@@ -54,28 +54,22 @@ bands:
     units: fnu_cgs
     sigma_mag: 0.05
     filter:
-      kind: tophat
-      wave_min: 9200
-      wave_max: 11400
-      n_wave: 400
+      kind: hdf5
+      path: filters/converted/euclid_nisp_y_throughput.h5
   - name: euclid_nisp_j
     column: euclid_nisp_j
     units: fnu_cgs
     sigma_mag: 0.05
     filter:
-      kind: tophat
-      wave_min: 11400
-      wave_max: 13700
-      n_wave: 400
+      kind: hdf5
+      path: filters/converted/euclid_nisp_j_throughput.h5
   - name: euclid_nisp_h
     column: euclid_nisp_h
     units: fnu_cgs
     sigma_mag: 0.05
     filter:
-      kind: tophat
-      wave_min: 13700
-      wave_max: 20000
-      n_wave: 500
+      kind: hdf5
+      path: filters/converted/euclid_nisp_h_throughput.h5
 
 model:
   n_sfh_bins: 96
@@ -90,8 +84,15 @@ model:
   parameter_columns: {}
 
 fit:
-  method: L-BFGS-B
+  method: jax_adam
   maxiter: 80
+  learning_rate: 0.1
+  tolerance: 1.0e-5
+  patience: 18
+  population:
+    prior_weight: 1.0
+    sigma_floor: 0.03
+    hyper_mu_scale: 5.0
   free_parameters:
     log10_sfr:
       initial: 0.0

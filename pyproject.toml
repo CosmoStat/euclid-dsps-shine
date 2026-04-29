@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Small Euclid/SHINE workflow around native DSPS."
 requires-python = ">=3.11"
 dependencies = [
+    "astropy",
     "corner",
     "dsps",
     "h5py",
@@ -17,7 +18,6 @@ dependencies = [
     "pandas",
     "pyarrow",
     "pyyaml",
-    "scipy",
     "tqdm",
 ]
 

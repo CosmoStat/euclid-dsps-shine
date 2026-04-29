@@ -59,8 +59,15 @@ model:
   parameter_columns: {}
 
 fit:
-  method: L-BFGS-B
-  maxiter: 60
+  method: jax_adam
+  maxiter: 80
+  learning_rate: 0.1
+  tolerance: 1.0e-5
+  patience: 18
+  population:
+    prior_weight: 1.0
+    sigma_floor: 0.03
+    hyper_mu_scale: 5.0
   free_parameters:
     log10_sfr:
       initial: 0.0

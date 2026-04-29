@@ -77,8 +77,15 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
             "log10_metallicity": {"initial": -2.0, "bounds": [-3.0, -1.0]},
         },
     )
-    config["fit"].setdefault("method", "L-BFGS-B")
+    config["fit"].setdefault("method", "jax_adam")
     config["fit"].setdefault("maxiter", 80)
+    config["fit"].setdefault("learning_rate", 0.1)
+    config["fit"].setdefault("tolerance", 1.0e-5)
+    config["fit"].setdefault("patience", 18)
+    config["fit"]["population"] = dict(config["fit"].get("population") or {})
+    config["fit"]["population"].setdefault("prior_weight", 1.0)
+    config["fit"]["population"].setdefault("sigma_floor", 0.03)
+    config["fit"]["population"].setdefault("hyper_mu_scale", 5.0)
 
     config["selection"].setdefault("index", None)
     config["selection"].setdefault("require_positive_flux", True)

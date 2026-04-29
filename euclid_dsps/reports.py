@@ -71,6 +71,7 @@ def write_fit_outputs(fit_result: Any, out_dir: str | Path) -> None:
             "best_parameters": fit_result.best_parameters,
             "chi2": fit_result.chi2,
             "n_bands": fit_result.n_bands,
+            "gradient_norm": fit_result.gradient_norm,
         },
     )
     pd.DataFrame(fit_result.trace).to_csv(out / "fit_trace.csv", index=False)
@@ -238,7 +239,22 @@ def plot_sed(result: ModelResult, path: str | Path) -> None:
     ax.plot(result.wave[mask], result.rest_sed[mask], label="Intrinsic rest SED", lw=1.1, alpha=0.65)
     ax.plot(result.wave[mask], result.dusted_rest_sed[mask], label="Dust-attenuated rest SED", lw=1.4)
     z_obs = result.parameters.get("z_obs", np.nan)
+    ymin, ymax = _positive_axis_limits(result.dusted_rest_sed[mask])
     for band, values in result.photometry.items():
+        wave_filter_obs = np.asarray(values.get("filter_wave_angstrom", []), dtype=float)
+        transmission = np.asarray(values.get("filter_transmission", []), dtype=float)
+        passband_mask = np.isfinite(wave_filter_obs) & np.isfinite(transmission) & (transmission > 0)
+        if passband_mask.any() and np.isfinite(z_obs):
+            wave_filter_rest = wave_filter_obs[passband_mask] / (1.0 + z_obs)
+            scaled = ymin * (ymax / ymin) ** (0.06 + 0.16 * transmission[passband_mask] / np.nanmax(transmission[passband_mask]))
+            ax.fill_between(
+                wave_filter_rest,
+                ymin,
+                scaled,
+                alpha=0.16,
+                lw=0,
+                label=f"{band.replace('euclid_', '')} passband",
+            )
         wave_rest = values["effective_wavelength_angstrom"] / (1.0 + z_obs)
         if np.isfinite(wave_rest) and 800 <= wave_rest <= 30_000:
             ax.axvline(wave_rest, color="black", lw=0.7, alpha=0.18)
@@ -252,6 +268,13 @@ def plot_sed(result: ModelResult, path: str | Path) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=170)
     plt.close(fig)
+
+
+def _positive_axis_limits(values: np.ndarray) -> tuple[float, float]:
+    finite = values[np.isfinite(values) & (values > 0)]
+    if finite.size == 0:
+        return 1.0, 10.0
+    return float(np.nanpercentile(finite, 1)), float(np.nanpercentile(finite, 99.5))
 
 
 def plot_photometry_comparison(comparison: pd.DataFrame, path: str | Path) -> None:
@@ -299,12 +322,15 @@ def plot_photometry_comparison(comparison: pd.DataFrame, path: str | Path) -> No
 
 
 def plot_fit_trace(trace: pd.DataFrame, path: str | Path) -> None:
-    if trace.empty or "chi2" not in trace:
+    if trace.empty:
+        return
+    y_col = "chi2" if "chi2" in trace else "mean_chi2_or_loss" if "mean_chi2_or_loss" in trace else None
+    if y_col is None:
         return
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(np.arange(len(trace)), trace["chi2"], lw=1)
+    ax.plot(np.arange(len(trace)), trace[y_col], lw=1)
     ax.set_xlabel("evaluation")
-    ax.set_ylabel("chi2")
+    ax.set_ylabel(y_col)
     ax.set_yscale("log")
     ax.grid(alpha=0.25)
     fig.tight_layout()
