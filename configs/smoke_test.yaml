@@ -1,0 +1,73 @@
+catalog_path: "Data/Euclid FS2 LC galaxy catalog.parquet"
+ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
+
+selection:
+  index: 0
+  require_positive_flux: true
+  sort_by_flux:
+
+eda:
+  nrows:
+
+bands:
+  - name: euclid_vis
+    column: euclid_vis
+    units: fnu_cgs
+    sigma_mag: 0.05
+    filter:
+      kind: tophat
+      wave_min: 5500
+      wave_max: 9000
+      n_wave: 700
+  - name: lsst_g
+    column: lsst_g
+    units: fnu_cgs
+    sigma_mag: 0.05
+    filter:
+      kind: hdf5
+      path: "Data/lsst_g_transmission.h5"
+  - name: lsst_r
+    column: lsst_r
+    units: fnu_cgs
+    sigma_mag: 0.05
+    filter:
+      kind: tophat
+  - name: lsst_i
+    column: lsst_i
+    units: fnu_cgs
+    sigma_mag: 0.05
+    filter:
+      kind: tophat
+  - name: lsst_y
+    column: lsst_y
+    units: fnu_cgs
+    sigma_mag: 0.05
+    filter:
+      kind: tophat
+
+model:
+  n_sfh_bins: 96
+  fixed_parameters:
+    z_obs: 0.5
+    log10_sfr: 0.0
+    sfh_t_peak: 4.0
+    sfh_tau: 0.6
+    log10_metallicity: -2.0
+    metallicity_scatter: 0.2
+    dust_av: 0.2
+    dust_slope: -0.7
+  parameter_columns: {}
+
+fit:
+  method: L-BFGS-B
+  maxiter: 60
+  free_parameters:
+    log10_sfr:
+      initial: 0.0
+      bounds: [-2.5, 3.0]
+    dust_av:
+      initial: 0.2
+      bounds: [0.0, 2.5]
+    log10_metallicity:
+      initial: -2.0
+      bounds: [-3.0, -1.0]

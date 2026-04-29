@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "euclid-dsps-shine"
+version = "0.1.0"
+description = "Small Euclid/SHINE workflow around native DSPS."
+requires-python = ">=3.11"
+dependencies = [
+    "corner",
+    "dsps",
+    "h5py",
+    "jax",
+    "matplotlib",
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "pyyaml",
+    "scipy",
+    "tqdm",
+]
+
+[project.scripts]
+euclid-dsps = "euclid_dsps.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["euclid_dsps*"]

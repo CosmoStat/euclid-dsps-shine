@@ -1,0 +1,41 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+
+The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reports.py` writes tables and plots, and `pipeline.py` composes CLI workflows. Configurations live in `configs/`; the default Euclid FS2 setup is `configs/fs2_phz1.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
+
+## Build, Test, and Development Commands
+
+Install in the existing environment:
+
+```bash
+conda activate shine
+python -m pip install -e .
+```
+
+Run the main checks:
+
+```bash
+python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+euclid-dsps --config configs/fs2_phz1.yaml run-one --out outputs/runs/dev_one
+euclid-dsps --config configs/fs2_phz1.yaml run-batch --limit 20 --batch-size 5 --out outputs/runs/dev_batch
+```
+
+Use `fit-batch` only with a small `--limit` while iterating because it runs one optimizer per galaxy.
+
+## Coding Style & Naming Conventions
+
+Use Python 3.11+ with type hints and small, explicit functions. Keep DSPS-specific calls isolated in `model.py`; other modules should use the wrapper dataclasses and CSV/JSON outputs. Prefer snake_case for functions, variables, YAML keys, and output filenames. Keep comments short and focused on non-obvious scientific or data-contract choices.
+
+## Testing Guidelines
+
+There is no formal test suite yet. For changes, run `compileall`, `run-one`, and a small `run-batch`. If touching fitting logic, also run:
+
+```bash
+euclid-dsps --config configs/fs2_phz1.yaml fit-one --out outputs/runs/dev_fit_one
+euclid-dsps --config configs/fs2_phz1.yaml fit-batch --limit 3 --batch-size 3 --out outputs/runs/dev_fit_batch
+```
+
+## Commit & Pull Request Guidelines
+
+This checkout has no git history, so no existing commit convention can be inferred. Use concise imperative messages, for example `Add FS2 redshift batch diagnostics`. PRs should describe the data/config used, commands run, output paths inspected, and any scientific limitations such as approximate filters or missing truth parameters.
