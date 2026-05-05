@@ -708,7 +708,9 @@ def _truth_kind(truth_name: str, spec: Any) -> str:
     if truth_name in {"dust_av", "log10_metallicity"}:
         return "proxy"
     if isinstance(spec, dict) and (
-        "scale" in spec or "offset" in spec or spec.get("transform") not in {None, "linear"}
+        "scale" in spec
+        or "offset" in spec
+        or spec.get("transform") not in {None, "linear"}
     ):
         return "proxy"
     return "direct"
@@ -1019,7 +1021,7 @@ class _NullProgress:
     def set_postfix_str(self, _: str, refresh: bool = False) -> None:
         return None
 
-    def __enter__(self) -> "_NullProgress":
+    def __enter__(self) -> _NullProgress:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:

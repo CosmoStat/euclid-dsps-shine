@@ -1,0 +1,109 @@
+Architecture
+============
+
+Current Layout
+--------------
+
+The repository is organized as a small Python package plus local experiment
+assets:
+
+.. code-block:: text
+
+   euclid_dsps/
+     assets.py       Download small DSPS smoke-test assets.
+     cli.py          Command-line parser and command dispatch.
+     config.py       YAML loading and default normalization.
+     filters.py      Euclid/LSST transmission curve loading.
+     fit.py          MAP and population optimization.
+     io.py           Parquet, row, unit, JSON, and CSV helpers.
+     likelihood.py   Shared likelihood helpers.
+     mcmc.py         NumPyro posterior sampling.
+     model.py        Native DSPS boundary.
+     pipeline.py     End-to-end CLI workflows.
+     reports.py      Report tables and plots.
+     selection.py    Single-row catalog selection.
+   configs/
+     fs2_phz1.yaml   Default Euclid FS2 PHZ setup.
+     smoke_test.yaml Lightweight smoke-test setup.
+   scripts/
+     quickstart_one_galaxy.py
+     convert_euclid_filters.py
+   Data/             Local data and DSPS assets, not source.
+   outputs/          Generated run outputs, not source.
+
+The current package has good high-level boundaries. The main cleanup need is
+not a rewrite; it is reducing module size and documenting contracts so new
+science experiments stay local to config, model, fit, or reporting layers.
+
+Layer Responsibilities
+----------------------
+
+``config.py``
+  Loads YAML, applies defaults, and keeps run setup explicit. It should not
+  read catalog data or call DSPS.
+
+``io.py``
+  Owns the catalog contract: parquet reads, required columns, row index
+  handling, truth value transforms, photometry unit conversion, and JSON
+  serialization.
+
+``filters.py``
+  Loads exact passbands from ASCII, HDF5, or FITS. Approximate top-hat filters
+  are a fallback for smoke tests only.
+
+``model.py``
+  Contains the native DSPS boundary. Other modules should pass normalized
+  dataclasses and parameter dictionaries into this layer rather than importing
+  DSPS directly.
+
+``fit.py`` and ``mcmc.py``
+  Own optimizer and sampler behavior. They should depend on the model boundary
+  and observation dataclasses, not on parquet or report-writing concerns.
+
+``pipeline.py``
+  Composes workflows from the layers above. It is allowed to orchestrate, but
+  should avoid complex scientific logic that belongs in ``model.py``,
+  ``fit.py``, or ``io.py``.
+
+``reports.py``
+  Owns artifact writing. Report code should receive already-computed tables and
+  model results where possible.
+
+Design Rules
+------------
+
+* Keep DSPS imports isolated in ``model.py``.
+* Keep catalog-specific aliases and truth transforms in config or ``io.py``.
+* Keep output files deterministic and named with snake_case.
+* Treat ``Data/`` and ``outputs/`` as local runtime state.
+* Add tests or smoke commands when changing model, fit, sampling, or catalog
+  contracts.
+* Prefer new config keys over hidden constants when changing scientific setup.
+
+Current Technical Debt
+----------------------
+
+``pipeline.py`` and ``reports.py`` are large because they combine many CLI
+workflows and plotting/report variants. That is acceptable for current
+experiments, but these files should be the first split when workflows grow.
+
+Recommended future split:
+
+.. code-block:: text
+
+   euclid_dsps/
+     workflows/
+       eda.py
+       forward.py
+       map_fit.py
+       bayesian.py
+       population.py
+     reporting/
+       tables.py
+       plots.py
+       posterior.py
+       workflow.py
+
+Avoid doing that split until tests or smoke fixtures exist, because it is mostly
+movement and import rewiring. The safer sequence is documented in
+:doc:`refactor_roadmap`.

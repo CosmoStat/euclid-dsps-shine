@@ -125,12 +125,12 @@ def write_mcmc_batch_outputs(
 ) -> None:
     out = ensure_dir(out_dir)
     summary_payload = {
-        "n_galaxies": int(summary["row_index"].nunique())
-        if "row_index" in summary
-        else 0,
-        "n_parameters": int(summary["parameter"].nunique())
-        if "parameter" in summary
-        else 0,
+        "n_galaxies": (
+            int(summary["row_index"].nunique()) if "row_index" in summary else 0
+        ),
+        "n_parameters": (
+            int(summary["parameter"].nunique()) if "parameter" in summary else 0
+        ),
     }
     if "n_divergent" in diagnostics:
         summary_payload["n_divergent"] = int(diagnostics["n_divergent"].sum())
@@ -165,9 +165,9 @@ def write_population_corner_outputs(
     )
     if not paired_truth.empty:
         paired_truth.to_csv(out / "population_truth_parameters.csv", index=False)
-        paired_truth.describe(percentiles=[0.05, 0.16, 0.5, 0.84, 0.95]).transpose().to_csv(
-            out / "population_truth_parameter_summary.csv"
-        )
+        paired_truth.describe(
+            percentiles=[0.05, 0.16, 0.5, 0.84, 0.95]
+        ).transpose().to_csv(out / "population_truth_parameter_summary.csv")
         metrics = parameter_truth_metrics(fits)
         if not metrics.empty:
             metrics.to_csv(out / "population_parameter_truth_metrics.csv", index=False)
@@ -191,7 +191,7 @@ def plot_population_parameter_histograms(
     columns = list(params.columns)
     fig, axes = plt.subplots(len(columns), 1, figsize=(8, max(2.2 * len(columns), 3)))
     axes = np.atleast_1d(axes)
-    for ax, column in zip(axes, columns):
+    for ax, column in zip(axes, columns, strict=True):
         values = params[column].replace([np.inf, -np.inf], np.nan).dropna()
         truth_values = (
             truth[column].replace([np.inf, -np.inf], np.nan).dropna()
@@ -247,17 +247,15 @@ def parameter_truth_metrics(frame: pd.DataFrame) -> pd.DataFrame:
                 pairs.append((parameter, fit_col, col))
 
     for parameter, fit_col, truth_col in pairs:
-        work = (
-            frame[[fit_col, truth_col]]
-            .replace([np.inf, -np.inf], np.nan)
-            .dropna()
-        )
+        work = frame[[fit_col, truth_col]].replace([np.inf, -np.inf], np.nan).dropna()
         if work.empty:
             continue
         delta = work[fit_col] - work[truth_col]
         corr = (
             float(work[fit_col].corr(work[truth_col]))
-            if len(work) > 1 and work[fit_col].nunique() > 1 and work[truth_col].nunique() > 1
+            if len(work) > 1
+            and work[fit_col].nunique() > 1
+            and work[truth_col].nunique() > 1
             else float("nan")
         )
         rows.append(
@@ -306,7 +304,9 @@ def trace_truth_summary(trace: pd.DataFrame) -> pd.DataFrame:
     if not metric_columns:
         return pd.DataFrame()
     group_names = ["chunk_index"] if "chunk_index" in trace.columns else []
-    grouped = trace.groupby(group_names, dropna=False) if group_names else [(None, trace)]
+    grouped = (
+        trace.groupby(group_names, dropna=False) if group_names else [(None, trace)]
+    )
     rows = []
     for key, group in grouped:
         row: dict[str, float | int] = {}
@@ -336,9 +336,7 @@ def plot_trace_truth_metrics(trace: pd.DataFrame, path: str | Path) -> None:
     loss_col = (
         "mean_chi2_or_loss"
         if "mean_chi2_or_loss" in trace
-        else "chi2"
-        if "chi2" in trace
-        else None
+        else "chi2" if "chi2" in trace else None
     )
     param_cols = [col for col in trace.columns if col.startswith("truth_mse_")]
     ncols = 3 if param_cols else 2
@@ -570,7 +568,7 @@ def plot_color_distributions(
     if len(columns) < 2:
         return
     fig, ax = plt.subplots(figsize=(8, 5))
-    for left, right in zip(columns[:-1], columns[1:]):
+    for left, right in zip(columns[:-1], columns[1:], strict=True):
         a = df[left].to_numpy(dtype=float)
         b = df[right].to_numpy(dtype=float)
         mask = np.isfinite(a) & np.isfinite(b) & (a > 0) & (b > 0)
@@ -630,7 +628,7 @@ def plot_physical_parameters_distributions(df: pd.DataFrame, path: str | Path) -
     fig, axes = plt.subplots(1, len(valid_params), figsize=(4 * len(valid_params), 4))
     axes = np.atleast_1d(axes)
 
-    for ax, param in zip(axes, valid_params):
+    for ax, param in zip(axes, valid_params, strict=True):
         val = df[param].to_numpy(dtype=float)
         val = val[np.isfinite(val)]
         ax.hist(val, bins=70, histtype="stepfilled", alpha=0.7)
@@ -748,7 +746,7 @@ def plot_photometry_comparison(comparison: pd.DataFrame, path: str | Path) -> No
         label="Simulated catalog",
     )
     ax_mag.plot(x, work["model_mag_ab"], marker="s", lw=1.4, label="DSPS model")
-    for xi, yi, label in zip(x, work["observed_mag_ab"], work["band"]):
+    for xi, yi, label in zip(x, work["observed_mag_ab"], work["band"], strict=True):
         ax_mag.annotate(
             label.replace("euclid_", ""),
             (xi, yi),
@@ -783,9 +781,7 @@ def plot_fit_trace(trace: pd.DataFrame, path: str | Path) -> None:
     y_col = (
         "chi2"
         if "chi2" in trace
-        else "mean_chi2_or_loss"
-        if "mean_chi2_or_loss" in trace
-        else None
+        else "mean_chi2_or_loss" if "mean_chi2_or_loss" in trace else None
     )
     if y_col is None:
         return
@@ -830,7 +826,7 @@ def plot_mcmc_traces(samples: pd.DataFrame, path: str | Path) -> None:
         sharex=True,
     )
     axes = np.atleast_1d(axes)
-    for ax, col in zip(axes, samples.columns):
+    for ax, col in zip(axes, samples.columns, strict=True):
         ax.plot(samples[col].to_numpy(dtype=float), lw=0.8)
         ax.set_ylabel(col)
         ax.grid(alpha=0.2)
@@ -900,7 +896,9 @@ def plot_corner_with_truth(
         if value is not None and np.isfinite(value):
             truth_by_column[column] = float(value)
     ranges = [
-        _corner_range_with_truth(varying[column].to_numpy(dtype=float), truth_by_column.get(column))
+        _corner_range_with_truth(
+            varying[column].to_numpy(dtype=float), truth_by_column.get(column)
+        )
         for column in varying.columns
     ]
     try:
@@ -928,7 +926,9 @@ def plot_corner_with_truth(
     plt.close(fig)
 
 
-def _corner_range_with_truth(values: np.ndarray, truth_value: float | None) -> tuple[float, float]:
+def _corner_range_with_truth(
+    values: np.ndarray, truth_value: float | None
+) -> tuple[float, float]:
     finite = values[np.isfinite(values)]
     if finite.size == 0:
         return (0.0, 1.0)
@@ -976,11 +976,18 @@ def _annotate_corner_truth(
                     va="top",
                     fontsize=8.5,
                     color=truth_color,
-                    bbox={"facecolor": "white", "edgecolor": truth_color, "alpha": 0.85, "pad": 2},
+                    bbox={
+                        "facecolor": "white",
+                        "edgecolor": truth_color,
+                        "alpha": 0.85,
+                        "pad": 2,
+                    },
                 )
 
 
-def _truth_axis_label(parameter: str, value: float, truth_values: dict[str, Any]) -> str:
+def _truth_axis_label(
+    parameter: str, value: float, truth_values: dict[str, Any]
+) -> str:
     source = truth_values.get(f"truth_source_{parameter}")
     kind = truth_values.get(f"truth_kind_{parameter}", "direct")
     prefix = "proxy" if kind == "proxy" else "truth"
@@ -1037,7 +1044,7 @@ def plot_batch_posterior_intervals(summary: pd.DataFrame, path: str | Path) -> N
         len(parameters), 1, figsize=(9, max(2.4 * len(parameters), 3)), sharex=True
     )
     axes = np.atleast_1d(axes)
-    for ax, parameter in zip(axes, parameters):
+    for ax, parameter in zip(axes, parameters, strict=True):
         work = summary[summary["parameter"] == parameter].sort_values("row_index")
         x = work["row_index"].to_numpy(dtype=float)
         median = work["median"].to_numpy(dtype=float)
@@ -1129,15 +1136,17 @@ def write_workflow_comparison(
         hmc_diagnostics.to_csv(out / "hmc_diagnostics.csv", index=False)
 
     summary = {
-        "n_map_galaxies": int(map_fits["row_index"].nunique())
-        if "row_index" in map_fits
-        else 0,
-        "n_population_galaxies": int(population_fits["row_index"].nunique())
-        if "row_index" in population_fits
-        else 0,
-        "n_hmc_galaxies": int(hmc_summary["row_index"].nunique())
-        if "row_index" in hmc_summary
-        else 0,
+        "n_map_galaxies": (
+            int(map_fits["row_index"].nunique()) if "row_index" in map_fits else 0
+        ),
+        "n_population_galaxies": (
+            int(population_fits["row_index"].nunique())
+            if "row_index" in population_fits
+            else 0
+        ),
+        "n_hmc_galaxies": (
+            int(hmc_summary["row_index"].nunique()) if "row_index" in hmc_summary else 0
+        ),
     }
     if "delta_chi2_population_minus_map" in map_pop_fits:
         summary["median_delta_chi2_population_minus_map"] = float(
@@ -1311,7 +1320,7 @@ def _truth_parameter_frame(
 
 
 def paired_fit_truth_frames(fits: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return aligned frames for parameters with both fit_ and truth_ columns."""
+    """Return aligned frames for parameters with both ``fit_`` and ``truth_`` columns."""
     inferred = {}
     truth = {}
     for col in fits.columns:
@@ -1417,7 +1426,7 @@ def plot_map_population_parameters(comparison: pd.DataFrame, path: str | Path) -
     fig, axes = plt.subplots(
         1, len(parameters), figsize=(4 * len(parameters), 4), squeeze=False
     )
-    for ax, parameter in zip(axes[0], parameters):
+    for ax, parameter in zip(axes[0], parameters, strict=True):
         work = comparison[comparison["parameter"] == parameter]
         ax.scatter(work["map_value"], work["population_value"], s=12, alpha=0.5)
         values = (
@@ -1485,7 +1494,7 @@ def plot_hmc_map_population(comparison: pd.DataFrame, path: str | Path) -> None:
         len(parameters), 1, figsize=(9, max(2.6 * len(parameters), 3)), sharex=False
     )
     axes = np.atleast_1d(axes)
-    for ax, parameter in zip(axes, parameters):
+    for ax, parameter in zip(axes, parameters, strict=True):
         work = (
             comparison[comparison["parameter"] == parameter]
             .sort_values("row_index")
@@ -1629,7 +1638,9 @@ def plot_batch_parameter_truth(by_row: pd.DataFrame, path: str | Path) -> None:
             max(work[truth_col].max(), work[fit_col].max()),
         )
         ax_scatter.plot([lo, hi], [lo, hi], color="black", lw=1)
-        ax_scatter.set_xlabel(f"{_truth_legend_label(param)} {_parameter_display_label(param)}")
+        ax_scatter.set_xlabel(
+            f"{_truth_legend_label(param)} {_parameter_display_label(param)}"
+        )
         ax_scatter.set_ylabel(f"inferred {_parameter_display_label(param)}")
         ax_scatter.grid(alpha=0.2)
 
@@ -1704,7 +1715,9 @@ def plot_redshift_scatter(by_row: pd.DataFrame, ax: plt.Axes) -> None:
 def _redshift_axis_labels(by_row: pd.DataFrame) -> tuple[str, str]:
     truth_source = _first_string(by_row, "redshift_truth_source") or "z_true"
     fit_source = _first_string(by_row, "z_obs_source") or "z_phz"
-    fit_label = "fit_z_obs" if "fit_z_obs" in by_row.columns else f"{fit_source} used by DSPS"
+    fit_label = (
+        "fit_z_obs" if "fit_z_obs" in by_row.columns else f"{fit_source} used by DSPS"
+    )
     return fit_label, truth_source
 
 

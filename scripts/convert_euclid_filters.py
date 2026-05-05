@@ -15,8 +15,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("fits", nargs="+", help="Input Euclid throughput FITS files.")
     parser.add_argument("--out", default="filters/converted", help="Output directory.")
     parser.add_argument("--wave-column", default="WAVE", help="FITS wavelength column.")
-    parser.add_argument("--throughput-column", default="T_TOTAL", help="FITS throughput column.")
-    parser.add_argument("--wave-unit", default="nm", choices=["angstrom", "nm", "micron"], help="Input wavelength unit.")
+    parser.add_argument(
+        "--throughput-column", default="T_TOTAL", help="FITS throughput column."
+    )
+    parser.add_argument(
+        "--wave-unit",
+        default="nm",
+        choices=["angstrom", "nm", "micron"],
+        help="Input wavelength unit.",
+    )
     return parser
 
 
@@ -37,7 +44,9 @@ def main(argv: list[str] | None = None) -> None:
         print(dst)
 
 
-def convert_one(src: Path, dst: Path, wave_column: str, throughput_column: str, wave_unit: str) -> None:
+def convert_one(
+    src: Path, dst: Path, wave_column: str, throughput_column: str, wave_unit: str
+) -> None:
     data = fits.getdata(src, 1)
     wave = np.asarray(data[wave_column], dtype=float) * wave_unit_to_angstrom(wave_unit)
     transmission = np.clip(np.asarray(data[throughput_column], dtype=float), 0.0, 1.0)

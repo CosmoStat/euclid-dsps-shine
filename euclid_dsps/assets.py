@@ -13,7 +13,9 @@ DEFAULT_ASSETS = {
 }
 
 
-def download_assets(out_dir: str | Path, overwrite: bool = False) -> list[dict[str, str | bool]]:
+def download_assets(
+    out_dir: str | Path, overwrite: bool = False
+) -> list[dict[str, str | bool]]:
     """Download DSPS SSP/filter files used by the smoke-test config."""
     out = ensure_dir(out_dir)
     records = []
