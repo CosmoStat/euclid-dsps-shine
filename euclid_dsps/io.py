@@ -50,7 +50,11 @@ def to_jsonable(value: Any) -> Any:
         return value.tolist()
     if isinstance(value, np.generic):
         return value.item()
-    if pd.isna(value) if not isinstance(value, (list, tuple, dict, np.ndarray)) else False:
+    if (
+        pd.isna(value)
+        if not isinstance(value, (list, tuple, dict, np.ndarray))
+        else False
+    ):
         return None
     return value
 
@@ -59,12 +63,56 @@ def dataclass_is_instance(value: Any) -> bool:
     return hasattr(value, "__dataclass_fields__")
 
 
-def read_catalog(path: str | Path, columns: list[str] | None = None, nrows: int | None = None) -> pd.DataFrame:
+def read_catalog(
+    path: str | Path, columns: list[str] | None = None, nrows: int | None = None
+) -> pd.DataFrame:
     """Read a parquet catalog into memory, optionally truncating rows."""
-    df = pd.read_parquet(path, columns=columns)
+    actual_columns = list(columns) if columns else None
+    if actual_columns and "log10_metallicity_true" in actual_columns:
+        actual_columns.remove("log10_metallicity_true")
+        if "metallicity_true" not in actual_columns:
+            actual_columns.append("metallicity_true")
+    df = pd.read_parquet(path, columns=actual_columns)
+    if "metallicity_true" in df.columns and "log10_metallicity_true" not in df.columns:
+        # dataset has 12 + log(O/H), convert to absolute log10(Z)
+        # DSPS internal solar log10(Z) = np.log10(0.012) = -1.92
+        # log10(Z) = 12 + log(O/H) - 8.69 + (-1.92) = metallicity_true - 10.61
+        df["log10_metallicity_true"] = df["metallicity_true"] - 10.61
     if nrows is not None:
         return df.head(nrows)
     return df
+
+
+def truth_column_from_spec(spec: Any) -> str | None:
+    """Return the catalog column named by a truth-column config entry."""
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, dict):
+        column = spec.get("column")
+        return str(column) if column else None
+    return None
+
+
+def truth_value_from_spec(row: dict[str, Any], spec: Any) -> float | None:
+    """Read and optionally transform a truth value from a catalog row."""
+    column = truth_column_from_spec(spec)
+    if not column or column not in row or pd.isna(row[column]):
+        return None
+    value = float(row[column])
+    if not np.isfinite(value):
+        return None
+
+    if isinstance(spec, dict):
+        transform = spec.get("transform")
+        if transform == "log10":
+            if value <= 0:
+                return None
+            value = float(np.log10(value))
+        elif transform not in {None, "linear"}:
+            raise ValueError(f"Unsupported truth transform: {transform}")
+        value = value * float(spec.get("scale", 1.0))
+        value = value + float(spec.get("offset", 0.0))
+    return value
 
 
 def iter_catalog_batches(
@@ -72,23 +120,54 @@ def iter_catalog_batches(
     columns: list[str] | None = None,
     batch_size: int = 10_000,
     limit: int | None = None,
+    row_indices: set[int] | None = None,
 ) -> Iterable[pd.DataFrame]:
     """Yield catalog batches without loading the full parquet into memory."""
     import pyarrow.parquet as pq
 
-    emitted = 0
+    yielded = 0
+    seen = 0
+    max_row_index = max(row_indices) if row_indices else None
     parquet = pq.ParquetFile(path)
-    for batch in parquet.iter_batches(batch_size=batch_size, columns=columns):
+
+    actual_columns = list(columns) if columns else None
+    if actual_columns and "log10_metallicity_true" in actual_columns:
+        actual_columns.remove("log10_metallicity_true")
+        if "metallicity_true" not in actual_columns:
+            actual_columns.append("metallicity_true")
+
+    for batch in parquet.iter_batches(batch_size=batch_size, columns=actual_columns):
         df = batch.to_pandas()
+        if (
+            "metallicity_true" in df.columns
+            and "log10_metallicity_true" not in df.columns
+        ):
+            df["log10_metallicity_true"] = df["metallicity_true"] - 10.61
+        raw_len = len(df)
+        df.index = range(seen, seen + raw_len)
+        seen += raw_len
+        if row_indices is not None:
+            df = df.loc[df.index.isin(row_indices)]
         if limit is not None:
-            remaining = limit - emitted
+            remaining = limit - yielded
             if remaining <= 0:
                 break
             df = df.head(remaining)
-        df.index = range(emitted, emitted + len(df))
-        emitted += len(df)
         if len(df):
+            yielded += len(df)
             yield df
+        if max_row_index is not None and seen > max_row_index:
+            break
+
+
+def load_row_indices(path: str | Path) -> list[int]:
+    """Load row indices from a one-column text or CSV file."""
+    rows = pd.read_csv(path, comment="#", header=None)
+    if rows.empty:
+        return []
+    return sorted(
+        {int(value) for value in rows.iloc[:, 0].dropna().astype(int).tolist()}
+    )
 
 
 def flux_fnu_cgs_to_abmag(flux: float) -> float:
@@ -115,7 +194,9 @@ def microjy_to_abmag(flux_microjy: float) -> float:
     return float(-2.5 * np.log10(flux_microjy) + 23.9)
 
 
-def build_observation(row_index: int, row: pd.Series, band_configs: list[dict[str, Any]]) -> GalaxyObservation:
+def build_observation(
+    row_index: int, row: pd.Series, band_configs: list[dict[str, Any]]
+) -> GalaxyObservation:
     bands = []
     for band in band_configs:
         column = band["column"]
@@ -131,7 +212,9 @@ def build_observation(row_index: int, row: pd.Series, band_configs: list[dict[st
             mag_ab = microjy_to_abmag(value)
             flux_fnu_cgs = microjy_to_flux_fnu_cgs(value)
         else:
-            raise ValueError(f"Unsupported photometry units for {band['name']}: {units}")
+            raise ValueError(
+                f"Unsupported photometry units for {band['name']}: {units}"
+            )
         bands.append(
             BandObservation(
                 name=band["name"],
@@ -152,15 +235,17 @@ def required_catalog_columns(config: dict[str, Any]) -> list[str]:
         columns.add(col)
     redshift = config.get("redshift", {})
     for key in ("column", "truth_column"):
-        col = redshift.get(key)
+        col = truth_column_from_spec(redshift.get(key))
         if col:
             columns.add(col)
     truth = config.get("truth", {})
-    truth_redshift = truth.get("redshift_column")
+    truth_redshift = truth_column_from_spec(truth.get("redshift_column"))
     if truth_redshift:
         columns.add(truth_redshift)
-    for col in (truth.get("parameter_columns") or {}).values():
-        columns.add(col)
+    for spec in (truth.get("parameter_columns") or {}).values():
+        col = truth_column_from_spec(spec)
+        if col:
+            columns.add(col)
     sort_col = config.get("selection", {}).get("sort_by_flux")
     if sort_col:
         columns.add(sort_col)

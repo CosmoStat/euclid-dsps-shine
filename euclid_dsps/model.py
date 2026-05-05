@@ -41,7 +41,16 @@ class JaxModelResult:
     model_mags: jnp.ndarray
     t_obs_gyr: jnp.ndarray
     formed_mass_msun: jnp.ndarray
-    sfr_at_t_obs_msun_per_yr: jnp.ndarray
+    sfr_at_obs_msun_per_yr: jnp.ndarray
+
+
+DERIVED_QUANTITY_NAMES = [
+    "t_obs_gyr",
+    "formed_mass_msun",
+    "log10_formed_mass_msun",
+    "sfr_at_obs_msun_per_yr",
+    "log10_sfr_at_obs",
+]
 
 
 def load_context(ssp_path: str, filters: dict[str, FilterCurve], n_sfh_bins: int = 96) -> DspsContext:
@@ -104,7 +113,10 @@ def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResul
             "t_obs_gyr": float(jax_result.t_obs_gyr),
             "formed_mass_msun": float(jax_result.formed_mass_msun),
             "log10_formed_mass_msun": _safe_log10(float(jax_result.formed_mass_msun)),
-            "sfr_at_t_obs_msun_per_yr": float(jax_result.sfr_at_t_obs_msun_per_yr),
+            "sfr_at_obs_msun_per_yr": float(jax_result.sfr_at_obs_msun_per_yr),
+            "log10_sfr_at_obs": _safe_log10(
+                float(jax_result.sfr_at_obs_msun_per_yr)
+            ),
         },
         wave=wave,
         rest_sed=rest_sed,
@@ -148,7 +160,7 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
         model_mags=model_mags,
         t_obs_gyr=t_obs,
         formed_mass_msun=formed_mass,
-        sfr_at_t_obs_msun_per_yr=gal_sfr_table[-1],
+        sfr_at_obs_msun_per_yr=gal_sfr_table[-1],
     )
 
 
@@ -183,6 +195,46 @@ def predict_batch_mags(context: DspsContext, parameter_names: list[str], paramet
 
     predict = jax.jit(jax.vmap(single))
     return np.asarray(predict(jnp.asarray(parameter_matrix)))
+
+
+def derived_quantities_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
+    """Return derived quantities needed for scientifically comparable reports."""
+    z_obs = jnp.asarray(params["z_obs"])
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
+    gal_sfr_table = build_lognormal_sfh_jax(
+        gal_t_table=gal_t_table,
+        log10_sfr=jnp.asarray(params["log10_sfr"]),
+        sfh_t_peak=jnp.asarray(params["sfh_t_peak"]),
+        sfh_tau=jnp.asarray(params["sfh_tau"]),
+    )
+    formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
+    sfr_at_obs = gal_sfr_table[-1]
+    return jnp.asarray(
+        [
+            t_obs,
+            formed_mass,
+            jnp.log10(jnp.maximum(formed_mass, 1.0e-300)),
+            sfr_at_obs,
+            jnp.log10(jnp.maximum(sfr_at_obs, 1.0e-300)),
+        ]
+    )
+
+
+def predict_batch_derived(
+    context: DspsContext, parameter_names: list[str], parameter_matrix: np.ndarray
+) -> dict[str, np.ndarray]:
+    """Compute derived quantities for many fitted parameter rows."""
+
+    def single(values):
+        params = {name: values[index] for index, name in enumerate(parameter_names)}
+        return derived_quantities_jax(context, params)
+
+    predict = jax.jit(jax.vmap(single))
+    values = np.asarray(predict(jnp.asarray(parameter_matrix)))
+    return {
+        name: values[:, index] for index, name in enumerate(DERIVED_QUANTITY_NAMES)
+    }
 
 
 def build_lognormal_sfh(gal_t_table: np.ndarray, log10_sfr: float, sfh_t_peak: float, sfh_tau: float) -> np.ndarray:
