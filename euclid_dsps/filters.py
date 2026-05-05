@@ -8,8 +8,6 @@ from typing import Any
 
 import numpy as np
 
-from dsps import load_transmission_curve
-
 
 @dataclass(frozen=True)
 class FilterCurve:
@@ -60,6 +58,8 @@ def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
         "path" in filter_config
         and str(filter_config["path"]).endswith((".h5", ".hdf5"))
     ):
+        from dsps import load_transmission_curve
+
         path = Path(filter_config["path"])
         curve = load_transmission_curve(fn=str(path))
         return FilterCurve(

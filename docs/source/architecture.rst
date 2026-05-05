@@ -19,9 +19,13 @@ assets:
      likelihood.py   Shared likelihood helpers.
      mcmc.py         NumPyro posterior sampling.
      model.py        Native DSPS boundary.
-     pipeline.py     End-to-end CLI workflows.
-     reports.py      Report tables and plots.
+     pipeline.py     Compatibility facade for workflow imports.
+     reports.py      Compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
+     reporting/
+       core.py       Report tables and plots.
+     workflows/
+       core.py       End-to-end CLI workflows.
    configs/
      fs2_phz1.yaml   Default Euclid FS2 PHZ setup.
      smoke_test.yaml Lightweight smoke-test setup.
@@ -60,14 +64,18 @@ Layer Responsibilities
   Own optimizer and sampler behavior. They should depend on the model boundary
   and observation dataclasses, not on parquet or report-writing concerns.
 
-``pipeline.py``
+``workflows/core.py``
   Composes workflows from the layers above. It is allowed to orchestrate, but
   should avoid complex scientific logic that belongs in ``model.py``,
   ``fit.py``, or ``io.py``.
 
-``reports.py``
+``reporting/core.py``
   Owns artifact writing. Report code should receive already-computed tables and
   model results where possible.
+
+``pipeline.py`` and ``reports.py``
+  Compatibility facades retained for existing scripts. New code should import
+  from ``euclid_dsps.workflows`` and ``euclid_dsps.reporting``.
 
 Design Rules
 ------------
@@ -83,27 +91,7 @@ Design Rules
 Current Technical Debt
 ----------------------
 
-``pipeline.py`` and ``reports.py`` are large because they combine many CLI
-workflows and plotting/report variants. That is acceptable for current
-experiments, but these files should be the first split when workflows grow.
-
-Recommended future split:
-
-.. code-block:: text
-
-   euclid_dsps/
-     workflows/
-       eda.py
-       forward.py
-       map_fit.py
-       bayesian.py
-       population.py
-     reporting/
-       tables.py
-       plots.py
-       posterior.py
-       workflow.py
-
-Avoid doing that split until tests or smoke fixtures exist, because it is mostly
-movement and import rewiring. The safer sequence is documented in
+``workflows/core.py`` and ``reporting/core.py`` remain large after the package
+split. The next split should be by workflow/report type after test coverage
+expands around generated tables and plots. The safer sequence is documented in
 :doc:`refactor_roadmap`.

@@ -22,6 +22,7 @@ The project keeps the scientific boundary narrow:
    installation
    architecture
    data_download
+   catalog_columns
    run_setup
    refactor_roadmap
 

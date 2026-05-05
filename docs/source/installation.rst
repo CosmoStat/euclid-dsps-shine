@@ -49,11 +49,12 @@ Run the same formatting and lint checks as CI:
 .. code-block:: bash
 
    python -m black --check euclid_dsps scripts
-   python -m ruff check euclid_dsps scripts
+   python -m ruff check euclid_dsps scripts tests
+   python -m pytest tests
 
 Format code before committing:
 
 .. code-block:: bash
 
    python -m black euclid_dsps scripts
-   python -m ruff check --fix euclid_dsps scripts
+   python -m ruff check --fix euclid_dsps scripts tests

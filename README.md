@@ -59,7 +59,8 @@ Start with:
 
 ```bash
 find euclid_dsps scripts -name '*.py' -exec python -m black --check {} \;
-python -m ruff check euclid_dsps scripts
+python -m ruff check euclid_dsps scripts tests
+python -m pytest tests
 python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
 python -m sphinx -W --keep-going -b html docs/source docs/build/html
 ```

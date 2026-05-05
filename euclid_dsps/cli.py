@@ -183,7 +183,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     from .config import load_config
-    from .pipeline import (
+    from .workflows import (
         fit_batch,
         fit_one,
         fit_population,

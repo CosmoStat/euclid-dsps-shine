@@ -28,10 +28,13 @@ jobs:
           python -m pip install -e ".[dev]"
 
       - name: Black
-        run: find euclid_dsps scripts -name '*.py' -exec python -m black --check {} \;
+        run: find euclid_dsps scripts tests -name '*.py' -exec python -m black --check {} \;
 
       - name: Ruff
-        run: python -m ruff check euclid_dsps scripts
+        run: python -m ruff check euclid_dsps scripts tests
+
+      - name: Tests
+        run: python -m pytest tests
 
       - name: Compile
         run: python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py

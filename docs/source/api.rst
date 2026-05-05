@@ -8,6 +8,13 @@ Configuration
    :members:
    :undoc-members:
 
+Catalog Columns
+---------------
+
+.. automodule:: euclid_dsps.columns
+   :members:
+   :undoc-members:
+
 I/O
 ---
 
@@ -43,15 +50,30 @@ Sampling
    :members:
    :undoc-members:
 
-Pipeline
---------
+Workflows
+---------
+
+.. automodule:: euclid_dsps.workflows
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.core
+   :members:
+   :undoc-members:
+
+Reporting
+---------
+
+.. automodule:: euclid_dsps.reporting.core
+   :members:
+   :undoc-members:
+
+Compatibility Facades
+---------------------
 
 .. automodule:: euclid_dsps.pipeline
    :members:
    :undoc-members:
-
-Reports
--------
 
 .. automodule:: euclid_dsps.reports
    :members:

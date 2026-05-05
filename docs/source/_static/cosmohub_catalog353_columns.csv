@@ -1,0 +1,49 @@
+local_name,source_or_expression,group,dtype,unit,description,notes
+ra_gal,ra_gal,coordinates,float,deg,Galaxy right ascension,ICRS-like sky coordinate used for spatial selection
+dec_gal,dec_gal,coordinates,float,deg,Galaxy declination,ICRS-like sky coordinate used for spatial selection
+ra_mag_gal,ra_mag_gal,coordinates,float,deg,Photometry-position right ascension,Position associated with catalog photometry or magnitudes
+dec_mag_gal,dec_mag_gal,coordinates,float,deg,Photometry-position declination,Position associated with catalog photometry or magnitudes
+z_true,true_redshift_halo,redshift,float,dimensionless,True halo redshift,Aliased by download query and used only for diagnostics
+z_phz,phz_mode_1,redshift,float,dimensionless,First mode of PHZ redshift PDF,Used as fixed DSPS z_obs in default config
+euclid_vis,euclid_vis,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid VIS flux density,Project config interprets as Fnu cgs
+euclid_nisp_y,euclid_nisp_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid NISP Y flux density,Project config interprets as Fnu cgs
+euclid_nisp_j,euclid_nisp_j,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid NISP J flux density,Project config interprets as Fnu cgs
+euclid_nisp_h,euclid_nisp_h,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid NISP H flux density,Project config interprets as Fnu cgs
+lsst_u,lsst_u,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST u flux density,Optional in current DSPS workflow
+lsst_g,lsst_g,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST g flux density,Optional in current DSPS workflow
+lsst_r,lsst_r,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST r flux density,Optional in current DSPS workflow
+lsst_i,lsst_i,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST i flux density,Optional in current DSPS workflow
+lsst_z,lsst_z,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST z flux density,Optional in current DSPS workflow
+lsst_y,lsst_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST y flux density,Optional in current DSPS workflow
+metallicity_true,metallicity,physical truth,float,12 + log10(O/H),Gas-phase oxygen abundance,Reports convert to log10 metallicity proxy with offset -10.61
+log_sfr_true,log_sfr,physical truth,float,log10(Msun yr^-1),Base-10 logarithm of catalog SFR,Compared to derived fit_log10_sfr_at_obs
+sfr_true,POW(10 log_sfr),physical truth,double,Msun yr^-1,Linear SFR computed in SQL,Convenience column from download query
+ebv_cosmos_1,ebv_cosmos_1,dust,float,mag,COSMOS E(B-V) component 1,Raw dust component
+ebv_cosmos_2,ebv_cosmos_2,dust,float,mag,COSMOS E(B-V) component 2,Raw dust component
+ext_curve_cosmos_1,ext_curve_cosmos_1,dust,int8,code,Extinction-curve identifier for component 1,Raw catalog code
+ext_curve_cosmos_2,ext_curve_cosmos_2,dust,int8,code,Extinction-curve identifier for component 2,Raw catalog code
+mw_extinction,mw_extinction,dust,float,mag,Milky Way foreground extinction scalar,Not applied by default model
+dust_ebv_true,SQL CASE expression,dust,float,mag,Single intrinsic E(B-V) target computed in SQL,Bulge-fraction weighted when both components are present
+bulge_fraction,bulge_fraction,morphology,float,fraction,Fraction of light assigned to bulge,Expected range 0 to 1 in query
+disk_r50,disk_r50,morphology,float,arcsec,Disk half-light radius,Flagship morphology model uses angular half-light radii
+bulge_r50,bulge_r50,morphology,float,arcsec,Bulge half-light radius,Flagship morphology model uses angular half-light radii
+eps1_gal,eps1_gal,morphology,float,dimensionless,Galaxy ellipticity e1 component,Shape diagnostic
+eps2_gal,eps2_gal,morphology,float,dimensionless,Galaxy ellipticity e2 component,Shape diagnostic
+disk_ellipticity,disk_ellipticity,morphology,float,dimensionless,Disk ellipticity,Shape diagnostic
+bulge_ellipticity,bulge_ellipticity,morphology,float,dimensionless,Bulge ellipticity,Shape diagnostic
+bulge_nsersic,bulge_nsersic,morphology,float,dimensionless,Bulge Sersic index,Shape diagnostic
+disk_nsersic,disk_nsersic,morphology,float,dimensionless,Disk Sersic index,Usually near 1 for exponential disk component
+lm_halo,lm_halo,halo,float,log10(Msun h^-1),Base-10 logarithm of halo mass,Halo diagnostic
+lmbound_halo,lmbound_halo,halo,float,log10(Msun h^-1),Base-10 logarithm of bound halo mass,Halo diagnostic
+r_halo,r_halo,halo,float,kpc h^-1,Halo radial distance in lightcone,Halo diagnostic
+x_halo,x_halo,halo,float,Mpc h^-1,Halo Cartesian x coordinate,Halo diagnostic
+y_halo,y_halo,halo,float,Mpc h^-1,Halo Cartesian y coordinate,Halo diagnostic
+z_halo,z_halo,halo,float,Mpc h^-1,Halo Cartesian z coordinate,Halo diagnostic
+vx_halo,vx_halo,halo,float,km s^-1,Halo peculiar velocity x component,Halo diagnostic
+vy_halo,vy_halo,halo,float,km s^-1,Halo peculiar velocity y component,Halo diagnostic
+vz_halo,vz_halo,halo,float,km s^-1,Halo peculiar velocity z component,Halo diagnostic
+n_sats_halo,n_sats_halo,halo,int32,count,Number of satellites assigned to halo,Halo diagnostic
+num_p_halo,num_p_halo,halo,int32,count,Number of simulation particles associated with halo,Halo diagnostic
+conc_vir_halo,conc_vir_halo,halo,float,dimensionless,Halo virial concentration,Halo diagnostic
+rs_halo,rs_halo,halo,float,kpc h^-1,Halo NFW scale radius,Halo diagnostic
+rvir_halo,rvir_halo,halo,float,kpc h^-1,Halo virial radius,Halo diagnostic

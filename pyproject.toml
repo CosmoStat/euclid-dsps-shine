@@ -25,6 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "black>=24.0",
+    "pytest>=8.0",
     "ruff>=0.8",
     "sphinx>=7.0",
     "sphinx-rtd-theme>=2.0",
@@ -61,3 +62,9 @@ ignore = [
     # Scientific scripts and CLIs keep some long help strings/readability lines.
     "E501",
 ]
+
+[tool.ruff.lint.isort]
+known-third-party = ["dsps"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

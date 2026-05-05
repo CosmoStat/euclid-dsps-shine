@@ -8,10 +8,6 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
-from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
-from dsps.dust.att_curves import _frac_transmission_from_k_lambda, sbl18_k_lambda
-
-from dsps import calc_obs_mag, calc_rest_sed_sfh_table_lognormal_mdf, load_ssp_templates
 
 from .filters import FilterCurve
 from .io import GalaxyObservation, abmag_to_flux_fnu_cgs
@@ -57,6 +53,8 @@ DERIVED_QUANTITY_NAMES = [
 def load_context(
     ssp_path: str, filters: dict[str, FilterCurve], n_sfh_bins: int = 96
 ) -> DspsContext:
+    from dsps import load_ssp_templates
+
     return DspsContext(
         ssp=load_ssp_templates(fn=ssp_path), filters=filters, n_sfh_bins=n_sfh_bins
     )
@@ -132,6 +130,9 @@ def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResul
 
 def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModelResult:
     """Pure-JAX DSPS forward model used by gradient-based fits."""
+    from dsps import calc_rest_sed_sfh_table_lognormal_mdf
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+
     ssp = context.ssp
     z_obs = jnp.asarray(params["z_obs"])
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
@@ -173,6 +174,9 @@ def predict_mags_jax(
     context: DspsContext, wave: jnp.ndarray, dusted_sed: jnp.ndarray, z_obs: jnp.ndarray
 ) -> jnp.ndarray:
     """Predict configured apparent AB magnitudes with DSPS photometry kernels."""
+    from dsps import calc_obs_mag
+    from dsps.cosmology import DEFAULT_COSMOLOGY
+
     mags = []
     for curve in context.filters.values():
         mags.append(
@@ -208,6 +212,8 @@ def predict_batch_mags(
 
 def derived_quantities_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
     """Return derived quantities needed for scientifically comparable reports."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+
     z_obs = jnp.asarray(params["z_obs"])
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
@@ -281,6 +287,8 @@ def apply_dust_jax(
     wave_angstrom: jnp.ndarray, rest_sed: jnp.ndarray, params: dict[str, Any]
 ) -> jnp.ndarray:
     """Apply DSPS Salim+2018-style attenuation without leaving JAX."""
+    from dsps.dust.att_curves import _frac_transmission_from_k_lambda, sbl18_k_lambda
+
     av = jnp.maximum(jnp.asarray(params.get("dust_av", 0.0)), 0.0)
     wave_micron = jnp.asarray(wave_angstrom) / 10_000.0
     k_lambda = sbl18_k_lambda(

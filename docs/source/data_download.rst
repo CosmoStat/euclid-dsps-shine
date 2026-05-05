@@ -157,6 +157,9 @@ the catalog columns to the names consumed by ``configs/fs2_phz1.yaml``:
 Column Contract
 ---------------
 
+See :doc:`catalog_columns` for the complete documented subset selected by the
+SQL query, including source names, aliases, units, and project usage notes.
+
 The default config requires these canonical columns:
 
 .. list-table::

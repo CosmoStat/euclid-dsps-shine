@@ -7,22 +7,21 @@ Assessment
 The current architecture is workable. DSPS calls are isolated, config is
 centralized, and command workflows are explicit. The biggest quality risks are:
 
-* ``reports.py`` is too large and mixes table shaping with plotting.
-* ``pipeline.py`` is too large and mixes orchestration for many commands.
-* There is no formal test suite or small synthetic fixture.
-* Config validation is implicit. Missing or misspelled YAML keys fail late.
+* ``reporting/core.py`` is still large and mixes table shaping with plotting.
+* ``workflows/core.py`` is still large and mixes orchestration for many commands.
+* There is no synthetic end-to-end parquet fixture yet.
 * Local runtime data and cloned helper repositories can clutter the project
   root if not ignored.
 
 Recommended Sequence
 --------------------
 
-1. Add project hygiene.
+1. Add project hygiene. Done.
 
-   Done in this cleanup: Sphinx docs, black/ruff config, CI workflow, and
-   stronger ignore rules for local artifacts.
+   Sphinx docs, black/ruff config, pytest wiring, CI workflow, and stronger
+   ignore rules for local artifacts are in place.
 
-2. Add lightweight tests before moving code.
+2. Add lightweight tests before moving code. Done for low-level contracts.
 
    Start with tests that do not require the full FS2 parquet or GPU:
 
@@ -33,65 +32,47 @@ Recommended Sequence
    * filter wavelength unit conversion
    * row-index file parsing
 
-3. Add explicit config schema validation.
+3. Add explicit config schema validation. Done.
 
-   A small validation layer should check required top-level keys, band entries,
-   free-parameter bounds, truth transforms, and path types immediately after
-   YAML loading. This can stay lightweight with dataclasses, or use Pydantic if
-   richer error messages become important.
+   ``euclid_dsps.config.validate_config`` checks required paths, band entries,
+   units, redshift bounds, fit bounds, sample settings, and truth transforms
+   immediately after YAML loading.
 
-4. Split reporting.
+4. Split reporting. First pass done.
 
-   Move report code into a package:
+   Report code now lives in a package:
 
    .. code-block:: text
 
       euclid_dsps/reporting/
-        tables.py
-        plots.py
-        posterior.py
-        workflow.py
+        core.py
 
-   Keep old public functions as small wrappers during the transition so the CLI
-   does not change.
+   ``euclid_dsps.reports`` remains as a compatibility facade.
 
-5. Split workflows.
+5. Split workflows. First pass done.
 
-   Move orchestration into:
+   Workflow orchestration now lives in:
 
    .. code-block:: text
 
       euclid_dsps/workflows/
-        eda.py
-        forward.py
-        map_fit.py
-        bayesian.py
-        population.py
+        core.py
 
-   ``pipeline.py`` can then become a compatibility facade imported by
-   ``cli.py`` and scripts.
+   ``euclid_dsps.pipeline`` remains as a compatibility facade.
 
-6. Introduce shared domain dataclasses.
+6. Introduce shared domain dataclasses. Partially done.
 
-   If parameter dictionaries become hard to reason about, add:
-
-   .. code-block:: text
-
-      euclid_dsps/types.py
-
-   Candidate dataclasses:
-
-   * ``ResolvedConfig``
-   * ``BandConfig``
-   * ``FitParameterSpec``
-   * ``TruthColumnSpec``
-   * ``WorkflowRunMetadata``
+   ``euclid_dsps.columns.CatalogColumn`` now documents the selected CosmoHub
+   columns. Runtime config still uses dictionaries because it maps directly to
+   YAML. Add typed config dataclasses only if validation errors or IDE support
+   become a real bottleneck.
 
 7. Add reproducible smoke fixtures.
 
    Keep a tiny synthetic parquet fixture under ``tests/data/``. It should have a
-   few rows and deterministic photometry values. This enables CI tests without
-   shipping private or large CosmoHub data.
+   few rows and deterministic photometry values. This will enable CI tests for
+   EDA and row-selection workflows without shipping private or large CosmoHub
+   data.
 
 Non-Goals
 ---------
