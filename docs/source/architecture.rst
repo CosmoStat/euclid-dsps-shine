@@ -23,8 +23,19 @@ assets:
      reports.py      Compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
      reporting/
+       eda.py        EDA report exports.
+       fit.py        MAP/population report exports.
+       forward.py    Forward-model report exports.
+       posterior.py  Posterior report exports.
+       workflow.py   Composite workflow report exports.
        core.py       Report tables and plots.
      workflows/
+       bayesian.py   Bayesian workflow exports.
+       eda.py        EDA workflow exports.
+       forward.py    Forward-model workflow exports.
+       map_fit.py    MAP workflow exports.
+       population.py Population workflow exports.
+       workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
      fs2_phz1.yaml   Default Euclid FS2 PHZ setup.
@@ -64,14 +75,15 @@ Layer Responsibilities
   Own optimizer and sampler behavior. They should depend on the model boundary
   and observation dataclasses, not on parquet or report-writing concerns.
 
-``workflows/core.py``
+``workflows/*.py``
   Composes workflows from the layers above. It is allowed to orchestrate, but
   should avoid complex scientific logic that belongs in ``model.py``,
-  ``fit.py``, or ``io.py``.
+  ``fit.py``, or ``io.py``. Focused modules expose stable entry points by
+  workflow type, while ``core.py`` keeps the shared implementation and helpers.
 
-``reporting/core.py``
-  Owns artifact writing. Report code should receive already-computed tables and
-  model results where possible.
+``reporting/*.py``
+  Owns artifact writing. Focused modules expose stable entry points by report
+  type, while ``core.py`` keeps shared plotting/table implementation.
 
 ``pipeline.py`` and ``reports.py``
   Compatibility facades retained for existing scripts. New code should import
@@ -91,7 +103,7 @@ Design Rules
 Current Technical Debt
 ----------------------
 
-``workflows/core.py`` and ``reporting/core.py`` remain large after the package
-split. The next split should be by workflow/report type after test coverage
-expands around generated tables and plots. The safer sequence is documented in
-:doc:`refactor_roadmap`.
+``workflows/core.py`` and ``reporting/core.py`` retain shared implementation to
+avoid risky movement of coupled helper functions. The public modules are now
+split by workflow/report type, so future internal movement can happen behind
+stable imports. The safer sequence is documented in :doc:`refactor_roadmap`.

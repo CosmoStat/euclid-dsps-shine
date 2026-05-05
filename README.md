@@ -54,6 +54,7 @@ Start with:
 - `docs/source/architecture.rst` for project boundaries and refactor roadmap.
 - `docs/source/data_download.rst` for the CosmoHub SQL query and data contract.
 - `docs/source/run_setup.rst` for config parameters and CLI workflows.
+- `docs/source/testing.rst` for unit tests, smoke fixtures, and CI checks.
 
 ## Quality Checks
 

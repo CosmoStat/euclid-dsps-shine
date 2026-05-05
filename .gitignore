@@ -14,6 +14,7 @@ outputs/
 # Local data and generated asset manifests.
 Data/*
 !Data/.gitkeep
+!tests/data/*.parquet
 *.Zone.Identifier
 filters/converted/
 

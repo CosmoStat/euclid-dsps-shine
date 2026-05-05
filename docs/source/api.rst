@@ -57,6 +57,30 @@ Workflows
    :members:
    :undoc-members:
 
+.. automodule:: euclid_dsps.workflows.eda
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.forward
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.map_fit
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.bayesian
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.population
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.workflow
+   :members:
+   :undoc-members:
+
 .. automodule:: euclid_dsps.workflows.core
    :members:
    :undoc-members:
@@ -65,6 +89,26 @@ Reporting
 ---------
 
 .. automodule:: euclid_dsps.reporting.core
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.reporting.eda
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.reporting.forward
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.reporting.fit
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.reporting.posterior
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.reporting.workflow
    :members:
    :undoc-members:
 

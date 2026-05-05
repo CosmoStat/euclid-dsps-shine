@@ -5,11 +5,12 @@ Assessment
 ----------
 
 The current architecture is workable. DSPS calls are isolated, config is
-centralized, and command workflows are explicit. The biggest quality risks are:
+centralized, and command workflows are explicit. The remaining quality risks are:
 
-* ``reporting/core.py`` is still large and mixes table shaping with plotting.
-* ``workflows/core.py`` is still large and mixes orchestration for many commands.
-* There is no synthetic end-to-end parquet fixture yet.
+* Native DSPS import currently segfaults in the local ``shine`` environment,
+  which blocks full forward-model smoke tests until the environment is repaired.
+* Plot-level tests remain intentionally light. They verify EDA artifact creation
+  but do not inspect image contents.
 * Local runtime data and cloned helper repositories can clutter the project
   root if not ignored.
 
@@ -21,7 +22,7 @@ Recommended Sequence
    Sphinx docs, black/ruff config, pytest wiring, CI workflow, and stronger
    ignore rules for local artifacts are in place.
 
-2. Add lightweight tests before moving code. Done for low-level contracts.
+2. Add lightweight tests before moving code. Done.
 
    Start with tests that do not require the full FS2 parquet or GPU:
 
@@ -31,6 +32,8 @@ Recommended Sequence
    * required catalog column discovery
    * filter wavelength unit conversion
    * row-index file parsing
+   * synthetic parquet schema validation
+   * EDA output smoke testing
 
 3. Add explicit config schema validation. Done.
 
@@ -38,24 +41,35 @@ Recommended Sequence
    units, redshift bounds, fit bounds, sample settings, and truth transforms
    immediately after YAML loading.
 
-4. Split reporting. First pass done.
+4. Split reporting. Done.
 
-   Report code now lives in a package:
+   Report code now lives in a package with focused public modules:
 
    .. code-block:: text
 
       euclid_dsps/reporting/
+        eda.py
+        fit.py
+        forward.py
+        posterior.py
+        workflow.py
         core.py
 
    ``euclid_dsps.reports`` remains as a compatibility facade.
 
-5. Split workflows. First pass done.
+5. Split workflows. Done.
 
-   Workflow orchestration now lives in:
+   Workflow orchestration now lives in focused public modules:
 
    .. code-block:: text
 
       euclid_dsps/workflows/
+        bayesian.py
+        eda.py
+        forward.py
+        map_fit.py
+        population.py
+        workflow.py
         core.py
 
    ``euclid_dsps.pipeline`` remains as a compatibility facade.
@@ -67,12 +81,11 @@ Recommended Sequence
    YAML. Add typed config dataclasses only if validation errors or IDE support
    become a real bottleneck.
 
-7. Add reproducible smoke fixtures.
+7. Add reproducible smoke fixtures. Done.
 
-   Keep a tiny synthetic parquet fixture under ``tests/data/``. It should have a
-   few rows and deterministic photometry values. This will enable CI tests for
-   EDA and row-selection workflows without shipping private or large CosmoHub
-   data.
+   ``tests/data/synthetic_catalog.parquet`` has a few deterministic rows. CI
+   validates the configured schema, row selection, derived metallicity helper,
+   and EDA outputs without shipping private or large CosmoHub data.
 
 Non-Goals
 ---------

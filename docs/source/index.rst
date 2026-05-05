@@ -24,6 +24,7 @@ The project keeps the scientific boundary narrow:
    data_download
    catalog_columns
    run_setup
+   testing
    refactor_roadmap
 
 .. toctree::
