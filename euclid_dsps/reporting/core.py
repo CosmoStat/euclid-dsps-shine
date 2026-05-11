@@ -16,9 +16,53 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from cycler import cycler
 
 from ..io import GalaxyObservation, ensure_dir, write_json
 from ..model import ModelResult, comparison_rows
+from ..sed import EmpiricalSed, reconstruct_empirical_sed
+
+
+def configure_plot_style() -> None:
+    """Apply project-wide, publication-style matplotlib defaults."""
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["STIXGeneral", "DejaVu Serif", "Times New Roman"],
+            "mathtext.fontset": "cm",
+            "axes.linewidth": 0.8,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.grid": True,
+            "axes.grid.axis": "both",
+            "grid.alpha": 0.22,
+            "grid.linewidth": 0.45,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "xtick.major.size": 4.0,
+            "ytick.major.size": 4.0,
+            "xtick.minor.size": 2.0,
+            "ytick.minor.size": 2.0,
+            "legend.frameon": False,
+            "legend.fontsize": 8,
+            "figure.facecolor": "white",
+            "savefig.facecolor": "white",
+            "savefig.bbox": "tight",
+            "axes.prop_cycle": cycler(
+                color=[
+                    "#2F5D8C",
+                    "#B85C38",
+                    "#3F7F5F",
+                    "#7A4E8A",
+                    "#8C6A2F",
+                    "#4F6F7A",
+                ]
+            ),
+        }
+    )
+
+
+configure_plot_style()
 
 
 def write_eda_outputs(
@@ -72,7 +116,21 @@ def write_run_outputs(
 
     plot_sed(result, out / "sed.png")
     plot_photometry_comparison(comparison, out / "photometry_comparison.png")
+    write_sed_comparison_outputs(observation, result, out)
     return comparison
+
+
+def write_sed_comparison_outputs(
+    observation: GalaxyObservation, result: ModelResult, out_dir: str | Path
+) -> EmpiricalSed:
+    """Write photometry-anchored pseudo-SED diagnostics for one galaxy."""
+    out = ensure_dir(out_dir)
+    empirical = reconstruct_empirical_sed(observation, result)
+    empirical.points.to_csv(out / "empirical_sed_points.csv", index=False)
+    empirical.continuous.to_csv(out / "empirical_sed.csv", index=False)
+    write_json(out / "empirical_sed_summary.json", empirical.summary)
+    plot_sed_comparison(empirical, out / "sed_comparison.png")
+    return empirical
 
 
 def write_fit_outputs(fit_result: Any, out_dir: str | Path) -> None:
@@ -534,16 +592,18 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
     for col in context_columns:
         aggregations[col] = (col, "first")
     by_row = valid.groupby("row_index").agg(**aggregations)
-    by_row["reduced_chi2"] = by_row["chi2"] / by_row["n_bands"].clip(lower=1)
+    derived_columns = {"reduced_chi2": by_row["chi2"] / by_row["n_bands"].clip(lower=1)}
 
     for col in list(by_row.columns):
         if col.startswith("truth_"):
             param_name = col[6:]
             fit_col = f"fit_{param_name}"
             if fit_col in by_row.columns:
-                by_row[f"delta_fit_{param_name}_minus_truth"] = (
+                derived_columns[f"delta_fit_{param_name}_minus_truth"] = (
                     by_row[fit_col] - by_row[col]
                 )
+
+    by_row = pd.concat([by_row, pd.DataFrame(derived_columns)], axis=1).copy()
 
     return by_row
 
@@ -624,8 +684,13 @@ def plot_redshift_distributions(
 
 
 def plot_physical_parameters_distributions(df: pd.DataFrame, path: str | Path) -> None:
-    params = ["log10_metallicity_true", "sfr_true", "log_sfr_true", "dust_ebv_true"]
-    valid_params = [p for p in params if p in df.columns]
+    params_map = {
+        "log10_metallicity_true": "Ground Truth log10(Z)",
+        "sfr_true": "Ground Truth SFR [Msun/yr]",
+        "log_sfr_true": "Ground Truth log10(SFR)",
+        "dust_ebv_true": "Ground Truth E(B-V)",
+    }
+    valid_params = [p for p in params_map if p in df.columns]
     if not valid_params:
         return
 
@@ -636,8 +701,8 @@ def plot_physical_parameters_distributions(df: pd.DataFrame, path: str | Path) -
         val = df[param].to_numpy(dtype=float)
         val = val[np.isfinite(val)]
         ax.hist(val, bins=70, histtype="stepfilled", alpha=0.7)
-        ax.set_xlabel(param)
-        ax.set_ylabel("count")
+        ax.set_xlabel(params_map[param])
+        ax.set_ylabel("galaxies")
         ax.grid(alpha=0.2)
 
     fig.tight_layout()
@@ -720,11 +785,177 @@ def plot_sed(result: ModelResult, path: str | Path) -> None:
     plt.close(fig)
 
 
+def plot_sed_comparison(empirical: EmpiricalSed, path: str | Path) -> None:
+    """Plot DSPS SED against broad-band empirical pseudo-SED points."""
+    points = empirical.points.copy()
+    continuous = empirical.continuous.copy()
+    if points.empty or continuous.empty:
+        return
+
+    wave = continuous["wave_angstrom"].to_numpy(dtype=float)
+    x = wave / 10_000.0
+    dsps = continuous["dsps_dusted_lnu_lsun_per_hz"].to_numpy(dtype=float)
+    intrinsic = continuous["dsps_intrinsic_lnu_lsun_per_hz"].to_numpy(dtype=float)
+    pseudo = continuous["empirical_dusted_lnu_lsun_per_hz"].to_numpy(dtype=float)
+    point_x = points["rest_wavelength_angstrom"].to_numpy(dtype=float) / 10_000.0
+    point_y = points["inferred_rest_lnu_lsun_per_hz"].to_numpy(dtype=float)
+    point_sigma = points["sigma_rest_lnu_lsun_per_hz"].to_numpy(dtype=float)
+    residual = points["log10_empirical_over_dsps_dusted"].to_numpy(dtype=float)
+    residual_sigma = points["sigma_log10_lnu"].to_numpy(dtype=float)
+    finite_x = point_x[np.isfinite(point_x) & (point_x > 0)]
+    xmin = max(float(np.nanmin(finite_x)) * 0.75, 0.05) if finite_x.size else None
+    xmax = float(np.nanmax(finite_x)) * 1.25 if finite_x.size else None
+    domain = np.ones_like(x, dtype=bool)
+    if xmin is not None and xmax is not None:
+        domain = (x >= xmin) & (x <= xmax)
+
+    fig, (ax_sed, ax_resid) = plt.subplots(
+        2,
+        1,
+        figsize=(8.2, 6.2),
+        sharex=True,
+        gridspec_kw={"height_ratios": [2.4, 1.0], "hspace": 0.06},
+    )
+
+    intrinsic_mask = _positive_curve_mask(x, intrinsic) & domain
+    dsps_mask = _positive_curve_mask(x, dsps) & domain
+    pseudo_mask = _positive_curve_mask(x, pseudo) & domain
+    if intrinsic_mask.any():
+        ax_sed.plot(
+            x[intrinsic_mask],
+            intrinsic[intrinsic_mask],
+            color="#777777",
+            lw=1.0,
+            ls="--",
+            alpha=0.75,
+            label=r"DSPS intrinsic $L_\nu$",
+        )
+    if dsps_mask.any():
+        ax_sed.plot(
+            x[dsps_mask],
+            dsps[dsps_mask],
+            color="#2F5D8C",
+            lw=1.55,
+            label=r"DSPS attenuated $L_\nu$",
+        )
+    if pseudo_mask.any():
+        ax_sed.plot(
+            x[pseudo_mask],
+            pseudo[pseudo_mask],
+            color="#B85C38",
+            lw=1.45,
+            label="photometry-anchored pseudo-SED",
+        )
+    point_mask = np.isfinite(point_x) & np.isfinite(point_y) & (point_y > 0)
+    if point_mask.any():
+        ax_sed.errorbar(
+            point_x[point_mask],
+            point_y[point_mask],
+            yerr=point_sigma[point_mask],
+            fmt="o",
+            ms=5.0,
+            capsize=2.5,
+            color="#1F1F1F",
+            ecolor="#555555",
+            elinewidth=0.8,
+            label="catalog broad-band points",
+            zorder=5,
+        )
+        for index, (xi, yi, label) in enumerate(
+            zip(
+                point_x[point_mask],
+                point_y[point_mask],
+                points.loc[point_mask, "band"],
+                strict=True,
+            )
+        ):
+            y_offset = 5 + 9 * (index % 2)
+            ax_sed.annotate(
+                _short_band_label(str(label)),
+                (xi, yi),
+                textcoords="offset points",
+                xytext=(2, y_offset),
+                rotation=25,
+                ha="left",
+                fontsize=7.2,
+            )
+
+    _set_sed_axis_limits(
+        ax_sed,
+        [
+            intrinsic[intrinsic_mask],
+            dsps[dsps_mask],
+            pseudo[pseudo_mask],
+            point_y[point_mask],
+        ],
+    )
+    if xmin is not None and xmax is not None:
+        ax_sed.set_xlim(xmin, xmax)
+        ax_resid.set_xlim(xmin, xmax)
+
+    ax_sed.set_ylabel(r"$L_\nu\,[L_\odot\,Hz^{-1}]$")
+    ax_sed.set_yscale("log")
+    ax_sed.legend(loc="best")
+    ax_sed.set_title("SED comparison at catalog photometric constraints")
+
+    residual_mask = np.isfinite(point_x) & np.isfinite(residual)
+    ax_resid.axhline(0.0, color="#1F1F1F", lw=0.9)
+    if residual_mask.any():
+        ax_resid.errorbar(
+            point_x[residual_mask],
+            residual[residual_mask],
+            yerr=residual_sigma[residual_mask],
+            fmt="o",
+            ms=4.8,
+            capsize=2.5,
+            color="#B85C38",
+            ecolor="#555555",
+            elinewidth=0.8,
+        )
+    ax_resid.set_xlabel(r"rest-frame wavelength [$\mu$m]")
+    ax_resid.set_ylabel(r"$\log_{10}(L_{\nu,emp}/L_{\nu,DSPS})$")
+
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+
+
 def _positive_axis_limits(values: np.ndarray) -> tuple[float, float]:
     finite = values[np.isfinite(values) & (values > 0)]
     if finite.size == 0:
         return 1.0, 10.0
     return float(np.nanpercentile(finite, 1)), float(np.nanpercentile(finite, 99.5))
+
+
+def _positive_curve_mask(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    return np.isfinite(x) & np.isfinite(y) & (x > 0) & (y > 0)
+
+
+def _set_sed_axis_limits(ax: plt.Axes, values: list[np.ndarray]) -> None:
+    positive = [
+        np.asarray(value, dtype=float)[
+            np.isfinite(value) & (np.asarray(value, dtype=float) > 0)
+        ]
+        for value in values
+    ]
+    finite = np.concatenate([value for value in positive if value.size])
+    if finite.size == 0:
+        return
+    lo = float(np.nanpercentile(finite, 2))
+    hi = float(np.nanpercentile(finite, 98))
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo <= 0 or hi <= 0:
+        return
+    if lo >= hi:
+        lo *= 0.8
+        hi *= 1.2
+    ax.set_ylim(lo * 0.55, hi * 1.8)
+
+
+def _short_band_label(name: str) -> str:
+    return (
+        name.replace("euclid_nisp_", "NISP-")
+        .replace("euclid_", "")
+        .replace("lsst_", "LSST-")
+    )
 
 
 def plot_photometry_comparison(comparison: pd.DataFrame, path: str | Path) -> None:
@@ -1720,9 +1951,11 @@ def _redshift_axis_labels(by_row: pd.DataFrame) -> tuple[str, str]:
     truth_source = _first_string(by_row, "redshift_truth_source") or "z_true"
     fit_source = _first_string(by_row, "z_obs_source") or "z_phz"
     fit_label = (
-        "fit_z_obs" if "fit_z_obs" in by_row.columns else f"{fit_source} used by DSPS"
+        "Inferred Redshift (Fit)"
+        if "fit_z_obs" in by_row.columns
+        else f"Input {fit_source} to DSPS"
     )
-    return fit_label, truth_source
+    return fit_label, f"Ground Truth ({truth_source})"
 
 
 def _first_string(frame: pd.DataFrame, column: str) -> str | None:
@@ -1743,21 +1976,19 @@ def _truth_kind_from_frame(frame: pd.DataFrame, parameter: str) -> str:
 
 
 def _truth_legend_label(parameter: str) -> str:
-    return "truth proxy" if parameter in {"dust_av", "log10_metallicity"} else "truth"
+    kind = " (proxy)" if parameter in {"dust_av", "log10_metallicity"} else ""
+    return f"Ground Truth{kind}"
 
 
 def _parameter_display_label(parameter: str) -> str:
     labels = {
-        "z_obs": "redshift",
-        "log10_sfr_at_obs": "log10 SFR at obs",
-        "log10_sfr": "log10 SFH amplitude",
-        "dust_av": "dust A_V",
-        "log10_metallicity": "log10 metallicity",
+        "z_obs": "Redshift",
+        "log10_sfr_at_obs": "log10 SFR [Msun/yr]",
+        "log10_sfr": "log10 SFH Amplitude",
+        "dust_av": "Dust Av [mag]",
+        "log10_metallicity": "log10 Metallicity [absolute log10(Z)]",
     }
-    label = labels.get(parameter, parameter)
-    if parameter in {"dust_av", "log10_metallicity"}:
-        label = f"{label} (proxy truth)"
-    return label
+    return labels.get(parameter, parameter)
 
 
 def ordered_bands(df: pd.DataFrame) -> list[str]:

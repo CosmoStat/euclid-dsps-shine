@@ -14,6 +14,7 @@ from ..io import (
     abmag_to_flux_fnu_cgs,
     build_observation,
     ensure_dir,
+    flux_error_to_sigma_mag,
     flux_fnu_cgs_to_abmag,
     iter_catalog_batches,
     load_row_indices,
@@ -90,6 +91,7 @@ def prepare_one(config: dict[str, Any]):
         config["ssp_path"],
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
     )
     params = parameters_for_row(
         config["model"]["fixed_parameters"],
@@ -184,6 +186,7 @@ def sample_batch(
         config["ssp_path"],
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
     )
 
     summary_rows = []
@@ -430,6 +433,7 @@ def run_batch(
         config["ssp_path"],
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
     )
 
     rows = []
@@ -480,6 +484,7 @@ def fit_batch(
         config["ssp_path"],
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
     )
 
     comparison_rows = []
@@ -542,6 +547,7 @@ def fit_population(
         config["ssp_path"],
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
     )
 
     comparison_rows = []
@@ -983,12 +989,54 @@ def _photometry_arrays(
             )
         mag_columns.append(mag)
         flux_columns.append(flux)
-        sigma_columns.append([float(band.get("sigma_mag", 0.05))] * len(batch))
+        sigma_columns.append(_sigma_mag_array(batch, band, flux, units))
     return (
         pd.DataFrame(mag_columns).transpose().to_numpy(dtype=float),
         pd.DataFrame(flux_columns).transpose().to_numpy(dtype=float),
         pd.DataFrame(sigma_columns).transpose().to_numpy(dtype=float),
     )
+
+
+def _sigma_mag_array(
+    batch: pd.DataFrame, band: dict[str, Any], flux: Any, units: str
+) -> list[float]:
+    fallback = float(band.get("sigma_mag", 0.05))
+    error_column = band.get("error_column")
+    if not error_column or error_column not in batch:
+        return [fallback] * len(batch)
+
+    raw_errors = batch[str(error_column)].astype(float).to_numpy()
+    error_units = band.get("error_units", units)
+    floor = band.get("sigma_mag_floor")
+    ceiling = band.get("sigma_mag_ceiling")
+    sigma = []
+    flux_values = np.asarray(flux, dtype=float)
+    for flux_value, raw_error in zip(flux_values, raw_errors, strict=True):
+        value = float("nan")
+        if np.isfinite(raw_error) and raw_error > 0.0:
+            if error_units == "abmag":
+                value = float(raw_error)
+                if floor is not None and np.isfinite(floor):
+                    value = max(value, float(floor))
+                if ceiling is not None and np.isfinite(ceiling):
+                    value = min(value, float(ceiling))
+            elif error_units == "fnu_cgs":
+                value = flux_error_to_sigma_mag(
+                    float(flux_value), float(raw_error), floor=floor, ceiling=ceiling
+                )
+            elif error_units in {"microjy", "ujy"}:
+                value = flux_error_to_sigma_mag(
+                    float(flux_value),
+                    microjy_to_flux_fnu_cgs(float(raw_error)),
+                    floor=floor,
+                    ceiling=ceiling,
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported photometry error units for {band['name']}: {error_units}"
+                )
+        sigma.append(value if np.isfinite(value) and value > 0.0 else fallback)
+    return sigma
 
 
 def _load_row_indices_set(row_indices_file: str | None) -> set[int] | None:

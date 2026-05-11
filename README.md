@@ -6,6 +6,10 @@ Standalone workflow for testing native `dsps` on simulated Euclid FS2 catalog da
 
 Default config: `configs/fs2_phz1.yaml`.
 
+Optional 10-band config: `configs/fs2_phz1_10band.yaml`. This explicitly
+activates LSST `ugrizy` in addition to Euclid VIS/Y/J/H. The default config
+remains Euclid-only.
+
 Default catalog: `Data/Euclid FS2 LC galaxy catalog_phz1.parquet`.
 
 Default Euclid passbands (VIS/Y/J/H) are loaded from ASCII throughput files under `filters/`:
@@ -19,6 +23,9 @@ Required columns for the default workflow:
 - `z_phz`: photometric redshift used by DSPS as fixed `z_obs`.
 - `z_true`: truth redshift used only for diagnostics.
 - `euclid_vis`, `euclid_nisp_y`, `euclid_nisp_j`, `euclid_nisp_h`: simulated fluxes.
+- `sed_cosmos_1`, `sed_cosmos_2`, `ebv_cosmos_*`, `ext_curve_cosmos_*`: COSMOS template reconstruction inputs.
+- `frac_cosmos_1`, `frac_cosmos_2`: component fractions used for COSMOS proxy SED reconstruction.
+- `euclid_vis_abs`, `euclid_nisp_y_abs`, `euclid_nisp_j_abs`, `euclid_nisp_h_abs`: rest-frame 10 pc Euclid fluxes used to normalize COSMOS proxy SEDs.
 - `log_sfr_true`: catalog log SFR, compared to derived DSPS `log10_sfr_at_obs`, not to the internal SFH amplitude.
 - `metallicity_true`: gas-phase oxygen abundance, converted to a metallicity proxy as `metallicity_true - 10.61`.
 - `dust_ebv_true`: catalog color excess, converted to an `A_V` proxy as `4.05 * E(B-V)`.
@@ -84,6 +91,30 @@ Fit one galaxy with a pure-JAX Adam chi-square likelihood in AB magnitudes:
 
 ```bash
 euclid-dsps --config configs/fs2_phz1.yaml fit-one --out outputs/runs/phz1_fit_one
+```
+
+Opt into the ten-band diagnostic setup:
+
+```bash
+euclid-dsps --config configs/fs2_phz1_10band.yaml fit-one --out outputs/runs/phz1_10band_fit_one
+```
+
+Reconstruct COSMOS-template proxy SEDs from the local LePhare data:
+
+```bash
+euclid-dsps --config configs/fs2_phz1.yaml cosmos-sed --limit 10 --plot-samples 12 --out outputs/runs/phz1_cosmos_sed
+```
+
+Compare COSMOS proxy SEDs against fitted DSPS SEDs for a small sample:
+
+```bash
+euclid-dsps --config configs/fs2_phz1.yaml cosmos-sed --limit 3 --fit-dsps --out outputs/runs/phz1_cosmos_sed_fit_dsps
+```
+
+Compare COSMOS proxy SEDs against a chunked population MAP DSPS fit:
+
+```bash
+euclid-dsps --config configs/fs2_phz1.yaml cosmos-sed --limit 64 --batch-size 32 --population-dsps --plot-samples 16 --out outputs/runs/phz1_cosmos_sed_population_dsps
 ```
 
 Sample one galaxy posterior. For quick debugging, use fixed-step HMC to cap the
@@ -172,7 +203,9 @@ Use `--all` instead of `--limit` to process the full parquet catalog.
 
 ## Outputs
 
-Single-galaxy runs write `selected_galaxy.json`, `model_parameters.json`, `sed.csv`, `sed.png`, `photometry_comparison.csv`, and `photometry_comparison.png`.
+Single-galaxy runs write `selected_galaxy.json`, `model_parameters.json`, `sed.csv`, `sed.png`, `photometry_comparison.csv`, and `photometry_comparison.png`. They also write `empirical_sed_points.csv`, `empirical_sed.csv`, `empirical_sed_summary.json`, and `sed_comparison.png`, which compare the DSPS attenuated SED to a broad-band pseudo-SED inferred from the configured catalog photometry. This diagnostic does not change the likelihood.
+
+`cosmos-sed` writes `cosmos_sed_validation.json`, `cosmos_sed_diagnostics.csv`, `cosmos_seds.parquet`, `cosmos_sed_example.png`, `cosmos_sed_sample_set.png`, `cosmos_template_pair_heatmap.png`, `cosmos_fraction_diagnostics.png`, and `synthetic_vs_catalog_abs_flux.png`. With `--compare-dsps`, `--fit-dsps`, or `--population-dsps`, it also writes branch-1 rest-frame SED metrics and branch-2 observed photometry residual metrics. Fit modes add `cosmos_dsps_fit_results.csv`, `cosmos_dsps_fit_trace.csv`, and population hyperparameters when requested.
 
 Batch runs write the flat comparison table plus `*_summary_by_band.csv`, `*_summary_by_galaxy.csv`, `*_dashboard.png`, `*_residuals_by_band.png`, `*_observed_vs_model.png`, and `*_redshift_truth.png`.
 

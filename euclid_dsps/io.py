@@ -19,6 +19,8 @@ class BandObservation:
     flux_fnu_cgs: float
     mag_ab: float
     sigma_mag: float
+    error_column: str | None = None
+    flux_error_fnu_cgs: float | None = None
 
 
 @dataclass(frozen=True)
@@ -195,6 +197,28 @@ def microjy_to_abmag(flux_microjy: float) -> float:
     return float(-2.5 * np.log10(flux_microjy) + 23.9)
 
 
+def flux_error_to_sigma_mag(
+    flux_fnu_cgs: float,
+    flux_error_fnu_cgs: float,
+    floor: float | None = None,
+    ceiling: float | None = None,
+) -> float:
+    """Convert a flux-density uncertainty into a local AB-mag uncertainty."""
+    if (
+        not np.isfinite(flux_fnu_cgs)
+        or not np.isfinite(flux_error_fnu_cgs)
+        or flux_fnu_cgs <= 0.0
+        or flux_error_fnu_cgs <= 0.0
+    ):
+        return float("nan")
+    sigma = float((2.5 / np.log(10.0)) * abs(flux_error_fnu_cgs / flux_fnu_cgs))
+    if floor is not None and np.isfinite(floor):
+        sigma = max(sigma, float(floor))
+    if ceiling is not None and np.isfinite(ceiling):
+        sigma = min(sigma, float(ceiling))
+    return sigma
+
+
 def build_observation(
     row_index: int, row: pd.Series, band_configs: list[dict[str, Any]]
 ) -> GalaxyObservation:
@@ -216,13 +240,41 @@ def build_observation(
             raise ValueError(
                 f"Unsupported photometry units for {band['name']}: {units}"
             )
+        error_column = band.get("error_column")
+        flux_error = None
+        sigma_mag = float(band.get("sigma_mag", 0.05))
+        if error_column and error_column in row and pd.notna(row[error_column]):
+            raw_error = float(row[error_column])
+            error_units = band.get("error_units", units)
+            if error_units == "abmag":
+                if np.isfinite(raw_error) and raw_error > 0:
+                    sigma_mag = raw_error
+            else:
+                if error_units == "fnu_cgs":
+                    flux_error = raw_error
+                elif error_units in {"microjy", "ujy"}:
+                    flux_error = microjy_to_flux_fnu_cgs(raw_error)
+                else:
+                    raise ValueError(
+                        f"Unsupported photometry error units for {band['name']}: {error_units}"
+                    )
+                converted = flux_error_to_sigma_mag(
+                    flux_fnu_cgs,
+                    flux_error,
+                    floor=band.get("sigma_mag_floor"),
+                    ceiling=band.get("sigma_mag_ceiling"),
+                )
+                if np.isfinite(converted):
+                    sigma_mag = converted
         bands.append(
             BandObservation(
                 name=band["name"],
                 column=column,
                 flux_fnu_cgs=flux_fnu_cgs,
                 mag_ab=mag_ab,
-                sigma_mag=float(band.get("sigma_mag", 0.05)),
+                sigma_mag=sigma_mag,
+                error_column=str(error_column) if error_column else None,
+                flux_error_fnu_cgs=flux_error,
             )
         )
     return GalaxyObservation(row_index=row_index, row=row.to_dict(), bands=bands)
@@ -230,6 +282,9 @@ def build_observation(
 
 def required_catalog_columns(config: dict[str, Any]) -> list[str]:
     columns = {band["column"] for band in config["bands"]}
+    for band in config["bands"]:
+        if band.get("error_column"):
+            columns.add(str(band["error_column"]))
     for col in config.get("extra_columns", []):
         columns.add(col)
     for col in (config.get("model", {}).get("parameter_columns") or {}).values():
