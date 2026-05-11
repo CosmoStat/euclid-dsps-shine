@@ -5,45 +5,87 @@ ra_mag_gal,ra_mag_gal,coordinates,float,deg,Photometry-position right ascension,
 dec_mag_gal,dec_mag_gal,coordinates,float,deg,Photometry-position declination,Position associated with catalog photometry or magnitudes
 z_true,true_redshift_halo,redshift,float,dimensionless,True halo redshift,Aliased by download query and used only for diagnostics
 z_phz,phz_mode_1,redshift,float,dimensionless,First mode of PHZ redshift PDF,Used as fixed DSPS z_obs in default config
-euclid_vis,euclid_vis,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid VIS flux density,Project config interprets as Fnu cgs
-euclid_nisp_y,euclid_nisp_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid NISP Y flux density,Project config interprets as Fnu cgs
-euclid_nisp_j,euclid_nisp_j,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid NISP J flux density,Project config interprets as Fnu cgs
-euclid_nisp_h,euclid_nisp_h,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated Euclid NISP H flux density,Project config interprets as Fnu cgs
-lsst_u,lsst_u,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST u flux density,Optional in current DSPS workflow
-lsst_g,lsst_g,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST g flux density,Optional in current DSPS workflow
-lsst_r,lsst_r,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST r flux density,Optional in current DSPS workflow
-lsst_i,lsst_i,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST i flux density,Optional in current DSPS workflow
-lsst_z,lsst_z,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST z flux density,Optional in current DSPS workflow
-lsst_y,lsst_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST y flux density,Optional in current DSPS workflow
-metallicity_true,metallicity,physical truth,float,12 + log10(O/H),Gas-phase oxygen abundance,Reports convert to log10 metallicity proxy with offset -10.61
-log_sfr_true,log_sfr,physical truth,float,log10(Msun yr^-1),Base-10 logarithm of catalog SFR,Compared to derived fit_log10_sfr_at_obs
-sfr_true,POW(10 log_sfr),physical truth,double,Msun yr^-1,Linear SFR computed in SQL,Convenience column from download query
-ebv_cosmos_1,ebv_cosmos_1,dust,float,mag,COSMOS E(B-V) component 1,Raw dust component
-ebv_cosmos_2,ebv_cosmos_2,dust,float,mag,COSMOS E(B-V) component 2,Raw dust component
-ext_curve_cosmos_1,ext_curve_cosmos_1,dust,int8,code,Extinction-curve identifier for component 1,Raw catalog code
-ext_curve_cosmos_2,ext_curve_cosmos_2,dust,int8,code,Extinction-curve identifier for component 2,Raw catalog code
-mw_extinction,mw_extinction,dust,float,mag,Milky Way foreground extinction scalar,Not applied by default model
-dust_ebv_true,SQL CASE expression,dust,float,mag,Single intrinsic E(B-V) target computed in SQL,Bulge-fraction weighted when both components are present
-bulge_fraction,bulge_fraction,morphology,float,fraction,Fraction of light assigned to bulge,Expected range 0 to 1 in query
-disk_r50,disk_r50,morphology,float,arcsec,Disk half-light radius,Flagship morphology model uses angular half-light radii
-bulge_r50,bulge_r50,morphology,float,arcsec,Bulge half-light radius,Flagship morphology model uses angular half-light radii
-eps1_gal,eps1_gal,morphology,float,dimensionless,Galaxy ellipticity e1 component,Shape diagnostic
-eps2_gal,eps2_gal,morphology,float,dimensionless,Galaxy ellipticity e2 component,Shape diagnostic
+sed_cosmos_1,sed_cosmos_1,SED latent,int8,index,Primary COSMOS SED template identifier [0-30],Used to reconstruct approximate ground-truth template SED
+sed_cosmos_2,sed_cosmos_2,SED latent,int8,index,Secondary COSMOS SED template identifier [0-30],Used with sed_cosmos_1 for interpolated/composite SED reconstruction
+frac_cosmos_1,frac_cosmos_1,SED latent,float,fraction,Fractional contribution of COSMOS SED component 1,Required by current strict COSMOS reconstruction config; normalize with frac_cosmos_2
+frac_cosmos_2,frac_cosmos_2,SED latent,float,fraction,Fractional contribution of COSMOS SED component 2,Required by current strict COSMOS reconstruction config; normalize with frac_cosmos_1
+color_kind,color_kind,SED latent,int8,category,HOD-based galaxy colour class (0=red sequence 1=green valley 2=blue cloud),Useful for population diagnostics
+euclid_vis,euclid_vis,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid VIS continuum flux density including internal attenuation,Project config interprets as observed-frame Fnu cgs
+euclid_vis_abs,euclid_vis_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame Euclid VIS flux density at 10 parsec,Useful anchor for pseudo-ground-truth SED normalization
+euclid_vis_el_model3_ext,euclid_vis_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid VIS flux including continuum emission lines and internal attenuation using Pozzetti model 3,More realistic forward-model observable
+euclid_vis_el_model3_ext_odonnell_ext,euclid_vis_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid VIS flux including continuum emission lines internal attenuation and Milky Way extinction,Closest catalog observable to survey photometry
+euclid_vis_el_model3_ext_odonnell_ext_error,euclid_vis_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty associated with euclid_vis_el_model3_ext_odonnell_ext,Recommended for likelihood weighting or chi-square comparison
+euclid_vis_el_model3_ext_odonnell_ext_error_realization,euclid_vis_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noise realization of Euclid VIS observed flux including attenuation and MW extinction,Useful for realistic noisy training or inference experiments
+euclid_nisp_y,euclid_nisp_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-Y continuum flux density including internal attenuation,Project config interprets as observed-frame Fnu cgs
+euclid_nisp_y_abs,euclid_nisp_y_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame Euclid NISP-Y flux density at 10 parsec,Useful anchor for pseudo-ground-truth SED normalization
+euclid_nisp_y_el_model3_ext,euclid_nisp_y_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-Y flux including continuum emission lines and internal attenuation using Pozzetti model 3,More realistic forward-model observable
+euclid_nisp_y_el_model3_ext_odonnell_ext,euclid_nisp_y_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-Y flux including continuum emission lines internal attenuation and Milky Way extinction,Closest catalog observable to survey photometry
+euclid_nisp_y_el_model3_ext_odonnell_ext_error,euclid_nisp_y_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty associated with euclid_nisp_y_el_model3_ext_odonnell_ext,Recommended for likelihood weighting or chi-square comparison
+euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization,euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noise realization of Euclid NISP-Y observed flux including attenuation and MW extinction,Useful for realistic noisy training or inference experiments
+euclid_nisp_j,euclid_nisp_j,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-J continuum flux density including internal attenuation,Project config interprets as observed-frame Fnu cgs
+euclid_nisp_j_abs,euclid_nisp_j_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame Euclid NISP-J flux density at 10 parsec,Useful anchor for pseudo-ground-truth SED normalization
+euclid_nisp_j_el_model3_ext,euclid_nisp_j_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-J flux including continuum emission lines and internal attenuation using Pozzetti model 3,More realistic forward-model observable
+euclid_nisp_j_el_model3_ext_odonnell_ext,euclid_nisp_j_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-J flux including continuum emission lines internal attenuation and Milky Way extinction,Closest catalog observable to survey photometry
+euclid_nisp_j_el_model3_ext_odonnell_ext_error,euclid_nisp_j_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty associated with euclid_nisp_j_el_model3_ext_odonnell_ext,Recommended for likelihood weighting or chi-square comparison
+euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization,euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noise realization of Euclid NISP-J observed flux including attenuation and MW extinction,Useful for realistic noisy training or inference experiments
+euclid_nisp_h,euclid_nisp_h,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-H continuum flux density including internal attenuation,Project config interprets as observed-frame Fnu cgs
+euclid_nisp_h_abs,euclid_nisp_h_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame Euclid NISP-H flux density at 10 parsec,Useful anchor for pseudo-ground-truth SED normalization
+euclid_nisp_h_el_model3_ext,euclid_nisp_h_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-H flux including continuum emission lines and internal attenuation using Pozzetti model 3,More realistic forward-model observable
+euclid_nisp_h_el_model3_ext_odonnell_ext,euclid_nisp_h_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed Euclid NISP-H flux including continuum emission lines internal attenuation and Milky Way extinction,Closest catalog observable to survey photometry
+euclid_nisp_h_el_model3_ext_odonnell_ext_error,euclid_nisp_h_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty associated with euclid_nisp_h_el_model3_ext_odonnell_ext,Recommended for likelihood weighting or chi-square comparison
+euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization,euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noise realization of Euclid NISP-H observed flux including attenuation and MW extinction,Useful for realistic noisy training or inference experiments
+lsst_u,lsst_u,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST u-band flux density,Optional in current DSPS workflow
+lsst_g,lsst_g,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST g-band flux density,Optional in current DSPS workflow
+lsst_r,lsst_r,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST r-band flux density,Optional in current DSPS workflow
+lsst_i,lsst_i,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST i-band flux density,Optional in current DSPS workflow
+lsst_z,lsst_z,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST z-band flux density,Optional in current DSPS workflow
+lsst_y,lsst_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST y-band flux density,Optional in current DSPS workflow
+metallicity_true,metallicity,physical truth,float,12 + log10(O/H),Gas-phase oxygen abundance,Can be converted to approximate stellar metallicity proxy for DSPS
+log_sfr_true,log_sfr,physical truth,float,log10(Msun yr^-1),Base-10 logarithm of catalog star formation rate,Compared to inferred DSPS SFR diagnostics
+sfr_true,POW(10 log_sfr),physical truth,double,Msun yr^-1,Linear star formation rate computed in SQL,Convenience derived column
+ebv_cosmos_1,ebv_cosmos_1,dust,float,mag,COSMOS dust reddening E(B-V) component 1,Associated with first SED component
+ebv_cosmos_2,ebv_cosmos_2,dust,float,mag,COSMOS dust reddening E(B-V) component 2,Associated with second SED component
+ext_curve_cosmos_1,ext_curve_cosmos_1,dust,int8,code,Extinction curve identifier for COSMOS component 1,Raw catalog code
+ext_curve_cosmos_2,ext_curve_cosmos_2,dust,int8,code,Extinction curve identifier for COSMOS component 2,Raw catalog code
+mw_extinction,mw_extinction,dust,float,mag,Milky Way foreground extinction scalar,Applied in odonnell_ext flux variants
+dust_ebv_true,SQL CASE expression,dust,float,mag,Single intrinsic E(B-V) target computed in SQL,Bulge-fraction weighted when both components are available
+bulge_fraction,bulge_fraction,morphology,float,fraction,Fraction of galaxy light assigned to bulge component,Expected range 0 to 1
+disk_r50,disk_r50,morphology,float,arcsec,Disk half-light radius,Angular half-light radius from Flagship morphology model
+bulge_r50,bulge_r50,morphology,float,arcsec,Bulge half-light radius,Angular half-light radius from Flagship morphology model
+eps1_gal,eps1_gal,morphology,float,dimensionless,Intrinsic galaxy ellipticity component e1,Shape diagnostic
+eps2_gal,eps2_gal,morphology,float,dimensionless,Intrinsic galaxy ellipticity component e2,Shape diagnostic
 disk_ellipticity,disk_ellipticity,morphology,float,dimensionless,Disk ellipticity,Shape diagnostic
 bulge_ellipticity,bulge_ellipticity,morphology,float,dimensionless,Bulge ellipticity,Shape diagnostic
 bulge_nsersic,bulge_nsersic,morphology,float,dimensionless,Bulge Sersic index,Shape diagnostic
-disk_nsersic,disk_nsersic,morphology,float,dimensionless,Disk Sersic index,Usually near 1 for exponential disk component
-lm_halo,lm_halo,halo,float,log10(Msun h^-1),Base-10 logarithm of halo mass,Halo diagnostic
-lmbound_halo,lmbound_halo,halo,float,log10(Msun h^-1),Base-10 logarithm of bound halo mass,Halo diagnostic
-r_halo,r_halo,halo,float,kpc h^-1,Halo radial distance in lightcone,Halo diagnostic
-x_halo,x_halo,halo,float,Mpc h^-1,Halo Cartesian x coordinate,Halo diagnostic
-y_halo,y_halo,halo,float,Mpc h^-1,Halo Cartesian y coordinate,Halo diagnostic
-z_halo,z_halo,halo,float,Mpc h^-1,Halo Cartesian z coordinate,Halo diagnostic
-vx_halo,vx_halo,halo,float,km s^-1,Halo peculiar velocity x component,Halo diagnostic
-vy_halo,vy_halo,halo,float,km s^-1,Halo peculiar velocity y component,Halo diagnostic
-vz_halo,vz_halo,halo,float,km s^-1,Halo peculiar velocity z component,Halo diagnostic
-n_sats_halo,n_sats_halo,halo,int32,count,Number of satellites assigned to halo,Halo diagnostic
-num_p_halo,num_p_halo,halo,int32,count,Number of simulation particles associated with halo,Halo diagnostic
-conc_vir_halo,conc_vir_halo,halo,float,dimensionless,Halo virial concentration,Halo diagnostic
-rs_halo,rs_halo,halo,float,kpc h^-1,Halo NFW scale radius,Halo diagnostic
-rvir_halo,rvir_halo,halo,float,kpc h^-1,Halo virial radius,Halo diagnostic
+disk_nsersic,disk_nsersic,morphology,float,dimensionless,Disk Sersic index,Usually near exponential profile
+ax_gal_rand,ax_gal_rand,morphology,float,dimensionless,Normalized randomized galaxy semi-major axis x component,Orientation diagnostic
+ay_gal_rand,ay_gal_rand,morphology,float,dimensionless,Normalized randomized galaxy semi-major axis y component,Orientation diagnostic
+az_gal_rand,az_gal_rand,morphology,float,dimensionless,Normalized randomized galaxy semi-major axis z component,Orientation diagnostic
+cx_gal_rand,cx_gal_rand,morphology,float,dimensionless,Normalized randomized galaxy semi-minor axis x component,Orientation diagnostic
+cy_gal_rand,cy_gal_rand,morphology,float,dimensionless,Normalized randomized galaxy semi-minor axis y component,Orientation diagnostic
+cz_gal_rand,cz_gal_rand,morphology,float,dimensionless,Normalized randomized galaxy semi-minor axis z component,Orientation diagnostic
+lm_halo,lm_halo,halo,float,log10(Msun h^-1),Base-10 logarithm of halo mass used for abundance matching,Halo diagnostic
+lmbound_halo,lmbound_halo,halo,float,log10(Msun h^-1),Base-10 logarithm of bound halo mass used for abundance matching,Halo diagnostic
+r_halo,r_halo,halo,float,Mpc h^-1,Halo comoving radial distance,Halo diagnostic
+x_halo,x_halo,halo,float,Mpc h^-1,Halo comoving Cartesian x coordinate,Halo diagnostic
+y_halo,y_halo,halo,float,Mpc h^-1,Halo comoving Cartesian y coordinate,Halo diagnostic
+z_halo,z_halo,halo,float,Mpc h^-1,Halo comoving Cartesian z coordinate,Halo diagnostic
+vx_halo,vx_halo,halo,float,km s^-1,Halo velocity x component,Halo diagnostic
+vy_halo,vy_halo,halo,float,km s^-1,Halo velocity y component,Halo diagnostic
+vz_halo,vz_halo,halo,float,km s^-1,Halo velocity z component,Halo diagnostic
+n_sats_halo,n_sats_halo,halo,int32,count,Number of HOD satellite galaxies associated with halo,Halo diagnostic
+num_p_halo,num_p_halo,halo,int32,count,Number of dark matter particles associated with halo,Halo diagnostic
+conc_vir_halo,conc_vir_halo,halo,float,dimensionless,NFW virial concentration parameter,Halo diagnostic
+rs_halo,rs_halo,halo,float,comoving kpc h^-1,NFW halo scale radius,Halo diagnostic
+rvir_halo,rvir_halo,halo,float,comoving kpc h^-1,NFW halo virial radius,Halo diagnostic
+ax_halo,ax_halo,halo,float,dimensionless,X component of halo semi-major axis orientation vector,Triaxial halo orientation diagnostic
+ay_halo,ay_halo,halo,float,dimensionless,Y component of halo semi-major axis orientation vector,Triaxial halo orientation diagnostic
+az_halo,az_halo,halo,float,dimensionless,Z component of halo semi-major axis orientation vector,Triaxial halo orientation diagnostic
+b_to_a_halo,b_to_a_halo,halo,float,dimensionless,Halo semi-medium to semi-major axis ratio,Triaxial halo shape diagnostic
+c_to_a_halo,c_to_a_halo,halo,float,dimensionless,Halo semi-minor to semi-major axis ratio,Triaxial halo shape diagnostic
+cx_halo,cx_halo,halo,float,dimensionless,X component of halo semi-minor axis orientation vector,Triaxial halo orientation diagnostic
+cy_halo,cy_halo,halo,float,dimensionless,Y component of halo semi-minor axis orientation vector,Triaxial halo orientation diagnostic
+cz_halo,cz_halo,halo,float,dimensionless,Z component of halo semi-minor axis orientation vector,Triaxial halo orientation diagnostic
+euler_alpha_halo,euler_alpha_halo,halo,float,rad,First Euler rotation angle of halo triaxial frame,Halo orientation diagnostic
+euler_beta_halo,euler_beta_halo,halo,float,rad,Second Euler rotation angle of halo triaxial frame,Halo orientation diagnostic
+euler_gamma_halo,euler_gamma_halo,halo,float,rad,Third Euler rotation angle of halo triaxial frame,Halo orientation diagnostic

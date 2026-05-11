@@ -1,6 +1,14 @@
 catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
 ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
 
+runtime:
+    # WSL-safe default. For a working CUDA JAX install, use:
+    # jax_platforms: "cuda,cpu"
+    # disable_jax_plugin_autoload: false
+    jax_platforms: "cpu"
+    disable_jax_plugin_autoload: true
+    xla_python_client_preallocate: false
+
 selection:
     index: 0
     require_positive_flux: true
@@ -14,6 +22,36 @@ extra_columns:
     - dec_gal
     - ra_mag_gal
     - dec_mag_gal
+    - sed_cosmos_1
+    - sed_cosmos_2
+    - frac_cosmos_1
+    - frac_cosmos_2
+    - color_kind
+    - euclid_vis_abs
+    - euclid_nisp_y_abs
+    - euclid_nisp_j_abs
+    - euclid_nisp_h_abs
+    - euclid_vis_el_model3_ext
+    - euclid_nisp_y_el_model3_ext
+    - euclid_nisp_j_el_model3_ext
+    - euclid_nisp_h_el_model3_ext
+    - euclid_vis_el_model3_ext_odonnell_ext
+    - euclid_nisp_y_el_model3_ext_odonnell_ext
+    - euclid_nisp_j_el_model3_ext_odonnell_ext
+    - euclid_nisp_h_el_model3_ext_odonnell_ext
+    - euclid_vis_el_model3_ext_odonnell_ext_error
+    - euclid_nisp_y_el_model3_ext_odonnell_ext_error
+    - euclid_nisp_j_el_model3_ext_odonnell_ext_error
+    - euclid_nisp_h_el_model3_ext_odonnell_ext_error
+    - euclid_vis_el_model3_ext_odonnell_ext_error_realization
+    - euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization
+    - euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization
+    - euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization
+    - ebv_cosmos_1
+    - ebv_cosmos_2
+    - ext_curve_cosmos_1
+    - ext_curve_cosmos_2
+    - mw_extinction
     - bulge_fraction
     - disk_r50
     - bulge_r50
@@ -31,6 +69,27 @@ extra_columns:
     - rvir_halo
     - n_sats_halo
     - num_p_halo
+
+cosmos_sed:
+    lephare_data_dir: "/home/maxime/.cache/lephare/data"
+    template_subdir: "sed/GAL/COSMOS_SED"
+    template_list: "COSMOS_MOD.list"
+    expected_template_count: 31
+    template_wave_unit: angstrom
+    template_flux_unit: arbitrary_flambda
+    extinction_dir: "ext"
+    extinction:
+        curves:
+            0: none
+            1: SMC_prevot
+            2: SB_calzetti
+            3: SB_calzetti_bump1
+            4: SB_calzetti_bump2
+    component_fraction_policy: strict
+    filter_response_kind: photon
+    comparison_wave_min_angstrom: 1000.0
+    comparison_wave_max_angstrom: 30000.0
+    sample_plot_count: 12
 
 redshift:
     column: z_phz
@@ -88,15 +147,18 @@ fit:
         sigma_floor: 0.03
         hyper_mu_scale: 5.0
     free_parameters:
+        z_obs:
+            initial: from_base
+            bounds: [0.001, 6.0]
         log10_sfr:
             initial: 0.0
-            bounds: [-4.0, 3.0]
+            bounds: [-4.5, 2.8]
         dust_av:
             initial: 0.2
-            bounds: [0.0, 1.0]
+            bounds: [0.0, 3.0]
         log10_metallicity:
             initial: -2.25
-            bounds: [-4.2, -1.4]
+            bounds: [-3.9, -1.6]
 
 sample:
     sampler: nuts
@@ -115,20 +177,18 @@ sample:
     priors:
         z_obs:
             type: truncated_normal
-            loc: 0.5
-            scale: 2.0
+            loc: from_base
+            scale: 0.15
         log10_sfr:
             type: truncated_normal
             loc: 0.0
-            scale: 1.75
+            scale: 1.3
         dust_av:
-            type: truncated_normal
-            loc: 0.2
-            scale: 0.6
+            type: scaled_beta
+            alpha: 1.2
+            beta: 3.0
         log10_metallicity:
-            type: truncated_normal
-            loc: -2.0
-            scale: 0.7
+            type: uniform
 
 truth:
     redshift_column: z_true
