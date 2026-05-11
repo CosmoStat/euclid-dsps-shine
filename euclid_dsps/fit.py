@@ -1,9 +1,15 @@
 """Single-galaxy fitting helpers."""
 
+# ruff: noqa: I001, E402
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+from .jax_runtime import configure_jax_runtime
+
+configure_jax_runtime()
 
 import jax
 import jax.numpy as jnp
@@ -344,6 +350,7 @@ def fit_galaxy_batch_adam(
         free_indices=setup["free_indices"],
         maxiter=maxiter,
         learning_rate=learning_rate,
+        prior_weight=float(fit_config.get("prior_weight", 1.0)),
     )
     best_theta, chi2, grad_norm, model_mags, trace_arrays = optimize(
         theta0,
@@ -353,6 +360,12 @@ def fit_galaxy_batch_adam(
         mask,
         lower,
         upper,
+        jnp.asarray(setup["prior_gaussian_mask"]),
+        jnp.asarray(setup["prior_gaussian_loc"]),
+        jnp.asarray(setup["prior_gaussian_scale"]),
+        jnp.asarray(setup["prior_beta_mask"]),
+        jnp.asarray(setup["prior_beta_alpha"]),
+        jnp.asarray(setup["prior_beta_beta"]),
         jnp.asarray(truth_theta_arr),
     )
     best_matrix = _apply_free_values(
@@ -409,6 +422,7 @@ def fit_population_batch_adam(
         sigma_floor=float(pop.get("sigma_floor", 0.03)),
         prior_weight=float(pop.get("prior_weight", 1.0)),
         hyper_mu_scale=float(pop.get("hyper_mu_scale", 5.0)),
+        physical_prior_weight=float(fit_config.get("prior_weight", 1.0)),
     )
     best_theta, mu, sigma_pop, loss, chi2, grad_norm, model_mags, trace_arrays = (
         optimize(
@@ -419,6 +433,12 @@ def fit_population_batch_adam(
             mask,
             lower,
             upper,
+            jnp.asarray(setup["prior_gaussian_mask"]),
+            jnp.asarray(setup["prior_gaussian_loc"]),
+            jnp.asarray(setup["prior_gaussian_scale"]),
+            jnp.asarray(setup["prior_beta_mask"]),
+            jnp.asarray(setup["prior_beta_alpha"]),
+            jnp.asarray(setup["prior_beta_beta"]),
             jnp.asarray(truth_theta_arr),
         )
     )
@@ -491,6 +511,13 @@ def _prepare_batch_fit(
                 f"initial_theta shape must be {(len(base_params_rows), len(free_names))}, got {theta0.shape}"
             )
     theta0 = np.clip(theta0, bounds[:, 0], bounds[:, 1])
+    prior_arrays = _prepare_prior_arrays(
+        fit_config.get("priors", {}),
+        free_names,
+        parameter_names,
+        base_matrix,
+        bounds,
+    )
     return {
         "parameter_names": parameter_names,
         "free_names": free_names,
@@ -501,6 +528,56 @@ def _prepare_batch_fit(
         "theta0": theta0,
         "lower": bounds[:, 0],
         "upper": bounds[:, 1],
+        **prior_arrays,
+    }
+
+
+def _prepare_prior_arrays(
+    priors: dict[str, Any],
+    free_names: list[str],
+    parameter_names: list[str],
+    base_matrix: np.ndarray,
+    bounds: np.ndarray,
+) -> dict[str, np.ndarray]:
+    n_rows = base_matrix.shape[0]
+    n_free = len(free_names)
+    gaussian_mask = np.zeros((n_rows, n_free), dtype=bool)
+    gaussian_loc = np.zeros((n_rows, n_free), dtype=float)
+    gaussian_scale = np.ones((n_rows, n_free), dtype=float)
+    beta_mask = np.zeros((n_rows, n_free), dtype=bool)
+    beta_alpha = np.ones((n_rows, n_free), dtype=float)
+    beta_beta = np.ones((n_rows, n_free), dtype=float)
+
+    for index, name in enumerate(free_names):
+        spec = priors.get(name)
+        if not spec:
+            continue
+        prior_type = str(spec.get("type", "normal"))
+        if prior_type == "uniform":
+            continue
+        if prior_type in {"normal", "truncated_normal"}:
+            loc = spec.get("loc", 0.0)
+            if loc == "from_base":
+                loc_values = base_matrix[:, parameter_names.index(name)]
+            else:
+                loc_values = np.full(n_rows, float(loc), dtype=float)
+            gaussian_mask[:, index] = True
+            gaussian_loc[:, index] = loc_values
+            gaussian_scale[:, index] = max(float(spec.get("scale", 1.0)), 1.0e-6)
+        elif prior_type == "scaled_beta":
+            beta_mask[:, index] = True
+            beta_alpha[:, index] = max(float(spec.get("alpha", 1.0)), 1.0e-6)
+            beta_beta[:, index] = max(float(spec.get("beta", 1.0)), 1.0e-6)
+        else:
+            raise ValueError(f"Unsupported fit prior type for {name}: {prior_type}")
+
+    return {
+        "prior_gaussian_mask": gaussian_mask,
+        "prior_gaussian_loc": gaussian_loc,
+        "prior_gaussian_scale": gaussian_scale,
+        "prior_beta_mask": beta_mask,
+        "prior_beta_alpha": beta_alpha,
+        "prior_beta_beta": beta_beta,
     }
 
 
@@ -521,6 +598,7 @@ def _build_independent_adam_optimizer(
     free_indices: np.ndarray,
     maxiter: int,
     learning_rate: float,
+    prior_weight: float,
 ):
     free_indices_jax = jnp.asarray(free_indices)
 
@@ -530,6 +608,40 @@ def _build_independent_adam_optimizer(
         chi = jnp.where(mask, (observed - model_mag) / sigma, 0.0)
         return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
+    def single_objective(
+        theta,
+        base,
+        observed,
+        sigma,
+        mask,
+        lower,
+        upper,
+        prior_gaussian_mask,
+        prior_gaussian_loc,
+        prior_gaussian_scale,
+        prior_beta_mask,
+        prior_beta_alpha,
+        prior_beta_beta,
+    ):
+        chi2 = single_chi2(theta, base, observed, sigma, mask)
+        prior = _physical_prior_penalty(
+            theta,
+            lower,
+            upper,
+            prior_gaussian_mask,
+            prior_gaussian_loc,
+            prior_gaussian_scale,
+            prior_beta_mask,
+            prior_beta_alpha,
+            prior_beta_beta,
+        )
+        return jnp.nan_to_num(
+            chi2 + prior_weight * prior,
+            nan=1.0e30,
+            posinf=1.0e30,
+            neginf=1.0e30,
+        )
+
     def single_mags(theta, base):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
         return model_mags_jax(context, params)
@@ -538,7 +650,22 @@ def _build_independent_adam_optimizer(
     log_sfr_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
     @jax.jit
-    def optimize(theta0, base_matrix, observed, sigma, mask, lower, upper, truth_theta):
+    def optimize(
+        theta0,
+        base_matrix,
+        observed,
+        sigma,
+        mask,
+        lower,
+        upper,
+        prior_gaussian_mask,
+        prior_gaussian_loc,
+        prior_gaussian_scale,
+        prior_beta_mask,
+        prior_beta_alpha,
+        prior_beta_beta,
+        truth_theta,
+    ):
         theta0 = _warm_start_log10_sfr(
             theta0,
             base_matrix,
@@ -552,28 +679,66 @@ def _build_independent_adam_optimizer(
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         m0 = jnp.zeros_like(y0)
         v0 = jnp.zeros_like(y0)
-        best_chi20 = jnp.full((theta0.shape[0],), jnp.inf)
+        best_objective0 = jnp.full((theta0.shape[0],), jnp.inf)
         best_grad0 = jnp.full((theta0.shape[0],), jnp.inf)
-        carry0 = (y0, m0, v0, theta0, best_chi20, best_grad0)
+        carry0 = (y0, m0, v0, theta0, best_objective0, best_grad0)
 
-        def single_chi2_y(y, base, observed_i, sigma_i, mask_i):
+        def single_objective_y(
+            y,
+            base,
+            observed_i,
+            sigma_i,
+            mask_i,
+            prior_gaussian_mask_i,
+            prior_gaussian_loc_i,
+            prior_gaussian_scale_i,
+            prior_beta_mask_i,
+            prior_beta_alpha_i,
+            prior_beta_beta_i,
+        ):
             theta = _unconstrained_to_bounded(y, lower, upper)
-            return single_chi2(theta, base, observed_i, sigma_i, mask_i)
+            return single_objective(
+                theta,
+                base,
+                observed_i,
+                sigma_i,
+                mask_i,
+                lower,
+                upper,
+                prior_gaussian_mask_i,
+                prior_gaussian_loc_i,
+                prior_gaussian_scale_i,
+                prior_beta_mask_i,
+                prior_beta_alpha_i,
+                prior_beta_beta_i,
+            )
 
-        batch_chi2_y_grad = jax.vmap(
-            jax.value_and_grad(single_chi2_y, argnums=0),
-            in_axes=(0, 0, 0, 0, 0),
+        batch_objective_y_grad = jax.vmap(
+            jax.value_and_grad(single_objective_y, argnums=0),
+            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
         )
 
         def step(carry, iteration):
-            y, m, v, best_theta, best_chi2, best_grad = carry
+            y, m, v, best_theta, best_objective, best_grad = carry
             theta = _unconstrained_to_bounded(y, lower, upper)
-            chi2, grad = batch_chi2_y_grad(y, base_matrix, observed, sigma, mask)
+            objective, grad = batch_objective_y_grad(
+                y,
+                base_matrix,
+                observed,
+                sigma,
+                mask,
+                prior_gaussian_mask,
+                prior_gaussian_loc,
+                prior_gaussian_scale,
+                prior_beta_mask,
+                prior_beta_alpha,
+                prior_beta_beta,
+            )
             grad = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
             grad_norm = jnp.linalg.norm(grad, axis=1)
-            improved = chi2 < best_chi2
+            improved = objective < best_objective
             best_theta = jnp.where(improved[:, None], theta, best_theta)
-            best_chi2 = jnp.where(improved, chi2, best_chi2)
+            best_objective = jnp.where(improved, objective, best_objective)
             best_grad = jnp.where(improved, grad_norm, best_grad)
 
             t = iteration + 1.0
@@ -584,6 +749,9 @@ def _build_independent_adam_optimizer(
             y = jnp.clip(
                 y - learning_rate * m_hat / (jnp.sqrt(v_hat) + 1.0e-8), -30.0, 30.0
             )
+            chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
+                theta, base_matrix, observed, sigma, mask
+            )
             metrics = jnp.concatenate(
                 [
                     jnp.asarray(
@@ -592,12 +760,15 @@ def _build_independent_adam_optimizer(
                     _truth_metric_vector(theta, truth_theta),
                 ]
             )
-            return (y, m, v, best_theta, best_chi2, best_grad), metrics
+            return (y, m, v, best_theta, best_objective, best_grad), metrics
 
-        (_, _, _, best_theta, best_chi2, best_grad), metrics = jax.lax.scan(
+        (_, _, _, best_theta, _, best_grad), metrics = jax.lax.scan(
             step,
             carry0,
             jnp.arange(maxiter, dtype=jnp.float64),
+        )
+        best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
+            best_theta, base_matrix, observed, sigma, mask
         )
         model_mags = batch_mags(best_theta, base_matrix)
         return best_theta, best_chi2, best_grad, model_mags, metrics
@@ -614,6 +785,7 @@ def _build_population_adam_optimizer(
     sigma_floor: float,
     prior_weight: float,
     hyper_mu_scale: float,
+    physical_prior_weight: float,
 ):
     free_indices_jax = jnp.asarray(free_indices)
 
@@ -628,14 +800,46 @@ def _build_population_adam_optimizer(
         in_axes=(0, 0, 0, 0, 0),
     )
 
-    def loss(theta, mu, raw_sigma, base_matrix, observed, sigma, mask):
+    def loss(
+        theta,
+        mu,
+        raw_sigma,
+        base_matrix,
+        observed,
+        sigma,
+        mask,
+        lower,
+        upper,
+        prior_gaussian_mask,
+        prior_gaussian_loc,
+        prior_gaussian_scale,
+        prior_beta_mask,
+        prior_beta_alpha,
+        prior_beta_beta,
+    ):
         chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
         prior = 0.5 * jnp.sum(
             ((theta - mu) / sigma_pop) ** 2 + 2.0 * jnp.log(sigma_pop), axis=1
         )
+        physical_prior = _physical_prior_penalty(
+            theta,
+            lower,
+            upper,
+            prior_gaussian_mask,
+            prior_gaussian_loc,
+            prior_gaussian_scale,
+            prior_beta_mask,
+            prior_beta_alpha,
+            prior_beta_beta,
+        )
         hyper = 0.5 * jnp.sum((mu / hyper_mu_scale) ** 2)
-        return 0.5 * jnp.sum(chi2) + prior_weight * jnp.sum(prior) + hyper
+        return (
+            0.5 * jnp.sum(chi2)
+            + prior_weight * jnp.sum(prior)
+            + physical_prior_weight * jnp.sum(physical_prior)
+            + hyper
+        )
 
     value_and_grad = jax.value_and_grad(loss, argnums=(0, 1, 2))
 
@@ -647,7 +851,22 @@ def _build_population_adam_optimizer(
     log_sfr_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
     @jax.jit
-    def optimize(theta0, base_matrix, observed, sigma, mask, lower, upper, truth_theta):
+    def optimize(
+        theta0,
+        base_matrix,
+        observed,
+        sigma,
+        mask,
+        lower,
+        upper,
+        prior_gaussian_mask,
+        prior_gaussian_loc,
+        prior_gaussian_scale,
+        prior_beta_mask,
+        prior_beta_alpha,
+        prior_beta_beta,
+        truth_theta,
+    ):
         theta0 = _warm_start_log10_sfr(
             theta0,
             base_matrix,
@@ -714,7 +933,21 @@ def _build_population_adam_optimizer(
             ) = carry
             theta = _unconstrained_to_bounded(y, lower, upper)
             value, grads = value_and_grad(
-                theta, mu, raw_sigma, base_matrix, observed, sigma, mask
+                theta,
+                mu,
+                raw_sigma,
+                base_matrix,
+                observed,
+                sigma,
+                mask,
+                lower,
+                upper,
+                prior_gaussian_mask,
+                prior_gaussian_loc,
+                prior_gaussian_scale,
+                prior_beta_mask,
+                prior_beta_alpha,
+                prior_beta_beta,
             )
             grad_theta_direct, grad_mu, grad_sigma = grads
             _, grad_y = jax.value_and_grad(
@@ -726,6 +959,14 @@ def _build_population_adam_optimizer(
                     observed,
                     sigma,
                     mask,
+                    lower,
+                    upper,
+                    prior_gaussian_mask,
+                    prior_gaussian_loc,
+                    prior_gaussian_scale,
+                    prior_beta_mask,
+                    prior_beta_alpha,
+                    prior_beta_beta,
                 )
             )(y)
             improved = value < best_loss
@@ -802,6 +1043,31 @@ def _params_from_vectors(
 ) -> dict[str, Any]:
     values = _apply_free_values(base, theta, free_indices)
     return {name: values[index] for index, name in enumerate(parameter_names)}
+
+
+def _physical_prior_penalty(
+    theta,
+    lower,
+    upper,
+    gaussian_mask,
+    gaussian_loc,
+    gaussian_scale,
+    beta_mask,
+    beta_alpha,
+    beta_beta,
+):
+    gaussian_scale = jnp.maximum(gaussian_scale, 1.0e-6)
+    gaussian = 0.5 * ((theta - gaussian_loc) / gaussian_scale) ** 2 + jnp.log(
+        gaussian_scale
+    )
+    gaussian = jnp.where(gaussian_mask, gaussian, 0.0)
+
+    scaled = jnp.clip((theta - lower) / (upper - lower), 1.0e-6, 1.0 - 1.0e-6)
+    beta = -(
+        (beta_alpha - 1.0) * jnp.log(scaled) + (beta_beta - 1.0) * jnp.log1p(-scaled)
+    )
+    beta = jnp.where(beta_mask, beta, 0.0)
+    return jnp.sum(gaussian + beta, axis=-1)
 
 
 def _apply_free_values(base, theta, free_indices):

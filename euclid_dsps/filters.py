@@ -61,6 +61,8 @@ def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
         from dsps import load_transmission_curve
 
         path = Path(filter_config["path"])
+        if not path.exists():
+            raise FileNotFoundError(f"Filter file not found for {name}: {path}")
         curve = load_transmission_curve(fn=str(path))
         return FilterCurve(
             name=name,
@@ -74,6 +76,8 @@ def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
         and str(filter_config["path"]).endswith((".fits", ".fit", ".fts"))
     ):
         path = Path(filter_config["path"])
+        if not path.exists():
+            raise FileNotFoundError(f"Filter file not found for {name}: {path}")
         return load_fits_filter(name, path, filter_config)
 
     if (
@@ -85,6 +89,8 @@ def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
         )
     ):
         path = Path(filter_config["path"])
+        if not path.exists():
+            raise FileNotFoundError(f"Filter file not found for {name}: {path}")
         return load_ascii_filter(name, path, filter_config)
 
     if kind in {"auto", "tophat"}:

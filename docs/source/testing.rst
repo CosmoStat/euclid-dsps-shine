@@ -29,8 +29,6 @@ Current coverage:
      - Wavelength unit conversion, effective wavelength, ASCII filter sorting/clipping.
    * - ``tests/test_imports.py``
      - Public workflow/reporting facades and compatibility imports.
-   * - ``tests/test_sed.py``
-     - Broad-band pseudo-SED reconstruction, luminosity conversion, SED report outputs.
    * - ``tests/test_workflows_smoke.py``
      - Synthetic parquet schema validation, row selection, EDA artifact creation.
 

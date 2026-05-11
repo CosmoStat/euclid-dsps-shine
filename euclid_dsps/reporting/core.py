@@ -16,9 +16,52 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from cycler import cycler
 
 from ..io import GalaxyObservation, ensure_dir, write_json
 from ..model import ModelResult, comparison_rows
+
+
+def configure_plot_style() -> None:
+    """Apply project-wide, publication-style matplotlib defaults."""
+    plt.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["STIXGeneral", "DejaVu Serif", "Times New Roman"],
+            "mathtext.fontset": "cm",
+            "axes.linewidth": 0.8,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.grid": True,
+            "axes.grid.axis": "both",
+            "grid.alpha": 0.22,
+            "grid.linewidth": 0.45,
+            "xtick.direction": "in",
+            "ytick.direction": "in",
+            "xtick.major.size": 4.0,
+            "ytick.major.size": 4.0,
+            "xtick.minor.size": 2.0,
+            "ytick.minor.size": 2.0,
+            "legend.frameon": False,
+            "legend.fontsize": 8,
+            "figure.facecolor": "white",
+            "savefig.facecolor": "white",
+            "savefig.bbox": "tight",
+            "axes.prop_cycle": cycler(
+                color=[
+                    "#2F5D8C",
+                    "#B85C38",
+                    "#3F7F5F",
+                    "#7A4E8A",
+                    "#8C6A2F",
+                    "#4F6F7A",
+                ]
+            ),
+        }
+    )
+
+
+configure_plot_style()
 
 
 def write_eda_outputs(
@@ -534,16 +577,18 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
     for col in context_columns:
         aggregations[col] = (col, "first")
     by_row = valid.groupby("row_index").agg(**aggregations)
-    by_row["reduced_chi2"] = by_row["chi2"] / by_row["n_bands"].clip(lower=1)
+    derived_columns = {"reduced_chi2": by_row["chi2"] / by_row["n_bands"].clip(lower=1)}
 
     for col in list(by_row.columns):
         if col.startswith("truth_"):
             param_name = col[6:]
             fit_col = f"fit_{param_name}"
             if fit_col in by_row.columns:
-                by_row[f"delta_fit_{param_name}_minus_truth"] = (
+                derived_columns[f"delta_fit_{param_name}_minus_truth"] = (
                     by_row[fit_col] - by_row[col]
                 )
+
+    by_row = pd.concat([by_row, pd.DataFrame(derived_columns)], axis=1).copy()
 
     return by_row
 
@@ -624,8 +669,13 @@ def plot_redshift_distributions(
 
 
 def plot_physical_parameters_distributions(df: pd.DataFrame, path: str | Path) -> None:
-    params = ["log10_metallicity_true", "sfr_true", "log_sfr_true", "dust_ebv_true"]
-    valid_params = [p for p in params if p in df.columns]
+    params_map = {
+        "log10_metallicity_true": "Ground Truth log10(Z)",
+        "sfr_true": "Ground Truth SFR [Msun/yr]",
+        "log_sfr_true": "Ground Truth log10(SFR)",
+        "dust_ebv_true": "Ground Truth E(B-V)",
+    }
+    valid_params = [p for p in params_map if p in df.columns]
     if not valid_params:
         return
 
@@ -636,8 +686,8 @@ def plot_physical_parameters_distributions(df: pd.DataFrame, path: str | Path) -
         val = df[param].to_numpy(dtype=float)
         val = val[np.isfinite(val)]
         ax.hist(val, bins=70, histtype="stepfilled", alpha=0.7)
-        ax.set_xlabel(param)
-        ax.set_ylabel("count")
+        ax.set_xlabel(params_map[param])
+        ax.set_ylabel("galaxies")
         ax.grid(alpha=0.2)
 
     fig.tight_layout()
@@ -1720,9 +1770,11 @@ def _redshift_axis_labels(by_row: pd.DataFrame) -> tuple[str, str]:
     truth_source = _first_string(by_row, "redshift_truth_source") or "z_true"
     fit_source = _first_string(by_row, "z_obs_source") or "z_phz"
     fit_label = (
-        "fit_z_obs" if "fit_z_obs" in by_row.columns else f"{fit_source} used by DSPS"
+        "Inferred Redshift (Fit)"
+        if "fit_z_obs" in by_row.columns
+        else f"Input {fit_source} to DSPS"
     )
-    return fit_label, truth_source
+    return fit_label, f"Ground Truth ({truth_source})"
 
 
 def _first_string(frame: pd.DataFrame, column: str) -> str | None:
@@ -1743,21 +1795,19 @@ def _truth_kind_from_frame(frame: pd.DataFrame, parameter: str) -> str:
 
 
 def _truth_legend_label(parameter: str) -> str:
-    return "truth proxy" if parameter in {"dust_av", "log10_metallicity"} else "truth"
+    kind = " (proxy)" if parameter in {"dust_av", "log10_metallicity"} else ""
+    return f"Ground Truth{kind}"
 
 
 def _parameter_display_label(parameter: str) -> str:
     labels = {
-        "z_obs": "redshift",
-        "log10_sfr_at_obs": "log10 SFR at obs",
-        "log10_sfr": "log10 SFH amplitude",
-        "dust_av": "dust A_V",
-        "log10_metallicity": "log10 metallicity",
+        "z_obs": "Redshift",
+        "log10_sfr_at_obs": "log10 SFR [Msun/yr]",
+        "log10_sfr": "log10 SFH Amplitude",
+        "dust_av": "Dust Av [mag]",
+        "log10_metallicity": "log10 Metallicity [absolute log10(Z)]",
     }
-    label = labels.get(parameter, parameter)
-    if parameter in {"dust_av", "log10_metallicity"}:
-        label = f"{label} (proxy truth)"
-    return label
+    return labels.get(parameter, parameter)
 
 
 def ordered_bands(df: pd.DataFrame) -> list[str]:

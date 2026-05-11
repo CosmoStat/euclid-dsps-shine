@@ -20,10 +20,22 @@ DEFAULT_MODEL_PARAMETERS = {
     "log10_sfr": 0.0,
     "sfh_t_peak": 4.0,
     "sfh_tau": 0.6,
+    "sfh_burst_fraction": 0.0,
+    "sfh_burst_time": 1.0,
+    "sfh_burst_width": 0.12,
+    "sfh_quench_time": 12.0,
+    "sfh_quench_width": 0.5,
+    "sfh_quench_depth": 0.0,
     "log10_metallicity": -2.0,
     "metallicity_scatter": 0.2,
     "dust_av": 0.2,
     "dust_slope": -0.7,
+    "cosmos_ebv_1": 0.0,
+    "cosmos_ebv_2": 0.0,
+    "cosmos_frac_1": 0.5,
+    "cosmos_frac_2": 0.5,
+    "cosmos_ext_curve_1": 0.0,
+    "cosmos_ext_curve_2": 0.0,
 }
 
 DEFAULT_REDSHIFT_CONFIG = {
@@ -39,6 +51,48 @@ SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10"}
+SUPPORTED_PRIOR_TYPES = {"uniform", "normal", "truncated_normal", "scaled_beta"}
+SUPPORTED_FILTER_RESPONSE_KINDS = {"photon", "energy"}
+SUPPORTED_COMPONENT_FRACTION_POLICIES = {"strict", "equal_if_missing"}
+SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
+    "continuum_internal_dust",
+    "emission_lines_internal_dust",
+    "emission_lines_internal_dust_mw",
+    "noisy_observation",
+}
+
+DEFAULT_RUNTIME_CONFIG = {
+    "jax_platforms": "cpu",
+    "disable_jax_plugin_autoload": True,
+    "xla_python_client_preallocate": False,
+}
+
+DEFAULT_COSMOS_SED_CONFIG = {
+    "lephare_data_dir": "~/.cache/lephare/data",
+    "template_subdir": "sed/GAL/COSMOS_SED",
+    "template_list": "COSMOS_MOD.list",
+    "expected_template_count": 31,
+    "template_wave_unit": "angstrom",
+    "template_flux_unit": "arbitrary_flambda",
+    "extinction_dir": "ext",
+    "extinction": {
+        "curves": {
+            0: "none",
+            1: "SMC_prevot",
+            2: "SB_calzetti",
+            3: "SB_calzetti_bump1",
+            4: "SB_calzetti_bump2",
+        }
+    },
+    "component_fraction_policy": "strict",
+    "filter_response_kind": "photon",
+    "comparison_wave_min_angstrom": 1000.0,
+    "comparison_wave_max_angstrom": 30000.0,
+    "sample_plot_count": 12,
+    "observed_photometry_target_sets": ["continuum_internal_dust"],
+    "normalization_bands": [],
+    "use_cosmos_dust_in_dsps": False,
+}
 
 
 class ConfigValidationError(ValueError):
@@ -62,7 +116,9 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config.setdefault("sample", {})
     config.setdefault("eda", {})
     config.setdefault("truth", {})
+    config.setdefault("runtime", {})
     config.setdefault("extra_columns", [])
+    config.setdefault("cosmos_sed", {})
 
     raw_redshift = dict(config["redshift"] or {})
     redshift = dict(DEFAULT_REDSHIFT_CONFIG)
@@ -93,6 +149,8 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["fit"].setdefault("learning_rate", 0.1)
     config["fit"].setdefault("tolerance", 1.0e-5)
     config["fit"].setdefault("patience", 18)
+    config["fit"].setdefault("prior_weight", 1.0)
+    config["fit"].setdefault("priors", {})
     config["fit"]["population"] = dict(config["fit"].get("population") or {})
     config["fit"]["population"].setdefault("prior_weight", 1.0)
     config["fit"]["population"].setdefault("sigma_floor", 0.03)
@@ -122,6 +180,20 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["truth"].setdefault("redshift_column", redshift.get("truth_column"))
     config["truth"].setdefault("parameter_columns", {})
 
+    runtime = dict(DEFAULT_RUNTIME_CONFIG)
+    runtime.update(dict(config["runtime"] or {}))
+    config["runtime"] = runtime
+
+    cosmos_sed = dict(DEFAULT_COSMOS_SED_CONFIG)
+    raw_cosmos_sed = dict(config["cosmos_sed"] or {})
+    raw_extinction = raw_cosmos_sed.pop("extinction", None)
+    cosmos_sed.update(raw_cosmos_sed)
+    extinction = dict(DEFAULT_COSMOS_SED_CONFIG["extinction"])
+    if raw_extinction is not None:
+        extinction.update(dict(raw_extinction or {}))
+    cosmos_sed["extinction"] = extinction
+    config["cosmos_sed"] = cosmos_sed
+
     validate_config(config)
     return config
 
@@ -142,6 +214,8 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_fit(config.get("fit", {}), errors)
     _validate_sample(config.get("sample", {}), errors)
     _validate_truth(config.get("truth", {}), errors)
+    _validate_runtime(config.get("runtime", {}), errors)
+    _validate_cosmos_sed(config.get("cosmos_sed", {}), errors)
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
         raise ConfigValidationError(f"Invalid configuration:\n{detail}")
@@ -213,6 +287,24 @@ def _validate_bands(value: Any, errors: list[str]) -> None:
         filter_config = band.get("filter", {})
         if filter_config is not None and not isinstance(filter_config, dict):
             errors.append(f"bands[{index}].filter must be a mapping when provided")
+        _optional_string(
+            band.get("error_column"), f"bands[{index}].error_column", errors
+        )
+        error_units = band.get("error_units", units)
+        if error_units not in SUPPORTED_PHOTOMETRY_UNITS:
+            errors.append(
+                f"bands[{index}].error_units must be one of {sorted(SUPPORTED_PHOTOMETRY_UNITS)}"
+            )
+        if band.get("sigma_mag_floor") is not None:
+            _positive_float(
+                band.get("sigma_mag_floor"), f"bands[{index}].sigma_mag_floor", errors
+            )
+        if band.get("sigma_mag_ceiling") is not None:
+            _positive_float(
+                band.get("sigma_mag_ceiling"),
+                f"bands[{index}].sigma_mag_ceiling",
+                errors,
+            )
 
 
 def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
@@ -252,6 +344,7 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
     _positive_float(fit.get("learning_rate"), "fit.learning_rate", errors)
     _positive_float(fit.get("tolerance"), "fit.tolerance", errors)
     _positive_int(fit.get("patience"), "fit.patience", errors)
+    _positive_float(fit.get("prior_weight", 1.0), "fit.prior_weight", errors)
     free = fit.get("free_parameters")
     if not isinstance(free, dict) or not free:
         errors.append("fit.free_parameters must be a non-empty mapping")
@@ -275,6 +368,34 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
         initial = spec.get("initial", 0.0)
         if initial != "from_base":
             _finite_float(initial, f"fit.free_parameters.{name}.initial", errors)
+    _validate_fit_priors(fit.get("priors", {}), free, errors)
+
+
+def _validate_fit_priors(
+    priors: Any, free_parameters: dict[str, Any], errors: list[str]
+) -> None:
+    if not isinstance(priors, dict):
+        errors.append("fit.priors must be a mapping")
+        return
+    for name, spec in priors.items():
+        if name not in free_parameters:
+            errors.append(f"fit.priors.{name} must match a free parameter")
+            continue
+        if not isinstance(spec, dict):
+            errors.append(f"fit.priors.{name} must be a mapping")
+            continue
+        prior_type = str(spec.get("type", "normal"))
+        if prior_type not in SUPPORTED_PRIOR_TYPES:
+            errors.append(
+                f"fit.priors.{name}.type must be one of {sorted(SUPPORTED_PRIOR_TYPES)}"
+            )
+        if "loc" in spec and spec["loc"] != "from_base":
+            _finite_float(spec["loc"], f"fit.priors.{name}.loc", errors)
+        if "scale" in spec:
+            _positive_float(spec["scale"], f"fit.priors.{name}.scale", errors)
+        if prior_type == "scaled_beta":
+            _positive_float(spec.get("alpha", 1.0), f"fit.priors.{name}.alpha", errors)
+            _positive_float(spec.get("beta", 1.0), f"fit.priors.{name}.beta", errors)
 
 
 def _validate_sample(sample: dict[str, Any], errors: list[str]) -> None:
@@ -300,6 +421,7 @@ def _validate_sample(sample: dict[str, Any], errors: list[str]) -> None:
     if target is not None and not 0.0 < target < 1.0:
         errors.append("sample.target_accept_prob must be between 0 and 1")
     _finite_float(sample.get("seed"), "sample.seed", errors)
+    _validate_sample_priors(sample.get("priors", {}), errors)
 
 
 def _validate_truth(truth: dict[str, Any], errors: list[str]) -> None:
@@ -329,6 +451,136 @@ def _validate_truth(truth: dict[str, Any], errors: list[str]) -> None:
         _finite_float(
             spec.get("offset", 0.0), f"truth.parameter_columns.{name}.offset", errors
         )
+
+
+def _validate_runtime(runtime: dict[str, Any], errors: list[str]) -> None:
+    if not isinstance(runtime, dict):
+        errors.append("runtime must be a mapping")
+        return
+    platforms = runtime.get("jax_platforms")
+    if not isinstance(platforms, str) or not platforms.strip():
+        errors.append("runtime.jax_platforms must be a non-empty string")
+    for key in ("disable_jax_plugin_autoload", "xla_python_client_preallocate"):
+        if not isinstance(runtime.get(key), bool):
+            errors.append(f"runtime.{key} must be a boolean")
+
+
+def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
+    if not isinstance(cosmos_sed, dict):
+        errors.append("cosmos_sed must be a mapping")
+        return
+    for key in (
+        "lephare_data_dir",
+        "template_subdir",
+        "template_list",
+        "template_wave_unit",
+        "template_flux_unit",
+        "extinction_dir",
+    ):
+        if not isinstance(cosmos_sed.get(key), str) or not cosmos_sed.get(key):
+            errors.append(f"cosmos_sed.{key} must be a non-empty string")
+    expected = cosmos_sed.get("expected_template_count")
+    if expected is not None:
+        _positive_int(expected, "cosmos_sed.expected_template_count", errors)
+    response = cosmos_sed.get("filter_response_kind")
+    if response not in SUPPORTED_FILTER_RESPONSE_KINDS:
+        errors.append(
+            "cosmos_sed.filter_response_kind must be one of "
+            f"{sorted(SUPPORTED_FILTER_RESPONSE_KINDS)}"
+        )
+    fraction_policy = cosmos_sed.get("component_fraction_policy")
+    if fraction_policy not in SUPPORTED_COMPONENT_FRACTION_POLICIES:
+        errors.append(
+            "cosmos_sed.component_fraction_policy must be one of "
+            f"{sorted(SUPPORTED_COMPONENT_FRACTION_POLICIES)}"
+        )
+    _finite_float(
+        cosmos_sed.get("comparison_wave_min_angstrom"),
+        "cosmos_sed.comparison_wave_min_angstrom",
+        errors,
+    )
+    _finite_float(
+        cosmos_sed.get("comparison_wave_max_angstrom"),
+        "cosmos_sed.comparison_wave_max_angstrom",
+        errors,
+    )
+    _positive_int(
+        cosmos_sed.get("sample_plot_count"), "cosmos_sed.sample_plot_count", errors
+    )
+    target_sets = cosmos_sed.get("observed_photometry_target_sets", [])
+    if not isinstance(target_sets, list):
+        errors.append("cosmos_sed.observed_photometry_target_sets must be a list")
+    elif not all(isinstance(item, str) and item for item in target_sets):
+        errors.append(
+            "cosmos_sed.observed_photometry_target_sets entries must be non-empty strings"
+        )
+    else:
+        unknown = sorted(set(target_sets) - SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS)
+        if unknown:
+            errors.append(
+                "cosmos_sed.observed_photometry_target_sets contains unsupported "
+                f"entries: {unknown}"
+            )
+    if not isinstance(cosmos_sed.get("use_cosmos_dust_in_dsps", False), bool):
+        errors.append("cosmos_sed.use_cosmos_dust_in_dsps must be a boolean")
+    extinction = cosmos_sed.get("extinction")
+    if not isinstance(extinction, dict):
+        errors.append("cosmos_sed.extinction must be a mapping")
+    else:
+        curves = extinction.get("curves")
+        if not isinstance(curves, dict) or not curves:
+            errors.append("cosmos_sed.extinction.curves must be a non-empty mapping")
+        else:
+            for code, curve in curves.items():
+                try:
+                    int(code)
+                except (TypeError, ValueError):
+                    errors.append("cosmos_sed.extinction.curves keys must be integers")
+                if not isinstance(curve, str) or not curve:
+                    errors.append(
+                        f"cosmos_sed.extinction.curves.{code} must be a non-empty string"
+                    )
+    normalization_bands = cosmos_sed.get("normalization_bands", [])
+    if normalization_bands is None:
+        return
+    if not isinstance(normalization_bands, list):
+        errors.append("cosmos_sed.normalization_bands must be a list")
+        return
+    for index, item in enumerate(normalization_bands):
+        if not isinstance(item, dict):
+            errors.append(f"cosmos_sed.normalization_bands[{index}] must be a mapping")
+            continue
+        for key in ("band_name", "target_column"):
+            if not isinstance(item.get(key), str) or not item.get(key):
+                errors.append(
+                    f"cosmos_sed.normalization_bands[{index}].{key} "
+                    "must be a non-empty string"
+                )
+
+
+def _validate_sample_priors(priors: Any, errors: list[str]) -> None:
+    if not isinstance(priors, dict):
+        errors.append("sample.priors must be a mapping")
+        return
+    for name, spec in priors.items():
+        if not isinstance(spec, dict):
+            errors.append(f"sample.priors.{name} must be a mapping")
+            continue
+        prior_type = str(spec.get("type", "truncated_normal"))
+        if prior_type not in SUPPORTED_PRIOR_TYPES:
+            errors.append(
+                f"sample.priors.{name}.type must be one of "
+                f"{sorted(SUPPORTED_PRIOR_TYPES)}"
+            )
+        if "loc" in spec and spec["loc"] != "from_base":
+            _finite_float(spec["loc"], f"sample.priors.{name}.loc", errors)
+        if "scale" in spec:
+            _positive_float(spec["scale"], f"sample.priors.{name}.scale", errors)
+        if prior_type == "scaled_beta":
+            _positive_float(
+                spec.get("alpha", 1.0), f"sample.priors.{name}.alpha", errors
+            )
+            _positive_float(spec.get("beta", 1.0), f"sample.priors.{name}.beta", errors)
 
 
 def _configured_catalog_columns(config: dict[str, Any]) -> set[str]:

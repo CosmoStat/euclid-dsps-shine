@@ -1,9 +1,15 @@
 """Native DSPS model wrapper."""
 
+# ruff: noqa: I001, E402
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+from .jax_runtime import configure_jax_runtime
+
+configure_jax_runtime()
 
 import jax
 import jax.numpy as jnp
@@ -18,6 +24,8 @@ class DspsContext:
     ssp: Any
     filters: dict[str, FilterCurve]
     n_sfh_bins: int = 96
+    cosmos_dust_k_by_code: np.ndarray | None = None
+    cosmos_dust_curve_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,19 @@ class JaxModelResult:
     sfr_at_obs_msun_per_yr: jnp.ndarray
 
 
+@dataclass(frozen=True)
+class BatchSedResult:
+    """Batch DSPS SEDs and photometry from one JAX-vmapped call."""
+
+    parameter_names: list[str]
+    parameter_matrix: np.ndarray
+    wave: np.ndarray
+    rest_sed: np.ndarray
+    dusted_rest_sed: np.ndarray
+    model_mags: np.ndarray
+    derived: dict[str, np.ndarray]
+
+
 DERIVED_QUANTITY_NAMES = [
     "t_obs_gyr",
     "formed_mass_msun",
@@ -51,13 +72,57 @@ DERIVED_QUANTITY_NAMES = [
 
 
 def load_context(
-    ssp_path: str, filters: dict[str, FilterCurve], n_sfh_bins: int = 96
+    ssp_path: str,
+    filters: dict[str, FilterCurve],
+    n_sfh_bins: int = 96,
+    cosmos_config: dict[str, Any] | None = None,
 ) -> DspsContext:
     from dsps import load_ssp_templates
 
+    ssp = load_ssp_templates(fn=ssp_path)
+    dust_k_by_code, dust_curve_names = _load_cosmos_dust_grid(ssp, cosmos_config)
     return DspsContext(
-        ssp=load_ssp_templates(fn=ssp_path), filters=filters, n_sfh_bins=n_sfh_bins
+        ssp=ssp,
+        filters=filters,
+        n_sfh_bins=n_sfh_bins,
+        cosmos_dust_k_by_code=dust_k_by_code,
+        cosmos_dust_curve_names=dust_curve_names,
     )
+
+
+def _load_cosmos_dust_grid(
+    ssp: Any, cosmos_config: dict[str, Any] | None
+) -> tuple[np.ndarray | None, tuple[str, ...]]:
+    if not cosmos_config or not bool(cosmos_config.get("use_cosmos_dust_in_dsps")):
+        return None, ()
+
+    from .cosmos import load_extinction_curves
+
+    mapping, curves, _ = load_extinction_curves(cosmos_config)
+    if not mapping:
+        return None, ()
+    max_code = max(int(code) for code in mapping)
+    wave = np.asarray(ssp.ssp_wave, dtype=float)
+    k_by_code = np.zeros((max_code + 1, len(wave)), dtype=float)
+    names: list[str] = []
+    for code in range(max_code + 1):
+        curve_name = mapping.get(code, "none")
+        names.append(curve_name)
+        if curve_name == "none":
+            continue
+        curve = curves.get(curve_name)
+        if curve is None:
+            raise ValueError(
+                f"COSMOS extinction curve {curve_name!r} is configured but not loaded."
+            )
+        k_by_code[code] = np.interp(
+            wave,
+            curve.wave_angstrom,
+            curve.k_lambda,
+            left=curve.k_lambda[0],
+            right=curve.k_lambda[-1],
+        )
+    return k_by_code, tuple(names)
 
 
 def parameters_for_row(
@@ -143,6 +208,12 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
         log10_sfr=jnp.asarray(params["log10_sfr"]),
         sfh_t_peak=jnp.asarray(params["sfh_t_peak"]),
         sfh_tau=jnp.asarray(params["sfh_tau"]),
+        sfh_burst_fraction=jnp.asarray(params.get("sfh_burst_fraction", 0.0)),
+        sfh_burst_time=jnp.asarray(params.get("sfh_burst_time", 1.0)),
+        sfh_burst_width=jnp.asarray(params.get("sfh_burst_width", 0.12)),
+        sfh_quench_time=jnp.asarray(params.get("sfh_quench_time", 12.0)),
+        sfh_quench_width=jnp.asarray(params.get("sfh_quench_width", 0.5)),
+        sfh_quench_depth=jnp.asarray(params.get("sfh_quench_depth", 0.0)),
     )
     formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
 
@@ -157,7 +228,9 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
         t_obs,
     )
     wave = jnp.asarray(ssp.ssp_wave)
-    dusted_sed = apply_dust_jax(wave, sed_info.rest_sed, params)
+    dusted_sed = apply_dust_jax(
+        wave, sed_info.rest_sed, params, context.cosmos_dust_k_by_code
+    )
     model_mags = predict_mags_jax(context, wave, dusted_sed, z_obs)
     return JaxModelResult(
         wave=wave,
@@ -222,6 +295,12 @@ def derived_quantities_jax(context: DspsContext, params: dict[str, Any]) -> jnp.
         log10_sfr=jnp.asarray(params["log10_sfr"]),
         sfh_t_peak=jnp.asarray(params["sfh_t_peak"]),
         sfh_tau=jnp.asarray(params["sfh_tau"]),
+        sfh_burst_fraction=jnp.asarray(params.get("sfh_burst_fraction", 0.0)),
+        sfh_burst_time=jnp.asarray(params.get("sfh_burst_time", 1.0)),
+        sfh_burst_width=jnp.asarray(params.get("sfh_burst_width", 0.12)),
+        sfh_quench_time=jnp.asarray(params.get("sfh_quench_time", 12.0)),
+        sfh_quench_width=jnp.asarray(params.get("sfh_quench_width", 0.5)),
+        sfh_quench_depth=jnp.asarray(params.get("sfh_quench_depth", 0.0)),
     )
     formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
     sfr_at_obs = gal_sfr_table[-1]
@@ -250,12 +329,74 @@ def predict_batch_derived(
     return {name: values[:, index] for index, name in enumerate(DERIVED_QUANTITY_NAMES)}
 
 
+def predict_batch_seds(
+    context: DspsContext, parameter_names: list[str], parameter_matrix: np.ndarray
+) -> BatchSedResult:
+    """Predict rest SEDs, dusted rest SEDs, magnitudes, and derived quantities.
+
+    This is the batch/GPU path used by COSMOS-template comparisons after MAP or
+    population fits. It avoids one Python DSPS call per galaxy.
+    """
+
+    def single(values):
+        params = {name: values[index] for index, name in enumerate(parameter_names)}
+        result = run_dsps_model_jax(context, params)
+        derived = jnp.asarray(
+            [
+                result.t_obs_gyr,
+                result.formed_mass_msun,
+                jnp.log10(jnp.maximum(result.formed_mass_msun, 1.0e-300)),
+                result.sfr_at_obs_msun_per_yr,
+                jnp.log10(jnp.maximum(result.sfr_at_obs_msun_per_yr, 1.0e-300)),
+            ]
+        )
+        return result.rest_sed, result.dusted_rest_sed, result.model_mags, derived
+
+    predict = jax.jit(jax.vmap(single))
+    rest_sed, dusted_rest_sed, model_mags, derived_values = predict(
+        jnp.asarray(parameter_matrix)
+    )
+    derived_array = np.asarray(derived_values)
+    return BatchSedResult(
+        parameter_names=list(parameter_names),
+        parameter_matrix=np.asarray(parameter_matrix, dtype=float),
+        wave=np.asarray(context.ssp.ssp_wave, dtype=float),
+        rest_sed=np.asarray(rest_sed, dtype=float),
+        dusted_rest_sed=np.asarray(dusted_rest_sed, dtype=float),
+        model_mags=np.asarray(model_mags, dtype=float),
+        derived={
+            name: derived_array[:, index]
+            for index, name in enumerate(DERIVED_QUANTITY_NAMES)
+        },
+    )
+
+
 def build_lognormal_sfh(
-    gal_t_table: np.ndarray, log10_sfr: float, sfh_t_peak: float, sfh_tau: float
+    gal_t_table: np.ndarray,
+    log10_sfr: float,
+    sfh_t_peak: float,
+    sfh_tau: float,
+    sfh_burst_fraction: float = 0.0,
+    sfh_burst_time: float = 1.0,
+    sfh_burst_width: float = 0.12,
+    sfh_quench_time: float = 12.0,
+    sfh_quench_width: float = 0.5,
+    sfh_quench_depth: float = 0.0,
 ) -> np.ndarray:
-    """Build a positive, smooth SFH in Msun/yr on cosmic-time bins."""
+    """Build a positive SFH in Msun/yr on cosmic-time bins."""
     return np.asarray(
-        build_lognormal_sfh_jax(gal_t_table, log10_sfr, sfh_t_peak, sfh_tau),
+        build_lognormal_sfh_jax(
+            gal_t_table,
+            log10_sfr,
+            sfh_t_peak,
+            sfh_tau,
+            sfh_burst_fraction,
+            sfh_burst_time,
+            sfh_burst_width,
+            sfh_quench_time,
+            sfh_quench_width,
+            sfh_quench_depth,
+        ),
         dtype=float,
     )
 
@@ -265,25 +406,61 @@ def build_lognormal_sfh_jax(
     log10_sfr: jnp.ndarray,
     sfh_t_peak: jnp.ndarray,
     sfh_tau: jnp.ndarray,
+    sfh_burst_fraction: float | jnp.ndarray = 0.0,
+    sfh_burst_time: float | jnp.ndarray = 1.0,
+    sfh_burst_width: float | jnp.ndarray = 0.12,
+    sfh_quench_time: float | jnp.ndarray = 12.0,
+    sfh_quench_width: float | jnp.ndarray = 0.5,
+    sfh_quench_depth: float | jnp.ndarray = 0.0,
 ) -> jnp.ndarray:
-    """JAX lognormal SFH in Msun/yr on cosmic-time bins."""
+    """JAX lognormal SFH with smooth burst/quench modifiers."""
     amplitude = 10**log10_sfr
     t_peak = jnp.clip(sfh_t_peak, jnp.min(gal_t_table), jnp.max(gal_t_table))
     tau = jnp.maximum(sfh_tau, 0.05)
     log_t = jnp.log(jnp.clip(gal_t_table, 1.0e-3))
     shape = jnp.exp(-0.5 * ((log_t - jnp.log(t_peak)) / tau) ** 2)
     shape = jnp.clip(shape, 1.0e-6)
-    return amplitude * shape
+    base = amplitude * shape
+
+    burst_fraction = jnp.maximum(sfh_burst_fraction, 0.0)
+    burst_time = jnp.clip(sfh_burst_time, jnp.min(gal_t_table), jnp.max(gal_t_table))
+    burst_width = jnp.maximum(sfh_burst_width, 0.03)
+    burst = (
+        amplitude
+        * burst_fraction
+        * jnp.exp(-0.5 * ((gal_t_table - burst_time) / burst_width) ** 2)
+    )
+
+    quench_time = jnp.clip(sfh_quench_time, jnp.min(gal_t_table), jnp.max(gal_t_table))
+    quench_width = jnp.maximum(sfh_quench_width, 0.03)
+    quench_depth = jnp.clip(sfh_quench_depth, 0.0, 1.0)
+    after_quench = jax.nn.sigmoid((gal_t_table - quench_time) / quench_width)
+    quench_factor = 1.0 - quench_depth * after_quench
+    return jnp.clip((base + burst) * quench_factor, 1.0e-12, jnp.inf)
 
 
 def apply_dust(
     wave_angstrom: np.ndarray, rest_sed: np.ndarray, params: dict[str, float]
 ) -> np.ndarray:
-    """Apply a DSPS Salim+2018-style attenuation curve."""
+    """Apply the configured attenuation model."""
     return np.asarray(apply_dust_jax(wave_angstrom, rest_sed, params), dtype=float)
 
 
 def apply_dust_jax(
+    wave_angstrom: jnp.ndarray,
+    rest_sed: jnp.ndarray,
+    params: dict[str, Any],
+    cosmos_dust_k_by_code: np.ndarray | None = None,
+) -> jnp.ndarray:
+    """Apply COSMOS two-component dust when available, else DSPS Salim dust."""
+    if cosmos_dust_k_by_code is not None:
+        return apply_cosmos_two_component_dust_jax(
+            rest_sed, params, cosmos_dust_k_by_code
+        )
+    return apply_salim_dust_jax(wave_angstrom, rest_sed, params)
+
+
+def apply_salim_dust_jax(
     wave_angstrom: jnp.ndarray, rest_sed: jnp.ndarray, params: dict[str, Any]
 ) -> jnp.ndarray:
     """Apply DSPS Salim+2018-style attenuation without leaving JAX."""
@@ -298,6 +475,34 @@ def apply_dust_jax(
     )
     transmission = _frac_transmission_from_k_lambda(k_lambda, av)
     return jnp.asarray(rest_sed) * transmission
+
+
+def apply_cosmos_two_component_dust_jax(
+    rest_sed: jnp.ndarray, params: dict[str, Any], cosmos_dust_k_by_code: np.ndarray
+) -> jnp.ndarray:
+    """Apply the two COSMOS dust curves as a differentiable mixture."""
+    k_grid = jnp.asarray(cosmos_dust_k_by_code)
+    n_codes = k_grid.shape[0]
+    code_1 = jnp.clip(
+        jnp.rint(jnp.asarray(params.get("cosmos_ext_curve_1", 0.0))).astype(jnp.int32),
+        0,
+        n_codes - 1,
+    )
+    code_2 = jnp.clip(
+        jnp.rint(jnp.asarray(params.get("cosmos_ext_curve_2", 0.0))).astype(jnp.int32),
+        0,
+        n_codes - 1,
+    )
+    ebv_1 = jnp.maximum(jnp.asarray(params.get("cosmos_ebv_1", 0.0)), 0.0)
+    ebv_2 = jnp.maximum(jnp.asarray(params.get("cosmos_ebv_2", 0.0)), 0.0)
+    frac_1 = jnp.maximum(jnp.asarray(params.get("cosmos_frac_1", 0.5)), 0.0)
+    frac_2 = jnp.maximum(jnp.asarray(params.get("cosmos_frac_2", 0.5)), 0.0)
+    frac_sum = frac_1 + frac_2
+    frac_1 = jnp.where(frac_sum > 0.0, frac_1 / frac_sum, 0.5)
+    frac_2 = jnp.where(frac_sum > 0.0, frac_2 / frac_sum, 0.5)
+    trans_1 = 10.0 ** (-0.4 * ebv_1 * k_grid[code_1])
+    trans_2 = 10.0 ** (-0.4 * ebv_2 * k_grid[code_2])
+    return jnp.asarray(rest_sed) * (frac_1 * trans_1 + frac_2 * trans_2)
 
 
 def _safe_log10(value: float) -> float:

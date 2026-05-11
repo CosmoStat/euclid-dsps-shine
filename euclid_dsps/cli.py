@@ -28,6 +28,42 @@ def build_parser() -> argparse.ArgumentParser:
     )
     eda.add_argument("--out", default="outputs/eda", help="Output directory.")
 
+    cosmos = sub.add_parser(
+        "cosmos-sed",
+        help="Reconstruct COSMOS-template proxy SEDs from catalog latent columns.",
+    )
+    cosmos.add_argument(
+        "--out", default="outputs/runs/cosmos_sed", help="Output directory."
+    )
+    cosmos.add_argument(
+        "--limit", type=int, default=10, help="Maximum catalog rows to process."
+    )
+    cosmos.add_argument(
+        "--batch-size", type=int, default=1000, help="Parquet batch size."
+    )
+    cosmos.add_argument("--index", type=int, help="Catalog row index to process.")
+    cosmos.add_argument("--all", action="store_true", help="Process the full catalog.")
+    cosmos.add_argument(
+        "--compare-dsps",
+        action="store_true",
+        help="Also compare COSMOS proxy rest SEDs against DSPS forward SEDs.",
+    )
+    cosmos.add_argument(
+        "--fit-dsps",
+        action="store_true",
+        help="Fit DSPS per row before COSMOS-vs-DSPS comparison.",
+    )
+    cosmos.add_argument(
+        "--population-dsps",
+        action="store_true",
+        help="Use chunked population MAP DSPS fits before COSMOS-vs-DSPS comparison.",
+    )
+    cosmos.add_argument(
+        "--plot-samples",
+        type=int,
+        help="Number of reconstructed COSMOS SEDs to overlay for visual inspection.",
+    )
+
     run = sub.add_parser("run-one", help="Run DSPS for one selected galaxy.")
     run.add_argument(
         "--out", default="outputs/runs/smoke_one", help="Output directory."
@@ -183,11 +219,16 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     from .config import load_config
+    from .jax_runtime import apply_jax_runtime_env
+
+    config = load_config(args.config)
+    apply_jax_runtime_env(config.get("runtime", {}))
     from .workflows import (
         fit_batch,
         fit_one,
         fit_population,
         fit_workflow,
+        reconstruct_cosmos_seds,
         report_workflow,
         run_batch,
         run_eda,
@@ -196,9 +237,22 @@ def main(argv: list[str] | None = None) -> None:
         sample_one,
     )
 
-    config = load_config(args.config)
     if args.command == "eda":
         run_eda(config, Path(args.out))
+    elif args.command == "cosmos-sed":
+        reconstruct_cosmos_seds(
+            config,
+            Path(args.out),
+            limit=_limit_arg(args),
+            batch_size=args.batch_size,
+            index=getattr(args, "index", None),
+            compare_dsps=bool(getattr(args, "compare_dsps", False))
+            or bool(getattr(args, "fit_dsps", False))
+            or bool(getattr(args, "population_dsps", False)),
+            fit_dsps=bool(getattr(args, "fit_dsps", False)),
+            population_dsps=bool(getattr(args, "population_dsps", False)),
+            sample_plot_count=getattr(args, "plot_samples", None),
+        )
     elif args.command == "run-one":
         _apply_selection_overrides(config, args)
         run_one(config, Path(args.out))

@@ -1,9 +1,15 @@
 """MCMC posterior sampling for selected galaxies."""
 
+# ruff: noqa: I001, E402
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+
+from .jax_runtime import configure_jax_runtime
+
+configure_jax_runtime()
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +17,7 @@ import numpy as np
 import numpyro
 import numpyro.distributions as dist
 from jax import random
+from numpyro.distributions import constraints
 from numpyro.infer import HMC, MCMC, NUTS
 from numpyro.infer.initialization import init_to_value
 
@@ -22,6 +29,45 @@ from .model import (
     predict_batch_derived,
     predict_batch_mags,
 )
+
+
+class ScaledBetaDistribution(dist.Distribution):
+    """Beta distribution scaled to a finite interval."""
+
+    arg_constraints = {
+        "alpha": constraints.positive,
+        "beta": constraints.positive,
+        "low": constraints.real,
+        "high": constraints.real,
+    }
+    reparametrized_params = ["alpha", "beta"]
+
+    def __init__(
+        self,
+        alpha: float,
+        beta: float,
+        low: float,
+        high: float,
+        validate_args: bool | None = None,
+    ):
+        self.alpha = jnp.asarray(alpha)
+        self.beta = jnp.asarray(beta)
+        self.low = jnp.asarray(low)
+        self.high = jnp.asarray(high)
+        self._beta = dist.Beta(self.alpha, self.beta)
+        super().__init__(batch_shape=(), event_shape=(), validate_args=validate_args)
+
+    @constraints.dependent_property
+    def support(self):
+        return constraints.interval(self.low, self.high)
+
+    def sample(self, key, sample_shape=()):
+        unit = self._beta.sample(key, sample_shape)
+        return self.low + (self.high - self.low) * unit
+
+    def log_prob(self, value):
+        unit = (value - self.low) / (self.high - self.low)
+        return self._beta.log_prob(unit) - jnp.log(self.high - self.low)
 
 
 @dataclass(frozen=True)
@@ -175,7 +221,7 @@ def _prior_distribution(
     base_params: dict[str, float],
 ):
     low, high = [float(value) for value in fit_spec["bounds"]]
-    loc = float(prior_spec.get("loc", _initial_value(fit_spec, name, base_params)))
+    loc = _prior_location(name, fit_spec, prior_spec, base_params)
     scale = float(prior_spec.get("scale", max((high - low) / 4.0, 1.0e-3)))
     prior_type = str(prior_spec.get("type", "truncated_normal"))
     if prior_type == "uniform":
@@ -184,7 +230,23 @@ def _prior_distribution(
         return dist.Normal(loc, scale)
     if prior_type == "truncated_normal":
         return dist.TruncatedNormal(loc=loc, scale=scale, low=low, high=high)
+    if prior_type == "scaled_beta":
+        alpha = float(prior_spec.get("alpha", 1.0))
+        beta = float(prior_spec.get("beta", 1.0))
+        return ScaledBetaDistribution(alpha=alpha, beta=beta, low=low, high=high)
     raise ValueError(f"Unsupported prior type for {name}: {prior_type}")
+
+
+def _prior_location(
+    name: str,
+    fit_spec: dict[str, Any],
+    prior_spec: dict[str, Any],
+    base_params: dict[str, float],
+) -> float:
+    value = prior_spec.get("loc", _initial_value(fit_spec, name, base_params))
+    if value == "from_base":
+        return float(base_params[name])
+    return float(value)
 
 
 def _posterior_model_mags(
