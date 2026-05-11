@@ -22,8 +22,49 @@ dependencies = [
     "tqdm",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "black>=24.0",
+    "pytest>=8.0",
+    "ruff>=0.8",
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+]
+
 [project.scripts]
 euclid-dsps = "euclid_dsps.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["euclid_dsps*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = [
+    "Data",
+    "outputs",
+    "filters/converted",
+    "dsps",
+    "caveman",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = [
+    # Scientific scripts and CLIs keep some long help strings/readability lines.
+    "E501",
+]
+
+[tool.ruff.lint.isort]
+known-third-party = ["dsps"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

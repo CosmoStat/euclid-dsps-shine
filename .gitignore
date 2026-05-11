@@ -2,6 +2,23 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 build/
 dist/
+docs/build/
 outputs/
+
+# Local data and generated asset manifests.
+Data/*
+!Data/.gitkeep
+!tests/data/*.parquet
+*.Zone.Identifier
+filters/converted/
+
+# Local tool config and cloned helper repositories are not project source.
+.codex/
+caveman/
+dsps/

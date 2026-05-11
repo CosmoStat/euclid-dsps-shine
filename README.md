@@ -35,6 +35,37 @@ conda activate shine
 python -m pip install -e .
 ```
 
+For documentation and quality tooling:
+
+```bash
+python -m pip install black ruff sphinx sphinx-rtd-theme
+```
+
+## Documentation
+
+Sphinx documentation lives in `docs/source/`:
+
+```bash
+python -m sphinx -W --keep-going -b html docs/source docs/build/html
+```
+
+Start with:
+
+- `docs/source/architecture.rst` for project boundaries and refactor roadmap.
+- `docs/source/data_download.rst` for the CosmoHub SQL query and data contract.
+- `docs/source/run_setup.rst` for config parameters and CLI workflows.
+- `docs/source/testing.rst` for unit tests, smoke fixtures, and CI checks.
+
+## Quality Checks
+
+```bash
+find euclid_dsps scripts -name '*.py' -exec python -m black --check {} \;
+python -m ruff check euclid_dsps scripts tests
+python -m pytest tests
+python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+python -m sphinx -W --keep-going -b html docs/source docs/build/html
+```
+
 ## Commands
 
 Inspect schema, stats, flux/color distributions, and redshift diagnostics:

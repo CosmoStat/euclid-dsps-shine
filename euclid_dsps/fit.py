@@ -7,8 +7,8 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-from jax.scipy.optimize import minimize as jax_minimize
 import numpy as np
+from jax.scipy.optimize import minimize as jax_minimize
 
 from .io import GalaxyObservation
 from .model import DspsContext, ModelResult, model_mags_jax, run_dsps_model
@@ -83,8 +83,12 @@ def fit_one_galaxy(
 
     free = fit_config["free_parameters"]
     names = list(free)
-    x0 = jnp.asarray([_initial_value(free[name], name, base_params) for name in names], dtype=float)
-    bounds = jnp.asarray([tuple(float(x) for x in free[name]["bounds"]) for name in names], dtype=float)
+    x0 = jnp.asarray(
+        [_initial_value(free[name], name, base_params) for name in names], dtype=float
+    )
+    bounds = jnp.asarray(
+        [tuple(float(x) for x in free[name]["bounds"]) for name in names], dtype=float
+    )
     lower = bounds[:, 0]
     upper = bounds[:, 1]
     x0 = jnp.clip(x0, lower, upper)
@@ -96,8 +100,10 @@ def fit_one_galaxy(
     trace: list[dict[str, float]] = []
 
     def unpack_jax(x: jnp.ndarray) -> dict[str, Any]:
-        params: dict[str, Any] = {key: jnp.asarray(value) for key, value in base_params.items()}
-        params.update({name: value for name, value in zip(names, x)})
+        params: dict[str, Any] = {
+            key: jnp.asarray(value) for key, value in base_params.items()
+        }
+        params.update({name: value for name, value in zip(names, x, strict=True)})
         return params
 
     def objective(x: jnp.ndarray) -> jnp.ndarray:
@@ -150,7 +156,9 @@ def fit_one_galaxy(
     )
 
 
-def _initial_value(spec: dict[str, Any], name: str, base_params: dict[str, float]) -> float:
+def _initial_value(
+    spec: dict[str, Any], name: str, base_params: dict[str, float]
+) -> float:
     """Allow YAML configs to use `initial: from_base` for row-dependent values."""
     value = spec.get("initial", base_params.get(name, 0.0))
     if isinstance(value, str):
@@ -160,7 +168,9 @@ def _initial_value(spec: dict[str, Any], name: str, base_params: dict[str, float
     return float(value)
 
 
-def _observation_arrays(observation: GalaxyObservation) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+def _observation_arrays(
+    observation: GalaxyObservation,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     observed_mag = jnp.asarray([band.mag_ab for band in observation.bands], dtype=float)
     sigma_mag = jnp.asarray([band.sigma_mag for band in observation.bands], dtype=float)
     finite_mask = jnp.isfinite(observed_mag) & jnp.isfinite(sigma_mag) & (sigma_mag > 0)
@@ -240,7 +250,11 @@ def _fit_bounded_bfgs(
         return objective(_unconstrained_to_bounded(y, lower, upper))
 
     initial_value, initial_grad = value_and_grad(x0)
-    trace.append(_trace_entry(names, x0, float(initial_value), float(jnp.linalg.norm(initial_grad)), 0))
+    trace.append(
+        _trace_entry(
+            names, x0, float(initial_value), float(jnp.linalg.norm(initial_grad)), 0
+        )
+    )
     opt = jax_minimize(
         jax.jit(unconstrained_objective),
         y0,
@@ -252,34 +266,54 @@ def _fit_bounded_bfgs(
     best_value, best_grad = value_and_grad(best_x)
     best_value_f = float(best_value)
     best_grad_norm = float(jnp.linalg.norm(best_grad))
-    trace.append(_trace_entry(names, best_x, best_value_f, best_grad_norm, int(getattr(opt, "nit", maxiter))))
+    trace.append(
+        _trace_entry(
+            names,
+            best_x,
+            best_value_f,
+            best_grad_norm,
+            int(getattr(opt, "nit", maxiter)),
+        )
+    )
     success = bool(getattr(opt, "success", False)) and np.isfinite(best_value_f)
     message = f"jax_bfgs status={int(getattr(opt, 'status', -1))}, nit={int(getattr(opt, 'nit', -1))}"
     state = {"iteration": int(getattr(opt, "nit", -1)), "x": best_x}
     return best_x, state, best_value_f, best_grad_norm, success, message
 
 
-def _bounded_to_unconstrained(x: jnp.ndarray, lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
+def _bounded_to_unconstrained(
+    x: jnp.ndarray, lower: jnp.ndarray, upper: jnp.ndarray
+) -> jnp.ndarray:
     eps = 1.0e-6
     scaled = jnp.clip((x - lower) / (upper - lower), eps, 1.0 - eps)
     return jnp.log(scaled) - jnp.log1p(-scaled)
 
 
-def _unconstrained_to_bounded(y: jnp.ndarray, lower: jnp.ndarray, upper: jnp.ndarray) -> jnp.ndarray:
+def _unconstrained_to_bounded(
+    y: jnp.ndarray, lower: jnp.ndarray, upper: jnp.ndarray
+) -> jnp.ndarray:
     return lower + (upper - lower) * jax.nn.sigmoid(y)
 
 
-def _trace_entry(names: list[str], x: jnp.ndarray, chi2: float, grad_norm: float, iteration: int) -> dict[str, float]:
-    entry = {name: float(value) for name, value in zip(names, np.asarray(x))}
+def _trace_entry(
+    names: list[str], x: jnp.ndarray, chi2: float, grad_norm: float, iteration: int
+) -> dict[str, float]:
+    entry = {
+        name: float(value) for name, value in zip(names, np.asarray(x), strict=True)
+    }
     entry["iteration"] = float(iteration)
     entry["chi2"] = float(chi2)
     entry["gradient_norm"] = float(grad_norm)
     return entry
 
 
-def _unpack_numpy(x: jnp.ndarray, names: list[str], base_params: dict[str, float]) -> dict[str, float]:
+def _unpack_numpy(
+    x: jnp.ndarray, names: list[str], base_params: dict[str, float]
+) -> dict[str, float]:
     params = dict(base_params)
-    params.update({name: float(value) for name, value in zip(names, np.asarray(x))})
+    params.update(
+        {name: float(value) for name, value in zip(names, np.asarray(x), strict=True)}
+    )
     return params
 
 
@@ -321,7 +355,9 @@ def fit_galaxy_batch_adam(
         upper,
         jnp.asarray(truth_theta_arr),
     )
-    best_matrix = _apply_free_values(base_matrix, best_theta, jnp.asarray(setup["free_indices"]))
+    best_matrix = _apply_free_values(
+        base_matrix, best_theta, jnp.asarray(setup["free_indices"])
+    )
     trace = _batch_trace_from_arrays(
         trace_arrays, setup["free_names"], include_truth_metrics=has_truth
     )
@@ -349,7 +385,9 @@ def fit_population_batch_adam(
     truth_theta: np.ndarray | None = None,
 ) -> PopulationFitResult:
     """Joint MAP fit with a Gaussian population prior over free parameters."""
-    setup = _prepare_batch_fit(base_params_rows, fit_config, initial_theta=initial_theta)
+    setup = _prepare_batch_fit(
+        base_params_rows, fit_config, initial_theta=initial_theta
+    )
     truth_theta_arr, has_truth = _prepare_truth_theta(setup["theta0"], truth_theta)
     theta0 = jnp.asarray(setup["theta0"])
     base_matrix = jnp.asarray(setup["base_matrix"])
@@ -372,17 +410,21 @@ def fit_population_batch_adam(
         prior_weight=float(pop.get("prior_weight", 1.0)),
         hyper_mu_scale=float(pop.get("hyper_mu_scale", 5.0)),
     )
-    best_theta, mu, sigma_pop, loss, chi2, grad_norm, model_mags, trace_arrays = optimize(
-        theta0,
-        base_matrix,
-        observed,
-        sigma,
-        mask,
-        lower,
-        upper,
-        jnp.asarray(truth_theta_arr),
+    best_theta, mu, sigma_pop, loss, chi2, grad_norm, model_mags, trace_arrays = (
+        optimize(
+            theta0,
+            base_matrix,
+            observed,
+            sigma,
+            mask,
+            lower,
+            upper,
+            jnp.asarray(truth_theta_arr),
+        )
     )
-    best_matrix = _apply_free_values(base_matrix, best_theta, jnp.asarray(setup["free_indices"]))
+    best_matrix = _apply_free_values(
+        base_matrix, best_theta, jnp.asarray(setup["free_indices"])
+    )
     batch = BatchFitResult(
         success=np.isfinite(np.asarray(chi2)),
         message=f"jax_population_adam maxiter={maxiter}, device={_jax_device()}",
@@ -399,8 +441,16 @@ def fit_population_batch_adam(
     )
     return PopulationFitResult(
         batch=batch,
-        hyper_mu={name: float(value) for name, value in zip(setup["free_names"], np.asarray(mu))},
-        hyper_sigma={name: float(value) for name, value in zip(setup["free_names"], np.asarray(sigma_pop))},
+        hyper_mu={
+            name: float(value)
+            for name, value in zip(setup["free_names"], np.asarray(mu), strict=True)
+        },
+        hyper_sigma={
+            name: float(value)
+            for name, value in zip(
+                setup["free_names"], np.asarray(sigma_pop), strict=True
+            )
+        },
         loss=float(loss),
     )
 
@@ -422,7 +472,10 @@ def _prepare_batch_fit(
         [[float(row[name]) for name in parameter_names] for row in base_params_rows],
         dtype=float,
     )
-    bounds = np.asarray([tuple(float(x) for x in free[name]["bounds"]) for name in free_names], dtype=float)
+    bounds = np.asarray(
+        [tuple(float(x) for x in free[name]["bounds"]) for name in free_names],
+        dtype=float,
+    )
     if initial_theta is None:
         theta0 = np.asarray(
             [
@@ -434,12 +487,16 @@ def _prepare_batch_fit(
     else:
         theta0 = np.asarray(initial_theta, dtype=float)
         if theta0.shape != (len(base_params_rows), len(free_names)):
-            raise ValueError(f"initial_theta shape must be {(len(base_params_rows), len(free_names))}, got {theta0.shape}")
+            raise ValueError(
+                f"initial_theta shape must be {(len(base_params_rows), len(free_names))}, got {theta0.shape}"
+            )
     theta0 = np.clip(theta0, bounds[:, 0], bounds[:, 1])
     return {
         "parameter_names": parameter_names,
         "free_names": free_names,
-        "free_indices": np.asarray([parameter_names.index(name) for name in free_names], dtype=np.int32),
+        "free_indices": np.asarray(
+            [parameter_names.index(name) for name in free_names], dtype=np.int32
+        ),
         "base_matrix": base_matrix,
         "theta0": theta0,
         "lower": bounds[:, 0],
@@ -473,11 +530,6 @@ def _build_independent_adam_optimizer(
         chi = jnp.where(mask, (observed - model_mag) / sigma, 0.0)
         return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
-    batch_chi2_grad = jax.vmap(
-        jax.value_and_grad(single_chi2, argnums=0),
-        in_axes=(0, 0, 0, 0, 0),
-    )
-
     def single_mags(theta, base):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
         return model_mags_jax(context, params)
@@ -487,7 +539,16 @@ def _build_independent_adam_optimizer(
 
     @jax.jit
     def optimize(theta0, base_matrix, observed, sigma, mask, lower, upper, truth_theta):
-        theta0 = _warm_start_log10_sfr(theta0, base_matrix, observed, mask, lower, upper, batch_mags, log_sfr_free_pos)
+        theta0 = _warm_start_log10_sfr(
+            theta0,
+            base_matrix,
+            observed,
+            mask,
+            lower,
+            upper,
+            batch_mags,
+            log_sfr_free_pos,
+        )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         m0 = jnp.zeros_like(y0)
         v0 = jnp.zeros_like(y0)
@@ -520,7 +581,9 @@ def _build_independent_adam_optimizer(
             v = 0.999 * v + 0.001 * (grad**2)
             m_hat = m / (1.0 - 0.9**t)
             v_hat = v / (1.0 - 0.999**t)
-            y = jnp.clip(y - learning_rate * m_hat / (jnp.sqrt(v_hat) + 1.0e-8), -30.0, 30.0)
+            y = jnp.clip(
+                y - learning_rate * m_hat / (jnp.sqrt(v_hat) + 1.0e-8), -30.0, 30.0
+            )
             metrics = jnp.concatenate(
                 [
                     jnp.asarray(
@@ -568,7 +631,9 @@ def _build_population_adam_optimizer(
     def loss(theta, mu, raw_sigma, base_matrix, observed, sigma, mask):
         chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
-        prior = 0.5 * jnp.sum(((theta - mu) / sigma_pop) ** 2 + 2.0 * jnp.log(sigma_pop), axis=1)
+        prior = 0.5 * jnp.sum(
+            ((theta - mu) / sigma_pop) ** 2 + 2.0 * jnp.log(sigma_pop), axis=1
+        )
         hyper = 0.5 * jnp.sum((mu / hyper_mu_scale) ** 2)
         return 0.5 * jnp.sum(chi2) + prior_weight * jnp.sum(prior) + hyper
 
@@ -583,7 +648,16 @@ def _build_population_adam_optimizer(
 
     @jax.jit
     def optimize(theta0, base_matrix, observed, sigma, mask, lower, upper, truth_theta):
-        theta0 = _warm_start_log10_sfr(theta0, base_matrix, observed, mask, lower, upper, batch_mags, log_sfr_free_pos)
+        theta0 = _warm_start_log10_sfr(
+            theta0,
+            base_matrix,
+            observed,
+            mask,
+            lower,
+            upper,
+            batch_mags,
+            log_sfr_free_pos,
+        )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         mu0 = jnp.nanmean(theta0, axis=0)
         raw_sigma0 = _softplus_inverse(jnp.nanstd(theta0, axis=0) + 0.2)
@@ -639,10 +713,20 @@ def _build_population_adam_optimizer(
                 best_loss,
             ) = carry
             theta = _unconstrained_to_bounded(y, lower, upper)
-            value, grads = value_and_grad(theta, mu, raw_sigma, base_matrix, observed, sigma, mask)
+            value, grads = value_and_grad(
+                theta, mu, raw_sigma, base_matrix, observed, sigma, mask
+            )
             grad_theta_direct, grad_mu, grad_sigma = grads
             _, grad_y = jax.value_and_grad(
-                lambda yy: loss(_unconstrained_to_bounded(yy, lower, upper), mu, raw_sigma, base_matrix, observed, sigma, mask)
+                lambda yy: loss(
+                    _unconstrained_to_bounded(yy, lower, upper),
+                    mu,
+                    raw_sigma,
+                    base_matrix,
+                    observed,
+                    sigma,
+                    mask,
+                )
             )(y)
             improved = value < best_loss
             best_theta = jnp.where(improved, theta, best_theta)
@@ -651,7 +735,9 @@ def _build_population_adam_optimizer(
             best_loss = jnp.where(improved, value, best_loss)
             y, m_y, v_y = adam_update(y, grad_y, m_y, v_y, iteration)
             mu, m_mu, v_mu = adam_update(mu, grad_mu, m_mu, v_mu, iteration)
-            raw_sigma, m_sigma, v_sigma = adam_update(raw_sigma, grad_sigma, m_sigma, v_sigma, iteration)
+            raw_sigma, m_sigma, v_sigma = adam_update(
+                raw_sigma, grad_sigma, m_sigma, v_sigma, iteration
+            )
             y = jnp.clip(y, -30.0, 30.0)
             raw_sigma = jnp.clip(raw_sigma, -8.0, 4.0)
             metrics = jnp.concatenate(
@@ -660,7 +746,9 @@ def _build_population_adam_optimizer(
                         [
                             value,
                             jnp.nanmean(
-                                batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
+                                batch_chi2_grad(
+                                    theta, base_matrix, observed, sigma, mask
+                                )
                             ),
                             jnp.nanmean(jnp.linalg.norm(grad_theta_direct, axis=1)),
                         ]
@@ -695,12 +783,23 @@ def _build_population_adam_optimizer(
             in_axes=(0, 0, 0, 0, 0),
         )(best_theta, base_matrix, observed, sigma, mask)
         model_mags = batch_mags(best_theta, base_matrix)
-        return best_theta, best_mu, sigma_pop, best_loss, chi2, jnp.linalg.norm(grad, axis=1), model_mags, metrics
+        return (
+            best_theta,
+            best_mu,
+            sigma_pop,
+            best_loss,
+            chi2,
+            jnp.linalg.norm(grad, axis=1),
+            model_mags,
+            metrics,
+        )
 
     return optimize
 
 
-def _params_from_vectors(theta, base, parameter_names: list[str], free_indices: jnp.ndarray) -> dict[str, Any]:
+def _params_from_vectors(
+    theta, base, parameter_names: list[str], free_indices: jnp.ndarray
+) -> dict[str, Any]:
     values = _apply_free_values(base, theta, free_indices)
     return {name: values[index] for index, name in enumerate(parameter_names)}
 
@@ -709,7 +808,9 @@ def _apply_free_values(base, theta, free_indices):
     return base.at[..., free_indices].set(theta)
 
 
-def _free_position(parameter_names: list[str], free_indices: np.ndarray, name: str) -> int | None:
+def _free_position(
+    parameter_names: list[str], free_indices: np.ndarray, name: str
+) -> int | None:
     if name not in parameter_names:
         return None
     parameter_index = parameter_names.index(name)
@@ -717,13 +818,17 @@ def _free_position(parameter_names: list[str], free_indices: np.ndarray, name: s
     return int(positions[0]) if len(positions) else None
 
 
-def _warm_start_log10_sfr(theta0, base_matrix, observed, mask, lower, upper, batch_mags, free_pos: int | None):
+def _warm_start_log10_sfr(
+    theta0, base_matrix, observed, mask, lower, upper, batch_mags, free_pos: int | None
+):
     if free_pos is None:
         return theta0
     model_mag = batch_mags(theta0, base_matrix)
     delta_mag = jnp.where(mask, model_mag - observed, jnp.nan)
     delta_log10_sfr = jnp.nanmedian(delta_mag, axis=1) / 2.5
-    warmed = theta0.at[:, free_pos].set(theta0[:, free_pos] + jnp.nan_to_num(delta_log10_sfr))
+    warmed = theta0.at[:, free_pos].set(
+        theta0[:, free_pos] + jnp.nan_to_num(delta_log10_sfr)
+    )
     return jnp.clip(warmed, lower, upper)
 
 

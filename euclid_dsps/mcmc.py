@@ -16,7 +16,12 @@ from numpyro.infer.initialization import init_to_value
 
 from .fit import _initial_value
 from .io import GalaxyObservation
-from .model import DspsContext, model_mags_jax, predict_batch_derived, predict_batch_mags
+from .model import (
+    DspsContext,
+    model_mags_jax,
+    predict_batch_derived,
+    predict_batch_mags,
+)
 
 
 @dataclass(frozen=True)
@@ -60,7 +65,9 @@ def sample_one_galaxy(
             )
         model_mag = model_mags_jax(context, params)
         numpyro.deterministic("model_mag", model_mag)
-        numpyro.sample("obs", dist.Normal(model_mag, sigma_mag).mask(finite), obs=observed_mag)
+        numpyro.sample(
+            "obs", dist.Normal(model_mag, sigma_mag).mask(finite), obs=observed_mag
+        )
 
     init_params = _initial_params(initial_params, free, free_names)
     kernel_kwargs = {}
@@ -155,11 +162,18 @@ def _initial_params(
             return None
         low, high = [float(value) for value in free[name]["bounds"]]
         eps = max((high - low) * 1.0e-6, 1.0e-8)
-        values[name] = jnp.asarray(np.clip(float(initial_params[name]), low + eps, high - eps))
+        values[name] = jnp.asarray(
+            np.clip(float(initial_params[name]), low + eps, high - eps)
+        )
     return values
 
 
-def _prior_distribution(name: str, fit_spec: dict[str, Any], prior_spec: dict[str, Any], base_params: dict[str, float]):
+def _prior_distribution(
+    name: str,
+    fit_spec: dict[str, Any],
+    prior_spec: dict[str, Any],
+    base_params: dict[str, float],
+):
     low, high = [float(value) for value in fit_spec["bounds"]]
     loc = float(prior_spec.get("loc", _initial_value(fit_spec, name, base_params)))
     scale = float(prior_spec.get("scale", max((high - low) / 4.0, 1.0e-3)))
@@ -173,7 +187,9 @@ def _prior_distribution(name: str, fit_spec: dict[str, Any], prior_spec: dict[st
     raise ValueError(f"Unsupported prior type for {name}: {prior_type}")
 
 
-def _posterior_model_mags(context: DspsContext, base_params: dict[str, float], samples: dict[str, np.ndarray]) -> np.ndarray:
+def _posterior_model_mags(
+    context: DspsContext, base_params: dict[str, float], samples: dict[str, np.ndarray]
+) -> np.ndarray:
     parameter_names, matrix = _posterior_parameter_matrix(base_params, samples)
     return predict_batch_mags(context, parameter_names, matrix)
 
@@ -190,7 +206,10 @@ def _posterior_parameter_matrix(
 ) -> tuple[list[str], np.ndarray]:
     parameter_names = list(base_params)
     n_samples = len(next(iter(samples.values())))
-    matrix = np.asarray([[float(base_params[name]) for name in parameter_names]] * n_samples, dtype=float)
+    matrix = np.asarray(
+        [[float(base_params[name]) for name in parameter_names]] * n_samples,
+        dtype=float,
+    )
     for name, values in samples.items():
         matrix[:, parameter_names.index(name)] = values
     return parameter_names, matrix
@@ -244,5 +263,7 @@ def _diagnostics(
     diagnostics["device"] = f"{jax.devices()[0].platform}:{jax.devices()[0].id}"
     diagnostics["initialized_from_map"] = bool(initial_params)
     if initial_params:
-        diagnostics["initial_parameters"] = {name: float(value) for name, value in initial_params.items()}
+        diagnostics["initial_parameters"] = {
+            name: float(value) for name, value in initial_params.items()
+        }
     return diagnostics

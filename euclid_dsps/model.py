@@ -5,12 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import jax.numpy as jnp
 import jax
+import jax.numpy as jnp
 import numpy as np
-from dsps import calc_obs_mag, calc_rest_sed_sfh_table_lognormal_mdf, load_ssp_templates
-from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
-from dsps.dust.att_curves import _frac_transmission_from_k_lambda, sbl18_k_lambda
 
 from .filters import FilterCurve
 from .io import GalaxyObservation, abmag_to_flux_fnu_cgs
@@ -53,8 +50,14 @@ DERIVED_QUANTITY_NAMES = [
 ]
 
 
-def load_context(ssp_path: str, filters: dict[str, FilterCurve], n_sfh_bins: int = 96) -> DspsContext:
-    return DspsContext(ssp=load_ssp_templates(fn=ssp_path), filters=filters, n_sfh_bins=n_sfh_bins)
+def load_context(
+    ssp_path: str, filters: dict[str, FilterCurve], n_sfh_bins: int = 96
+) -> DspsContext:
+    from dsps import load_ssp_templates
+
+    return DspsContext(
+        ssp=load_ssp_templates(fn=ssp_path), filters=filters, n_sfh_bins=n_sfh_bins
+    )
 
 
 def parameters_for_row(
@@ -72,7 +75,9 @@ def parameters_for_row(
     return params
 
 
-def resolve_redshift(params: dict[str, float], row: dict[str, Any], redshift_config: dict[str, Any]) -> float:
+def resolve_redshift(
+    params: dict[str, float], row: dict[str, Any], redshift_config: dict[str, Any]
+) -> float:
     """Resolve the redshift used by DSPS from a catalog column or fixed fallback."""
     value = params.get("z_obs", redshift_config.get("fixed_value", 0.5))
     column = redshift_config.get("column")
@@ -97,7 +102,7 @@ def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResul
     model_mags = np.asarray(jax_result.model_mags, dtype=float)
 
     photometry: dict[str, dict[str, float]] = {}
-    for (name, curve), mag in zip(context.filters.items(), model_mags):
+    for (name, curve), mag in zip(context.filters.items(), model_mags, strict=True):
         photometry[name] = {
             "model_mag_ab": float(mag),
             "model_flux_fnu_cgs": abmag_to_flux_fnu_cgs(float(mag)),
@@ -114,9 +119,7 @@ def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResul
             "formed_mass_msun": float(jax_result.formed_mass_msun),
             "log10_formed_mass_msun": _safe_log10(float(jax_result.formed_mass_msun)),
             "sfr_at_obs_msun_per_yr": float(jax_result.sfr_at_obs_msun_per_yr),
-            "log10_sfr_at_obs": _safe_log10(
-                float(jax_result.sfr_at_obs_msun_per_yr)
-            ),
+            "log10_sfr_at_obs": _safe_log10(float(jax_result.sfr_at_obs_msun_per_yr)),
         },
         wave=wave,
         rest_sed=rest_sed,
@@ -127,6 +130,9 @@ def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResul
 
 def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModelResult:
     """Pure-JAX DSPS forward model used by gradient-based fits."""
+    from dsps import calc_rest_sed_sfh_table_lognormal_mdf
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+
     ssp = context.ssp
     z_obs = jnp.asarray(params["z_obs"])
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
@@ -164,8 +170,13 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
     )
 
 
-def predict_mags_jax(context: DspsContext, wave: jnp.ndarray, dusted_sed: jnp.ndarray, z_obs: jnp.ndarray) -> jnp.ndarray:
+def predict_mags_jax(
+    context: DspsContext, wave: jnp.ndarray, dusted_sed: jnp.ndarray, z_obs: jnp.ndarray
+) -> jnp.ndarray:
     """Predict configured apparent AB magnitudes with DSPS photometry kernels."""
+    from dsps import calc_obs_mag
+    from dsps.cosmology import DEFAULT_COSMOLOGY
+
     mags = []
     for curve in context.filters.values():
         mags.append(
@@ -186,7 +197,9 @@ def model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
     return run_dsps_model_jax(context, params).model_mags
 
 
-def predict_batch_mags(context: DspsContext, parameter_names: list[str], parameter_matrix: np.ndarray) -> np.ndarray:
+def predict_batch_mags(
+    context: DspsContext, parameter_names: list[str], parameter_matrix: np.ndarray
+) -> np.ndarray:
     """Predict magnitudes for many parameter rows with one JAX-vmapped call."""
 
     def single(values):
@@ -199,6 +212,8 @@ def predict_batch_mags(context: DspsContext, parameter_names: list[str], paramet
 
 def derived_quantities_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
     """Return derived quantities needed for scientifically comparable reports."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+
     z_obs = jnp.asarray(params["z_obs"])
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
@@ -232,14 +247,17 @@ def predict_batch_derived(
 
     predict = jax.jit(jax.vmap(single))
     values = np.asarray(predict(jnp.asarray(parameter_matrix)))
-    return {
-        name: values[:, index] for index, name in enumerate(DERIVED_QUANTITY_NAMES)
-    }
+    return {name: values[:, index] for index, name in enumerate(DERIVED_QUANTITY_NAMES)}
 
 
-def build_lognormal_sfh(gal_t_table: np.ndarray, log10_sfr: float, sfh_t_peak: float, sfh_tau: float) -> np.ndarray:
+def build_lognormal_sfh(
+    gal_t_table: np.ndarray, log10_sfr: float, sfh_t_peak: float, sfh_tau: float
+) -> np.ndarray:
     """Build a positive, smooth SFH in Msun/yr on cosmic-time bins."""
-    return np.asarray(build_lognormal_sfh_jax(gal_t_table, log10_sfr, sfh_t_peak, sfh_tau), dtype=float)
+    return np.asarray(
+        build_lognormal_sfh_jax(gal_t_table, log10_sfr, sfh_t_peak, sfh_tau),
+        dtype=float,
+    )
 
 
 def build_lognormal_sfh_jax(
@@ -258,13 +276,19 @@ def build_lognormal_sfh_jax(
     return amplitude * shape
 
 
-def apply_dust(wave_angstrom: np.ndarray, rest_sed: np.ndarray, params: dict[str, float]) -> np.ndarray:
+def apply_dust(
+    wave_angstrom: np.ndarray, rest_sed: np.ndarray, params: dict[str, float]
+) -> np.ndarray:
     """Apply a DSPS Salim+2018-style attenuation curve."""
     return np.asarray(apply_dust_jax(wave_angstrom, rest_sed, params), dtype=float)
 
 
-def apply_dust_jax(wave_angstrom: jnp.ndarray, rest_sed: jnp.ndarray, params: dict[str, Any]) -> jnp.ndarray:
+def apply_dust_jax(
+    wave_angstrom: jnp.ndarray, rest_sed: jnp.ndarray, params: dict[str, Any]
+) -> jnp.ndarray:
     """Apply DSPS Salim+2018-style attenuation without leaving JAX."""
+    from dsps.dust.att_curves import _frac_transmission_from_k_lambda, sbl18_k_lambda
+
     av = jnp.maximum(jnp.asarray(params.get("dust_av", 0.0)), 0.0)
     wave_micron = jnp.asarray(wave_angstrom) / 10_000.0
     k_lambda = sbl18_k_lambda(
@@ -280,13 +304,18 @@ def _safe_log10(value: float) -> float:
     return float(np.log10(value)) if value > 0 else float("nan")
 
 
-
-def comparison_rows(observation: GalaxyObservation, result: ModelResult) -> list[dict[str, float | str]]:
+def comparison_rows(
+    observation: GalaxyObservation, result: ModelResult
+) -> list[dict[str, float | str]]:
     rows = []
     for observed in observation.bands:
         model = result.photometry[observed.name]
         residual = observed.mag_ab - model["model_mag_ab"]
-        flux_ratio = model["model_flux_fnu_cgs"] / observed.flux_fnu_cgs if observed.flux_fnu_cgs > 0 else float("nan")
+        flux_ratio = (
+            model["model_flux_fnu_cgs"] / observed.flux_fnu_cgs
+            if observed.flux_fnu_cgs > 0
+            else float("nan")
+        )
         rows.append(
             {
                 "band": observed.name,
