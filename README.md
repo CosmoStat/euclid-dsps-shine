@@ -203,7 +203,7 @@ Use `--all` instead of `--limit` to process the full parquet catalog.
 
 ## Outputs
 
-Single-galaxy runs write `selected_galaxy.json`, `model_parameters.json`, `sed.csv`, `sed.png`, `photometry_comparison.csv`, and `photometry_comparison.png`. They also write `empirical_sed_points.csv`, `empirical_sed.csv`, `empirical_sed_summary.json`, and `sed_comparison.png`, which compare the DSPS attenuated SED to a broad-band pseudo-SED inferred from the configured catalog photometry. This diagnostic does not change the likelihood.
+Single-galaxy runs write `selected_galaxy.json`, `model_parameters.json`, `sed.csv`, `sed.png`, `photometry_comparison.csv`, and `photometry_comparison.png`.
 
 `cosmos-sed` writes `cosmos_sed_validation.json`, `cosmos_sed_diagnostics.csv`, `cosmos_seds.parquet`, `cosmos_sed_example.png`, `cosmos_sed_sample_set.png`, `cosmos_template_pair_heatmap.png`, `cosmos_fraction_diagnostics.png`, and `synthetic_vs_catalog_abs_flux.png`. With `--compare-dsps`, `--fit-dsps`, or `--population-dsps`, it also writes branch-1 rest-frame SED metrics and branch-2 observed photometry residual metrics. Fit modes add `cosmos_dsps_fit_results.csv`, `cosmos_dsps_fit_trace.csv`, and population hyperparameters when requested.
 

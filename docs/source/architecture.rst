@@ -21,7 +21,6 @@ assets:
      likelihood.py   Shared likelihood helpers.
      mcmc.py         NumPyro posterior sampling.
      model.py        Native DSPS boundary.
-     sed.py          Photometry-anchored pseudo-SED diagnostics.
      pipeline.py     Compatibility facade for workflow imports.
      reports.py      Compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
@@ -75,12 +74,6 @@ Layer Responsibilities
   Contains the native DSPS boundary. Other modules should pass normalized
   dataclasses and parameter dictionaries into this layer rather than importing
   DSPS directly.
-
-``sed.py``
-  Converts observed broad-band ``Fnu`` points to rest-frame luminosity-density
-  points and interpolates a pseudo-SED for diagnostics. It does not change the
-  photometric likelihood and should not be treated as a template-level catalog
-  ground truth.
 
 ``cosmos.py``
   Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,

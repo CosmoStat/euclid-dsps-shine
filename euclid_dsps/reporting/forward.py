@@ -14,12 +14,10 @@ from .core import (
     plot_redshift_scatter,
     plot_residual_boxplot,
     plot_sed,
-    plot_sed_comparison,
     summarize_by_band,
     summarize_by_row,
     write_batch_outputs,
     write_run_outputs,
-    write_sed_comparison_outputs,
 )
 
 __all__ = [
@@ -34,10 +32,8 @@ __all__ = [
     "plot_redshift_scatter",
     "plot_residual_boxplot",
     "plot_sed",
-    "plot_sed_comparison",
     "summarize_by_band",
     "summarize_by_row",
     "write_batch_outputs",
     "write_run_outputs",
-    "write_sed_comparison_outputs",
 ]

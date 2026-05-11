@@ -357,15 +357,9 @@ Exported plots:
     Catalog AB magnitudes versus DSPS predicted AB magnitudes by band.
     Residuals are ``model_mag - observed_mag``.
 
-  ``sed_comparison.png``
-    DSPS attenuated SED compared with a photometry-anchored pseudo-SED.
-    Broad-band points are converted to rest-frame luminosity density, then
-    log-interpolated onto the DSPS wavelength grid.
-
 Exported tables:
   ``selected_galaxy.json``, ``model_parameters.json``, ``sed.csv``,
-  ``photometry_comparison.csv``, ``empirical_sed_points.csv``,
-  ``empirical_sed.csv``, ``empirical_sed_summary.json``.
+  ``photometry_comparison.csv``.
 
 ``fit-one``
 ~~~~~~~~~~~

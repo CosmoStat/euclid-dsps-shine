@@ -18,9 +18,11 @@ import pandas as pd
 
 from .filters import FilterCurve
 from .model import ModelResult
-from .sed import L_SUN_ERG_PER_S, TEN_PC_CM
 
 C_ANGSTROM_PER_S = 2.99792458e18
+L_SUN_ERG_PER_S = 3.828e33
+PC_CM = 3.0856775814913673e18
+TEN_PC_CM = 10.0 * PC_CM
 COSMOS_COMPONENT_COLUMNS = (
     "sed_cosmos_1",
     "sed_cosmos_2",
