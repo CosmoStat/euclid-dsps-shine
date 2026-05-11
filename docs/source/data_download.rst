@@ -39,11 +39,41 @@ the catalog columns to the names consumed by ``configs/fs2_phz1.yaml``:
      `true_redshift_halo` AS `z_true`,
      `phz_mode_1` AS `z_phz`,
 
+     -- COSMOS template SED latent columns
+     `sed_cosmos_1`,
+     `sed_cosmos_2`,
+     `frac_cosmos_1`,
+     `frac_cosmos_2`,
+     `color_kind`,
+
      -- Euclid photometry
      `euclid_vis`,
+     `euclid_vis_abs`,
+     `euclid_vis_el_model3_ext`,
+     `euclid_vis_el_model3_ext_odonnell_ext`,
+     `euclid_vis_el_model3_ext_odonnell_ext_error`,
+     `euclid_vis_el_model3_ext_odonnell_ext_error_realization`,
+
      `euclid_nisp_y`,
+     `euclid_nisp_y_abs`,
+     `euclid_nisp_y_el_model3_ext`,
+     `euclid_nisp_y_el_model3_ext_odonnell_ext`,
+     `euclid_nisp_y_el_model3_ext_odonnell_ext_error`,
+     `euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization`,
+
      `euclid_nisp_j`,
+     `euclid_nisp_j_abs`,
+     `euclid_nisp_j_el_model3_ext`,
+     `euclid_nisp_j_el_model3_ext_odonnell_ext`,
+     `euclid_nisp_j_el_model3_ext_odonnell_ext_error`,
+     `euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization`,
+
      `euclid_nisp_h`,
+     `euclid_nisp_h_abs`,
+     `euclid_nisp_h_el_model3_ext`,
+     `euclid_nisp_h_el_model3_ext_odonnell_ext`,
+     `euclid_nisp_h_el_model3_ext_odonnell_ext_error`,
+     `euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization`,
 
      -- LSST photometry
      `lsst_u`,
@@ -173,6 +203,18 @@ The default config requires these canonical columns:
      - Truth redshift used only in diagnostics.
    * - ``euclid_vis``, ``euclid_nisp_y``, ``euclid_nisp_j``, ``euclid_nisp_h``
      - Euclid photometry, interpreted as ``Fnu`` in ``erg/s/cm^2/Hz``.
+   * - ``sed_cosmos_1``, ``sed_cosmos_2``
+     - COSMOS template IDs in local LePhare ``COSMOS_MOD.list`` order.
+   * - ``frac_cosmos_1``, ``frac_cosmos_2``
+     - Component fractions for COSMOS proxy SED reconstruction. The current
+       local parquet contains them, so the default reconstruction policy is
+       strict and reports fraction diagnostics.
+   * - ``euclid_*_abs``
+     - Rest-frame Euclid flux density at 10 parsec, used to normalize the
+       COSMOS proxy SED.
+   * - ``euclid_*_el_model3_ext*``
+     - Forward-modelled Euclid flux target variants for observed-frame branch-2
+       diagnostics.
    * - ``metallicity_true``
      - Gas-phase oxygen abundance truth. Reports convert it to a metallicity proxy with ``offset: -10.61``.
    * - ``log_sfr_true``
@@ -204,3 +246,22 @@ ASCII passbands:
    filters/Euclid_NISP.Y.dat
    filters/Euclid_NISP.J.dat
    filters/Euclid_NISP.H.dat
+
+Optional Rest-Frame Flux Columns
+--------------------------------
+
+CosmoHub tooltips expose rest-frame Euclid flux columns such as
+``euclid_nisp_h_abs`` with the description "rest-frame flux at 10 parsec" and
+units ``erg/cm**2/s/Hz``. These columns are now part of the recommended query:
+
+.. code-block:: sql
+
+   `euclid_vis_abs`,
+   `euclid_nisp_y_abs`,
+   `euclid_nisp_j_abs`,
+   `euclid_nisp_h_abs`,
+
+When these ``*_abs`` columns are present in the parquet row, the SED diagnostic
+uses them to anchor the rest-frame pseudo-SED directly. If they are absent, the
+diagnostic falls back to converting observed fluxes to rest-frame luminosity
+density with the luminosity distance.

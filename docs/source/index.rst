@@ -23,6 +23,7 @@ The project keeps the scientific boundary narrow:
    architecture
    data_download
    catalog_columns
+   cosmos_sed
    run_setup
    science_assessment
    testing

@@ -1,100 +1,132 @@
 Refactor Roadmap
 ================
 
-Assessment
-----------
+Current State
+-------------
 
-The current architecture is workable. DSPS calls are isolated, config is
-centralized, and command workflows are explicit. The remaining quality risks are:
+The project now has a usable architecture:
 
-* Native DSPS import currently segfaults in the local ``shine`` environment,
-  which blocks full forward-model smoke tests until the environment is repaired.
-* Plot-level tests remain intentionally light. They verify EDA artifact creation
-  but do not inspect image contents.
-* Local runtime data and cloned helper repositories can clutter the project
-  root if not ignored.
+* ``euclid_dsps.model`` owns the DSPS/JAX boundary.
+* ``euclid_dsps.io`` owns catalog rows, photometric units, and likelihood
+  uncertainties.
+* ``euclid_dsps.cosmos`` owns COSMOS-template pseudo-SED reconstruction.
+* ``euclid_dsps.fit`` owns MAP and population optimizers.
+* ``euclid_dsps.reporting`` owns plots and summary tables.
+* ``euclid_dsps.workflows`` owns CLI orchestration.
+* Sphinx, ruff, black, pytest, config validation, synthetic fixtures, and CI
+  are in place.
 
-Recommended Sequence
---------------------
+Remaining Architecture Risks
+----------------------------
 
-1. Add project hygiene. Done.
+1. Config dictionaries still cross most module boundaries.
 
-   Sphinx docs, black/ruff config, pytest wiring, CI workflow, and stronger
-   ignore rules for local artifacts are in place.
+   YAML compatibility is useful, but repeated dictionary access makes contracts
+   hard to audit. Introduce typed config dataclasses after the scientific model
+   stabilizes. Keep the YAML schema unchanged and convert to typed objects at
+   load time.
 
-2. Add lightweight tests before moving code. Done.
+2. ``workflows/core.py`` remains too large.
 
-   Start with tests that do not require the full FS2 parquet or GPU:
+   It still contains shared helpers, MAP batch orchestration, population
+   orchestration, MCMC orchestration, and report regeneration glue. Split into:
 
-   * config normalization
-   * photometry unit conversions
-   * truth value transforms
-   * required catalog column discovery
-   * filter wavelength unit conversion
-   * row-index file parsing
-   * synthetic parquet schema validation
-   * EDA output smoke testing
+   * ``workflows/photometry.py`` for observation arrays and comparison rows;
+   * ``workflows/fitting.py`` for MAP/population batch execution;
+   * ``workflows/posterior.py`` for HMC/NUTS batch execution;
+   * ``workflows/context.py`` for row context and truth/proxy extraction.
 
-3. Add explicit config schema validation. Done.
+3. Reporting has a broad ``reporting/core.py`` module.
 
-   ``euclid_dsps.config.validate_config`` checks required paths, band entries,
-   units, redshift bounds, fit bounds, sample settings, and truth transforms
-   immediately after YAML loading.
+   The public facade is split, but implementation remains centralized. Move
+   plot families into private modules:
 
-4. Split reporting. Done.
+   * ``reporting/eda_impl.py``;
+   * ``reporting/sed_impl.py``;
+   * ``reporting/batch_impl.py``;
+   * ``reporting/posterior_impl.py``;
+   * ``reporting/workflow_impl.py``.
 
-   Report code now lives in a package with focused public modules:
+4. Model parameter semantics are mixed.
 
-   .. code-block:: text
+   ``log10_sfr`` currently acts as SFH amplitude, not a physical instantaneous
+   SFR label. Add explicit stellar mass or formed-mass amplitude and compute
+   SFR diagnostics from the SFH. Rename reports so fitted amplitudes and catalog
+   truth proxies cannot be confused.
 
-      euclid_dsps/reporting/
-        eda.py
-        fit.py
-        forward.py
-        posterior.py
-        workflow.py
-        core.py
+5. Dust handling has two modes.
 
-   ``euclid_dsps.reports`` remains as a compatibility facade.
+   The Salim-style scalar dust fallback is useful for generic DSPS runs. The
+   COSMOS two-component dust mode is better for Flagship template diagnostics.
+   Expose the active dust model in every run manifest and report title.
 
-5. Split workflows. Done.
+6. Plot tests check file creation, not content.
 
-   Workflow orchestration now lives in focused public modules:
+   Add small image-integrity tests for key plots:
 
-   .. code-block:: text
+   * non-empty canvas;
+   * expected number of panels;
+   * finite plotted data in CSV source tables;
+   * no all-white or all-transparent PNGs.
 
-      euclid_dsps/workflows/
-        bayesian.py
-        eda.py
-        forward.py
-        map_fit.py
-        population.py
-        workflow.py
-        core.py
+7. Full-run reproducibility needs stronger manifests.
 
-   ``euclid_dsps.pipeline`` remains as a compatibility facade.
+   Each workflow should write:
 
-6. Introduce shared domain dataclasses. Partially done.
+   * git commit or dirty-state hash when available;
+   * config path and normalized config hash;
+   * JAX backend and device;
+   * package versions for DSPS, JAX, NumPy, pandas, pyarrow;
+   * input parquet path, size, and schema hash.
 
-   ``euclid_dsps.columns.CatalogColumn`` now documents the selected CosmoHub
-   columns. Runtime config still uses dictionaries because it maps directly to
-   YAML. Add typed config dataclasses only if validation errors or IDE support
-   become a real bottleneck.
+8. Error handling can be more uniform.
 
-7. Add reproducible smoke fixtures. Done.
+   COSMOS resources already fail with explicit searched paths. Apply the same
+   pattern to filter files, SSP assets, parquet schema mismatches, and output
+   write failures.
 
-   ``tests/data/synthetic_catalog.parquet`` has a few deterministic rows. CI
-   validates the configured schema, row selection, derived metallicity helper,
-   and EDA outputs without shipping private or large CosmoHub data.
+9. Performance profiling is missing.
+
+   Add timing rows per workflow chunk:
+
+   * parquet read time;
+   * COSMOS reconstruction time;
+   * JAX compile time;
+   * JAX execution time;
+   * plotting/reporting time;
+   * peak memory if available.
+
+Near-Term Refactor Tasks
+------------------------
+
+1. Extract photometry likelihood arrays from ``workflows/core.py``.
+
+   Target module: ``euclid_dsps.photometry``. Include flux-to-mag conversion,
+   error-column handling, masks, and comparison-row construction.
+
+2. Add typed config objects.
+
+   Start with ``BandConfig``, ``FitConfig``, ``CosmosSedConfig``, and
+   ``RuntimeConfig``. Keep dictionary export for compatibility.
+
+3. Split ``reporting/core.py`` by plot family.
+
+   Keep existing import paths working through ``euclid_dsps.reporting``.
+
+4. Add run manifests to all workflows.
+
+   Current COSMOS workflow has a manifest. Extend this to ``run-one``,
+   ``fit-one``, ``run-batch``, ``fit-batch``, ``fit-population``, and
+   ``fit-workflow``.
+
+5. Add GPU smoke test profile.
+
+   Keep CI CPU-only. Add a local command that writes timing/device diagnostics
+   for ``cosmos-sed --population-dsps`` with a small sample.
 
 Non-Goals
 ---------
 
-Do not vendor native DSPS inside this repository. Keep DSPS as a dependency and
-keep local clones outside the project root.
-
-Do not move large parquet files, SSP assets, or generated outputs into source
-control.
-
-Do not split modules only for appearance. Split after tests exist or when a file
-has a clear independent responsibility that can move with low behavior risk.
+* No vendored DSPS copy in this repository.
+* No large parquet, SSP, LePhare cache, or generated output in source control.
+* No broad rewrite before the stellar-mass/SFH model decision.

@@ -36,6 +36,27 @@ Model
    :members:
    :undoc-members:
 
+SED Diagnostics
+---------------
+
+.. automodule:: euclid_dsps.sed
+   :members:
+   :undoc-members:
+
+COSMOS Template SEDs
+--------------------
+
+.. automodule:: euclid_dsps.cosmos
+   :members:
+   :undoc-members:
+
+JAX Runtime
+-----------
+
+.. automodule:: euclid_dsps.jax_runtime
+   :members:
+   :undoc-members:
+
 Fitting
 -------
 
@@ -62,6 +83,10 @@ Workflows
    :undoc-members:
 
 .. automodule:: euclid_dsps.workflows.forward
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.workflows.cosmos
    :members:
    :undoc-members:
 
@@ -97,6 +122,10 @@ Reporting
    :undoc-members:
 
 .. automodule:: euclid_dsps.reporting.forward
+   :members:
+   :undoc-members:
+
+.. automodule:: euclid_dsps.reporting.cosmos
    :members:
    :undoc-members:
 

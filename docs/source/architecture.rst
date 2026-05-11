@@ -13,16 +13,20 @@ assets:
      assets.py       Download small DSPS smoke-test assets.
      cli.py          Command-line parser and command dispatch.
      config.py       YAML loading and default normalization.
+     cosmos.py       COSMOS-template proxy SED reconstruction.
      filters.py      Euclid/LSST transmission curve loading.
      fit.py          MAP and population optimization.
      io.py           Parquet, row, unit, JSON, and CSV helpers.
+     jax_runtime.py  Conservative JAX runtime setup for local WSL/shine.
      likelihood.py   Shared likelihood helpers.
      mcmc.py         NumPyro posterior sampling.
      model.py        Native DSPS boundary.
+     sed.py          Photometry-anchored pseudo-SED diagnostics.
      pipeline.py     Compatibility facade for workflow imports.
      reports.py      Compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
      reporting/
+       cosmos.py     COSMOS SED diagnostic plots.
        eda.py        EDA report exports.
        fit.py        MAP/population report exports.
        forward.py    Forward-model report exports.
@@ -31,6 +35,7 @@ assets:
        core.py       Report tables and plots.
      workflows/
        bayesian.py   Bayesian workflow exports.
+       cosmos.py     COSMOS SED reconstruction workflow.
        eda.py        EDA workflow exports.
        forward.py    Forward-model workflow exports.
        map_fit.py    MAP workflow exports.
@@ -70,6 +75,24 @@ Layer Responsibilities
   Contains the native DSPS boundary. Other modules should pass normalized
   dataclasses and parameter dictionaries into this layer rather than importing
   DSPS directly.
+
+``sed.py``
+  Converts observed broad-band ``Fnu`` points to rest-frame luminosity-density
+  points and interpolates a pseudo-SED for diagnostics. It does not change the
+  photometric likelihood and should not be treated as a template-level catalog
+  ground truth.
+
+``cosmos.py``
+  Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,
+  ``ebv_cosmos_*``, ``ext_curve_cosmos_*``, and ``frac_cosmos_*``.
+  It owns LePhare template/extinction loading, attenuation, synthetic
+  photometry, Euclid absolute-flux normalization, and COSMOS-vs-DSPS metrics.
+
+``jax_runtime.py``
+  Applies config/env JAX runtime choices before JAX-heavy modules are imported.
+  The local ``shine`` WSL environment currently segfaults while probing the
+  CUDA13 plugin, so the default config is CPU-safe. GPU runs are enabled by
+  changing ``runtime.jax_platforms`` and plugin autoload settings.
 
 ``fit.py`` and ``mcmc.py``
   Own optimizer and sampler behavior. They should depend on the model boundary
