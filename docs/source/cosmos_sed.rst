@@ -21,12 +21,12 @@ SPS ground truth and should not be used as a training label without this caveat.
 LePhare Resources
 -----------------
 
-The workflow reads local LePhare auxiliary data:
+The workflow reads local LePhare auxiliary data downloaded with the script (download_lephare_sed_gen.py):
 
 .. code-block:: text
 
-   /home/maxime/.cache/lephare/data/sed/GAL/COSMOS_SED/COSMOS_MOD.list
-   /home/maxime/.cache/lephare/data/ext/
+   /home/<user>/.cache/lephare/data/sed/GAL/COSMOS_SED/COSMOS_MOD.list
+   /home/<user>/.cache/lephare/data/ext/
 
 ``COSMOS_MOD.list`` has 31 entries in the local download. Catalog template IDs
 ``0`` through ``30`` map directly to this file order. The template files are
@@ -125,7 +125,7 @@ The default filter convention is photon-counting AB-style:
    \frac{\int \lambda F_\lambda(\lambda) T(\lambda)\,d\lambda}
         {\int c T(\lambda)/\lambda\,d\lambda}.
 
-``filter_response_kind: energy`` is also available when needed:
+``filter_response_kind: energy`` is also available if needed:
 
 .. math::
 
@@ -275,8 +275,7 @@ JAX-heavy modules are imported:
      disable_jax_plugin_autoload: true
      xla_python_client_preallocate: false
 
-The default config is CPU-safe. For the local ``shine`` environment with a
-working CUDA JAX stack, override the runtime from the shell:
+The default config is CPU-safe. If the environment has a working CUDA JAX stack, override the runtime from the shell:
 
 .. code-block:: bash
 

@@ -43,6 +43,7 @@ assets:
        core.py       End-to-end CLI workflows.
    configs/
      fs2_phz1.yaml   Default Euclid FS2 PHZ setup.
+     fs2_phz1_10band.yaml Default Euclid x LSST 10 bands fit FS2 PHZ setup.
      smoke_test.yaml Lightweight smoke-test setup.
    scripts/
      quickstart_one_galaxy.py
@@ -83,8 +84,7 @@ Layer Responsibilities
 
 ``jax_runtime.py``
   Applies config/env JAX runtime choices before JAX-heavy modules are imported.
-  The local ``shine`` WSL environment currently segfaults while probing the
-  CUDA13 plugin, so the default config is CPU-safe. GPU runs are enabled by
+  Auto switch between cpu if GPU not found. GPU runs are enabled by
   changing ``runtime.jax_platforms`` and plugin autoload settings.
 
 ``fit.py`` and ``mcmc.py``

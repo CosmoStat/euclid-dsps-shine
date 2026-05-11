@@ -252,14 +252,6 @@ Optional Rest-Frame Flux Columns
 
 CosmoHub tooltips expose rest-frame Euclid flux columns such as
 ``euclid_nisp_h_abs`` with the description "rest-frame flux at 10 parsec" and
-units ``erg/cm**2/s/Hz``. These columns are now part of the recommended query:
-
-.. code-block:: sql
-
-   `euclid_vis_abs`,
-   `euclid_nisp_y_abs`,
-   `euclid_nisp_j_abs`,
-   `euclid_nisp_h_abs`,
 
 When these ``*_abs`` columns are present in the parquet row, the SED diagnostic
 uses them to anchor the rest-frame pseudo-SED directly. If they are absent, the

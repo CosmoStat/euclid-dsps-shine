@@ -74,12 +74,7 @@ Current Scientific Problems
    throughput files for precision runs; top-hat/auto filters are acceptable
    only for development diagnostics.
 
-7. Redshift prior lacks a row-level uncertainty.
-
-   The current prior can center on ``z_phz`` but has a fixed width. A physical
-   photo-z likelihood needs PHZ PDF summaries or calibrated uncertainty columns.
-
-8. Population model incomplete.
+7. Population model incomplete.
 
    Current population MAP regularizes fitted parameters inside each chunk. It
    is not a learned galaxy population model like pop-cosmos.

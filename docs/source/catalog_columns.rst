@@ -149,37 +149,6 @@ These columns are the preferred targets for:
 * simulation-to-observation benchmarking,
 * differentiable forward-model validation.
 
-Unit Notes
-----------
-
-The public CosmoHub page is not machine-readable without an interactive session
-in this environment, so this table combines:
-
-* the SQL query used for the project export,
-* the downloaded parquet schema,
-* Euclid Flagship catalog paper descriptions of positions, halo properties,
-  morphology, SFR, metallicity, and dust,
-* PHZ documentation for ``phz_mode_1`` as the first mode of the redshift PDF,
-* project configuration assumptions for photometric units,
-* Flagship forward-model semantics for emission lines and attenuation.
-
-Flux columns are interpreted by ``configs/fs2_phz1.yaml`` as observed-frame
-``Fnu`` in cgs units:
-
-.. code-block:: text
-
-   erg s^-1 cm^-2 Hz^-1
-
-Absolute flux columns ending in ``_abs`` are interpreted as rest-frame flux
-densities normalized at 10 parsec:
-
-.. code-block:: text
-
-   erg s^-1 cm^-2 Hz^-1 at 10 pc
-
-If future exports use magnitudes, microJanskys, or alternative calibration
-conventions, both the configuration file and this documentation should be
-updated together.
 
 Selected Column Metadata
 ------------------------

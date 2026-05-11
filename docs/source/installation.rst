@@ -1,11 +1,8 @@
 Installation
 ============
 
-Use the existing ``shine`` conda environment when working locally:
 
 .. code-block:: bash
-
-   conda activate shine
    python -m pip install -e .
 
 For documentation and quality tooling:
