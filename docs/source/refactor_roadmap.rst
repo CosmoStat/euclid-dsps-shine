@@ -49,10 +49,10 @@ Remaining Architecture Risks
 
 4. Model parameter semantics are mixed.
 
-   ``log10_sfr`` currently acts as SFH amplitude, not a physical instantaneous
-   SFR label. Add explicit stellar mass or formed-mass amplitude and compute
-   SFR diagnostics from the SFH. Rename reports so fitted amplitudes and catalog
-   truth proxies cannot be confused.
+   The main configs now use ``log10_formed_mass_msun`` as the luminosity
+   amplitude and derive SFR diagnostics from the SFH. Remaining cleanup:
+   remove old wording and examples where ``log10_sfr`` appears as the primary
+   fit amplitude, while keeping backward compatibility for smoke configs.
 
 5. Dust handling has two modes.
 
@@ -96,6 +96,13 @@ Remaining Architecture Risks
    * plotting/reporting time;
    * peak memory if available.
 
+10. Population inference is still not a learned prior.
+
+   Population MAP writes hyperparameter diagnostics and grouped validation, but
+   it regularizes only within each processed chunk. A future pop-cosmos-like
+   prior should be trained or calibrated separately and then used inside the
+   objective.
+
 Near-Term Refactor Tasks
 ------------------------
 
@@ -124,9 +131,15 @@ Near-Term Refactor Tasks
    Keep CI CPU-only. Add a local command that writes timing/device diagnostics
    for ``cosmos-sed --population-dsps`` with a small sample.
 
+6. Separate chunk regularization from learned population priors.
+
+   Keep current population MAP as ``chunk_regularized_map`` in reports. Add a
+   separate interface for external population priors once the prior family is
+   scientifically defined.
+
 Non-Goals
 ---------
 
 * No vendored DSPS copy in this repository.
 * No large parquet, SSP, LePhare cache, or generated output in source control.
-* No broad rewrite before the stellar-mass/SFH model decision.
+* No broad rewrite before the SFH-basis and population-prior decision.

@@ -18,7 +18,9 @@ from ..cosmos import (
     observed_photometry_chi2_summary,
     observed_photometry_target_rows,
     photometry_target_sets,
+    population_validation_summary,
     reconstruct_cosmos_proxy_sed,
+    resolve_value_added_data_dir,
     validate_cosmos_catalog,
 )
 from ..filters import load_filters
@@ -47,6 +49,7 @@ from ..reporting.cosmos import (
     plot_cosmos_sed_sample_set,
     plot_fraction_diagnostics,
     plot_observed_flux_residuals,
+    plot_population_validation_summary,
     plot_rest_color_residuals,
     plot_synthetic_vs_catalog_abs_flux,
     plot_template_pair_heatmap,
@@ -93,6 +96,7 @@ def reconstruct_cosmos_seds(
     validation_report["missing_branch2_target_columns"] = _missing_branch2_columns(
         config, available_columns
     )
+    validation_report["value_added_data"] = _value_added_data_report(cosmos_config)
     write_json(out / "cosmos_sed_validation.json", validation_report)
 
     resources = load_cosmos_sed_resources(cosmos_config)
@@ -256,6 +260,16 @@ def reconstruct_cosmos_seds(
         manifest.append("branch1_rest_color_residuals.png")
         plot_branch1_residual_heatmap(branch1, out / "branch1_rms_residual_heatmap.png")
         manifest.append("branch1_rms_residual_heatmap.png")
+        population = population_validation_summary(
+            branch1, "rms_log_sed_residual", "branch1_rest_sed_rms"
+        )
+        if not population.empty:
+            population.to_csv(out / "branch1_population_validation.csv", index=False)
+            manifest.append("branch1_population_validation.csv")
+            plot_population_validation_summary(
+                population, out / "branch1_population_validation.png"
+            )
+            manifest.append("branch1_population_validation.png")
     if branch1_comparison_frames:
         branch1_comparison = pd.concat(branch1_comparison_frames, ignore_index=True)
         branch1_comparison.to_csv(out / "branch1_rest_sed_comparison.csv", index=False)
@@ -292,6 +306,16 @@ def reconstruct_cosmos_seds(
             branch2, out / "branch2_observed_flux_residuals.png"
         )
         manifest.append("branch2_observed_flux_residuals.png")
+        population = population_validation_summary(
+            branch2, "relative_flux_residual", "branch2_relative_flux_residual"
+        )
+        if not population.empty:
+            population.to_csv(out / "branch2_population_validation.csv", index=False)
+            manifest.append("branch2_population_validation.csv")
+            plot_population_validation_summary(
+                population, out / "branch2_population_validation.png"
+            )
+            manifest.append("branch2_population_validation.png")
 
     if dsps_fit_rows:
         pd.DataFrame(dsps_fit_rows).to_csv(
@@ -303,6 +327,26 @@ def reconstruct_cosmos_seds(
             out / "cosmos_dsps_population_hyperparameters.csv", index=False
         )
         manifest.append("cosmos_dsps_population_hyperparameters.csv")
+        write_json(
+            out / "cosmos_dsps_population_report.json",
+            {
+                "model_kind": "chunk_regularized_population_map",
+                "is_learned_population_model": False,
+                "interpretation": (
+                    "The current population mode jointly regularizes fitted "
+                    "parameters inside each processed chunk. It is useful for "
+                    "stabilizing MAP fits and producing hyperparameter "
+                    "diagnostics, but it is not a learned galaxy-population "
+                    "prior comparable to pop-cosmos."
+                ),
+                "recommended_use": (
+                    "Use the population validation CSV/PNG outputs to identify "
+                    "where residuals depend on color_kind, redshift, magnitude, "
+                    "SFR, metallicity, template pair, or dust curve pair."
+                ),
+            },
+        )
+        manifest.append("cosmos_dsps_population_report.json")
     if dsps_trace_rows:
         pd.DataFrame(dsps_trace_rows).to_csv(
             out / "cosmos_dsps_fit_trace.csv", index=False
@@ -485,6 +529,7 @@ def _batch_fit_rows(
         params = {
             name: float(sed_result.parameter_matrix[local_index, index])
             for index, name in enumerate(sed_result.parameter_names)
+            if not name.endswith("_prior_sigma")
         }
         derived = {
             f"fit_{name}": float(values[local_index])
@@ -528,6 +573,7 @@ def _batch_likelihood_rows(
         params = {
             name: float(fit_result.best_parameter_matrix[local_index, param_index])
             for param_index, name in enumerate(fit_result.parameter_names)
+            if not name.endswith("_prior_sigma")
         }
         context_values = _row_context(row.to_dict(), params, config)
         fit_values = {f"fit_{key}": value for key, value in params.items()}
@@ -584,6 +630,7 @@ def _model_result_from_batch(
     params = {
         name: float(batch_result.parameter_matrix[local_index, index])
         for index, name in enumerate(batch_result.parameter_names)
+        if not name.endswith("_prior_sigma")
     }
     derived = {
         name: float(values[local_index])
@@ -685,6 +732,41 @@ def _missing_branch2_columns(
                 if column and column not in available_columns:
                     missing.add(column)
     return sorted(missing)
+
+
+def _value_added_data_report(cosmos_config: dict[str, Any]) -> dict[str, Any]:
+    value_added_dir = resolve_value_added_data_dir(cosmos_config)
+    if value_added_dir is None:
+        return {
+            "configured": False,
+            "role": (
+                "Not configured. COSMOS templates/extinction curves are loaded from "
+                "LePhare paths instead."
+            ),
+        }
+    sed_dir = value_added_dir / "galaxy_seds"
+    extinct_dir = value_added_dir / "galaxy_extincts"
+    filter_dir = value_added_dir / "filters"
+    sed_files = sorted(sed_dir.glob("*.csv"))
+    return {
+        "configured": True,
+        "path": str(value_added_dir),
+        "galaxy_seds_dir": str(sed_dir),
+        "galaxy_seds_count": len(sed_files),
+        "galaxy_seds_first": sed_files[0].name if sed_files else None,
+        "galaxy_seds_last": sed_files[-1].name if sed_files else None,
+        "galaxy_extincts_dir": str(extinct_dir),
+        "galaxy_extincts_count": len(list(extinct_dir.glob("*.csv"))),
+        "filters_dir": str(filter_dir),
+        "filters_count": len(list(filter_dir.glob("*.csv"))),
+        "role": (
+            "Primary local SciPIC value-added library. It provides the COSMOS "
+            "template family used by sed_cosmos_* and flat-spectrum attenuation "
+            "files used to derive k(lambda). It is a better local resource "
+            "source than an external LePhare cache, but still template-level "
+            "pseudo truth rather than physical spectra."
+        ),
+    }
 
 
 def _print_abs_flux_table(result) -> None:

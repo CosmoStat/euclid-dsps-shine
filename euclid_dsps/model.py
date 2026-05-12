@@ -137,6 +137,9 @@ def parameters_for_row(
         if column in row and np.isfinite(row[column]):
             params[param_name] = float(row[column])
     params["z_obs"] = resolve_redshift(params, row, redshift_config or {})
+    prior_sigma = resolve_redshift_prior_sigma(row, redshift_config or {})
+    if np.isfinite(prior_sigma):
+        params["z_obs_prior_sigma"] = float(prior_sigma)
     return params
 
 
@@ -156,6 +159,41 @@ def resolve_redshift(
     if not np.isfinite(value):
         value = z_min
     return float(np.clip(value, z_min, z_max))
+
+
+def resolve_redshift_prior_sigma(
+    row: dict[str, Any], redshift_config: dict[str, Any]
+) -> float:
+    """Estimate a row-level Gaussian prior sigma from a PHZ central interval."""
+    interval = redshift_config.get("prior_interval") or {}
+    if not isinstance(interval, dict):
+        return float("nan")
+    min_column = interval.get("min_column")
+    max_column = interval.get("max_column")
+    if not min_column or not max_column:
+        return float("nan")
+    try:
+        z_min = float(row[min_column])
+        z_max = float(row[max_column])
+    except (KeyError, TypeError, ValueError):
+        return float("nan")
+    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
+        return float("nan")
+    probability = float(interval.get("probability", 0.70))
+    zscore_by_probability = {
+        0.70: 1.0364333894937898,
+        0.90: 1.6448536269514722,
+        0.95: 1.959963984540054,
+    }
+    zscore = zscore_by_probability.get(round(probability, 2))
+    if zscore is None:
+        # Fallback for uncommon central intervals. The 70/90/95 values above
+        # cover the CosmoHub NNPZ columns used by this project.
+        zscore = 1.0364333894937898
+    sigma = 0.5 * (z_max - z_min) / zscore
+    floor = float(interval.get("sigma_floor", 0.01))
+    ceiling = float(interval.get("sigma_ceiling", 1.0))
+    return float(np.clip(sigma, floor, ceiling))
 
 
 def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResult:
@@ -215,7 +253,9 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
         sfh_quench_width=jnp.asarray(params.get("sfh_quench_width", 0.5)),
         sfh_quench_depth=jnp.asarray(params.get("sfh_quench_depth", 0.0)),
     )
-    formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
+    gal_sfr_table, formed_mass = normalize_sfh_mass_jax(
+        gal_t_table, gal_sfr_table, params
+    )
 
     sed_info = calc_rest_sed_sfh_table_lognormal_mdf(
         gal_t_table,
@@ -302,7 +342,9 @@ def derived_quantities_jax(context: DspsContext, params: dict[str, Any]) -> jnp.
         sfh_quench_width=jnp.asarray(params.get("sfh_quench_width", 0.5)),
         sfh_quench_depth=jnp.asarray(params.get("sfh_quench_depth", 0.0)),
     )
-    formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
+    gal_sfr_table, formed_mass = normalize_sfh_mass_jax(
+        gal_t_table, gal_sfr_table, params
+    )
     sfr_at_obs = gal_sfr_table[-1]
     return jnp.asarray(
         [
@@ -437,6 +479,26 @@ def build_lognormal_sfh_jax(
     after_quench = jax.nn.sigmoid((gal_t_table - quench_time) / quench_width)
     quench_factor = 1.0 - quench_depth * after_quench
     return jnp.clip((base + burst) * quench_factor, 1.0e-12, jnp.inf)
+
+
+def normalize_sfh_mass_jax(
+    gal_t_table: jnp.ndarray, gal_sfr_table: jnp.ndarray, params: dict[str, Any]
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Optionally scale an SFH to a configured formed stellar mass.
+
+    Without ``log10_formed_mass_msun`` this preserves the historical behavior,
+    where ``log10_sfr`` is the SFH amplitude. With it, ``log10_sfr`` only sets
+    the pre-normalization shape scale and the luminosity amplitude is controlled
+    by the formed-mass parameter.
+    """
+    formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
+    if "log10_formed_mass_msun" not in params:
+        return gal_sfr_table, formed_mass
+    target_mass = 10.0 ** jnp.asarray(params["log10_formed_mass_msun"])
+    scale = target_mass / jnp.maximum(formed_mass, 1.0e-30)
+    scaled_sfr = jnp.clip(gal_sfr_table * scale, 1.0e-12, jnp.inf)
+    scaled_mass = jnp.trapezoid(scaled_sfr, gal_t_table) * 1.0e9
+    return scaled_sfr, scaled_mass
 
 
 def apply_dust(

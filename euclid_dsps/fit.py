@@ -563,7 +563,25 @@ def _prepare_prior_arrays(
                 loc_values = np.full(n_rows, float(loc), dtype=float)
             gaussian_mask[:, index] = True
             gaussian_loc[:, index] = loc_values
-            gaussian_scale[:, index] = max(float(spec.get("scale", 1.0)), 1.0e-6)
+            scale = spec.get("scale", 1.0)
+            if scale == "from_base":
+                scale_name = str(spec.get("scale_parameter", f"{name}_prior_sigma"))
+                if scale_name not in parameter_names:
+                    raise ValueError(
+                        f"fit.priors.{name}.scale='from_base' needs parameter "
+                        f"{scale_name!r} in base parameters"
+                    )
+                scale_values = np.asarray(
+                    base_matrix[:, parameter_names.index(scale_name)], dtype=float
+                )
+                scale_values = np.where(
+                    np.isfinite(scale_values) & (scale_values > 0),
+                    scale_values,
+                    1.0,
+                )
+                gaussian_scale[:, index] = np.maximum(scale_values, 1.0e-6)
+            else:
+                gaussian_scale[:, index] = max(float(scale), 1.0e-6)
         elif prior_type == "scaled_beta":
             beta_mask[:, index] = True
             beta_alpha[:, index] = max(float(spec.get("alpha", 1.0)), 1.0e-6)
@@ -647,7 +665,11 @@ def _build_independent_adam_optimizer(
         return model_mags_jax(context, params)
 
     batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
-    log_sfr_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
+    amplitude_free_pos = _free_position(
+        parameter_names, free_indices, "log10_formed_mass_msun"
+    )
+    if amplitude_free_pos is None:
+        amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
     @jax.jit
     def optimize(
@@ -666,7 +688,7 @@ def _build_independent_adam_optimizer(
         prior_beta_beta,
         truth_theta,
     ):
-        theta0 = _warm_start_log10_sfr(
+        theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
             observed,
@@ -674,7 +696,7 @@ def _build_independent_adam_optimizer(
             lower,
             upper,
             batch_mags,
-            log_sfr_free_pos,
+            amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         m0 = jnp.zeros_like(y0)
@@ -848,7 +870,11 @@ def _build_population_adam_optimizer(
         return model_mags_jax(context, params)
 
     batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
-    log_sfr_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
+    amplitude_free_pos = _free_position(
+        parameter_names, free_indices, "log10_formed_mass_msun"
+    )
+    if amplitude_free_pos is None:
+        amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
     @jax.jit
     def optimize(
@@ -867,7 +893,7 @@ def _build_population_adam_optimizer(
         prior_beta_beta,
         truth_theta,
     ):
-        theta0 = _warm_start_log10_sfr(
+        theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
             observed,
@@ -875,7 +901,7 @@ def _build_population_adam_optimizer(
             lower,
             upper,
             batch_mags,
-            log_sfr_free_pos,
+            amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         mu0 = jnp.nanmean(theta0, axis=0)
@@ -1084,7 +1110,7 @@ def _free_position(
     return int(positions[0]) if len(positions) else None
 
 
-def _warm_start_log10_sfr(
+def _warm_start_amplitude(
     theta0, base_matrix, observed, mask, lower, upper, batch_mags, free_pos: int | None
 ):
     if free_pos is None:

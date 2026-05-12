@@ -8,6 +8,21 @@ SELECT
   -- redshift labels
   `true_redshift_halo` AS `z_true`,
   `phz_mode_1` AS `z_phz`,
+  `true_redshift_gal` AS `z_true_gal`,
+  `observed_redshift_gal` AS `z_obs_gal`,
+  `redshift_step`,
+  `zp` AS `z_deepz`,
+  `phz_flags`,
+  `phz_median`,
+  `phz_min_70`,
+  `phz_max_70`,
+  `phz_min_90`,
+  `phz_max_90`,
+  `phz_min_95`,
+  `phz_max_95`,
+  `phz_mode_1_area`,
+  `phz_mode_2`,
+  `phz_mode_2_area`,
 
   -- COSMOS SED latent templates
   `sed_cosmos_1`,
@@ -57,6 +72,11 @@ SELECT
   `lsst_y`,
 
   -- physical truth labels
+  `log_stellar_mass`,
+  `log_ml_r01`,
+  `abs_mag_r01`,
+  `log_luminosity_r01`,
+  `abs_mag_uv_unextincted`,
   `metallicity` AS `metallicity_true`,
   `log_sfr` AS `log_sfr_true`,
   POW(10, `log_sfr`) AS `sfr_true`,
@@ -164,8 +184,22 @@ WHERE
   -- required redshift labels
   AND `phz_mode_1` IS NOT NULL
   AND `true_redshift_halo` IS NOT NULL
+  AND `true_redshift_gal` IS NOT NULL
+  AND `observed_redshift_gal` IS NOT NULL
+  AND `zp` IS NOT NULL
+  AND `phz_flags` IS NOT NULL
+  AND `phz_median` IS NOT NULL
+  AND `phz_min_70` IS NOT NULL
+  AND `phz_max_70` IS NOT NULL
+  AND `phz_min_90` IS NOT NULL
+  AND `phz_max_90` IS NOT NULL
+  AND `phz_min_95` IS NOT NULL
+  AND `phz_max_95` IS NOT NULL
+  AND `phz_mode_1_area` IS NOT NULL
 
   -- required physical labels
+  AND `log_stellar_mass` IS NOT NULL
+  AND `log_ml_r01` IS NOT NULL
   AND `metallicity` IS NOT NULL
   AND `log_sfr` IS NOT NULL
 

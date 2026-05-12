@@ -40,6 +40,21 @@ def test_truth_value_transform_scale_offset_and_log10() -> None:
     assert truth_value_from_spec(row, {"column": "missing"}) is None
 
 
+def test_truth_value_converts_log_stellar_mass_h2_to_msun() -> None:
+    row = {"log_stellar_mass": 10.0}
+
+    value = truth_value_from_spec(
+        row,
+        {
+            "column": "log_stellar_mass",
+            "transform": "log_stellar_mass_h2_to_msun",
+            "h": 0.67,
+        },
+    )
+
+    assert value == pytest.approx(10.0 + 2.0 * np.log10(0.67))
+
+
 def test_load_row_indices_deduplicates_and_sorts(tmp_path) -> None:
     path = tmp_path / "rows.csv"
     path.write_text("# comment\n7\n3\n7\n", encoding="utf-8")

@@ -204,6 +204,56 @@ Use:
 for likelihood-based inference, noisy photometric simulations, or differentiable
 survey forward-model validation.
 
+The ``*_error`` columns are flux-density uncertainties in the same units as the
+catalog fluxes. When a band config declares ``error_column``, the pipeline
+converts the flux uncertainty into a local AB-magnitude uncertainty,
+
+.. math::
+
+   \sigma_m \simeq \frac{2.5}{\ln 10}\frac{\sigma_F}{F},
+
+and uses it in the photometric likelihood. This gives high signal-to-noise
+objects stronger weight and prevents faint noisy points from dominating the fit
+as if every band had the same fixed ``sigma_mag``. ``sigma_mag_floor`` and
+``sigma_mag_ceiling`` in the config keep the weights numerically stable.
+
+The noisy realization columns are not uncertainties. They are one simulated
+measurement drawn from the survey-like flux plus noise model. Use them when the
+experiment should mimic measured survey photometry; use the corresponding
+``*_error`` columns for the likelihood denominator and chi-square.
+
+The 10-band config already wires the Euclid survey-like errors for the Euclid
+bands and uses fixed fallback errors for bands without catalog uncertainty
+columns:
+
+.. code-block:: bash
+
+   euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
+     --limit 32 \
+     --batch-size 32 \
+     --out outputs/runs/dev_fit_batch_10band
+
+For COSMOS SED validation with DSPS population fitting and survey diagnostics:
+
+.. code-block:: bash
+
+   EUCLID_DSPS_JAX_PLATFORMS=cuda \
+   EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0 \
+   EUCLID_DSPS_XLA_PYTHON_CLIENT_PREALLOCATE=false \
+   EUCLID_DSPS_REQUIRE_GPU=1 \
+   EUCLID_DSPS_EXPECTED_GPU_NAME=NVIDIA \
+   euclid-dsps --config configs/fs2_phz1_10band.yaml cosmos-sed \
+     --limit 2000 \
+     --batch-size 512 \
+     --population-dsps \
+     --plot-samples 10 \
+     --out outputs/runs/cosmos_sed_population_dsps_10band_2000_gpu
+
+In branch-2 outputs, ``branch2_observed_photometry_chi2.csv`` reports the
+weighted chi-square when errors are available. The continuum-only target set is
+the default science target because the current DSPS model has continuum plus
+dust, but not nebular emission lines.
+
 References
 ----------
 

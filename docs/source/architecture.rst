@@ -21,8 +21,8 @@ assets:
      likelihood.py   Shared likelihood helpers.
      mcmc.py         NumPyro posterior sampling.
      model.py        Native DSPS boundary.
-     pipeline.py     Compatibility facade for workflow imports.
-     reports.py      Compatibility facade for reporting imports.
+     pipeline.py     Deprecated compatibility facade for workflow imports.
+     reports.py      Deprecated compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
      reporting/
        cosmos.py     COSMOS SED diagnostic plots.
@@ -79,8 +79,9 @@ Layer Responsibilities
 ``cosmos.py``
   Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,
   ``ebv_cosmos_*``, ``ext_curve_cosmos_*``, and ``frac_cosmos_*``.
-  It owns LePhare template/extinction loading, attenuation, synthetic
-  photometry, Euclid absolute-flux normalization, and COSMOS-vs-DSPS metrics.
+  It owns SciPIC value-added or LePhare template/extinction loading,
+  attenuation, synthetic photometry, Euclid absolute-flux normalization,
+  population validation, and COSMOS-vs-DSPS metrics.
 
 ``jax_runtime.py``
   Applies config/env JAX runtime choices before JAX-heavy modules are imported.
@@ -102,8 +103,11 @@ Layer Responsibilities
   type, while ``core.py`` keeps shared plotting/table implementation.
 
 ``pipeline.py`` and ``reports.py``
-  Compatibility facades retained for existing scripts. New code should import
-  from ``euclid_dsps.workflows`` and ``euclid_dsps.reporting``.
+  Deprecated compatibility facades retained for existing scripts and notebooks.
+  They contain no workflow or plotting implementation. New source code should
+  import from ``euclid_dsps.workflows`` and ``euclid_dsps.reporting``. They can
+  be removed after local scripts such as ``scripts/quickstart_one_galaxy.py``
+  and downstream notebooks no longer import them.
 
 Design Rules
 ------------
@@ -116,10 +120,12 @@ Design Rules
   contracts.
 * Prefer new config keys over hidden constants when changing scientific setup.
 
-Current Technical Debt
-----------------------
+Remaining Cleanup
+-----------------
 
-``workflows/core.py`` and ``reporting/core.py`` retain shared implementation to
-avoid risky movement of coupled helper functions. The public modules are now
-split by workflow/report type, so future internal movement can happen behind
-stable imports. The safer sequence is documented in :doc:`refactor_roadmap`.
+The detailed cleanup queue is maintained in :doc:`refactor_roadmap`. The main
+architectural risk is not the public API split; it is the size of the shared
+implementation modules behind that API. ``workflows/core.py`` still owns too
+many orchestration helpers, and ``reporting/core.py`` still owns too many plot
+families. Future refactors should move those internals while keeping the stable
+``euclid_dsps.workflows`` and ``euclid_dsps.reporting`` imports.

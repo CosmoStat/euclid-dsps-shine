@@ -40,6 +40,7 @@ def test_normalize_config_adds_defaults() -> None:
     assert config["sample"]["sampler"] == "nuts"
     assert config["runtime"]["jax_platforms"] == "cpu"
     assert config["runtime"]["disable_jax_plugin_autoload"] is True
+    assert config["runtime"]["require_gpu"] is False
     assert (
         config["redshift"]["fixed_value"]
         == config["model"]["fixed_parameters"]["z_obs"]
@@ -79,6 +80,21 @@ def test_required_catalog_columns_include_config_contract() -> None:
     ]
 
 
+def test_required_catalog_columns_include_redshift_prior_interval() -> None:
+    config = minimal_config()
+    config["redshift"]["prior_interval"] = {
+        "min_column": "phz_min_70",
+        "max_column": "phz_max_70",
+        "probability": 0.70,
+    }
+    normalized = normalize_config(config)
+
+    columns = required_catalog_columns(normalized)
+
+    assert "phz_min_70" in columns
+    assert "phz_max_70" in columns
+
+
 def test_validate_catalog_columns_reports_missing_columns() -> None:
     config = normalize_config(minimal_config())
 
@@ -110,8 +126,14 @@ def test_optional_10band_config_activates_lsst_bands_explicitly() -> None:
     ]
     assert config["cosmos_sed"]["use_cosmos_dust_in_dsps"] is True
     assert "dust_av" not in config["fit"]["free_parameters"]
-    assert "sfh_burst_fraction" in config["fit"]["free_parameters"]
+    assert "log10_formed_mass_msun" in config["fit"]["free_parameters"]
+    assert "sfh_burst_fraction" not in config["fit"]["free_parameters"]
+    assert config["fit"]["priors"]["z_obs"]["scale"] == "from_base"
     assert config["bands"][6]["error_column"].endswith("_error")
+    assert config["runtime"]["jax_platforms"] == "cuda"
+    assert config["runtime"]["disable_jax_plugin_autoload"] is False
+    assert config["runtime"]["require_gpu"] is True
+    assert config["runtime"]["expected_gpu_name"] == "NVIDIA"
 
 
 def test_cosmos_sed_defaults_are_normalized() -> None:

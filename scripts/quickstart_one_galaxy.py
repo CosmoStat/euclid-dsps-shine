@@ -5,7 +5,7 @@ Usage:
 """
 
 from euclid_dsps.config import load_config
-from euclid_dsps.pipeline import fit_one, run_one
+from euclid_dsps.workflows import fit_one, run_one
 
 
 def main() -> None:

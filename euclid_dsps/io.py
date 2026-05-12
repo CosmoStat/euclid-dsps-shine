@@ -111,6 +111,13 @@ def truth_value_from_spec(row: dict[str, Any], spec: Any) -> float | None:
             if value <= 0:
                 return None
             value = float(np.log10(value))
+        elif transform == "log_stellar_mass_h2_to_msun":
+            h = float(spec.get("h"))
+            if not np.isfinite(h) or h <= 0:
+                raise ValueError(
+                    "truth log_stellar_mass_h2_to_msun transform needs h > 0"
+                )
+            value = float(value + 2.0 * np.log10(h))
         elif transform not in {None, "linear"}:
             raise ValueError(f"Unsupported truth transform: {transform}")
         value = value * float(spec.get("scale", 1.0))
@@ -222,6 +229,13 @@ def flux_error_to_sigma_mag(
 def build_observation(
     row_index: int, row: pd.Series, band_configs: list[dict[str, Any]]
 ) -> GalaxyObservation:
+    """Build one photometric observation from a catalog row.
+
+    When a band declares ``error_column``, the catalog flux-density error is
+    converted to a local AB-magnitude uncertainty and used by the likelihood.
+    The configured ``sigma_mag`` remains the fallback for bands without usable
+    per-object errors.
+    """
     bands = []
     for band in band_configs:
         column = band["column"]
@@ -294,6 +308,12 @@ def required_catalog_columns(config: dict[str, Any]) -> list[str]:
         col = truth_column_from_spec(redshift.get(key))
         if col:
             columns.add(col)
+    interval = redshift.get("prior_interval") or {}
+    if isinstance(interval, dict):
+        for key in ("min_column", "max_column"):
+            col = interval.get(key)
+            if col:
+                columns.add(str(col))
     truth = config.get("truth", {})
     truth_redshift = truth_column_from_spec(truth.get("redshift_column"))
     if truth_redshift:

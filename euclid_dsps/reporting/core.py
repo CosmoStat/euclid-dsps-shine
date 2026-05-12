@@ -923,6 +923,13 @@ def posterior_comparable_frame(
     data = {}
     if "truth_log10_sfr_at_obs" in truth_values and "log10_sfr_at_obs" in derived:
         data["log10_sfr_at_obs"] = derived["log10_sfr_at_obs"].to_numpy(dtype=float)
+    if (
+        "truth_log10_formed_mass_msun" in truth_values
+        and "log10_formed_mass_msun" in derived
+    ):
+        data["log10_formed_mass_msun"] = derived["log10_formed_mass_msun"].to_numpy(
+            dtype=float
+        )
     if "truth_dust_av" in truth_values and "dust_av" in samples:
         data["dust_av"] = samples["dust_av"].to_numpy(dtype=float)
     if "truth_log10_metallicity" in truth_values and "log10_metallicity" in samples:
@@ -1055,6 +1062,7 @@ def _posterior_display_label(parameter: str) -> str:
         "z_obs": "DSPS redshift",
         "log10_sfr_at_obs": "DSPS log10 SFR(t_obs)",
         "log10_sfr": "DSPS log10 SFH amplitude",
+        "log10_formed_mass_msun": "DSPS log10 formed mass",
         "dust_av": "DSPS dust A_V",
         "log10_metallicity": "DSPS log10 stellar Z",
     }
@@ -1804,6 +1812,7 @@ def _parameter_display_label(parameter: str) -> str:
         "z_obs": "Redshift",
         "log10_sfr_at_obs": "log10 SFR [Msun/yr]",
         "log10_sfr": "log10 SFH Amplitude",
+        "log10_formed_mass_msun": "log10 formed mass [Msun]",
         "dust_av": "Dust Av [mag]",
         "log10_metallicity": "log10 Metallicity [absolute log10(Z)]",
     }

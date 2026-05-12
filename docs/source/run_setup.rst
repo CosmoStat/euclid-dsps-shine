@@ -47,12 +47,32 @@ Runtime
      jax_platforms: "cpu"
      disable_jax_plugin_autoload: true
      xla_python_client_preallocate: false
+     require_gpu: false
+     expected_gpu_name:
 
 The default is WSL-safe for the local ``shine`` environment. For a working CUDA
-JAX stack, use ``jax_platforms: "cuda,cpu"`` and
-``disable_jax_plugin_autoload: false``. Batch fitting and COSMOS DSPS
-comparison are JAX-vectorized over each parquet chunk, so increasing
-``--batch-size`` uses more accelerator memory when a GPU backend is active.
+JAX stack, use ``jax_platforms: "cuda"`` and
+``disable_jax_plugin_autoload: false``. Set ``require_gpu: true`` or
+``EUCLID_DSPS_REQUIRE_GPU=1`` when a run must fail instead of silently falling
+back to CPU. ``expected_gpu_name`` or ``EUCLID_DSPS_EXPECTED_GPU_NAME`` checks
+the JAX GPU ``device_kind`` string, for example ``NVIDIA``.
+
+Before a long GPU run, verify the environment:
+
+.. code-block:: bash
+
+   /home/maxime/miniforge3/envs/shine/bin/python \
+     scripts/check_jax_gpu.py \
+     --require-nvidia \
+     --hold-seconds 10
+
+This script prints ``nvidia-smi`` visibility, JAX devices, selected backend, and
+runs a real JAX matrix multiplication while NVIDIA memory is allocated. If JAX
+shows only ``cpu`` devices, the pipeline will not use the RTX card.
+
+Batch fitting and COSMOS DSPS comparison are JAX-vectorized over each parquet
+chunk, so increasing ``--batch-size`` uses more accelerator memory when a GPU
+backend is active.
 
 Selection
 ---------
@@ -69,19 +89,29 @@ Selection
 Redshift
 --------
 
-The default redshift setup fixes DSPS ``z_obs`` from the catalog photo-z:
+The updated FS2 configs set DSPS ``z_obs`` from the NNPZ PDF median and use the
+70 percent interval to derive a row-level Gaussian prior width:
 
 .. code-block:: yaml
 
    redshift:
-     column: z_phz
-     truth_column: z_true
+     column: phz_median
+     truth_column: z_true_gal
      fixed_value: 0.5
      min: 0.0001
      max: 6.0
+     prior_interval:
+       min_column: phz_min_70
+       max_column: phz_max_70
+       probability: 0.70
+       sigma_floor: 0.01
+       sigma_ceiling: 0.6
 
 ``column`` is used for DSPS. ``truth_column`` is diagnostic only. ``fixed_value``
-is a fallback when the row value is missing or invalid.
+is a fallback when the row value is missing or invalid. The prior interval is
+converted to ``z_obs_prior_sigma`` with
+``sigma = 0.5 * (phz_max_70 - phz_min_70) / 1.036`` and clipped to the
+configured floor/ceiling.
 
 Bands
 -----
@@ -133,6 +163,7 @@ Default free parameters can override these values during fitting.
      n_sfh_bins: 96
      fixed_parameters:
        log10_sfr: 0.0
+       log10_formed_mass_msun: 10.0
        sfh_t_peak: 4.0
        sfh_tau: 0.6
        sfh_burst_fraction: 0.0
@@ -155,6 +186,68 @@ In the 10-band COSMOS comparison config, ``parameter_columns`` maps
 catalog so DSPS uses the same two-component attenuation family as the COSMOS
 template proxy.
 
+Parameter meanings:
+
+``log10_sfr``
+  Historical logarithmic SFH amplitude in ``Msun/yr``. When
+  ``log10_formed_mass_msun`` is present, the SFH is renormalized to the formed
+  mass and ``log10_sfr`` no longer controls the luminosity amplitude.
+
+``log10_formed_mass_msun``
+  Base-10 logarithm of the formed stellar mass in ``Msun``. This is now the
+  preferred DSPS amplitude parameter. Catalog ``log_stellar_mass`` is stored as
+  ``log10(Msun h^-2)`` and is converted for diagnostics using
+  ``log10(Msun) = log_stellar_mass + 2 log10(h)``.
+
+``sfh_t_peak`` and ``sfh_tau``
+  Peak time and width of the lognormal SFH baseline in Gyr. Lognormal and
+  delayed families are common compact SFH parameterizations, but they are too
+  restrictive for many galaxies.
+
+``sfh_burst_fraction``, ``sfh_burst_time``, ``sfh_burst_width``
+  Smooth Gaussian burst component added to the baseline SFH. This is motivated
+  by the PROVABGS model family, which uses a richer SFH basis plus burst terms
+  for DESI BGS SED inference.
+
+``sfh_quench_time``, ``sfh_quench_width``, ``sfh_quench_depth``
+  Smooth late-time suppression applied after a quench time. This is a compact
+  differentiable proxy for the flexibility normally provided by non-parametric
+  SFHs or NMF SFH bases.
+
+``log10_metallicity`` and ``metallicity_scatter``
+  Stellar metallicity center and scatter for DSPS SSP weighting. The catalog
+  ``metallicity_true`` column is gas-phase ``12 + log(O/H)``; any conversion to
+  DSPS stellar metallicity is diagnostic only.
+
+``dust_av`` and ``dust_slope``
+  Scalar fallback dust parameters. The 10-band COSMOS config prefers
+  row-resolved two-component COSMOS attenuation through ``cosmos_ebv_*``,
+  ``cosmos_ext_curve_*``, and ``cosmos_frac_*``.
+
+``cosmos_ebv_*``, ``cosmos_ext_curve_*``, ``cosmos_frac_*``
+  Per-row COSMOS attenuation parameters copied from the catalog. They are used
+  when ``cosmos_sed.use_cosmos_dust_in_dsps`` is true.
+
+The default numbers are starting values and safe fallbacks, not final physical
+priors. The scientific motivation is:
+
+* `PROVABGS mock challenge <https://arxiv.org/abs/2202.01809>`__: richer SFH
+  bases, burst terms, and explicit priors matter for physical parameter
+  inference.
+* `How to Measure Galaxy SFHs II <https://arxiv.org/abs/1811.03637>`__:
+  non-parametric SFHs are more flexible, but their inference is prior
+  dependent.
+* `pop-cosmos <https://arxiv.org/abs/2402.00935>`__: population-level priors
+  calibrated on COSMOS photometry are a better long-term target than fully
+  independent broad-band fits.
+
+The current values keep the optimization stable while leaving the scientific
+assumptions visible in YAML. The default 10-band fit infers formed mass,
+redshift, lognormal SFH shape, and metallicity. It does not freely fit the
+burst/quench modifiers by default because broad-band photometry alone does not
+robustly identify those features. The modifiers remain available for targeted
+experiments once a stronger SFH prior is introduced.
+
 Fit Parameters
 --------------
 
@@ -174,11 +267,11 @@ bounds:
        z_obs:
          type: truncated_normal
          loc: from_base
-         scale: 0.12
+         scale: from_base
      free_parameters:
-       log10_sfr:
-         initial: 0.0
-         bounds: [-4.5, 2.8]
+       log10_formed_mass_msun:
+         initial: 10.0
+         bounds: [6.0, 13.0]
        dust_av:
          initial: 0.2
          bounds: [0.0, 3.0]
@@ -191,8 +284,10 @@ base parameter dictionary for each row.
 
 ``fit.priors`` adds differentiable penalties to the JAX objective. Supported
 types are ``uniform``, ``normal``, ``truncated_normal``, and ``scaled_beta``.
-The reported ``chi2`` remains the photometric chi-square; the prior only guides
-the optimization.
+For Gaussian priors, ``scale: from_base`` reads a row-resolved
+``<parameter>_prior_sigma`` value from the base parameter dictionary; this is
+used by ``z_obs`` through the PHZ interval columns. The reported ``chi2``
+remains the photometric chi-square; the prior only guides the optimization.
 
 Bayesian Sampling
 -----------------
@@ -232,7 +327,7 @@ Use ``--sampler hmc`` and a small ``--num-steps`` for predictable debugging.
 Use ``--sampler nuts`` for more adaptive posterior checks on selected rows.
 Supported prior types are ``uniform``, ``normal``, ``truncated_normal``, and
 ``scaled_beta``. ``loc: from_base`` centers a prior on the row-resolved base
-parameter, useful for redshift priors centered on ``z_phz``.
+parameter, useful for redshift priors centered on ``phz_median``.
 
 COSMOS Template SED Setup
 -------------------------
@@ -242,6 +337,8 @@ COSMOS Template SED Setup
 .. code-block:: yaml
 
    cosmos_sed:
+     value_added_data_dir: "Data/value_added_data"
+     catalog_h: 0.67
      lephare_data_dir: "/home/maxime/.cache/lephare/data"
      template_subdir: "sed/GAL/COSMOS_SED"
      template_list: "COSMOS_MOD.list"
@@ -266,10 +363,16 @@ The default policy is therefore strict. Older exports can use
 ``component_fraction_policy: equal_if_missing`` explicitly; the fallback is
 recorded in output diagnostics.
 
+When ``value_added_data_dir`` is configured, COSMOS templates are loaded from
+``galaxy_seds`` and attenuation curves are derived from ``galaxy_extincts``
+using the SciPIC formula documented with the data release. This is the preferred
+local source because it is the same value-added library shipped with the
+catalog. If it is absent, the workflow falls back to the LePhare cache.
+
 ``observed_photometry_target_sets`` defaults to continuum-only in the current
 science config. This avoids scoring a continuum+dust DSPS model against
 catalog columns that include emission lines. ``use_cosmos_dust_in_dsps`` loads
-the LePhare extinction curves into the JAX context and applies the
+the configured extinction curves into the JAX context and applies the
 row-resolved two-component COSMOS attenuation inside DSPS.
 
 Truth Comparisons
@@ -281,8 +384,12 @@ model or MAP fit:
 .. code-block:: yaml
 
    truth:
-     redshift_column: z_true
+     redshift_column: z_true_gal
      parameter_columns:
+       log10_formed_mass_msun:
+         column: log_stellar_mass
+         transform: log_stellar_mass_h2_to_msun
+         h: 0.67
        log10_metallicity:
          column: metallicity_true
          offset: -10.61
@@ -636,13 +743,27 @@ Branch-1 plots:
     Sixteen worst SED comparisons selected by ``rms_log_sed_residual``.
 
   ``branch1_rms_residual_heatmap.png``
-    Median RMS log SED residual by ``z_true`` bin and ``color_kind``.
+    Median RMS log SED residual by ``z_true_gal`` bin and ``color_kind``.
+
+  ``branch1_population_validation.png``
+    Median rest-SED residual grouped by ``color_kind``, redshift, apparent
+    magnitude, SFR proxy, metallicity proxy, stellar mass, template pair, and
+    dust-curve pair. The CSV contains the same grouped values.
 
 Branch-2 plots:
   ``branch2_observed_flux_residuals.png``
     Observed-frame flux residuals by band and target set. Continuum sets use
     clipped fractional residuals. Noisy target sets use clipped
     ``(model-observed)/sigma``.
+
+  ``branch2_population_validation.png``
+    Same population grouping axes as branch 1, but for observed-frame
+    photometry residuals.
+
+Population-mode report:
+  ``cosmos_dsps_population_report.json``
+    Explicitly records that population mode is chunk-regularized MAP. It is not
+    a learned galaxy-population prior like pop-cosmos.
 
 Fit-likelihood plots:
   ``cosmos_dsps_likelihood_dashboard.png``
@@ -655,7 +776,7 @@ Fit-likelihood plots:
     Magnitude residuals by band.
 
   ``cosmos_dsps_likelihood_redshift_truth.png``
-    Fitted/input redshift versus ``z_true``.
+    Fitted/input redshift versus ``z_true_gal`` when available.
 
   ``cosmos_dsps_likelihood_parameter_truth.png``
     Fitted parameters versus available truth/proxy columns.

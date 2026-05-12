@@ -53,6 +53,65 @@ def test_load_cosmos_templates_uses_list_order(tmp_path) -> None:
     assert resources.extinction_mapping[1] == "SMC_prevot"
 
 
+def test_load_value_added_templates_and_extinction_curves(tmp_path) -> None:
+    value_added = tmp_path / "value_added_data"
+    sed_dir = value_added / "galaxy_seds"
+    ext_dir = value_added / "galaxy_extincts"
+    sed_dir.mkdir(parents=True)
+    ext_dir.mkdir(parents=True)
+    wave = np.asarray([1000.0, 2000.0, 3000.0])
+    np.savetxt(
+        sed_dir / "00_Ell1_A_0_UV.csv", np.column_stack([wave, wave]), delimiter=","
+    )
+    np.savetxt(
+        sed_dir / "01_Ell2_A_0_UV.csv",
+        np.column_stack([wave, wave * 2.0]),
+        delimiter=",",
+    )
+    noext_flux = np.ones_like(wave)
+    ext_flux = noext_flux / (10 ** (0.4 * 0.2 * 2.0))
+    np.savetxt(
+        ext_dir / "0_flatnuspec_noext.csv",
+        np.column_stack([wave, noext_flux]),
+        delimiter=",",
+    )
+    np.savetxt(
+        ext_dir / "1_flatnuspec_prevot_ebv02.csv",
+        np.column_stack([wave, ext_flux]),
+        delimiter=",",
+    )
+    config = normalize_config(
+        {
+            "catalog_path": "catalog.parquet",
+            "ssp_path": "ssp.h5",
+            "bands": [
+                {
+                    "name": "euclid_vis",
+                    "column": "euclid_vis",
+                    "units": "fnu_cgs",
+                    "sigma_mag": 0.05,
+                    "filter": {"kind": "tophat"},
+                }
+            ],
+            "cosmos_sed": {
+                "value_added_data_dir": str(value_added),
+                "expected_template_count": 2,
+                "extinction": {"curves": {0: "none", 1: "SMC_prevot"}},
+            },
+        }
+    )
+
+    resources = load_cosmos_sed_resources(config["cosmos_sed"])
+
+    assert [template.name for template in resources.templates] == [
+        "00_Ell1_A_0_UV.csv",
+        "01_Ell2_A_0_UV.csv",
+    ]
+    assert resources.extinction_curves["SMC_prevot"].k_lambda.tolist() == pytest.approx(
+        [2.0, 2.0, 2.0]
+    )
+
+
 def test_apply_cosmos_extinction_uses_configured_curve(tmp_path) -> None:
     config = _cosmos_config(tmp_path)
     resources = load_cosmos_sed_resources(config["cosmos_sed"])

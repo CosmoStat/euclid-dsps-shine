@@ -50,7 +50,7 @@ SUPPORTED_PHOTOMETRY_UNITS = {"fnu_cgs", "abmag", "microjy", "ujy"}
 SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
-SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10"}
+SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
 SUPPORTED_PRIOR_TYPES = {"uniform", "normal", "truncated_normal", "scaled_beta"}
 SUPPORTED_FILTER_RESPONSE_KINDS = {"photon", "energy"}
 SUPPORTED_COMPONENT_FRACTION_POLICIES = {"strict", "equal_if_missing"}
@@ -65,6 +65,8 @@ DEFAULT_RUNTIME_CONFIG = {
     "jax_platforms": "cpu",
     "disable_jax_plugin_autoload": True,
     "xla_python_client_preallocate": False,
+    "require_gpu": False,
+    "expected_gpu_name": None,
 }
 
 DEFAULT_COSMOS_SED_CONFIG = {
@@ -74,6 +76,8 @@ DEFAULT_COSMOS_SED_CONFIG = {
     "expected_template_count": 31,
     "template_wave_unit": "angstrom",
     "template_flux_unit": "arbitrary_flambda",
+    "value_added_data_dir": None,
+    "catalog_h": None,
     "extinction_dir": "ext",
     "extinction": {
         "curves": {
@@ -315,6 +319,28 @@ def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
     z_max = _finite_float(redshift.get("max"), "redshift.max", errors)
     if z_min is not None and z_max is not None and z_min >= z_max:
         errors.append("redshift.min must be smaller than redshift.max")
+    interval = redshift.get("prior_interval")
+    if interval is not None:
+        if not isinstance(interval, dict):
+            errors.append("redshift.prior_interval must be a mapping when provided")
+        else:
+            _optional_string(
+                interval.get("min_column"),
+                "redshift.prior_interval.min_column",
+                errors,
+            )
+            _optional_string(
+                interval.get("max_column"),
+                "redshift.prior_interval.max_column",
+                errors,
+            )
+            probability = _finite_float(
+                interval.get("probability", 0.70),
+                "redshift.prior_interval.probability",
+                errors,
+            )
+            if probability is not None and not 0.0 < probability < 1.0:
+                errors.append("redshift.prior_interval.probability must be in (0, 1)")
 
 
 def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
@@ -391,7 +417,7 @@ def _validate_fit_priors(
             )
         if "loc" in spec and spec["loc"] != "from_base":
             _finite_float(spec["loc"], f"fit.priors.{name}.loc", errors)
-        if "scale" in spec:
+        if "scale" in spec and spec["scale"] != "from_base":
             _positive_float(spec["scale"], f"fit.priors.{name}.scale", errors)
         if prior_type == "scaled_beta":
             _positive_float(spec.get("alpha", 1.0), f"fit.priors.{name}.alpha", errors)
@@ -451,6 +477,8 @@ def _validate_truth(truth: dict[str, Any], errors: list[str]) -> None:
         _finite_float(
             spec.get("offset", 0.0), f"truth.parameter_columns.{name}.offset", errors
         )
+        if transform == "log_stellar_mass_h2_to_msun":
+            _positive_float(spec.get("h"), f"truth.parameter_columns.{name}.h", errors)
 
 
 def _validate_runtime(runtime: dict[str, Any], errors: list[str]) -> None:
@@ -460,9 +488,16 @@ def _validate_runtime(runtime: dict[str, Any], errors: list[str]) -> None:
     platforms = runtime.get("jax_platforms")
     if not isinstance(platforms, str) or not platforms.strip():
         errors.append("runtime.jax_platforms must be a non-empty string")
-    for key in ("disable_jax_plugin_autoload", "xla_python_client_preallocate"):
+    for key in (
+        "disable_jax_plugin_autoload",
+        "xla_python_client_preallocate",
+        "require_gpu",
+    ):
         if not isinstance(runtime.get(key), bool):
             errors.append(f"runtime.{key} must be a boolean")
+    _optional_string(
+        runtime.get("expected_gpu_name"), "runtime.expected_gpu_name", errors
+    )
 
 
 def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
@@ -479,6 +514,13 @@ def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
     ):
         if not isinstance(cosmos_sed.get(key), str) or not cosmos_sed.get(key):
             errors.append(f"cosmos_sed.{key} must be a non-empty string")
+    _optional_string(
+        cosmos_sed.get("value_added_data_dir"),
+        "cosmos_sed.value_added_data_dir",
+        errors,
+    )
+    if cosmos_sed.get("catalog_h") is not None:
+        _positive_float(cosmos_sed.get("catalog_h"), "cosmos_sed.catalog_h", errors)
     expected = cosmos_sed.get("expected_template_count")
     if expected is not None:
         _positive_int(expected, "cosmos_sed.expected_template_count", errors)
@@ -574,7 +616,7 @@ def _validate_sample_priors(priors: Any, errors: list[str]) -> None:
             )
         if "loc" in spec and spec["loc"] != "from_base":
             _finite_float(spec["loc"], f"sample.priors.{name}.loc", errors)
-        if "scale" in spec:
+        if "scale" in spec and spec["scale"] != "from_base":
             _positive_float(spec["scale"], f"sample.priors.{name}.scale", errors)
         if prior_type == "scaled_beta":
             _positive_float(

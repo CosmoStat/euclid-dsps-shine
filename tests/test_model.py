@@ -3,7 +3,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from euclid_dsps.model import apply_cosmos_two_component_dust_jax, build_lognormal_sfh
+from euclid_dsps.model import (
+    apply_cosmos_two_component_dust_jax,
+    build_lognormal_sfh,
+    normalize_sfh_mass_jax,
+)
 
 
 def test_burst_and_quench_sfh_stays_positive_and_changes_shape() -> None:
@@ -55,3 +59,17 @@ def test_cosmos_two_component_dust_mixes_configured_curves() -> None:
         -0.4 * 0.25 * 4.0
     )
     assert attenuated.tolist() == pytest.approx([expected, expected, expected])
+
+
+def test_sfh_can_be_normalized_to_formed_mass() -> None:
+    time = np.linspace(0.1, 10.0, 128)
+    sfr = build_lognormal_sfh(time, 0.0, 4.0, 0.6)
+
+    scaled, formed_mass = normalize_sfh_mass_jax(
+        time, sfr, {"log10_formed_mass_msun": 10.0}
+    )
+
+    assert float(formed_mass) == pytest.approx(1.0e10, rel=1.0e-5)
+    assert np.trapezoid(np.asarray(scaled), time) * 1.0e9 == pytest.approx(
+        1.0e10, rel=1.0e-5
+    )

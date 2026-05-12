@@ -3,13 +3,16 @@ Installation
 
 
 .. code-block:: bash
+
+   conda activate shine
    python -m pip install -e .
 
 For documentation and quality tooling:
 
 .. code-block:: bash
 
-   python -m pip install -e ".[dev]"
+   python -m pip install sphinx sphinx-rtd-theme
+   python -m pip install pytest ruff black
 
 Core Checks
 -----------

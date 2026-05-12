@@ -38,6 +38,39 @@ EUCLID_BAND_NAMES = (
     "euclid_nisp_j",
     "euclid_nisp_h",
 )
+VALUE_ADDED_EXTINCTION_FILES = {
+    "SMC_prevot": "1_flatnuspec_prevot_ebv02.csv",
+    "SB_calzetti": "2_flatnuspec_calzetti_ebv02.csv",
+    "SB_calzetti_bump1": "3_flatnuspec_calzetti_bump1_ebv02.csv",
+    "SB_calzetti_bump2": "4_flatnuspec_calzetti_bump2_ebv02.csv",
+}
+OPTIONAL_DIAGNOSTIC_COLUMNS = (
+    "color_kind",
+    "z_true",
+    "z_phz",
+    "z_true_gal",
+    "z_obs_gal",
+    "z_deepz",
+    "phz_flags",
+    "phz_median",
+    "phz_min_70",
+    "phz_max_70",
+    "phz_min_90",
+    "phz_max_90",
+    "phz_min_95",
+    "phz_max_95",
+    "phz_mode_1_area",
+    "phz_mode_2",
+    "phz_mode_2_area",
+    "log_stellar_mass",
+    "log_ml_r01",
+    "abs_mag_r01",
+    "log_luminosity_r01",
+    "abs_mag_uv_unextincted",
+    "metallicity_true",
+    "log_sfr_true",
+    "dust_ebv_true",
+)
 
 
 class CosmosSedError(ValueError):
@@ -118,7 +151,12 @@ def load_cosmos_sed_resources(cosmos_config: dict[str, Any]) -> CosmosSedResourc
     extinction_mapping, extinction_curves, extinction_dir = load_extinction_curves(
         cosmos_config
     )
-    template_list_path = _template_list_path(cosmos_config)
+    value_added_dir = resolve_value_added_data_dir(cosmos_config)
+    template_list_path = (
+        (value_added_dir / "galaxy_seds").resolve()
+        if value_added_dir is not None
+        else _template_list_path(cosmos_config)
+    )
     return CosmosSedResources(
         templates=templates,
         extinction_curves=extinction_curves,
@@ -133,6 +171,10 @@ def load_cosmos_templates(cosmos_config: dict[str, Any]) -> tuple[CosmosTemplate
 
     Catalog IDs ``0..N-1`` map directly to the line order in the list file.
     """
+    value_added_dir = resolve_value_added_data_dir(cosmos_config)
+    if value_added_dir is not None:
+        return load_value_added_cosmos_templates(cosmos_config, value_added_dir)
+
     list_path = _template_list_path(cosmos_config)
     if not list_path.exists():
         raise MissingCosmosResourceError(
@@ -176,6 +218,10 @@ def load_extinction_curves(
     cosmos_config: dict[str, Any],
 ) -> tuple[dict[int, str], dict[str, ExtinctionCurve], Path]:
     """Load configured LePhare extinction curves from ``$LEPHAREDIR/ext``."""
+    value_added_dir = resolve_value_added_data_dir(cosmos_config)
+    if value_added_dir is not None:
+        return load_value_added_extinction_curves(cosmos_config, value_added_dir)
+
     lephare_dir = resolve_lephare_data_dir(cosmos_config)
     extinction_dir = (
         lephare_dir / str(cosmos_config.get("extinction_dir", "ext"))
@@ -205,6 +251,103 @@ def load_extinction_curves(
             k_lambda=k_lambda[mask][order],
         )
     return mapping, curves, extinction_dir
+
+
+def resolve_value_added_data_dir(cosmos_config: dict[str, Any]) -> Path | None:
+    """Resolve the optional SciPIC value-added data directory."""
+    configured = cosmos_config.get("value_added_data_dir")
+    if not configured:
+        return None
+    return Path(str(configured)).expanduser().resolve()
+
+
+def load_value_added_cosmos_templates(
+    cosmos_config: dict[str, Any], value_added_dir: Path
+) -> tuple[CosmosTemplate, ...]:
+    """Load SciPIC COSMOS templates from ``value_added_data/galaxy_seds``."""
+    sed_dir = value_added_dir / "galaxy_seds"
+    files = sorted(sed_dir.glob("*.csv"))
+    if not files:
+        raise MissingCosmosResourceError(
+            "SciPIC value-added galaxy SED files not found. "
+            f"Searched: {sed_dir}. Configure cosmos_sed.value_added_data_dir."
+        )
+    templates = []
+    for template_id, path in enumerate(files):
+        data = _load_two_column_file(path, f"value-added COSMOS template {template_id}")
+        wave = data[:, 0] * _wave_unit_factor(cosmos_config.get("template_wave_unit"))
+        flambda = data[:, 1].astype(float)
+        mask = np.isfinite(wave) & np.isfinite(flambda) & (wave > 0)
+        order = np.argsort(wave[mask])
+        templates.append(
+            CosmosTemplate(
+                template_id=template_id,
+                name=path.name,
+                path=path.resolve(),
+                wave_angstrom=wave[mask][order],
+                flambda=np.clip(flambda[mask][order], 0.0, np.inf),
+            )
+        )
+    expected = cosmos_config.get("expected_template_count")
+    if expected is not None and len(templates) != int(expected):
+        raise MissingCosmosResourceError(
+            f"COSMOS value-added template count mismatch: expected {int(expected)}, "
+            f"loaded {len(templates)} from {sed_dir}."
+        )
+    return tuple(templates)
+
+
+def load_value_added_extinction_curves(
+    cosmos_config: dict[str, Any], value_added_dir: Path
+) -> tuple[dict[int, str], dict[str, ExtinctionCurve], Path]:
+    """Derive ``k(lambda)`` curves from SciPIC attenuated flat-Fnu files."""
+    extinction_dir = value_added_dir / "galaxy_extincts"
+    mapping = _normalized_extinction_mapping(cosmos_config)
+    noext_path = extinction_dir / "0_flatnuspec_noext.csv"
+    if not noext_path.exists():
+        raise MissingCosmosResourceError(
+            "SciPIC no-extinction flat spectrum not found. " f"Searched: {noext_path}."
+        )
+    noext = _load_two_column_file(noext_path, "value-added no-extinction spectrum")
+    wave_noext = noext[:, 0]
+    flux_noext = noext[:, 1]
+    curves: dict[str, ExtinctionCurve] = {}
+    for curve_name in sorted(set(mapping.values())):
+        if curve_name == "none":
+            continue
+        filename = VALUE_ADDED_EXTINCTION_FILES.get(curve_name)
+        if filename is None:
+            raise MissingCosmosResourceError(
+                f"No SciPIC value-added extinction file mapping for {curve_name!r}."
+            )
+        path = extinction_dir / filename
+        if not path.exists():
+            raise MissingCosmosResourceError(
+                "SciPIC value-added extinction curve not found. "
+                f"Curve: {curve_name}. Searched: {path}."
+            )
+        ext = _load_two_column_file(path, f"value-added extinction curve {curve_name}")
+        wave = ext[:, 0]
+        flux_ext = ext[:, 1]
+        interp_noext = np.interp(wave, wave_noext, flux_noext)
+        valid = (
+            np.isfinite(wave)
+            & np.isfinite(interp_noext)
+            & np.isfinite(flux_ext)
+            & (wave > 0)
+            & (interp_noext > 0)
+            & (flux_ext > 0)
+        )
+        k_lambda = np.full_like(wave, np.nan, dtype=float)
+        k_lambda[valid] = np.log10(interp_noext[valid] / flux_ext[valid]) / (0.4 * 0.2)
+        order = np.argsort(wave[valid])
+        curves[curve_name] = ExtinctionCurve(
+            name=curve_name,
+            path=path.resolve(),
+            wave_angstrom=wave[valid][order],
+            k_lambda=k_lambda[valid][order],
+        )
+    return mapping, curves, extinction_dir.resolve()
 
 
 def reconstruct_cosmos_proxy_sed(
@@ -265,10 +408,15 @@ def reconstruct_cosmos_proxy_sed(
         "row_index": int(row_index),
         "sed_cosmos_1": int(template_1.template_id),
         "sed_cosmos_2": int(template_2.template_id),
+        "template_pair": f"{int(template_1.template_id)}-{int(template_2.template_id)}",
         "template_name_1": template_1.name,
         "template_name_2": template_2.name,
         "ext_curve_cosmos_1": _curve_code_from_row(row_dict, "ext_curve_cosmos_1"),
         "ext_curve_cosmos_2": _curve_code_from_row(row_dict, "ext_curve_cosmos_2"),
+        "dust_curve_pair": (
+            f"{_curve_code_from_row(row_dict, 'ext_curve_cosmos_1')}-"
+            f"{_curve_code_from_row(row_dict, 'ext_curve_cosmos_2')}"
+        ),
         "extinction_name_1": resources.extinction_mapping[
             _curve_code_from_row(row_dict, "ext_curve_cosmos_1")
         ],
@@ -277,12 +425,7 @@ def reconstruct_cosmos_proxy_sed(
         ],
         "ebv_cosmos_1": _row_float(row_dict, "ebv_cosmos_1"),
         "ebv_cosmos_2": _row_float(row_dict, "ebv_cosmos_2"),
-        "color_kind": _optional_row_float(row_dict, "color_kind"),
-        "z_true": _optional_row_float(row_dict, "z_true"),
-        "z_phz": _optional_row_float(row_dict, "z_phz"),
-        "metallicity_true": _optional_row_float(row_dict, "metallicity_true"),
-        "log_sfr_true": _optional_row_float(row_dict, "log_sfr_true"),
-        "dust_ebv_true": _optional_row_float(row_dict, "dust_ebv_true"),
+        **_catalog_diagnostic_values(row_dict, band_configs, cosmos_config),
         **fraction_diagnostics,
     }
     return CosmosSedResult(
@@ -546,16 +689,8 @@ def cosmos_catalog_columns(
     elif include_optional:
         columns.update(COSMOS_FRACTION_COLUMNS)
     if include_optional:
-        columns.update(
-            [
-                "color_kind",
-                "z_true",
-                "z_phz",
-                "metallicity_true",
-                "log_sfr_true",
-                "dust_ebv_true",
-            ]
-        )
+        columns.update(OPTIONAL_DIAGNOSTIC_COLUMNS)
+        columns.update(str(band["column"]) for band in config.get("bands", []))
     if available_columns is not None:
         allowed = set(available_columns)
         columns = {column for column in columns if column in allowed}
@@ -906,14 +1041,7 @@ def observed_photometry_chi2_summary(frame: pd.DataFrame) -> pd.DataFrame:
                 "reduced_chi2": float(np.sum(chi**2) / max(len(chi), 1)),
                 **{
                     key: group[key].iloc[0]
-                    for key in (
-                        "color_kind",
-                        "z_true",
-                        "z_phz",
-                        "metallicity_true",
-                        "log_sfr_true",
-                        "dust_ebv_true",
-                    )
+                    for key in _diagnostic_output_columns(group.iloc[0].to_dict())
                     if key in group
                 },
             }
@@ -975,9 +1103,10 @@ def grouped_metric_summary(frame: pd.DataFrame, value_column: str) -> pd.DataFra
     if frame.empty or value_column not in frame:
         return pd.DataFrame()
     work = frame.copy()
-    if "z_true" in work:
+    z_column = "z_true_gal" if "z_true_gal" in work else "z_true"
+    if z_column in work:
         work["z_bin"] = pd.cut(
-            pd.to_numeric(work["z_true"], errors="coerce"),
+            pd.to_numeric(work[z_column], errors="coerce"),
             bins=[0.0, 0.5, 1.0, 1.5, 2.5, 4.5, np.inf],
             include_lowest=True,
         ).astype(str)
@@ -992,6 +1121,102 @@ def grouped_metric_summary(frame: pd.DataFrame, value_column: str) -> pd.DataFra
         value_column
     ]
     return grouped.agg(["count", "mean", "median", "std"]).reset_index()
+
+
+def population_validation_summary(
+    frame: pd.DataFrame, value_column: str, metric_name: str
+) -> pd.DataFrame:
+    """Summarize metrics over science-relevant population axes."""
+    if frame.empty or value_column not in frame:
+        return pd.DataFrame()
+    work = frame.replace([np.inf, -np.inf], np.nan).copy()
+    work[value_column] = pd.to_numeric(work[value_column], errors="coerce")
+    work = work.dropna(subset=[value_column])
+    if work.empty:
+        return pd.DataFrame()
+
+    z_col = "z_true_gal" if "z_true_gal" in work else "z_true"
+    if z_col in work:
+        work["z_bin"] = pd.cut(
+            pd.to_numeric(work[z_col], errors="coerce"),
+            bins=[0.0, 0.5, 1.0, 1.5, 2.5, 4.5, np.inf],
+            include_lowest=True,
+        ).astype(str)
+    if "log_sfr_true" in work:
+        work["log_sfr_bin"] = _quantile_bins(work["log_sfr_true"], 5)
+    if "metallicity_true" in work:
+        work["metallicity_bin"] = _quantile_bins(work["metallicity_true"], 5)
+    if "log10_stellar_mass_msun" in work:
+        work["stellar_mass_bin"] = _quantile_bins(work["log10_stellar_mass_msun"], 5)
+    mag_column = _first_existing_column(
+        work,
+        (
+            "apparent_mag_euclid_vis",
+            "apparent_mag_lsst_i",
+            "apparent_mag_lsst_r",
+        ),
+    )
+    if mag_column:
+        work["apparent_mag_bin"] = _quantile_bins(work[mag_column], 5)
+
+    grouping_columns = [
+        "color_kind",
+        "z_bin",
+        "apparent_mag_bin",
+        "log_sfr_bin",
+        "metallicity_bin",
+        "stellar_mass_bin",
+        "template_pair",
+        "dust_curve_pair",
+    ]
+    rows = []
+    for grouping in grouping_columns:
+        if grouping not in work:
+            continue
+        grouped = work.dropna(subset=[grouping]).groupby(grouping, dropna=False)[
+            value_column
+        ]
+        for group_value, values in grouped:
+            array = values.to_numpy(dtype=float)
+            if len(array) == 0:
+                continue
+            rows.append(
+                {
+                    "metric": metric_name,
+                    "value_column": value_column,
+                    "grouping": grouping,
+                    "group": str(group_value),
+                    "count": int(len(array)),
+                    "mean": float(np.nanmean(array)),
+                    "median": float(np.nanmedian(array)),
+                    "p16": float(np.nanpercentile(array, 16.0)),
+                    "p84": float(np.nanpercentile(array, 84.0)),
+                    "std": float(np.nanstd(array)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _quantile_bins(series: pd.Series, n_bins: int) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce")
+    finite = values[np.isfinite(values)]
+    if finite.nunique() < 2:
+        return pd.Series([np.nan] * len(values), index=series.index)
+    try:
+        return pd.qcut(
+            values, q=min(int(n_bins), finite.nunique()), duplicates="drop"
+        ).astype(str)
+    except ValueError:
+        return pd.Series([np.nan] * len(values), index=series.index)
+
+
+def _first_existing_column(
+    frame: pd.DataFrame, candidates: tuple[str, ...]
+) -> str | None:
+    for column in candidates:
+        if column in frame:
+            return column
+    return None
 
 
 def _template_list_path(cosmos_config: dict[str, Any]) -> Path:
@@ -1051,6 +1276,11 @@ def _normalized_curve_name(name: str) -> str:
 def _load_two_column_file(path: Path, label: str) -> np.ndarray:
     try:
         data = np.loadtxt(path)
+    except ValueError:
+        try:
+            data = np.loadtxt(path, delimiter=",")
+        except OSError as exc:
+            raise MissingCosmosResourceError(f"Cannot read {label}: {path}") from exc
     except OSError as exc:
         raise MissingCosmosResourceError(f"Cannot read {label}: {path}") from exc
     if data.ndim != 2 or data.shape[1] < 2:
@@ -1208,28 +1438,53 @@ def _interval_median(
 def _diagnostic_group_values(result: CosmosSedResult) -> dict[str, Any]:
     return {
         key: result.diagnostics.get(key)
-        for key in (
-            "color_kind",
-            "z_true",
-            "z_phz",
-            "metallicity_true",
-            "log_sfr_true",
-            "dust_ebv_true",
-        )
+        for key in _diagnostic_output_columns(result.diagnostics)
         if key in result.diagnostics
     }
 
 
 def _row_group_values(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    return _catalog_diagnostic_values(row, [], {})
+
+
+def _catalog_diagnostic_values(
+    row: dict[str, Any],
+    band_configs: list[dict[str, Any]],
+    cosmos_config: dict[str, Any],
+) -> dict[str, Any]:
+    values = {
         column: _optional_row_float(row, column)
-        for column in (
-            "color_kind",
-            "z_true",
-            "z_phz",
-            "metallicity_true",
-            "log_sfr_true",
-            "dust_ebv_true",
-        )
+        for column in OPTIONAL_DIAGNOSTIC_COLUMNS
         if column in row
     }
+    h = cosmos_config.get("catalog_h")
+    log_stellar_mass = values.get("log_stellar_mass")
+    if h is not None and log_stellar_mass is not None and np.isfinite(log_stellar_mass):
+        values["log10_stellar_mass_msun"] = float(
+            log_stellar_mass + 2.0 * np.log10(float(h))
+        )
+    for band in band_configs:
+        name = str(band.get("name", ""))
+        column = str(band.get("column", ""))
+        if not name or column not in row:
+            continue
+        mag = _fnu_to_abmag(_row_float(row, column))
+        if np.isfinite(mag):
+            values[f"apparent_mag_{name}"] = mag
+    return values
+
+
+def _diagnostic_output_columns(values: dict[str, Any]) -> tuple[str, ...]:
+    base = list(OPTIONAL_DIAGNOSTIC_COLUMNS) + [
+        "log10_stellar_mass_msun",
+        "template_pair",
+        "dust_curve_pair",
+    ]
+    base.extend(key for key in values if key.startswith("apparent_mag_"))
+    return tuple(dict.fromkeys(base))
+
+
+def _fnu_to_abmag(flux: float) -> float:
+    if not np.isfinite(flux) or flux <= 0:
+        return float("nan")
+    return float(-2.5 * np.log10(flux) - 48.6)

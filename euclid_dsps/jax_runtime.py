@@ -22,11 +22,20 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
             "EUCLID_DSPS_XLA_PYTHON_CLIENT_PREALLOCATE",
             _bool_env(runtime["xla_python_client_preallocate"]),
         )
+    if "require_gpu" in runtime:
+        os.environ.setdefault(
+            "EUCLID_DSPS_REQUIRE_GPU",
+            _bool_env(runtime["require_gpu"]),
+        )
+    if runtime.get("expected_gpu_name"):
+        os.environ.setdefault(
+            "EUCLID_DSPS_EXPECTED_GPU_NAME",
+            str(runtime["expected_gpu_name"]),
+        )
 
 
 def configure_jax_runtime() -> None:
-    """Set conservative JAX defaults unless caller already configured them.
-    """
+    """Set conservative JAX defaults unless caller already configured them."""
     os.environ.setdefault(
         "JAX_PLATFORMS", os.environ.get("EUCLID_DSPS_JAX_PLATFORMS", "cpu")
     )
@@ -38,6 +47,44 @@ def configure_jax_runtime() -> None:
         import jax._src.xla_bridge as xla_bridge
 
         xla_bridge.discover_pjrt_plugins = lambda: None
+    if _truthy(os.environ.get("EUCLID_DSPS_REQUIRE_GPU", "0")):
+        require_jax_gpu(os.environ.get("EUCLID_DSPS_EXPECTED_GPU_NAME"))
+
+
+def require_jax_gpu(expected_name: str | None = None) -> list[str]:
+    """Raise if JAX did not expose an NVIDIA/CUDA-capable GPU device."""
+    import jax
+
+    devices = jax.devices()
+    gpu_devices = [
+        device
+        for device in devices
+        if str(getattr(device, "platform", "")).lower() in {"cuda", "gpu"}
+    ]
+    if not gpu_devices:
+        details = ", ".join(_device_label(device) for device in devices) or "none"
+        raise RuntimeError(
+            "JAX did not expose a CUDA/GPU device. "
+            f"Visible JAX devices: {details}. "
+            f"JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS')!r}. "
+            "Check that the shine environment has a CUDA-enabled jaxlib, "
+            "EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0, and WSL nvidia-smi works."
+        )
+    labels = [_device_label(device) for device in gpu_devices]
+    if expected_name:
+        expected = expected_name.lower()
+        if not any(expected in label.lower() for label in labels):
+            raise RuntimeError(
+                f"JAX GPU device does not match expected name {expected_name!r}. "
+                f"Visible GPU devices: {', '.join(labels)}."
+            )
+    return labels
+
+
+def _device_label(device: Any) -> str:
+    platform = getattr(device, "platform", "unknown")
+    kind = getattr(device, "device_kind", "")
+    return f"{platform}:{kind}:{device}"
 
 
 def _truthy(value: str) -> bool:
