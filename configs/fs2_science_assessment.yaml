@@ -1,0 +1,125 @@
+# Configuration optimisée pour le Science Assessment
+# Active l'inférence du redshift (z_obs) et la relation Masse-Métallicité
+
+catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
+ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
+
+runtime:
+    jax_platforms: "cuda,cpu"
+    disable_jax_plugin_autoload: false
+    xla_python_client_preallocate: false
+
+selection:
+    index: 0
+    require_positive_flux: true
+
+redshift:
+    column: phz_median
+    truth_column: z_true_gal
+    fixed_value: 0.5
+    min: 0.0001
+    max: 6.0
+    prior_interval:
+        min_column: phz_min_70
+        max_column: phz_max_70
+        probability: 0.70
+
+bands:
+    - name: euclid_vis
+      column: euclid_vis
+      units: fnu_cgs
+      sigma_mag: 0.05
+      filter: { path: filters/Euclid_VIS.vis.dat }
+    - name: euclid_nisp_y
+      column: euclid_nisp_y
+      units: fnu_cgs
+      sigma_mag: 0.05
+      filter: { path: filters/Euclid_NISP.Y.dat }
+    - name: euclid_nisp_j
+      column: euclid_nisp_j
+      units: fnu_cgs
+      sigma_mag: 0.05
+      filter: { path: filters/Euclid_NISP.J.dat }
+    - name: euclid_nisp_h
+      column: euclid_nisp_h
+      units: fnu_cgs
+      sigma_mag: 0.05
+      filter: { path: filters/Euclid_NISP.H.dat }
+
+model:
+    n_sfh_bins: 96
+    fixed_parameters:
+        log10_sfr: 0.0
+        log10_formed_mass_msun: 10.0
+        sfh_t_peak: 4.0
+        sfh_tau: 0.6
+        log10_metallicity: -2.0
+        metallicity_scatter: 0.2
+        dust_av: 0.2
+        dust_slope: -0.7
+    parameter_columns:
+        z_obs_phz_min_70: phz_min_70
+        z_obs_phz_max_70: phz_max_70
+        z_obs_phz_min_90: phz_min_90
+        z_obs_phz_max_90: phz_max_90
+        z_obs_phz_min_95: phz_min_95
+        z_obs_phz_max_95: phz_max_95
+
+fit:
+    method: jax_adam
+    maxiter: 100
+    learning_rate: 0.1
+    priors:
+        z_obs:
+            type: phz_interval
+            tail_scale: 0.05
+            weight: 2.0 # Augmentation du poids du prior Photo-Z
+    population:
+        prior_weight: 1.0
+        sigma_floor: 0.03
+        relations:
+            log10_metallicity:
+                predictor: log10_formed_mass_msun
+                pivot: 10.0
+                intercept_initial: -2.25
+                slope_initial: 0.15 # Relation Masse-Métallicité attendue
+                sigma_initial: 0.35
+    free_parameters:
+        z_obs:
+            initial: from_base
+            bounds: [0.001, 6.0]
+        log10_formed_mass_msun:
+            initial: from_base
+            bounds: [6.0, 13.0]
+        dust_av:
+            initial: from_base
+            bounds: [0.0, 3.0]
+        log10_metallicity:
+            initial: from_base
+            bounds: [-3.9, -1.6]
+
+truth:
+    redshift_column: z_true_gal
+    parameter_columns:
+        log10_formed_mass_msun:
+            column: log_stellar_mass
+            transform: log_stellar_mass_h2_to_msun
+            h: 0.67
+        log10_metallicity:
+            column: metallicity_true
+            offset: -10.61
+        log10_sfr_at_obs: log_sfr_true
+        dust_av:
+            column: dust_ebv_true
+            scale: 4.05
+
+extra_columns:
+    - color_kind
+    - log_stellar_mass
+    - phz_median
+    - phz_min_70
+    - phz_max_70
+    - phz_min_90
+    - phz_max_90
+    - phz_min_95
+    - phz_max_95
