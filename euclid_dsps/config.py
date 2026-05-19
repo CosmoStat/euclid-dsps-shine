@@ -51,7 +51,13 @@ SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
-SUPPORTED_PRIOR_TYPES = {"uniform", "normal", "truncated_normal", "scaled_beta"}
+SUPPORTED_PRIOR_TYPES = {
+    "uniform",
+    "normal",
+    "truncated_normal",
+    "scaled_beta",
+    "phz_interval",
+}
 SUPPORTED_FILTER_RESPONSE_KINDS = {"photon", "energy"}
 SUPPORTED_COMPONENT_FRACTION_POLICIES = {"strict", "equal_if_missing"}
 SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
@@ -60,6 +66,8 @@ SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
     "emission_lines_internal_dust_mw",
     "noisy_observation",
 }
+SUPPORTED_REPORTING_LEVELS = {"full", "light"}
+SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 
 DEFAULT_RUNTIME_CONFIG = {
     "jax_platforms": "cpu",
@@ -67,6 +75,8 @@ DEFAULT_RUNTIME_CONFIG = {
     "xla_python_client_preallocate": False,
     "require_gpu": False,
     "expected_gpu_name": None,
+    "jax_compilation_cache_dir": None,
+    "jax_persistent_cache_min_compile_time_secs": 1.0,
 }
 
 DEFAULT_COSMOS_SED_CONFIG = {
@@ -121,6 +131,8 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config.setdefault("eda", {})
     config.setdefault("truth", {})
     config.setdefault("runtime", {})
+    config.setdefault("reporting", {})
+    config.setdefault("output", {})
     config.setdefault("extra_columns", [])
     config.setdefault("cosmos_sed", {})
 
@@ -154,11 +166,21 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["fit"].setdefault("tolerance", 1.0e-5)
     config["fit"].setdefault("patience", 18)
     config["fit"].setdefault("prior_weight", 1.0)
+    config["fit"].setdefault("fast_warmstart_only", False)
+    config["fit"].setdefault("fast_grid_search", False)
+    config["fit"].setdefault("redshift_grid_size", 5)
+    config["fit"].setdefault("redshift_grid_width", 0.4)
+    config["fit"].setdefault(
+        "fast_grid_parameters",
+        ["z_obs", "log10_metallicity", "sfh_t_peak", "sfh_tau"],
+    )
+    config["fit"].setdefault("fast_grid_prior_width", 1.0)
     config["fit"].setdefault("priors", {})
     config["fit"]["population"] = dict(config["fit"].get("population") or {})
     config["fit"]["population"].setdefault("prior_weight", 1.0)
     config["fit"]["population"].setdefault("sigma_floor", 0.03)
     config["fit"]["population"].setdefault("hyper_mu_scale", 5.0)
+    config["fit"]["population"].setdefault("relations", {})
 
     config["sample"] = dict(config["sample"] or {})
     config["sample"].setdefault("num_warmup", 100)
@@ -187,6 +209,12 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     runtime = dict(DEFAULT_RUNTIME_CONFIG)
     runtime.update(dict(config["runtime"] or {}))
     config["runtime"] = runtime
+
+    config["reporting"] = dict(config["reporting"] or {})
+    config["reporting"].setdefault("level", "full")
+    config["output"] = dict(config["output"] or {})
+    config["output"].setdefault("format", "both")
+    config["output"].setdefault("verbose_benchmark", False)
 
     cosmos_sed = dict(DEFAULT_COSMOS_SED_CONFIG)
     raw_cosmos_sed = dict(config["cosmos_sed"] or {})
@@ -219,6 +247,8 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_sample(config.get("sample", {}), errors)
     _validate_truth(config.get("truth", {}), errors)
     _validate_runtime(config.get("runtime", {}), errors)
+    _validate_reporting(config.get("reporting", {}), errors)
+    _validate_output(config.get("output", {}), errors)
     _validate_cosmos_sed(config.get("cosmos_sed", {}), errors)
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
@@ -321,26 +351,29 @@ def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
         errors.append("redshift.min must be smaller than redshift.max")
     interval = redshift.get("prior_interval")
     if interval is not None:
-        if not isinstance(interval, dict):
-            errors.append("redshift.prior_interval must be a mapping when provided")
+        _validate_redshift_interval(interval, "redshift.prior_interval", errors)
+    intervals = redshift.get("prior_intervals")
+    if intervals is not None:
+        if not isinstance(intervals, list):
+            errors.append("redshift.prior_intervals must be a list when provided")
         else:
-            _optional_string(
-                interval.get("min_column"),
-                "redshift.prior_interval.min_column",
-                errors,
-            )
-            _optional_string(
-                interval.get("max_column"),
-                "redshift.prior_interval.max_column",
-                errors,
-            )
-            probability = _finite_float(
-                interval.get("probability", 0.70),
-                "redshift.prior_interval.probability",
-                errors,
-            )
-            if probability is not None and not 0.0 < probability < 1.0:
-                errors.append("redshift.prior_interval.probability must be in (0, 1)")
+            for index, item in enumerate(intervals):
+                _validate_redshift_interval(
+                    item, f"redshift.prior_intervals[{index}]", errors
+                )
+
+
+def _validate_redshift_interval(value: Any, label: str, errors: list[str]) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be a mapping when provided")
+        return
+    _optional_string(value.get("min_column"), f"{label}.min_column", errors)
+    _optional_string(value.get("max_column"), f"{label}.max_column", errors)
+    probability = _finite_float(
+        value.get("probability", 0.70), f"{label}.probability", errors
+    )
+    if probability is not None and not 0.0 < probability < 1.0:
+        errors.append(f"{label}.probability must be in (0, 1)")
 
 
 def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
@@ -371,6 +404,23 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
     _positive_float(fit.get("tolerance"), "fit.tolerance", errors)
     _positive_int(fit.get("patience"), "fit.patience", errors)
     _positive_float(fit.get("prior_weight", 1.0), "fit.prior_weight", errors)
+    if not isinstance(fit.get("fast_warmstart_only", False), bool):
+        errors.append("fit.fast_warmstart_only must be a boolean")
+    if not isinstance(fit.get("fast_grid_search", False), bool):
+        errors.append("fit.fast_grid_search must be a boolean")
+    _positive_int(fit.get("redshift_grid_size", 5), "fit.redshift_grid_size", errors)
+    _positive_float(
+        fit.get("redshift_grid_width", 0.4), "fit.redshift_grid_width", errors
+    )
+    fast_grid_parameters = fit.get("fast_grid_parameters", [])
+    if not isinstance(fast_grid_parameters, list) or not all(
+        isinstance(name, str) and name for name in fast_grid_parameters
+    ):
+        errors.append("fit.fast_grid_parameters must be a list of parameter names")
+    _positive_float(
+        fit.get("fast_grid_prior_width", 1.0), "fit.fast_grid_prior_width", errors
+    )
+    _validate_population_config(fit.get("population", {}), errors)
     free = fit.get("free_parameters")
     if not isinstance(free, dict) or not free:
         errors.append("fit.free_parameters must be a non-empty mapping")
@@ -422,6 +472,57 @@ def _validate_fit_priors(
         if prior_type == "scaled_beta":
             _positive_float(spec.get("alpha", 1.0), f"fit.priors.{name}.alpha", errors)
             _positive_float(spec.get("beta", 1.0), f"fit.priors.{name}.beta", errors)
+        if prior_type == "phz_interval":
+            _positive_float(
+                spec.get("tail_scale", 0.05), f"fit.priors.{name}.tail_scale", errors
+            )
+            _positive_float(
+                spec.get("weight", 1.0), f"fit.priors.{name}.weight", errors
+            )
+
+
+def _validate_population_config(population: Any, errors: list[str]) -> None:
+    if not isinstance(population, dict):
+        errors.append("fit.population must be a mapping")
+        return
+    _positive_float(
+        population.get("prior_weight", 1.0), "fit.population.prior_weight", errors
+    )
+    _positive_float(
+        population.get("sigma_floor", 0.03), "fit.population.sigma_floor", errors
+    )
+    _positive_float(
+        population.get("hyper_mu_scale", 5.0), "fit.population.hyper_mu_scale", errors
+    )
+    relations = population.get("relations", {})
+    if not isinstance(relations, dict):
+        errors.append("fit.population.relations must be a mapping")
+        return
+    for target, spec in relations.items():
+        if not isinstance(target, str) or not target:
+            errors.append("fit.population.relations keys must be parameter names")
+            continue
+        if not isinstance(spec, dict):
+            errors.append(f"fit.population.relations.{target} must be a mapping")
+            continue
+        _optional_string(
+            spec.get("predictor"),
+            f"fit.population.relations.{target}.predictor",
+            errors,
+        )
+        for key in (
+            "pivot",
+            "intercept_initial",
+            "slope_initial",
+            "sigma_initial",
+            "slope_scale",
+        ):
+            if key in spec and spec[key] != "median":
+                label = f"fit.population.relations.{target}.{key}"
+                if key in {"sigma_initial", "slope_scale"}:
+                    _positive_float(spec[key], label, errors)
+                else:
+                    _finite_float(spec[key], label, errors)
 
 
 def _validate_sample(sample: dict[str, Any], errors: list[str]) -> None:
@@ -498,6 +599,38 @@ def _validate_runtime(runtime: dict[str, Any], errors: list[str]) -> None:
     _optional_string(
         runtime.get("expected_gpu_name"), "runtime.expected_gpu_name", errors
     )
+    _optional_string(
+        runtime.get("jax_compilation_cache_dir"),
+        "runtime.jax_compilation_cache_dir",
+        errors,
+    )
+    cache_min = runtime.get("jax_persistent_cache_min_compile_time_secs")
+    if cache_min is not None:
+        _positive_float(
+            cache_min, "runtime.jax_persistent_cache_min_compile_time_secs", errors
+        )
+
+
+def _validate_reporting(reporting: dict[str, Any], errors: list[str]) -> None:
+    if not isinstance(reporting, dict):
+        errors.append("reporting must be a mapping")
+        return
+    if reporting.get("level") not in SUPPORTED_REPORTING_LEVELS:
+        errors.append(
+            f"reporting.level must be one of {sorted(SUPPORTED_REPORTING_LEVELS)}"
+        )
+
+
+def _validate_output(output: dict[str, Any], errors: list[str]) -> None:
+    if not isinstance(output, dict):
+        errors.append("output must be a mapping")
+        return
+    if output.get("format") not in SUPPORTED_OUTPUT_FORMATS:
+        errors.append(
+            f"output.format must be one of {sorted(SUPPORTED_OUTPUT_FORMATS)}"
+        )
+    if not isinstance(output.get("verbose_benchmark"), bool):
+        errors.append("output.verbose_benchmark must be a boolean")
 
 
 def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
@@ -623,6 +756,15 @@ def _validate_sample_priors(priors: Any, errors: list[str]) -> None:
                 spec.get("alpha", 1.0), f"sample.priors.{name}.alpha", errors
             )
             _positive_float(spec.get("beta", 1.0), f"sample.priors.{name}.beta", errors)
+        if prior_type == "phz_interval":
+            _positive_float(
+                spec.get("tail_scale", 0.05),
+                f"sample.priors.{name}.tail_scale",
+                errors,
+            )
+            _positive_float(
+                spec.get("weight", 1.0), f"sample.priors.{name}.weight", errors
+            )
 
 
 def _configured_catalog_columns(config: dict[str, Any]) -> set[str]:

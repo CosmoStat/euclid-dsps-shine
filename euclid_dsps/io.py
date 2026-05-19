@@ -42,6 +42,39 @@ def write_json(path: str | Path, payload: Any) -> None:
         json.dump(to_jsonable(payload), stream, indent=2, sort_keys=True)
 
 
+def configured_output_formats(config: dict[str, Any]) -> list[str]:
+    """Return configured tabular output formats."""
+    raw = (config.get("output", {}) or {}).get("format", "both")
+    if isinstance(raw, str):
+        if raw == "both":
+            return ["parquet", "csv"]
+        return [raw]
+    formats = [str(item) for item in raw]
+    return formats or ["parquet", "csv"]
+
+
+def write_dataframe_outputs(
+    frame: pd.DataFrame,
+    out_dir: str | Path,
+    stem: str,
+    config: dict[str, Any],
+    index: bool = False,
+) -> list[str]:
+    """Write a dataframe in configured formats and return filenames."""
+    out = ensure_dir(out_dir)
+    written: list[str] = []
+    formats = configured_output_formats(config)
+    if "parquet" in formats:
+        path = out / f"{stem}.parquet"
+        frame.to_parquet(path, index=index)
+        written.append(path.name)
+    if "csv" in formats:
+        path = out / f"{stem}.csv"
+        frame.to_csv(path, index=index)
+        written.append(path.name)
+    return written
+
+
 def to_jsonable(value: Any) -> Any:
     if dataclass_is_instance(value):
         return to_jsonable(asdict(value))
@@ -314,6 +347,15 @@ def required_catalog_columns(config: dict[str, Any]) -> list[str]:
             col = interval.get(key)
             if col:
                 columns.add(str(col))
+    intervals = redshift.get("prior_intervals") or []
+    if isinstance(intervals, list):
+        for interval_item in intervals:
+            if not isinstance(interval_item, dict):
+                continue
+            for key in ("min_column", "max_column"):
+                col = interval_item.get(key)
+                if col:
+                    columns.add(str(col))
     truth = config.get("truth", {})
     truth_redshift = truth_column_from_spec(truth.get("redshift_column"))
     if truth_redshift:

@@ -9,6 +9,8 @@ runtime:
     xla_python_client_preallocate: false
     require_gpu: true
     expected_gpu_name: "NVIDIA"
+    jax_compilation_cache_dir: "outputs/jax_cache"
+    jax_persistent_cache_min_compile_time_secs: 1.0
 
 selection:
     index: 8
@@ -129,6 +131,16 @@ redshift:
         probability: 0.70
         sigma_floor: 0.01
         sigma_ceiling: 0.6
+    prior_intervals:
+        - min_column: phz_min_70
+          max_column: phz_max_70
+          probability: 0.70
+        - min_column: phz_min_90
+          max_column: phz_max_90
+          probability: 0.90
+        - min_column: phz_min_95
+          max_column: phz_max_95
+          probability: 0.95
 
 bands:
     - name: lsst_u
@@ -229,7 +241,7 @@ bands:
           wave_unit: angstrom
 
 model:
-    n_sfh_bins: 96
+    n_sfh_bins: 32
     fixed_parameters:
         log10_sfr: 0.0
         log10_formed_mass_msun: 10.0
@@ -257,23 +269,47 @@ model:
         cosmos_frac_2: frac_cosmos_2
         cosmos_ext_curve_1: ext_curve_cosmos_1
         cosmos_ext_curve_2: ext_curve_cosmos_2
+        z_obs_phz_min_70: phz_min_70
+        z_obs_phz_max_70: phz_max_70
+        z_obs_phz_min_90: phz_min_90
+        z_obs_phz_max_90: phz_max_90
+        z_obs_phz_min_95: phz_min_95
+        z_obs_phz_max_95: phz_max_95
 
 fit:
     method: jax_adam
-    maxiter: 200
+    maxiter: 30
     learning_rate: 0.08
     tolerance: 1.0e-5
     patience: 24
     prior_weight: 1.0
+    fast_warmstart_only: false
+    fast_grid_search: true
+    redshift_grid_size: 5
+    redshift_grid_width: 0.4
+    fast_grid_parameters:
+        - z_obs
+        - log10_metallicity
+        - sfh_t_peak
+        - sfh_tau
+    fast_grid_prior_width: 1.0
     population:
         prior_weight: 1.0
         sigma_floor: 0.03
         hyper_mu_scale: 5.0
+        relations:
+            log10_metallicity:
+                predictor: log10_formed_mass_msun
+                pivot: 10.0
+                intercept_initial: -2.25
+                slope_initial: 0.15
+                sigma_initial: 0.35
+                slope_scale: 0.7
     priors:
         z_obs:
-            type: truncated_normal
-            loc: from_base
-            scale: from_base
+            type: phz_interval
+            tail_scale: 0.05
+            weight: 1.0
         log10_formed_mass_msun:
             type: normal
             loc: 10.0
@@ -323,9 +359,9 @@ sample:
     save_samples: true
     priors:
         z_obs:
-            type: truncated_normal
-            loc: from_base
-            scale: 0.15
+            type: phz_interval
+            tail_scale: 0.05
+            weight: 1.0
         log10_sfr:
             type: truncated_normal
             loc: 0.0

@@ -5,9 +5,10 @@ runtime:
     # WSL-safe default. For a working CUDA JAX install, use:
     # jax_platforms: "cuda,cpu"
     # disable_jax_plugin_autoload: false
-    jax_platforms: "cpu"
-    disable_jax_plugin_autoload: true
+    jax_platforms: "cuda"
+    disable_jax_plugin_autoload: false
     xla_python_client_preallocate: false
+    require_gpu: true
 
 selection:
     index: 0
@@ -125,6 +126,16 @@ redshift:
         probability: 0.70
         sigma_floor: 0.01
         sigma_ceiling: 0.6
+    prior_intervals:
+        - min_column: phz_min_70
+          max_column: phz_max_70
+          probability: 0.70
+        - min_column: phz_min_90
+          max_column: phz_max_90
+          probability: 0.90
+        - min_column: phz_min_95
+          max_column: phz_max_95
+          probability: 0.95
 
 bands:
     - name: euclid_vis
@@ -173,9 +184,9 @@ fit:
     patience: 18
     priors:
         z_obs:
-            type: truncated_normal
-            loc: from_base
-            scale: from_base
+            type: phz_interval
+            tail_scale: 0.05
+            weight: 1.0
         log10_formed_mass_msun:
             type: normal
             loc: 10.0
@@ -184,6 +195,14 @@ fit:
         prior_weight: 1.0
         sigma_floor: 0.03
         hyper_mu_scale: 5.0
+        relations:
+            log10_metallicity:
+                predictor: log10_formed_mass_msun
+                pivot: 10.0
+                intercept_initial: -2.25
+                slope_initial: 0.15
+                sigma_initial: 0.35
+                slope_scale: 0.7
     free_parameters:
         z_obs:
             initial: from_base
@@ -214,9 +233,9 @@ sample:
     save_samples: true
     priors:
         z_obs:
-            type: truncated_normal
-            loc: from_base
-            scale: 0.15
+            type: phz_interval
+            tail_scale: 0.05
+            weight: 1.0
         log10_sfr:
             type: truncated_normal
             loc: 0.0

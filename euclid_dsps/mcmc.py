@@ -21,7 +21,7 @@ from numpyro.distributions import constraints
 from numpyro.infer import HMC, MCMC, NUTS
 from numpyro.infer.initialization import init_to_value
 
-from .fit import _initial_value
+from .fit import _initial_value, _phz_interval_penalty
 from .io import GalaxyObservation
 from .model import (
     DspsContext,
@@ -103,12 +103,18 @@ def sample_one_galaxy(
     def model():
         params = {key: jnp.asarray(value) for key, value in base_params.items()}
         for name in free_names:
+            prior_spec = priors.get(name, {})
             params[name] = numpyro.sample(
                 name,
-                _prior_distribution(
-                    name, free[name], priors.get(name, {}), base_params
-                ),
+                _prior_distribution(name, free[name], prior_spec, base_params),
             )
+            if str(prior_spec.get("type", "")).lower() == "phz_interval":
+                numpyro.factor(
+                    f"{name}_phz_interval",
+                    -_phz_prior_penalty_from_base(
+                        params[name], prior_spec, base_params
+                    ),
+                )
         model_mag = model_mags_jax(context, params)
         numpyro.deterministic("model_mag", model_mag)
         numpyro.sample(
@@ -234,7 +240,28 @@ def _prior_distribution(
         alpha = float(prior_spec.get("alpha", 1.0))
         beta = float(prior_spec.get("beta", 1.0))
         return ScaledBetaDistribution(alpha=alpha, beta=beta, low=low, high=high)
+    if prior_type == "phz_interval":
+        return dist.Uniform(low, high, validate_args=True)
     raise ValueError(f"Unsupported prior type for {name}: {prior_type}")
+
+
+def _phz_prior_penalty_from_base(
+    z_value: jnp.ndarray, prior_spec: dict[str, Any], base_params: dict[str, float]
+) -> jnp.ndarray:
+    def value(key: str, default: str) -> jnp.ndarray:
+        return jnp.asarray(base_params.get(str(prior_spec.get(key, default)), jnp.nan))
+
+    penalty = _phz_interval_penalty(
+        z_value,
+        value("min_70_parameter", "z_obs_phz_min_70"),
+        value("max_70_parameter", "z_obs_phz_max_70"),
+        value("min_90_parameter", "z_obs_phz_min_90"),
+        value("max_90_parameter", "z_obs_phz_max_90"),
+        value("min_95_parameter", "z_obs_phz_min_95"),
+        value("max_95_parameter", "z_obs_phz_max_95"),
+        jnp.asarray(float(prior_spec.get("tail_scale", 0.05))),
+    )
+    return float(prior_spec.get("weight", 1.0)) * penalty
 
 
 def _prior_location(

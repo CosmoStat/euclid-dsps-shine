@@ -74,6 +74,17 @@ Batch fitting and COSMOS DSPS comparison are JAX-vectorized over each parquet
 chunk, so increasing ``--batch-size`` uses more accelerator memory when a GPU
 backend is active.
 
+For repeated GPU runs, enable the persistent JAX compilation cache:
+
+.. code-block:: yaml
+
+   runtime:
+     jax_compilation_cache_dir: outputs/jax_cache
+     jax_persistent_cache_min_compile_time_secs: 1.0
+
+This does not make the first compilation free, but it reduces repeated-run
+startup cost when shapes, filters, SSP assets, and fit mode stay unchanged.
+
 Selection
 ---------
 
@@ -89,8 +100,8 @@ Selection
 Redshift
 --------
 
-The updated FS2 configs set DSPS ``z_obs`` from the NNPZ PDF median and use the
-70 percent interval to derive a row-level Gaussian prior width:
+The FS2 configs set initial DSPS ``z_obs`` from the NNPZ PDF median and use the
+70/90/95 percent intervals for a row-level non-Gaussian redshift prior:
 
 .. code-block:: yaml
 
@@ -106,12 +117,22 @@ The updated FS2 configs set DSPS ``z_obs`` from the NNPZ PDF median and use the
        probability: 0.70
        sigma_floor: 0.01
        sigma_ceiling: 0.6
+     prior_intervals:
+       - min_column: phz_min_70
+         max_column: phz_max_70
+         probability: 0.70
+       - min_column: phz_min_90
+         max_column: phz_max_90
+         probability: 0.90
+       - min_column: phz_min_95
+         max_column: phz_max_95
+         probability: 0.95
 
 ``column`` is used for DSPS. ``truth_column`` is diagnostic only. ``fixed_value``
-is a fallback when the row value is missing or invalid. The prior interval is
-converted to ``z_obs_prior_sigma`` with
-``sigma = 0.5 * (phz_max_70 - phz_min_70) / 1.036`` and clipped to the
-configured floor/ceiling.
+is a fallback when the row value is missing or invalid. ``prior_interval`` still
+writes the compatibility field ``z_obs_prior_sigma``. ``prior_intervals`` writes
+``z_obs_phz_min/max_70/90/95`` base parameters consumed by the JAX
+``phz_interval`` prior.
 
 Bands
 -----
@@ -204,15 +225,24 @@ Parameter meanings:
   delayed families are common compact SFH parameterizations, but they are too
   restrictive for many galaxies.
 
+``sfh_bin_log_sfr_*`` and ``sfh_bin_transition_width``
+  Optional smooth non-parametric SFH shape bins. They are not enabled in the
+  default local configs because the local broad-band data do not constrain many
+  SFH degrees of freedom. If explicitly configured, bin values are
+  mean-centered before formed-mass normalization.
+
 ``sfh_burst_fraction``, ``sfh_burst_time``, ``sfh_burst_width``
   Smooth Gaussian burst component added to the baseline SFH. This is motivated
   by the PROVABGS model family, which uses a richer SFH basis plus burst terms
-  for DESI BGS SED inference.
+  for DESI BGS SED inference. In this project it is experimental and fixed to
+  zero in the local production configs.
 
 ``sfh_quench_time``, ``sfh_quench_width``, ``sfh_quench_depth``
   Smooth late-time suppression applied after a quench time. This is a compact
   differentiable proxy for the flexibility normally provided by non-parametric
-  SFHs or NMF SFH bases.
+  SFHs or NMF SFH bases. It is currently added-but-not-used for the local
+  broad-band data: ``sfh_quench_depth`` is fixed to zero, and quench parameters
+  should not be interpreted as inferred galaxy properties.
 
 ``log10_metallicity`` and ``metallicity_scatter``
   Stellar metallicity center and scatter for DSPS SSP weighting. The catalog
@@ -242,11 +272,21 @@ priors. The scientific motivation is:
   independent broad-band fits.
 
 The current values keep the optimization stable while leaving the scientific
-assumptions visible in YAML. The default 10-band fit infers formed mass,
-redshift, lognormal SFH shape, and metallicity. It does not freely fit the
-burst/quench modifiers by default because broad-band photometry alone does not
-robustly identify those features. The modifiers remain available for targeted
-experiments once a stronger SFH prior is introduced.
+assumptions visible in YAML. The default fits infer formed mass, redshift,
+lognormal SFH shape where configured, dust where applicable, and metallicity.
+Burst/quench modifiers and binned SFH parameters remain fixed by default
+because broad-band photometry alone does not robustly identify those features.
+
+Current "extra" model pieces:
+
+* burst modifiers are implemented but inactive in the production configs;
+* quench modifiers are implemented but inactive because ``sfh_quench_depth`` is
+  zero;
+* binned SFH parameters are implemented but absent from the local configs;
+* scalar Salim dust remains as fallback, while the 10-band COSMOS config uses
+  row-injected two-component COSMOS dust;
+* emission-line targets exist in the catalog, but no local line-enabled SSP
+  asset is configured, so emission lines are not part of the main likelihood.
 
 Fit Parameters
 --------------
@@ -265,10 +305,13 @@ bounds:
      prior_weight: 1.0
      priors:
        z_obs:
-         type: truncated_normal
-         loc: from_base
-         scale: from_base
+         type: phz_interval
+         tail_scale: 0.05
+         weight: 1.0
      free_parameters:
+       z_obs:
+         initial: from_base
+         bounds: [0.001, 6.0]
        log10_formed_mass_msun:
          initial: 10.0
          bounds: [6.0, 13.0]
@@ -283,11 +326,29 @@ Use ``initial: from_base`` when the initial value should come from the resolved
 base parameter dictionary for each row.
 
 ``fit.priors`` adds differentiable penalties to the JAX objective. Supported
-types are ``uniform``, ``normal``, ``truncated_normal``, and ``scaled_beta``.
-For Gaussian priors, ``scale: from_base`` reads a row-resolved
-``<parameter>_prior_sigma`` value from the base parameter dictionary; this is
-used by ``z_obs`` through the PHZ interval columns. The reported ``chi2``
-remains the photometric chi-square; the prior only guides the optimization.
+types are ``uniform``, ``normal``, ``truncated_normal``, ``scaled_beta``, and
+``phz_interval``. For Gaussian priors, ``scale: from_base`` reads a row-resolved
+``<parameter>_prior_sigma`` value from the base parameter dictionary. For
+``phz_interval``, the prior is flat inside the 70 percent interval and steepens
+through the 90/95 percent intervals. The reported ``chi2`` remains the
+photometric chi-square; the prior only guides the optimization.
+
+Population relations can be configured under ``fit.population.relations``:
+
+.. code-block:: yaml
+
+   population:
+     relations:
+       log10_metallicity:
+         predictor: log10_formed_mass_msun
+         pivot: 10.0
+         intercept_initial: -2.25
+         slope_initial: 0.15
+         sigma_initial: 0.35
+
+This replaces the independent Gaussian population prior for the target
+parameter with ``target ~ Normal(intercept + slope * (predictor - pivot),
+sigma)`` in the population MAP objective.
 
 Bayesian Sampling
 -----------------
@@ -309,9 +370,9 @@ Bayesian Sampling
      init_from_map: true
      priors:
        z_obs:
-         type: truncated_normal
-         loc: from_base
-         scale: 0.15
+         type: phz_interval
+         tail_scale: 0.05
+         weight: 1.0
        log10_sfr:
          type: truncated_normal
          loc: 0.0
@@ -325,9 +386,10 @@ Bayesian Sampling
 
 Use ``--sampler hmc`` and a small ``--num-steps`` for predictable debugging.
 Use ``--sampler nuts`` for more adaptive posterior checks on selected rows.
-Supported prior types are ``uniform``, ``normal``, ``truncated_normal``, and
-``scaled_beta``. ``loc: from_base`` centers a prior on the row-resolved base
-parameter, useful for redshift priors centered on ``phz_median``.
+Supported prior types are ``uniform``, ``normal``, ``truncated_normal``,
+``scaled_beta``, and ``phz_interval``. ``loc: from_base`` centers a Gaussian
+prior on the row-resolved base parameter. ``phz_interval`` uses the same PHZ
+interval penalty as MAP and does not need ``loc``/``scale``.
 
 COSMOS Template SED Setup
 -------------------------
@@ -576,6 +638,77 @@ Exported tables:
 Purpose:
   Fit independent MAP solutions for many rows with JAX-vmapped Adam.
 
+Fast production mode:
+  The 10-band config defaults to ``fit.fast_grid_search: true``. In this mode
+  each galaxy is fit with coordinate grids for the fast configured parameters
+  and an analytic luminosity-amplitude warm start. It is intended for large GPU
+  runs where full per-galaxy Adam would be too expensive.
+
+  Inferred in fast-grid mode:
+
+  * ``z_obs``: selected from a small row-level PHZ grid using photometry plus
+    the configured PHZ interval prior;
+  * ``log10_formed_mass_msun``: adjusted analytically from the broadband
+    magnitude offset;
+  * ``log10_metallicity``: selected on a small prior-bounded grid;
+  * ``sfh_t_peak`` and ``sfh_tau``: selected on small prior-bounded grids;
+  * derived ``sfr_at_obs_msun_per_yr`` and ``log10_sfr_at_obs``: inferred from
+    the fitted formed mass plus fitted SFH shape.
+
+  ``log10_sfr`` is not the main amplitude when
+  ``log10_formed_mass_msun`` is present; it is retained for backward
+  compatibility. The SFR quantity to use is derived ``fit_log10_sfr_at_obs``.
+
+  The default fast grid axes are controlled by:
+
+  .. code-block:: yaml
+
+     fit:
+       fast_grid_parameters:
+         - z_obs
+         - log10_metallicity
+         - sfh_t_peak
+         - sfh_tau
+       redshift_grid_size: 5
+       fast_grid_prior_width: 1.0
+
+  The same axes can be overridden from the CLI:
+
+  .. code-block:: bash
+
+     euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
+       --fast-grid \
+       --fast-grid-parameters z_obs,log10_metallicity,sfh_t_peak,sfh_tau \
+       --redshift-grid-size 5 \
+       --fast-grid-prior-width 1.0 \
+       --out outputs/runs/fast_grid
+
+  Priors used by the 10-band config:
+
+  * redshift: PHZ 70/90/95 interval plateau prior;
+  * mass: broad normal prior on ``log10_formed_mass_msun``;
+  * metallicity: broad normal stellar-metallicity prior;
+  * SFR: no direct independent ``log10_sfr`` prior in fast mode; SFR is derived
+    from the fitted SFH shape, whose priors are broad normals on
+    ``sfh_t_peak`` and ``sfh_tau``.
+
+  Use ``--full-adam`` for a validation subset when all configured free
+  parameters should be optimized with gradients:
+
+  .. code-block:: bash
+
+     euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
+       --limit 100 \
+       --batch-size 32 \
+       --full-adam \
+       --fit-maxiter 30 \
+       --reporting-level light \
+       --output-format parquet \
+       --out outputs/runs/validation_full_adam
+
+  Use ``--fast-warmstart`` for the fastest diagnostic pass. It adjusts only the
+  amplitude and does not scan redshift.
+
 Exported plots:
   Same aggregate plot family as ``run-batch``, with prefix ``batch_fit_*``.
   ``batch_fit_trace_truth.png`` is added when configured truth/proxy values
@@ -583,8 +716,12 @@ Exported plots:
 
 Exported tables:
   ``batch_fit_results.csv``, ``batch_fit_photometry_comparison.csv``,
-  ``batch_fit_trace.csv``, ``batch_fit_summary*.csv/json``,
+  ``batch_fit_trace.csv``, ``batch_fit_residuals_by_property.csv``,
+  ``batch_fit_summary*.csv/json``,
   ``batch_fit_truth_metrics.csv`` when available.
+
+During batch fitting, per-chunk checkpoints are written under ``_chunks/``.
+These files make long million-row runs recoverable even if a later chunk fails.
 
 ``fit-batch --bayesian``
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -626,8 +763,20 @@ Exported tables:
      --out outputs/runs/phz1_population
 
 Purpose:
-  Fit chunked population MAP model with a Gaussian population regularizer over
-  free parameters.
+  Fit chunked population MAP model with Gaussian regularizers and configured
+  physical relation priors, such as mass-metallicity.
+
+Fast mode behavior:
+  If ``fit.fast_grid_search`` or ``fit.fast_warmstart_only`` is enabled,
+  ``fit-population`` does not run the slow joint population Adam objective.
+  It runs the same fast per-galaxy fit as ``fit-batch`` and writes empirical
+  chunk-level population summaries. ``population_hyperparameters`` rows with
+  ``kind=fast_empirical`` contain mean/scatter of fitted values; rows with
+  ``kind=fast_relation`` contain a post-fit linear regression such as
+  mass-metallicity. These are diagnostics, not jointly optimized population
+  priors.
+
+  Use ``--full-adam`` to run the true joint population MAP optimizer.
 
 Exported plots:
   Same aggregate plot family as ``run-batch``, with prefix
@@ -645,7 +794,8 @@ Exported plots:
 Exported tables:
   ``population_fit_results.csv``,
   ``population_fit_photometry_comparison.csv``,
-  ``population_hyperparameters.csv``, ``population_fit_trace.csv``,
+  ``population_hyperparameters.csv`` with Gaussian and relation hyperparameters,
+  ``population_fit_trace.csv``, ``population_fit_residuals_by_property.csv``,
   ``population_map_parameters.csv``, ``population_map_parameter_summary.csv``,
   truth/proxy summary tables when available.
 

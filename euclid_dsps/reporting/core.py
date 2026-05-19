@@ -327,7 +327,7 @@ def parameter_truth_metrics(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def write_trace_truth_outputs(
-    trace: pd.DataFrame, out_dir: str | Path, label: str
+    trace: pd.DataFrame, out_dir: str | Path, label: str, make_plots: bool = True
 ) -> None:
     if trace.empty or "truth_mse" not in trace:
         return
@@ -338,7 +338,8 @@ def write_trace_truth_outputs(
     trace_truth_summary(trace).to_csv(
         out / f"{label}_trace_truth_summary.csv", index=False
     )
-    plot_trace_truth_metrics(trace, out / f"{label}_trace_truth.png")
+    if make_plots:
+        plot_trace_truth_metrics(trace, out / f"{label}_trace_truth.png")
 
 
 def trace_truth_summary(trace: pd.DataFrame) -> pd.DataFrame:
@@ -469,7 +470,10 @@ def _trace_group_mean(trace: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
 
 
 def write_batch_outputs(
-    comparison: pd.DataFrame, out_dir: str | Path, label: str = "batch"
+    comparison: pd.DataFrame,
+    out_dir: str | Path,
+    label: str = "batch",
+    reporting_level: str = "full",
 ) -> None:
     """Write aggregate tables and plots for multi-galaxy runs."""
     out = ensure_dir(out_dir)
@@ -519,13 +523,437 @@ def write_batch_outputs(
     truth_metrics = parameter_truth_metrics(by_row.reset_index())
     if not truth_metrics.empty:
         truth_metrics.to_csv(out / f"{label}_truth_metrics.csv", index=False)
+    residual_properties = residuals_by_property(by_row.reset_index())
+    if not residual_properties.empty:
+        residual_properties.to_csv(
+            out / f"{label}_residuals_by_property.csv", index=False
+        )
     write_json(out / f"{label}_summary.json", summary)
+
+    if str(reporting_level).lower() != "full":
+        return
 
     plot_batch_dashboard(valid, by_row, out / f"{label}_dashboard.png")
     plot_batch_residuals_by_band(valid, out / f"{label}_residuals_by_band.png")
     plot_batch_observed_vs_model(valid, out / f"{label}_observed_vs_model.png")
     plot_batch_redshift_truth(by_row, out / f"{label}_redshift_truth.png")
     plot_batch_parameter_truth(by_row, out / f"{label}_parameter_truth.png")
+    plot_residuals_by_property(
+        by_row.reset_index(), out / f"{label}_residuals_by_property.png"
+    )
+    plot_population_bias_heatmap(
+        by_row.reset_index(), out / f"{label}_bias_heatmap.png"
+    )
+
+
+def write_fit_diagnostic_outputs(
+    fits: pd.DataFrame,
+    comparison: pd.DataFrame,
+    config: dict[str, Any],
+    out_dir: str | Path,
+    label: str = "batch_fit",
+    hyperparameters: pd.DataFrame | None = None,
+) -> None:
+    """Write fit audit tables that protect scientific interpretation."""
+    out = ensure_dir(out_dir)
+    audit = fit_parameter_audit(fits, config)
+    if not audit.empty:
+        audit.to_csv(out / f"{label}_parameter_audit.csv", index=False)
+    components = fit_objective_components(fits, comparison, config, hyperparameters)
+    if not components.empty:
+        components.to_csv(out / f"{label}_objective_components.csv", index=False)
+
+
+def fit_parameter_audit(fits: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    """Summarize whether reported fit columns were truly inferred."""
+    if fits.empty:
+        return pd.DataFrame()
+    free = config.get("fit", {}).get("free_parameters", {}) or {}
+    fixed = config.get("model", {}).get("fixed_parameters", {}) or {}
+    injected = config.get("model", {}).get("parameter_columns", {}) or {}
+    derived = {
+        "t_obs_gyr",
+        "formed_mass_msun",
+        "log10_formed_mass_msun",
+        "sfr_at_obs_msun_per_yr",
+        "log10_sfr_at_obs",
+    }
+    rows = []
+    for column in sorted(c for c in fits.columns if c.startswith("fit_")):
+        name = column[4:]
+        values = pd.to_numeric(fits[column], errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        finite = values.dropna()
+        source = _fit_parameter_source(name, free, fixed, injected, derived)
+        warning_flags = _fit_parameter_warning_flags(name, source, finite, free)
+        row: dict[str, Any] = {
+            "parameter": name,
+            "fit_column": column,
+            "source": source,
+            "is_free": bool(name in free),
+            "is_fixed": bool(name in fixed and name not in free),
+            "is_row_injected": bool(name in injected and name not in free),
+            "is_derived": bool(name in derived),
+            "n": int(len(finite)),
+            "n_unique": int(finite.nunique()) if not finite.empty else 0,
+            "warning_flags": ",".join(warning_flags),
+        }
+        if not finite.empty:
+            row.update(
+                {
+                    "min": float(finite.min()),
+                    "p16": float(finite.quantile(0.16)),
+                    "median": float(finite.median()),
+                    "p84": float(finite.quantile(0.84)),
+                    "max": float(finite.max()),
+                    "std": float(finite.std()) if len(finite) > 1 else 0.0,
+                }
+            )
+        if name in free:
+            spec = free[name] or {}
+            row["initial"] = spec.get("initial")
+            bounds = spec.get("bounds")
+            if isinstance(bounds, (list, tuple)) and len(bounds) == 2:
+                low = float(bounds[0])
+                high = float(bounds[1])
+                span = high - low
+                row["lower_bound"] = low
+                row["upper_bound"] = high
+                if not finite.empty and span > 0:
+                    row["fraction_near_lower_1pct"] = float(
+                        ((finite - low).abs() <= 0.01 * span).mean()
+                    )
+                    row["fraction_near_upper_1pct"] = float(
+                        ((high - finite).abs() <= 0.01 * span).mean()
+                    )
+        if name in injected:
+            row["source_column"] = injected[name]
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def fit_objective_components(
+    fits: pd.DataFrame,
+    comparison: pd.DataFrame,
+    config: dict[str, Any],
+    hyperparameters: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Post-hoc objective decomposition from saved MAP rows."""
+    if fits.empty:
+        return pd.DataFrame()
+    rows = fits.copy()
+    out = pd.DataFrame({"row_index": rows["row_index"].astype(int)})
+    if "chunk_index" in rows:
+        out["chunk_index"] = rows["chunk_index"]
+    out["photometric_chi2"] = _photometric_chi2_by_row(rows, comparison)
+    physical = _physical_prior_components(rows, config)
+    for name, values in physical.items():
+        out[name] = values
+    if hyperparameters is not None and not hyperparameters.empty:
+        population = _population_prior_components(rows, hyperparameters)
+        for name, values in population.items():
+            out[name] = values
+    for column in [
+        "physical_gaussian_prior_penalty",
+        "physical_beta_prior_penalty",
+        "phz_prior_penalty",
+        "population_gaussian_prior_penalty",
+        "population_relation_prior_penalty",
+    ]:
+        if column not in out:
+            out[column] = 0.0
+    out["physical_prior_penalty"] = (
+        out["physical_gaussian_prior_penalty"]
+        + out["physical_beta_prior_penalty"]
+        + out["phz_prior_penalty"]
+    )
+    out["population_prior_penalty"] = (
+        out["population_gaussian_prior_penalty"]
+        + out["population_relation_prior_penalty"]
+    )
+    out["approx_objective"] = (
+        0.5 * out["photometric_chi2"]
+        + out["physical_prior_penalty"]
+        + out["population_prior_penalty"]
+    )
+    return out
+
+
+def _fit_parameter_source(
+    name: str,
+    free: dict[str, Any],
+    fixed: dict[str, Any],
+    injected: dict[str, Any],
+    derived: set[str],
+) -> str:
+    if name in free:
+        return "free"
+    if name in derived:
+        return "derived"
+    if name in injected:
+        return "row_injected"
+    if name in fixed:
+        return "fixed"
+    if name.startswith("z_obs_phz_") or name.endswith("_prior_sigma"):
+        return "prior_context"
+    return "reported_not_configured"
+
+
+def _fit_parameter_warning_flags(
+    name: str, source: str, finite: pd.Series, free: dict[str, Any]
+) -> list[str]:
+    flags: list[str] = []
+    if source != "free" and source not in {"derived"}:
+        flags.append("not_inferred_column")
+    if source == "free" and len(finite) > 1 and finite.nunique() <= 1:
+        flags.append("constant_free_parameter")
+    spec = free.get(name) or {}
+    bounds = spec.get("bounds")
+    if isinstance(bounds, (list, tuple)) and len(bounds) == 2 and not finite.empty:
+        low = float(bounds[0])
+        high = float(bounds[1])
+        span = high - low
+        if span > 0:
+            if ((finite - low).abs() <= 0.01 * span).mean() > 0.1:
+                flags.append("near_lower_bound_population")
+            if ((high - finite).abs() <= 0.01 * span).mean() > 0.1:
+                flags.append("near_upper_bound_population")
+    return flags
+
+
+def _photometric_chi2_by_row(fits: pd.DataFrame, comparison: pd.DataFrame) -> pd.Series:
+    if not comparison.empty and {"row_index", "chi"}.issubset(comparison.columns):
+        grouped = comparison.assign(
+            _chi2=pd.to_numeric(comparison["chi"], errors="coerce") ** 2
+        )
+        chi2 = grouped.groupby("row_index")["_chi2"].sum()
+        return fits["row_index"].map(chi2).fillna(fits.get("chi2", 0.0)).astype(float)
+    if "chi2" in fits:
+        return pd.to_numeric(fits["chi2"], errors="coerce").fillna(0.0)
+    return pd.Series(np.zeros(len(fits)), index=fits.index)
+
+
+def _physical_prior_components(
+    fits: pd.DataFrame, config: dict[str, Any]
+) -> dict[str, pd.Series]:
+    priors = config.get("fit", {}).get("priors", {}) or {}
+    free = config.get("fit", {}).get("free_parameters", {}) or {}
+    gaussian = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
+    beta = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
+    phz = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
+    for name, spec in priors.items():
+        if name not in free:
+            continue
+        values = _fit_values(fits, name)
+        if values is None:
+            continue
+        prior_type = str((spec or {}).get("type", "normal"))
+        if prior_type in {"normal", "truncated_normal"}:
+            loc = _prior_loc(fits, name, spec)
+            scale = max(float((spec or {}).get("scale", 1.0)), 1.0e-6)
+            gaussian += 0.5 * ((values - loc) / scale) ** 2 + np.log(scale)
+        elif prior_type == "scaled_beta":
+            bounds = free.get(name, {}).get("bounds", [0.0, 1.0])
+            low, high = float(bounds[0]), float(bounds[1])
+            scaled = ((values - low) / max(high - low, 1.0e-12)).clip(
+                1.0e-6, 1 - 1.0e-6
+            )
+            alpha = max(float((spec or {}).get("alpha", 1.0)), 1.0e-6)
+            beta_param = max(float((spec or {}).get("beta", 1.0)), 1.0e-6)
+            beta += -(
+                (alpha - 1.0) * np.log(scaled) + (beta_param - 1.0) * np.log1p(-scaled)
+            )
+        elif prior_type == "phz_interval" and name == "z_obs":
+            phz += _phz_interval_penalty_numpy(values, fits, spec)
+    return {
+        "physical_gaussian_prior_penalty": gaussian,
+        "physical_beta_prior_penalty": beta,
+        "phz_prior_penalty": phz,
+    }
+
+
+def _population_prior_components(
+    fits: pd.DataFrame, hyperparameters: pd.DataFrame
+) -> dict[str, pd.Series]:
+    gaussian = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
+    relation = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
+    relation_targets = set(
+        hyperparameters.loc[
+            hyperparameters.get("kind", pd.Series(dtype=str)).eq("relation"),
+            "target_parameter",
+        ]
+        .dropna()
+        .astype(str)
+    )
+    chunk_values = (
+        fits["chunk_index"] if "chunk_index" in fits else pd.Series(0, index=fits.index)
+    )
+    for _, row in hyperparameters.iterrows():
+        chunk_mask = chunk_values.eq(row.get("chunk_index", 0))
+        if not chunk_mask.any():
+            continue
+        kind = row.get("kind")
+        if kind == "gaussian":
+            parameter = str(row.get("parameter"))
+            if parameter in relation_targets:
+                continue
+            values = _fit_values(fits.loc[chunk_mask], parameter)
+            if values is None:
+                continue
+            mu = float(row.get("population_mu", 0.0))
+            sigma = max(float(row.get("population_sigma", 1.0)), 1.0e-6)
+            gaussian.loc[chunk_mask] += 0.5 * ((values - mu) / sigma) ** 2 + np.log(
+                sigma
+            )
+        elif kind == "relation":
+            target = str(row.get("target_parameter"))
+            predictor = str(row.get("predictor_parameter"))
+            target_values = _fit_values(fits.loc[chunk_mask], target)
+            predictor_values = _fit_values(fits.loc[chunk_mask], predictor)
+            if target_values is None or predictor_values is None:
+                continue
+            pivot = float(row.get("population_pivot", 0.0))
+            intercept = float(row.get("population_intercept", 0.0))
+            slope = float(row.get("population_slope", 0.0))
+            sigma = max(float(row.get("population_sigma", 1.0)), 1.0e-6)
+            loc = intercept + slope * (predictor_values - pivot)
+            relation.loc[chunk_mask] += 0.5 * (
+                (target_values - loc) / sigma
+            ) ** 2 + np.log(sigma)
+    return {
+        "population_gaussian_prior_penalty": gaussian,
+        "population_relation_prior_penalty": relation,
+    }
+
+
+def _fit_values(fits: pd.DataFrame, parameter: str) -> pd.Series | None:
+    for column in (f"fit_{parameter}", f"param_{parameter}", parameter):
+        if column in fits:
+            return pd.to_numeric(fits[column], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+    return None
+
+
+def _prior_loc(fits: pd.DataFrame, name: str, spec: dict[str, Any]) -> pd.Series:
+    loc = spec.get("loc", 0.0)
+    if loc == "from_base":
+        values = _fit_values(fits, name)
+        return (
+            values
+            if values is not None
+            else pd.Series(np.zeros(len(fits)), index=fits.index)
+        )
+    return pd.Series(float(loc), index=fits.index)
+
+
+def _phz_interval_penalty_numpy(
+    z: pd.Series, fits: pd.DataFrame, spec: dict[str, Any]
+) -> pd.Series:
+    def column(name: str, fallback: str) -> pd.Series:
+        param = str(spec.get(name, fallback))
+        values = _fit_values(fits, param)
+        if values is None:
+            return pd.Series(np.nan, index=fits.index)
+        return values
+
+    min70 = column("min_70_parameter", "z_obs_phz_min_70")
+    max70 = column("max_70_parameter", "z_obs_phz_max_70")
+    min90 = column("min_90_parameter", "z_obs_phz_min_90")
+    max90 = column("max_90_parameter", "z_obs_phz_max_90")
+    min95 = column("min_95_parameter", "z_obs_phz_min_95")
+    max95 = column("max_95_parameter", "z_obs_phz_max_95")
+    valid = (
+        min70.notna()
+        & max70.notna()
+        & min90.notna()
+        & max90.notna()
+        & min95.notna()
+        & max95.notna()
+        & (max70 > min70)
+        & (max90 > min90)
+        & (max95 > min95)
+    )
+    d70 = np.maximum(np.maximum(min70 - z, z - max70), 0.0)
+    d90 = np.maximum(np.maximum(min90 - z, z - max90), 0.0)
+    d95 = np.maximum(np.maximum(min95 - z, z - max95), 0.0)
+    width70 = np.where(z < min70, min70 - min90, max90 - max70)
+    width90 = np.where(z < min90, min90 - min95, max95 - max90)
+    width70 = np.maximum(width70, 1.0e-4)
+    width90 = np.maximum(width90, 1.0e-4)
+    tail = max(float(spec.get("tail_scale", 0.05)), 1.0e-4)
+    penalty_70_90 = 0.5 * (d70 / width70) ** 2
+    penalty_90_95 = 0.5 + (d90 / width90) ** 2
+    penalty_tail = 1.5 + 2.0 * (d95 / tail) ** 2
+    penalty = np.where(
+        d70 <= 0.0,
+        0.0,
+        np.where(
+            d90 <= 0.0, penalty_70_90, np.where(d95 <= 0.0, penalty_90_95, penalty_tail)
+        ),
+    )
+    penalty = pd.Series(penalty, index=fits.index).where(valid, 0.0)
+    return penalty * max(float(spec.get("weight", 1.0)), 0.0)
+
+
+def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None:
+    """Plot a heatmap of reduced chi2 in the Redshift-Mass plane."""
+    z_col = "redshift_truth" if "redshift_truth" in by_row else "z_obs"
+    m_col = (
+        "catalog_log_stellar_mass"
+        if "catalog_log_stellar_mass" in by_row
+        else "fit_log10_formed_mass_msun"
+    )
+
+    if z_col not in by_row or m_col not in by_row or "reduced_chi2" not in by_row:
+        return
+
+    work = (
+        by_row[[z_col, m_col, "reduced_chi2"]]
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
+    if len(work) < 10:
+        return
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    try:
+        # Create 2D bins
+        z_bins = np.linspace(work[z_col].min(), work[z_col].max(), 12)
+        m_bins = np.linspace(work[m_col].min(), work[m_col].max(), 12)
+
+        stats = (
+            pd.DataFrame(
+                {
+                    "z_bin": pd.cut(work[z_col], bins=z_bins),
+                    "m_bin": pd.cut(work[m_col], bins=m_bins),
+                    "chi2": work["reduced_chi2"],
+                }
+            )
+            .groupby(["z_bin", "m_bin"], observed=True)["chi2"]
+            .median()
+            .unstack()
+        )
+
+        im = ax.pcolormesh(
+            m_bins,
+            z_bins,
+            stats.to_numpy(),
+            cmap="viridis",
+            shading="flat",
+            norm=matplotlib.colors.LogNorm(vmin=0.1, vmax=10.0),
+        )
+        fig.colorbar(im, ax=ax, label="median reduced chi2")
+        ax.set_xlabel(_parameter_display_label(m_col))
+        ax.set_ylabel(_parameter_display_label(z_col))
+        ax.set_title("Population Fit Quality Map")
+    except Exception:
+        ax.text(0.5, 0.5, "Heatmap failed (insufficient coverage)", ha="center")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
 
 
 def summarize_by_band(valid: pd.DataFrame) -> pd.DataFrame:
@@ -591,6 +1019,69 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
     by_row = pd.concat([by_row, pd.DataFrame(derived_columns)], axis=1).copy()
 
     return by_row
+
+
+def residuals_by_property(by_row: pd.DataFrame) -> pd.DataFrame:
+    """Summarize row residuals against catalog/fit properties."""
+    rows: list[dict[str, Any]] = []
+    property_specs = [
+        ("redshift_truth", "redshift"),
+        ("z_obs", "redshift"),
+        ("z_true_gal", "truth redshift gal"),
+        ("catalog_log_stellar_mass", "catalog log stellar mass"),
+        ("fit_log10_formed_mass_msun", "fit log formed mass"),
+        ("fit_log10_sfr_at_obs", "fit log sfr at obs"),
+        ("catalog_color_kind", "color_kind"),
+    ]
+    for column, label in property_specs:
+        if column not in by_row:
+            continue
+        values = by_row[column]
+        if label == "color_kind":
+            groups = values.astype("string")
+        else:
+            numeric = pd.to_numeric(values, errors="coerce")
+            finite = numeric.replace([np.inf, -np.inf], np.nan).dropna()
+            if finite.nunique() < 2:
+                continue
+            try:
+                # Use a mix of fixed and quantile bins for better scientific grouping
+                if label == "redshift":
+                    groups = pd.cut(numeric, bins=[0, 0.5, 1.0, 1.5, 2.5, 4.0, 6.0])
+                else:
+                    groups = pd.qcut(
+                        numeric, q=min(6, finite.nunique()), duplicates="drop"
+                    )
+            except ValueError:
+                continue
+        work = by_row.assign(_group=groups)
+        for group, subset in work.groupby("_group", dropna=True):
+            row = _residual_property_row(subset, label, column, str(group))
+            if row:
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _residual_property_row(
+    subset: pd.DataFrame, property_name: str, source_column: str, group_label: str
+) -> dict[str, Any]:
+    residual = subset["mean_residual_mag"].replace([np.inf, -np.inf], np.nan).dropna()
+    reduced = subset["reduced_chi2"].replace([np.inf, -np.inf], np.nan).dropna()
+    if residual.empty:
+        return {}
+    row: dict[str, Any] = {
+        "property": property_name,
+        "source_column": source_column,
+        "group": group_label,
+        "n_galaxies": int(len(residual)),
+        "mean_residual_mag": float(residual.mean()),
+        "median_residual_mag": float(residual.median()),
+        "mean_abs_residual_mag": float(residual.abs().mean()),
+        "median_abs_residual_mag": float(residual.abs().median()),
+    }
+    if not reduced.empty:
+        row["median_reduced_chi2"] = float(reduced.median())
+    return row
 
 
 def plot_flux_distributions(
@@ -1717,6 +2208,83 @@ def plot_batch_parameter_truth(by_row: pd.DataFrame, path: str | Path) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=170)
     plt.close(fig)
+
+
+def plot_residuals_by_property(by_row: pd.DataFrame, path: str | Path) -> None:
+    specs = [
+        ("redshift_truth", "truth redshift"),
+        ("z_obs", "photo-z / fitted redshift"),
+        ("catalog_log_stellar_mass", "catalog log stellar mass"),
+        ("fit_log10_formed_mass_msun", "fit log formed mass"),
+    ]
+    available = [(column, label) for column, label in specs if column in by_row]
+    has_color = "catalog_color_kind" in by_row
+    if not available and not has_color:
+        return
+    n_panels = len(available) + int(has_color)
+    fig, axes = plt.subplots(
+        n_panels, 1, figsize=(8, max(2.8 * n_panels, 3)), squeeze=False
+    )
+    axes_flat = axes[:, 0]
+    panel = 0
+    for column, label in available:
+        work = by_row[[column, "mean_residual_mag"]].replace([np.inf, -np.inf], np.nan)
+        work = work.dropna()
+        if work.empty:
+            axes_flat[panel].axis("off")
+            panel += 1
+            continue
+        axes_flat[panel].scatter(
+            work[column], work["mean_residual_mag"], s=10, alpha=0.35
+        )
+        _plot_running_median(
+            work[column].to_numpy(dtype=float),
+            work["mean_residual_mag"].to_numpy(dtype=float),
+            axes_flat[panel],
+        )
+        axes_flat[panel].axhline(0, color="black", lw=1)
+        axes_flat[panel].set_xlabel(label)
+        axes_flat[panel].set_ylabel("mean model - obs [mag]")
+        axes_flat[panel].grid(alpha=0.2)
+        panel += 1
+    if has_color:
+        work = by_row[["catalog_color_kind", "mean_residual_mag"]].dropna()
+        if work.empty:
+            axes_flat[panel].axis("off")
+        else:
+            groups = [
+                group["mean_residual_mag"].to_numpy(dtype=float)
+                for _, group in work.groupby("catalog_color_kind")
+            ]
+            labels = [str(key) for key in work.groupby("catalog_color_kind").groups]
+            axes_flat[panel].boxplot(groups, labels=labels, showfliers=False)
+            axes_flat[panel].axhline(0, color="black", lw=1)
+            axes_flat[panel].set_xlabel("catalog color_kind")
+            axes_flat[panel].set_ylabel("mean model - obs [mag]")
+            axes_flat[panel].grid(alpha=0.2, axis="y")
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+
+
+def _plot_running_median(x: np.ndarray, y: np.ndarray, ax: plt.Axes) -> None:
+    mask = np.isfinite(x) & np.isfinite(y)
+    if mask.sum() < 8:
+        return
+    x = x[mask]
+    y = y[mask]
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+    bins = np.array_split(np.arange(len(x)), min(8, len(x)))
+    centers = []
+    medians = []
+    for item in bins:
+        if len(item) == 0:
+            continue
+        centers.append(float(np.median(x[item])))
+        medians.append(float(np.median(y[item])))
+    ax.plot(centers, medians, color="black", lw=1.4)
 
 
 def plot_residual_boxplot(valid: pd.DataFrame, ax: plt.Axes) -> None:

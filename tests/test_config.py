@@ -95,6 +95,28 @@ def test_required_catalog_columns_include_redshift_prior_interval() -> None:
     assert "phz_max_70" in columns
 
 
+def test_required_catalog_columns_include_redshift_prior_intervals() -> None:
+    config = minimal_config()
+    config["redshift"]["prior_intervals"] = [
+        {
+            "min_column": "phz_min_70",
+            "max_column": "phz_max_70",
+            "probability": 0.70,
+        },
+        {
+            "min_column": "phz_min_95",
+            "max_column": "phz_max_95",
+            "probability": 0.95,
+        },
+    ]
+    normalized = normalize_config(config)
+
+    columns = required_catalog_columns(normalized)
+
+    assert "phz_min_70" in columns
+    assert "phz_max_95" in columns
+
+
 def test_validate_catalog_columns_reports_missing_columns() -> None:
     config = normalize_config(minimal_config())
 
@@ -128,7 +150,13 @@ def test_optional_10band_config_activates_lsst_bands_explicitly() -> None:
     assert "dust_av" not in config["fit"]["free_parameters"]
     assert "log10_formed_mass_msun" in config["fit"]["free_parameters"]
     assert "sfh_burst_fraction" not in config["fit"]["free_parameters"]
-    assert config["fit"]["priors"]["z_obs"]["scale"] == "from_base"
+    assert config["fit"]["priors"]["z_obs"]["type"] == "phz_interval"
+    assert "sfh_bin_log_sfr_0" not in config["fit"]["free_parameters"]
+    assert "sfh_t_peak" in config["fit"]["free_parameters"]
+    assert (
+        config["fit"]["population"]["relations"]["log10_metallicity"]["predictor"]
+        == "log10_formed_mass_msun"
+    )
     assert config["bands"][6]["error_column"].endswith("_error")
     assert config["runtime"]["jax_platforms"] == "cuda"
     assert config["runtime"]["disable_jax_plugin_autoload"] is False

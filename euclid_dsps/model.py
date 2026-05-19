@@ -26,6 +26,12 @@ class DspsContext:
     n_sfh_bins: int = 96
     cosmos_dust_k_by_code: np.ndarray | None = None
     cosmos_dust_curve_names: tuple[str, ...] = ()
+    ssp_wave_jax: Any | None = None
+    ssp_lgmet_jax: Any | None = None
+    ssp_lg_age_gyr_jax: Any | None = None
+    ssp_flux_jax: Any | None = None
+    jax_filters: tuple[tuple[Any, Any], ...] = ()
+    cosmos_dust_k_by_code_jax: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -87,6 +93,22 @@ def load_context(
         n_sfh_bins=n_sfh_bins,
         cosmos_dust_k_by_code=dust_k_by_code,
         cosmos_dust_curve_names=dust_curve_names,
+        ssp_wave_jax=jnp.asarray(ssp.ssp_wave, dtype=jnp.float32),
+        ssp_lgmet_jax=jnp.asarray(ssp.ssp_lgmet, dtype=jnp.float32),
+        ssp_lg_age_gyr_jax=jnp.asarray(ssp.ssp_lg_age_gyr, dtype=jnp.float32),
+        ssp_flux_jax=jnp.asarray(ssp.ssp_flux, dtype=jnp.float32),
+        jax_filters=tuple(
+            (
+                jnp.asarray(curve.wave, dtype=jnp.float32),
+                jnp.asarray(curve.transmission, dtype=jnp.float32),
+            )
+            for curve in filters.values()
+        ),
+        cosmos_dust_k_by_code_jax=(
+            None
+            if dust_k_by_code is None
+            else jnp.asarray(dust_k_by_code, dtype=jnp.float32)
+        ),
     )
 
 
@@ -138,8 +160,8 @@ def parameters_for_row(
             params[param_name] = float(row[column])
     params["z_obs"] = resolve_redshift(params, row, redshift_config or {})
     prior_sigma = resolve_redshift_prior_sigma(row, redshift_config or {})
-    if np.isfinite(prior_sigma):
-        params["z_obs_prior_sigma"] = float(prior_sigma)
+    params["z_obs_prior_sigma"] = float(prior_sigma)
+    params.update(resolve_redshift_prior_interval_values(row, redshift_config or {}))
     return params
 
 
@@ -196,6 +218,40 @@ def resolve_redshift_prior_sigma(
     return float(np.clip(sigma, floor, ceiling))
 
 
+def resolve_redshift_prior_interval_values(
+    row: dict[str, Any], redshift_config: dict[str, Any]
+) -> dict[str, float]:
+    """Read PHZ central intervals into scalar parameters for JAX priors."""
+    values: dict[str, float] = {}
+    for interval in _redshift_prior_intervals(redshift_config):
+        probability = float(interval.get("probability", np.nan))
+        if not np.isfinite(probability):
+            continue
+        suffix = str(int(round(probability * 100.0)))
+        for side, key in (("min", "min_column"), ("max", "max_column")):
+            column = interval.get(key)
+            value = float("nan")
+            if column and column in row:
+                try:
+                    candidate = float(row[column])
+                except (TypeError, ValueError):
+                    candidate = float("nan")
+                if np.isfinite(candidate):
+                    value = candidate
+            values[f"z_obs_phz_{side}_{suffix}"] = value
+    return values
+
+
+def _redshift_prior_intervals(redshift_config: dict[str, Any]) -> list[dict[str, Any]]:
+    intervals = redshift_config.get("prior_intervals")
+    if isinstance(intervals, list):
+        return [item for item in intervals if isinstance(item, dict)]
+    interval = redshift_config.get("prior_interval")
+    if isinstance(interval, dict):
+        return [interval]
+    return []
+
+
 def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResult:
     """Run DSPS from simple SFH/metallicity parameters to SED and photometry."""
     jax_result = run_dsps_model_jax(context, params)
@@ -236,23 +292,11 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
     from dsps import calc_rest_sed_sfh_table_lognormal_mdf
     from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
 
-    ssp = context.ssp
-    z_obs = jnp.asarray(params["z_obs"])
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
 
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
-    gal_sfr_table = build_lognormal_sfh_jax(
-        gal_t_table=gal_t_table,
-        log10_sfr=jnp.asarray(params["log10_sfr"]),
-        sfh_t_peak=jnp.asarray(params["sfh_t_peak"]),
-        sfh_tau=jnp.asarray(params["sfh_tau"]),
-        sfh_burst_fraction=jnp.asarray(params.get("sfh_burst_fraction", 0.0)),
-        sfh_burst_time=jnp.asarray(params.get("sfh_burst_time", 1.0)),
-        sfh_burst_width=jnp.asarray(params.get("sfh_burst_width", 0.12)),
-        sfh_quench_time=jnp.asarray(params.get("sfh_quench_time", 12.0)),
-        sfh_quench_width=jnp.asarray(params.get("sfh_quench_width", 0.5)),
-        sfh_quench_depth=jnp.asarray(params.get("sfh_quench_depth", 0.0)),
-    )
+    gal_sfr_table = build_sfh_table_jax(gal_t_table, params)
     gal_sfr_table, formed_mass = normalize_sfh_mass_jax(
         gal_t_table, gal_sfr_table, params
     )
@@ -260,16 +304,16 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
     sed_info = calc_rest_sed_sfh_table_lognormal_mdf(
         gal_t_table,
         gal_sfr_table,
-        jnp.asarray(params["log10_metallicity"]),
-        jnp.asarray(params["metallicity_scatter"]),
-        jnp.asarray(ssp.ssp_lgmet),
-        jnp.asarray(ssp.ssp_lg_age_gyr),
-        jnp.asarray(ssp.ssp_flux),
+        jnp.asarray(params["log10_metallicity"], dtype=jnp.float32),
+        jnp.asarray(params["metallicity_scatter"], dtype=jnp.float32),
+        _context_ssp_lgmet(context),
+        _context_ssp_lg_age_gyr(context),
+        _context_ssp_flux(context),
         t_obs,
     )
-    wave = jnp.asarray(ssp.ssp_wave)
+    wave = _context_ssp_wave(context)
     dusted_sed = apply_dust_jax(
-        wave, sed_info.rest_sed, params, context.cosmos_dust_k_by_code
+        wave, sed_info.rest_sed, params, context.cosmos_dust_k_by_code_jax
     )
     model_mags = predict_mags_jax(context, wave, dusted_sed, z_obs)
     return JaxModelResult(
@@ -290,14 +334,23 @@ def predict_mags_jax(
     from dsps import calc_obs_mag
     from dsps.cosmology import DEFAULT_COSMOLOGY
 
+    filter_arrays = context.jax_filters
+    if not filter_arrays:
+        filter_arrays = tuple(
+            (
+                jnp.asarray(curve.wave, dtype=jnp.float32),
+                jnp.asarray(curve.transmission, dtype=jnp.float32),
+            )
+            for curve in context.filters.values()
+        )
     mags = []
-    for curve in context.filters.values():
+    for filter_wave, filter_transmission in filter_arrays:
         mags.append(
             calc_obs_mag(
                 wave,
                 dusted_sed,
-                jnp.asarray(curve.wave),
-                jnp.asarray(curve.transmission),
+                filter_wave,
+                filter_transmission,
                 z_obs,
                 *DEFAULT_COSMOLOGY,
             )
@@ -310,38 +363,58 @@ def model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
     return run_dsps_model_jax(context, params).model_mags
 
 
+def _context_ssp_wave(context: DspsContext) -> jnp.ndarray:
+    if context.ssp_wave_jax is not None:
+        return context.ssp_wave_jax
+    return jnp.asarray(context.ssp.ssp_wave, dtype=jnp.float32)
+
+
+def _context_ssp_lgmet(context: DspsContext) -> jnp.ndarray:
+    if context.ssp_lgmet_jax is not None:
+        return context.ssp_lgmet_jax
+    return jnp.asarray(context.ssp.ssp_lgmet, dtype=jnp.float32)
+
+
+def _context_ssp_lg_age_gyr(context: DspsContext) -> jnp.ndarray:
+    if context.ssp_lg_age_gyr_jax is not None:
+        return context.ssp_lg_age_gyr_jax
+    return jnp.asarray(context.ssp.ssp_lg_age_gyr, dtype=jnp.float32)
+
+
+def _context_ssp_flux(context: DspsContext) -> jnp.ndarray:
+    if context.ssp_flux_jax is not None:
+        return context.ssp_flux_jax
+    return jnp.asarray(context.ssp.ssp_flux, dtype=jnp.float32)
+
+
+_BATCH_PREDICT_CACHE = {}
+
+
 def predict_batch_mags(
     context: DspsContext, parameter_names: list[str], parameter_matrix: np.ndarray
 ) -> np.ndarray:
     """Predict magnitudes for many parameter rows with one JAX-vmapped call."""
+    cache_key = ("mags", id(context), tuple(parameter_names))
+    if cache_key not in _BATCH_PREDICT_CACHE:
 
-    def single(values):
-        params = {name: values[index] for index, name in enumerate(parameter_names)}
-        return model_mags_jax(context, params)
+        def single(values):
+            params = {name: values[index] for index, name in enumerate(parameter_names)}
+            return model_mags_jax(context, params)
 
-    predict = jax.jit(jax.vmap(single))
-    return np.asarray(predict(jnp.asarray(parameter_matrix)))
+        _BATCH_PREDICT_CACHE[cache_key] = jax.jit(jax.vmap(single))
+
+    predict = _BATCH_PREDICT_CACHE[cache_key]
+    return np.asarray(predict(jnp.asarray(parameter_matrix, dtype=jnp.float32)))
 
 
 def derived_quantities_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
     """Return derived quantities needed for scientifically comparable reports."""
     from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
 
-    z_obs = jnp.asarray(params["z_obs"])
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
-    gal_sfr_table = build_lognormal_sfh_jax(
-        gal_t_table=gal_t_table,
-        log10_sfr=jnp.asarray(params["log10_sfr"]),
-        sfh_t_peak=jnp.asarray(params["sfh_t_peak"]),
-        sfh_tau=jnp.asarray(params["sfh_tau"]),
-        sfh_burst_fraction=jnp.asarray(params.get("sfh_burst_fraction", 0.0)),
-        sfh_burst_time=jnp.asarray(params.get("sfh_burst_time", 1.0)),
-        sfh_burst_width=jnp.asarray(params.get("sfh_burst_width", 0.12)),
-        sfh_quench_time=jnp.asarray(params.get("sfh_quench_time", 12.0)),
-        sfh_quench_width=jnp.asarray(params.get("sfh_quench_width", 0.5)),
-        sfh_quench_depth=jnp.asarray(params.get("sfh_quench_depth", 0.0)),
-    )
+    gal_sfr_table = build_sfh_table_jax(gal_t_table, params)
     gal_sfr_table, formed_mass = normalize_sfh_mass_jax(
         gal_t_table, gal_sfr_table, params
     )
@@ -361,13 +434,17 @@ def predict_batch_derived(
     context: DspsContext, parameter_names: list[str], parameter_matrix: np.ndarray
 ) -> dict[str, np.ndarray]:
     """Compute derived quantities for many fitted parameter rows."""
+    cache_key = ("derived", id(context), tuple(parameter_names))
+    if cache_key not in _BATCH_PREDICT_CACHE:
 
-    def single(values):
-        params = {name: values[index] for index, name in enumerate(parameter_names)}
-        return derived_quantities_jax(context, params)
+        def single(values):
+            params = {name: values[index] for index, name in enumerate(parameter_names)}
+            return derived_quantities_jax(context, params)
 
-    predict = jax.jit(jax.vmap(single))
-    values = np.asarray(predict(jnp.asarray(parameter_matrix)))
+        _BATCH_PREDICT_CACHE[cache_key] = jax.jit(jax.vmap(single))
+
+    predict = _BATCH_PREDICT_CACHE[cache_key]
+    values = np.asarray(predict(jnp.asarray(parameter_matrix, dtype=jnp.float32)))
     return {name: values[:, index] for index, name in enumerate(DERIVED_QUANTITY_NAMES)}
 
 
@@ -379,30 +456,34 @@ def predict_batch_seds(
     This is the batch/GPU path used by COSMOS-template comparisons after MAP or
     population fits. It avoids one Python DSPS call per galaxy.
     """
+    cache_key = ("seds", id(context), tuple(parameter_names))
+    if cache_key not in _BATCH_PREDICT_CACHE:
 
-    def single(values):
-        params = {name: values[index] for index, name in enumerate(parameter_names)}
-        result = run_dsps_model_jax(context, params)
-        derived = jnp.asarray(
-            [
-                result.t_obs_gyr,
-                result.formed_mass_msun,
-                jnp.log10(jnp.maximum(result.formed_mass_msun, 1.0e-300)),
-                result.sfr_at_obs_msun_per_yr,
-                jnp.log10(jnp.maximum(result.sfr_at_obs_msun_per_yr, 1.0e-300)),
-            ]
-        )
-        return result.rest_sed, result.dusted_rest_sed, result.model_mags, derived
+        def single(values):
+            params = {name: values[index] for index, name in enumerate(parameter_names)}
+            result = run_dsps_model_jax(context, params)
+            derived = jnp.asarray(
+                [
+                    result.t_obs_gyr,
+                    result.formed_mass_msun,
+                    jnp.log10(jnp.maximum(result.formed_mass_msun, 1.0e-300)),
+                    result.sfr_at_obs_msun_per_yr,
+                    jnp.log10(jnp.maximum(result.sfr_at_obs_msun_per_yr, 1.0e-300)),
+                ]
+            )
+            return result.rest_sed, result.dusted_rest_sed, result.model_mags, derived
 
-    predict = jax.jit(jax.vmap(single))
+        _BATCH_PREDICT_CACHE[cache_key] = jax.jit(jax.vmap(single))
+
+    predict = _BATCH_PREDICT_CACHE[cache_key]
     rest_sed, dusted_rest_sed, model_mags, derived_values = predict(
-        jnp.asarray(parameter_matrix)
+        jnp.asarray(parameter_matrix, dtype=jnp.float32)
     )
     derived_array = np.asarray(derived_values)
     return BatchSedResult(
         parameter_names=list(parameter_names),
         parameter_matrix=np.asarray(parameter_matrix, dtype=float),
-        wave=np.asarray(context.ssp.ssp_wave, dtype=float),
+        wave=np.asarray(_context_ssp_wave(context), dtype=float),
         rest_sed=np.asarray(rest_sed, dtype=float),
         dusted_rest_sed=np.asarray(dusted_rest_sed, dtype=float),
         model_mags=np.asarray(model_mags, dtype=float),
@@ -441,6 +522,82 @@ def build_lognormal_sfh(
         ),
         dtype=float,
     )
+
+
+def build_sfh_table_jax(
+    gal_t_table: jnp.ndarray, params: dict[str, Any]
+) -> jnp.ndarray:
+    """Build the active SFH table without leaving JAX.
+
+    If ``sfh_bin_log_sfr_*`` keys are present, use a smooth non-parametric
+    binned SFH. Otherwise, keep the historical lognormal+burst/quench form.
+    """
+    bin_names = _sfh_bin_parameter_names(params)
+    if bin_names:
+        bin_values = jnp.asarray([params[name] for name in bin_names], dtype=jnp.float32)
+        return build_binned_sfh_jax(
+            gal_t_table=gal_t_table,
+            bin_log_sfr=bin_values,
+            transition_width=jnp.asarray(
+                params.get("sfh_bin_transition_width", 0.015), dtype=jnp.float32
+            ),
+        )
+    return build_lognormal_sfh_jax(
+        gal_t_table=gal_t_table,
+        log10_sfr=jnp.asarray(params["log10_sfr"], dtype=jnp.float32),
+        sfh_t_peak=jnp.asarray(params["sfh_t_peak"], dtype=jnp.float32),
+        sfh_tau=jnp.asarray(params["sfh_tau"], dtype=jnp.float32),
+        sfh_burst_fraction=jnp.asarray(
+            params.get("sfh_burst_fraction", 0.0), dtype=jnp.float32
+        ),
+        sfh_burst_time=jnp.asarray(
+            params.get("sfh_burst_time", 1.0), dtype=jnp.float32
+        ),
+        sfh_burst_width=jnp.asarray(
+            params.get("sfh_burst_width", 0.12), dtype=jnp.float32
+        ),
+        sfh_quench_time=jnp.asarray(
+            params.get("sfh_quench_time", 12.0), dtype=jnp.float32
+        ),
+        sfh_quench_width=jnp.asarray(
+            params.get("sfh_quench_width", 0.5), dtype=jnp.float32
+        ),
+        sfh_quench_depth=jnp.asarray(
+            params.get("sfh_quench_depth", 0.0), dtype=jnp.float32
+        ),
+    )
+
+
+def _sfh_bin_parameter_names(params: dict[str, Any]) -> list[str]:
+    prefix = "sfh_bin_log_sfr_"
+    names = [name for name in params if name.startswith(prefix)]
+    return sorted(names, key=lambda name: int(name.removeprefix(prefix)))
+
+
+def build_binned_sfh_jax(
+    gal_t_table: jnp.ndarray,
+    bin_log_sfr: jnp.ndarray,
+    transition_width: float | jnp.ndarray = 0.015,
+) -> jnp.ndarray:
+    """Smooth non-parametric SFH with approximately constant SFR time bins.
+
+    Bin amplitudes are mean-centered so formed mass controls luminosity amplitude
+    while bins control shape. Smooth edges preserve useful gradients with
+    respect to redshift through ``t_obs``.
+    """
+    n_bins = bin_log_sfr.shape[0]
+    x = (gal_t_table - gal_t_table[0]) / jnp.maximum(
+        gal_t_table[-1] - gal_t_table[0], 1.0e-6
+    )
+    edges = jnp.linspace(0.0, 1.0, n_bins + 1)
+    width = jnp.maximum(jnp.asarray(transition_width), 1.0e-4)
+    left = jax.nn.sigmoid((x[:, None] - edges[:-1][None, :]) / width)
+    right = jax.nn.sigmoid((x[:, None] - edges[1:][None, :]) / width)
+    weights = jnp.maximum(left - right, 0.0)
+    weights = weights / jnp.maximum(jnp.sum(weights, axis=1, keepdims=True), 1.0e-12)
+    centered = bin_log_sfr - jnp.mean(bin_log_sfr)
+    sfr_by_bin = 10.0**centered
+    return jnp.clip(weights @ sfr_by_bin, 1.0e-12, jnp.inf)
 
 
 def build_lognormal_sfh_jax(
@@ -494,7 +651,9 @@ def normalize_sfh_mass_jax(
     formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
     if "log10_formed_mass_msun" not in params:
         return gal_sfr_table, formed_mass
-    target_mass = 10.0 ** jnp.asarray(params["log10_formed_mass_msun"])
+    target_mass = 10.0 ** jnp.asarray(
+        params["log10_formed_mass_msun"], dtype=jnp.float32
+    )
     scale = target_mass / jnp.maximum(formed_mass, 1.0e-30)
     scaled_sfr = jnp.clip(gal_sfr_table * scale, 1.0e-12, jnp.inf)
     scaled_mass = jnp.trapezoid(scaled_sfr, gal_t_table) * 1.0e9

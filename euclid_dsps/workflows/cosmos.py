@@ -31,6 +31,7 @@ from ..io import (
     iter_catalog_batches,
     read_catalog,
     required_catalog_columns,
+    write_dataframe_outputs,
     write_json,
 )
 from ..model import (
@@ -40,7 +41,8 @@ from ..model import (
     parameters_for_row,
     predict_batch_seds,
 )
-from ..reporting.core import write_batch_outputs
+from ..performance import PerformanceRecorder, write_performance_outputs
+from ..reporting.core import write_batch_outputs, write_fit_diagnostic_outputs
 from ..reporting.cosmos import (
     plot_branch1_metric_summary,
     plot_branch1_residual_heatmap,
@@ -59,9 +61,11 @@ from ..reporting.cosmos import (
 from .core import (
     _make_progress_bar,
     _photometry_arrays,
+    _reporting_level,
     _row_context,
     _truth_parameter_matrix,
     _update_progress,
+    _verbose_benchmark,
 )
 
 
@@ -78,6 +82,8 @@ def reconstruct_cosmos_seds(
 ) -> pd.DataFrame:
     """Run COSMOS-template SED reconstruction for a small catalog sample."""
     out = ensure_dir(out_dir)
+    perf = PerformanceRecorder(_verbose_benchmark(config))
+    full_report = _reporting_level(config) == "full"
     available_columns = _available_catalog_columns(config["catalog_path"])
     cosmos_config = config.get("cosmos_sed", {})
     validation_columns = cosmos_catalog_columns(
@@ -98,6 +104,7 @@ def reconstruct_cosmos_seds(
     )
     validation_report["value_added_data"] = _value_added_data_report(cosmos_config)
     write_json(out / "cosmos_sed_validation.json", validation_report)
+    perf.mark("read_catalog", n_rows=len(selected))
 
     resources = load_cosmos_sed_resources(cosmos_config)
     filters = load_filters(config["bands"])
@@ -110,6 +117,7 @@ def reconstruct_cosmos_seds(
             n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
             cosmos_config=cosmos_config,
         )
+    perf.mark("load_resources", n_bands=len(config["bands"]), dsps_mode=dsps_mode)
 
     diagnostics: list[dict[str, Any]] = []
     abs_flux_rows: list[dict[str, Any]] = []
@@ -192,32 +200,41 @@ def reconstruct_cosmos_seds(
                             sample_comparison_frames.append(comparison)
                         if first_branch1 is None:
                             first_branch1 = comparison
-                    branch2_rows.extend(
-                        observed_photometry_target_rows(
-                            row.to_dict(),
-                            int(row_index),
-                            dsps_result,
-                            config["bands"],
-                            target_set_names=cosmos_config.get(
-                                "observed_photometry_target_sets"
-                            ),
-                        )
+                branch2_rows.extend(
+                    observed_photometry_target_rows(
+                        row.to_dict(),
+                        int(row_index),
+                        dsps_result,
+                        config["bands"],
+                        target_set_names=cosmos_config.get(
+                            "observed_photometry_target_sets"
+                        ),
                     )
+                )
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
             )
+            perf.mark("cosmos_chunk", chunk_index=chunk_index, n_rows=len(batch))
 
     diagnostics_frame = pd.DataFrame(diagnostics)
-    diagnostics_frame.to_csv(out / "cosmos_sed_diagnostics.csv", index=False)
-    manifest.append("cosmos_sed_diagnostics.csv")
+    manifest.extend(
+        write_dataframe_outputs(
+            diagnostics_frame, out, "cosmos_sed_diagnostics", config
+        )
+    )
+    perf.mark("write_primary_cosmos_outputs", n_rows=len(diagnostics_frame))
 
     abs_flux_frame = pd.DataFrame(abs_flux_rows)
-    abs_flux_frame.to_csv(out / "synthetic_vs_catalog_abs_flux.csv", index=False)
-    manifest.append("synthetic_vs_catalog_abs_flux.csv")
-    plot_synthetic_vs_catalog_abs_flux(
-        abs_flux_frame, out / "synthetic_vs_catalog_abs_flux.png"
+    manifest.extend(
+        write_dataframe_outputs(
+            abs_flux_frame, out, "synthetic_vs_catalog_abs_flux", config
+        )
     )
-    manifest.append("synthetic_vs_catalog_abs_flux.png")
+    if full_report:
+        plot_synthetic_vs_catalog_abs_flux(
+            abs_flux_frame, out / "synthetic_vs_catalog_abs_flux.png"
+        )
+        manifest.append("synthetic_vs_catalog_abs_flux.png")
 
     if sed_frames:
         sed_frame = pd.concat(sed_frames, ignore_index=True)
@@ -227,9 +244,10 @@ def reconstruct_cosmos_seds(
         first_sed.to_csv(out / "cosmos_sed_example.csv", index=False)
         manifest.append("cosmos_sed_example.csv")
     if first_result is not None:
-        plot_cosmos_sed_example(first_result, out / "cosmos_sed_example.png")
-        manifest.append("cosmos_sed_example.png")
-    if sample_results:
+        if full_report:
+            plot_cosmos_sed_example(first_result, out / "cosmos_sed_example.png")
+            manifest.append("cosmos_sed_example.png")
+    if sample_results and full_report:
         plot_cosmos_sed_sample_set(
             sample_results,
             out / "cosmos_sed_sample_set.png",
@@ -238,43 +256,52 @@ def reconstruct_cosmos_seds(
         )
         manifest.append("cosmos_sed_sample_set.png")
 
-    plot_template_pair_heatmap(
-        diagnostics_frame, out / "cosmos_template_pair_heatmap.png"
-    )
-    manifest.append("cosmos_template_pair_heatmap.png")
-    plot_fraction_diagnostics(
-        diagnostics_frame, out / "cosmos_fraction_diagnostics.png"
-    )
-    manifest.append("cosmos_fraction_diagnostics.png")
+    if full_report:
+        plot_template_pair_heatmap(
+            diagnostics_frame, out / "cosmos_template_pair_heatmap.png"
+        )
+        manifest.append("cosmos_template_pair_heatmap.png")
+        plot_fraction_diagnostics(
+            diagnostics_frame, out / "cosmos_fraction_diagnostics.png"
+        )
+        manifest.append("cosmos_fraction_diagnostics.png")
 
     if branch1_metric_rows:
         branch1 = pd.DataFrame(branch1_metric_rows)
-        branch1.to_csv(out / "branch1_rest_sed_metrics.csv", index=False)
-        manifest.append("branch1_rest_sed_metrics.csv")
+        manifest.extend(
+            write_dataframe_outputs(branch1, out, "branch1_rest_sed_metrics", config)
+        )
         grouped = grouped_metric_summary(branch1, "rms_log_sed_residual")
         grouped.to_csv(out / "branch1_rest_sed_metrics_by_group.csv", index=False)
         manifest.append("branch1_rest_sed_metrics_by_group.csv")
-        plot_branch1_metric_summary(branch1, out / "branch1_rest_sed_metrics.png")
-        manifest.append("branch1_rest_sed_metrics.png")
-        plot_rest_color_residuals(branch1, out / "branch1_rest_color_residuals.png")
-        manifest.append("branch1_rest_color_residuals.png")
-        plot_branch1_residual_heatmap(branch1, out / "branch1_rms_residual_heatmap.png")
-        manifest.append("branch1_rms_residual_heatmap.png")
+        if full_report:
+            plot_branch1_metric_summary(branch1, out / "branch1_rest_sed_metrics.png")
+            manifest.append("branch1_rest_sed_metrics.png")
+            plot_rest_color_residuals(branch1, out / "branch1_rest_color_residuals.png")
+            manifest.append("branch1_rest_color_residuals.png")
+            plot_branch1_residual_heatmap(
+                branch1, out / "branch1_rms_residual_heatmap.png"
+            )
+            manifest.append("branch1_rms_residual_heatmap.png")
         population = population_validation_summary(
             branch1, "rms_log_sed_residual", "branch1_rest_sed_rms"
         )
         if not population.empty:
             population.to_csv(out / "branch1_population_validation.csv", index=False)
             manifest.append("branch1_population_validation.csv")
-            plot_population_validation_summary(
-                population, out / "branch1_population_validation.png"
-            )
-            manifest.append("branch1_population_validation.png")
+            if full_report:
+                plot_population_validation_summary(
+                    population, out / "branch1_population_validation.png"
+                )
+                manifest.append("branch1_population_validation.png")
     if branch1_comparison_frames:
         branch1_comparison = pd.concat(branch1_comparison_frames, ignore_index=True)
-        branch1_comparison.to_csv(out / "branch1_rest_sed_comparison.csv", index=False)
-        manifest.append("branch1_rest_sed_comparison.csv")
-        if branch1_metric_rows:
+        manifest.extend(
+            write_dataframe_outputs(
+                branch1_comparison, out, "branch1_rest_sed_comparison", config
+            )
+        )
+        if branch1_metric_rows and full_report:
             plot_worst_sed_grid(
                 pd.DataFrame(branch1_metric_rows),
                 branch1_comparison,
@@ -282,7 +309,7 @@ def reconstruct_cosmos_seds(
                 n=16,
             )
             manifest.append("branch1_worst_sed_grid.png")
-    if first_branch1 is not None:
+    if first_branch1 is not None and full_report:
         row_index = int(first_branch1["row_index"].iloc[0])
         plot_cosmos_dsps_rest_comparison(
             first_branch1, out / "branch1_rest_sed_comparison_example.png", row_index
@@ -291,8 +318,11 @@ def reconstruct_cosmos_seds(
 
     if branch2_rows:
         branch2 = pd.DataFrame(branch2_rows)
-        branch2.to_csv(out / "branch2_observed_photometry_metrics.csv", index=False)
-        manifest.append("branch2_observed_photometry_metrics.csv")
+        manifest.extend(
+            write_dataframe_outputs(
+                branch2, out, "branch2_observed_photometry_metrics", config
+            )
+        )
         chi2 = observed_photometry_chi2_summary(branch2)
         if not chi2.empty:
             chi2.to_csv(out / "branch2_observed_photometry_chi2.csv", index=False)
@@ -302,31 +332,42 @@ def reconstruct_cosmos_seds(
             out / "branch2_observed_photometry_metrics_by_group.csv", index=False
         )
         manifest.append("branch2_observed_photometry_metrics_by_group.csv")
-        plot_observed_flux_residuals(
-            branch2, out / "branch2_observed_flux_residuals.png"
-        )
-        manifest.append("branch2_observed_flux_residuals.png")
+        if full_report:
+            plot_observed_flux_residuals(
+                branch2, out / "branch2_observed_flux_residuals.png"
+            )
+            manifest.append("branch2_observed_flux_residuals.png")
         population = population_validation_summary(
             branch2, "relative_flux_residual", "branch2_relative_flux_residual"
         )
         if not population.empty:
             population.to_csv(out / "branch2_population_validation.csv", index=False)
             manifest.append("branch2_population_validation.csv")
-            plot_population_validation_summary(
-                population, out / "branch2_population_validation.png"
-            )
-            manifest.append("branch2_population_validation.png")
+            if full_report:
+                plot_population_validation_summary(
+                    population, out / "branch2_population_validation.png"
+                )
+                manifest.append("branch2_population_validation.png")
 
     if dsps_fit_rows:
-        pd.DataFrame(dsps_fit_rows).to_csv(
-            out / "cosmos_dsps_fit_results.csv", index=False
+        dsps_fit_frame = pd.DataFrame(dsps_fit_rows)
+        manifest.extend(
+            write_dataframe_outputs(
+                dsps_fit_frame, out, "cosmos_dsps_fit_results", config
+            )
         )
-        manifest.append("cosmos_dsps_fit_results.csv")
+    else:
+        dsps_fit_frame = pd.DataFrame()
     if dsps_hyper_rows:
-        pd.DataFrame(dsps_hyper_rows).to_csv(
-            out / "cosmos_dsps_population_hyperparameters.csv", index=False
+        dsps_hyper_frame = pd.DataFrame(dsps_hyper_rows)
+        manifest.extend(
+            write_dataframe_outputs(
+                dsps_hyper_frame,
+                out,
+                "cosmos_dsps_population_hyperparameters",
+                config,
+            )
         )
-        manifest.append("cosmos_dsps_population_hyperparameters.csv")
         write_json(
             out / "cosmos_dsps_population_report.json",
             {
@@ -347,33 +388,68 @@ def reconstruct_cosmos_seds(
             },
         )
         manifest.append("cosmos_dsps_population_report.json")
+    else:
+        dsps_hyper_frame = pd.DataFrame()
     if dsps_trace_rows:
-        pd.DataFrame(dsps_trace_rows).to_csv(
-            out / "cosmos_dsps_fit_trace.csv", index=False
+        manifest.extend(
+            write_dataframe_outputs(
+                pd.DataFrame(dsps_trace_rows), out, "cosmos_dsps_fit_trace", config
+            )
         )
-        manifest.append("cosmos_dsps_fit_trace.csv")
 
     if likelihood_rows:
         likelihood = pd.DataFrame(likelihood_rows)
-        likelihood.to_csv(
-            out / "cosmos_dsps_likelihood_photometry_comparison.csv", index=False
+        manifest.extend(
+            write_dataframe_outputs(
+                likelihood,
+                out,
+                "cosmos_dsps_likelihood_photometry_comparison",
+                config,
+            )
         )
-        manifest.append("cosmos_dsps_likelihood_photometry_comparison.csv")
-        write_batch_outputs(likelihood, out, label="cosmos_dsps_likelihood")
+        write_batch_outputs(
+            likelihood,
+            out,
+            label="cosmos_dsps_likelihood",
+            reporting_level=_reporting_level(config),
+        )
+        if not dsps_fit_frame.empty:
+            write_fit_diagnostic_outputs(
+                dsps_fit_frame,
+                likelihood,
+                config,
+                out,
+                label="cosmos_dsps_likelihood",
+                hyperparameters=dsps_hyper_frame,
+            )
+            manifest.extend(
+                [
+                    "cosmos_dsps_likelihood_parameter_audit.csv",
+                    "cosmos_dsps_likelihood_objective_components.csv",
+                ]
+            )
         manifest.extend(
             [
-                "cosmos_dsps_likelihood_dashboard.png",
-                "cosmos_dsps_likelihood_observed_vs_model.png",
-                "cosmos_dsps_likelihood_residuals_by_band.png",
-                "cosmos_dsps_likelihood_redshift_truth.png",
-                "cosmos_dsps_likelihood_parameter_truth.png",
                 "cosmos_dsps_likelihood_summary.json",
                 "cosmos_dsps_likelihood_summary_by_band.csv",
                 "cosmos_dsps_likelihood_summary_by_galaxy.csv",
                 "cosmos_dsps_likelihood_truth_metrics.csv",
             ]
         )
+        if full_report:
+            manifest.extend(
+                [
+                    "cosmos_dsps_likelihood_dashboard.png",
+                    "cosmos_dsps_likelihood_observed_vs_model.png",
+                    "cosmos_dsps_likelihood_residuals_by_band.png",
+                    "cosmos_dsps_likelihood_redshift_truth.png",
+                    "cosmos_dsps_likelihood_parameter_truth.png",
+                ]
+            )
+    perf.mark("write_reports")
 
+    write_json(out / "normalized_config.json", config)
+    manifest.append("normalized_config.json")
     write_json(
         out / "cosmos_sed_run_config.json",
         {
@@ -393,6 +469,10 @@ def reconstruct_cosmos_seds(
         },
     )
     manifest.append("cosmos_sed_run_config.json")
+    write_performance_outputs(perf.rows, out, "cosmos_sed")
+    manifest.extend(
+        ["cosmos_sed_performance_benchmark.csv", "cosmos_sed_performance_summary.json"]
+    )
     write_cosmos_output_manifest(out, manifest)
     return diagnostics_frame
 
@@ -463,6 +543,7 @@ def _batch_dsps_results(
                 {
                     "chunk_index": chunk_index,
                     "n_galaxies": len(batch),
+                    "kind": "gaussian",
                     "parameter": name,
                     "population_mu": pop_result.hyper_mu[name],
                     "population_sigma": pop_result.hyper_sigma[name],
@@ -471,6 +552,23 @@ def _batch_dsps_results(
                 }
                 for name in fit_result.free_parameter_names
             ]
+            for relation in pop_result.hyper_relations:
+                hyper_rows.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "n_galaxies": len(batch),
+                        "kind": "relation",
+                        "parameter": relation["target_parameter"],
+                        "target_parameter": relation["target_parameter"],
+                        "predictor_parameter": relation["predictor_parameter"],
+                        "population_pivot": relation["pivot"],
+                        "population_intercept": relation["intercept"],
+                        "population_slope": relation["slope"],
+                        "population_sigma": relation["sigma"],
+                        "loss": pop_result.loss,
+                        "device": fit_result.device,
+                    }
+                )
         else:
             fit_result = fit_galaxy_batch_adam(
                 context,
@@ -495,7 +593,9 @@ def _batch_dsps_results(
 
     sed_result = predict_batch_seds(context, parameter_names, parameter_matrix)
     if mode in {"map", "population"}:
-        fit_rows = _batch_fit_rows(batch, fit_result, sed_result, config, mode)
+        fit_rows = _batch_fit_rows(
+            batch, fit_result, sed_result, config, mode, chunk_index
+        )
         likelihood_rows = _batch_likelihood_rows(
             batch,
             fit_result,
@@ -522,6 +622,7 @@ def _batch_fit_rows(
     sed_result: BatchSedResult,
     config: dict[str, Any],
     mode: str,
+    chunk_index: int,
 ) -> list[dict[str, Any]]:
     rows = []
     for local_index, (row_index, _) in enumerate(batch.iterrows()):
@@ -538,6 +639,7 @@ def _batch_fit_rows(
         rows.append(
             {
                 "row_index": int(row_index),
+                "chunk_index": int(chunk_index),
                 "dsps_mode": mode,
                 "success": bool(fit_result.success[local_index]),
                 "message": fit_result.message,

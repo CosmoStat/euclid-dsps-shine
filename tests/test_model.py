@@ -5,6 +5,7 @@ import pytest
 
 from euclid_dsps.model import (
     apply_cosmos_two_component_dust_jax,
+    build_binned_sfh_jax,
     build_lognormal_sfh,
     normalize_sfh_mass_jax,
 )
@@ -73,3 +74,14 @@ def test_sfh_can_be_normalized_to_formed_mass() -> None:
     assert np.trapezoid(np.asarray(scaled), time) * 1.0e9 == pytest.approx(
         1.0e10, rel=1.0e-5
     )
+
+
+def test_binned_sfh_is_positive_and_responds_to_bin_weights() -> None:
+    time = np.linspace(0.1, 10.0, 128)
+
+    flat = np.asarray(build_binned_sfh_jax(time, np.zeros(6)))
+    rising = np.asarray(build_binned_sfh_jax(time, np.linspace(-1.0, 1.0, 6)))
+
+    assert np.all(flat > 0.0)
+    assert np.all(rising > 0.0)
+    assert rising[-1] > rising[0]

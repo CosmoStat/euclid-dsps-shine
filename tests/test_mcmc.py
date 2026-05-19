@@ -28,3 +28,16 @@ def test_scaled_beta_prior_uses_fit_bounds() -> None:
     assert np.isfinite(float(prior.log_prob(jnp.asarray(1.5))))
     assert not np.isfinite(float(prior.log_prob(jnp.asarray(0.0))))
     assert not np.isfinite(float(prior.log_prob(jnp.asarray(3.0))))
+
+
+def test_phz_interval_prior_samples_within_fit_bounds() -> None:
+    prior = _prior_distribution(
+        "z_obs",
+        {"initial": "from_base", "bounds": [0.001, 6.0]},
+        {"type": "phz_interval"},
+        {"z_obs": 0.5},
+    )
+
+    assert np.isfinite(float(prior.log_prob(jnp.asarray(0.5))))
+    assert bool(prior.support(jnp.asarray(0.5)))
+    assert not bool(prior.support(jnp.asarray(7.0)))

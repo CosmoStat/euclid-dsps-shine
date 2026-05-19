@@ -32,6 +32,16 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
             "EUCLID_DSPS_EXPECTED_GPU_NAME",
             str(runtime["expected_gpu_name"]),
         )
+    if runtime.get("jax_compilation_cache_dir"):
+        os.environ.setdefault(
+            "EUCLID_DSPS_JAX_COMPILATION_CACHE_DIR",
+            str(runtime["jax_compilation_cache_dir"]),
+        )
+    if runtime.get("jax_persistent_cache_min_compile_time_secs") is not None:
+        os.environ.setdefault(
+            "EUCLID_DSPS_JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
+            str(runtime["jax_persistent_cache_min_compile_time_secs"]),
+        )
 
 
 def configure_jax_runtime() -> None:
@@ -47,8 +57,30 @@ def configure_jax_runtime() -> None:
         import jax._src.xla_bridge as xla_bridge
 
         xla_bridge.discover_pjrt_plugins = lambda: None
+    _configure_persistent_cache()
     if _truthy(os.environ.get("EUCLID_DSPS_REQUIRE_GPU", "0")):
         require_jax_gpu(os.environ.get("EUCLID_DSPS_EXPECTED_GPU_NAME"))
+
+
+def _configure_persistent_cache() -> None:
+    cache_dir = os.environ.get("EUCLID_DSPS_JAX_COMPILATION_CACHE_DIR")
+    if not cache_dir:
+        return
+    from pathlib import Path
+
+    path = Path(cache_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    import jax
+
+    jax.config.update("jax_enable_compilation_cache", True)
+    jax.config.update("jax_compilation_cache_dir", str(path))
+    min_compile = os.environ.get(
+        "EUCLID_DSPS_JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"
+    )
+    if min_compile is not None:
+        jax.config.update(
+            "jax_persistent_cache_min_compile_time_secs", float(min_compile)
+        )
 
 
 def require_jax_gpu(expected_name: str | None = None) -> list[str]:

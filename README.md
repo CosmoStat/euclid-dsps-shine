@@ -20,7 +20,8 @@ Default Euclid passbands (VIS/Y/J/H) are loaded from ASCII throughput files unde
 
 Required columns for the default workflow:
 
-- `z_phz`: photometric redshift used by DSPS as fixed `z_obs`.
+- `phz_median`: photometric redshift used to initialize free DSPS `z_obs`.
+- `phz_min_70`/`phz_max_70`, `phz_min_90`/`phz_max_90`, `phz_min_95`/`phz_max_95`: NNPZ redshift intervals used by the plateau-style redshift prior.
 - `z_true`: truth redshift used only for diagnostics.
 - `euclid_vis`, `euclid_nisp_y`, `euclid_nisp_j`, `euclid_nisp_h`: simulated fluxes.
 - `sed_cosmos_1`, `sed_cosmos_2`, `ebv_cosmos_*`, `ext_curve_cosmos_*`: COSMOS template reconstruction inputs.
@@ -156,10 +157,30 @@ Run the forward model over many galaxies with JAX-vmapped chunks:
 euclid-dsps --config configs/fs2_phz1.yaml run-batch --limit 1000 --batch-size 500 --out outputs/runs/phz1_batch
 ```
 
-Fit many galaxies with one JAX-vmapped Adam optimizer per parquet chunk. Increase `--batch-size` until GPU memory becomes the bottleneck:
+Fit many galaxies. The 10-band production config uses a fast GPU path by
+default: a small PHZ redshift grid plus analytic mass warm start per galaxy.
+Increase `--batch-size` until GPU memory becomes the bottleneck:
 
 ```bash
-euclid-dsps --config configs/fs2_phz1.yaml fit-batch --limit 1024 --batch-size 64 --out outputs/runs/phz1_fit_batch
+euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
+  --limit 10000 \
+  --batch-size 512 \
+  --reporting-level light \
+  --output-format parquet \
+  --verbose-benchmark \
+  --out outputs/runs/phz1_fit_batch
+```
+
+Use `--full-adam` on smaller validation subsets when all configured free
+parameters should be gradient-optimized:
+
+```bash
+euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
+  --limit 100 \
+  --batch-size 32 \
+  --full-adam \
+  --fit-maxiter 30 \
+  --out outputs/runs/phz1_fit_full_adam_subset
 ```
 
 To rerun only a chosen subset of catalog rows, pass a text or CSV file containing one `row_index` per line:
@@ -176,11 +197,15 @@ euclid-dsps --config configs/fs2_phz1.yaml fit-batch --bayesian --limit 5 --batc
 
 This same `--row-indices-file` option works for `run-batch`, `fit-batch`, and `fit-population`, which makes the recommended workflow straightforward: MAP on a large batch, inspect `batch_fit_results.csv`, write the selected `row_index` values to a file, then run Bayesian sampling only on that subset.
 
-Fit a chunked hierarchical population MAP model:
+Fit a chunked population model:
 
 ```bash
 euclid-dsps --config configs/fs2_phz1.yaml fit-population --limit 1024 --batch-size 64 --out outputs/runs/phz1_population_fit
 ```
+
+When fast mode is enabled, `fit-population` runs the same fast per-galaxy fit
+as `fit-batch` and writes empirical population summaries plus post-fit relation
+diagnostics. Add `--full-adam` to run the true joint population MAP optimizer.
 
 Run the complete diagnostic workflow in one command: independent MAP on a large batch, automatic HMC subset selection, Bayesian sampling on that subset, population MAP initialized from the independent MAP result, and comparison plots:
 
@@ -207,15 +232,15 @@ Single-galaxy runs write `selected_galaxy.json`, `model_parameters.json`, `sed.c
 
 `cosmos-sed` writes `cosmos_sed_validation.json`, `cosmos_sed_diagnostics.csv`, `cosmos_seds.parquet`, `cosmos_sed_example.png`, `cosmos_sed_sample_set.png`, `cosmos_template_pair_heatmap.png`, `cosmos_fraction_diagnostics.png`, and `synthetic_vs_catalog_abs_flux.png`. With `--compare-dsps`, `--fit-dsps`, or `--population-dsps`, it also writes branch-1 rest-frame SED metrics and branch-2 observed photometry residual metrics. Fit modes add `cosmos_dsps_fit_results.csv`, `cosmos_dsps_fit_trace.csv`, and population hyperparameters when requested.
 
-Batch runs write the flat comparison table plus `*_summary_by_band.csv`, `*_summary_by_galaxy.csv`, `*_dashboard.png`, `*_residuals_by_band.png`, `*_observed_vs_model.png`, and `*_redshift_truth.png`.
+Batch runs write the flat comparison table plus `*_summary_by_band.csv`, `*_summary_by_galaxy.csv`, `*_residuals_by_property.csv`, `*_dashboard.png`, `*_residuals_by_band.png`, `*_residuals_by_property.png`, `*_observed_vs_model.png`, and `*_redshift_truth.png`.
 
-`fit-batch` additionally writes `batch_fit_results.csv` and `batch_fit_trace.csv` with recovered parameters, derived quantities, and optimizer diagnostics. `fit-population` writes `population_fit_results.csv`, `population_hyperparameters.csv`, and `population_fit_trace.csv`. Progress bars are shown for batch commands.
+`fit-batch` additionally writes `batch_fit_results.csv` and `batch_fit_trace.csv` with recovered parameters, derived quantities, and optimizer diagnostics. Long `fit-batch` runs also write per-chunk checkpoints under `_chunks/`. `fit-population` writes `population_fit_results.csv`, `population_hyperparameters.csv`, and `population_fit_trace.csv`; full-Adam relation rows contain optimized mass-metallicity slope/intercept values, while fast-mode relation rows are post-fit empirical diagnostics. Progress bars are shown for batch commands.
 
 Bayesian single-galaxy runs first compute an Adam/MAP solution, then initialize NumPyro HMC/NUTS from that point unless `--no-map-init` is passed. They write `posterior_samples.csv`, `posterior_derived_samples.csv`, `posterior_comparable_samples.csv`, `posterior_summary.csv`, `posterior_corner.png`, `posterior_corner_with_truth.png`, `posterior_trace.png`, `posterior_predictive_photometry.csv`, and `posterior_predictive_photometry.png`. The truth-overlaid corner uses comparable quantities: derived `log10_sfr_at_obs`, fitted `dust_av`, and fitted `log10_metallicity`. Bayesian batch runs use the same per-galaxy MAP initialization and write `batch_posterior_summary.csv`, `batch_posterior_samples.csv`, `batch_posterior_predictive.csv`, and batch posterior diagnostic plots.
 
 ## Model Notes
 
-`euclid_dsps/model.py` is the only module that calls native DSPS. It builds a lognormal SFH table, uses `calc_rest_sed_sfh_table_lognormal_mdf`, applies DSPS dust attenuation, and calls `calc_obs_mag` for each configured filter. The fit path keeps these operations in JAX until final report writing, so `jax.value_and_grad` can differentiate the photometric likelihood. Batch fitting uses `jax.vmap` over each parquet chunk and runs on the active JAX device, normally GPU when available.
+`euclid_dsps/model.py` is the only module that calls native DSPS. It builds a lognormal SFH table by default, with an optional binned-SFH code path only when `sfh_bin_log_sfr_*` parameters are explicitly configured. It passes that JAX SFH table into `calc_rest_sed_sfh_table_lognormal_mdf`, applies DSPS dust attenuation, and calls `calc_obs_mag` for each configured filter. The fit path keeps these operations in JAX until final report writing, so `jax.value_and_grad` can differentiate the photometric likelihood. Batch fitting uses `jax.vmap` over each parquet chunk and runs on the active JAX device, normally GPU when configured.
 
 The default fit follows the DSPS-paper process as closely as the current catalog allows:
 
@@ -223,22 +248,16 @@ The default fit follows the DSPS-paper process as closely as the current catalog
 - Native DSPS maps those parameters to a rest-frame SED.
 - DSPS photometry maps the SED to observed VIS/Y/J/H AB magnitudes.
 - A Gaussian chi-square compares model magnitudes to simulated Euclid photometry.
+- `z_obs` is free by default and regularized by the NNPZ 70/90/95 percent interval prior.
 - Adam optimizes bounded parameters through a smooth transform.
-- `fit-population` adds a shared Gaussian population prior over the free parameters and jointly optimizes per-galaxy parameters plus population `mu`/`sigma`.
+- `fit-population --full-adam` adds shared Gaussian population priors plus configured physical relations, currently `log10_metallicity ~ log10_formed_mass_msun`, and jointly optimizes per-galaxy parameters plus hyperparameters.
+- Fast production mode infers `z_obs`, `log10_formed_mass_msun`, `log10_metallicity`, and SFR through fitted SFH-shape parameters (`sfh_t_peak`, `sfh_tau`). Use derived `fit_log10_sfr_at_obs` as the SFR estimate.
 - `--bayesian` uses NumPyro HMC/NUTS to sample the posterior density after an Adam/MAP initialization instead of returning only one MAP point.
 - `--sampler hmc` is the fast debug path. It uses a fixed number of leapfrog steps, controlled by `--num-steps`, so runtime is predictable.
 - `--sampler nuts` is more adaptive and usually more robust, but it can be much slower because each draw may require many leapfrog steps up to the configured `--max-tree-depth`.
 - `--chain-method vectorized` can run multiple chains on one accelerator, but it increases memory use and is mainly useful after a single-chain run looks healthy.
 
-The default free parameters are `log10_sfr`, `dust_av`, and `log10_metallicity`. Bounds and optimizer settings live under `fit` in `configs/fs2_phz1.yaml`.
-
-By default, `z_obs` is fixed per row from `z_phz`. This is intentional: with only VIS/Y/J/H photometry, freeing redshift lets redshift absorb dust/SFR/metallicity mismatch. To run a photo-z recovery experiment anyway, add this under `fit.free_parameters`:
-
-```yaml
-z_obs:
-  initial: from_base
-  bounds: [0.001, 6.0]
-```
+The default free parameters are `z_obs`, `log10_formed_mass_msun`, `dust_av`, and `log10_metallicity`. The 10-band config also frees `sfh_t_peak` and `sfh_tau`. Bounds and optimizer settings live under `fit` in `configs/fs2_phz1.yaml`.
 
 When physical truth columns are configured under `truth.parameter_columns`, batch and population fits write inferred-vs-truth diagnostics alongside the photometry reports. For `fit-population`, inspect `population_corner_parameters_with_truth.png`, `population_parameter_distributions_with_truth.png`, `population_parameter_truth_metrics.csv`, `population_fit_parameter_truth.png`, and `population_fit_trace_truth.png`.
 

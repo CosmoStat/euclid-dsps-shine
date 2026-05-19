@@ -24,6 +24,7 @@ from ..io import (
     required_catalog_columns,
     truth_column_from_spec,
     truth_value_from_spec,
+    write_dataframe_outputs,
     write_json,
 )
 from ..model import (
@@ -33,9 +34,11 @@ from ..model import (
     predict_batch_mags,
     run_dsps_model,
 )
+from ..performance import PerformanceRecorder, write_performance_outputs
 from ..reporting import (
     write_batch_outputs,
     write_eda_outputs,
+    write_fit_diagnostic_outputs,
     write_fit_outputs,
     write_mcmc_outputs,
     write_population_corner_outputs,
@@ -297,7 +300,7 @@ def fit_workflow(
     comparison_out = ensure_dir(out / "comparison")
 
     fit_batch(config, map_out, limit=limit, batch_size=batch_size)
-    map_fits = pd.read_csv(map_out / "batch_fit_results.csv")
+    map_fits = _read_table(map_out / "batch_fit_results.csv")
     selected_rows = _select_hmc_row_indices(
         map_fits, n=hmc_n, method=hmc_select, seed=seed
     )
@@ -322,7 +325,7 @@ def fit_workflow(
         batch_size=population_batch_size or batch_size,
         map_init_file=str(map_out / "batch_fit_results.csv"),
     )
-    population_fits = pd.read_csv(population_out / "population_fit_results.csv")
+    population_fits = _read_table(population_out / "population_fit_results.csv")
     hmc_summary = _read_optional_csv(hmc_out / "batch_posterior_summary.csv")
     hmc_diagnostics = _read_optional_csv(hmc_out / "batch_mcmc_diagnostics.csv")
     hmc_samples = _read_optional_csv(hmc_out / "batch_posterior_samples.csv")
@@ -383,16 +386,36 @@ def _select_hmc_row_indices(
 
 
 def _read_optional_csv(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
-    return pd.read_csv(path)
+    if path.exists():
+        return pd.read_csv(path)
+    parquet = path.with_suffix(".parquet")
+    if parquet.exists():
+        return pd.read_parquet(parquet)
+    return pd.DataFrame()
+
+
+def _read_table(path: Path) -> pd.DataFrame:
+    if path.exists():
+        return pd.read_csv(path)
+    parquet = path.with_suffix(".parquet")
+    if parquet.exists():
+        return pd.read_parquet(parquet)
+    raise FileNotFoundError(path)
+
+
+def _reporting_level(config: dict[str, Any]) -> str:
+    return str((config.get("reporting", {}) or {}).get("level", "full")).lower()
+
+
+def _verbose_benchmark(config: dict[str, Any]) -> bool:
+    return bool((config.get("output", {}) or {}).get("verbose_benchmark", False))
 
 
 def report_workflow(config: dict[str, Any], run_dir: str | Path) -> None:
     """Regenerate workflow comparison reports from existing workflow outputs."""
     root = Path(run_dir)
-    map_fits = pd.read_csv(root / "map" / "batch_fit_results.csv")
-    population_fits = pd.read_csv(root / "population" / "population_fit_results.csv")
+    map_fits = _read_table(root / "map" / "batch_fit_results.csv")
+    population_fits = _read_table(root / "population" / "population_fit_results.csv")
     hmc_summary = _read_optional_csv(root / "hmc" / "batch_posterior_summary.csv")
     hmc_diagnostics = _read_optional_csv(root / "hmc" / "batch_mcmc_diagnostics.csv")
     hmc_samples = _read_optional_csv(root / "hmc" / "batch_posterior_samples.csv")
@@ -426,6 +449,8 @@ def run_batch(
     supports per-row physical parameters through `model.parameter_columns`.
     """
     out = ensure_dir(out_dir)
+    perf = PerformanceRecorder(_verbose_benchmark(config))
+    reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
@@ -435,9 +460,11 @@ def run_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
     )
+    perf.mark("load_context", n_bands=len(config["bands"]))
 
     rows = []
     total = _progress_total(config["catalog_path"], limit, row_indices)
+    chunk_index = 0
     with _make_progress_bar(total=total, desc="run-batch", unit="galaxy") as progress:
         for batch in iter_catalog_batches(
             config["catalog_path"],
@@ -446,14 +473,20 @@ def run_batch(
             limit=limit,
             row_indices=row_indices,
         ):
+            perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
             rows.extend(_forward_dataframe_batch(context, batch, config))
+            perf.mark("forward_chunk", chunk_index=chunk_index, n_rows=len(batch))
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
             )
+            chunk_index += 1
 
     comparison = pd.DataFrame(rows)
-    comparison.to_csv(out / "batch_photometry_comparison.csv", index=False)
-    write_batch_outputs(comparison, out, label="batch")
+    write_dataframe_outputs(comparison, out, "batch_photometry_comparison", config)
+    perf.mark("write_primary_outputs", n_rows=len(comparison))
+    write_batch_outputs(comparison, out, label="batch", reporting_level=reporting_level)
+    perf.mark("write_reports")
+    write_json(out / "normalized_config.json", config)
     write_json(
         out / "batch_run_config.json",
         {
@@ -463,6 +496,7 @@ def run_batch(
             "row_indices_file": row_indices_file,
         },
     )
+    write_performance_outputs(perf.rows, out, "batch")
 
 
 def fit_batch(
@@ -477,6 +511,8 @@ def fit_batch(
     The default path optimizes each parquet chunk with one JAX-vmapped Adam run.
     """
     out = ensure_dir(out_dir)
+    perf = PerformanceRecorder(_verbose_benchmark(config))
+    reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
@@ -486,11 +522,13 @@ def fit_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
     )
+    perf.mark("load_context", n_bands=len(config["bands"]))
 
     comparison_rows = []
     fit_rows = []
     trace_rows = []
     total = _progress_total(config["catalog_path"], limit, row_indices)
+    chunk_index = 0
     with _make_progress_bar(total=total, desc="fit-batch", unit="galaxy") as progress:
         for batch in iter_catalog_batches(
             config["catalog_path"],
@@ -499,23 +537,37 @@ def fit_batch(
             limit=limit,
             row_indices=row_indices,
         ):
-            batch_result = _fit_dataframe_batch(context, batch, config)
+            perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
+            batch_result = _fit_dataframe_batch(
+                context, batch, config, chunk_index=chunk_index, perf=perf
+            )
             fit_rows.extend(batch_result["fit_rows"])
             comparison_rows.extend(batch_result["comparison_rows"])
             trace_rows.extend(batch_result["trace_rows"])
+            _write_fit_chunk_checkpoint(out, batch_result, config, chunk_index)
+            perf.mark("fit_chunk", chunk_index=chunk_index, n_rows=len(batch))
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
             )
+            chunk_index += 1
 
     fits = pd.DataFrame(fit_rows)
     comparison = pd.DataFrame(comparison_rows)
-    fits.to_csv(out / "batch_fit_results.csv", index=False)
-    comparison.to_csv(out / "batch_fit_photometry_comparison.csv", index=False)
+    write_dataframe_outputs(fits, out, "batch_fit_results", config)
+    write_dataframe_outputs(comparison, out, "batch_fit_photometry_comparison", config)
+    perf.mark("write_primary_outputs", n_rows=len(fits))
     if trace_rows:
         trace = pd.DataFrame(trace_rows)
-        trace.to_csv(out / "batch_fit_trace.csv", index=False)
-        write_trace_truth_outputs(trace, out, label="batch_fit")
-    write_batch_outputs(comparison, out, label="batch_fit")
+        write_dataframe_outputs(trace, out, "batch_fit_trace", config)
+        write_trace_truth_outputs(
+            trace, out, label="batch_fit", make_plots=reporting_level == "full"
+        )
+    write_batch_outputs(
+        comparison, out, label="batch_fit", reporting_level=reporting_level
+    )
+    write_fit_diagnostic_outputs(fits, comparison, config, out, label="batch_fit")
+    perf.mark("write_reports")
+    write_json(out / "normalized_config.json", config)
     write_json(
         out / "batch_fit_run_config.json",
         {
@@ -525,6 +577,38 @@ def fit_batch(
             "row_indices_file": row_indices_file,
         },
     )
+    write_performance_outputs(perf.rows, out, "batch_fit")
+
+
+def _write_fit_chunk_checkpoint(
+    out: Path,
+    batch_result: dict[str, list[dict[str, Any]]],
+    config: dict[str, Any],
+    chunk_index: int,
+) -> None:
+    chunk_dir = ensure_dir(out / "_chunks")
+    suffix = f"chunk_{chunk_index:06d}"
+    if batch_result["fit_rows"]:
+        write_dataframe_outputs(
+            pd.DataFrame(batch_result["fit_rows"]),
+            chunk_dir,
+            f"batch_fit_results_{suffix}",
+            config,
+        )
+    if batch_result["comparison_rows"]:
+        write_dataframe_outputs(
+            pd.DataFrame(batch_result["comparison_rows"]),
+            chunk_dir,
+            f"batch_fit_photometry_comparison_{suffix}",
+            config,
+        )
+    if batch_result["trace_rows"]:
+        write_dataframe_outputs(
+            pd.DataFrame(batch_result["trace_rows"]),
+            chunk_dir,
+            f"batch_fit_trace_{suffix}",
+            config,
+        )
 
 
 def fit_population(
@@ -537,6 +621,8 @@ def fit_population(
 ) -> None:
     """Fit chunked hierarchical population MAP models with JAX-vmapped Adam."""
     out = ensure_dir(out_dir)
+    perf = PerformanceRecorder(_verbose_benchmark(config))
+    reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
     map_init = (
         pd.read_csv(map_init_file).set_index("row_index") if map_init_file else None
@@ -549,6 +635,7 @@ def fit_population(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
     )
+    perf.mark("load_context", n_bands=len(config["bands"]))
 
     comparison_rows = []
     fit_rows = []
@@ -566,6 +653,7 @@ def fit_population(
             limit=limit,
             row_indices=row_indices,
         ):
+            perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
             batch_result = _fit_dataframe_batch(
                 context,
                 batch,
@@ -573,11 +661,15 @@ def fit_population(
                 population=True,
                 chunk_index=chunk_index,
                 map_init=map_init,
+                perf=perf,
             )
             fit_rows.extend(batch_result["fit_rows"])
             comparison_rows.extend(batch_result["comparison_rows"])
             hyper_rows.extend(batch_result["hyper_rows"])
             trace_rows.extend(batch_result["trace_rows"])
+            perf.mark(
+                "fit_population_chunk", chunk_index=chunk_index, n_rows=len(batch)
+            )
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
             )
@@ -585,18 +677,40 @@ def fit_population(
 
     fits = pd.DataFrame(fit_rows)
     comparison = pd.DataFrame(comparison_rows)
-    fits.to_csv(out / "population_fit_results.csv", index=False)
-    comparison.to_csv(out / "population_fit_photometry_comparison.csv", index=False)
+    write_dataframe_outputs(fits, out, "population_fit_results", config)
+    write_dataframe_outputs(
+        comparison, out, "population_fit_photometry_comparison", config
+    )
+    hyper_frame = pd.DataFrame(hyper_rows)
     if hyper_rows:
-        pd.DataFrame(hyper_rows).to_csv(
-            out / "population_hyperparameters.csv", index=False
-        )
+        write_dataframe_outputs(hyper_frame, out, "population_hyperparameters", config)
+    perf.mark("write_primary_outputs", n_rows=len(fits))
     if trace_rows:
         trace = pd.DataFrame(trace_rows)
-        trace.to_csv(out / "population_fit_trace.csv", index=False)
-        write_trace_truth_outputs(trace, out, label="population_fit")
-    write_batch_outputs(comparison, out, label="population_fit")
-    write_population_corner_outputs(fits, list(config["fit"]["free_parameters"]), out)
+        write_dataframe_outputs(trace, out, "population_fit_trace", config)
+        write_trace_truth_outputs(
+            trace,
+            out,
+            label="population_fit",
+            make_plots=reporting_level == "full",
+        )
+    write_batch_outputs(
+        comparison, out, label="population_fit", reporting_level=reporting_level
+    )
+    if reporting_level == "full":
+        write_population_corner_outputs(
+            fits, list(config["fit"]["free_parameters"]), out
+        )
+    write_fit_diagnostic_outputs(
+        fits,
+        comparison,
+        config,
+        out,
+        label="population_fit",
+        hyperparameters=hyper_frame,
+    )
+    perf.mark("write_reports")
+    write_json(out / "normalized_config.json", config)
     write_json(
         out / "population_fit_run_config.json",
         {
@@ -607,6 +721,7 @@ def fit_population(
             "map_init_file": map_init_file,
         },
     )
+    write_performance_outputs(perf.rows, out, "population_fit")
 
 
 def _comparison_for_batch(observation, result, params, config):
@@ -671,6 +786,90 @@ def _posterior_truth_values(context_values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fast_fit_enabled(config: dict[str, Any]) -> bool:
+    fit = config.get("fit", {}) or {}
+    return bool(fit.get("fast_grid_search", False)) or bool(
+        fit.get("fast_warmstart_only", False)
+    )
+
+
+def _fast_population_hyper_rows(
+    fit_result,
+    config: dict[str, Any],
+    chunk_index: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    matrix = np.asarray(fit_result.best_parameter_matrix, dtype=float)
+    parameter_names = list(fit_result.parameter_names)
+    free_names = list(fit_result.free_parameter_names)
+    for name in free_names:
+        if name not in parameter_names:
+            continue
+        values = matrix[:, parameter_names.index(name)]
+        finite = values[np.isfinite(values)]
+        rows.append(
+            {
+                "chunk_index": chunk_index,
+                "n_galaxies": int(matrix.shape[0]),
+                "kind": "fast_empirical",
+                "parameter": name,
+                "population_mu": float(np.nanmean(finite)) if len(finite) else np.nan,
+                "population_sigma": float(np.nanstd(finite)) if len(finite) else np.nan,
+                "loss": np.nan,
+                "device": fit_result.device,
+                "note": "fast fit summary; hyperparameters not jointly optimized",
+            }
+        )
+    relations = ((config.get("fit", {}) or {}).get("population", {}) or {}).get(
+        "relations", {}
+    )
+    if not isinstance(relations, dict):
+        return rows
+    for target, spec in relations.items():
+        if not spec or not bool(spec.get("enabled", True)):
+            continue
+        predictor = str(spec.get("predictor", ""))
+        if target not in parameter_names or predictor not in parameter_names:
+            continue
+        y = matrix[:, parameter_names.index(target)]
+        x = matrix[:, parameter_names.index(predictor)]
+        mask = np.isfinite(x) & np.isfinite(y)
+        raw_pivot = spec.get("pivot", "median")
+        pivot = (
+            float(np.nanmedian(x[mask]))
+            if raw_pivot == "median" and mask.any()
+            else float(raw_pivot)
+            if raw_pivot != "median"
+            else 0.0
+        )
+        slope = np.nan
+        intercept = np.nan
+        sigma = np.nan
+        if mask.sum() >= 2 and np.nanstd(x[mask]) > 0:
+            slope, intercept_at_zero = np.polyfit(x[mask] - pivot, y[mask], 1)
+            intercept = float(intercept_at_zero)
+            residual = y[mask] - (intercept + slope * (x[mask] - pivot))
+            sigma = float(np.nanstd(residual))
+        rows.append(
+            {
+                "chunk_index": chunk_index,
+                "n_galaxies": int(matrix.shape[0]),
+                "kind": "fast_relation",
+                "parameter": str(target),
+                "target_parameter": str(target),
+                "predictor_parameter": predictor,
+                "population_pivot": pivot,
+                "population_intercept": intercept,
+                "population_slope": float(slope) if np.isfinite(slope) else np.nan,
+                "population_sigma": sigma,
+                "loss": np.nan,
+                "device": fit_result.device,
+                "note": "fast fit regression; relation not used as optimized prior",
+            }
+        )
+    return rows
+
+
 def _row_context(
     row: dict[str, Any], params: dict[str, float], config: dict[str, Any]
 ) -> dict[str, float | str]:
@@ -729,8 +928,11 @@ def _fit_dataframe_batch(
     population: bool = False,
     chunk_index: int = 0,
     map_init: pd.DataFrame | None = None,
+    perf: PerformanceRecorder | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     observed_mag, observed_flux, sigma_mag = _photometry_arrays(batch, config["bands"])
+    if perf is not None:
+        perf.mark("prepare_photometry", chunk_index=chunk_index, n_rows=len(batch))
     base_rows = [
         parameters_for_row(
             config["model"]["fixed_parameters"],
@@ -740,36 +942,77 @@ def _fit_dataframe_batch(
         )
         for _, row in batch.iterrows()
     ]
+    if perf is not None:
+        perf.mark("prepare_parameters", chunk_index=chunk_index, n_rows=len(batch))
     if population:
         truth_theta = _truth_parameter_matrix(
             batch, config, list(config["fit"]["free_parameters"])
         )
-        pop_result = fit_population_batch_adam(
-            context,
-            base_rows,
-            observed_mag,
-            sigma_mag,
-            config["fit"],
-            initial_theta=_initial_theta_from_map(batch, config, map_init),
-            truth_theta=truth_theta,
-        )
-        fit_result = pop_result.batch
-        hyper_rows = [
-            {
-                "chunk_index": chunk_index,
-                "n_galaxies": len(batch),
-                "parameter": name,
-                "population_mu": pop_result.hyper_mu[name],
-                "population_sigma": pop_result.hyper_sigma[name],
-                "loss": pop_result.loss,
-                "device": fit_result.device,
-            }
-            for name in fit_result.free_parameter_names
-        ]
+        if perf is not None:
+            perf.mark("prepare_truth", chunk_index=chunk_index, n_rows=len(batch))
+        if _fast_fit_enabled(config):
+            fit_result = fit_galaxy_batch_adam(
+                context,
+                base_rows,
+                observed_mag,
+                sigma_mag,
+                config["fit"],
+                truth_theta=truth_theta,
+            )
+            if perf is not None:
+                perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
+            hyper_rows = _fast_population_hyper_rows(
+                fit_result, config, chunk_index=chunk_index
+            )
+        else:
+            pop_result = fit_population_batch_adam(
+                context,
+                base_rows,
+                observed_mag,
+                sigma_mag,
+                config["fit"],
+                initial_theta=_initial_theta_from_map(batch, config, map_init),
+                truth_theta=truth_theta,
+            )
+            if perf is not None:
+                perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
+            fit_result = pop_result.batch
+            hyper_rows = [
+                {
+                    "chunk_index": chunk_index,
+                    "n_galaxies": len(batch),
+                    "kind": "gaussian",
+                    "parameter": name,
+                    "population_mu": pop_result.hyper_mu[name],
+                    "population_sigma": pop_result.hyper_sigma[name],
+                    "loss": pop_result.loss,
+                    "device": fit_result.device,
+                }
+                for name in fit_result.free_parameter_names
+            ]
+            for relation in pop_result.hyper_relations:
+                hyper_rows.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "n_galaxies": len(batch),
+                        "kind": "relation",
+                        "parameter": relation["target_parameter"],
+                        "target_parameter": relation["target_parameter"],
+                        "predictor_parameter": relation["predictor_parameter"],
+                        "population_pivot": relation["pivot"],
+                        "population_intercept": relation["intercept"],
+                        "population_slope": relation["slope"],
+                        "population_sigma": relation["sigma"],
+                        "loss": pop_result.loss,
+                        "device": fit_result.device,
+                    }
+                )
     else:
         truth_theta = _truth_parameter_matrix(
             batch, config, list(config["fit"]["free_parameters"])
         )
+        if perf is not None:
+            perf.mark("prepare_truth", chunk_index=chunk_index, n_rows=len(batch))
         fit_result = fit_galaxy_batch_adam(
             context,
             base_rows,
@@ -778,6 +1021,8 @@ def _fit_dataframe_batch(
             config["fit"],
             truth_theta=truth_theta,
         )
+        if perf is not None:
+            perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
         hyper_rows = []
 
     fit_rows = []
@@ -786,6 +1031,8 @@ def _fit_dataframe_batch(
     filter_curves = [context.filters[name] for name in band_names]
     param_matrix = fit_result.best_parameter_matrix
     derived = predict_batch_derived(context, fit_result.parameter_names, param_matrix)
+    if perf is not None:
+        perf.mark("derive_quantities", chunk_index=chunk_index, n_rows=len(batch))
     for local_index, (row_index, row) in enumerate(batch.iterrows()):
         params = {
             name: float(param_matrix[local_index, param_index])
@@ -803,6 +1050,7 @@ def _fit_dataframe_batch(
         fit_rows.append(
             {
                 "row_index": int(row_index),
+                "chunk_index": int(chunk_index),
                 "success": bool(fit_result.success[local_index]),
                 "message": fit_result.message,
                 "chi2": float(fit_result.chi2[local_index]),
@@ -853,6 +1101,8 @@ def _fit_dataframe_batch(
         }
         for entry in fit_result.trace
     ]
+    if perf is not None:
+        perf.mark("materialize_rows", chunk_index=chunk_index, n_rows=len(batch))
     return {
         "fit_rows": fit_rows,
         "comparison_rows": comparison_rows,

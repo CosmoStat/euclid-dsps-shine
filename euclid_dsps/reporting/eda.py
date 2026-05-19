@@ -7,6 +7,8 @@ from .core import (
     plot_flux_distributions,
     plot_physical_parameters_distributions,
     plot_redshift_distributions,
+    plot_residuals_by_property,
+    residuals_by_property,
     write_eda_outputs,
 )
 
@@ -15,5 +17,7 @@ __all__ = [
     "plot_flux_distributions",
     "plot_physical_parameters_distributions",
     "plot_redshift_distributions",
+    "plot_residuals_by_property",
+    "residuals_by_property",
     "write_eda_outputs",
 ]

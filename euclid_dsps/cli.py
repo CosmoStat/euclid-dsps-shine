@@ -63,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Number of reconstructed COSMOS SEDs to overlay for visual inspection.",
     )
+    add_fit_overrides(cosmos)
+    add_output_overrides(cosmos)
 
     run = sub.add_parser("run-one", help="Run DSPS for one selected galaxy.")
     run.add_argument(
@@ -80,6 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run NumPyro HMC/NUTS posterior sampling instead of Adam/MAP.",
     )
+    add_fit_overrides(fit)
     add_sample_overrides(fit)
 
     batch = sub.add_parser(
@@ -97,6 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--row-indices-file",
         help="CSV/TXT file containing one catalog row_index per line.",
     )
+    add_output_overrides(batch)
 
     fit_batch = sub.add_parser(
         "fit-batch", help="Fit configured parameters over many catalog rows."
@@ -122,6 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run NumPyro HMC/NUTS per galaxy instead of Adam/MAP.",
     )
+    add_fit_overrides(fit_batch)
+    add_output_overrides(fit_batch)
     add_sample_overrides(fit_batch)
 
     population = sub.add_parser(
@@ -147,6 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--map-init-file",
         help="batch_fit_results.csv used to initialize population MAP parameters.",
     )
+    add_fit_overrides(population)
+    add_output_overrides(population)
 
     workflow = sub.add_parser(
         "fit-workflow",
@@ -181,16 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         help="Batch size for Bayesian HMC subset.",
     )
-    workflow.add_argument(
-        "--fit-maxiter",
-        type=int,
-        help="Override fit.maxiter for MAP and population steps.",
-    )
-    workflow.add_argument(
-        "--learning-rate",
-        type=float,
-        help="Override fit.learning_rate for MAP and population steps.",
-    )
+    add_fit_overrides(workflow)
     workflow.add_argument(
         "--hmc-select",
         choices=("stratified", "random", "best", "worst"),
@@ -198,6 +197,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="How to select HMC galaxies from MAP reduced chi2.",
     )
     add_sample_overrides(workflow)
+    add_output_overrides(workflow)
 
     report = sub.add_parser(
         "report-workflow",
@@ -240,6 +240,8 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "eda":
         run_eda(config, Path(args.out))
     elif args.command == "cosmos-sed":
+        _apply_fit_overrides(config, args)
+        _apply_output_overrides(config, args)
         reconstruct_cosmos_seds(
             config,
             Path(args.out),
@@ -258,12 +260,14 @@ def main(argv: list[str] | None = None) -> None:
         run_one(config, Path(args.out))
     elif args.command == "fit-one":
         _apply_selection_overrides(config, args)
+        _apply_fit_overrides(config, args)
         _apply_sample_overrides(config, args)
         if args.bayesian:
             sample_one(config, Path(args.out))
         else:
             fit_one(config, Path(args.out))
     elif args.command == "run-batch":
+        _apply_output_overrides(config, args)
         run_batch(
             config,
             Path(args.out),
@@ -272,6 +276,8 @@ def main(argv: list[str] | None = None) -> None:
             row_indices_file=getattr(args, "row_indices_file", None),
         )
     elif args.command == "fit-batch":
+        _apply_fit_overrides(config, args)
+        _apply_output_overrides(config, args)
         _apply_sample_overrides(config, args)
         if args.bayesian:
             sample_batch(
@@ -290,6 +296,8 @@ def main(argv: list[str] | None = None) -> None:
                 row_indices_file=getattr(args, "row_indices_file", None),
             )
     elif args.command == "fit-population":
+        _apply_fit_overrides(config, args)
+        _apply_output_overrides(config, args)
         fit_population(
             config,
             Path(args.out),
@@ -299,6 +307,7 @@ def main(argv: list[str] | None = None) -> None:
             map_init_file=getattr(args, "map_init_file", None),
         )
     elif args.command == "fit-workflow":
+        _apply_output_overrides(config, args)
         _apply_sample_overrides(config, args)
         _apply_fit_overrides(config, args)
         fit_workflow(
@@ -380,6 +389,71 @@ def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_fit_overrides(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--fit-maxiter",
+        type=int,
+        help="Override fit.maxiter for MAP and population steps.",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        help="Override fit.learning_rate for MAP and population steps.",
+    )
+    parser.add_argument(
+        "--n-sfh-bins",
+        type=int,
+        help="Override model.n_sfh_bins. Lower values compile/run faster.",
+    )
+    parser.add_argument(
+        "--fast-warmstart",
+        action="store_true",
+        help="Skip Adam loop and run one JAX warm-start prediction pass.",
+    )
+    parser.add_argument(
+        "--fast-grid",
+        action="store_true",
+        help="Fit redshift on a small PHZ grid plus analytic mass warm-start.",
+    )
+    parser.add_argument(
+        "--full-adam",
+        action="store_true",
+        help="Disable fast fit shortcuts and run full Adam.",
+    )
+    parser.add_argument(
+        "--redshift-grid-size",
+        type=int,
+        help="Override fit.redshift_grid_size for --fast-grid.",
+    )
+    parser.add_argument(
+        "--fast-grid-parameters",
+        help="Comma-separated parameters scanned by --fast-grid.",
+    )
+    parser.add_argument(
+        "--fast-grid-prior-width",
+        type=float,
+        help="Prior sigma half-width for non-redshift fast-grid axes.",
+    )
+
+
+def add_output_overrides(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--reporting-level",
+        choices=("full", "light"),
+        help="full writes plots and tables; light writes only tables and benchmarks.",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=("both", "parquet", "csv"),
+        help="Tabular format for large workflow outputs.",
+    )
+    parser.add_argument(
+        "--verbose-benchmark",
+        action="store_true",
+        help="Print benchmark timings for each workflow stage.",
+    )
+
+
 def _apply_sample_overrides(config: dict, args) -> None:
     sample = config.setdefault("sample", {})
     for attr in (
@@ -417,6 +491,35 @@ def _apply_fit_overrides(config: dict, args) -> None:
         fit["maxiter"] = args.fit_maxiter
     if getattr(args, "learning_rate", None) is not None:
         fit["learning_rate"] = args.learning_rate
+    if getattr(args, "fast_warmstart", False):
+        fit["fast_warmstart_only"] = True
+    if getattr(args, "fast_grid", False):
+        fit["fast_grid_search"] = True
+        fit["fast_warmstart_only"] = False
+    if getattr(args, "full_adam", False):
+        fit["fast_grid_search"] = False
+        fit["fast_warmstart_only"] = False
+    if getattr(args, "redshift_grid_size", None) is not None:
+        fit["redshift_grid_size"] = int(args.redshift_grid_size)
+    if getattr(args, "fast_grid_parameters", None):
+        fit["fast_grid_parameters"] = [
+            item.strip()
+            for item in str(args.fast_grid_parameters).split(",")
+            if item.strip()
+        ]
+    if getattr(args, "fast_grid_prior_width", None) is not None:
+        fit["fast_grid_prior_width"] = float(args.fast_grid_prior_width)
+    if getattr(args, "n_sfh_bins", None) is not None:
+        config.setdefault("model", {})["n_sfh_bins"] = int(args.n_sfh_bins)
+
+
+def _apply_output_overrides(config: dict, args) -> None:
+    if getattr(args, "reporting_level", None) is not None:
+        config.setdefault("reporting", {})["level"] = args.reporting_level
+    if getattr(args, "output_format", None) is not None:
+        config.setdefault("output", {})["format"] = args.output_format
+    if getattr(args, "verbose_benchmark", False):
+        config.setdefault("output", {})["verbose_benchmark"] = True
 
 
 if __name__ == "__main__":

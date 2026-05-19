@@ -4,7 +4,7 @@ dec_gal,dec_gal,coordinates,float,deg,Galaxy declination.,ICRS-like sky coordina
 ra_mag_gal,ra_mag_gal,coordinates,float,deg,Right ascension associated with the photometry/magnitude position.,
 dec_mag_gal,dec_mag_gal,coordinates,float,deg,Declination associated with the photometry/magnitude position.,
 z_true,true_redshift_halo,redshift,float,dimensionless,"True halo redshift, aliased by the download query.",Used only for diagnostics in the default workflow.
-z_phz,phz_mode_1,redshift,float,dimensionless,First mode of the photometric-redshift probability distribution.,Used as fixed DSPS z_obs by the default config.
+z_phz,phz_mode_1,redshift,float,dimensionless,First mode of the photometric-redshift probability distribution.,Legacy photo-z column; current FS2 config uses phz_median to initialize free DSPS z_obs.
 z_true_gal,true_redshift_gal,redshift,float,dimensionless,True galaxy redshift.,Preferred truth redshift for galaxy-level DSPS validation.
 z_obs_gal,observed_redshift_gal,redshift,float,dimensionless,Observed galaxy redshift including peculiar velocity.,
 z_deepz,zp,redshift,double,dimensionless,DeepZ mode of the p(z) distribution.,
