@@ -1,6 +1,6 @@
 # Euclid DSPS SHINE
 
-Standalone workflow for testing native `dsps` on simulated Euclid FS2 catalog data. The current target is practical: load the local parquet catalog, select one galaxy or stream many galaxies, run DSPS with the catalog redshift, convert the SED to VIS/Y/J/H photometry, compare to simulated fluxes, and fit a small parameter set.
+Standalone workflow for testing native `dsps` on simulated Euclid FS2 catalog data. The current target is practical: load the local parquet catalog, select one galaxy or stream many galaxies, run a no-fit DSPS forward pass or a batched MAP fit, convert the SED to LSST/Euclid photometry, compare to simulated fluxes, and debug inferred DSPS SEDs against COSMOS proxy SEDs.
 
 ## Data Contract
 
@@ -21,7 +21,7 @@ Default Euclid passbands (VIS/Y/J/H) are loaded from ASCII throughput files unde
 Required columns for the default workflow:
 
 - `phz_median`: photometric redshift used to initialize free DSPS `z_obs`.
-- `phz_min_70`/`phz_max_70`, `phz_min_90`/`phz_max_90`, `phz_min_95`/`phz_max_95`: NNPZ redshift intervals used by the plateau-style redshift prior.
+- `phz_min_70`/`phz_max_70`, `phz_min_90`/`phz_max_90`, `phz_min_95`/`phz_max_95`: NNPZ redshift intervals kept for diagnostics and optional soft-prior experiments. Production fast mode no longer uses them as hard bounds by default.
 - `z_true`: truth redshift used only for diagnostics.
 - `euclid_vis`, `euclid_nisp_y`, `euclid_nisp_j`, `euclid_nisp_h`: simulated fluxes.
 - `sed_cosmos_1`, `sed_cosmos_2`, `ebv_cosmos_*`, `ext_curve_cosmos_*`: COSMOS template reconstruction inputs.
@@ -42,6 +42,17 @@ Use the existing `shine` conda environment:
 conda activate shine
 python -m pip install -e .
 ```
+
+Future `uv` workflow target:
+
+```bash
+uv sync
+uv run euclid-dsps --help
+uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+```
+
+GPU JAX may need a separate `uv` install command from the conda `shine` setup;
+document that command before switching production runs to `uv`.
 
 For documentation and quality tooling:
 
@@ -86,6 +97,16 @@ Run DSPS for one selected galaxy:
 
 ```bash
 euclid-dsps --config configs/fs2_phz1.yaml run-one --out outputs/runs/phz1_one
+```
+
+Run a simpler no-fit forward pass. With `--index`, this writes one row; without
+`--index`, it streams a batch:
+
+```bash
+euclid-dsps --config configs/fs2_phz1_10band.yaml forward \
+  --index 0 \
+  --plot-ground-truth \
+  --out outputs/runs/phz1_forward_row0
 ```
 
 Fit one galaxy with a pure-JAX Adam chi-square likelihood in AB magnitudes:
@@ -167,6 +188,8 @@ euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
   --batch-size 512 \
   --reporting-level light \
   --output-format parquet \
+  --save-sed-samples 8 \
+  --plot-ground-truth \
   --verbose-benchmark \
   --out outputs/runs/phz1_fit_batch
 ```
@@ -234,7 +257,7 @@ Single-galaxy runs write `selected_galaxy.json`, `model_parameters.json`, `sed.c
 
 Batch runs write the flat comparison table plus `*_summary_by_band.csv`, `*_summary_by_galaxy.csv`, `*_residuals_by_property.csv`, `*_dashboard.png`, `*_residuals_by_band.png`, `*_residuals_by_property.png`, `*_observed_vs_model.png`, and `*_redshift_truth.png`.
 
-`fit-batch` additionally writes `batch_fit_results.csv` and `batch_fit_trace.csv` with recovered parameters, derived quantities, and optimizer diagnostics. Long `fit-batch` runs also write per-chunk checkpoints under `_chunks/`. `fit-population` writes `population_fit_results.csv`, `population_hyperparameters.csv`, and `population_fit_trace.csv`; full-Adam relation rows contain optimized mass-metallicity slope/intercept values, while fast-mode relation rows are post-fit empirical diagnostics. Progress bars are shown for batch commands.
+`fit-batch` additionally writes `batch_fit_results.csv`/`.parquet` and `batch_fit_trace.csv`/`.parquet` with recovered parameters, derived quantities, and optimizer diagnostics. Long `fit-batch` runs also write per-chunk checkpoints under `_chunks/`. With `--save-sed-samples N`, batch workflows write `sed_diagnostics/` plots/tables and `sed_diagnostics_manifest.csv`; `--plot-ground-truth` overlays the COSMOS proxy SED when local template columns and resources are present. `fit-population` writes `population_fit_results.csv`, `population_hyperparameters.csv`, and `population_fit_trace.csv`; full-Adam relation rows contain optimized mass-metallicity slope/intercept values, while fast-mode relation rows are post-fit empirical diagnostics. Progress bars are shown for batch commands.
 
 Bayesian single-galaxy runs first compute an Adam/MAP solution, then initialize NumPyro HMC/NUTS from that point unless `--no-map-init` is passed. They write `posterior_samples.csv`, `posterior_derived_samples.csv`, `posterior_comparable_samples.csv`, `posterior_summary.csv`, `posterior_corner.png`, `posterior_corner_with_truth.png`, `posterior_trace.png`, `posterior_predictive_photometry.csv`, and `posterior_predictive_photometry.png`. The truth-overlaid corner uses comparable quantities: derived `log10_sfr_at_obs`, fitted `dust_av`, and fitted `log10_metallicity`. Bayesian batch runs use the same per-galaxy MAP initialization and write `batch_posterior_summary.csv`, `batch_posterior_samples.csv`, `batch_posterior_predictive.csv`, and batch posterior diagnostic plots.
 

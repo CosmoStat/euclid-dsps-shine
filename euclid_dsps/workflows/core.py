@@ -28,10 +28,13 @@ from ..io import (
     write_json,
 )
 from ..model import (
+    BatchSedResult,
+    ModelResult,
     load_context,
     parameters_for_row,
     predict_batch_derived,
     predict_batch_mags,
+    predict_batch_seds,
     run_dsps_model,
 )
 from ..performance import PerformanceRecorder, write_performance_outputs
@@ -43,6 +46,7 @@ from ..reporting import (
     write_mcmc_outputs,
     write_population_corner_outputs,
     write_run_outputs,
+    write_sed_diagnostic_outputs,
     write_trace_truth_outputs,
     write_workflow_comparison,
 )
@@ -109,12 +113,22 @@ def run_one(config: dict[str, Any], out_dir: str | Path) -> pd.DataFrame:
     out = ensure_dir(out_dir)
     context, observation, params = prepare_one(config)
     result = run_dsps_model(context, params)
-    comparison = write_run_outputs(observation, result, out)
+    ground_truth_sed, ground_truth_status = _ground_truth_sed_for_row(
+        observation.row, observation.row_index, context.filters, config
+    )
+    comparison = write_run_outputs(
+        observation,
+        result,
+        out,
+        ground_truth_sed=ground_truth_sed,
+        include_filters=_plot_filters(config),
+    )
     write_json(
         out / "run_summary.json",
         {
             "row_index": observation.row_index,
             "n_bands": len(observation.bands),
+            "ground_truth_sed_status": ground_truth_status,
             **_row_context(observation.row, params, config),
         },
     )
@@ -125,8 +139,18 @@ def fit_one(config: dict[str, Any], out_dir: str | Path) -> None:
     out = ensure_dir(out_dir)
     context, observation, params = prepare_one(config)
     fit_result = fit_one_galaxy(context, observation, params, config["fit"])
-    write_run_outputs(observation, fit_result.model_result, out)
+    ground_truth_sed, ground_truth_status = _ground_truth_sed_for_row(
+        observation.row, observation.row_index, context.filters, config
+    )
+    write_run_outputs(
+        observation,
+        fit_result.model_result,
+        out,
+        ground_truth_sed=ground_truth_sed,
+        include_filters=_plot_filters(config),
+    )
     write_fit_outputs(fit_result, out)
+    write_json(out / "sed_diagnostic_summary.json", {"ground_truth_sed_status": ground_truth_status})
 
 
 def sample_one(config: dict[str, Any], out_dir: str | Path) -> None:
@@ -463,6 +487,9 @@ def run_batch(
     perf.mark("load_context", n_bands=len(config["bands"]))
 
     rows = []
+    sed_manifest_rows = []
+    sed_samples_written = 0
+    sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     chunk_index = 0
     with _make_progress_bar(total=total, desc="run-batch", unit="galaxy") as progress:
@@ -476,6 +503,33 @@ def run_batch(
             perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
             rows.extend(_forward_dataframe_batch(context, batch, config))
             perf.mark("forward_chunk", chunk_index=chunk_index, n_rows=len(batch))
+            if sed_samples_written < sed_sample_limit:
+                base_rows = [
+                    parameters_for_row(
+                        config["model"]["fixed_parameters"],
+                        config["model"].get("parameter_columns", {}),
+                        row.to_dict(),
+                        config.get("redshift", {}),
+                    )
+                    for _, row in batch.iterrows()
+                ]
+                new_rows = _write_sed_samples(
+                    context,
+                    batch,
+                    base_rows,
+                    config,
+                    out,
+                    mode="forward",
+                    chunk_index=chunk_index,
+                    remaining=sed_sample_limit - sed_samples_written,
+                )
+                sed_manifest_rows.extend(new_rows)
+                sed_samples_written += len(new_rows)
+                perf.mark(
+                    "write_sed_samples",
+                    chunk_index=chunk_index,
+                    n_rows=len(new_rows),
+                )
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
             )
@@ -485,6 +539,10 @@ def run_batch(
     write_dataframe_outputs(comparison, out, "batch_photometry_comparison", config)
     perf.mark("write_primary_outputs", n_rows=len(comparison))
     write_batch_outputs(comparison, out, label="batch", reporting_level=reporting_level)
+    if sed_manifest_rows:
+        pd.DataFrame(sed_manifest_rows).to_csv(
+            out / "sed_diagnostics_manifest.csv", index=False
+        )
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(
@@ -527,6 +585,9 @@ def fit_batch(
     comparison_rows = []
     fit_rows = []
     trace_rows = []
+    sed_manifest_rows = []
+    sed_samples_written = 0
+    sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     chunk_index = 0
     with _make_progress_bar(total=total, desc="fit-batch", unit="galaxy") as progress:
@@ -545,6 +606,24 @@ def fit_batch(
             comparison_rows.extend(batch_result["comparison_rows"])
             trace_rows.extend(batch_result["trace_rows"])
             _write_fit_chunk_checkpoint(out, batch_result, config, chunk_index)
+            if sed_samples_written < sed_sample_limit:
+                new_rows = _write_fit_sed_samples(
+                    context,
+                    batch,
+                    batch_result["fit_rows"],
+                    config,
+                    out,
+                    mode="fit",
+                    chunk_index=chunk_index,
+                    remaining=sed_sample_limit - sed_samples_written,
+                )
+                sed_manifest_rows.extend(new_rows)
+                sed_samples_written += len(new_rows)
+                perf.mark(
+                    "write_sed_samples",
+                    chunk_index=chunk_index,
+                    n_rows=len(new_rows),
+                )
             perf.mark("fit_chunk", chunk_index=chunk_index, n_rows=len(batch))
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
@@ -565,6 +644,10 @@ def fit_batch(
     write_batch_outputs(
         comparison, out, label="batch_fit", reporting_level=reporting_level
     )
+    if sed_manifest_rows:
+        pd.DataFrame(sed_manifest_rows).to_csv(
+            out / "sed_diagnostics_manifest.csv", index=False
+        )
     write_fit_diagnostic_outputs(fits, comparison, config, out, label="batch_fit")
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
@@ -611,6 +694,230 @@ def _write_fit_chunk_checkpoint(
         )
 
 
+_COSMOS_RESOURCE_CACHE: dict[tuple[Any, ...], Any] = {}
+
+
+def _sed_sample_limit(config: dict[str, Any]) -> int:
+    reporting = config.get("reporting", {}) or {}
+    return max(int(reporting.get("save_sed_samples", 0) or 0), 0)
+
+
+def _plot_filters(config: dict[str, Any]) -> bool:
+    reporting = config.get("reporting", {}) or {}
+    return bool(reporting.get("plot_filters", True))
+
+
+def _plot_ground_truth(config: dict[str, Any]) -> bool:
+    reporting = config.get("reporting", {}) or {}
+    return bool(reporting.get("plot_ground_truth", False))
+
+
+def _write_fit_sed_samples(
+    context,
+    batch: pd.DataFrame,
+    fit_rows: list[dict[str, Any]],
+    config: dict[str, Any],
+    out: Path,
+    *,
+    mode: str,
+    chunk_index: int,
+    remaining: int,
+) -> list[dict[str, Any]]:
+    fit_by_row = {int(row["row_index"]): row for row in fit_rows}
+    parameter_rows = []
+    selected = []
+    for row_index, row in batch.iterrows():
+        if len(selected) >= remaining:
+            break
+        fit_row = fit_by_row.get(int(row_index))
+        if fit_row is None:
+            continue
+        params = parameters_for_row(
+            config["model"]["fixed_parameters"],
+            config["model"].get("parameter_columns", {}),
+            row.to_dict(),
+            config.get("redshift", {}),
+        )
+        for name in list(params):
+            fit_key = f"fit_{name}"
+            if fit_key in fit_row and pd.notna(fit_row[fit_key]):
+                params[name] = float(fit_row[fit_key])
+        selected.append((row_index, row))
+        parameter_rows.append(params)
+    if not selected:
+        return []
+    selected_batch = pd.DataFrame([row for _, row in selected])
+    selected_batch.index = [int(row_index) for row_index, _ in selected]
+    return _write_sed_samples(
+        context,
+        selected_batch,
+        parameter_rows,
+        config,
+        out,
+        mode=mode,
+        chunk_index=chunk_index,
+        remaining=remaining,
+    )
+
+
+def _write_sed_samples(
+    context,
+    batch: pd.DataFrame,
+    parameter_rows: list[dict[str, Any]],
+    config: dict[str, Any],
+    out: Path,
+    *,
+    mode: str,
+    chunk_index: int,
+    remaining: int,
+) -> list[dict[str, Any]]:
+    if remaining <= 0 or batch.empty or not parameter_rows:
+        return []
+    n = min(int(remaining), len(batch), len(parameter_rows))
+    batch = batch.head(n)
+    parameter_rows = parameter_rows[:n]
+    parameter_names = _parameter_names_for_sed_rows(parameter_rows)
+    parameter_matrix = pd.DataFrame(parameter_rows, columns=parameter_names).to_numpy(
+        dtype=float
+    )
+    sed_result = predict_batch_seds(context, parameter_names, parameter_matrix)
+    sed_dir = ensure_dir(out / "sed_diagnostics")
+    manifest_rows = []
+    for local_index, (row_index, row) in enumerate(batch.iterrows()):
+        row_dict = row.to_dict()
+        observation = build_observation(int(row_index), row, config["bands"])
+        model_result = _model_result_from_sed_batch(
+            sed_result, local_index, context, config
+        )
+        ground_truth_sed, ground_truth_status = _ground_truth_sed_for_row(
+            row_dict, int(row_index), context.filters, config
+        )
+        stem = f"{mode}_chunk_{chunk_index:06d}_row_{int(row_index):08d}"
+        output = write_sed_diagnostic_outputs(
+            observation,
+            model_result,
+            sed_dir,
+            stem=stem,
+            ground_truth_sed=ground_truth_sed,
+            include_filters=_plot_filters(config),
+        )
+        manifest_rows.append(
+            {
+                **output,
+                "mode": mode,
+                "chunk_index": int(chunk_index),
+                "ground_truth_sed_status": ground_truth_status,
+            }
+        )
+    return manifest_rows
+
+
+def _parameter_names_for_sed_rows(parameter_rows: list[dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    for row in parameter_rows:
+        for name in row:
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _model_result_from_sed_batch(
+    batch_result: BatchSedResult,
+    local_index: int,
+    context,
+    config: dict[str, Any],
+) -> ModelResult:
+    params = {
+        name: float(batch_result.parameter_matrix[local_index, index])
+        for index, name in enumerate(batch_result.parameter_names)
+    }
+    derived = {
+        name: float(values[local_index])
+        for name, values in batch_result.derived.items()
+    }
+    photometry = {}
+    for band_index, band in enumerate(config["bands"]):
+        name = band["name"]
+        curve = context.filters[name]
+        mag = float(batch_result.model_mags[local_index, band_index])
+        photometry[name] = {
+            "model_mag_ab": mag,
+            "model_flux_fnu_cgs": abmag_to_flux_fnu_cgs(mag),
+            "filter_source": curve.source,
+            "effective_wavelength_angstrom": curve.effective_wavelength,
+            "filter_wave_angstrom": curve.wave,
+            "filter_transmission": curve.transmission,
+        }
+    return ModelResult(
+        parameters=params,
+        derived=derived,
+        wave=batch_result.wave,
+        rest_sed=batch_result.rest_sed[local_index],
+        dusted_rest_sed=batch_result.dusted_rest_sed[local_index],
+        photometry=photometry,
+    )
+
+
+def _ground_truth_sed_for_row(
+    row: dict[str, Any],
+    row_index: int,
+    filters: Any,
+    config: dict[str, Any],
+) -> tuple[pd.DataFrame | None, str]:
+    if not _plot_ground_truth(config):
+        return None, "disabled"
+    try:
+        from ..cosmos import (
+            MissingCosmosColumnsError,
+            MissingCosmosResourceError,
+            flambda_10pc_to_lnu_lsun,
+            load_cosmos_sed_resources,
+            reconstruct_cosmos_proxy_sed,
+        )
+    except Exception as exc:  # pragma: no cover - defensive optional import path
+        return None, f"import_failed:{type(exc).__name__}"
+
+    cosmos_config = config.get("cosmos_sed", {}) or {}
+    cache_key = (
+        cosmos_config.get("value_added_data_dir"),
+        cosmos_config.get("lephare_data_dir"),
+        cosmos_config.get("template_subdir"),
+        cosmos_config.get("template_list"),
+    )
+    try:
+        if cache_key not in _COSMOS_RESOURCE_CACHE:
+            _COSMOS_RESOURCE_CACHE[cache_key] = load_cosmos_sed_resources(
+                cosmos_config
+            )
+        cosmos_result = reconstruct_cosmos_proxy_sed(
+            row,
+            row_index,
+            _COSMOS_RESOURCE_CACHE[cache_key],
+            filters,
+            config["bands"],
+            cosmos_config,
+        )
+    except MissingCosmosColumnsError as exc:
+        return None, f"missing_columns:{exc}"
+    except MissingCosmosResourceError as exc:
+        return None, f"missing_resource:{exc}"
+    except Exception as exc:  # pragma: no cover - report unexpected data issue
+        return None, f"failed:{type(exc).__name__}:{exc}"
+
+    return (
+        pd.DataFrame(
+            {
+                "wave_angstrom": cosmos_result.wave_angstrom,
+                "ground_truth_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
+                    cosmos_result.wave_angstrom, cosmos_result.flambda_scaled
+                ),
+                "ground_truth_label": "COSMOS proxy",
+            }
+        ),
+        "ok",
+    )
+
+
 def fit_population(
     config: dict[str, Any],
     out_dir: str | Path,
@@ -641,6 +948,9 @@ def fit_population(
     fit_rows = []
     hyper_rows = []
     trace_rows = []
+    sed_manifest_rows = []
+    sed_samples_written = 0
+    sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     with _make_progress_bar(
         total=total, desc="fit-population", unit="galaxy"
@@ -667,6 +977,24 @@ def fit_population(
             comparison_rows.extend(batch_result["comparison_rows"])
             hyper_rows.extend(batch_result["hyper_rows"])
             trace_rows.extend(batch_result["trace_rows"])
+            if sed_samples_written < sed_sample_limit:
+                new_rows = _write_fit_sed_samples(
+                    context,
+                    batch,
+                    batch_result["fit_rows"],
+                    config,
+                    out,
+                    mode="population_fit",
+                    chunk_index=chunk_index,
+                    remaining=sed_sample_limit - sed_samples_written,
+                )
+                sed_manifest_rows.extend(new_rows)
+                sed_samples_written += len(new_rows)
+                perf.mark(
+                    "write_sed_samples",
+                    chunk_index=chunk_index,
+                    n_rows=len(new_rows),
+                )
             perf.mark(
                 "fit_population_chunk", chunk_index=chunk_index, n_rows=len(batch)
             )
@@ -697,6 +1025,10 @@ def fit_population(
     write_batch_outputs(
         comparison, out, label="population_fit", reporting_level=reporting_level
     )
+    if sed_manifest_rows:
+        pd.DataFrame(sed_manifest_rows).to_csv(
+            out / "sed_diagnostics_manifest.csv", index=False
+        )
     if reporting_level == "full":
         write_population_corner_outputs(
             fits, list(config["fit"]["free_parameters"]), out

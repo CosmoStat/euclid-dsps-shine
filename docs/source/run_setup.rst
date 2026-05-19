@@ -100,8 +100,10 @@ Selection
 Redshift
 --------
 
-The FS2 configs set initial DSPS ``z_obs`` from the NNPZ PDF median and use the
-70/90/95 percent intervals for a row-level non-Gaussian redshift prior:
+The FS2 configs set initial DSPS ``z_obs`` from the NNPZ PDF median. The
+70/90/95 percent intervals are still loaded so diagnostics and explicit
+photo-z-prior experiments can use them, but production fast mode does not use
+them as hard bounds by default:
 
 .. code-block:: yaml
 
@@ -128,11 +130,12 @@ The FS2 configs set initial DSPS ``z_obs`` from the NNPZ PDF median and use the
          max_column: phz_max_95
          probability: 0.95
 
-``column`` is used for DSPS. ``truth_column`` is diagnostic only. ``fixed_value``
-is a fallback when the row value is missing or invalid. ``prior_interval`` still
-writes the compatibility field ``z_obs_prior_sigma``. ``prior_intervals`` writes
-``z_obs_phz_min/max_70/90/95`` base parameters consumed by the JAX
-``phz_interval`` prior.
+``column`` initializes the DSPS redshift. ``truth_column`` is diagnostic only.
+``fixed_value`` is a fallback when the row value is missing or invalid.
+``prior_interval`` still writes the compatibility field ``z_obs_prior_sigma``.
+``prior_intervals`` writes ``z_obs_phz_min/max_70/90/95`` base parameters. They
+are consumed only when a config explicitly enables ``type: phz_interval`` or
+``fit.fast_grid_use_phz_bounds: true``.
 
 Bands
 -----
@@ -528,7 +531,41 @@ Exported plots:
 
 Exported tables:
   ``selected_galaxy.json``, ``model_parameters.json``, ``sed.csv``,
-  ``photometry_comparison.csv``.
+  ``photometry_comparison.csv``, ``sed_diagnostic_dsps_sed.csv``,
+  ``sed_diagnostic_photometry.csv``. With ``--plot-ground-truth``, the command
+  also writes ``sed_diagnostic_ground_truth_sed.csv`` when local COSMOS
+  resources are available.
+
+``forward``
+~~~~~~~~~~~
+
+.. code-block:: bash
+
+   euclid-dsps --config configs/fs2_phz1_10band.yaml forward \
+     --index 0 \
+     --plot-ground-truth \
+     --out outputs/runs/phz1_forward_row0
+
+Purpose:
+  Simpler no-fit entry point. With ``--index`` it behaves like ``run-one``.
+  Without ``--index`` it streams rows like ``run-batch``.
+
+Useful diagnostics:
+
+.. code-block:: bash
+
+   euclid-dsps --config configs/fs2_phz1_10band.yaml forward \
+     --limit 100 \
+     --batch-size 50 \
+     --save-sed-samples 8 \
+     --plot-ground-truth \
+     --out outputs/runs/phz1_forward_diag
+
+``--save-sed-samples N`` writes ``sed_diagnostics/`` and
+``sed_diagnostics_manifest.csv`` for the first ``N`` processed rows.
+``--plot-filters`` is enabled by default and overlays passbands in rest-frame
+wavelength. ``--plot-ground-truth`` overlays the COSMOS proxy SED only when the
+local columns and template resources are present.
 
 ``fit-one``
 ~~~~~~~~~~~
@@ -623,7 +660,9 @@ Exported plots:
 Exported tables:
   ``batch_photometry_comparison.csv``, ``batch_summary.json``,
   ``batch_summary_by_band.csv``, ``batch_summary_by_galaxy.csv``,
-  ``batch_truth_metrics.csv`` when truth/proxy pairs exist.
+  ``batch_truth_metrics.csv`` when truth/proxy pairs exist. With
+  ``--save-sed-samples N``, ``sed_diagnostics_manifest.csv`` and per-sample SED
+  CSV/PNG files are also written.
 
 ``fit-batch``
 ~~~~~~~~~~~~~
@@ -646,8 +685,9 @@ Fast production mode:
 
   Inferred in fast-grid mode:
 
-  * ``z_obs``: selected from a small row-level PHZ grid using photometry plus
-    the configured PHZ interval prior;
+  * ``z_obs``: selected from a small row-level grid around the initialized
+    redshift using photometry and the configured redshift bounds; PHZ hard
+    interval bounds are disabled unless ``fit.fast_grid_use_phz_bounds: true``;
   * ``log10_formed_mass_msun``: adjusted analytically from the broadband
     magnitude offset;
   * ``log10_metallicity``: selected on a small prior-bounded grid;
@@ -685,7 +725,8 @@ Fast production mode:
 
   Priors used by the 10-band config:
 
-  * redshift: PHZ 70/90/95 interval plateau prior;
+  * redshift: uniform by default in current production configs; PHZ interval
+    prior is available only for explicit comparison runs;
   * mass: broad normal prior on ``log10_formed_mass_msun``;
   * metallicity: broad normal stellar-metallicity prior;
   * SFR: no direct independent ``log10_sfr`` prior in fast mode; SFR is derived

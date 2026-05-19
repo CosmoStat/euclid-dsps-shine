@@ -13,6 +13,16 @@ conda activate shine
 python -m pip install -e .
 ```
 
+The project should also be kept compatible with a future `uv` workflow. When dependency or packaging changes are made, verify or update:
+
+```bash
+uv sync
+uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+uv run euclid-dsps --help
+```
+
+If GPU JAX setup differs between `conda shine` and `uv`, document the exact commands and caveats instead of assuming one install path works for both.
+
 Run the main checks:
 
 ```bash
@@ -39,3 +49,7 @@ euclid-dsps --config configs/fs2_phz1.yaml fit-batch --limit 3 --batch-size 3 --
 ## Commit & Pull Request Guidelines
 
 This checkout has no git history, so no existing commit convention can be inferred. Use concise imperative messages, for example `Add FS2 redshift batch diagnostics`. PRs should describe the data/config used, commands run, output paths inspected, and any scientific limitations such as approximate filters or missing truth parameters.
+
+## Planning Workflow
+
+Keep `PLAN.md` as the living implementation plan. At the start and end of each phase prompt, update it with completed work, changed priorities, and newly discovered blockers. Prefer small phase commits over broad mixed commits, especially when changing scientific assumptions, runtime behavior, or output formats.

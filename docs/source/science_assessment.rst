@@ -36,8 +36,8 @@ The 10-band COSMOS comparison config uses:
 * SciPIC value-added CSV filters for LSST and Euclid;
 * COSMOS two-component attenuation from ``ebv_cosmos_*``,
   ``ext_curve_cosmos_*``, and ``frac_cosmos_*``;
-* ``phz_median`` as the redshift estimate and ``phz_min/max_70/90/95`` as
-  row-level NNPZ redshift-prior intervals;
+* ``phz_median`` as the redshift initializer and ``phz_min/max_70/90/95`` as
+  diagnostics or explicit optional soft-prior inputs;
 * continuum-only branch-2 targets by default.
 
 Large-Run Fit Modes
@@ -46,7 +46,8 @@ Large-Run Fit Modes
 The million-row path is not full per-galaxy gradient optimization. The default
 10-band production config uses ``fit.fast_grid_search``:
 
-* scan a small row-level redshift grid inside the PHZ support;
+* scan a small row-level redshift grid around the initialized value, bounded by
+  configured redshift limits rather than PHZ hard intervals by default;
 * analytically warm-start ``log10_formed_mass_msun`` from the broadband
   magnitude offset;
 * scan small prior-bounded grids for ``log10_metallicity``, ``sfh_t_peak``, and
@@ -77,7 +78,9 @@ Exists now:
 
 * differentiable DSPS forward model on JAX/GPU;
 * Euclid-only and 10-band LSST+Euclid configs;
-* PHZ interval prior from local ``phz_min/max_70/90/95`` columns;
+* optional PHZ interval prior from local ``phz_min/max_70/90/95`` columns;
+* SED diagnostic plots/tables with DSPS SED, filters, photometry, and optional
+  COSMOS proxy overlay;
 * fast large-run fit for redshift, formed mass, stellar metallicity, and
   SFR-through-SFH-shape;
 * full Adam MAP for smaller validation subsets;
@@ -136,15 +139,17 @@ Priors are intentionally broad and stabilizing rather than final astrophysical
 population priors. The justification is tied to what the local data can
 support:
 
-* ``z_obs`` uses PHZ central intervals because the catalog already provides
-  NNPZ-like photo-z summaries. Euclid photo-z work emphasizes that cosmology and
+* ``z_obs`` is initialized from ``phz_median`` but uses a uniform prior in the
+  current production configs. PHZ intervals are available only for explicit
+  comparison runs because treating central intervals as hard truth is circular
+  for redshift validation. Euclid photo-z work emphasizes that cosmology and
   physical inference need calibrated photo-z PDFs/PDZs, not unconstrained
   broad-band redshifts; see `Euclid preparation X
   <https://arxiv.org/abs/2009.12112>`__ and nearest-neighbour photo-z
   methodology such as `Tanaka et al. 2018
   <https://academic.oup.com/pasj/article/doi/10.1093/pasj/psx077/4494086>`__.
-  The current plateau prior is a compact approximation to the available
-  70/90/95 percent intervals, not a replacement for full PDFs.
+  The plateau prior remains implemented as a compact approximation to the
+  available 70/90/95 percent intervals, not a replacement for full PDFs.
 * ``log10_formed_mass_msun`` is the luminosity amplitude because SPS maps
   formed stellar mass and SFH to SED normalization. DSPS is explicitly designed
   as a differentiable SPS kernel connecting physical parameters to SEDs; see
@@ -198,12 +203,13 @@ The current implementation now makes these science choices explicit:
    formed mass. Catalog ``log_stellar_mass`` is converted from
    ``log10(Msun h^-2)`` to ``log10(Msun)`` only for truth/proxy diagnostics.
 
-5. The photo-z prior uses row-level PHZ intervals.
+5. The production redshift prior is no longer PHZ-hard by default.
 
-   ``phz_median`` sets the base redshift and the 70/90/95 percent NNPZ
-   intervals define a JAX plateau-style penalty. Inside the 70 percent interval
-   the prior is flat; outside wider intervals it steepens smoothly. The older
-   ``z_obs_prior_sigma`` value is still written for compatibility.
+   ``phz_median`` sets the base redshift. The 70/90/95 percent NNPZ intervals
+   are still loaded for diagnostics and optional comparison configs, but
+   ``configs/fs2_phz1_10band.yaml`` uses ``type: uniform`` for ``z_obs`` and
+   ``fit.fast_grid_use_phz_bounds: false``. The older ``z_obs_prior_sigma``
+   value is still written for compatibility.
 
 6. Population MAP can learn a mass-metallicity relation.
 
@@ -341,11 +347,12 @@ Current Scientific Problems
    an almost-zero slope because the target metallicity values did not move. This
    relation is not yet scientifically usable on the current 10-band run.
 
-6. Photo-z prior is still approximate.
+6. Photo-z treatment is still approximate.
 
-   The current redshift prior uses central PHZ intervals but not full PDF
-   samples or calibrated multimodal mixtures. A full treatment should use those
-   objects when available.
+   The current redshift fit uses broad-band photometry plus simple bounds, not
+   full PDF samples or calibrated multimodal mixtures. A full treatment should
+   use those objects when available and should be evaluated against non-circular
+   validation targets.
 
 7. COSMOS proxy SED is template truth, not physical truth.
 

@@ -92,7 +92,12 @@ def write_eda_outputs(
 
 
 def write_run_outputs(
-    observation: GalaxyObservation, result: ModelResult, out_dir: str | Path
+    observation: GalaxyObservation,
+    result: ModelResult,
+    out_dir: str | Path,
+    *,
+    ground_truth_sed: Any | None = None,
+    include_filters: bool = True,
 ) -> pd.DataFrame:
     out = ensure_dir(out_dir)
     write_json(out / "selected_galaxy.json", observation)
@@ -114,8 +119,66 @@ def write_run_outputs(
     comparison.to_csv(out / "photometry_comparison.csv", index=False)
 
     plot_sed(result, out / "sed.png")
+    write_sed_diagnostic_outputs(
+        observation,
+        result,
+        out,
+        stem="sed_diagnostic",
+        ground_truth_sed=ground_truth_sed,
+        include_filters=include_filters,
+    )
     plot_photometry_comparison(comparison, out / "photometry_comparison.png")
     return comparison
+
+
+def write_sed_diagnostic_outputs(
+    observation: GalaxyObservation,
+    result: ModelResult,
+    out_dir: str | Path,
+    *,
+    stem: str,
+    ground_truth_sed: Any | None = None,
+    include_filters: bool = True,
+) -> dict[str, Any]:
+    """Write one rich SED diagnostic: DSPS SED, optional COSMOS proxy, filters, photometry."""
+    out = ensure_dir(out_dir)
+    sed = pd.DataFrame(
+        {
+            "wave_angstrom": result.wave,
+            "rest_sed_lsun_per_hz": result.rest_sed,
+            "dusted_rest_sed_lsun_per_hz": result.dusted_rest_sed,
+        }
+    )
+    sed_path = out / f"{stem}_dsps_sed.csv"
+    sed.to_csv(sed_path, index=False)
+
+    truth_path = None
+    if ground_truth_sed is not None:
+        truth = _ground_truth_sed_frame(ground_truth_sed)
+        if truth is not None and not truth.empty:
+            truth_path = out / f"{stem}_ground_truth_sed.csv"
+            truth.to_csv(truth_path, index=False)
+
+    comparison = pd.DataFrame(comparison_rows(observation, result))
+    phot_path = out / f"{stem}_photometry.csv"
+    comparison.to_csv(phot_path, index=False)
+
+    plot_path = out / f"{stem}.png"
+    plot_sed_diagnostic(
+        result,
+        plot_path,
+        observation=observation,
+        ground_truth_sed=ground_truth_sed,
+        include_filters=include_filters,
+    )
+    return {
+        "row_index": int(observation.row_index),
+        "plot": plot_path.name,
+        "dsps_sed": sed_path.name,
+        "photometry": phot_path.name,
+        "ground_truth_sed": truth_path.name if truth_path else None,
+        "has_ground_truth_sed": truth_path is not None,
+    }
 
 
 def write_fit_outputs(fit_result: Any, out_dir: str | Path) -> None:
@@ -1055,7 +1118,7 @@ def residuals_by_property(by_row: pd.DataFrame) -> pd.DataFrame:
             except ValueError:
                 continue
         work = by_row.assign(_group=groups)
-        for group, subset in work.groupby("_group", dropna=True):
+        for group, subset in work.groupby("_group", dropna=True, observed=False):
             row = _residual_property_row(subset, label, column, str(group))
             if row:
                 rows.append(row)
@@ -1259,6 +1322,206 @@ def plot_sed(result: ModelResult, path: str | Path) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=170)
     plt.close(fig)
+
+
+def plot_sed_diagnostic(
+    result: ModelResult,
+    path: str | Path,
+    *,
+    observation: GalaxyObservation | None = None,
+    ground_truth_sed: Any | None = None,
+    include_filters: bool = True,
+) -> None:
+    """Plot DSPS-vs-ground-truth SED plus observed/model photometry residuals."""
+    fig, axes = plt.subplots(
+        2,
+        1,
+        figsize=(8.6, 7.0),
+        gridspec_kw={"height_ratios": [2.2, 1.0]},
+        sharex=False,
+    )
+    ax_sed, ax_phot = axes
+    mask = _sed_plot_mask(result.wave, result.dusted_rest_sed)
+    if mask.any():
+        ax_sed.plot(
+            result.wave[mask],
+            result.rest_sed[mask],
+            label="DSPS intrinsic",
+            lw=1.0,
+            alpha=0.6,
+        )
+        ax_sed.plot(
+            result.wave[mask],
+            result.dusted_rest_sed[mask],
+            label="DSPS dusted",
+            lw=1.35,
+        )
+
+    truth = _ground_truth_sed_frame(ground_truth_sed)
+    if truth is not None and not truth.empty:
+        truth_mask = _sed_plot_mask(
+            truth["wave_angstrom"].to_numpy(dtype=float),
+            truth["ground_truth_lnu_lsun_per_hz"].to_numpy(dtype=float),
+        )
+        if truth_mask.any():
+            ax_sed.plot(
+                truth["wave_angstrom"].to_numpy(dtype=float)[truth_mask],
+                truth["ground_truth_lnu_lsun_per_hz"].to_numpy(dtype=float)[
+                    truth_mask
+                ],
+                label=str(truth["ground_truth_label"].iloc[0]),
+                lw=1.2,
+                ls="--",
+                alpha=0.9,
+            )
+
+    z_obs = result.parameters.get("z_obs", np.nan)
+    if include_filters and mask.any():
+        _plot_rest_frame_filters(ax_sed, result, mask)
+
+    if observation is not None:
+        comparison = pd.DataFrame(comparison_rows(observation, result)).sort_values(
+            "effective_wavelength_angstrom"
+        )
+        if not comparison.empty:
+            x_obs = comparison["effective_wavelength_angstrom"].to_numpy(dtype=float)
+            if np.isfinite(z_obs):
+                x_obs = x_obs / (1.0 + float(z_obs))
+            obs_mag = comparison["observed_mag_ab"].to_numpy(dtype=float)
+            model_mag = comparison["model_mag_ab"].to_numpy(dtype=float)
+            sigma = comparison["sigma_mag"].to_numpy(dtype=float)
+            ax_phot.errorbar(
+                x_obs,
+                obs_mag,
+                yerr=sigma,
+                fmt="o",
+                ms=4.2,
+                lw=0.8,
+                capsize=2.0,
+                label="observed",
+            )
+            ax_phot.plot(x_obs, model_mag, "s", ms=4.0, label="DSPS model")
+            for _, item in comparison.iterrows():
+                x_val = float(item["effective_wavelength_angstrom"])
+                if np.isfinite(z_obs):
+                    x_val = x_val / (1.0 + float(z_obs))
+                ax_phot.text(
+                    x_val,
+                    float(item["model_mag_ab"]),
+                    str(item["band"]).replace("euclid_", ""),
+                    fontsize=7,
+                    rotation=35,
+                    ha="left",
+                    va="bottom",
+                )
+            ax_resid = ax_phot.twinx()
+            ax_resid.axhline(0.0, color="0.35", lw=0.8, alpha=0.45)
+            ax_resid.plot(
+                x_obs,
+                comparison["residual_mag_observed_minus_model"].to_numpy(dtype=float),
+                color="#B85C38",
+                lw=0.8,
+                alpha=0.8,
+                label="obs-model",
+            )
+            ax_resid.set_ylabel("residual mag")
+            ax_resid.grid(False)
+
+    ax_sed.set_xscale("log")
+    ax_sed.set_yscale("log")
+    ax_sed.set_ylabel("rest Lsun / Hz")
+    ax_sed.set_title(f"SED diagnostic, z={z_obs:.3f}")
+    ax_sed.legend(fontsize=8, loc="best")
+    ax_phot.set_xscale("log")
+    ax_phot.invert_yaxis()
+    ax_phot.set_xlabel("rest-frame wavelength [Angstrom]")
+    ax_phot.set_ylabel("AB mag")
+    ax_phot.legend(fontsize=8, loc="best")
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+
+
+def _sed_plot_mask(wave: np.ndarray, values: np.ndarray) -> np.ndarray:
+    return (
+        np.isfinite(wave)
+        & np.isfinite(values)
+        & (wave >= 800.0)
+        & (wave <= 30_000.0)
+        & (values > 0.0)
+    )
+
+
+def _plot_rest_frame_filters(
+    ax: plt.Axes, result: ModelResult, sed_mask: np.ndarray
+) -> None:
+    z_obs = result.parameters.get("z_obs", np.nan)
+    if not np.isfinite(z_obs) or not sed_mask.any():
+        return
+    ymin, ymax = _positive_axis_limits(result.dusted_rest_sed[sed_mask])
+    for band, values in result.photometry.items():
+        wave_filter_obs = np.asarray(
+            values.get("filter_wave_angstrom", []), dtype=float
+        )
+        transmission = np.asarray(values.get("filter_transmission", []), dtype=float)
+        passband_mask = (
+            np.isfinite(wave_filter_obs)
+            & np.isfinite(transmission)
+            & (transmission > 0)
+        )
+        if not passband_mask.any():
+            continue
+        rest_wave = wave_filter_obs[passband_mask] / (1.0 + float(z_obs))
+        scaled = ymin * (ymax / ymin) ** (
+            0.035
+            + 0.13
+            * transmission[passband_mask]
+            / np.nanmax(transmission[passband_mask])
+        )
+        ax.fill_between(
+            rest_wave,
+            ymin,
+            scaled,
+            alpha=0.12,
+            lw=0,
+            label=f"{band.replace('euclid_', '')} filter",
+        )
+
+
+def _ground_truth_sed_frame(ground_truth_sed: Any | None) -> pd.DataFrame | None:
+    if ground_truth_sed is None:
+        return None
+    if isinstance(ground_truth_sed, pd.DataFrame):
+        frame = ground_truth_sed.copy()
+    else:
+        frame = pd.DataFrame(ground_truth_sed)
+    if frame.empty:
+        return None
+    if "wave_angstrom" not in frame:
+        return None
+    value_column = None
+    for candidate in (
+        "ground_truth_lnu_lsun_per_hz",
+        "lnu_lsun_per_hz_rest_proxy_scaled",
+        "cosmos_proxy_lnu_lsun_per_hz",
+    ):
+        if candidate in frame:
+            value_column = candidate
+            break
+    if value_column is None:
+        return None
+    label = (
+        str(frame["ground_truth_label"].iloc[0])
+        if "ground_truth_label" in frame
+        else "COSMOS proxy"
+    )
+    return pd.DataFrame(
+        {
+            "wave_angstrom": frame["wave_angstrom"].to_numpy(dtype=float),
+            "ground_truth_lnu_lsun_per_hz": frame[value_column].to_numpy(dtype=float),
+            "ground_truth_label": label,
+        }
+    )
 
 
 def _positive_axis_limits(values: np.ndarray) -> tuple[float, float]:

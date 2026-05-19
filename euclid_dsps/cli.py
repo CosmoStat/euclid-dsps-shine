@@ -71,6 +71,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--out", default="outputs/runs/smoke_one", help="Output directory."
     )
     run.add_argument("--index", type=int, help="Catalog row index to select.")
+    add_sed_diagnostic_overrides(run)
+
+    forward = sub.add_parser(
+        "forward",
+        help="Forward DSPS without fitting. Uses --index for one row, else batch.",
+    )
+    forward.add_argument("--out", default="outputs/runs/forward", help="Output directory.")
+    forward.add_argument("--index", type=int, help="Catalog row index to select.")
+    forward.add_argument(
+        "--limit", type=int, default=100, help="Maximum catalog rows to process."
+    )
+    forward.add_argument(
+        "--batch-size", type=int, default=1000, help="Parquet batch size."
+    )
+    forward.add_argument("--all", action="store_true", help="Process the full catalog.")
+    forward.add_argument(
+        "--row-indices-file",
+        help="CSV/TXT file containing one catalog row_index per line.",
+    )
+    add_output_overrides(forward)
+    add_sed_diagnostic_overrides(forward)
 
     fit = sub.add_parser(
         "fit-one", help="Fit configured parameters for one selected galaxy."
@@ -84,6 +105,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_fit_overrides(fit)
     add_sample_overrides(fit)
+    add_sed_diagnostic_overrides(fit)
 
     batch = sub.add_parser(
         "run-batch", help="Run configured model over many catalog rows."
@@ -101,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="CSV/TXT file containing one catalog row_index per line.",
     )
     add_output_overrides(batch)
+    add_sed_diagnostic_overrides(batch)
 
     fit_batch = sub.add_parser(
         "fit-batch", help="Fit configured parameters over many catalog rows."
@@ -129,6 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_fit_overrides(fit_batch)
     add_output_overrides(fit_batch)
     add_sample_overrides(fit_batch)
+    add_sed_diagnostic_overrides(fit_batch)
 
     population = sub.add_parser(
         "fit-population", help="Fit chunked hierarchical population MAP models."
@@ -155,6 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_fit_overrides(population)
     add_output_overrides(population)
+    add_sed_diagnostic_overrides(population)
 
     workflow = sub.add_parser(
         "fit-workflow",
@@ -198,6 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_sample_overrides(workflow)
     add_output_overrides(workflow)
+    add_sed_diagnostic_overrides(workflow)
 
     report = sub.add_parser(
         "report-workflow",
@@ -257,17 +283,34 @@ def main(argv: list[str] | None = None) -> None:
         )
     elif args.command == "run-one":
         _apply_selection_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
         run_one(config, Path(args.out))
+    elif args.command == "forward":
+        _apply_selection_overrides(config, args)
+        _apply_output_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
+        if getattr(args, "index", None) is not None:
+            run_one(config, Path(args.out))
+        else:
+            run_batch(
+                config,
+                Path(args.out),
+                limit=_limit_arg(args),
+                batch_size=args.batch_size,
+                row_indices_file=getattr(args, "row_indices_file", None),
+            )
     elif args.command == "fit-one":
         _apply_selection_overrides(config, args)
         _apply_fit_overrides(config, args)
         _apply_sample_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
         if args.bayesian:
             sample_one(config, Path(args.out))
         else:
             fit_one(config, Path(args.out))
     elif args.command == "run-batch":
         _apply_output_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
         run_batch(
             config,
             Path(args.out),
@@ -279,6 +322,7 @@ def main(argv: list[str] | None = None) -> None:
         _apply_fit_overrides(config, args)
         _apply_output_overrides(config, args)
         _apply_sample_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
         if args.bayesian:
             sample_batch(
                 config,
@@ -298,6 +342,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "fit-population":
         _apply_fit_overrides(config, args)
         _apply_output_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
         fit_population(
             config,
             Path(args.out),
@@ -310,6 +355,7 @@ def main(argv: list[str] | None = None) -> None:
         _apply_output_overrides(config, args)
         _apply_sample_overrides(config, args)
         _apply_fit_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
         fit_workflow(
             config,
             Path(args.out),
@@ -413,7 +459,7 @@ def add_fit_overrides(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--fast-grid",
         action="store_true",
-        help="Fit redshift on a small PHZ grid plus analytic mass warm-start.",
+        help="Fit redshift on a small row-level grid plus analytic mass warm-start.",
     )
     parser.add_argument(
         "--full-adam",
@@ -451,6 +497,26 @@ def add_output_overrides(parser: argparse.ArgumentParser) -> None:
         "--verbose-benchmark",
         action="store_true",
         help="Print benchmark timings for each workflow stage.",
+    )
+
+
+def add_sed_diagnostic_overrides(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--save-sed-samples",
+        type=int,
+        help="Write rich SED diagnostic plots/tables for the first N processed rows.",
+    )
+    parser.add_argument(
+        "--plot-filters",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Overlay configured filters on SED diagnostic plots.",
+    )
+    parser.add_argument(
+        "--plot-ground-truth",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Overlay COSMOS proxy SED when local columns/resources are available.",
     )
 
 
@@ -520,6 +586,16 @@ def _apply_output_overrides(config: dict, args) -> None:
         config.setdefault("output", {})["format"] = args.output_format
     if getattr(args, "verbose_benchmark", False):
         config.setdefault("output", {})["verbose_benchmark"] = True
+
+
+def _apply_sed_diagnostic_overrides(config: dict, args) -> None:
+    reporting = config.setdefault("reporting", {})
+    if getattr(args, "save_sed_samples", None) is not None:
+        reporting["save_sed_samples"] = int(args.save_sed_samples)
+    if getattr(args, "plot_filters", None) is not None:
+        reporting["plot_filters"] = bool(args.plot_filters)
+    if getattr(args, "plot_ground_truth", None) is not None:
+        reporting["plot_ground_truth"] = bool(args.plot_ground_truth)
 
 
 if __name__ == "__main__":

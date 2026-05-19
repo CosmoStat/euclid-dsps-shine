@@ -287,6 +287,9 @@ fit:
     fast_grid_search: true
     redshift_grid_size: 5
     redshift_grid_width: 0.4
+    # Keep PHZ columns available for diagnostics/initialization, but do not
+    # make the fast grid follow PHZ hard intervals by default.
+    fast_grid_use_phz_bounds: false
     fast_grid_parameters:
         - z_obs
         - log10_metallicity
@@ -307,9 +310,7 @@ fit:
                 slope_scale: 0.7
     priors:
         z_obs:
-            type: phz_interval
-            tail_scale: 0.05
-            weight: 1.0
+            type: uniform
         log10_formed_mass_msun:
             type: normal
             loc: 10.0

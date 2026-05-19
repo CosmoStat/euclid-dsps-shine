@@ -170,6 +170,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["fit"].setdefault("fast_grid_search", False)
     config["fit"].setdefault("redshift_grid_size", 5)
     config["fit"].setdefault("redshift_grid_width", 0.4)
+    config["fit"].setdefault("fast_grid_use_phz_bounds", False)
     config["fit"].setdefault(
         "fast_grid_parameters",
         ["z_obs", "log10_metallicity", "sfh_t_peak", "sfh_tau"],
@@ -212,6 +213,9 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
 
     config["reporting"] = dict(config["reporting"] or {})
     config["reporting"].setdefault("level", "full")
+    config["reporting"].setdefault("save_sed_samples", 0)
+    config["reporting"].setdefault("plot_filters", True)
+    config["reporting"].setdefault("plot_ground_truth", False)
     config["output"] = dict(config["output"] or {})
     config["output"].setdefault("format", "both")
     config["output"].setdefault("verbose_benchmark", False)
@@ -408,6 +412,8 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
         errors.append("fit.fast_warmstart_only must be a boolean")
     if not isinstance(fit.get("fast_grid_search", False), bool):
         errors.append("fit.fast_grid_search must be a boolean")
+    if not isinstance(fit.get("fast_grid_use_phz_bounds", False), bool):
+        errors.append("fit.fast_grid_use_phz_bounds must be a boolean")
     _positive_int(fit.get("redshift_grid_size", 5), "fit.redshift_grid_size", errors)
     _positive_float(
         fit.get("redshift_grid_width", 0.4), "fit.redshift_grid_width", errors
@@ -619,6 +625,14 @@ def _validate_reporting(reporting: dict[str, Any], errors: list[str]) -> None:
         errors.append(
             f"reporting.level must be one of {sorted(SUPPORTED_REPORTING_LEVELS)}"
         )
+    _nonnegative_int(
+        reporting.get("save_sed_samples"),
+        "reporting.save_sed_samples",
+        errors,
+    )
+    for key in ("plot_filters", "plot_ground_truth"):
+        if not isinstance(reporting.get(key), bool):
+            errors.append(f"reporting.{key} must be a boolean")
 
 
 def _validate_output(output: dict[str, Any], errors: list[str]) -> None:
@@ -800,5 +814,12 @@ def _positive_float(value: Any, label: str, errors: list[str]) -> float | None:
 def _positive_int(value: Any, label: str, errors: list[str]) -> int | None:
     if not isinstance(value, int) or value <= 0:
         errors.append(f"{label} must be an integer > 0")
+        return None
+    return value
+
+
+def _nonnegative_int(value: Any, label: str, errors: list[str]) -> int | None:
+    if not isinstance(value, int) or value < 0:
+        errors.append(f"{label} must be an integer >= 0")
         return None
     return value

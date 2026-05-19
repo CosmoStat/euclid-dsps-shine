@@ -184,9 +184,7 @@ fit:
     patience: 18
     priors:
         z_obs:
-            type: phz_interval
-            tail_scale: 0.05
-            weight: 1.0
+            type: uniform
         log10_formed_mass_msun:
             type: normal
             loc: 10.0
@@ -233,9 +231,7 @@ sample:
     save_samples: true
     priors:
         z_obs:
-            type: phz_interval
-            tail_scale: 0.05
-            weight: 1.0
+            type: uniform
         log10_sfr:
             type: truncated_normal
             loc: 0.0

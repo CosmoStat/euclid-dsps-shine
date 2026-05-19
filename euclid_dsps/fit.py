@@ -389,6 +389,7 @@ def fit_galaxy_batch_adam(
     fast_grid_search = bool(fit_config.get("fast_grid_search", False))
     redshift_grid_size = int(fit_config.get("redshift_grid_size", 7))
     redshift_grid_width = float(fit_config.get("redshift_grid_width", 0.4))
+    fast_grid_use_phz_bounds = bool(fit_config.get("fast_grid_use_phz_bounds", False))
     fast_grid_parameters = tuple(fit_config.get("fast_grid_parameters", ()))
     fast_grid_prior_width = float(fit_config.get("fast_grid_prior_width", 1.0))
 
@@ -408,6 +409,7 @@ def fit_galaxy_batch_adam(
         0.0 if fast_warmstart_only else prior_weight,
         redshift_grid_size if fast_grid_search else 0,
         redshift_grid_width if fast_grid_search else 0.0,
+        fast_grid_use_phz_bounds if fast_grid_search else False,
         fast_grid_parameters if fast_grid_search else (),
         fast_grid_prior_width if fast_grid_search else 0.0,
     )
@@ -426,6 +428,7 @@ def fit_galaxy_batch_adam(
                 prior_weight=prior_weight,
                 redshift_grid_size=redshift_grid_size,
                 redshift_grid_width=redshift_grid_width,
+                fast_grid_use_phz_bounds=fast_grid_use_phz_bounds,
                 fast_grid_parameters=fast_grid_parameters,
                 fast_grid_prior_width=fast_grid_prior_width,
             )
@@ -1309,6 +1312,7 @@ def _build_independent_grid_optimizer(
     prior_weight: float,
     redshift_grid_size: int,
     redshift_grid_width: float,
+    fast_grid_use_phz_bounds: bool,
     fast_grid_parameters: tuple[str, ...],
     fast_grid_prior_width: float,
 ):
@@ -1501,6 +1505,7 @@ def _build_independent_grid_optimizer(
                 redshift_grid_width,
                 fast_grid_prior_width,
                 z_free_pos,
+                fast_grid_use_phz_bounds,
             )
 
             def grid_step(carry, frac):
@@ -1559,13 +1564,15 @@ def _fast_grid_bounds(
     redshift_grid_width: float,
     fast_grid_prior_width: float,
     redshift_free_pos: int | None,
+    fast_grid_use_phz_bounds: bool,
 ):
     center = theta[:, free_pos]
     is_redshift = redshift_free_pos is not None and free_pos == redshift_free_pos
     phz_lo = prior_phz_min_95[:, free_pos]
     phz_hi = prior_phz_max_95[:, free_pos]
     valid_phz = (
-        is_redshift
+        bool(fast_grid_use_phz_bounds)
+        & is_redshift
         & jnp.isfinite(phz_lo)
         & jnp.isfinite(phz_hi)
         & (phz_hi > phz_lo)
