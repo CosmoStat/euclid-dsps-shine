@@ -911,6 +911,9 @@ def _ground_truth_sed_for_row(
                 "ground_truth_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
                     cosmos_result.wave_angstrom, cosmos_result.flambda_scaled
                 ),
+                "ground_truth_unscaled_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
+                    cosmos_result.wave_angstrom, cosmos_result.flambda_unscaled
+                ),
                 "ground_truth_label": "COSMOS proxy",
             }
         ),

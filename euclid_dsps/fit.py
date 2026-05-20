@@ -144,15 +144,6 @@ def fit_one_galaxy(
             prior_arrays_jax["prior_beta_mask"],
             prior_arrays_jax["prior_beta_alpha"],
             prior_arrays_jax["prior_beta_beta"],
-            prior_arrays_jax["prior_phz_mask"],
-            prior_arrays_jax["prior_phz_min_70"],
-            prior_arrays_jax["prior_phz_max_70"],
-            prior_arrays_jax["prior_phz_min_90"],
-            prior_arrays_jax["prior_phz_max_90"],
-            prior_arrays_jax["prior_phz_min_95"],
-            prior_arrays_jax["prior_phz_max_95"],
-            prior_arrays_jax["prior_phz_tail_scale"],
-            prior_arrays_jax["prior_phz_weight"],
         )
         objective_value = chi2 + float(fit_config.get("prior_weight", 1.0)) * prior
         return jnp.nan_to_num(objective_value, nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
@@ -389,7 +380,6 @@ def fit_galaxy_batch_adam(
     fast_grid_search = bool(fit_config.get("fast_grid_search", False))
     redshift_grid_size = int(fit_config.get("redshift_grid_size", 7))
     redshift_grid_width = float(fit_config.get("redshift_grid_width", 0.4))
-    fast_grid_use_phz_bounds = bool(fit_config.get("fast_grid_use_phz_bounds", False))
     fast_grid_parameters = tuple(fit_config.get("fast_grid_parameters", ()))
     fast_grid_prior_width = float(fit_config.get("fast_grid_prior_width", 1.0))
 
@@ -409,7 +399,6 @@ def fit_galaxy_batch_adam(
         0.0 if fast_warmstart_only else prior_weight,
         redshift_grid_size if fast_grid_search else 0,
         redshift_grid_width if fast_grid_search else 0.0,
-        fast_grid_use_phz_bounds if fast_grid_search else False,
         fast_grid_parameters if fast_grid_search else (),
         fast_grid_prior_width if fast_grid_search else 0.0,
     )
@@ -428,7 +417,6 @@ def fit_galaxy_batch_adam(
                 prior_weight=prior_weight,
                 redshift_grid_size=redshift_grid_size,
                 redshift_grid_width=redshift_grid_width,
-                fast_grid_use_phz_bounds=fast_grid_use_phz_bounds,
                 fast_grid_parameters=fast_grid_parameters,
                 fast_grid_prior_width=fast_grid_prior_width,
             )
@@ -457,15 +445,6 @@ def fit_galaxy_batch_adam(
         jnp.asarray(setup["prior_beta_mask"]),
         jnp.asarray(setup["prior_beta_alpha"], dtype=_FIT_DTYPE),
         jnp.asarray(setup["prior_beta_beta"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_mask"]),
-        jnp.asarray(setup["prior_phz_min_70"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_max_70"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_min_90"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_max_90"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_min_95"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_max_95"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_tail_scale"], dtype=_FIT_DTYPE),
-        jnp.asarray(setup["prior_phz_weight"], dtype=_FIT_DTYPE),
         jnp.asarray(truth_theta_arr, dtype=_FIT_DTYPE),
     )
     best_matrix = _apply_free_values(
@@ -599,15 +578,6 @@ def fit_population_batch_adam(
         jnp.asarray(setup["prior_beta_mask"]),
         jnp.asarray(setup["prior_beta_alpha"]),
         jnp.asarray(setup["prior_beta_beta"]),
-        jnp.asarray(setup["prior_phz_mask"]),
-        jnp.asarray(setup["prior_phz_min_70"]),
-        jnp.asarray(setup["prior_phz_max_70"]),
-        jnp.asarray(setup["prior_phz_min_90"]),
-        jnp.asarray(setup["prior_phz_max_90"]),
-        jnp.asarray(setup["prior_phz_min_95"]),
-        jnp.asarray(setup["prior_phz_max_95"]),
-        jnp.asarray(setup["prior_phz_tail_scale"]),
-        jnp.asarray(setup["prior_phz_weight"]),
         jnp.asarray(truth_theta_arr),
     )
     best_matrix = _apply_free_values(
@@ -744,15 +714,6 @@ def _prepare_prior_arrays(
     beta_mask = np.zeros((n_rows, n_free), dtype=bool)
     beta_alpha = np.ones((n_rows, n_free), dtype=float)
     beta_beta = np.ones((n_rows, n_free), dtype=float)
-    phz_mask = np.zeros((n_rows, n_free), dtype=bool)
-    phz_min_70 = np.full((n_rows, n_free), np.nan, dtype=float)
-    phz_max_70 = np.full((n_rows, n_free), np.nan, dtype=float)
-    phz_min_90 = np.full((n_rows, n_free), np.nan, dtype=float)
-    phz_max_90 = np.full((n_rows, n_free), np.nan, dtype=float)
-    phz_min_95 = np.full((n_rows, n_free), np.nan, dtype=float)
-    phz_max_95 = np.full((n_rows, n_free), np.nan, dtype=float)
-    phz_tail_scale = np.full((n_rows, n_free), 0.05, dtype=float)
-    phz_weight = np.ones((n_rows, n_free), dtype=float)
 
     for index, name in enumerate(free_names):
         spec = priors.get(name)
@@ -792,20 +753,6 @@ def _prepare_prior_arrays(
             beta_mask[:, index] = True
             beta_alpha[:, index] = max(float(spec.get("alpha", 1.0)), 1.0e-6)
             beta_beta[:, index] = max(float(spec.get("beta", 1.0)), 1.0e-6)
-        elif prior_type == "phz_interval":
-            if name != "z_obs":
-                raise ValueError("fit.priors phz_interval is only supported for z_obs")
-            phz_mask[:, index] = True
-            (
-                phz_min_70[:, index],
-                phz_max_70[:, index],
-                phz_min_90[:, index],
-                phz_max_90[:, index],
-                phz_min_95[:, index],
-                phz_max_95[:, index],
-            ) = _phz_interval_columns(parameter_names, base_matrix, spec)
-            phz_tail_scale[:, index] = max(float(spec.get("tail_scale", 0.05)), 1.0e-6)
-            phz_weight[:, index] = max(float(spec.get("weight", 1.0)), 0.0)
         else:
             raise ValueError(f"Unsupported fit prior type for {name}: {prior_type}")
 
@@ -816,42 +763,7 @@ def _prepare_prior_arrays(
         "prior_beta_mask": beta_mask,
         "prior_beta_alpha": beta_alpha,
         "prior_beta_beta": beta_beta,
-        "prior_phz_mask": phz_mask,
-        "prior_phz_min_70": phz_min_70,
-        "prior_phz_max_70": phz_max_70,
-        "prior_phz_min_90": phz_min_90,
-        "prior_phz_max_90": phz_max_90,
-        "prior_phz_min_95": phz_min_95,
-        "prior_phz_max_95": phz_max_95,
-        "prior_phz_tail_scale": phz_tail_scale,
-        "prior_phz_weight": phz_weight,
     }
-
-
-def _phz_interval_columns(
-    parameter_names: list[str],
-    base_matrix: np.ndarray,
-    spec: dict[str, Any],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    names = {
-        "min_70": str(spec.get("min_70_parameter", "z_obs_phz_min_70")),
-        "max_70": str(spec.get("max_70_parameter", "z_obs_phz_max_70")),
-        "min_90": str(spec.get("min_90_parameter", "z_obs_phz_min_90")),
-        "max_90": str(spec.get("max_90_parameter", "z_obs_phz_max_90")),
-        "min_95": str(spec.get("min_95_parameter", "z_obs_phz_min_95")),
-        "max_95": str(spec.get("max_95_parameter", "z_obs_phz_max_95")),
-    }
-    columns = []
-    for key, parameter in names.items():
-        if parameter not in parameter_names:
-            raise ValueError(
-                f"fit.priors.z_obs.type='phz_interval' needs base parameter {parameter!r} "
-                f"for {key}"
-            )
-        columns.append(
-            np.asarray(base_matrix[:, parameter_names.index(parameter)], dtype=float)
-        )
-    return tuple(columns)  # type: ignore[return-value]
 
 
 def _prepare_population_relation_arrays(
@@ -998,15 +910,6 @@ def _build_independent_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
     ):
         chi2 = single_chi2(theta, base, observed, sigma, mask)
         prior = _physical_prior_penalty(
@@ -1019,15 +922,6 @@ def _build_independent_adam_optimizer(
             prior_beta_mask,
             prior_beta_alpha,
             prior_beta_beta,
-            prior_phz_mask,
-            prior_phz_min_70,
-            prior_phz_max_70,
-            prior_phz_min_90,
-            prior_phz_max_90,
-            prior_phz_min_95,
-            prior_phz_max_95,
-            prior_phz_tail_scale,
-            prior_phz_weight,
         )
         return jnp.nan_to_num(
             chi2 + prior_weight * prior,
@@ -1062,15 +956,6 @@ def _build_independent_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
         truth_theta,
     ):
         theta0 = _warm_start_amplitude(
@@ -1102,15 +987,6 @@ def _build_independent_adam_optimizer(
             prior_beta_mask_i,
             prior_beta_alpha_i,
             prior_beta_beta_i,
-            prior_phz_mask_i,
-            prior_phz_min_70_i,
-            prior_phz_max_70_i,
-            prior_phz_min_90_i,
-            prior_phz_max_90_i,
-            prior_phz_min_95_i,
-            prior_phz_max_95_i,
-            prior_phz_tail_scale_i,
-            prior_phz_weight_i,
         ):
             theta = _unconstrained_to_bounded(y, lower, upper)
             return single_objective(
@@ -1127,20 +1003,11 @@ def _build_independent_adam_optimizer(
                 prior_beta_mask_i,
                 prior_beta_alpha_i,
                 prior_beta_beta_i,
-                prior_phz_mask_i,
-                prior_phz_min_70_i,
-                prior_phz_max_70_i,
-                prior_phz_min_90_i,
-                prior_phz_max_90_i,
-                prior_phz_min_95_i,
-                prior_phz_max_95_i,
-                prior_phz_tail_scale_i,
-                prior_phz_weight_i,
             )
 
         batch_objective_y_grad = jax.vmap(
             jax.value_and_grad(single_objective_y, argnums=0),
-            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
         )
 
         def step(carry, iteration):
@@ -1158,15 +1025,6 @@ def _build_independent_adam_optimizer(
                 prior_beta_mask,
                 prior_beta_alpha,
                 prior_beta_beta,
-                prior_phz_mask,
-                prior_phz_min_70,
-                prior_phz_max_70,
-                prior_phz_min_90,
-                prior_phz_max_90,
-                prior_phz_min_95,
-                prior_phz_max_95,
-                prior_phz_tail_scale,
-                prior_phz_weight,
             )
             grad = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
             grad_norm = jnp.linalg.norm(grad, axis=1)
@@ -1248,15 +1106,6 @@ def _build_independent_warmstart_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
         truth_theta,
     ):
         del (
@@ -1266,15 +1115,6 @@ def _build_independent_warmstart_optimizer(
             prior_beta_mask,
             prior_beta_alpha,
             prior_beta_beta,
-            prior_phz_mask,
-            prior_phz_min_70,
-            prior_phz_max_70,
-            prior_phz_min_90,
-            prior_phz_max_90,
-            prior_phz_min_95,
-            prior_phz_max_95,
-            prior_phz_tail_scale,
-            prior_phz_weight,
         )
         best_theta = _warm_start_amplitude(
             theta0,
@@ -1312,7 +1152,6 @@ def _build_independent_grid_optimizer(
     prior_weight: float,
     redshift_grid_size: int,
     redshift_grid_width: float,
-    fast_grid_use_phz_bounds: bool,
     fast_grid_parameters: tuple[str, ...],
     fast_grid_prior_width: float,
 ):
@@ -1353,15 +1192,6 @@ def _build_independent_grid_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
     ):
         chi2 = single_chi2(theta, base, observed, sigma, mask)
         prior = _physical_prior_penalty(
@@ -1374,15 +1204,6 @@ def _build_independent_grid_optimizer(
             prior_beta_mask,
             prior_beta_alpha,
             prior_beta_beta,
-            prior_phz_mask,
-            prior_phz_min_70,
-            prior_phz_max_70,
-            prior_phz_min_90,
-            prior_phz_max_90,
-            prior_phz_min_95,
-            prior_phz_max_95,
-            prior_phz_tail_scale,
-            prior_phz_weight,
         )
         return jnp.nan_to_num(
             chi2 + prior_weight * prior,
@@ -1395,30 +1216,7 @@ def _build_independent_grid_optimizer(
     batch_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))
     batch_objective = jax.vmap(
         single_objective,
-        in_axes=(
-            0,
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        ),
+        in_axes=(0, 0, 0, 0, 0, None, None, 0, 0, 0, 0, 0, 0),
     )
 
     @jax.jit
@@ -1436,15 +1234,6 @@ def _build_independent_grid_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
         truth_theta,
     ):
         n_rows = theta0.shape[0]
@@ -1477,15 +1266,6 @@ def _build_independent_grid_optimizer(
                 prior_beta_mask,
                 prior_beta_alpha,
                 prior_beta_beta,
-                prior_phz_mask,
-                prior_phz_min_70,
-                prior_phz_max_70,
-                prior_phz_min_90,
-                prior_phz_max_90,
-                prior_phz_min_95,
-                prior_phz_max_95,
-                prior_phz_tail_scale,
-                prior_phz_weight,
             )
             return objective.astype(theta0.dtype), theta
 
@@ -1500,12 +1280,9 @@ def _build_independent_grid_optimizer(
                 prior_gaussian_mask,
                 prior_gaussian_loc,
                 prior_gaussian_scale,
-                prior_phz_min_95,
-                prior_phz_max_95,
                 redshift_grid_width,
                 fast_grid_prior_width,
                 z_free_pos,
-                fast_grid_use_phz_bounds,
             )
 
             def grid_step(carry, frac):
@@ -1559,24 +1336,12 @@ def _fast_grid_bounds(
     prior_gaussian_mask,
     prior_gaussian_loc,
     prior_gaussian_scale,
-    prior_phz_min_95,
-    prior_phz_max_95,
     redshift_grid_width: float,
     fast_grid_prior_width: float,
     redshift_free_pos: int | None,
-    fast_grid_use_phz_bounds: bool,
 ):
     center = theta[:, free_pos]
     is_redshift = redshift_free_pos is not None and free_pos == redshift_free_pos
-    phz_lo = prior_phz_min_95[:, free_pos]
-    phz_hi = prior_phz_max_95[:, free_pos]
-    valid_phz = (
-        bool(fast_grid_use_phz_bounds)
-        & is_redshift
-        & jnp.isfinite(phz_lo)
-        & jnp.isfinite(phz_hi)
-        & (phz_hi > phz_lo)
-    )
     gaussian_loc = prior_gaussian_loc[:, free_pos]
     gaussian_scale = prior_gaussian_scale[:, free_pos]
     valid_gaussian = (
@@ -1594,16 +1359,8 @@ def _fast_grid_bounds(
         grid_width,
         jnp.asarray(0.25, dtype=theta.dtype) * (upper[free_pos] - lower[free_pos]),
     )
-    lo = jnp.where(
-        valid_phz,
-        phz_lo,
-        jnp.where(valid_gaussian, lo_gaussian, center - fallback_width),
-    )
-    hi = jnp.where(
-        valid_phz,
-        phz_hi,
-        jnp.where(valid_gaussian, hi_gaussian, center + fallback_width),
-    )
+    lo = jnp.where(valid_gaussian, lo_gaussian, center - fallback_width)
+    hi = jnp.where(valid_gaussian, hi_gaussian, center + fallback_width)
     lo = jnp.maximum(lo, lower[free_pos])
     hi = jnp.minimum(hi, upper[free_pos])
     hi = jnp.maximum(hi, lo + jnp.asarray(1.0e-4, dtype=theta.dtype))
@@ -1662,15 +1419,6 @@ def _build_population_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
     ):
         chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
@@ -1701,15 +1449,6 @@ def _build_population_adam_optimizer(
             prior_beta_mask,
             prior_beta_alpha,
             prior_beta_beta,
-            prior_phz_mask,
-            prior_phz_min_70,
-            prior_phz_max_70,
-            prior_phz_min_90,
-            prior_phz_max_90,
-            prior_phz_min_95,
-            prior_phz_max_95,
-            prior_phz_tail_scale,
-            prior_phz_weight,
         )
         hyper = 0.5 * jnp.sum(relation_default_mask * (mu / hyper_mu_scale) ** 2)
         relation_hyper = 0.5 * jnp.sum(
@@ -1752,15 +1491,6 @@ def _build_population_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
-        prior_phz_mask,
-        prior_phz_min_70,
-        prior_phz_max_70,
-        prior_phz_min_90,
-        prior_phz_max_90,
-        prior_phz_min_95,
-        prior_phz_max_95,
-        prior_phz_tail_scale,
-        prior_phz_weight,
         truth_theta,
     ):
         theta0 = _warm_start_amplitude(
@@ -1881,15 +1611,6 @@ def _build_population_adam_optimizer(
                 prior_beta_mask,
                 prior_beta_alpha,
                 prior_beta_beta,
-                prior_phz_mask,
-                prior_phz_min_70,
-                prior_phz_max_70,
-                prior_phz_min_90,
-                prior_phz_max_90,
-                prior_phz_min_95,
-                prior_phz_max_95,
-                prior_phz_tail_scale,
-                prior_phz_weight,
             )
             (
                 grad_theta_direct,
@@ -1919,15 +1640,6 @@ def _build_population_adam_optimizer(
                     prior_beta_mask,
                     prior_beta_alpha,
                     prior_beta_beta,
-                    prior_phz_mask,
-                    prior_phz_min_70,
-                    prior_phz_max_70,
-                    prior_phz_min_90,
-                    prior_phz_max_90,
-                    prior_phz_min_95,
-                    prior_phz_max_95,
-                    prior_phz_tail_scale,
-                    prior_phz_weight,
                 )
             )(y)
             improved = value < best_loss
@@ -2077,15 +1789,6 @@ def _physical_prior_penalty(
     beta_mask,
     beta_alpha,
     beta_beta,
-    phz_mask,
-    phz_min_70,
-    phz_max_70,
-    phz_min_90,
-    phz_max_90,
-    phz_min_95,
-    phz_max_95,
-    phz_tail_scale,
-    phz_weight,
 ):
     gaussian_scale = jnp.maximum(gaussian_scale, 1.0e-6)
     gaussian = 0.5 * ((theta - gaussian_loc) / gaussian_scale) ** 2 + jnp.log(
@@ -2098,62 +1801,7 @@ def _physical_prior_penalty(
         (beta_alpha - 1.0) * jnp.log(scaled) + (beta_beta - 1.0) * jnp.log1p(-scaled)
     )
     beta = jnp.where(beta_mask, beta, 0.0)
-    phz = phz_weight * _phz_interval_penalty(
-        theta,
-        phz_min_70,
-        phz_max_70,
-        phz_min_90,
-        phz_max_90,
-        phz_min_95,
-        phz_max_95,
-        phz_tail_scale,
-    )
-    phz = jnp.where(phz_mask, phz, 0.0)
-    return jnp.sum(gaussian + beta + phz, axis=-1)
-
-
-def _phz_interval_penalty(
-    z,
-    min_70,
-    max_70,
-    min_90,
-    max_90,
-    min_95,
-    max_95,
-    tail_scale,
-):
-    valid = (
-        jnp.isfinite(min_70)
-        & jnp.isfinite(max_70)
-        & jnp.isfinite(min_90)
-        & jnp.isfinite(max_90)
-        & jnp.isfinite(min_95)
-        & jnp.isfinite(max_95)
-        & (max_70 > min_70)
-        & (max_90 > min_90)
-        & (max_95 > min_95)
-    )
-    d70 = jnp.maximum(jnp.maximum(min_70 - z, z - max_70), 0.0)
-    d90 = jnp.maximum(jnp.maximum(min_90 - z, z - max_90), 0.0)
-    d95 = jnp.maximum(jnp.maximum(min_95 - z, z - max_95), 0.0)
-    width70 = jnp.where(z < min_70, min_70 - min_90, max_90 - max_70)
-    width90 = jnp.where(z < min_90, min_90 - min_95, max_95 - max_90)
-    width70 = jnp.maximum(width70, 1.0e-4)
-    width90 = jnp.maximum(width90, 1.0e-4)
-    tail = jnp.maximum(tail_scale, 1.0e-4)
-    penalty_70_90 = 0.5 * (d70 / width70) ** 2
-    penalty_90_95 = 0.5 + (d90 / width90) ** 2
-    penalty_tail = 1.5 + 2.0 * (d95 / tail) ** 2
-    penalty = jnp.where(
-        d70 <= 0.0,
-        0.0,
-        jnp.where(
-            d90 <= 0.0,
-            penalty_70_90,
-            jnp.where(d95 <= 0.0, penalty_90_95, penalty_tail),
-        ),
-    )
-    return jnp.where(valid, penalty, 0.0)
+    return jnp.sum(gaussian + beta, axis=-1)
 
 
 def _population_relation_prior_penalty(

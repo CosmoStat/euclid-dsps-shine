@@ -341,21 +341,6 @@ def required_catalog_columns(config: dict[str, Any]) -> list[str]:
         col = truth_column_from_spec(redshift.get(key))
         if col:
             columns.add(col)
-    interval = redshift.get("prior_interval") or {}
-    if isinstance(interval, dict):
-        for key in ("min_column", "max_column"):
-            col = interval.get(key)
-            if col:
-                columns.add(str(col))
-    intervals = redshift.get("prior_intervals") or []
-    if isinstance(intervals, list):
-        for interval_item in intervals:
-            if not isinstance(interval_item, dict):
-                continue
-            for key in ("min_column", "max_column"):
-                col = interval_item.get(key)
-                if col:
-                    columns.add(str(col))
     truth = config.get("truth", {})
     truth_redshift = truth_column_from_spec(truth.get("redshift_column"))
     if truth_redshift:

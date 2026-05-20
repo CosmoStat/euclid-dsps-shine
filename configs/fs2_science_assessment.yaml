@@ -1,5 +1,5 @@
 # Configuration optimisée pour le Science Assessment
-# Active l'inférence du redshift (z_obs) et la relation Masse-Métallicité
+# Active l'inférence simple du redshift (z_obs) et la relation Masse-Métallicité
 
 catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
 ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
@@ -19,10 +19,6 @@ redshift:
     fixed_value: 0.5
     min: 0.0001
     max: 6.0
-    prior_interval:
-        min_column: phz_min_70
-        max_column: phz_max_70
-        probability: 0.70
 
 bands:
     - name: euclid_vis
@@ -57,13 +53,7 @@ model:
         metallicity_scatter: 0.2
         dust_av: 0.2
         dust_slope: -0.7
-    parameter_columns:
-        z_obs_phz_min_70: phz_min_70
-        z_obs_phz_max_70: phz_max_70
-        z_obs_phz_min_90: phz_min_90
-        z_obs_phz_max_90: phz_max_90
-        z_obs_phz_min_95: phz_min_95
-        z_obs_phz_max_95: phz_max_95
+    parameter_columns: {}
 
 fit:
     method: jax_adam
@@ -71,9 +61,7 @@ fit:
     learning_rate: 0.1
     priors:
         z_obs:
-            type: phz_interval
-            tail_scale: 0.05
-            weight: 2.0 # Augmentation du poids du prior Photo-Z
+            type: uniform
     population:
         prior_weight: 1.0
         sigma_floor: 0.03

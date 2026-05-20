@@ -101,9 +101,8 @@ Redshift
 --------
 
 The FS2 configs set initial DSPS ``z_obs`` from the NNPZ PDF median. The
-70/90/95 percent intervals are still loaded so diagnostics and explicit
-photo-z-prior experiments can use them, but production fast mode does not use
-them as hard bounds by default:
+70/90/95 percent intervals may still be loaded as catalog diagnostics, but
+they are not used as fit priors:
 
 .. code-block:: yaml
 
@@ -113,29 +112,9 @@ them as hard bounds by default:
      fixed_value: 0.5
      min: 0.0001
      max: 6.0
-     prior_interval:
-       min_column: phz_min_70
-       max_column: phz_max_70
-       probability: 0.70
-       sigma_floor: 0.01
-       sigma_ceiling: 0.6
-     prior_intervals:
-       - min_column: phz_min_70
-         max_column: phz_max_70
-         probability: 0.70
-       - min_column: phz_min_90
-         max_column: phz_max_90
-         probability: 0.90
-       - min_column: phz_min_95
-         max_column: phz_max_95
-         probability: 0.95
 
 ``column`` initializes the DSPS redshift. ``truth_column`` is diagnostic only.
 ``fixed_value`` is a fallback when the row value is missing or invalid.
-``prior_interval`` still writes the compatibility field ``z_obs_prior_sigma``.
-``prior_intervals`` writes ``z_obs_phz_min/max_70/90/95`` base parameters. They
-are consumed only when a config explicitly enables ``type: phz_interval`` or
-``fit.fast_grid_use_phz_bounds: true``.
 
 Bands
 -----
@@ -190,12 +169,6 @@ Default free parameters can override these values during fitting.
        log10_formed_mass_msun: 10.0
        sfh_t_peak: 4.0
        sfh_tau: 0.6
-       sfh_burst_fraction: 0.0
-       sfh_burst_time: 1.0
-       sfh_burst_width: 0.12
-       sfh_quench_time: 12.0
-       sfh_quench_width: 0.5
-       sfh_quench_depth: 0.0
        log10_metallicity: -2.0
        metallicity_scatter: 0.2
        dust_av: 0.2
@@ -225,27 +198,9 @@ Parameter meanings:
 
 ``sfh_t_peak`` and ``sfh_tau``
   Peak time and width of the lognormal SFH baseline in Gyr. Lognormal and
-  delayed families are common compact SFH parameterizations, but they are too
-  restrictive for many galaxies.
-
-``sfh_bin_log_sfr_*`` and ``sfh_bin_transition_width``
-  Optional smooth non-parametric SFH shape bins. They are not enabled in the
-  default local configs because the local broad-band data do not constrain many
-  SFH degrees of freedom. If explicitly configured, bin values are
-  mean-centered before formed-mass normalization.
-
-``sfh_burst_fraction``, ``sfh_burst_time``, ``sfh_burst_width``
-  Smooth Gaussian burst component added to the baseline SFH. This is motivated
-  by the PROVABGS model family, which uses a richer SFH basis plus burst terms
-  for DESI BGS SED inference. In this project it is experimental and fixed to
-  zero in the local production configs.
-
-``sfh_quench_time``, ``sfh_quench_width``, ``sfh_quench_depth``
-  Smooth late-time suppression applied after a quench time. This is a compact
-  differentiable proxy for the flexibility normally provided by non-parametric
-  SFHs or NMF SFH bases. It is currently added-but-not-used for the local
-  broad-band data: ``sfh_quench_depth`` is fixed to zero, and quench parameters
-  should not be interpreted as inferred galaxy properties.
+  delayed families are common compact SFH parameterizations. The local workflow
+  intentionally keeps this simple; binned SFH, burst, and quench parameters are
+  not active.
 
 ``log10_metallicity`` and ``metallicity_scatter``
   Stellar metallicity center and scatter for DSPS SSP weighting. The catalog
@@ -277,15 +232,13 @@ priors. The scientific motivation is:
 The current values keep the optimization stable while leaving the scientific
 assumptions visible in YAML. The default fits infer formed mass, redshift,
 lognormal SFH shape where configured, dust where applicable, and metallicity.
-Burst/quench modifiers and binned SFH parameters remain fixed by default
-because broad-band photometry alone does not robustly identify those features.
+Burst/quench modifiers and binned SFH parameters were removed from the active
+workflow because broad-band photometry alone does not robustly identify those
+features.
 
 Current "extra" model pieces:
 
-* burst modifiers are implemented but inactive in the production configs;
-* quench modifiers are implemented but inactive because ``sfh_quench_depth`` is
-  zero;
-* binned SFH parameters are implemented but absent from the local configs;
+* binned SFH, burst, and quench modifiers are not active;
 * scalar Salim dust remains as fallback, while the 10-band COSMOS config uses
   row-injected two-component COSMOS dust;
 * emission-line targets exist in the catalog, but no local line-enabled SSP
@@ -308,9 +261,7 @@ bounds:
      prior_weight: 1.0
      priors:
        z_obs:
-         type: phz_interval
-         tail_scale: 0.05
-         weight: 1.0
+         type: uniform
      free_parameters:
        z_obs:
          initial: from_base
@@ -329,12 +280,9 @@ Use ``initial: from_base`` when the initial value should come from the resolved
 base parameter dictionary for each row.
 
 ``fit.priors`` adds differentiable penalties to the JAX objective. Supported
-types are ``uniform``, ``normal``, ``truncated_normal``, ``scaled_beta``, and
-``phz_interval``. For Gaussian priors, ``scale: from_base`` reads a row-resolved
-``<parameter>_prior_sigma`` value from the base parameter dictionary. For
-``phz_interval``, the prior is flat inside the 70 percent interval and steepens
-through the 90/95 percent intervals. The reported ``chi2`` remains the
-photometric chi-square; the prior only guides the optimization.
+types are ``uniform``, ``normal``, ``truncated_normal``, and ``scaled_beta``.
+The reported ``chi2`` remains the photometric chi-square; the prior only guides
+the optimization.
 
 Population relations can be configured under ``fit.population.relations``:
 
@@ -373,9 +321,7 @@ Bayesian Sampling
      init_from_map: true
      priors:
        z_obs:
-         type: phz_interval
-         tail_scale: 0.05
-         weight: 1.0
+         type: uniform
        log10_sfr:
          type: truncated_normal
          loc: 0.0
@@ -389,10 +335,9 @@ Bayesian Sampling
 
 Use ``--sampler hmc`` and a small ``--num-steps`` for predictable debugging.
 Use ``--sampler nuts`` for more adaptive posterior checks on selected rows.
-Supported prior types are ``uniform``, ``normal``, ``truncated_normal``,
-``scaled_beta``, and ``phz_interval``. ``loc: from_base`` centers a Gaussian
-prior on the row-resolved base parameter. ``phz_interval`` uses the same PHZ
-interval penalty as MAP and does not need ``loc``/``scale``.
+Supported prior types are ``uniform``, ``normal``, ``truncated_normal``, and
+``scaled_beta``. ``loc: from_base`` centers a Gaussian prior on the row-resolved
+base parameter.
 
 COSMOS Template SED Setup
 -------------------------
@@ -686,8 +631,7 @@ Fast production mode:
   Inferred in fast-grid mode:
 
   * ``z_obs``: selected from a small row-level grid around the initialized
-    redshift using photometry and the configured redshift bounds; PHZ hard
-    interval bounds are disabled unless ``fit.fast_grid_use_phz_bounds: true``;
+    redshift using photometry and the configured redshift bounds;
   * ``log10_formed_mass_msun``: adjusted analytically from the broadband
     magnitude offset;
   * ``log10_metallicity``: selected on a small prior-bounded grid;

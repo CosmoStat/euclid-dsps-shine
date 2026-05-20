@@ -38,13 +38,16 @@ Tasks:
 
 ## Phase 0 - Baseline And Cleanup
 
+Status: active cleanup.
+
 Commit target: `Document current DSPS workflow state`
 
 Tasks:
 
 - Document commands that currently work.
 - List active features vs experimental/inactive features.
-- Mark quench, burst, and complex SFH terms as inactive unless a config uses them.
+- Mark removed quench, burst, PHZ-prior, and complex SFH terms as removed from
+  active code/configs.
 - Reduce dense science assessment prose into decisions, limitations, and next checks.
 - Keep SSP path rationale documented: SSP tables are model inputs, not inferred by DSPS.
 
@@ -67,9 +70,9 @@ Tasks:
 - [x] Add ground-truth `cosmos_sed` overlay when local data provides it.
 - [x] Plot sample diagnostics:
   - inferred DSPS SED
-  - COSMOS/ground-truth SED
-  - observed photometric points
-  - filter transmission curves
+  - COSMOS/ground-truth SED, both scaled and unscaled diagnostic shape
+  - observed photometric constraints on the SED panel
+  - filter transmission curves placed near the lower plot axis
   - residuals by band
   - fitted/input parameters: redshift, mass, SFR, metallicity, dust
 - [x] Add CLI options:
@@ -111,6 +114,8 @@ Done when:
 
 ## Phase 3 - Minimal Production Model
 
+Status: active cleanup.
+
 Commit target: `Reduce fitted parameter space`
 
 Goal: fit few realistic parameters first.
@@ -120,12 +125,12 @@ Production defaults:
 - Free: `z_obs`, `log10_formed_mass_msun`, simple SFH parameters if needed.
 - Derived: SFR from fitted mass-normalized SFH.
 - Fixed or weak-prior initially: metallicity, dust, depending on diagnostics.
-- Inactive: quench terms, burst terms, non-parametric SFH bins unless explicitly enabled.
+- Removed from active model: quench terms, burst terms, non-parametric SFH bins.
 
 Tasks:
 
-- Remove complex SFH/quench/burst from default configs.
-- Keep code paths only if marked experimental and tested.
+- [x] Remove complex SFH/quench/burst from code and default configs.
+- [x] Keep simple lognormal SFH table as the only active SFH path.
 - Add flat-prior config for comparison.
 
 Done when:
@@ -144,11 +149,12 @@ Goal: fit redshift without circular hard photo-z truth.
 Tasks:
 
 - [x] Stop using `phz_min_70` / `phz_max_70` as hard truth-like bounds in current production configs.
-- [x] Add `fit.fast_grid_use_phz_bounds`, default `false`.
+- [x] Remove PHZ interval priors from MAP, fast-grid, population, sampling, and config validation.
+- [x] Keep PHZ interval columns only as optional diagnostics.
 - Test:
   - fixed catalog redshift
   - free redshift with flat broad prior
-  - free redshift with soft photo-z prior, if justified
+  - calibrated non-circular redshift prior, only if justified later
 - Report redshift bias and mass coupling.
 
 Done when:

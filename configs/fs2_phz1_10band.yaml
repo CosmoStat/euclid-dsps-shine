@@ -125,22 +125,6 @@ redshift:
     fixed_value: 0.5
     min: 0.0001
     max: 6.0
-    prior_interval:
-        min_column: phz_min_70
-        max_column: phz_max_70
-        probability: 0.70
-        sigma_floor: 0.01
-        sigma_ceiling: 0.6
-    prior_intervals:
-        - min_column: phz_min_70
-          max_column: phz_max_70
-          probability: 0.70
-        - min_column: phz_min_90
-          max_column: phz_max_90
-          probability: 0.90
-        - min_column: phz_min_95
-          max_column: phz_max_95
-          probability: 0.95
 
 bands:
     - name: lsst_u
@@ -247,12 +231,6 @@ model:
         log10_formed_mass_msun: 10.0
         sfh_t_peak: 4.0
         sfh_tau: 0.6
-        sfh_burst_fraction: 0.0
-        sfh_burst_time: 1.0
-        sfh_burst_width: 0.12
-        sfh_quench_time: 12.0
-        sfh_quench_width: 0.5
-        sfh_quench_depth: 0.0
         log10_metallicity: -2.0
         metallicity_scatter: 0.2
         dust_slope: -0.7
@@ -269,12 +247,6 @@ model:
         cosmos_frac_2: frac_cosmos_2
         cosmos_ext_curve_1: ext_curve_cosmos_1
         cosmos_ext_curve_2: ext_curve_cosmos_2
-        z_obs_phz_min_70: phz_min_70
-        z_obs_phz_max_70: phz_max_70
-        z_obs_phz_min_90: phz_min_90
-        z_obs_phz_max_90: phz_max_90
-        z_obs_phz_min_95: phz_min_95
-        z_obs_phz_max_95: phz_max_95
 
 fit:
     method: jax_adam
@@ -287,9 +259,6 @@ fit:
     fast_grid_search: true
     redshift_grid_size: 5
     redshift_grid_width: 0.4
-    # Keep PHZ columns available for diagnostics/initialization, but do not
-    # make the fast grid follow PHZ hard intervals by default.
-    fast_grid_use_phz_bounds: false
     fast_grid_parameters:
         - z_obs
         - log10_metallicity
@@ -360,9 +329,7 @@ sample:
     save_samples: true
     priors:
         z_obs:
-            type: phz_interval
-            tail_scale: 0.05
-            weight: 1.0
+            type: uniform
         log10_sfr:
             type: truncated_normal
             loc: 0.0

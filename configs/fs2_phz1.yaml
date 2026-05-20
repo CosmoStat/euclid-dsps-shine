@@ -120,22 +120,6 @@ redshift:
     fixed_value: 0.5
     min: 0.0001
     max: 6.0
-    prior_interval:
-        min_column: phz_min_70
-        max_column: phz_max_70
-        probability: 0.70
-        sigma_floor: 0.01
-        sigma_ceiling: 0.6
-    prior_intervals:
-        - min_column: phz_min_70
-          max_column: phz_max_70
-          probability: 0.70
-        - min_column: phz_min_90
-          max_column: phz_max_90
-          probability: 0.90
-        - min_column: phz_min_95
-          max_column: phz_max_95
-          probability: 0.95
 
 bands:
     - name: euclid_vis

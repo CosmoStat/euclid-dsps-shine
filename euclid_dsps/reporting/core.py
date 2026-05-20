@@ -593,9 +593,6 @@ def write_batch_outputs(
         )
     write_json(out / f"{label}_summary.json", summary)
 
-    if str(reporting_level).lower() != "full":
-        return
-
     plot_batch_dashboard(valid, by_row, out / f"{label}_dashboard.png")
     plot_batch_residuals_by_band(valid, out / f"{label}_residuals_by_band.png")
     plot_batch_observed_vs_model(valid, out / f"{label}_observed_vs_model.png")
@@ -720,7 +717,6 @@ def fit_objective_components(
     for column in [
         "physical_gaussian_prior_penalty",
         "physical_beta_prior_penalty",
-        "phz_prior_penalty",
         "population_gaussian_prior_penalty",
         "population_relation_prior_penalty",
     ]:
@@ -729,7 +725,6 @@ def fit_objective_components(
     out["physical_prior_penalty"] = (
         out["physical_gaussian_prior_penalty"]
         + out["physical_beta_prior_penalty"]
-        + out["phz_prior_penalty"]
     )
     out["population_prior_penalty"] = (
         out["population_gaussian_prior_penalty"]
@@ -758,7 +753,7 @@ def _fit_parameter_source(
         return "row_injected"
     if name in fixed:
         return "fixed"
-    if name.startswith("z_obs_phz_") or name.endswith("_prior_sigma"):
+    if name.endswith("_prior_sigma"):
         return "prior_context"
     return "reported_not_configured"
 
@@ -804,7 +799,6 @@ def _physical_prior_components(
     free = config.get("fit", {}).get("free_parameters", {}) or {}
     gaussian = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
     beta = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
-    phz = pd.Series(np.zeros(len(fits)), index=fits.index, dtype=float)
     for name, spec in priors.items():
         if name not in free:
             continue
@@ -827,12 +821,9 @@ def _physical_prior_components(
             beta += -(
                 (alpha - 1.0) * np.log(scaled) + (beta_param - 1.0) * np.log1p(-scaled)
             )
-        elif prior_type == "phz_interval" and name == "z_obs":
-            phz += _phz_interval_penalty_numpy(values, fits, spec)
     return {
         "physical_gaussian_prior_penalty": gaussian,
         "physical_beta_prior_penalty": beta,
-        "phz_prior_penalty": phz,
     }
 
 
@@ -909,55 +900,6 @@ def _prior_loc(fits: pd.DataFrame, name: str, spec: dict[str, Any]) -> pd.Series
             else pd.Series(np.zeros(len(fits)), index=fits.index)
         )
     return pd.Series(float(loc), index=fits.index)
-
-
-def _phz_interval_penalty_numpy(
-    z: pd.Series, fits: pd.DataFrame, spec: dict[str, Any]
-) -> pd.Series:
-    def column(name: str, fallback: str) -> pd.Series:
-        param = str(spec.get(name, fallback))
-        values = _fit_values(fits, param)
-        if values is None:
-            return pd.Series(np.nan, index=fits.index)
-        return values
-
-    min70 = column("min_70_parameter", "z_obs_phz_min_70")
-    max70 = column("max_70_parameter", "z_obs_phz_max_70")
-    min90 = column("min_90_parameter", "z_obs_phz_min_90")
-    max90 = column("max_90_parameter", "z_obs_phz_max_90")
-    min95 = column("min_95_parameter", "z_obs_phz_min_95")
-    max95 = column("max_95_parameter", "z_obs_phz_max_95")
-    valid = (
-        min70.notna()
-        & max70.notna()
-        & min90.notna()
-        & max90.notna()
-        & min95.notna()
-        & max95.notna()
-        & (max70 > min70)
-        & (max90 > min90)
-        & (max95 > min95)
-    )
-    d70 = np.maximum(np.maximum(min70 - z, z - max70), 0.0)
-    d90 = np.maximum(np.maximum(min90 - z, z - max90), 0.0)
-    d95 = np.maximum(np.maximum(min95 - z, z - max95), 0.0)
-    width70 = np.where(z < min70, min70 - min90, max90 - max70)
-    width90 = np.where(z < min90, min90 - min95, max95 - max90)
-    width70 = np.maximum(width70, 1.0e-4)
-    width90 = np.maximum(width90, 1.0e-4)
-    tail = max(float(spec.get("tail_scale", 0.05)), 1.0e-4)
-    penalty_70_90 = 0.5 * (d70 / width70) ** 2
-    penalty_90_95 = 0.5 + (d90 / width90) ** 2
-    penalty_tail = 1.5 + 2.0 * (d95 / tail) ** 2
-    penalty = np.where(
-        d70 <= 0.0,
-        0.0,
-        np.where(
-            d90 <= 0.0, penalty_70_90, np.where(d95 <= 0.0, penalty_90_95, penalty_tail)
-        ),
-    )
-    penalty = pd.Series(penalty, index=fits.index).where(valid, 0.0)
-    return penalty * max(float(spec.get("weight", 1.0)), 0.0)
 
 
 def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None:
@@ -1359,21 +1301,36 @@ def plot_sed_diagnostic(
 
     truth = _ground_truth_sed_frame(ground_truth_sed)
     if truth is not None and not truth.empty:
+        truth_wave = truth["wave_angstrom"].to_numpy(dtype=float)
+        truth_scaled = truth["ground_truth_lnu_lsun_per_hz"].to_numpy(dtype=float)
         truth_mask = _sed_plot_mask(
-            truth["wave_angstrom"].to_numpy(dtype=float),
-            truth["ground_truth_lnu_lsun_per_hz"].to_numpy(dtype=float),
+            truth_wave,
+            truth_scaled,
         )
         if truth_mask.any():
             ax_sed.plot(
-                truth["wave_angstrom"].to_numpy(dtype=float)[truth_mask],
-                truth["ground_truth_lnu_lsun_per_hz"].to_numpy(dtype=float)[
-                    truth_mask
-                ],
-                label=str(truth["ground_truth_label"].iloc[0]),
+                truth_wave[truth_mask],
+                truth_scaled[truth_mask],
+                label=f"{truth['ground_truth_label'].iloc[0]} scaled",
                 lw=1.2,
                 ls="--",
                 alpha=0.9,
             )
+        if "ground_truth_unscaled_lnu_lsun_per_hz_display" in truth:
+            unscaled = truth[
+                "ground_truth_unscaled_lnu_lsun_per_hz_display"
+            ].to_numpy(dtype=float)
+            unscaled_mask = _sed_plot_mask(truth_wave, unscaled)
+            if unscaled_mask.any():
+                ax_sed.plot(
+                    truth_wave[unscaled_mask],
+                    unscaled[unscaled_mask],
+                    label=f"{truth['ground_truth_label'].iloc[0]} unscaled shape",
+                    lw=0.9,
+                    ls=":",
+                    alpha=0.85,
+                    color="#5A8F6B",
+                )
 
     z_obs = result.parameters.get("z_obs", np.nan)
     if include_filters and mask.any():
@@ -1384,6 +1341,7 @@ def plot_sed_diagnostic(
             "effective_wavelength_angstrom"
         )
         if not comparison.empty:
+            _plot_sed_photometry_constraints(ax_sed, result, comparison, z_obs)
             x_obs = comparison["effective_wavelength_angstrom"].to_numpy(dtype=float)
             if np.isfinite(z_obs):
                 x_obs = x_obs / (1.0 + float(z_obs))
@@ -1458,8 +1416,22 @@ def _plot_rest_frame_filters(
     z_obs = result.parameters.get("z_obs", np.nan)
     if not np.isfinite(z_obs) or not sed_mask.any():
         return
-    ymin, ymax = _positive_axis_limits(result.dusted_rest_sed[sed_mask])
-    for band, values in result.photometry.items():
+    palette = [
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
+        "#bcbd22",
+        "#17becf",
+    ]
+    base = 0.035
+    height = 0.055
+    xaxis_transform = ax.get_xaxis_transform()
+    for index, (band, values) in enumerate(result.photometry.items()):
         wave_filter_obs = np.asarray(
             values.get("filter_wave_angstrom", []), dtype=float
         )
@@ -1472,20 +1444,85 @@ def _plot_rest_frame_filters(
         if not passband_mask.any():
             continue
         rest_wave = wave_filter_obs[passband_mask] / (1.0 + float(z_obs))
-        scaled = ymin * (ymax / ymin) ** (
-            0.035
-            + 0.13
-            * transmission[passband_mask]
-            / np.nanmax(transmission[passband_mask])
-        )
+        color = palette[index % len(palette)]
+        norm_trans = transmission[passband_mask] / np.nanmax(transmission[passband_mask])
+        scaled = base + height * norm_trans
         ax.fill_between(
             rest_wave,
-            ymin,
+            base,
             scaled,
-            alpha=0.12,
+            transform=xaxis_transform,
+            alpha=0.34,
+            color=color,
             lw=0,
             label=f"{band.replace('euclid_', '')} filter",
+            zorder=0,
+            clip_on=True,
         )
+        ax.plot(
+            rest_wave,
+            scaled,
+            color=color,
+            lw=0.8,
+            alpha=0.9,
+            zorder=1,
+            transform=xaxis_transform,
+            clip_on=True,
+        )
+
+
+def _plot_sed_photometry_constraints(
+    ax: plt.Axes, result: ModelResult, comparison: pd.DataFrame, z_obs: float
+) -> None:
+    if not np.isfinite(z_obs):
+        return
+    rest_wave = comparison["effective_wavelength_angstrom"].to_numpy(dtype=float) / (
+        1.0 + float(z_obs)
+    )
+    model_flux = comparison["model_flux_fnu_cgs"].to_numpy(dtype=float)
+    obs_flux = comparison["observed_flux_fnu_cgs"].to_numpy(dtype=float)
+    sigma_mag = comparison["sigma_mag"].to_numpy(dtype=float)
+    y_model = np.interp(rest_wave, result.wave, result.dusted_rest_sed)
+    ratio = np.divide(
+        obs_flux,
+        model_flux,
+        out=np.full_like(obs_flux, np.nan),
+        where=np.isfinite(model_flux) & (model_flux > 0),
+    )
+    y_obs = y_model * ratio
+    yerr = y_obs * np.log(10.0) * 0.4 * sigma_mag
+    valid = (
+        np.isfinite(rest_wave)
+        & np.isfinite(y_model)
+        & np.isfinite(y_obs)
+        & (rest_wave > 0)
+        & (y_model > 0)
+        & (y_obs > 0)
+    )
+    if not valid.any():
+        return
+    ax.errorbar(
+        rest_wave[valid],
+        y_obs[valid],
+        yerr=yerr[valid],
+        fmt="o",
+        ms=4.0,
+        color="#1F4E79",
+        ecolor="#1F4E79",
+        elinewidth=0.75,
+        capsize=1.5,
+        label="observed phot. constraint",
+        zorder=5,
+    )
+    ax.scatter(
+        rest_wave[valid],
+        y_model[valid],
+        marker="s",
+        s=18,
+        color="#B85C38",
+        label="DSPS band model",
+        zorder=5,
+    )
 
 
 def _ground_truth_sed_frame(ground_truth_sed: Any | None) -> pd.DataFrame | None:
@@ -1515,13 +1552,24 @@ def _ground_truth_sed_frame(ground_truth_sed: Any | None) -> pd.DataFrame | None
         if "ground_truth_label" in frame
         else "COSMOS proxy"
     )
-    return pd.DataFrame(
+    output = pd.DataFrame(
         {
             "wave_angstrom": frame["wave_angstrom"].to_numpy(dtype=float),
             "ground_truth_lnu_lsun_per_hz": frame[value_column].to_numpy(dtype=float),
             "ground_truth_label": label,
         }
     )
+    if "ground_truth_unscaled_lnu_lsun_per_hz" in frame:
+        raw = frame["ground_truth_unscaled_lnu_lsun_per_hz"].to_numpy(dtype=float)
+        scaled = output["ground_truth_lnu_lsun_per_hz"].to_numpy(dtype=float)
+        good = np.isfinite(raw) & np.isfinite(scaled) & (raw > 0) & (scaled > 0)
+        display = np.full_like(raw, np.nan, dtype=float)
+        if good.any():
+            factor = np.nanmedian(scaled[good]) / np.nanmedian(raw[good])
+            display = raw * factor
+        output["ground_truth_unscaled_lnu_lsun_per_hz"] = raw
+        output["ground_truth_unscaled_lnu_lsun_per_hz_display"] = display
+    return output
 
 
 def _positive_axis_limits(values: np.ndarray) -> tuple[float, float]:

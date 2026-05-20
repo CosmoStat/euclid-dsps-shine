@@ -21,7 +21,7 @@ Default Euclid passbands (VIS/Y/J/H) are loaded from ASCII throughput files unde
 Required columns for the default workflow:
 
 - `phz_median`: photometric redshift used to initialize free DSPS `z_obs`.
-- `phz_min_70`/`phz_max_70`, `phz_min_90`/`phz_max_90`, `phz_min_95`/`phz_max_95`: NNPZ redshift intervals kept for diagnostics and optional soft-prior experiments. Production fast mode no longer uses them as hard bounds by default.
+- `phz_min_70`/`phz_max_70`, `phz_min_90`/`phz_max_90`, `phz_min_95`/`phz_max_95`: NNPZ redshift intervals kept only as diagnostics. They are not used as fit priors.
 - `z_true`: truth redshift used only for diagnostics.
 - `euclid_vis`, `euclid_nisp_y`, `euclid_nisp_j`, `euclid_nisp_h`: simulated fluxes.
 - `sed_cosmos_1`, `sed_cosmos_2`, `ebv_cosmos_*`, `ext_curve_cosmos_*`: COSMOS template reconstruction inputs.
@@ -263,7 +263,7 @@ Bayesian single-galaxy runs first compute an Adam/MAP solution, then initialize 
 
 ## Model Notes
 
-`euclid_dsps/model.py` is the only module that calls native DSPS. It builds a lognormal SFH table by default, with an optional binned-SFH code path only when `sfh_bin_log_sfr_*` parameters are explicitly configured. It passes that JAX SFH table into `calc_rest_sed_sfh_table_lognormal_mdf`, applies DSPS dust attenuation, and calls `calc_obs_mag` for each configured filter. The fit path keeps these operations in JAX until final report writing, so `jax.value_and_grad` can differentiate the photometric likelihood. Batch fitting uses `jax.vmap` over each parquet chunk and runs on the active JAX device, normally GPU when configured.
+`euclid_dsps/model.py` is the only module that calls native DSPS. It builds a simple lognormal SFH table from formed mass, `sfh_t_peak`, and `sfh_tau`. It passes that JAX SFH table into `calc_rest_sed_sfh_table_lognormal_mdf`, applies DSPS dust attenuation, and calls `calc_obs_mag` for each configured filter. The fit path keeps these operations in JAX until final report writing, so `jax.value_and_grad` can differentiate the photometric likelihood. Batch fitting uses `jax.vmap` over each parquet chunk and runs on the active JAX device, normally GPU when configured.
 
 The default fit follows the DSPS-paper process as closely as the current catalog allows:
 
@@ -271,7 +271,7 @@ The default fit follows the DSPS-paper process as closely as the current catalog
 - Native DSPS maps those parameters to a rest-frame SED.
 - DSPS photometry maps the SED to observed VIS/Y/J/H AB magnitudes.
 - A Gaussian chi-square compares model magnitudes to simulated Euclid photometry.
-- `z_obs` is free by default and regularized by the NNPZ 70/90/95 percent interval prior.
+- `z_obs` is free by default, initialized from `phz_median`, and uses broad configured bounds rather than PHZ interval priors.
 - Adam optimizes bounded parameters through a smooth transform.
 - `fit-population --full-adam` adds shared Gaussian population priors plus configured physical relations, currently `log10_metallicity ~ log10_formed_mass_msun`, and jointly optimizes per-galaxy parameters plus hyperparameters.
 - Fast production mode infers `z_obs`, `log10_formed_mass_msun`, `log10_metallicity`, and SFR through fitted SFH-shape parameters (`sfh_t_peak`, `sfh_tau`). Use derived `fit_log10_sfr_at_obs` as the SFR estimate.

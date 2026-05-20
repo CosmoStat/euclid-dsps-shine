@@ -159,9 +159,6 @@ def parameters_for_row(
         if column in row and np.isfinite(row[column]):
             params[param_name] = float(row[column])
     params["z_obs"] = resolve_redshift(params, row, redshift_config or {})
-    prior_sigma = resolve_redshift_prior_sigma(row, redshift_config or {})
-    params["z_obs_prior_sigma"] = float(prior_sigma)
-    params.update(resolve_redshift_prior_interval_values(row, redshift_config or {}))
     return params
 
 
@@ -181,75 +178,6 @@ def resolve_redshift(
     if not np.isfinite(value):
         value = z_min
     return float(np.clip(value, z_min, z_max))
-
-
-def resolve_redshift_prior_sigma(
-    row: dict[str, Any], redshift_config: dict[str, Any]
-) -> float:
-    """Estimate a row-level Gaussian prior sigma from a PHZ central interval."""
-    interval = redshift_config.get("prior_interval") or {}
-    if not isinstance(interval, dict):
-        return float("nan")
-    min_column = interval.get("min_column")
-    max_column = interval.get("max_column")
-    if not min_column or not max_column:
-        return float("nan")
-    try:
-        z_min = float(row[min_column])
-        z_max = float(row[max_column])
-    except (KeyError, TypeError, ValueError):
-        return float("nan")
-    if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
-        return float("nan")
-    probability = float(interval.get("probability", 0.70))
-    zscore_by_probability = {
-        0.70: 1.0364333894937898,
-        0.90: 1.6448536269514722,
-        0.95: 1.959963984540054,
-    }
-    zscore = zscore_by_probability.get(round(probability, 2))
-    if zscore is None:
-        # Fallback for uncommon central intervals. The 70/90/95 values above
-        # cover the CosmoHub NNPZ columns used by this project.
-        zscore = 1.0364333894937898
-    sigma = 0.5 * (z_max - z_min) / zscore
-    floor = float(interval.get("sigma_floor", 0.01))
-    ceiling = float(interval.get("sigma_ceiling", 1.0))
-    return float(np.clip(sigma, floor, ceiling))
-
-
-def resolve_redshift_prior_interval_values(
-    row: dict[str, Any], redshift_config: dict[str, Any]
-) -> dict[str, float]:
-    """Read PHZ central intervals into scalar parameters for JAX priors."""
-    values: dict[str, float] = {}
-    for interval in _redshift_prior_intervals(redshift_config):
-        probability = float(interval.get("probability", np.nan))
-        if not np.isfinite(probability):
-            continue
-        suffix = str(int(round(probability * 100.0)))
-        for side, key in (("min", "min_column"), ("max", "max_column")):
-            column = interval.get(key)
-            value = float("nan")
-            if column and column in row:
-                try:
-                    candidate = float(row[column])
-                except (TypeError, ValueError):
-                    candidate = float("nan")
-                if np.isfinite(candidate):
-                    value = candidate
-            values[f"z_obs_phz_{side}_{suffix}"] = value
-    return values
-
-
-def _redshift_prior_intervals(redshift_config: dict[str, Any]) -> list[dict[str, Any]]:
-    intervals = redshift_config.get("prior_intervals")
-    if isinstance(intervals, list):
-        return [item for item in intervals if isinstance(item, dict)]
-    interval = redshift_config.get("prior_interval")
-    if isinstance(interval, dict):
-        return [interval]
-    return []
 
 
 def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResult:
@@ -499,12 +427,6 @@ def build_lognormal_sfh(
     log10_sfr: float,
     sfh_t_peak: float,
     sfh_tau: float,
-    sfh_burst_fraction: float = 0.0,
-    sfh_burst_time: float = 1.0,
-    sfh_burst_width: float = 0.12,
-    sfh_quench_time: float = 12.0,
-    sfh_quench_width: float = 0.5,
-    sfh_quench_depth: float = 0.0,
 ) -> np.ndarray:
     """Build a positive SFH in Msun/yr on cosmic-time bins."""
     return np.asarray(
@@ -513,12 +435,6 @@ def build_lognormal_sfh(
             log10_sfr,
             sfh_t_peak,
             sfh_tau,
-            sfh_burst_fraction,
-            sfh_burst_time,
-            sfh_burst_width,
-            sfh_quench_time,
-            sfh_quench_width,
-            sfh_quench_depth,
         ),
         dtype=float,
     )
@@ -527,77 +443,13 @@ def build_lognormal_sfh(
 def build_sfh_table_jax(
     gal_t_table: jnp.ndarray, params: dict[str, Any]
 ) -> jnp.ndarray:
-    """Build the active SFH table without leaving JAX.
-
-    If ``sfh_bin_log_sfr_*`` keys are present, use a smooth non-parametric
-    binned SFH. Otherwise, keep the historical lognormal+burst/quench form.
-    """
-    bin_names = _sfh_bin_parameter_names(params)
-    if bin_names:
-        bin_values = jnp.asarray([params[name] for name in bin_names], dtype=jnp.float32)
-        return build_binned_sfh_jax(
-            gal_t_table=gal_t_table,
-            bin_log_sfr=bin_values,
-            transition_width=jnp.asarray(
-                params.get("sfh_bin_transition_width", 0.015), dtype=jnp.float32
-            ),
-        )
+    """Build the simple production SFH table without leaving JAX."""
     return build_lognormal_sfh_jax(
         gal_t_table=gal_t_table,
         log10_sfr=jnp.asarray(params["log10_sfr"], dtype=jnp.float32),
         sfh_t_peak=jnp.asarray(params["sfh_t_peak"], dtype=jnp.float32),
         sfh_tau=jnp.asarray(params["sfh_tau"], dtype=jnp.float32),
-        sfh_burst_fraction=jnp.asarray(
-            params.get("sfh_burst_fraction", 0.0), dtype=jnp.float32
-        ),
-        sfh_burst_time=jnp.asarray(
-            params.get("sfh_burst_time", 1.0), dtype=jnp.float32
-        ),
-        sfh_burst_width=jnp.asarray(
-            params.get("sfh_burst_width", 0.12), dtype=jnp.float32
-        ),
-        sfh_quench_time=jnp.asarray(
-            params.get("sfh_quench_time", 12.0), dtype=jnp.float32
-        ),
-        sfh_quench_width=jnp.asarray(
-            params.get("sfh_quench_width", 0.5), dtype=jnp.float32
-        ),
-        sfh_quench_depth=jnp.asarray(
-            params.get("sfh_quench_depth", 0.0), dtype=jnp.float32
-        ),
     )
-
-
-def _sfh_bin_parameter_names(params: dict[str, Any]) -> list[str]:
-    prefix = "sfh_bin_log_sfr_"
-    names = [name for name in params if name.startswith(prefix)]
-    return sorted(names, key=lambda name: int(name.removeprefix(prefix)))
-
-
-def build_binned_sfh_jax(
-    gal_t_table: jnp.ndarray,
-    bin_log_sfr: jnp.ndarray,
-    transition_width: float | jnp.ndarray = 0.015,
-) -> jnp.ndarray:
-    """Smooth non-parametric SFH with approximately constant SFR time bins.
-
-    Bin amplitudes are mean-centered so formed mass controls luminosity amplitude
-    while bins control shape. Smooth edges preserve useful gradients with
-    respect to redshift through ``t_obs``.
-    """
-    n_bins = bin_log_sfr.shape[0]
-    x = (gal_t_table - gal_t_table[0]) / jnp.maximum(
-        gal_t_table[-1] - gal_t_table[0], 1.0e-6
-    )
-    edges = jnp.linspace(0.0, 1.0, n_bins + 1)
-    width = jnp.maximum(jnp.asarray(transition_width), 1.0e-4)
-    left = jax.nn.sigmoid((x[:, None] - edges[:-1][None, :]) / width)
-    right = jax.nn.sigmoid((x[:, None] - edges[1:][None, :]) / width)
-    weights = jnp.maximum(left - right, 0.0)
-    weights = weights / jnp.maximum(jnp.sum(weights, axis=1, keepdims=True), 1.0e-12)
-    centered = bin_log_sfr - jnp.mean(bin_log_sfr)
-    sfr_by_bin = 10.0**centered
-    return jnp.clip(weights @ sfr_by_bin, 1.0e-12, jnp.inf)
 
 
 def build_lognormal_sfh_jax(
@@ -605,37 +457,15 @@ def build_lognormal_sfh_jax(
     log10_sfr: jnp.ndarray,
     sfh_t_peak: jnp.ndarray,
     sfh_tau: jnp.ndarray,
-    sfh_burst_fraction: float | jnp.ndarray = 0.0,
-    sfh_burst_time: float | jnp.ndarray = 1.0,
-    sfh_burst_width: float | jnp.ndarray = 0.12,
-    sfh_quench_time: float | jnp.ndarray = 12.0,
-    sfh_quench_width: float | jnp.ndarray = 0.5,
-    sfh_quench_depth: float | jnp.ndarray = 0.0,
 ) -> jnp.ndarray:
-    """JAX lognormal SFH with smooth burst/quench modifiers."""
+    """JAX lognormal SFH used by production fits."""
     amplitude = 10**log10_sfr
     t_peak = jnp.clip(sfh_t_peak, jnp.min(gal_t_table), jnp.max(gal_t_table))
     tau = jnp.maximum(sfh_tau, 0.05)
     log_t = jnp.log(jnp.clip(gal_t_table, 1.0e-3))
     shape = jnp.exp(-0.5 * ((log_t - jnp.log(t_peak)) / tau) ** 2)
     shape = jnp.clip(shape, 1.0e-6)
-    base = amplitude * shape
-
-    burst_fraction = jnp.maximum(sfh_burst_fraction, 0.0)
-    burst_time = jnp.clip(sfh_burst_time, jnp.min(gal_t_table), jnp.max(gal_t_table))
-    burst_width = jnp.maximum(sfh_burst_width, 0.03)
-    burst = (
-        amplitude
-        * burst_fraction
-        * jnp.exp(-0.5 * ((gal_t_table - burst_time) / burst_width) ** 2)
-    )
-
-    quench_time = jnp.clip(sfh_quench_time, jnp.min(gal_t_table), jnp.max(gal_t_table))
-    quench_width = jnp.maximum(sfh_quench_width, 0.03)
-    quench_depth = jnp.clip(sfh_quench_depth, 0.0, 1.0)
-    after_quench = jax.nn.sigmoid((gal_t_table - quench_time) / quench_width)
-    quench_factor = 1.0 - quench_depth * after_quench
-    return jnp.clip((base + burst) * quench_factor, 1.0e-12, jnp.inf)
+    return jnp.clip(amplitude * shape, 1.0e-12, jnp.inf)
 
 
 def normalize_sfh_mass_jax(

@@ -18,12 +18,6 @@ Current Forward Model
 
 * formed-mass amplitude ``log10_formed_mass_msun`` plus a lognormal SFH shape
   with ``sfh_t_peak`` and ``sfh_tau``;
-* optional binned SFH code path when ``sfh_bin_log_sfr_*`` parameters are
-  explicitly configured for experiments;
-* optional smooth burst term with ``sfh_burst_fraction``, ``sfh_burst_time``,
-  and ``sfh_burst_width``;
-* optional smooth quench term with ``sfh_quench_time``, ``sfh_quench_width``,
-  and ``sfh_quench_depth``;
 * scalar stellar metallicity ``log10_metallicity`` and scatter
   ``metallicity_scatter``;
 * either Salim-style scalar dust or row-resolved two-component COSMOS dust;
@@ -36,8 +30,8 @@ The 10-band COSMOS comparison config uses:
 * SciPIC value-added CSV filters for LSST and Euclid;
 * COSMOS two-component attenuation from ``ebv_cosmos_*``,
   ``ext_curve_cosmos_*``, and ``frac_cosmos_*``;
-* ``phz_median`` as the redshift initializer and ``phz_min/max_70/90/95`` as
-  diagnostics or explicit optional soft-prior inputs;
+* ``phz_median`` as the redshift initializer. ``phz_min/max_70/90/95`` can be
+  carried as diagnostic catalog columns, but they are not used as fit priors;
 * continuum-only branch-2 targets by default.
 
 Large-Run Fit Modes
@@ -78,7 +72,6 @@ Exists now:
 
 * differentiable DSPS forward model on JAX/GPU;
 * Euclid-only and 10-band LSST+Euclid configs;
-* optional PHZ interval prior from local ``phz_min/max_70/90/95`` columns;
 * SED diagnostic plots/tables with DSPS SED, filters, photometry, and optional
   COSMOS proxy overlay;
 * fast large-run fit for redshift, formed mass, stellar metallicity, and
@@ -95,7 +88,7 @@ Does not exist yet:
 * learned population prior trained across the full catalog;
 * calibrated main-sequence prior tying mass, SFR, redshift, and dust;
 * nebular emission-line model with local compatible SSP assets;
-* full photo-z PDF likelihood beyond central PHZ intervals;
+* calibrated non-circular redshift prior or full photo-z PDF likelihood;
 * explicit selection-function likelihood;
 * image-level chromatic PSF/SED integration.
 
@@ -110,21 +103,16 @@ Should be added next:
   claim;
 * a real learned population prior only after fast-mode diagnostics are stable.
 
-Added But Not Currently Scientifically Active
----------------------------------------------
+Removed From The Active Model
+-----------------------------
 
-The code contains a few deliberately experimental hooks. They are useful for
-future model tests, but they should not be interpreted as current scientific
-claims:
+Several experimental hooks were removed from the active code path to keep the
+local workflow interpretable:
 
-* ``sfh_burst_*`` exists, but the local production configs keep
-  ``sfh_burst_fraction=0`` and do not fit burst parameters.
-* ``sfh_quench_*`` exists, but ``sfh_quench_depth=0`` makes the quench branch
-  inactive in the production configs. It was added as a differentiable proxy
-  for quenching flexibility, but current broad-band data do not identify it.
-* ``sfh_bin_log_sfr_*`` support exists, but no local config enables binned SFH
-  fitting. It should stay disabled until a continuity/stochastic prior and
-  validation subset are added.
+* PHZ interval priors were removed. ``phz_median`` initializes redshift, then
+  photometry and broad bounds drive the fit.
+* binned SFH, burst, and quench parameters were removed. The current model uses
+  one compact lognormal SFH shape plus formed-mass normalization.
 * Salim scalar dust remains available for generic DSPS runs. The 10-band
   COSMOS diagnostic uses row-injected two-component COSMOS dust instead.
 * Emission-line catalog columns are present, but the configured local SSP file
@@ -140,16 +128,14 @@ population priors. The justification is tied to what the local data can
 support:
 
 * ``z_obs`` is initialized from ``phz_median`` but uses a uniform prior in the
-  current production configs. PHZ intervals are available only for explicit
-  comparison runs because treating central intervals as hard truth is circular
-  for redshift validation. Euclid photo-z work emphasizes that cosmology and
-  physical inference need calibrated photo-z PDFs/PDZs, not unconstrained
+  current production configs. PHZ intervals are not used as priors because
+  treating central intervals as hard truth is circular for redshift validation.
+  Euclid photo-z work emphasizes that cosmology and physical inference need
+  calibrated photo-z PDFs/PDZs, not unconstrained
   broad-band redshifts; see `Euclid preparation X
   <https://arxiv.org/abs/2009.12112>`__ and nearest-neighbour photo-z
   methodology such as `Tanaka et al. 2018
   <https://academic.oup.com/pasj/article/doi/10.1093/pasj/psx077/4494086>`__.
-  The plateau prior remains implemented as a compact approximation to the
-  available 70/90/95 percent intervals, not a replacement for full PDFs.
 * ``log10_formed_mass_msun`` is the luminosity amplitude because SPS maps
   formed stellar mass and SFH to SED normalization. DSPS is explicitly designed
   as a differentiable SPS kernel connecting physical parameters to SEDs; see
@@ -203,13 +189,12 @@ The current implementation now makes these science choices explicit:
    formed mass. Catalog ``log_stellar_mass`` is converted from
    ``log10(Msun h^-2)`` to ``log10(Msun)`` only for truth/proxy diagnostics.
 
-5. The production redshift prior is no longer PHZ-hard by default.
+5. The production redshift prior is not PHZ-based.
 
    ``phz_median`` sets the base redshift. The 70/90/95 percent NNPZ intervals
-   are still loaded for diagnostics and optional comparison configs, but
-   ``configs/fs2_phz1_10band.yaml`` uses ``type: uniform`` for ``z_obs`` and
-   ``fit.fast_grid_use_phz_bounds: false``. The older ``z_obs_prior_sigma``
-   value is still written for compatibility.
+   can still be loaded for diagnostics, but ``configs/fs2_phz1_10band.yaml``
+   uses ``type: uniform`` for ``z_obs`` and no PHZ interval penalty exists in
+   MAP, fast-grid, population, or sampling code.
 
 6. Population MAP can learn a mass-metallicity relation.
 
@@ -282,7 +267,7 @@ Current interpretation:
 
 * The weird inferred distributions are mostly caused by under-constrained or
   fixed parameters, not by genuine astrophysical population structure.
-* With 10 broad bands, PHZ intervals, injected COSMOS dust, and one mass
+* With 10 broad bands, injected COSMOS dust, and one mass
   amplitude, the optimizer mainly uses ``z_obs`` and ``log10_formed_mass_msun``.
   SFH shape and stellar metallicity remain effectively inactive in these runs.
   The fast production mode therefore explicitly treats SFH shape and stellar
@@ -302,9 +287,9 @@ Current Scientific Problems
    The default fit infers a formed mass plus a compact lognormal SFH shape.
    This is stable for the local broad-band catalog but it is still not
    equivalent to PROVABGS NMF SFHs or Prospector continuity-prior
-   non-parametric SFHs. The optional binned SFH code path is deliberately not
-   enabled by default because the local Euclid-only fit has too few bands to
-   constrain many SFH bins.
+   non-parametric SFHs. Binned SFH, burst, and quench branches were removed
+   from the active model because the local broad-band fit has too few bands to
+   constrain those degrees of freedom.
 
    Current consequence: the DSPS SED may fit broad-band colors while recovering
    an implausible SFH. Treat SFH parameters as nuisance parameters until the
@@ -361,12 +346,11 @@ Current Scientific Problems
    checking template-level consistency, but it cannot prove that DSPS recovered
    the true stellar population.
 
-Why Burst/Quench SFH Exists
+Why Complex SFH Is Deferred
 ---------------------------
 
-The burst/quench extension is not an invented shape for plot fitting. It is a
-small differentiable approximation to two established lessons from the SED
-literature:
+Complex SFH terms are scientifically motivated, but they are deferred until the
+basic photometric workflow and mass/redshift recovery are stable:
 
 * `PROVABGS <https://arxiv.org/abs/2202.01809>`__ models DESI BGS galaxies
   with a richer SPS parameterization including NMF SFH coefficients and burst
@@ -382,25 +366,10 @@ literature:
   model, motivating population-level priors and diagnostics rather than only
   independent galaxy fits.
 
-The legacy lognormal burst/quench SFH remains deliberately conservative:
-
-.. math::
-
-   \mathrm{SFR}(t) =
-   \left[\mathrm{SFR}_{lognormal}(t) +
-   A_{burst}\exp\left(-\frac{(t-t_{burst})^2}{2\sigma_{burst}^2}\right)\right]
-   \left[1 - d_q\,\sigma\left(\frac{t-t_q}{w_q}\right)\right].
-
-This keeps the model JAX-vectorized and differentiable while allowing:
-
-* excess recent/intermediate star formation through the burst term;
-* smooth suppression after a quench time;
-* future explicit priors on burst amplitude and quench depth.
-
-In the current production configs these branches are inactive. The model is
-still a stepping stone. Best next model: keep formed mass as the amplitude and
-use either a documented continuity/stochastic binned-SFH prior or an
-NMF/low-rank basis once the data can constrain it.
+Current decision: keep formed mass as the amplitude and use one lognormal SFH
+shape. Reintroduce binned or low-rank SFHs only after SED diagnostics show the
+simple model fails in a way that cannot be fixed by normalization, dust, or
+filter handling.
 
 Implemented Prior Summary
 -------------------------

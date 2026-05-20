@@ -60,13 +60,13 @@ Remaining Architecture Risks
    COSMOS two-component dust mode is better for Flagship template diagnostics.
    Expose the active dust model in every run manifest and report title.
 
-6. Some model hooks are implemented ahead of available data.
+6. Avoid model hooks ahead of available data.
 
-   Burst/quench SFH terms, binned SFH parameters, scalar fallback dust, and
-   emission-line target plumbing should remain documented as inactive or
-   experimental unless a config actually fits them and validation shows they
-   are identifiable. The near-term goal is not to add more free knobs; it is to
-   keep fast redshift/mass/SFR/metallicity inference calibrated.
+   Burst/quench SFH terms and binned SFH parameters were removed from the
+   active workflow. Scalar fallback dust and emission-line target plumbing
+   remain documented, but emission lines stay outside the main likelihood until
+   local compatible assets exist. The near-term goal is not to add more free
+   knobs; it is to keep fast redshift/mass/SFR/metallicity inference calibrated.
 
 7. Plot tests check file creation, not content.
 

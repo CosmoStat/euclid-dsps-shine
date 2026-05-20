@@ -20,12 +20,6 @@ DEFAULT_MODEL_PARAMETERS = {
     "log10_sfr": 0.0,
     "sfh_t_peak": 4.0,
     "sfh_tau": 0.6,
-    "sfh_burst_fraction": 0.0,
-    "sfh_burst_time": 1.0,
-    "sfh_burst_width": 0.12,
-    "sfh_quench_time": 12.0,
-    "sfh_quench_width": 0.5,
-    "sfh_quench_depth": 0.0,
     "log10_metallicity": -2.0,
     "metallicity_scatter": 0.2,
     "dust_av": 0.2,
@@ -56,7 +50,6 @@ SUPPORTED_PRIOR_TYPES = {
     "normal",
     "truncated_normal",
     "scaled_beta",
-    "phz_interval",
 }
 SUPPORTED_FILTER_RESPONSE_KINDS = {"photon", "energy"}
 SUPPORTED_COMPONENT_FRACTION_POLICIES = {"strict", "equal_if_missing"}
@@ -170,7 +163,6 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["fit"].setdefault("fast_grid_search", False)
     config["fit"].setdefault("redshift_grid_size", 5)
     config["fit"].setdefault("redshift_grid_width", 0.4)
-    config["fit"].setdefault("fast_grid_use_phz_bounds", False)
     config["fit"].setdefault(
         "fast_grid_parameters",
         ["z_obs", "log10_metallicity", "sfh_t_peak", "sfh_tau"],
@@ -353,31 +345,6 @@ def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
     z_max = _finite_float(redshift.get("max"), "redshift.max", errors)
     if z_min is not None and z_max is not None and z_min >= z_max:
         errors.append("redshift.min must be smaller than redshift.max")
-    interval = redshift.get("prior_interval")
-    if interval is not None:
-        _validate_redshift_interval(interval, "redshift.prior_interval", errors)
-    intervals = redshift.get("prior_intervals")
-    if intervals is not None:
-        if not isinstance(intervals, list):
-            errors.append("redshift.prior_intervals must be a list when provided")
-        else:
-            for index, item in enumerate(intervals):
-                _validate_redshift_interval(
-                    item, f"redshift.prior_intervals[{index}]", errors
-                )
-
-
-def _validate_redshift_interval(value: Any, label: str, errors: list[str]) -> None:
-    if not isinstance(value, dict):
-        errors.append(f"{label} must be a mapping when provided")
-        return
-    _optional_string(value.get("min_column"), f"{label}.min_column", errors)
-    _optional_string(value.get("max_column"), f"{label}.max_column", errors)
-    probability = _finite_float(
-        value.get("probability", 0.70), f"{label}.probability", errors
-    )
-    if probability is not None and not 0.0 < probability < 1.0:
-        errors.append(f"{label}.probability must be in (0, 1)")
 
 
 def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
@@ -412,8 +379,6 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
         errors.append("fit.fast_warmstart_only must be a boolean")
     if not isinstance(fit.get("fast_grid_search", False), bool):
         errors.append("fit.fast_grid_search must be a boolean")
-    if not isinstance(fit.get("fast_grid_use_phz_bounds", False), bool):
-        errors.append("fit.fast_grid_use_phz_bounds must be a boolean")
     _positive_int(fit.get("redshift_grid_size", 5), "fit.redshift_grid_size", errors)
     _positive_float(
         fit.get("redshift_grid_width", 0.4), "fit.redshift_grid_width", errors
@@ -478,13 +443,6 @@ def _validate_fit_priors(
         if prior_type == "scaled_beta":
             _positive_float(spec.get("alpha", 1.0), f"fit.priors.{name}.alpha", errors)
             _positive_float(spec.get("beta", 1.0), f"fit.priors.{name}.beta", errors)
-        if prior_type == "phz_interval":
-            _positive_float(
-                spec.get("tail_scale", 0.05), f"fit.priors.{name}.tail_scale", errors
-            )
-            _positive_float(
-                spec.get("weight", 1.0), f"fit.priors.{name}.weight", errors
-            )
 
 
 def _validate_population_config(population: Any, errors: list[str]) -> None:
@@ -770,15 +728,6 @@ def _validate_sample_priors(priors: Any, errors: list[str]) -> None:
                 spec.get("alpha", 1.0), f"sample.priors.{name}.alpha", errors
             )
             _positive_float(spec.get("beta", 1.0), f"sample.priors.{name}.beta", errors)
-        if prior_type == "phz_interval":
-            _positive_float(
-                spec.get("tail_scale", 0.05),
-                f"sample.priors.{name}.tail_scale",
-                errors,
-            )
-            _positive_float(
-                spec.get("weight", 1.0), f"sample.priors.{name}.weight", errors
-            )
 
 
 def _configured_catalog_columns(config: dict[str, Any]) -> set[str]:
