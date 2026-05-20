@@ -222,37 +222,28 @@ measurement drawn from the survey-like flux plus noise model. Use them when the
 experiment should mimic measured survey photometry; use the corresponding
 ``*_error`` columns for the likelihood denominator and chi-square.
 
-The 10-band config already wires the Euclid survey-like errors for the Euclid
+The science config already wires the Euclid survey-like errors for the Euclid
 bands and uses fixed fallback errors for bands without catalog uncertainty
 columns:
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/fs2_phz1_10band.yaml fit-batch \
+   euclid-dsps fit --config configs/fs2_phz1_science.yaml \
      --limit 32 \
      --batch-size 32 \
      --out outputs/runs/dev_fit_batch_10band
 
-For COSMOS SED validation with DSPS population fitting and survey diagnostics:
+For COSMOS SED validation:
 
 .. code-block:: bash
 
-   EUCLID_DSPS_JAX_PLATFORMS=cuda \
-   EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0 \
-   EUCLID_DSPS_XLA_PYTHON_CLIENT_PREALLOCATE=false \
-   EUCLID_DSPS_REQUIRE_GPU=1 \
-   EUCLID_DSPS_EXPECTED_GPU_NAME=NVIDIA \
-   euclid-dsps --config configs/fs2_phz1_10band.yaml cosmos-sed \
-     --limit 2000 \
-     --batch-size 512 \
-     --population-dsps \
-     --plot-samples 10 \
-     --out outputs/runs/cosmos_sed_population_dsps_10band_2000_gpu
+   euclid-dsps check --config configs/fs2_phz1_science.yaml \
+     --kind cosmos \
+     --limit 20 \
+     --out outputs/check/cosmos
 
-In branch-2 outputs, ``branch2_observed_photometry_chi2.csv`` reports the
-weighted chi-square when errors are available. The continuum-only target set is
-the default science target because the current DSPS model has continuum plus
-dust, but not nebular emission lines.
+The continuum-only target set is the default science target because the current
+DSPS model has continuum plus dust, but not nebular emission lines.
 
 References
 ----------

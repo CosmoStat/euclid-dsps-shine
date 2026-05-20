@@ -922,8 +922,8 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
     if len(work) < 10:
         return
 
-    fig, ax = plt.subplots(figsize=(8, 6))
     try:
+        fig, ax = plt.subplots(figsize=(8, 6))
         # Create 2D bins
         z_bins = np.linspace(work[z_col].min(), work[z_col].max(), 12)
         m_bins = np.linspace(work[m_col].min(), work[m_col].max(), 12)
@@ -954,7 +954,9 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
         ax.set_ylabel(_parameter_display_label(z_col))
         ax.set_title("Population Fit Quality Map")
     except Exception:
-        ax.text(0.5, 0.5, "Heatmap failed (insufficient coverage)", ha="center")
+        if "fig" in locals():
+            plt.close(fig)
+        return
 
     fig.tight_layout()
     fig.savefig(path, dpi=170)
@@ -2524,7 +2526,7 @@ def plot_batch_parameter_truth(by_row: pd.DataFrame, path: str | Path) -> None:
 def plot_residuals_by_property(by_row: pd.DataFrame, path: str | Path) -> None:
     specs = [
         ("redshift_truth", "truth redshift"),
-        ("z_obs", "photo-z / fitted redshift"),
+        ("z_obs", "DSPS fitted redshift"),
         ("catalog_log_stellar_mass", "catalog log stellar mass"),
         ("fit_log10_formed_mass_msun", "fit log formed mass"),
     ]
@@ -2658,7 +2660,7 @@ def _redshift_axis_labels(by_row: pd.DataFrame) -> tuple[str, str]:
     fit_source = _first_string(by_row, "z_obs_source") or "z_phz"
     fit_label = (
         "Inferred Redshift (Fit)"
-        if "fit_z_obs" in by_row.columns
+        if "fit_z_obs" in by_row.columns or fit_source == "DSPS fit"
         else f"Input {fit_source} to DSPS"
     )
     return fit_label, f"Ground Truth ({truth_source})"

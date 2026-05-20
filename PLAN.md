@@ -1,332 +1,64 @@
 # DSPS Plan
 
-Living plan for the DSPS wrapper. Update this file at the start/end of each phase prompt so the project keeps one current source of truth.
+Living plan for the simplified Euclid + LSST DSPS workflow.
 
-## Operating Rules
+## Active Goal
 
-- Work in small phases with regular commits.
-- Keep production workflow simple before adding richer inference.
-- Only implement features supported by local data columns and local SSP/filter assets.
-- Keep hot paths JAX-first and GPU-friendly. Avoid pandas/NumPy inside model, loss, optimizer, and batched forward paths.
-- Support current `conda` environment `shine`; add `uv` setup so future runs can use reproducible `uv` workflows too.
-- Write outputs progressively during long runs, then compile plots/reports after compute.
-- Every run that fits or forwards galaxies should be able to emit SED diagnostics for a sample.
+Build a DSPS-like pipeline that fits SED parameters from Euclid + LSST
+photometry, compares fitted quantities to FS2 truth/proxy columns, and keeps
+workflow/docs small enough to audit.
 
-## Environment Plan
+## Active Public Workflow
 
-Current supported path:
+Use one science config:
 
 ```bash
-conda activate shine
-python -m pip install -e .
+configs/fs2_phz1_science.yaml
 ```
 
-Add `uv` path:
+Use three commands:
 
 ```bash
-uv sync
-uv run euclid-dsps --help
-uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+euclid-dsps fit --limit 100 --batch-size 50 --sed-samples 8 --out outputs/runs/science_fit
+euclid-dsps posterior --index 0 --num-warmup 100 --num-samples 200 --out outputs/runs/posterior_one
+euclid-dsps check --kind cosmos --limit 20 --out outputs/check/cosmos
 ```
 
-Tasks:
-
-- Audit `pyproject.toml` dependencies for full `uv sync` support.
-- Decide how GPU JAX is installed under `uv` without breaking `conda shine`.
-- Document CPU-only vs GPU install commands.
-- Add a smoke test command for each env path.
-
-## Phase 0 - Baseline And Cleanup
-
-Status: active cleanup.
-
-Commit target: `Document current DSPS workflow state`
-
-Tasks:
-
-- Document commands that currently work.
-- List active features vs experimental/inactive features.
-- Mark removed quench, burst, PHZ-prior, and complex SFH terms as removed from
-  active code/configs.
-- Reduce dense science assessment prose into decisions, limitations, and next checks.
-- Keep SSP path rationale documented: SSP tables are model inputs, not inferred by DSPS.
-
-Done when:
-
-- `README.md`, `docs/source/*`, and this plan agree.
-- Sphinx docs build.
-
-## Phase 1 - Mandatory SED Diagnostics
-
-Status: in progress, baseline implemented.
-
-Commit target: `Add SED fit diagnostics`
-
-Goal: understand why inferred SEDs diverge from `cosmos_sed`.
-
-Tasks:
-
-- [x] Add SED output for forward pass and MAP fit.
-- [x] Add ground-truth `cosmos_sed` overlay when local data provides it.
-- [x] Plot sample diagnostics:
-  - inferred DSPS SED
-  - COSMOS/ground-truth SED, both scaled and unscaled diagnostic shape
-  - observed photometric constraints on the SED panel
-  - filter transmission curves placed near the lower plot axis
-  - residuals by band
-  - fitted/input parameters: redshift, mass, SFR, metallicity, dust
-- [x] Add CLI options:
-  - `--save-sed-samples N`
-  - `--plot-filters`
-  - `--plot-ground-truth`
-- [ ] Add worst-fit automatic SED sampling, not only first-N rows.
-- [ ] Add compact SED summary metrics directly to batch reports.
-
-Done when:
-
-- A small `fit-batch` run produces diagnostic SED plots.
-- Missing ground truth is reported clearly, not faked.
-
-## Phase 2 - Simple Workflow
-
-Status: implemented.
-
-Commit target: `Simplify user-facing workflows`
-
-Goal: make commands obvious and consistent for one science loop: infer DSPS
-parameters from Euclid+LSST photometry, compare simple recovered quantities to
-catalog truth/proxies, and visually compare inferred DSPS SEDs to COSMOS proxy
-SEDs.
-
-Workflows:
-
-- Keep as public:
-  - `fit`: MAP fit for one row or a batch, with `--index`, `--limit`, and
-    `--sed-samples`.
-  - `posterior`: HMC/NUTS for one row or a small row list, initialized from MAP
-    by default.
-  - `check`: EDA plus forward/SED sanity checks.
-- Hide or alias:
-  - `run-one` and `run-batch` become implementation aliases behind `check` or
-    `fit --no-optimize`.
-  - `fit-one` and `fit-batch` become one `fit` command.
-  - `cosmos-sed --compare-dsps/--fit-dsps/--population-dsps` becomes default
-    SED diagnostic output from `fit`; standalone COSMOS reconstruction moves to
-    `check cosmos`.
-  - `fit-population` and `fit-workflow` move to an advanced/research namespace
-    until priors are scientifically fixed.
-
-Tasks:
-
-- [x] Align CLI names/help text with these workflows.
-- [x] Ensure each workflow can optionally generate SED diagnostics.
-- [x] Remove duplicated or confusing reporting paths from public docs/help.
-- [x] Add one recommended command to the README:
-  `euclid-dsps --config configs/fs2_phz1_science.yaml fit --limit 1000 --batch-size 512 --sed-samples 16 --out outputs/runs/science_fit`.
-- [x] Add one posterior command to the README:
-  `euclid-dsps --config configs/fs2_phz1_science.yaml posterior --row-indices-file rows.txt --out outputs/runs/posterior_subset`.
-
-Done when:
-
-- New user can run one forward command and one fit command without reading code.
-
-## Phase 2b - Config Simplification
-
-Status: implemented baseline.
-
-Commit target: `Simplify science config`
-
-Goal: make the main config readable by a scientist who wants DSPS-like SED
-inference, not a full internal schema dump.
-
-Config split:
-
-- [x] `configs/fs2_phz1_science.yaml`: public science preset. Keep only data paths,
-  bands preset, runtime preset, fitted parameters, priors, truth columns, and
-  output choices.
-- [x] `configs/presets/*.yaml`: internal defaults for runtime, filters, COSMOS SED
-  resources, reporting, optimizer, and sampler.
-- [x] Current `configs/fs2_phz1.yaml` and `configs/fs2_phz1_10band.yaml`: keep as
-  compatibility configs until the simplified preset passes smoke runs.
-
-Simplify public YAML:
-
-- [x] Replace long `extra_columns` list with named column groups:
-  `truth_basic`, `cosmos_proxy`, `photometry_errors`, `diagnostics`.
-- [x] Replace repeated band blocks with `bands: lsst_euclid_10` or
-  `bands: euclid_4`.
-- [x] Keep `fit.free_parameters` but make defaults explicit:
-  `z_obs`, `log10_formed_mass_msun`, `sfh_t_peak`, `sfh_tau`,
-  `log10_metallicity`, and optional `dust_av`.
-- [x] Mark row-injected COSMOS dust as `dust_model: cosmos_proxy_fixed`, not as
-  inferred DSPS dust.
-- [x] Move LePhare/SciPIC resource details out of the public config.
-
-Priors:
-
-- [x] Add public prior naming in docs/config around `weak_physical`: broad
-  non-circular priors for stability.
-- [ ] Add executable named prior sets once needed:
-  `weak_physical`, `flat_debug`, and then `popcosmos_like` only where the local
-  parameterization matches the papers.
-- [x] Do not advertise any prior as POP-COSMOS-like until the exact paper values,
-  variable definitions, and unit conversions are documented.
-
-Done when:
-
-- README shows one main config and two commands.
-- Full schema lives in reference docs, not in the first-run path.
-- Run outputs write the expanded normalized config for audit.
-
-## Phase 3 - Minimal Production Model
-
-Status: active cleanup.
-
-Commit target: `Reduce fitted parameter space`
-
-Goal: fit few realistic parameters first.
-
-Production defaults:
-
-- Free: `z_obs`, `log10_formed_mass_msun`, simple SFH parameters if needed.
-- Derived: SFR from fitted mass-normalized SFH.
-- Fixed or weak-prior initially: metallicity, dust, depending on diagnostics.
-- Removed from active model: quench terms, burst terms, non-parametric SFH bins.
-
-Tasks:
-
-- [x] Remove complex SFH/quench/burst from code and default configs.
-- [x] Keep simple lognormal SFH table as the only active SFH path.
-- Add flat-prior config for comparison.
-
-Done when:
-
-- Fast mode still fits redshift, mass, SFR-derived quantity, and minimal SFH.
-- No default production run uses quench/burst accidentally.
-
-## Phase 4 - Redshift Treatment
-
-Status: baseline production config changed.
-
-Commit target: `Remove naive PHZ interval prior`
-
-Goal: fit redshift without circular hard photo-z truth.
-
-Tasks:
-
-- [x] Stop using `phz_min_70` / `phz_max_70` as hard truth-like bounds in current production configs.
-- [x] Remove PHZ interval priors from MAP, fast-grid, population, sampling, and config validation.
-- [x] Keep PHZ interval columns only as optional diagnostics.
-- Test:
-  - fixed catalog redshift
-  - free redshift with flat broad prior
-  - calibrated non-circular redshift prior, only if justified later
-- Report redshift bias and mass coupling.
-
-Done when:
-
-- Configs make clear whether photo-z is ignored, soft prior, or fixed input.
-
-## Phase 5 - Mass Offset Investigation
-
-Commit target: `Add mass offset diagnostics`
-
-Goal: identify source of fitted mass offset.
-
-Checks:
-
-- formed mass vs surviving stellar mass
-- IMF/SSP mismatch
-- luminosity distance/redshift normalization
-- flux units and filter integration
-- dust/mass degeneracy
-- per-band residual pattern
-
-Outputs:
-
-- `fit_mass - catalog_mass` vs redshift, color, SNR, dust, true/catalog mass.
-- Flux ratio by band.
-- Summary table for worst outliers.
-
-Done when:
-
-- Mass offset has one or more falsifiable causes, not guesses.
-
-## Phase 6 - SSP And Pop-COSMOS Research
-
-Commit target: `Document SSP and Pop-COSMOS choices`
-
-Tasks:
-
-- Compare local SSP assets available to DSPS options.
-- Document which SSP table is used and why.
-- Verify what Pop-COSMOS does for SFH, dust, metallicity, priors, and photo-z.
-- Decide whether current SSP is acceptable before changing it.
-
-Done when:
-
-- SSP choice is explicit and tied to local files.
-- Pop-COSMOS comparison informs priors without copying unavailable data assumptions.
-
-## Phase 7 - Performance And Benchmarks
-
-Status: existing benchmark hooks kept; SED sample writes are explicit opt-in.
-
-Commit target: `Benchmark forward and optimizer`
-
-Goal: prepare for millions of galaxies.
-
-Benchmarks:
-
-- context load
-- batched forward SED
-- filter projection
-- loss evaluation
-- optimizer step
-- full grid/MAP fit
-- RAM, VRAM, CPU timing
-
-Tasks:
-
-- Keep arrays on GPU.
-- Remove NumPy/pandas from hot path where possible.
-- Use progressive parquet chunk writes.
-- Generate plots after compute.
-- Add `uv run` and `conda shine` benchmark commands.
-
-Done when:
-
-- Benchmark output explains runtime per galaxy and per major stage.
-
-## Phase 8 - Priors
-
-Commit target: `Add prior comparison configs`
-
-Configs:
-
-- `prior_flat.yaml`
-- `prior_weak_informed.yaml`
-- `prior_catalog_informed.yaml`
-
-Goal: find informed but non-circular priors.
-
-Rules:
-
-- Do not use target truth directly as prior.
-- Do not treat photo-z intervals as hard truth.
-- Learn population priors only after forward/SED/mass diagnostics are stable.
-
-Done when:
-
-- Prior comparison report shows bias, scatter, and failure cases.
-
-## Commit Cadence
-
-- One commit per phase or coherent sub-phase.
-- Commit message imperative and short.
-- Each commit should mention commands run and output paths inspected.
-- Avoid mixing science behavior change with unrelated formatting.
-
-## Immediate Next Step
-
-Start Phase 1: add SED diagnostics and ground-truth/filter overlays. This is blocker for understanding SED divergence and mass offset.
+## Current Science Contract
+
+- Free parameters: `z_obs`, `log10_formed_mass_msun`, `sfh_t_peak`,
+  `sfh_tau`, `log10_metallicity`.
+- Not free in main config: `log10_sfr`, `dust_av`.
+- Redshift: initialized from deterministic random flat draw, then fitted from
+  photometry. No photo-z or PHZ interval prior.
+- Dust: COSMOS proxy dust is row-injected in the main config.
+- Metallicity truth: proxy only, because gas-phase O/H is not stellar
+  metallicity.
+- Emission-line columns: diagnostics only until a line model/assets exist.
+- Priors: `weak_physical` for science, `flat_debug` for debugging,
+  `popcosmos_like` reserved until exact mapping/units exist.
+
+## Completed In Current Phase
+
+- Public CLI simplified to `fit`, `posterior`, `check`.
+- Old configs moved to `configs/legacy/`.
+- PHZ interval prior support removed.
+- Fast-grid/warmstart public config removed.
+- Science config switched to random flat redshift initialization.
+- Sample priors must match actual free parameters.
+- Batch SED diagnostics now select worst-fit galaxies.
+- Blank failed heatmaps no longer get written.
+- Docs reduced to active workflow and science assumptions.
+- Verification passed: `compileall`, full `pytest`, CLI CPU EDA smoke, and CLI
+  CPU one-row/batch fit smoke with SED diagnostics.
+
+## Remaining Work
+
+- Validate exact POP-COSMOS parameter mapping and units before implementing
+  `popcosmos_like`.
+- Decide whether lognormal SFH is sufficient after comparing residual trends
+  versus truth redshift, mass, SFR, and metallicity proxy.
+- Add a small formal smoke dataset that exercises the full `fit` command
+  without private FS2 data.
+- Consider splitting `workflows/core.py` and `reporting/core.py` after science
+  behavior stabilizes.

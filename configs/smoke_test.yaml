@@ -1,4 +1,4 @@
-catalog_path: "Data/Euclid FS2 LC galaxy catalog.parquet"
+catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
 ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
 
 selection:

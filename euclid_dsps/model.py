@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -165,19 +166,44 @@ def parameters_for_row(
 def resolve_redshift(
     params: dict[str, float], row: dict[str, Any], redshift_config: dict[str, Any]
 ) -> float:
-    """Resolve the redshift used by DSPS from a catalog column or fixed fallback."""
+    """Resolve DSPS redshift from configured initializer."""
     value = params.get("z_obs", redshift_config.get("fixed_value", 0.5))
+    initial = str(redshift_config.get("initial", "catalog_column"))
     column = redshift_config.get("column")
-    if column and column in row and np.isfinite(row[column]):
-        value = float(row[column])
-    elif np.isfinite(redshift_config.get("fixed_value", np.nan)):
-        value = float(redshift_config["fixed_value"])
-
     z_min = float(redshift_config.get("min", 1.0e-4))
     z_max = float(redshift_config.get("max", 6.0))
+
+    if initial == "random_uniform":
+        value = _random_uniform_redshift(row, redshift_config, z_min, z_max)
+    elif (
+        initial == "catalog_column"
+        and column
+        and column in row
+        and np.isfinite(row[column])
+    ):
+        value = float(row[column])
+    elif initial in {"catalog_column", "fixed"} and np.isfinite(
+        redshift_config.get("fixed_value", np.nan)
+    ):
+        value = float(redshift_config["fixed_value"])
+
     if not np.isfinite(value):
         value = z_min
     return float(np.clip(value, z_min, z_max))
+
+
+def _random_uniform_redshift(
+    row: dict[str, Any], redshift_config: dict[str, Any], z_min: float, z_max: float
+) -> float:
+    seed = int(float(redshift_config.get("seed", 42)))
+    payload = "|".join(
+        f"{key}={row[key]}" for key in sorted(row) if np.isscalar(row[key])
+    )
+    digest = hashlib.blake2b(
+        f"{seed}|{payload}".encode("utf-8"), digest_size=8
+    ).digest()
+    unit = int.from_bytes(digest, "big") / float(2**64 - 1)
+    return z_min + unit * (z_max - z_min)
 
 
 def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResult:

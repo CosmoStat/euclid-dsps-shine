@@ -499,7 +499,7 @@ def run_batch(
     sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     chunk_index = 0
-    with _make_progress_bar(total=total, desc="run-batch", unit="galaxy") as progress:
+    with _make_progress_bar(total=total, desc="check-batch", unit="galaxy") as progress:
         for batch in iter_catalog_batches(
             config["catalog_path"],
             columns=columns,
@@ -592,12 +592,10 @@ def fit_batch(
     comparison_rows = []
     fit_rows = []
     trace_rows = []
-    sed_manifest_rows = []
-    sed_samples_written = 0
     sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     chunk_index = 0
-    with _make_progress_bar(total=total, desc="fit-batch", unit="galaxy") as progress:
+    with _make_progress_bar(total=total, desc="fit", unit="galaxy") as progress:
         for batch in iter_catalog_batches(
             config["catalog_path"],
             columns=columns,
@@ -613,24 +611,6 @@ def fit_batch(
             comparison_rows.extend(batch_result["comparison_rows"])
             trace_rows.extend(batch_result["trace_rows"])
             _write_fit_chunk_checkpoint(out, batch_result, config, chunk_index)
-            if sed_samples_written < sed_sample_limit:
-                new_rows = _write_fit_sed_samples(
-                    context,
-                    batch,
-                    batch_result["fit_rows"],
-                    config,
-                    out,
-                    mode="fit",
-                    chunk_index=chunk_index,
-                    remaining=sed_sample_limit - sed_samples_written,
-                )
-                sed_manifest_rows.extend(new_rows)
-                sed_samples_written += len(new_rows)
-                perf.mark(
-                    "write_sed_samples",
-                    chunk_index=chunk_index,
-                    n_rows=len(new_rows),
-                )
             perf.mark("fit_chunk", chunk_index=chunk_index, n_rows=len(batch))
             _update_progress(
                 progress, row_index=int(batch.index[-1]), amount=len(batch)
@@ -642,6 +622,16 @@ def fit_batch(
     write_dataframe_outputs(fits, out, "batch_fit_results", config)
     write_dataframe_outputs(comparison, out, "batch_fit_photometry_comparison", config)
     perf.mark("write_primary_outputs", n_rows=len(fits))
+    sed_manifest_rows = _write_worst_fit_sed_samples(
+        context,
+        fits,
+        comparison,
+        config,
+        out,
+        limit=sed_sample_limit,
+    )
+    if sed_manifest_rows:
+        perf.mark("write_sed_samples", n_rows=len(sed_manifest_rows))
     if trace_rows:
         trace = pd.DataFrame(trace_rows)
         write_dataframe_outputs(trace, out, "batch_fit_trace", config)
@@ -717,6 +707,119 @@ def _plot_filters(config: dict[str, Any]) -> bool:
 def _plot_ground_truth(config: dict[str, Any]) -> bool:
     reporting = config.get("reporting", {}) or {}
     return bool(reporting.get("plot_ground_truth", False))
+
+
+def _write_worst_fit_sed_samples(
+    context,
+    fits: pd.DataFrame,
+    comparison: pd.DataFrame,
+    config: dict[str, Any],
+    out: Path,
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    if limit <= 0 or fits.empty:
+        return []
+    selected = _worst_fit_rows(fits, comparison, limit)
+    if selected.empty:
+        return []
+
+    row_indices = [int(value) for value in selected["row_index"]]
+    wanted = set(row_indices)
+    rows_by_index: dict[int, pd.Series] = {}
+    for batch in iter_catalog_batches(
+        config["catalog_path"],
+        columns=required_catalog_columns(config),
+        batch_size=max(1024, len(wanted)),
+        row_indices=wanted,
+    ):
+        for row_index, row in batch.iterrows():
+            rows_by_index[int(row_index)] = row
+        if len(rows_by_index) == len(wanted):
+            break
+
+    rows = []
+    fit_rows = []
+    for _, fit_row in selected.iterrows():
+        row_index = int(fit_row["row_index"])
+        row = rows_by_index.get(row_index)
+        if row is None:
+            continue
+        rows.append(row)
+        fit_rows.append(fit_row.to_dict())
+    if not rows:
+        return []
+
+    batch = pd.DataFrame(rows)
+    batch.index = [int(row["row_index"]) for row in fit_rows]
+    manifest = _write_fit_sed_samples(
+        context,
+        batch,
+        fit_rows,
+        config,
+        out,
+        mode="fit_worst",
+        chunk_index=0,
+        remaining=limit,
+    )
+    ranks = {
+        int(row["row_index"]): int(rank)
+        for rank, row in enumerate(selected.to_dict("records"), start=1)
+    }
+    scores = {
+        int(row["row_index"]): float(row["sed_diagnostic_score"])
+        for row in selected.to_dict("records")
+    }
+    for row in manifest:
+        row_index = int(row.get("row_index", -1))
+        row["selection_reason"] = "worst_fit"
+        row["selection_rank"] = ranks.get(row_index)
+        row["selection_score"] = scores.get(row_index)
+    return manifest
+
+
+def _worst_fit_rows(
+    fits: pd.DataFrame, comparison: pd.DataFrame, limit: int
+) -> pd.DataFrame:
+    work = fits.copy()
+    if "row_index" not in work:
+        return pd.DataFrame()
+    work["row_index"] = work["row_index"].astype(int)
+    if not comparison.empty and "row_index" in comparison:
+        residual_col = "residual_mag_model_minus_observed"
+        if residual_col in comparison:
+            residual = (
+                comparison[["row_index", residual_col]]
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
+            by_row = (
+                residual.assign(abs_residual=residual[residual_col].abs())
+                .groupby("row_index", as_index=False)["abs_residual"]
+                .median()
+                .rename(columns={"abs_residual": "median_abs_mag_residual"})
+            )
+            work = work.merge(by_row, on="row_index", how="left")
+    if "median_abs_mag_residual" in work:
+        score = work["median_abs_mag_residual"]
+    elif "reduced_chi2" in work:
+        score = work["reduced_chi2"]
+    else:
+        score = pd.Series(np.zeros(len(work)), index=work.index)
+    work["sed_diagnostic_score"] = score.replace([np.inf, -np.inf], np.nan).fillna(
+        -np.inf
+    )
+    if "reduced_chi2" not in work:
+        work["reduced_chi2"] = work["sed_diagnostic_score"]
+    return (
+        work.sort_values(
+            ["sed_diagnostic_score", "reduced_chi2"],
+            ascending=[False, False],
+            na_position="last",
+        )
+        .drop_duplicates("row_index")
+        .head(limit)
+    )
 
 
 def _write_fit_sed_samples(
@@ -963,7 +1066,7 @@ def fit_population(
     sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     with _make_progress_bar(
-        total=total, desc="fit-population", unit="galaxy"
+            total=total, desc="population-fit", unit="galaxy"
     ) as progress:
         chunk_index = 0
         for batch in iter_catalog_batches(
@@ -1128,97 +1231,19 @@ def _posterior_truth_values(context_values: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _fast_fit_enabled(config: dict[str, Any]) -> bool:
-    fit = config.get("fit", {}) or {}
-    return bool(fit.get("fast_grid_search", False)) or bool(
-        fit.get("fast_warmstart_only", False)
-    )
-
-
-def _fast_population_hyper_rows(
-    fit_result,
-    config: dict[str, Any],
-    chunk_index: int,
-) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    matrix = np.asarray(fit_result.best_parameter_matrix, dtype=float)
-    parameter_names = list(fit_result.parameter_names)
-    free_names = list(fit_result.free_parameter_names)
-    for name in free_names:
-        if name not in parameter_names:
-            continue
-        values = matrix[:, parameter_names.index(name)]
-        finite = values[np.isfinite(values)]
-        rows.append(
-            {
-                "chunk_index": chunk_index,
-                "n_galaxies": int(matrix.shape[0]),
-                "kind": "fast_empirical",
-                "parameter": name,
-                "population_mu": float(np.nanmean(finite)) if len(finite) else np.nan,
-                "population_sigma": float(np.nanstd(finite)) if len(finite) else np.nan,
-                "loss": np.nan,
-                "device": fit_result.device,
-                "note": "fast fit summary; hyperparameters not jointly optimized",
-            }
-        )
-    relations = ((config.get("fit", {}) or {}).get("population", {}) or {}).get(
-        "relations", {}
-    )
-    if not isinstance(relations, dict):
-        return rows
-    for target, spec in relations.items():
-        if not spec or not bool(spec.get("enabled", True)):
-            continue
-        predictor = str(spec.get("predictor", ""))
-        if target not in parameter_names or predictor not in parameter_names:
-            continue
-        y = matrix[:, parameter_names.index(target)]
-        x = matrix[:, parameter_names.index(predictor)]
-        mask = np.isfinite(x) & np.isfinite(y)
-        raw_pivot = spec.get("pivot", "median")
-        pivot = (
-            float(np.nanmedian(x[mask]))
-            if raw_pivot == "median" and mask.any()
-            else float(raw_pivot)
-            if raw_pivot != "median"
-            else 0.0
-        )
-        slope = np.nan
-        intercept = np.nan
-        sigma = np.nan
-        if mask.sum() >= 2 and np.nanstd(x[mask]) > 0:
-            slope, intercept_at_zero = np.polyfit(x[mask] - pivot, y[mask], 1)
-            intercept = float(intercept_at_zero)
-            residual = y[mask] - (intercept + slope * (x[mask] - pivot))
-            sigma = float(np.nanstd(residual))
-        rows.append(
-            {
-                "chunk_index": chunk_index,
-                "n_galaxies": int(matrix.shape[0]),
-                "kind": "fast_relation",
-                "parameter": str(target),
-                "target_parameter": str(target),
-                "predictor_parameter": predictor,
-                "population_pivot": pivot,
-                "population_intercept": intercept,
-                "population_slope": float(slope) if np.isfinite(slope) else np.nan,
-                "population_sigma": sigma,
-                "loss": np.nan,
-                "device": fit_result.device,
-                "note": "fast fit regression; relation not used as optimized prior",
-            }
-        )
-    return rows
-
-
 def _row_context(
     row: dict[str, Any], params: dict[str, float], config: dict[str, Any]
 ) -> dict[str, float | str]:
     values: dict[str, float | str] = {}
     values["z_obs"] = float(params["z_obs"])
     redshift = config.get("redshift", {})
-    z_source = truth_column_from_spec(redshift.get("column")) or "fixed_value"
+    redshift_initial = str(redshift.get("initial", "catalog_column"))
+    if redshift_initial == "random_uniform":
+        z_source = "random_uniform"
+    elif redshift_initial == "fixed":
+        z_source = "fixed_value"
+    else:
+        z_source = truth_column_from_spec(redshift.get("column")) or "fixed_value"
     values["z_obs_source"] = z_source
     truth_col = redshift.get("truth_column") or config.get("truth", {}).get(
         "redshift_column"
@@ -1292,63 +1317,48 @@ def _fit_dataframe_batch(
         )
         if perf is not None:
             perf.mark("prepare_truth", chunk_index=chunk_index, n_rows=len(batch))
-        if _fast_fit_enabled(config):
-            fit_result = fit_galaxy_batch_adam(
-                context,
-                base_rows,
-                observed_mag,
-                sigma_mag,
-                config["fit"],
-                truth_theta=truth_theta,
-            )
-            if perf is not None:
-                perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
-            hyper_rows = _fast_population_hyper_rows(
-                fit_result, config, chunk_index=chunk_index
-            )
-        else:
-            pop_result = fit_population_batch_adam(
-                context,
-                base_rows,
-                observed_mag,
-                sigma_mag,
-                config["fit"],
-                initial_theta=_initial_theta_from_map(batch, config, map_init),
-                truth_theta=truth_theta,
-            )
-            if perf is not None:
-                perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
-            fit_result = pop_result.batch
-            hyper_rows = [
+        pop_result = fit_population_batch_adam(
+            context,
+            base_rows,
+            observed_mag,
+            sigma_mag,
+            config["fit"],
+            initial_theta=_initial_theta_from_map(batch, config, map_init),
+            truth_theta=truth_theta,
+        )
+        if perf is not None:
+            perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
+        fit_result = pop_result.batch
+        hyper_rows = [
+            {
+                "chunk_index": chunk_index,
+                "n_galaxies": len(batch),
+                "kind": "gaussian",
+                "parameter": name,
+                "population_mu": pop_result.hyper_mu[name],
+                "population_sigma": pop_result.hyper_sigma[name],
+                "loss": pop_result.loss,
+                "device": fit_result.device,
+            }
+            for name in fit_result.free_parameter_names
+        ]
+        for relation in pop_result.hyper_relations:
+            hyper_rows.append(
                 {
                     "chunk_index": chunk_index,
                     "n_galaxies": len(batch),
-                    "kind": "gaussian",
-                    "parameter": name,
-                    "population_mu": pop_result.hyper_mu[name],
-                    "population_sigma": pop_result.hyper_sigma[name],
+                    "kind": "relation",
+                    "parameter": relation["target_parameter"],
+                    "target_parameter": relation["target_parameter"],
+                    "predictor_parameter": relation["predictor_parameter"],
+                    "population_pivot": relation["pivot"],
+                    "population_intercept": relation["intercept"],
+                    "population_slope": relation["slope"],
+                    "population_sigma": relation["sigma"],
                     "loss": pop_result.loss,
                     "device": fit_result.device,
                 }
-                for name in fit_result.free_parameter_names
-            ]
-            for relation in pop_result.hyper_relations:
-                hyper_rows.append(
-                    {
-                        "chunk_index": chunk_index,
-                        "n_galaxies": len(batch),
-                        "kind": "relation",
-                        "parameter": relation["target_parameter"],
-                        "target_parameter": relation["target_parameter"],
-                        "predictor_parameter": relation["predictor_parameter"],
-                        "population_pivot": relation["pivot"],
-                        "population_intercept": relation["intercept"],
-                        "population_slope": relation["slope"],
-                        "population_sigma": relation["sigma"],
-                        "loss": pop_result.loss,
-                        "device": fit_result.device,
-                    }
-                )
+            )
     else:
         truth_theta = _truth_parameter_matrix(
             batch, config, list(config["fit"]["free_parameters"])
@@ -1386,8 +1396,11 @@ def _fit_dataframe_batch(
         }
         context_values = {
             **_row_context(row.to_dict(), params, config),
+            **{f"fit_{key}": value for key, value in params.items()},
             **derived_values,
         }
+        if "z_obs" in fit_result.free_parameter_names:
+            context_values["z_obs_source"] = "DSPS fit"
         n_bands = len(config["bands"])
         fit_rows.append(
             {

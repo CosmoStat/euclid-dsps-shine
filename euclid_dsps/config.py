@@ -33,11 +33,13 @@ DEFAULT_MODEL_PARAMETERS = {
 }
 
 DEFAULT_REDSHIFT_CONFIG = {
+    "initial": "catalog_column",
     "column": None,
     "truth_column": None,
     "fixed_value": 0.5,
     "min": 1.0e-4,
     "max": 6.0,
+    "seed": 42,
 }
 
 SUPPORTED_PHOTOMETRY_UNITS = {"fnu_cgs", "abmag", "microjy", "ujy"}
@@ -61,6 +63,24 @@ SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
 }
 SUPPORTED_REPORTING_LEVELS = {"full", "light"}
 SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
+SUPPORTED_REDSHIFT_INITIALS = {"catalog_column", "fixed", "random_uniform"}
+
+PRIOR_SETS = {
+    "flat_debug": {
+        "z_obs": {"type": "uniform"},
+        "log10_formed_mass_msun": {"type": "uniform"},
+        "sfh_t_peak": {"type": "uniform"},
+        "sfh_tau": {"type": "uniform"},
+        "log10_metallicity": {"type": "uniform"},
+    },
+    "weak_physical": {
+        "z_obs": {"type": "uniform"},
+        "log10_formed_mass_msun": {"type": "normal", "loc": 10.0, "scale": 1.5},
+        "sfh_t_peak": {"type": "normal", "loc": 4.0, "scale": 3.0},
+        "sfh_tau": {"type": "normal", "loc": 0.8, "scale": 0.8},
+        "log10_metallicity": {"type": "normal", "loc": -2.4, "scale": 0.6},
+    },
+}
 
 RUNTIME_PRESETS = {
     "cpu": {
@@ -244,7 +264,6 @@ BAND_PRESETS = {
 COLUMN_GROUPS = {
     "truth_basic": [
         "z_true_gal",
-        "phz_median",
         "log_stellar_mass",
         "log_sfr_true",
         "metallicity_true",
@@ -426,15 +445,6 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["fit"].setdefault("tolerance", 1.0e-5)
     config["fit"].setdefault("patience", 18)
     config["fit"].setdefault("prior_weight", 1.0)
-    config["fit"].setdefault("fast_warmstart_only", False)
-    config["fit"].setdefault("fast_grid_search", False)
-    config["fit"].setdefault("redshift_grid_size", 5)
-    config["fit"].setdefault("redshift_grid_width", 0.4)
-    config["fit"].setdefault(
-        "fast_grid_parameters",
-        ["z_obs", "log10_metallicity", "sfh_t_peak", "sfh_tau"],
-    )
-    config["fit"].setdefault("fast_grid_prior_width", 1.0)
     config["fit"].setdefault("priors", {})
     config["fit"]["population"] = dict(config["fit"].get("population") or {})
     config["fit"]["population"].setdefault("prior_weight", 1.0)
@@ -458,6 +468,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["sample"].setdefault("init_from_map", True)
     config["sample"].setdefault("save_samples", True)
     config["sample"].setdefault("priors", {})
+    _apply_prior_set(config)
 
     config["selection"].setdefault("index", None)
     config["selection"].setdefault("require_positive_flux", True)
@@ -597,6 +608,33 @@ def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def _apply_prior_set(config: dict[str, Any]) -> None:
+    prior_set = config.get("prior_set")
+    if prior_set is None:
+        return
+    name = str(prior_set)
+    if name == "popcosmos_like":
+        raise ConfigValidationError(
+            "prior_set='popcosmos_like' is reserved until exact POP-COSMOS "
+            "parameter mapping and units are implemented."
+        )
+    if name not in PRIOR_SETS:
+        expected = sorted([*PRIOR_SETS, "popcosmos_like"])
+        raise ConfigValidationError(
+            f"Unknown prior_set {name!r}; expected one of {expected}"
+        )
+    free = set(config["fit"]["free_parameters"])
+    named_priors = {
+        key: dict(value) for key, value in PRIOR_SETS[name].items() if key in free
+    }
+    fit_priors = dict(named_priors)
+    fit_priors.update(config["fit"].get("priors") or {})
+    sample_priors = dict(named_priors)
+    sample_priors.update(config["sample"].get("priors") or {})
+    config["fit"]["priors"] = fit_priors
+    config["sample"]["priors"] = sample_priors
+
+
 def _named_preset(presets: dict[str, Any], name: str, label: str) -> Any:
     if name not in presets:
         raise ConfigValidationError(
@@ -624,7 +662,7 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_redshift(config.get("redshift", {}), errors)
     _validate_model(config.get("model", {}), errors)
     _validate_fit(config.get("fit", {}), errors)
-    _validate_sample(config.get("sample", {}), errors)
+    _validate_sample(config.get("sample", {}), config.get("fit", {}), errors)
     _validate_truth(config.get("truth", {}), errors)
     _validate_runtime(config.get("runtime", {}), errors)
     _validate_reporting(config.get("reporting", {}), errors)
@@ -722,9 +760,18 @@ def _validate_bands(value: Any, errors: list[str]) -> None:
 
 
 def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
+    for removed_key in ("prior_interval", "prior_intervals", "phz_interval"):
+        if removed_key in redshift:
+            errors.append(f"redshift.{removed_key} was removed; fit z_obs directly")
+    initial = redshift.get("initial", "catalog_column")
+    if initial not in SUPPORTED_REDSHIFT_INITIALS:
+        errors.append(
+            f"redshift.initial must be one of {sorted(SUPPORTED_REDSHIFT_INITIALS)}"
+        )
     _optional_string(redshift.get("column"), "redshift.column", errors)
     _optional_string(redshift.get("truth_column"), "redshift.truth_column", errors)
     _finite_float(redshift.get("fixed_value"), "redshift.fixed_value", errors)
+    _finite_float(redshift.get("seed", 42), "redshift.seed", errors)
     z_min = _finite_float(redshift.get("min"), "redshift.min", errors)
     z_max = _finite_float(redshift.get("max"), "redshift.max", errors)
     if z_min is not None and z_max is not None and z_min >= z_max:
@@ -751,6 +798,16 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
 
 
 def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
+    for removed_key in (
+        "fast_warmstart_only",
+        "fast_grid_search",
+        "redshift_grid_size",
+        "redshift_grid_width",
+        "fast_grid_parameters",
+        "fast_grid_prior_width",
+    ):
+        if removed_key in fit:
+            errors.append(f"fit.{removed_key} was removed from the public workflow")
     method = str(fit.get("method", "jax_adam")).lower()
     if method not in SUPPORTED_FIT_METHODS:
         errors.append(f"fit.method must be one of {sorted(SUPPORTED_FIT_METHODS)}")
@@ -759,22 +816,6 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
     _positive_float(fit.get("tolerance"), "fit.tolerance", errors)
     _positive_int(fit.get("patience"), "fit.patience", errors)
     _positive_float(fit.get("prior_weight", 1.0), "fit.prior_weight", errors)
-    if not isinstance(fit.get("fast_warmstart_only", False), bool):
-        errors.append("fit.fast_warmstart_only must be a boolean")
-    if not isinstance(fit.get("fast_grid_search", False), bool):
-        errors.append("fit.fast_grid_search must be a boolean")
-    _positive_int(fit.get("redshift_grid_size", 5), "fit.redshift_grid_size", errors)
-    _positive_float(
-        fit.get("redshift_grid_width", 0.4), "fit.redshift_grid_width", errors
-    )
-    fast_grid_parameters = fit.get("fast_grid_parameters", [])
-    if not isinstance(fast_grid_parameters, list) or not all(
-        isinstance(name, str) and name for name in fast_grid_parameters
-    ):
-        errors.append("fit.fast_grid_parameters must be a list of parameter names")
-    _positive_float(
-        fit.get("fast_grid_prior_width", 1.0), "fit.fast_grid_prior_width", errors
-    )
     _validate_population_config(fit.get("population", {}), errors)
     free = fit.get("free_parameters")
     if not isinstance(free, dict) or not free:
@@ -873,7 +914,9 @@ def _validate_population_config(population: Any, errors: list[str]) -> None:
                     _finite_float(spec[key], label, errors)
 
 
-def _validate_sample(sample: dict[str, Any], errors: list[str]) -> None:
+def _validate_sample(
+    sample: dict[str, Any], fit: dict[str, Any], errors: list[str]
+) -> None:
     sampler = sample.get("sampler")
     if sampler not in SUPPORTED_SAMPLERS:
         errors.append(f"sample.sampler must be one of {sorted(SUPPORTED_SAMPLERS)}")
@@ -896,7 +939,11 @@ def _validate_sample(sample: dict[str, Any], errors: list[str]) -> None:
     if target is not None and not 0.0 < target < 1.0:
         errors.append("sample.target_accept_prob must be between 0 and 1")
     _finite_float(sample.get("seed"), "sample.seed", errors)
-    _validate_sample_priors(sample.get("priors", {}), errors)
+    free = fit.get("free_parameters", {})
+    if isinstance(free, dict):
+        _validate_sample_priors(sample.get("priors", {}), free, errors)
+    else:
+        _validate_sample_priors(sample.get("priors", {}), {}, errors)
 
 
 def _validate_truth(truth: dict[str, Any], errors: list[str]) -> None:
@@ -1089,11 +1136,16 @@ def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
                 )
 
 
-def _validate_sample_priors(priors: Any, errors: list[str]) -> None:
+def _validate_sample_priors(
+    priors: Any, free_parameters: dict[str, Any], errors: list[str]
+) -> None:
     if not isinstance(priors, dict):
         errors.append("sample.priors must be a mapping")
         return
     for name, spec in priors.items():
+        if name not in free_parameters:
+            errors.append(f"sample.priors.{name} must match a free parameter")
+            continue
         if not isinstance(spec, dict):
             errors.append(f"sample.priors.{name} must be a mapping")
             continue

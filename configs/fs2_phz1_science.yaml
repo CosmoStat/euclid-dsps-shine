@@ -4,12 +4,21 @@ extends: presets/fs2_common.yaml
 runtime: gpu
 bands: lsst_euclid_10
 dust_model: cosmos_proxy_fixed
+prior_set: weak_physical
 
 column_groups:
     - truth_basic
-    - phz_diagnostics
     - cosmos_proxy
     - photometry_errors
+
+redshift:
+    initial: random_uniform
+    column:
+    truth_column: z_true_gal
+    fixed_value: 0.5
+    min: 0.0001
+    max: 6.0
+    seed: 42
 
 model:
     n_sfh_bins: 32
@@ -30,40 +39,11 @@ model:
 
 fit:
     method: jax_adam
-    maxiter: 80
+    maxiter: 200
     learning_rate: 0.08
     tolerance: 1.0e-5
     patience: 24
     prior_weight: 1.0
-    fast_warmstart_only: false
-    fast_grid_search: false
-    redshift_grid_size: 5
-    redshift_grid_width: 0.4
-    fast_grid_parameters:
-        - z_obs
-        - log10_metallicity
-        - sfh_t_peak
-        - sfh_tau
-    fast_grid_prior_width: 1.0
-    priors:
-        z_obs:
-            type: uniform
-        log10_formed_mass_msun:
-            type: normal
-            loc: 10.0
-            scale: 1.5
-        sfh_t_peak:
-            type: normal
-            loc: 4.0
-            scale: 3.0
-        sfh_tau:
-            type: normal
-            loc: 0.8
-            scale: 0.8
-        log10_metallicity:
-            type: normal
-            loc: -2.4
-            scale: 0.6
     free_parameters:
         z_obs:
             initial: from_base
@@ -95,25 +75,6 @@ sample:
     progress_bar: true
     init_from_map: true
     save_samples: true
-    priors:
-        z_obs:
-            type: uniform
-        log10_formed_mass_msun:
-            type: normal
-            loc: 10.0
-            scale: 1.5
-        sfh_t_peak:
-            type: normal
-            loc: 4.0
-            scale: 3.0
-        sfh_tau:
-            type: normal
-            loc: 0.8
-            scale: 0.8
-        log10_metallicity:
-            type: normal
-            loc: -2.4
-            scale: 0.6
 
 reporting:
     level: full

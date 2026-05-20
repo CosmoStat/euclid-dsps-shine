@@ -2,18 +2,16 @@ catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
 ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
 
 runtime:
-    # GPU config. Use scripts/check_jax_gpu.py first to verify that JAX sees
-    # the NVIDIA device inside the shine environment.
+    # WSL-safe default. For a working CUDA JAX install, use:
+    # jax_platforms: "cuda,cpu"
+    # disable_jax_plugin_autoload: false
     jax_platforms: "cuda"
     disable_jax_plugin_autoload: false
     xla_python_client_preallocate: false
     require_gpu: true
-    expected_gpu_name: "NVIDIA"
-    jax_compilation_cache_dir: "outputs/jax_cache"
-    jax_persistent_cache_min_compile_time_secs: 1.0
 
 selection:
-    index: 8
+    index: 0
     require_positive_flux: true
     sort_by_flux:
 
@@ -115,9 +113,6 @@ cosmos_sed:
     comparison_wave_min_angstrom: 1000.0
     comparison_wave_max_angstrom: 30000.0
     sample_plot_count: 12
-    observed_photometry_target_sets:
-        - continuum_internal_dust
-    use_cosmos_dust_in_dsps: true
 
 redshift:
     column: phz_median
@@ -127,105 +122,33 @@ redshift:
     max: 6.0
 
 bands:
-    - name: lsst_u
-      column: lsst_u
-      units: fnu_cgs
-      sigma_mag: 0.05
-      filter:
-          kind: ascii
-          path: Data/value_added_data/filters/lsst_u.csv
-          wave_unit: angstrom
-    - name: lsst_g
-      column: lsst_g
-      units: fnu_cgs
-      sigma_mag: 0.05
-      filter:
-          kind: ascii
-          path: Data/value_added_data/filters/lsst_g.csv
-          wave_unit: angstrom
-    - name: lsst_r
-      column: lsst_r
-      units: fnu_cgs
-      sigma_mag: 0.05
-      filter:
-          kind: ascii
-          path: Data/value_added_data/filters/lsst_r.csv
-          wave_unit: angstrom
-    - name: lsst_i
-      column: lsst_i
-      units: fnu_cgs
-      sigma_mag: 0.05
-      filter:
-          kind: ascii
-          path: Data/value_added_data/filters/lsst_i.csv
-          wave_unit: angstrom
-    - name: lsst_z
-      column: lsst_z
-      units: fnu_cgs
-      sigma_mag: 0.05
-      filter:
-          kind: ascii
-          path: Data/value_added_data/filters/lsst_z.csv
-          wave_unit: angstrom
-    - name: lsst_y
-      column: lsst_y
-      units: fnu_cgs
-      sigma_mag: 0.05
-      filter:
-          kind: ascii
-          path: Data/value_added_data/filters/lsst_y.csv
-          wave_unit: angstrom
     - name: euclid_vis
       column: euclid_vis
       units: fnu_cgs
       sigma_mag: 0.05
-      error_column: euclid_vis_el_model3_ext_odonnell_ext_error
-      error_units: fnu_cgs
-      sigma_mag_floor: 0.01
-      sigma_mag_ceiling: 0.5
       filter:
-          kind: ascii
-          path: Data/value_added_data/filters/euclid_vis.csv
-          wave_unit: angstrom
+          path: filters/Euclid_VIS.vis.dat
     - name: euclid_nisp_y
       column: euclid_nisp_y
       units: fnu_cgs
       sigma_mag: 0.05
-      error_column: euclid_nisp_y_el_model3_ext_odonnell_ext_error
-      error_units: fnu_cgs
-      sigma_mag_floor: 0.01
-      sigma_mag_ceiling: 0.5
       filter:
-          kind: ascii
-          path: Data/value_added_data/filters/euclid_nisp_y.csv
-          wave_unit: angstrom
+          path: filters/Euclid_NISP.Y.dat
     - name: euclid_nisp_j
       column: euclid_nisp_j
       units: fnu_cgs
       sigma_mag: 0.05
-      error_column: euclid_nisp_j_el_model3_ext_odonnell_ext_error
-      error_units: fnu_cgs
-      sigma_mag_floor: 0.01
-      sigma_mag_ceiling: 0.5
       filter:
-          kind: ascii
-          path: Data/value_added_data/filters/euclid_nisp_j.csv
-          wave_unit: angstrom
+          path: filters/Euclid_NISP.J.dat
     - name: euclid_nisp_h
       column: euclid_nisp_h
       units: fnu_cgs
       sigma_mag: 0.05
-      error_column: euclid_nisp_h_el_model3_ext_odonnell_ext_error
-      error_units: fnu_cgs
-      sigma_mag_floor: 0.01
-      sigma_mag_ceiling: 0.5
       filter:
-          kind: ascii
-          path: Data/value_added_data/filters/euclid_nisp_h.csv
-          wave_unit: angstrom
+          path: filters/Euclid_NISP.H.dat
 
 model:
-    n_sfh_bins: 32
+    n_sfh_bins: 96
     fixed_parameters:
         log10_sfr: 0.0
         log10_formed_mass_msun: 10.0
@@ -233,38 +156,23 @@ model:
         sfh_tau: 0.6
         log10_metallicity: -2.0
         metallicity_scatter: 0.2
+        dust_av: 0.2
         dust_slope: -0.7
-        cosmos_ebv_1: 0.0
-        cosmos_ebv_2: 0.0
-        cosmos_frac_1: 0.5
-        cosmos_frac_2: 0.5
-        cosmos_ext_curve_1: 0.0
-        cosmos_ext_curve_2: 0.0
-    parameter_columns:
-        cosmos_ebv_1: ebv_cosmos_1
-        cosmos_ebv_2: ebv_cosmos_2
-        cosmos_frac_1: frac_cosmos_1
-        cosmos_frac_2: frac_cosmos_2
-        cosmos_ext_curve_1: ext_curve_cosmos_1
-        cosmos_ext_curve_2: ext_curve_cosmos_2
+    parameter_columns: {}
 
 fit:
     method: jax_adam
-    maxiter: 100
-    learning_rate: 0.08
+    maxiter: 80
+    learning_rate: 0.1
     tolerance: 1.0e-5
-    patience: 24
-    prior_weight: 1.0
-    fast_warmstart_only: false
-    fast_grid_search: false
-    redshift_grid_size: 5
-    redshift_grid_width: 0.4
-    fast_grid_parameters:
-        - z_obs
-        - log10_metallicity
-        - sfh_t_peak
-        - sfh_tau
-    fast_grid_prior_width: 1.0
+    patience: 18
+    priors:
+        z_obs:
+            type: uniform
+        log10_formed_mass_msun:
+            type: normal
+            loc: 10.0
+            scale: 1.5
     population:
         prior_weight: 1.0
         sigma_floor: 0.03
@@ -277,25 +185,6 @@ fit:
                 slope_initial: 0.15
                 sigma_initial: 0.35
                 slope_scale: 0.7
-    priors:
-        z_obs:
-            type: uniform
-        log10_formed_mass_msun:
-            type: normal
-            loc: 10.0
-            scale: 1.5
-        sfh_t_peak:
-            type: normal
-            loc: 4.0
-            scale: 3.0
-        sfh_tau:
-            type: normal
-            loc: 0.8
-            scale: 0.8
-        log10_metallicity:
-            type: normal
-            loc: -2.4
-            scale: 0.6
     free_parameters:
         z_obs:
             initial: from_base
@@ -303,12 +192,9 @@ fit:
         log10_formed_mass_msun:
             initial: 10.0
             bounds: [6.0, 13.0]
-        sfh_t_peak:
-            initial: 4.0
-            bounds: [0.1, 13.5]
-        sfh_tau:
-            initial: 0.6
-            bounds: [0.08, 4.0]
+        dust_av:
+            initial: 0.2
+            bounds: [0.0, 3.0]
         log10_metallicity:
             initial: -2.25
             bounds: [-3.9, -1.6]
@@ -330,10 +216,6 @@ sample:
     priors:
         z_obs:
             type: uniform
-        log10_sfr:
-            type: truncated_normal
-            loc: 0.0
-            scale: 1.3
         dust_av:
             type: scaled_beta
             alpha: 1.2

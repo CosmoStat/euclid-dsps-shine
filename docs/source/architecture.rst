@@ -42,8 +42,8 @@ assets:
        workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
-     fs2_phz1.yaml   Default Euclid FS2 PHZ setup.
-     fs2_phz1_10band.yaml Default Euclid x LSST 10 bands fit FS2 PHZ setup.
+     fs2_phz1_science.yaml Active LSST+Euclid science setup.
+     legacy/         Old config examples, not active workflow defaults.
      smoke_test.yaml Lightweight smoke-test setup.
    scripts/
      quickstart_one_galaxy.py
@@ -123,9 +123,8 @@ Design Rules
 Remaining Cleanup
 -----------------
 
-The detailed cleanup queue is maintained in :doc:`refactor_roadmap`. The main
-architectural risk is not the public API split; it is the size of the shared
-implementation modules behind that API. ``workflows/core.py`` still owns too
-many orchestration helpers, and ``reporting/core.py`` still owns too many plot
-families. Future refactors should move those internals while keeping the stable
-``euclid_dsps.workflows`` and ``euclid_dsps.reporting`` imports.
+The main architectural risk is the size of the shared implementation modules.
+``workflows/core.py`` still owns many orchestration helpers, and
+``reporting/core.py`` still owns many plot families. Future refactors should
+move those internals while keeping the stable ``euclid_dsps.workflows`` and
+``euclid_dsps.reporting`` imports.
