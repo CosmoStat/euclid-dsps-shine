@@ -19,6 +19,8 @@ class BandObservation:
     flux_fnu_cgs: float
     mag_ab: float
     sigma_mag: float
+    error_column: str | None = None
+    flux_error_fnu_cgs: float | None = None
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,39 @@ def write_json(path: str | Path, payload: Any) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", encoding="utf-8") as stream:
         json.dump(to_jsonable(payload), stream, indent=2, sort_keys=True)
+
+
+def configured_output_formats(config: dict[str, Any]) -> list[str]:
+    """Return configured tabular output formats."""
+    raw = (config.get("output", {}) or {}).get("format", "both")
+    if isinstance(raw, str):
+        if raw == "both":
+            return ["parquet", "csv"]
+        return [raw]
+    formats = [str(item) for item in raw]
+    return formats or ["parquet", "csv"]
+
+
+def write_dataframe_outputs(
+    frame: pd.DataFrame,
+    out_dir: str | Path,
+    stem: str,
+    config: dict[str, Any],
+    index: bool = False,
+) -> list[str]:
+    """Write a dataframe in configured formats and return filenames."""
+    out = ensure_dir(out_dir)
+    written: list[str] = []
+    formats = configured_output_formats(config)
+    if "parquet" in formats:
+        path = out / f"{stem}.parquet"
+        frame.to_parquet(path, index=index)
+        written.append(path.name)
+    if "csv" in formats:
+        path = out / f"{stem}.csv"
+        frame.to_csv(path, index=index)
+        written.append(path.name)
+    return written
 
 
 def to_jsonable(value: Any) -> Any:
@@ -109,6 +144,13 @@ def truth_value_from_spec(row: dict[str, Any], spec: Any) -> float | None:
             if value <= 0:
                 return None
             value = float(np.log10(value))
+        elif transform == "log_stellar_mass_h2_to_msun":
+            h = float(spec.get("h"))
+            if not np.isfinite(h) or h <= 0:
+                raise ValueError(
+                    "truth log_stellar_mass_h2_to_msun transform needs h > 0"
+                )
+            value = float(value + 2.0 * np.log10(h))
         elif transform not in {None, "linear"}:
             raise ValueError(f"Unsupported truth transform: {transform}")
         value = value * float(spec.get("scale", 1.0))
@@ -195,9 +237,38 @@ def microjy_to_abmag(flux_microjy: float) -> float:
     return float(-2.5 * np.log10(flux_microjy) + 23.9)
 
 
+def flux_error_to_sigma_mag(
+    flux_fnu_cgs: float,
+    flux_error_fnu_cgs: float,
+    floor: float | None = None,
+    ceiling: float | None = None,
+) -> float:
+    """Convert a flux-density uncertainty into a local AB-mag uncertainty."""
+    if (
+        not np.isfinite(flux_fnu_cgs)
+        or not np.isfinite(flux_error_fnu_cgs)
+        or flux_fnu_cgs <= 0.0
+        or flux_error_fnu_cgs <= 0.0
+    ):
+        return float("nan")
+    sigma = float((2.5 / np.log(10.0)) * abs(flux_error_fnu_cgs / flux_fnu_cgs))
+    if floor is not None and np.isfinite(floor):
+        sigma = max(sigma, float(floor))
+    if ceiling is not None and np.isfinite(ceiling):
+        sigma = min(sigma, float(ceiling))
+    return sigma
+
+
 def build_observation(
     row_index: int, row: pd.Series, band_configs: list[dict[str, Any]]
 ) -> GalaxyObservation:
+    """Build one photometric observation from a catalog row.
+
+    When a band declares ``error_column``, the catalog flux-density error is
+    converted to a local AB-magnitude uncertainty and used by the likelihood.
+    The configured ``sigma_mag`` remains the fallback for bands without usable
+    per-object errors.
+    """
     bands = []
     for band in band_configs:
         column = band["column"]
@@ -216,13 +287,41 @@ def build_observation(
             raise ValueError(
                 f"Unsupported photometry units for {band['name']}: {units}"
             )
+        error_column = band.get("error_column")
+        flux_error = None
+        sigma_mag = float(band.get("sigma_mag", 0.05))
+        if error_column and error_column in row and pd.notna(row[error_column]):
+            raw_error = float(row[error_column])
+            error_units = band.get("error_units", units)
+            if error_units == "abmag":
+                if np.isfinite(raw_error) and raw_error > 0:
+                    sigma_mag = raw_error
+            else:
+                if error_units == "fnu_cgs":
+                    flux_error = raw_error
+                elif error_units in {"microjy", "ujy"}:
+                    flux_error = microjy_to_flux_fnu_cgs(raw_error)
+                else:
+                    raise ValueError(
+                        f"Unsupported photometry error units for {band['name']}: {error_units}"
+                    )
+                converted = flux_error_to_sigma_mag(
+                    flux_fnu_cgs,
+                    flux_error,
+                    floor=band.get("sigma_mag_floor"),
+                    ceiling=band.get("sigma_mag_ceiling"),
+                )
+                if np.isfinite(converted):
+                    sigma_mag = converted
         bands.append(
             BandObservation(
                 name=band["name"],
                 column=column,
                 flux_fnu_cgs=flux_fnu_cgs,
                 mag_ab=mag_ab,
-                sigma_mag=float(band.get("sigma_mag", 0.05)),
+                sigma_mag=sigma_mag,
+                error_column=str(error_column) if error_column else None,
+                flux_error_fnu_cgs=flux_error,
             )
         )
     return GalaxyObservation(row_index=row_index, row=row.to_dict(), bands=bands)
@@ -230,6 +329,9 @@ def build_observation(
 
 def required_catalog_columns(config: dict[str, Any]) -> list[str]:
     columns = {band["column"] for band in config["bands"]}
+    for band in config["bands"]:
+        if band.get("error_column"):
+            columns.add(str(band["error_column"]))
     for col in config.get("extra_columns", []):
         columns.add(col)
     for col in (config.get("model", {}).get("parameter_columns") or {}).values():
@@ -239,6 +341,21 @@ def required_catalog_columns(config: dict[str, Any]) -> list[str]:
         col = truth_column_from_spec(redshift.get(key))
         if col:
             columns.add(col)
+    prior_interval = redshift.get("prior_interval")
+    if isinstance(prior_interval, dict):
+        for key in ("min_column", "max_column"):
+            col = truth_column_from_spec(prior_interval.get(key))
+            if col:
+                columns.add(col)
+    prior_intervals = redshift.get("prior_intervals", [])
+    if isinstance(prior_intervals, list):
+        for interval in prior_intervals:
+            if not isinstance(interval, dict):
+                continue
+            for key in ("min_column", "max_column"):
+                col = truth_column_from_spec(interval.get(key))
+                if col:
+                    columns.add(col)
     truth = config.get("truth", {})
     truth_redshift = truth_column_from_spec(truth.get("redshift_column"))
     if truth_redshift:

@@ -36,13 +36,6 @@ Model
    :members:
    :undoc-members:
 
-SED Diagnostics
----------------
-
-.. automodule:: euclid_dsps.sed
-   :members:
-   :undoc-members:
-
 COSMOS Template SEDs
 --------------------
 

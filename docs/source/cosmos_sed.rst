@@ -18,20 +18,61 @@ template-based pseudo-ground-truth SED from the catalog latent COSMOS columns:
 This reconstruction is a diagnostic reference SED. It is not exact physical
 SPS ground truth and should not be used as a training label without this caveat.
 
-LePhare Resources
------------------
+Template Resources
+------------------
 
-The workflow reads local LePhare auxiliary data:
+The preferred local source is the SciPIC value-added directory:
 
 .. code-block:: text
 
-   /home/maxime/.cache/lephare/data/sed/GAL/COSMOS_SED/COSMOS_MOD.list
-   /home/maxime/.cache/lephare/data/ext/
+   Data/value_added_data/galaxy_seds/
+   Data/value_added_data/galaxy_extincts/
+   Data/value_added_data/filters/
+
+``galaxy_seds`` contains the 31 COSMOS templates from Ilbert et al. (2009):
+template IDs 0--6 are ellipticals, 7--18 are S0/spiral templates, and 19--30
+are starburst templates. The files are CSV tables of wavelength in Angstrom and
+``F_lambda`` in ``erg/cm^2/s/Angstrom`` with arbitrary normalization. They are
+template shapes, not object-specific spectra.
+
+``galaxy_extincts`` contains one flat-Fnu no-extinction spectrum and four
+attenuated flat-Fnu spectra. The workflow derives the attenuation law as:
+
+.. math::
+
+   k(\lambda) =
+   \frac{\log_{10}(F_{noext}/F_{ext})}{0.4 \times 0.2}.
+
+This matches the value-added data documentation and avoids depending on an
+external LePhare cache for the COSMOS/SciPIC resources.
+
+LePhare Fallback
+----------------
+
+If ``cosmos_sed.value_added_data_dir`` is not configured, the workflow reads
+local LePhare auxiliary data downloaded with the script
+``download_lephare_sed_gen.py``:
+
+.. code-block:: text
+
+   /home/<user>/.cache/lephare/data/sed/GAL/COSMOS_SED/COSMOS_MOD.list
+   /home/<user>/.cache/lephare/data/ext/
 
 ``COSMOS_MOD.list`` has 31 entries in the local download. Catalog template IDs
-``0`` through ``30`` map directly to this file order. The template files are
-two-column ASCII files interpreted as rest-frame wavelength in Angstrom and an
-arbitrary ``F_lambda``-like template shape.
+``0`` through ``30`` map directly to this file order. The template files follow
+the same wavelength and ``F_lambda`` convention. LePhare's manual states that
+ASCII SED templates are written as ``lambda[A]`` and flux in ``erg/s/A/cm^2``
+with increasing wavelength. LePhare converts other template formats into this
+flux-per-wavelength form when building its binary SED libraries.
+
+Reference:
+  https://lephare.readthedocs.io/en/latest/detailed.html#build-the-rest-frame-templates-library
+
+For this project, the absolute normalization of those COSMOS template files is
+not treated as physical truth. The template shape is used first, then the whole
+combined SED is scaled to the catalog rest-frame Euclid absolute fluxes. The
+scaled product is therefore a COSMOS-template proxy SED, not a measured true
+spectrum.
 
 Extinction Curves
 -----------------
@@ -125,7 +166,7 @@ The default filter convention is photon-counting AB-style:
    \frac{\int \lambda F_\lambda(\lambda) T(\lambda)\,d\lambda}
         {\int c T(\lambda)/\lambda\,d\lambda}.
 
-``filter_response_kind: energy`` is also available when needed:
+``filter_response_kind: energy`` is also available if needed:
 
 .. math::
 
@@ -180,7 +221,8 @@ Outputs
 Standalone outputs:
 
 * ``cosmos_sed_validation.json``: missing columns, unique template IDs,
-  extinction-code values, and fraction diagnostics.
+  extinction-code values, fraction diagnostics, and a ``value_added_data``
+  resource report when the local SciPIC directory is configured.
 * ``cosmos_sed_diagnostics.csv``: one row per galaxy with template IDs,
   extinction curves, E(B-V), fraction policy, ``alpha``, and Euclid absolute
   flux residuals.
@@ -216,6 +258,10 @@ Branch 1 outputs when DSPS comparison is enabled:
 * ``branch1_rest_sed_metrics_by_group.csv`` and
   ``branch1_rest_sed_metrics.png``: grouped diagnostics by ``color_kind`` and
   redshift bin.
+* ``branch1_population_validation.csv`` and
+  ``branch1_population_validation.png``: population-level metrics versus
+  ``color_kind``, redshift bin, apparent magnitude bin, SFR proxy, metallicity
+  proxy, stellar-mass bin, COSMOS template pair, and dust-curve pair.
 
 Branch 2 outputs when DSPS comparison is enabled:
 
@@ -230,10 +276,16 @@ Branch 2 outputs when DSPS comparison is enabled:
   Relative residuals are clipped robustly for readability. For
   ``noisy_observation`` target sets, the plot uses clipped residuals in units
   of the catalog flux error instead of raw fractional residuals.
+* ``branch2_population_validation.csv`` and
+  ``branch2_population_validation.png``: population-level observed-photometry
+  residual summaries using the same grouping axes as branch 1.
 
 With ``--fit-dsps`` or ``--population-dsps``, the workflow also writes
 ``cosmos_dsps_fit_results.csv`` and ``cosmos_dsps_fit_trace.csv``. Population
 mode additionally writes ``cosmos_dsps_population_hyperparameters.csv``.
+Population mode also writes ``cosmos_dsps_population_report.json``. This file
+states explicitly that the current population mode is chunk-regularized MAP,
+not a learned population prior comparable to pop-cosmos.
 The same run also writes the classic fit dashboard files from the photometric
 likelihood:
 
@@ -274,12 +326,27 @@ JAX-heavy modules are imported:
      jax_platforms: "cpu"
      disable_jax_plugin_autoload: true
      xla_python_client_preallocate: false
+     require_gpu: false
+     expected_gpu_name:
 
-The default config is CPU-safe. For the local ``shine`` environment with a
-working CUDA JAX stack, override the runtime from the shell:
+The default Euclid-only config is CPU-safe. The 10-band GPU config uses
+``jax_platforms: "cuda"`` and plugin autoload enabled. Verify the local
+``shine`` environment before large runs:
 
 .. code-block:: bash
 
-   export EUCLID_DSPS_JAX_PLATFORMS=cuda,cpu
+   /home/maxime/miniforge3/envs/shine/bin/python \
+     scripts/check_jax_gpu.py \
+     --require-nvidia \
+     --hold-seconds 10
+
+For production runs, force a hard failure when JAX does not expose the NVIDIA
+GPU:
+
+.. code-block:: bash
+
+   export EUCLID_DSPS_JAX_PLATFORMS=cuda
    export EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0
    export EUCLID_DSPS_XLA_PYTHON_CLIENT_PREALLOCATE=false
+   export EUCLID_DSPS_REQUIRE_GPU=1
+   export EUCLID_DSPS_EXPECTED_GPU_NAME=NVIDIA

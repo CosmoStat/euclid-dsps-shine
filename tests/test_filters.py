@@ -32,3 +32,13 @@ def test_load_ascii_filter_sorts_and_clips(tmp_path) -> None:
 
     assert curve.wave.tolist() == [4000.0, 5000.0, 6000.0]
     assert curve.transmission.tolist() == [0.0, 0.5, 1.0]
+
+
+def test_load_csv_filter_from_value_added_style_file(tmp_path) -> None:
+    path = tmp_path / "filter.csv"
+    path.write_text("6000,1.0\n4000,0.0\n5000,0.5\n", encoding="utf-8")
+
+    curve = load_filter("test", {"path": str(path), "kind": "ascii"})
+
+    assert curve.wave.tolist() == [4000.0, 5000.0, 6000.0]
+    assert curve.transmission.tolist() == [0.0, 0.5, 1.0]

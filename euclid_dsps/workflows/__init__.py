@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .bayesian import sample_batch, sample_one
+from .cosmos import reconstruct_cosmos_seds
 from .eda import run_eda
 from .forward import prepare_one, run_batch, run_one
 from .map_fit import fit_batch, fit_one
@@ -16,6 +17,7 @@ __all__ = [
     "fit_workflow",
     "prepare_one",
     "report_workflow",
+    "reconstruct_cosmos_seds",
     "run_batch",
     "run_eda",
     "run_one",

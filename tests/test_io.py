@@ -4,10 +4,12 @@ import math
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from euclid_dsps.io import (
     abmag_to_flux_fnu_cgs,
     build_observation,
+    flux_error_to_sigma_mag,
     flux_fnu_cgs_to_abmag,
     load_row_indices,
     microjy_to_abmag,
@@ -38,6 +40,21 @@ def test_truth_value_transform_scale_offset_and_log10() -> None:
     assert truth_value_from_spec(row, {"column": "missing"}) is None
 
 
+def test_truth_value_converts_log_stellar_mass_h2_to_msun() -> None:
+    row = {"log_stellar_mass": 10.0}
+
+    value = truth_value_from_spec(
+        row,
+        {
+            "column": "log_stellar_mass",
+            "transform": "log_stellar_mass_h2_to_msun",
+            "h": 0.67,
+        },
+    )
+
+    assert value == pytest.approx(10.0 + 2.0 * np.log10(0.67))
+
+
 def test_load_row_indices_deduplicates_and_sorts(tmp_path) -> None:
     path = tmp_path / "rows.csv"
     path.write_text("# comment\n7\n3\n7\n", encoding="utf-8")
@@ -59,3 +76,25 @@ def test_build_observation_supports_configured_units() -> None:
     assert [band.name for band in obs.bands] == ["fnu", "mag", "ujy"]
     assert math.isclose(obs.bands[1].flux_fnu_cgs, abmag_to_flux_fnu_cgs(23.0))
     assert math.isclose(obs.bands[2].mag_ab, 23.9)
+
+
+def test_build_observation_uses_catalog_flux_error_for_sigma_mag() -> None:
+    row = pd.Series({"flux": 2.0e-29, "flux_err": 2.0e-30})
+    bands = [
+        {
+            "name": "euclid_vis",
+            "column": "flux",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.5,
+            "error_column": "flux_err",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.3,
+        }
+    ]
+
+    obs = build_observation(0, row, bands)
+
+    expected = flux_error_to_sigma_mag(2.0e-29, 2.0e-30, floor=0.01, ceiling=0.3)
+    assert obs.bands[0].sigma_mag == pytest.approx(expected)
+    assert obs.bands[0].flux_error_fnu_cgs == pytest.approx(2.0e-30)

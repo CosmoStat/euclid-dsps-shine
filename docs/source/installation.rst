@@ -1,18 +1,30 @@
 Installation
 ============
 
-Use the existing ``shine`` conda environment when working locally:
 
 .. code-block:: bash
 
    conda activate shine
    python -m pip install -e .
 
+Future ``uv`` workflow target:
+
+.. code-block:: bash
+
+   uv sync
+   uv run euclid-dsps --help
+   uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+
+GPU JAX may require a different install command under ``uv`` than under
+``conda activate shine``. Keep the exact CPU/GPU commands documented before
+using ``uv`` for production GPU runs.
+
 For documentation and quality tooling:
 
 .. code-block:: bash
 
-   python -m pip install -e ".[dev]"
+   python -m pip install sphinx sphinx-rtd-theme
+   python -m pip install pytest ruff black
 
 Core Checks
 -----------

@@ -1,0 +1,57 @@
+catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
+ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
+
+selection:
+    index: 0
+    require_positive_flux: true
+    sort_by_flux:
+
+eda:
+    nrows:
+
+cosmos_sed:
+    value_added_data_dir: "Data/value_added_data"
+    catalog_h: 0.67
+    lephare_data_dir: "/home/maxime/.cache/lephare/data"
+    template_subdir: "sed/GAL/COSMOS_SED"
+    template_list: "COSMOS_MOD.list"
+    expected_template_count: 31
+    template_wave_unit: angstrom
+    template_flux_unit: arbitrary_flambda
+    extinction_dir: "ext"
+    extinction:
+        curves:
+            0: none
+            1: SMC_prevot
+            2: SB_calzetti
+            3: SB_calzetti_bump1
+            4: SB_calzetti_bump2
+    component_fraction_policy: strict
+    filter_response_kind: photon
+    comparison_wave_min_angstrom: 1000.0
+    comparison_wave_max_angstrom: 30000.0
+    sample_plot_count: 12
+    observed_photometry_target_sets:
+        - continuum_internal_dust
+
+redshift:
+    column: phz_median
+    truth_column: z_true_gal
+    fixed_value: 0.5
+    min: 0.0001
+    max: 6.0
+
+truth:
+    redshift_column: z_true_gal
+    parameter_columns:
+        log10_formed_mass_msun:
+            column: log_stellar_mass
+            transform: log_stellar_mass_h2_to_msun
+            h: 0.67
+        log10_metallicity:
+            column: metallicity_true
+            offset: -10.61
+        log10_sfr_at_obs: log_sfr_true
+        dust_av:
+            column: dust_ebv_true
+            scale: 4.05

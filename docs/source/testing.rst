@@ -29,8 +29,6 @@ Current coverage:
      - Wavelength unit conversion, effective wavelength, ASCII filter sorting/clipping.
    * - ``tests/test_imports.py``
      - Public workflow/reporting facades and compatibility imports.
-   * - ``tests/test_sed.py``
-     - Broad-band pseudo-SED reconstruction, luminosity conversion, SED report outputs.
    * - ``tests/test_workflows_smoke.py``
      - Synthetic parquet schema validation, row selection, EDA artifact creation.
 
@@ -70,10 +68,8 @@ Runtime Notes
 -------------
 
 Native DSPS/JAX workflows are still heavier than unit tests, so CI focuses on
-fast deterministic tests. The local ``shine`` WSL environment segfaults when
-JAX probes the CUDA13 plugin directly; ``configs/fs2_phz1.yaml`` defaults
-project DSPS workflows to CPU and disables JAX plugin autoload before importing
-JAX-heavy modules. Manual smoke commands should include:
+fast deterministic tests.
+Manual smoke commands should include:
 
 .. code-block:: bash
 
