@@ -124,7 +124,7 @@ CATALOG_COLUMNS: tuple[CatalogColumn, ...] = (
         "float",
         "dimensionless",
         "NNPZ median of the photometric-redshift PDF.",
-        "Used as the default DSPS redshift estimate in the updated configs.",
+        "Diagnostic only in the active science config; DSPS fits z_obs from photometry.",
     ),
     CatalogColumn(
         "phz_min_70",

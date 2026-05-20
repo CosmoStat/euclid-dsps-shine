@@ -63,8 +63,8 @@ Config Shorthands
 
 ``column_groups``
   Replaces long ``extra_columns`` lists. Useful groups are ``truth_basic``,
-  ``phz_diagnostics``, ``cosmos_proxy``, ``photometry_errors``,
-  ``emission_line_diagnostics``, and ``morphology_halo``.
+  ``cosmos_proxy``, ``photometry_errors``, ``emission_line_diagnostics``, and
+  ``morphology_halo``. ``phz_diagnostics`` exists only for explicit audits.
 
 ``dust_model: cosmos_proxy_fixed``
   Injects COSMOS dust columns into DSPS. These values are copied from the row
@@ -81,20 +81,14 @@ The current fit infers:
 * stellar metallicity proxy ``log10_metallicity``;
 * derived current SFR from fitted mass plus SFH shape.
 
-Truth columns are diagnostics only. ``phz_median`` initializes redshift, but
-PHZ intervals are not used as hard priors in the science preset.
+Truth columns are diagnostics only. The science preset does not feed photo-z
+into DSPS. ``redshift.initial`` draws a deterministic random value inside broad
+bounds, then ``z_obs`` is fitted with a flat prior. PHZ interval priors were
+removed.
 
 Current priors are broad ``weak_physical`` priors. They are not yet POP-COSMOS
 priors. A POP-COSMOS-like mode needs exact variable mapping and learned
 population-prior calibration before it should be used.
 
-Legacy Commands
----------------
-
-Old commands still work for reproducibility:
-
-``run-one``, ``run-batch``, ``fit-one``, ``fit-batch``, ``cosmos-sed``,
-``fit-population``, and ``fit-workflow``.
-
-They are kept as compatibility/advanced entry points. New runs should start
-from ``fit``, ``posterior``, and ``check``.
+Legacy configs live under ``configs/legacy`` as examples only. Active runs
+should start from ``fit``, ``posterior``, and ``check``.

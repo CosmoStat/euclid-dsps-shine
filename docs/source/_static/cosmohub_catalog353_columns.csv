@@ -4,13 +4,13 @@ dec_gal,dec_gal,coordinates,float,deg,Galaxy declination.,ICRS-like sky coordina
 ra_mag_gal,ra_mag_gal,coordinates,float,deg,Right ascension associated with the photometry/magnitude position.,
 dec_mag_gal,dec_mag_gal,coordinates,float,deg,Declination associated with the photometry/magnitude position.,
 z_true,true_redshift_halo,redshift,float,dimensionless,"True halo redshift, aliased by the download query.",Used only for diagnostics in the default workflow.
-z_phz,phz_mode_1,redshift,float,dimensionless,First mode of the photometric-redshift probability distribution.,Legacy photo-z column; current FS2 config uses phz_median to initialize free DSPS z_obs.
+z_phz,phz_mode_1,redshift,float,dimensionless,First mode of the photometric-redshift probability distribution.,Diagnostic/legacy photo-z column; active science fits DSPS z_obs from photometry.
 z_true_gal,true_redshift_gal,redshift,float,dimensionless,True galaxy redshift.,Preferred truth redshift for galaxy-level DSPS validation.
 z_obs_gal,observed_redshift_gal,redshift,float,dimensionless,Observed galaxy redshift including peculiar velocity.,
 z_deepz,zp,redshift,double,dimensionless,DeepZ mode of the p(z) distribution.,
 redshift_step,redshift_step,redshift,smallint,index,Redshift step from the Flagship DM lensing healpix maps.,
 phz_flags,phz_flags,redshift,tinyint,flag,NNPZ photometric-redshift quality flag.,0 means no known issue; 1 means insufficient neighbours for robust photo-z.
-phz_median,phz_median,redshift,float,dimensionless,NNPZ median of the photometric-redshift PDF.,Used as the default DSPS redshift estimate in the updated configs.
+phz_median,phz_median,redshift,float,dimensionless,NNPZ median of the photometric-redshift PDF.,Diagnostic only in the active science config; DSPS fits z_obs from photometry.
 phz_min_70,phz_min_70,redshift,float,dimensionless,Lower edge of the NNPZ 70 percent PDF interval.,
 phz_max_70,phz_max_70,redshift,float,dimensionless,Upper edge of the NNPZ 70 percent PDF interval.,
 phz_min_90,phz_min_90,redshift,float,dimensionless,Lower edge of the NNPZ 90 percent PDF interval.,

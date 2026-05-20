@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from euclid_dsps.config import (
@@ -80,41 +82,35 @@ def test_required_catalog_columns_include_config_contract() -> None:
     ]
 
 
-def test_required_catalog_columns_include_redshift_prior_interval() -> None:
+def test_redshift_prior_interval_is_removed() -> None:
     config = minimal_config()
     config["redshift"]["prior_interval"] = {
         "min_column": "phz_min_70",
         "max_column": "phz_max_70",
         "probability": 0.70,
     }
-    normalized = normalize_config(config)
 
-    columns = required_catalog_columns(normalized)
-
-    assert "phz_min_70" in columns
-    assert "phz_max_70" in columns
+    with pytest.raises(ConfigValidationError, match="redshift\\.prior_interval"):
+        normalize_config(config)
 
 
-def test_required_catalog_columns_include_redshift_prior_intervals() -> None:
+def test_sample_priors_must_match_free_parameters() -> None:
     config = minimal_config()
-    config["redshift"]["prior_intervals"] = [
-        {
-            "min_column": "phz_min_70",
-            "max_column": "phz_max_70",
-            "probability": 0.70,
-        },
-        {
-            "min_column": "phz_min_95",
-            "max_column": "phz_max_95",
-            "probability": 0.95,
-        },
-    ]
-    normalized = normalize_config(config)
+    config["fit"] = {
+        "free_parameters": {"z_obs": {"initial": "from_base", "bounds": [0.001, 6.0]}}
+    }
+    config["sample"] = {"priors": {"dust_av": {"type": "uniform"}}}
 
-    columns = required_catalog_columns(normalized)
+    with pytest.raises(ConfigValidationError, match="sample\\.priors\\.dust_av"):
+        normalize_config(config)
 
-    assert "phz_min_70" in columns
-    assert "phz_max_95" in columns
+
+def test_popcosmos_prior_set_is_reserved() -> None:
+    config = minimal_config()
+    config["prior_set"] = "popcosmos_like"
+
+    with pytest.raises(ConfigValidationError, match="popcosmos_like"):
+        normalize_config(config)
 
 
 def test_validate_catalog_columns_reports_missing_columns() -> None:
@@ -124,40 +120,30 @@ def test_validate_catalog_columns_reports_missing_columns() -> None:
         validate_catalog_columns(config, {"euclid_vis", "z_phz", "z_true", "ra_gal"})
 
 
-def test_default_science_config_uses_euclid_bands_only() -> None:
-    config = load_config("configs/fs2_phz1.yaml")
-
-    band_names = [band["name"] for band in config["bands"]]
-    assert band_names == [
-        "euclid_vis",
-        "euclid_nisp_y",
-        "euclid_nisp_j",
-        "euclid_nisp_h",
-    ]
+def test_legacy_euclid_config_was_moved_to_examples() -> None:
+    assert Path("configs/legacy/fs2_phz1.yaml").exists()
+    assert not Path("configs/fs2_phz1.yaml").exists()
 
 
-def test_optional_10band_config_activates_lsst_bands_explicitly() -> None:
-    config = load_config("configs/fs2_phz1_10band.yaml")
+def test_science_config_is_main_lsst_euclid_setup() -> None:
+    config = load_config("configs/fs2_phz1_science.yaml")
 
     band_names = [band["name"] for band in config["bands"]]
     assert len(band_names) == 10
     assert {"euclid_vis", "euclid_nisp_h", "lsst_u", "lsst_y"}.issubset(band_names)
-    assert config["sample"]["priors"]["dust_av"]["type"] == "scaled_beta"
     assert config["cosmos_sed"]["observed_photometry_target_sets"] == [
         "continuum_internal_dust"
     ]
     assert config["cosmos_sed"]["use_cosmos_dust_in_dsps"] is True
     assert "dust_av" not in config["fit"]["free_parameters"]
+    assert "log10_sfr" not in config["fit"]["free_parameters"]
     assert "log10_formed_mass_msun" in config["fit"]["free_parameters"]
-    assert "sfh_burst_fraction" not in config["fit"]["free_parameters"]
+    assert set(config["sample"]["priors"]) == set(config["fit"]["free_parameters"])
     assert config["fit"]["priors"]["z_obs"]["type"] == "uniform"
-    assert "sfh_bin_log_sfr_0" not in config["fit"]["free_parameters"]
     assert "sfh_t_peak" in config["fit"]["free_parameters"]
-    assert (
-        config["fit"]["population"]["relations"]["log10_metallicity"]["predictor"]
-        == "log10_formed_mass_msun"
-    )
     assert config["bands"][6]["error_column"].endswith("_error")
+    assert config["redshift"]["initial"] == "random_uniform"
+    assert config["redshift"]["column"] is None
     assert config["runtime"]["jax_platforms"] == "cuda"
     assert config["runtime"]["disable_jax_plugin_autoload"] is False
     assert config["runtime"]["require_gpu"] is True
@@ -173,7 +159,7 @@ def test_science_config_expands_shorthands() -> None:
     assert config["runtime"]["require_gpu"] is True
     assert config["cosmos_sed"]["use_cosmos_dust_in_dsps"] is True
     assert config["model"]["parameter_columns"]["cosmos_ebv_1"] == "ebv_cosmos_1"
-    assert "phz_min_70" in config["extra_columns"]
+    assert "phz_min_70" not in config["extra_columns"]
     assert config["reporting"]["plot_ground_truth"] is True
     assert config["fit"]["priors"]["z_obs"]["type"] == "uniform"
 

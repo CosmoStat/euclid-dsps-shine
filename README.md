@@ -5,7 +5,7 @@ DSPS-like SED inference from Euclid + LSST photometry.
 Main goal:
 
 - fit simple DSPS parameters from catalog photometry;
-- compare recovered redshift, mass, SFR, metallicity, and dust proxies to FS2 truth/proxy columns;
+- compare recovered redshift, mass, SFR, and metallicity proxies to FS2 truth/proxy columns;
 - compare inferred DSPS SEDs to COSMOS-template proxy SEDs;
 - keep MAP fast for batches and keep HMC/NUTS posterior sampling for selected galaxies.
 
@@ -64,8 +64,6 @@ Public commands:
 - `posterior`: HMC/NUTS for one row or a small row list.
 - `check`: EDA, forward pass, or standalone COSMOS proxy SED checks.
 
-Legacy commands still work for old scripts: `fit-one`, `fit-batch`, `run-one`, `run-batch`, `cosmos-sed`, `fit-population`, `fit-workflow`.
-
 ## Science Config
 
 `configs/fs2_phz1_science.yaml` is intentionally short. It uses:
@@ -73,7 +71,8 @@ Legacy commands still work for old scripts: `fit-one`, `fit-batch`, `run-one`, `
 - `bands: lsst_euclid_10` for LSST `ugrizy` + Euclid VIS/Y/J/H;
 - `column_groups` instead of a long `extra_columns` list;
 - `dust_model: cosmos_proxy_fixed` so COSMOS dust columns are row-injected, not inferred as DSPS `dust_av`;
-- broad non-circular priors for the current DSPS parameterization;
+- `redshift.initial: random_uniform`, then `z_obs` is fitted with a broad flat prior;
+- broad non-circular `weak_physical` priors for the current DSPS parameterization;
 - `plot_ground_truth: true` so SED diagnostics overlay the COSMOS proxy when local resources exist.
 
 Expanded normalized config is written in run outputs as `normalized_config.json`.

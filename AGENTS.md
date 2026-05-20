@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reports.py` writes tables and plots, and `pipeline.py` composes CLI workflows. Configurations live in `configs/`; the default Euclid FS2 setup is `configs/fs2_phz1.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
+The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reports.py` writes tables and plots, and `pipeline.py` composes CLI workflows. Configurations live in `configs/`; the active science setup is `configs/fs2_phz1_science.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
 
 ## Build, Test, and Development Commands
 
@@ -27,11 +27,11 @@ Run the main checks:
 
 ```bash
 python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-euclid-dsps --config configs/fs2_phz1.yaml run-one --out outputs/runs/dev_one
-euclid-dsps --config configs/fs2_phz1.yaml run-batch --limit 20 --batch-size 5 --out outputs/runs/dev_batch
+euclid-dsps fit --config configs/fs2_phz1_science.yaml --index 0 --out outputs/runs/dev_fit_one
+euclid-dsps fit --config configs/fs2_phz1_science.yaml --limit 20 --batch-size 5 --out outputs/runs/dev_fit_batch
 ```
 
-Use `fit-batch` only with a small `--limit` while iterating because it runs one optimizer per galaxy.
+Use `fit` only with a small `--limit` while iterating because it runs one optimizer per galaxy.
 
 ## Coding Style & Naming Conventions
 
@@ -39,11 +39,10 @@ Use Python 3.11+ with type hints and small, explicit functions. Keep DSPS-specif
 
 ## Testing Guidelines
 
-There is no formal test suite yet. For changes, run `compileall`, `run-one`, and a small `run-batch`. If touching fitting logic, also run:
+There is no formal test suite yet. For changes, run `compileall`, one-row `fit`, and a small batch `fit`. If touching posterior logic, also run:
 
 ```bash
-euclid-dsps --config configs/fs2_phz1.yaml fit-one --out outputs/runs/dev_fit_one
-euclid-dsps --config configs/fs2_phz1.yaml fit-batch --limit 3 --batch-size 3 --out outputs/runs/dev_fit_batch
+euclid-dsps posterior --config configs/fs2_phz1_science.yaml --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_posterior_one
 ```
 
 ## Commit & Pull Request Guidelines

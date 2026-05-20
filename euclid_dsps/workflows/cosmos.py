@@ -141,7 +141,7 @@ def reconstruct_cosmos_seds(
     )
 
     total = len(selected)
-    with _make_progress_bar(total=total, desc="cosmos-sed", unit="galaxy") as progress:
+    with _make_progress_bar(total=total, desc="cosmos-check", unit="galaxy") as progress:
         for chunk_index, batch in enumerate(_dataframe_chunks(selected, batch_size)):
             cosmos_results = []
             for row_index, row in batch.iterrows():

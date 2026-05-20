@@ -34,15 +34,14 @@ Run the checks used while developing:
 .. code-block:: bash
 
    python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-   euclid-dsps --config configs/fs2_phz1.yaml run-one --out outputs/runs/dev_one
-   euclid-dsps --config configs/fs2_phz1.yaml run-batch --limit 20 --batch-size 5 --out outputs/runs/dev_batch
+   euclid-dsps fit --config configs/fs2_phz1_science.yaml --index 0 --out outputs/runs/dev_fit_one
+   euclid-dsps fit --config configs/fs2_phz1_science.yaml --limit 20 --batch-size 5 --out outputs/runs/dev_fit_batch
 
-When fitting code changes, also run:
+When posterior code changes, also run a tiny posterior smoke:
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/fs2_phz1.yaml fit-one --out outputs/runs/dev_fit_one
-   euclid-dsps --config configs/fs2_phz1.yaml fit-batch --limit 3 --batch-size 3 --out outputs/runs/dev_fit_batch
+   euclid-dsps posterior --config configs/fs2_phz1_science.yaml --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_posterior_one
 
 Documentation Build
 -------------------

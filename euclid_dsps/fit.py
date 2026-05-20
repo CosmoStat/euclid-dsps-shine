@@ -376,59 +376,25 @@ def fit_galaxy_batch_adam(
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
     prior_weight = float(fit_config.get("prior_weight", 1.0))
-    fast_warmstart_only = bool(fit_config.get("fast_warmstart_only", False))
-    fast_grid_search = bool(fit_config.get("fast_grid_search", False))
-    redshift_grid_size = int(fit_config.get("redshift_grid_size", 7))
-    redshift_grid_width = float(fit_config.get("redshift_grid_width", 0.4))
-    fast_grid_parameters = tuple(fit_config.get("fast_grid_parameters", ()))
-    fast_grid_prior_width = float(fit_config.get("fast_grid_prior_width", 1.0))
 
     cache_key = (
-        (
-            "independent_warmstart"
-            if fast_warmstart_only
-            else "independent_grid"
-            if fast_grid_search
-            else "independent"
-        ),
+        "independent",
         id(context),
         tuple(setup["parameter_names"]),
         tuple(setup["free_names"]),
-        0 if (fast_warmstart_only or fast_grid_search) else maxiter,
-        0.0 if (fast_warmstart_only or fast_grid_search) else learning_rate,
-        0.0 if fast_warmstart_only else prior_weight,
-        redshift_grid_size if fast_grid_search else 0,
-        redshift_grid_width if fast_grid_search else 0.0,
-        fast_grid_parameters if fast_grid_search else (),
-        fast_grid_prior_width if fast_grid_search else 0.0,
+        maxiter,
+        learning_rate,
+        prior_weight,
     )
     if cache_key not in _OPTIMIZER_CACHE:
-        if fast_warmstart_only:
-            _OPTIMIZER_CACHE[cache_key] = _build_independent_warmstart_optimizer(
-                context=context,
-                parameter_names=setup["parameter_names"],
-                free_indices=setup["free_indices"],
-            )
-        elif fast_grid_search:
-            _OPTIMIZER_CACHE[cache_key] = _build_independent_grid_optimizer(
-                context=context,
-                parameter_names=setup["parameter_names"],
-                free_indices=setup["free_indices"],
-                prior_weight=prior_weight,
-                redshift_grid_size=redshift_grid_size,
-                redshift_grid_width=redshift_grid_width,
-                fast_grid_parameters=fast_grid_parameters,
-                fast_grid_prior_width=fast_grid_prior_width,
-            )
-        else:
-            _OPTIMIZER_CACHE[cache_key] = _build_independent_adam_optimizer(
-                context=context,
-                parameter_names=setup["parameter_names"],
-                free_indices=setup["free_indices"],
-                maxiter=maxiter,
-                learning_rate=learning_rate,
-                prior_weight=prior_weight,
-            )
+        _OPTIMIZER_CACHE[cache_key] = _build_independent_adam_optimizer(
+            context=context,
+            parameter_names=setup["parameter_names"],
+            free_indices=setup["free_indices"],
+            maxiter=maxiter,
+            learning_rate=learning_rate,
+            prior_weight=prior_weight,
+        )
     optimize = _OPTIMIZER_CACHE[cache_key]
 
     best_theta, chi2, grad_norm, model_mags, trace_arrays = optimize(
@@ -455,16 +421,7 @@ def fit_galaxy_batch_adam(
     )
     return BatchFitResult(
         success=np.isfinite(np.asarray(chi2)),
-        message=(
-            f"jax_warmstart_only device={_jax_device()}"
-            if fast_warmstart_only
-            else (
-                f"jax_grid_warmstart n_grid={redshift_grid_size}, "
-                f"params={','.join(fast_grid_parameters)}, device={_jax_device()}"
-            )
-            if fast_grid_search
-            else f"jax_adam_vmap maxiter={maxiter}, device={_jax_device()}"
-        ),
+        message=f"jax_adam_vmap maxiter={maxiter}, device={_jax_device()}",
         parameter_names=setup["parameter_names"],
         free_parameter_names=setup["free_names"],
         best_parameter_matrix=np.asarray(best_matrix),
@@ -1066,305 +1023,6 @@ def _build_independent_adam_optimizer(
         return best_theta, best_chi2, best_grad, model_mags, metrics
 
     return optimize
-
-
-def _build_independent_warmstart_optimizer(
-    context: DspsContext,
-    parameter_names: list[str],
-    free_indices: np.ndarray,
-):
-    free_indices_jax = jnp.asarray(free_indices)
-
-    def single_mags(theta, base):
-        params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        return model_mags_jax(context, params)
-
-    def single_chi2(theta, base, observed, sigma, mask):
-        model_mag = single_mags(theta, base)
-        chi = jnp.where(mask, (observed - model_mag) / sigma, 0.0)
-        return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
-
-    batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
-    amplitude_free_pos = _free_position(
-        parameter_names, free_indices, "log10_formed_mass_msun"
-    )
-    if amplitude_free_pos is None:
-        amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
-
-    @jax.jit
-    def optimize(
-        theta0,
-        base_matrix,
-        observed,
-        sigma,
-        mask,
-        lower,
-        upper,
-        prior_gaussian_mask,
-        prior_gaussian_loc,
-        prior_gaussian_scale,
-        prior_beta_mask,
-        prior_beta_alpha,
-        prior_beta_beta,
-        truth_theta,
-    ):
-        del (
-            prior_gaussian_mask,
-            prior_gaussian_loc,
-            prior_gaussian_scale,
-            prior_beta_mask,
-            prior_beta_alpha,
-            prior_beta_beta,
-        )
-        best_theta = _warm_start_amplitude(
-            theta0,
-            base_matrix,
-            observed,
-            mask,
-            lower,
-            upper,
-            batch_mags,
-            amplitude_free_pos,
-        )
-        best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
-            best_theta, base_matrix, observed, sigma, mask
-        )
-        model_mags = batch_mags(best_theta, base_matrix)
-        grad_norm = jnp.zeros((best_theta.shape[0],), dtype=best_theta.dtype)
-        metrics = jnp.concatenate(
-            [
-                jnp.asarray(
-                    [jnp.nanmean(best_chi2), jnp.nanmedian(best_chi2), 0.0],
-                    dtype=best_theta.dtype,
-                ),
-                _truth_metric_vector(best_theta, truth_theta),
-            ]
-        )[None, :]
-        return best_theta, best_chi2, grad_norm, model_mags, metrics
-
-    return optimize
-
-
-def _build_independent_grid_optimizer(
-    context: DspsContext,
-    parameter_names: list[str],
-    free_indices: np.ndarray,
-    prior_weight: float,
-    redshift_grid_size: int,
-    redshift_grid_width: float,
-    fast_grid_parameters: tuple[str, ...],
-    fast_grid_prior_width: float,
-):
-    free_indices_jax = jnp.asarray(free_indices)
-    n_grid = max(int(redshift_grid_size), 1)
-    grid_free_positions = tuple(
-        pos
-        for name in fast_grid_parameters
-        if (pos := _free_position(parameter_names, free_indices, name)) is not None
-    )
-    z_free_pos = _free_position(parameter_names, free_indices, "z_obs")
-    amplitude_free_pos = _free_position(
-        parameter_names, free_indices, "log10_formed_mass_msun"
-    )
-    if amplitude_free_pos is None:
-        amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
-
-    def single_mags(theta, base):
-        params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        return model_mags_jax(context, params)
-
-    def single_chi2(theta, base, observed, sigma, mask):
-        model_mag = single_mags(theta, base)
-        chi = jnp.where(mask, (observed - model_mag) / sigma, 0.0)
-        return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
-
-    def single_objective(
-        theta,
-        base,
-        observed,
-        sigma,
-        mask,
-        lower,
-        upper,
-        prior_gaussian_mask,
-        prior_gaussian_loc,
-        prior_gaussian_scale,
-        prior_beta_mask,
-        prior_beta_alpha,
-        prior_beta_beta,
-    ):
-        chi2 = single_chi2(theta, base, observed, sigma, mask)
-        prior = _physical_prior_penalty(
-            theta,
-            lower,
-            upper,
-            prior_gaussian_mask,
-            prior_gaussian_loc,
-            prior_gaussian_scale,
-            prior_beta_mask,
-            prior_beta_alpha,
-            prior_beta_beta,
-        )
-        return jnp.nan_to_num(
-            chi2 + prior_weight * prior,
-            nan=1.0e30,
-            posinf=1.0e30,
-            neginf=1.0e30,
-        )
-
-    batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
-    batch_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))
-    batch_objective = jax.vmap(
-        single_objective,
-        in_axes=(0, 0, 0, 0, 0, None, None, 0, 0, 0, 0, 0, 0),
-    )
-
-    @jax.jit
-    def optimize(
-        theta0,
-        base_matrix,
-        observed,
-        sigma,
-        mask,
-        lower,
-        upper,
-        prior_gaussian_mask,
-        prior_gaussian_loc,
-        prior_gaussian_scale,
-        prior_beta_mask,
-        prior_beta_alpha,
-        prior_beta_beta,
-        truth_theta,
-    ):
-        n_rows = theta0.shape[0]
-        frac_values = jnp.linspace(0.0, 1.0, n_grid, dtype=theta0.dtype)
-        best_theta = theta0
-        best_objective = jnp.full((n_rows,), jnp.inf, dtype=theta0.dtype)
-
-        def evaluate(theta):
-            theta = _warm_start_amplitude(
-                theta,
-                base_matrix,
-                observed,
-                mask,
-                lower,
-                upper,
-                batch_mags,
-                amplitude_free_pos,
-            )
-            objective = batch_objective(
-                theta,
-                base_matrix,
-                observed,
-                sigma,
-                mask,
-                lower,
-                upper,
-                prior_gaussian_mask,
-                prior_gaussian_loc,
-                prior_gaussian_scale,
-                prior_beta_mask,
-                prior_beta_alpha,
-                prior_beta_beta,
-            )
-            return objective.astype(theta0.dtype), theta
-
-        best_objective, best_theta = evaluate(best_theta)
-
-        def scan_one_parameter(best_objective, best_theta, free_pos: int):
-            lo, hi = _fast_grid_bounds(
-                best_theta,
-                free_pos,
-                lower,
-                upper,
-                prior_gaussian_mask,
-                prior_gaussian_loc,
-                prior_gaussian_scale,
-                redshift_grid_width,
-                fast_grid_prior_width,
-                z_free_pos,
-            )
-
-            def grid_step(carry, frac):
-                current_best_objective, current_best_theta = carry
-                candidate = current_best_theta
-                value = lo + frac * (hi - lo)
-                candidate = candidate.at[:, free_pos].set(value.astype(theta0.dtype))
-                objective, candidate = evaluate(candidate)
-                improved = objective < current_best_objective
-                current_best_objective = jnp.where(
-                    improved, objective, current_best_objective
-                )
-                current_best_theta = jnp.where(
-                    improved[:, None], candidate, current_best_theta
-                )
-                return (current_best_objective, current_best_theta), None
-
-            (best_objective, best_theta), _ = jax.lax.scan(
-                grid_step,
-                (best_objective, best_theta),
-                frac_values,
-            )
-            return best_objective, best_theta
-
-        for free_pos in grid_free_positions:
-            best_objective, best_theta = scan_one_parameter(
-                best_objective, best_theta, free_pos
-            )
-        best_chi2 = batch_chi2(best_theta, base_matrix, observed, sigma, mask)
-        model_mags = batch_mags(best_theta, base_matrix)
-        grad_norm = jnp.zeros((n_rows,), dtype=theta0.dtype)
-        metrics = jnp.concatenate(
-            [
-                jnp.asarray(
-                    [jnp.nanmean(best_chi2), jnp.nanmedian(best_chi2), 0.0],
-                    dtype=theta0.dtype,
-                ),
-                _truth_metric_vector(best_theta, truth_theta),
-            ]
-        )[None, :]
-        return best_theta, best_chi2, grad_norm, model_mags, metrics
-
-    return optimize
-
-
-def _fast_grid_bounds(
-    theta,
-    free_pos: int,
-    lower,
-    upper,
-    prior_gaussian_mask,
-    prior_gaussian_loc,
-    prior_gaussian_scale,
-    redshift_grid_width: float,
-    fast_grid_prior_width: float,
-    redshift_free_pos: int | None,
-):
-    center = theta[:, free_pos]
-    is_redshift = redshift_free_pos is not None and free_pos == redshift_free_pos
-    gaussian_loc = prior_gaussian_loc[:, free_pos]
-    gaussian_scale = prior_gaussian_scale[:, free_pos]
-    valid_gaussian = (
-        prior_gaussian_mask[:, free_pos]
-        & jnp.isfinite(gaussian_loc)
-        & jnp.isfinite(gaussian_scale)
-        & (gaussian_scale > 0)
-    )
-    prior_width = jnp.asarray(fast_grid_prior_width, dtype=theta.dtype)
-    grid_width = jnp.asarray(redshift_grid_width, dtype=theta.dtype)
-    lo_gaussian = gaussian_loc - prior_width * gaussian_scale
-    hi_gaussian = gaussian_loc + prior_width * gaussian_scale
-    fallback_width = jnp.where(
-        is_redshift,
-        grid_width,
-        jnp.asarray(0.25, dtype=theta.dtype) * (upper[free_pos] - lower[free_pos]),
-    )
-    lo = jnp.where(valid_gaussian, lo_gaussian, center - fallback_width)
-    hi = jnp.where(valid_gaussian, hi_gaussian, center + fallback_width)
-    lo = jnp.maximum(lo, lower[free_pos])
-    hi = jnp.minimum(hi, upper[free_pos])
-    hi = jnp.maximum(hi, lo + jnp.asarray(1.0e-4, dtype=theta.dtype))
-    return lo, hi
 
 
 def _build_population_adam_optimizer(
