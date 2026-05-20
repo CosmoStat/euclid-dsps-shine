@@ -216,10 +216,6 @@ sample:
     priors:
         z_obs:
             type: uniform
-        log10_sfr:
-            type: truncated_normal
-            loc: 0.0
-            scale: 1.3
         dust_av:
             type: scaled_beta
             alpha: 1.2

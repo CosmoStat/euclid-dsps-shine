@@ -255,16 +255,6 @@ fit:
     tolerance: 1.0e-5
     patience: 24
     prior_weight: 1.0
-    fast_warmstart_only: false
-    fast_grid_search: false
-    redshift_grid_size: 5
-    redshift_grid_width: 0.4
-    fast_grid_parameters:
-        - z_obs
-        - log10_metallicity
-        - sfh_t_peak
-        - sfh_tau
-    fast_grid_prior_width: 1.0
     population:
         prior_weight: 1.0
         sigma_floor: 0.03
@@ -330,14 +320,6 @@ sample:
     priors:
         z_obs:
             type: uniform
-        log10_sfr:
-            type: truncated_normal
-            loc: 0.0
-            scale: 1.3
-        dust_av:
-            type: scaled_beta
-            alpha: 1.2
-            beta: 3.0
         log10_metallicity:
             type: uniform
 
