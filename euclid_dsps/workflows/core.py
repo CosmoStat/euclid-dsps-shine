@@ -132,6 +132,7 @@ def run_one(config: dict[str, Any], out_dir: str | Path) -> pd.DataFrame:
             **_row_context(observation.row, params, config),
         },
     )
+    write_json(out / "normalized_config.json", config)
     return comparison
 
 
@@ -150,7 +151,11 @@ def fit_one(config: dict[str, Any], out_dir: str | Path) -> None:
         include_filters=_plot_filters(config),
     )
     write_fit_outputs(fit_result, out)
-    write_json(out / "sed_diagnostic_summary.json", {"ground_truth_sed_status": ground_truth_status})
+    write_json(
+        out / "sed_diagnostic_summary.json",
+        {"ground_truth_sed_status": ground_truth_status},
+    )
+    write_json(out / "normalized_config.json", config)
 
 
 def sample_one(config: dict[str, Any], out_dir: str | Path) -> None:
@@ -184,6 +189,7 @@ def sample_one(config: dict[str, Any], out_dir: str | Path) -> None:
         out,
         truth_values=_posterior_truth_values(context_values),
     )
+    write_json(out / "normalized_config.json", config)
 
 
 def sample_batch(
@@ -295,6 +301,7 @@ def sample_batch(
         pd.DataFrame(sample_rows).to_csv(
             out / "batch_posterior_samples.csv", index=False
         )
+    write_json(out / "normalized_config.json", config)
     from ..reporting import write_mcmc_batch_outputs
 
     write_mcmc_batch_outputs(

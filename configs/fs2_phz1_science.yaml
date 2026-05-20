@@ -1,0 +1,126 @@
+extends: presets/fs2_common.yaml
+
+# Main science preset: LSST ugrizy + Euclid VIS/Y/J/H.
+runtime: gpu
+bands: lsst_euclid_10
+dust_model: cosmos_proxy_fixed
+
+column_groups:
+    - truth_basic
+    - phz_diagnostics
+    - cosmos_proxy
+    - photometry_errors
+
+model:
+    n_sfh_bins: 32
+    fixed_parameters:
+        log10_sfr: 0.0
+        log10_formed_mass_msun: 10.0
+        sfh_t_peak: 4.0
+        sfh_tau: 0.6
+        log10_metallicity: -2.0
+        metallicity_scatter: 0.2
+        dust_slope: -0.7
+        cosmos_ebv_1: 0.0
+        cosmos_ebv_2: 0.0
+        cosmos_frac_1: 0.5
+        cosmos_frac_2: 0.5
+        cosmos_ext_curve_1: 0.0
+        cosmos_ext_curve_2: 0.0
+
+fit:
+    method: jax_adam
+    maxiter: 80
+    learning_rate: 0.08
+    tolerance: 1.0e-5
+    patience: 24
+    prior_weight: 1.0
+    fast_warmstart_only: false
+    fast_grid_search: false
+    redshift_grid_size: 5
+    redshift_grid_width: 0.4
+    fast_grid_parameters:
+        - z_obs
+        - log10_metallicity
+        - sfh_t_peak
+        - sfh_tau
+    fast_grid_prior_width: 1.0
+    priors:
+        z_obs:
+            type: uniform
+        log10_formed_mass_msun:
+            type: normal
+            loc: 10.0
+            scale: 1.5
+        sfh_t_peak:
+            type: normal
+            loc: 4.0
+            scale: 3.0
+        sfh_tau:
+            type: normal
+            loc: 0.8
+            scale: 0.8
+        log10_metallicity:
+            type: normal
+            loc: -2.4
+            scale: 0.6
+    free_parameters:
+        z_obs:
+            initial: from_base
+            bounds: [0.001, 6.0]
+        log10_formed_mass_msun:
+            initial: 10.0
+            bounds: [6.0, 13.0]
+        sfh_t_peak:
+            initial: 4.0
+            bounds: [0.1, 13.5]
+        sfh_tau:
+            initial: 0.6
+            bounds: [0.08, 4.0]
+        log10_metallicity:
+            initial: -2.25
+            bounds: [-3.9, -1.6]
+
+sample:
+    sampler: nuts
+    num_warmup: 100
+    num_samples: 200
+    num_chains: 1
+    chain_method: parallel
+    target_accept_prob: 0.85
+    max_tree_depth: 10
+    num_steps: 8
+    dense_mass: false
+    seed: 42
+    progress_bar: true
+    init_from_map: true
+    save_samples: true
+    priors:
+        z_obs:
+            type: uniform
+        log10_formed_mass_msun:
+            type: normal
+            loc: 10.0
+            scale: 1.5
+        sfh_t_peak:
+            type: normal
+            loc: 4.0
+            scale: 3.0
+        sfh_tau:
+            type: normal
+            loc: 0.8
+            scale: 0.8
+        log10_metallicity:
+            type: normal
+            loc: -2.4
+            scale: 0.6
+
+reporting:
+    level: full
+    save_sed_samples: 16
+    plot_filters: true
+    plot_ground_truth: true
+
+output:
+    format: parquet
+    verbose_benchmark: false

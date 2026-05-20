@@ -7,13 +7,23 @@ from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="euclid-dsps")
+    parser = argparse.ArgumentParser(
+        prog="euclid-dsps",
+        description=(
+            "DSPS-like SED inference from Euclid/LSST photometry. "
+            "Use fit, posterior, and check for the normal workflow."
+        ),
+    )
     parser.add_argument(
         "--config",
-        default="configs/fs2_phz1.yaml",
+        default="configs/fs2_phz1_science.yaml",
         help="YAML configuration file.",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(
+        dest="command",
+        required=True,
+        metavar="{download-assets,check,fit,posterior}",
+    )
 
     assets = sub.add_parser(
         "download-assets", help="Download native DSPS smoke-test assets."
@@ -23,14 +33,95 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite", action="store_true", help="Replace existing files."
     )
 
+    check = sub.add_parser(
+        "check",
+        help="Run EDA, forward sanity checks, or standalone COSMOS SED checks.",
+    )
+    check.add_argument(
+        "--kind",
+        choices=("forward", "eda", "cosmos"),
+        default="forward",
+        help="Check type.",
+    )
+    check.add_argument("--out", default="outputs/check", help="Output directory.")
+    check.add_argument("--index", type=int, help="Catalog row index to select.")
+    check.add_argument(
+        "--limit", type=int, default=100, help="Maximum catalog rows to process."
+    )
+    check.add_argument(
+        "--batch-size", type=int, default=1000, help="Parquet batch size."
+    )
+    check.add_argument("--all", action="store_true", help="Process the full catalog.")
+    check.add_argument(
+        "--row-indices-file",
+        help="CSV/TXT file containing one catalog row_index per line.",
+    )
+    check.add_argument(
+        "--plot-samples",
+        type=int,
+        help="Number of COSMOS SEDs to overlay for check --kind cosmos.",
+    )
+    add_output_overrides(check, show_advanced=False)
+    add_sed_diagnostic_overrides(check)
+
+    fit = sub.add_parser(
+        "fit",
+        help="Run MAP fit for one row or a batch.",
+    )
+    fit.add_argument("--out", default="outputs/runs/fit", help="Output directory.")
+    fit.add_argument("--index", type=int, help="Catalog row index to fit.")
+    fit.add_argument(
+        "--limit", type=int, default=25, help="Maximum catalog rows to fit."
+    )
+    fit.add_argument(
+        "--batch-size", type=int, default=64, help="Parquet batch size."
+    )
+    fit.add_argument("--all", action="store_true", help="Process the full catalog.")
+    fit.add_argument(
+        "--row-indices-file",
+        help="CSV/TXT file containing one catalog row_index per line.",
+    )
+    fit.add_argument(
+        "--no-optimize",
+        action="store_true",
+        help="Run forward model only, without MAP optimization.",
+    )
+    add_fit_overrides(fit, show_advanced=False)
+    add_output_overrides(fit, show_advanced=False)
+    add_sed_diagnostic_overrides(fit)
+
+    posterior = sub.add_parser(
+        "posterior",
+        help="Sample one-row or small-subset posterior with HMC/NUTS.",
+    )
+    posterior.add_argument(
+        "--out", default="outputs/runs/posterior", help="Output directory."
+    )
+    posterior.add_argument("--index", type=int, help="Catalog row index to sample.")
+    posterior.add_argument(
+        "--limit", type=int, default=5, help="Maximum catalog rows to sample."
+    )
+    posterior.add_argument(
+        "--batch-size", type=int, default=1, help="Parquet batch size."
+    )
+    posterior.add_argument(
+        "--row-indices-file",
+        help="CSV/TXT file containing one catalog row_index per line.",
+    )
+    add_fit_overrides(posterior)
+    add_sample_overrides(posterior)
+
     eda = sub.add_parser(
-        "eda", help="Write schema, stats, missing values, and flux plots."
+        "eda",
+        help=argparse.SUPPRESS,
+        description="Legacy alias for: check --kind eda.",
     )
     eda.add_argument("--out", default="outputs/eda", help="Output directory.")
 
     cosmos = sub.add_parser(
         "cosmos-sed",
-        help="Reconstruct COSMOS-template proxy SEDs from catalog latent columns.",
+        help=argparse.SUPPRESS,
+        description="Legacy COSMOS proxy SED command.",
     )
     cosmos.add_argument(
         "--out", default="outputs/runs/cosmos_sed", help="Output directory."
@@ -66,7 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_fit_overrides(cosmos)
     add_output_overrides(cosmos)
 
-    run = sub.add_parser("run-one", help="Run DSPS for one selected galaxy.")
+    run = sub.add_parser(
+        "run-one",
+        help=argparse.SUPPRESS,
+        description="Legacy alias for: fit --no-optimize --index.",
+    )
     run.add_argument(
         "--out", default="outputs/runs/smoke_one", help="Output directory."
     )
@@ -75,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     forward = sub.add_parser(
         "forward",
-        help="Forward DSPS without fitting. Uses --index for one row, else batch.",
+        help=argparse.SUPPRESS,
+        description="Legacy alias for: fit --no-optimize.",
     )
     forward.add_argument("--out", default="outputs/runs/forward", help="Output directory.")
     forward.add_argument("--index", type=int, help="Catalog row index to select.")
@@ -93,22 +189,26 @@ def build_parser() -> argparse.ArgumentParser:
     add_output_overrides(forward)
     add_sed_diagnostic_overrides(forward)
 
-    fit = sub.add_parser(
-        "fit-one", help="Fit configured parameters for one selected galaxy."
+    fit_one_parser = sub.add_parser(
+        "fit-one",
+        help=argparse.SUPPRESS,
+        description="Legacy alias for: fit --index.",
     )
-    fit.add_argument("--out", default="outputs/runs/fit_one", help="Output directory.")
-    fit.add_argument("--index", type=int, help="Catalog row index to select.")
-    fit.add_argument(
+    fit_one_parser.add_argument("--out", default="outputs/runs/fit_one", help="Output directory.")
+    fit_one_parser.add_argument("--index", type=int, help="Catalog row index to select.")
+    fit_one_parser.add_argument(
         "--bayesian",
         action="store_true",
         help="Run NumPyro HMC/NUTS posterior sampling instead of Adam/MAP.",
     )
-    add_fit_overrides(fit)
-    add_sample_overrides(fit)
-    add_sed_diagnostic_overrides(fit)
+    add_fit_overrides(fit_one_parser)
+    add_sample_overrides(fit_one_parser)
+    add_sed_diagnostic_overrides(fit_one_parser)
 
     batch = sub.add_parser(
-        "run-batch", help="Run configured model over many catalog rows."
+        "run-batch",
+        help=argparse.SUPPRESS,
+        description="Legacy alias for: fit --no-optimize.",
     )
     batch.add_argument("--out", default="outputs/runs/batch", help="Output directory.")
     batch.add_argument(
@@ -126,7 +226,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_sed_diagnostic_overrides(batch)
 
     fit_batch = sub.add_parser(
-        "fit-batch", help="Fit configured parameters over many catalog rows."
+        "fit-batch",
+        help=argparse.SUPPRESS,
+        description="Legacy alias for: fit.",
     )
     fit_batch.add_argument(
         "--out", default="outputs/runs/batch_fit", help="Output directory."
@@ -155,7 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
     add_sed_diagnostic_overrides(fit_batch)
 
     population = sub.add_parser(
-        "fit-population", help="Fit chunked hierarchical population MAP models."
+        "fit-population",
+        help=argparse.SUPPRESS,
+        description="Advanced/research command.",
     )
     population.add_argument(
         "--out", default="outputs/runs/population_fit", help="Output directory."
@@ -183,7 +287,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     workflow = sub.add_parser(
         "fit-workflow",
-        help="Run MAP batch, HMC subset, population MAP, and comparison reports.",
+        help=argparse.SUPPRESS,
+        description="Advanced/research command.",
     )
     workflow.add_argument(
         "--out", default="outputs/runs/fit_workflow", help="Output directory."
@@ -227,13 +332,39 @@ def build_parser() -> argparse.ArgumentParser:
 
     report = sub.add_parser(
         "report-workflow",
-        help="Regenerate workflow comparison plots from an existing fit-workflow output.",
+        help=argparse.SUPPRESS,
+        description="Advanced/research command.",
     )
     report.add_argument(
         "--run-dir", required=True, help="Existing fit-workflow output directory."
     )
 
+    _hide_legacy_subcommands(
+        sub,
+        {
+            "eda",
+            "cosmos-sed",
+            "run-one",
+            "forward",
+            "fit-one",
+            "run-batch",
+            "fit-batch",
+            "fit-population",
+            "fit-workflow",
+            "report-workflow",
+        },
+    )
     return parser
+
+
+def _hide_legacy_subcommands(
+    subparsers: argparse._SubParsersAction, names: set[str]
+) -> None:
+    subparsers._choices_actions = [
+        action
+        for action in subparsers._choices_actions
+        if getattr(action, "dest", None) not in names
+    ]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -263,7 +394,75 @@ def main(argv: list[str] | None = None) -> None:
         sample_one,
     )
 
-    if args.command == "eda":
+    if args.command == "check":
+        _apply_selection_overrides(config, args)
+        _apply_output_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
+        if args.kind == "eda":
+            run_eda(config, Path(args.out))
+        elif args.kind == "cosmos":
+            reconstruct_cosmos_seds(
+                config,
+                Path(args.out),
+                limit=_limit_arg(args),
+                batch_size=args.batch_size,
+                index=getattr(args, "index", None),
+                compare_dsps=False,
+                fit_dsps=False,
+                population_dsps=False,
+                sample_plot_count=getattr(args, "plot_samples", None),
+            )
+        elif getattr(args, "index", None) is not None:
+            run_one(config, Path(args.out))
+        else:
+            run_batch(
+                config,
+                Path(args.out),
+                limit=_limit_arg(args),
+                batch_size=args.batch_size,
+                row_indices_file=getattr(args, "row_indices_file", None),
+            )
+    elif args.command == "fit":
+        _apply_selection_overrides(config, args)
+        _apply_fit_overrides(config, args)
+        _apply_output_overrides(config, args)
+        _apply_sed_diagnostic_overrides(config, args)
+        if getattr(args, "index", None) is not None:
+            if args.no_optimize:
+                run_one(config, Path(args.out))
+            else:
+                fit_one(config, Path(args.out))
+        elif args.no_optimize:
+            run_batch(
+                config,
+                Path(args.out),
+                limit=_limit_arg(args),
+                batch_size=args.batch_size,
+                row_indices_file=getattr(args, "row_indices_file", None),
+            )
+        else:
+            fit_batch(
+                config,
+                Path(args.out),
+                limit=_limit_arg(args),
+                batch_size=args.batch_size,
+                row_indices_file=getattr(args, "row_indices_file", None),
+            )
+    elif args.command == "posterior":
+        _apply_selection_overrides(config, args)
+        _apply_fit_overrides(config, args)
+        _apply_sample_overrides(config, args)
+        if getattr(args, "index", None) is not None:
+            sample_one(config, Path(args.out))
+        else:
+            sample_batch(
+                config,
+                Path(args.out),
+                limit=getattr(args, "limit", 5),
+                batch_size=args.batch_size,
+                row_indices_file=getattr(args, "row_indices_file", None),
+            )
+    elif args.command == "eda":
         run_eda(config, Path(args.out))
     elif args.command == "cosmos-sed":
         _apply_fit_overrides(config, args)
@@ -435,74 +634,87 @@ def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def add_fit_overrides(parser: argparse.ArgumentParser) -> None:
+def add_fit_overrides(
+    parser: argparse.ArgumentParser, *, show_advanced: bool = True
+) -> None:
+    advanced_help = None if show_advanced else argparse.SUPPRESS
     parser.add_argument(
         "--fit-maxiter",
         type=int,
-        help="Override fit.maxiter for MAP and population steps.",
+        help=advanced_help or "Override fit.maxiter for MAP and population steps.",
     )
     parser.add_argument(
         "--learning-rate",
         type=float,
-        help="Override fit.learning_rate for MAP and population steps.",
+        help=advanced_help or "Override fit.learning_rate for MAP and population steps.",
     )
     parser.add_argument(
         "--n-sfh-bins",
         type=int,
-        help="Override model.n_sfh_bins. Lower values compile/run faster.",
+        help=advanced_help
+        or "Override model.n_sfh_bins. Lower values compile/run faster.",
     )
     parser.add_argument(
         "--fast-warmstart",
         action="store_true",
-        help="Skip Adam loop and run one JAX warm-start prediction pass.",
+        help=advanced_help
+        or "Skip Adam loop and run one JAX warm-start prediction pass.",
     )
     parser.add_argument(
         "--fast-grid",
         action="store_true",
-        help="Fit redshift on a small row-level grid plus analytic mass warm-start.",
+        help=advanced_help
+        or "Fit redshift on a small row-level grid plus analytic mass warm-start.",
     )
     parser.add_argument(
         "--full-adam",
         action="store_true",
-        help="Disable fast fit shortcuts and run full Adam.",
+        help=advanced_help or "Disable fast fit shortcuts and run full Adam.",
     )
     parser.add_argument(
         "--redshift-grid-size",
         type=int,
-        help="Override fit.redshift_grid_size for --fast-grid.",
+        help=advanced_help or "Override fit.redshift_grid_size for --fast-grid.",
     )
     parser.add_argument(
         "--fast-grid-parameters",
-        help="Comma-separated parameters scanned by --fast-grid.",
+        help=advanced_help or "Comma-separated parameters scanned by --fast-grid.",
     )
     parser.add_argument(
         "--fast-grid-prior-width",
         type=float,
-        help="Prior sigma half-width for non-redshift fast-grid axes.",
+        help=advanced_help
+        or "Prior sigma half-width for non-redshift fast-grid axes.",
     )
 
 
-def add_output_overrides(parser: argparse.ArgumentParser) -> None:
+def add_output_overrides(
+    parser: argparse.ArgumentParser, *, show_advanced: bool = True
+) -> None:
+    advanced_help = None if show_advanced else argparse.SUPPRESS
     parser.add_argument(
         "--reporting-level",
         choices=("full", "light"),
-        help="full writes plots and tables; light writes only tables and benchmarks.",
+        help=advanced_help
+        or "full writes plots and tables; light writes only tables and benchmarks.",
     )
     parser.add_argument(
         "--output-format",
         choices=("both", "parquet", "csv"),
-        help="Tabular format for large workflow outputs.",
+        help=advanced_help or "Tabular format for large workflow outputs.",
     )
     parser.add_argument(
         "--verbose-benchmark",
         action="store_true",
-        help="Print benchmark timings for each workflow stage.",
+        help=advanced_help or "Print benchmark timings for each workflow stage.",
     )
 
 
 def add_sed_diagnostic_overrides(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--sed-samples",
         "--save-sed-samples",
+        dest="save_sed_samples",
         type=int,
         help="Write rich SED diagnostic plots/tables for the first N processed rows.",
     )

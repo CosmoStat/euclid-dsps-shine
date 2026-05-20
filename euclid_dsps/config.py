@@ -62,6 +62,274 @@ SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
 SUPPORTED_REPORTING_LEVELS = {"full", "light"}
 SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 
+RUNTIME_PRESETS = {
+    "cpu": {
+        "jax_platforms": "cpu",
+        "disable_jax_plugin_autoload": True,
+        "xla_python_client_preallocate": False,
+        "require_gpu": False,
+    },
+    "gpu": {
+        "jax_platforms": "cuda",
+        "disable_jax_plugin_autoload": False,
+        "xla_python_client_preallocate": False,
+        "require_gpu": True,
+        "expected_gpu_name": "NVIDIA",
+        "jax_compilation_cache_dir": "outputs/jax_cache",
+        "jax_persistent_cache_min_compile_time_secs": 1.0,
+    },
+}
+
+BAND_PRESETS = {
+    "euclid_4": [
+        {
+            "name": "euclid_vis",
+            "column": "euclid_vis",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {"path": "filters/Euclid_VIS.vis.dat"},
+        },
+        {
+            "name": "euclid_nisp_y",
+            "column": "euclid_nisp_y",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {"path": "filters/Euclid_NISP.Y.dat"},
+        },
+        {
+            "name": "euclid_nisp_j",
+            "column": "euclid_nisp_j",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {"path": "filters/Euclid_NISP.J.dat"},
+        },
+        {
+            "name": "euclid_nisp_h",
+            "column": "euclid_nisp_h",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {"path": "filters/Euclid_NISP.H.dat"},
+        },
+    ],
+    "lsst_euclid_10": [
+        {
+            "name": "lsst_u",
+            "column": "lsst_u",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/lsst_u.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "lsst_g",
+            "column": "lsst_g",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/lsst_g.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "lsst_r",
+            "column": "lsst_r",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/lsst_r.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "lsst_i",
+            "column": "lsst_i",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/lsst_i.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "lsst_z",
+            "column": "lsst_z",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/lsst_z.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "lsst_y",
+            "column": "lsst_y",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/lsst_y.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "euclid_vis",
+            "column": "euclid_vis",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "error_column": "euclid_vis_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/euclid_vis.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "euclid_nisp_y",
+            "column": "euclid_nisp_y",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "error_column": "euclid_nisp_y_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/euclid_nisp_y.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "euclid_nisp_j",
+            "column": "euclid_nisp_j",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "error_column": "euclid_nisp_j_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/euclid_nisp_j.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+        {
+            "name": "euclid_nisp_h",
+            "column": "euclid_nisp_h",
+            "units": "fnu_cgs",
+            "sigma_mag": 0.05,
+            "error_column": "euclid_nisp_h_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
+            "filter": {
+                "kind": "ascii",
+                "path": "Data/value_added_data/filters/euclid_nisp_h.csv",
+                "wave_unit": "angstrom",
+            },
+        },
+    ],
+}
+
+COLUMN_GROUPS = {
+    "truth_basic": [
+        "z_true_gal",
+        "phz_median",
+        "log_stellar_mass",
+        "log_sfr_true",
+        "metallicity_true",
+        "dust_ebv_true",
+    ],
+    "phz_diagnostics": [
+        "z_obs_gal",
+        "redshift_step",
+        "z_deepz",
+        "phz_flags",
+        "phz_min_70",
+        "phz_max_70",
+        "phz_min_90",
+        "phz_max_90",
+        "phz_min_95",
+        "phz_max_95",
+        "phz_mode_1_area",
+        "phz_mode_2",
+        "phz_mode_2_area",
+    ],
+    "cosmos_proxy": [
+        "sed_cosmos_1",
+        "sed_cosmos_2",
+        "frac_cosmos_1",
+        "frac_cosmos_2",
+        "color_kind",
+        "euclid_vis_abs",
+        "euclid_nisp_y_abs",
+        "euclid_nisp_j_abs",
+        "euclid_nisp_h_abs",
+        "ebv_cosmos_1",
+        "ebv_cosmos_2",
+        "ext_curve_cosmos_1",
+        "ext_curve_cosmos_2",
+        "mw_extinction",
+    ],
+    "photometry_errors": [
+        "euclid_vis_el_model3_ext_odonnell_ext_error",
+        "euclid_nisp_y_el_model3_ext_odonnell_ext_error",
+        "euclid_nisp_j_el_model3_ext_odonnell_ext_error",
+        "euclid_nisp_h_el_model3_ext_odonnell_ext_error",
+    ],
+    "emission_line_diagnostics": [
+        "euclid_vis_el_model3_ext",
+        "euclid_nisp_y_el_model3_ext",
+        "euclid_nisp_j_el_model3_ext",
+        "euclid_nisp_h_el_model3_ext",
+        "euclid_vis_el_model3_ext_odonnell_ext",
+        "euclid_nisp_y_el_model3_ext_odonnell_ext",
+        "euclid_nisp_j_el_model3_ext_odonnell_ext",
+        "euclid_nisp_h_el_model3_ext_odonnell_ext",
+        "euclid_vis_el_model3_ext_odonnell_ext_error_realization",
+        "euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization",
+        "euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization",
+        "euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization",
+    ],
+    "morphology_halo": [
+        "ra_gal",
+        "dec_gal",
+        "ra_mag_gal",
+        "dec_mag_gal",
+        "log_ml_r01",
+        "abs_mag_r01",
+        "log_luminosity_r01",
+        "abs_mag_uv_unextincted",
+        "bulge_fraction",
+        "disk_r50",
+        "bulge_r50",
+        "eps1_gal",
+        "eps2_gal",
+        "disk_ellipticity",
+        "bulge_ellipticity",
+        "bulge_nsersic",
+        "disk_nsersic",
+        "lm_halo",
+        "lmbound_halo",
+        "r_halo",
+        "conc_vir_halo",
+        "rs_halo",
+        "rvir_halo",
+        "n_sats_halo",
+        "num_p_halo",
+    ],
+}
+
 DEFAULT_RUNTIME_CONFIG = {
     "jax_platforms": "cpu",
     "disable_jax_plugin_autoload": True,
@@ -108,14 +376,13 @@ class ConfigValidationError(ValueError):
 
 def load_config(path: str | Path) -> dict[str, Any]:
     """Load a YAML config file."""
-    with Path(path).open("r", encoding="utf-8") as stream:
-        config = yaml.safe_load(stream) or {}
+    config = _load_config_tree(Path(path).resolve(), seen=set())
     return normalize_config(config)
 
 
 def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     """Fill lightweight defaults without hiding required paths."""
-    config = dict(config)
+    config = _expand_config_shorthands(dict(config))
     config.setdefault("selection", {})
     config.setdefault("redshift", {})
     config.setdefault("model", {})
@@ -224,6 +491,123 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
 
     validate_config(config)
     return config
+
+
+def _load_config_tree(path: Path, seen: set[Path]) -> dict[str, Any]:
+    if path in seen:
+        chain = " -> ".join(str(item) for item in [*seen, path])
+        raise ConfigValidationError(f"Config extends cycle: {chain}")
+    with path.open("r", encoding="utf-8") as stream:
+        raw = yaml.safe_load(stream) or {}
+    if not isinstance(raw, dict):
+        raise ConfigValidationError(f"Config must be a YAML mapping: {path}")
+
+    seen = {*seen, path}
+    extends = raw.pop("extends", [])
+    if isinstance(extends, str):
+        extends = [extends]
+    if not isinstance(extends, list):
+        raise ConfigValidationError("extends must be a string or list of strings")
+
+    merged: dict[str, Any] = {}
+    for item in extends:
+        if not isinstance(item, str) or not item:
+            raise ConfigValidationError("extends entries must be non-empty strings")
+        parent = Path(item)
+        if not parent.is_absolute():
+            parent = path.parent / parent
+        merged = _deep_merge(merged, _load_config_tree(parent.resolve(), seen=seen))
+    return _deep_merge(merged, raw)
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
+    config = dict(config)
+    runtime = config.get("runtime")
+    runtime_preset = config.pop("runtime_preset", None)
+    if isinstance(runtime, str):
+        config["runtime"] = _named_preset(RUNTIME_PRESETS, runtime, "runtime")
+    elif runtime_preset and "runtime" not in config:
+        config["runtime"] = _named_preset(
+            RUNTIME_PRESETS, str(runtime_preset), "runtime"
+        )
+
+    bands = config.get("bands")
+    if isinstance(bands, str):
+        config["bands"] = _named_preset(BAND_PRESETS, bands, "bands")
+
+    groups = config.pop("column_groups", [])
+    if isinstance(groups, str):
+        groups = [groups]
+    if groups is None:
+        groups = []
+    if not isinstance(groups, list):
+        raise ConfigValidationError("column_groups must be a string or list")
+
+    extra_columns = config.get("extra_columns", [])
+    if isinstance(extra_columns, str):
+        extra_columns = [extra_columns]
+    if extra_columns is None:
+        extra_columns = []
+    if not isinstance(extra_columns, list):
+        raise ConfigValidationError("extra_columns must be a string or list")
+
+    expanded_columns: list[str] = []
+    for item in [*groups, *extra_columns]:
+        if not isinstance(item, str) or not item:
+            raise ConfigValidationError("column groups and extra columns must be strings")
+        if item in COLUMN_GROUPS:
+            expanded_columns.extend(COLUMN_GROUPS[item])
+        else:
+            expanded_columns.append(item)
+    config["extra_columns"] = sorted(dict.fromkeys(expanded_columns))
+
+    if config.get("dust_model") == "cosmos_proxy_fixed":
+        cosmos = dict(config.get("cosmos_sed") or {})
+        cosmos["use_cosmos_dust_in_dsps"] = True
+        config["cosmos_sed"] = cosmos
+        model = dict(config.get("model") or {})
+        parameter_columns = dict(model.get("parameter_columns") or {})
+        parameter_columns.update(
+            {
+                "cosmos_ebv_1": "ebv_cosmos_1",
+                "cosmos_ebv_2": "ebv_cosmos_2",
+                "cosmos_frac_1": "frac_cosmos_1",
+                "cosmos_frac_2": "frac_cosmos_2",
+                "cosmos_ext_curve_1": "ext_curve_cosmos_1",
+                "cosmos_ext_curve_2": "ext_curve_cosmos_2",
+            }
+        )
+        model["parameter_columns"] = parameter_columns
+        config["model"] = model
+
+    return config
+
+
+def _named_preset(presets: dict[str, Any], name: str, label: str) -> Any:
+    if name not in presets:
+        raise ConfigValidationError(
+            f"Unknown {label} preset {name!r}; expected one of {sorted(presets)}"
+        )
+    value = presets[name]
+    if isinstance(value, dict):
+        return _deep_merge({}, value)
+    if isinstance(value, list):
+        return [_deep_merge({}, item) if isinstance(item, dict) else item for item in value]
+    return value
 
 
 def validate_config(config: dict[str, Any]) -> None:

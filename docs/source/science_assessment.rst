@@ -378,10 +378,10 @@ Implemented fit priors are penalties in the JAX objective. Reported ``chi2``
 remains the photometric chi-square. Scientific motivation and citations are in
 `Current Prior Justification`_ above.
 
-Current 10-band priors:
+Current 10-band science priors:
 
-* ``z_obs``: flat inside the 70 percent NNPZ interval, then increasingly
-  penalized through the 90 and 95 percent intervals.
+* ``z_obs``: uniform inside configured broad bounds. ``phz_median`` initializes
+  the fit, while PHZ intervals stay diagnostics only.
 * ``log10_formed_mass_msun``: broad normal amplitude prior.
 * ``sfh_t_peak`` and ``sfh_tau``: broad smooth-SFH shape priors when free.
 * ``log10_metallicity``: broad normal prior in independent MAP; population MAP

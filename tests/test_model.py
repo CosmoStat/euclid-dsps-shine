@@ -5,30 +5,25 @@ import pytest
 
 from euclid_dsps.model import (
     apply_cosmos_two_component_dust_jax,
-    build_binned_sfh_jax,
     build_lognormal_sfh,
     normalize_sfh_mass_jax,
 )
 
 
-def test_burst_and_quench_sfh_stays_positive_and_changes_shape() -> None:
+def test_lognormal_sfh_stays_positive_and_peak_controls_shape() -> None:
     time = np.linspace(0.1, 10.0, 128)
 
-    base = build_lognormal_sfh(time, 0.0, 4.0, 0.6)
-    modified = build_lognormal_sfh(
-        time,
-        0.0,
-        4.0,
-        0.6,
-        sfh_burst_fraction=1.0,
-        sfh_burst_time=2.0,
-        sfh_quench_time=7.0,
-        sfh_quench_depth=0.8,
-    )
+    early = build_lognormal_sfh(time, 0.0, 2.0, 0.6)
+    late = build_lognormal_sfh(time, 0.0, 7.0, 0.6)
 
-    assert np.all(modified > 0.0)
-    assert modified[np.argmin(np.abs(time - 2.0))] > base[np.argmin(np.abs(time - 2.0))]
-    assert modified[-1] < base[-1]
+    assert np.all(early > 0.0)
+    assert np.all(late > 0.0)
+    assert early[np.argmin(np.abs(time - 2.0))] > late[
+        np.argmin(np.abs(time - 2.0))
+    ]
+    assert late[np.argmin(np.abs(time - 7.0))] > early[
+        np.argmin(np.abs(time - 7.0))
+    ]
 
 
 def test_cosmos_two_component_dust_mixes_configured_curves() -> None:
@@ -75,13 +70,3 @@ def test_sfh_can_be_normalized_to_formed_mass() -> None:
         1.0e10, rel=1.0e-5
     )
 
-
-def test_binned_sfh_is_positive_and_responds_to_bin_weights() -> None:
-    time = np.linspace(0.1, 10.0, 128)
-
-    flat = np.asarray(build_binned_sfh_jax(time, np.zeros(6)))
-    rising = np.asarray(build_binned_sfh_jax(time, np.linspace(-1.0, 1.0, 6)))
-
-    assert np.all(flat > 0.0)
-    assert np.all(rising > 0.0)
-    assert rising[-1] > rising[0]

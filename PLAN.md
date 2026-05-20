@@ -89,28 +89,94 @@ Done when:
 
 ## Phase 2 - Simple Workflow
 
-Status: started.
+Status: implemented.
 
 Commit target: `Simplify user-facing workflows`
 
-Goal: make commands obvious and consistent.
+Goal: make commands obvious and consistent for one science loop: infer DSPS
+parameters from Euclid+LSST photometry, compare simple recovered quantities to
+catalog truth/proxies, and visually compare inferred DSPS SEDs to COSMOS proxy
+SEDs.
 
 Workflows:
 
-- [x] `forward`: no fit, catalog/config parameters in, photometry/SED/plots out.
-- [x] `fit-batch`: batched MAP, progressive chunk outputs, optional SED sample plots.
-- [x] `fit-population`: batched population summaries first; true hierarchical fit later.
-- MCMC: deferred until forward model and optimizer are fast enough.
+- Keep as public:
+  - `fit`: MAP fit for one row or a batch, with `--index`, `--limit`, and
+    `--sed-samples`.
+  - `posterior`: HMC/NUTS for one row or a small row list, initialized from MAP
+    by default.
+  - `check`: EDA plus forward/SED sanity checks.
+- Hide or alias:
+  - `run-one` and `run-batch` become implementation aliases behind `check` or
+    `fit --no-optimize`.
+  - `fit-one` and `fit-batch` become one `fit` command.
+  - `cosmos-sed --compare-dsps/--fit-dsps/--population-dsps` becomes default
+    SED diagnostic output from `fit`; standalone COSMOS reconstruction moves to
+    `check cosmos`.
+  - `fit-population` and `fit-workflow` move to an advanced/research namespace
+    until priors are scientifically fixed.
 
 Tasks:
 
-- Align CLI names/help text with these workflows.
-- Ensure each workflow can optionally generate SED diagnostics.
-- Remove duplicated or confusing reporting paths.
+- [x] Align CLI names/help text with these workflows.
+- [x] Ensure each workflow can optionally generate SED diagnostics.
+- [x] Remove duplicated or confusing reporting paths from public docs/help.
+- [x] Add one recommended command to the README:
+  `euclid-dsps --config configs/fs2_phz1_science.yaml fit --limit 1000 --batch-size 512 --sed-samples 16 --out outputs/runs/science_fit`.
+- [x] Add one posterior command to the README:
+  `euclid-dsps --config configs/fs2_phz1_science.yaml posterior --row-indices-file rows.txt --out outputs/runs/posterior_subset`.
 
 Done when:
 
 - New user can run one forward command and one fit command without reading code.
+
+## Phase 2b - Config Simplification
+
+Status: implemented baseline.
+
+Commit target: `Simplify science config`
+
+Goal: make the main config readable by a scientist who wants DSPS-like SED
+inference, not a full internal schema dump.
+
+Config split:
+
+- [x] `configs/fs2_phz1_science.yaml`: public science preset. Keep only data paths,
+  bands preset, runtime preset, fitted parameters, priors, truth columns, and
+  output choices.
+- [x] `configs/presets/*.yaml`: internal defaults for runtime, filters, COSMOS SED
+  resources, reporting, optimizer, and sampler.
+- [x] Current `configs/fs2_phz1.yaml` and `configs/fs2_phz1_10band.yaml`: keep as
+  compatibility configs until the simplified preset passes smoke runs.
+
+Simplify public YAML:
+
+- [x] Replace long `extra_columns` list with named column groups:
+  `truth_basic`, `cosmos_proxy`, `photometry_errors`, `diagnostics`.
+- [x] Replace repeated band blocks with `bands: lsst_euclid_10` or
+  `bands: euclid_4`.
+- [x] Keep `fit.free_parameters` but make defaults explicit:
+  `z_obs`, `log10_formed_mass_msun`, `sfh_t_peak`, `sfh_tau`,
+  `log10_metallicity`, and optional `dust_av`.
+- [x] Mark row-injected COSMOS dust as `dust_model: cosmos_proxy_fixed`, not as
+  inferred DSPS dust.
+- [x] Move LePhare/SciPIC resource details out of the public config.
+
+Priors:
+
+- [x] Add public prior naming in docs/config around `weak_physical`: broad
+  non-circular priors for stability.
+- [ ] Add executable named prior sets once needed:
+  `weak_physical`, `flat_debug`, and then `popcosmos_like` only where the local
+  parameterization matches the papers.
+- [x] Do not advertise any prior as POP-COSMOS-like until the exact paper values,
+  variable definitions, and unit conversions are documented.
+
+Done when:
+
+- README shows one main config and two commands.
+- Full schema lives in reference docs, not in the first-run path.
+- Run outputs write the expanded normalized config for audit.
 
 ## Phase 3 - Minimal Production Model
 

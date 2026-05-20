@@ -49,7 +49,7 @@ def _config() -> dict:
                     },
                 },
                 "priors": {
-                    "z_obs": {"type": "phz_interval", "tail_scale": 0.05},
+                    "z_obs": {"type": "uniform"},
                     "log10_metallicity": {
                         "type": "normal",
                         "loc": -2.25,
@@ -82,23 +82,16 @@ def test_fit_parameter_audit_flags_constant_free_parameter() -> None:
 
 def test_fit_objective_components_writes_photometric_and_prior_terms() -> None:
     fits = pd.DataFrame(
-        {
-            "row_index": [0],
-            "fit_z_obs": [1.2],
-            "fit_log10_metallicity": [-2.0],
-            "fit_z_obs_phz_min_70": [0.9],
-            "fit_z_obs_phz_max_70": [1.1],
-            "fit_z_obs_phz_min_90": [0.8],
-            "fit_z_obs_phz_max_90": [1.3],
-            "fit_z_obs_phz_min_95": [0.7],
-            "fit_z_obs_phz_max_95": [1.4],
-        }
-    )
+            {
+                "row_index": [0],
+                "fit_z_obs": [1.2],
+                "fit_log10_metallicity": [-2.0],
+            }
+        )
     comparison = pd.DataFrame({"row_index": [0, 0], "chi": [2.0, -1.0]})
 
     components = fit_objective_components(fits, comparison, _config())
 
     assert components.loc[0, "photometric_chi2"] == 5.0
     assert components.loc[0, "physical_gaussian_prior_penalty"] > 0.0
-    assert components.loc[0, "phz_prior_penalty"] > 0.0
     assert components.loc[0, "approx_objective"] > 0.0

@@ -150,7 +150,7 @@ def test_optional_10band_config_activates_lsst_bands_explicitly() -> None:
     assert "dust_av" not in config["fit"]["free_parameters"]
     assert "log10_formed_mass_msun" in config["fit"]["free_parameters"]
     assert "sfh_burst_fraction" not in config["fit"]["free_parameters"]
-    assert config["fit"]["priors"]["z_obs"]["type"] == "phz_interval"
+    assert config["fit"]["priors"]["z_obs"]["type"] == "uniform"
     assert "sfh_bin_log_sfr_0" not in config["fit"]["free_parameters"]
     assert "sfh_t_peak" in config["fit"]["free_parameters"]
     assert (
@@ -162,6 +162,20 @@ def test_optional_10band_config_activates_lsst_bands_explicitly() -> None:
     assert config["runtime"]["disable_jax_plugin_autoload"] is False
     assert config["runtime"]["require_gpu"] is True
     assert config["runtime"]["expected_gpu_name"] == "NVIDIA"
+
+
+def test_science_config_expands_shorthands() -> None:
+    config = load_config("configs/fs2_phz1_science.yaml")
+
+    band_names = [band["name"] for band in config["bands"]]
+    assert len(band_names) == 10
+    assert band_names[:2] == ["lsst_u", "lsst_g"]
+    assert config["runtime"]["require_gpu"] is True
+    assert config["cosmos_sed"]["use_cosmos_dust_in_dsps"] is True
+    assert config["model"]["parameter_columns"]["cosmos_ebv_1"] == "ebv_cosmos_1"
+    assert "phz_min_70" in config["extra_columns"]
+    assert config["reporting"]["plot_ground_truth"] is True
+    assert config["fit"]["priors"]["z_obs"]["type"] == "uniform"
 
 
 def test_cosmos_sed_defaults_are_normalized() -> None:

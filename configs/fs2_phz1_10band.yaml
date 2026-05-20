@@ -250,13 +250,13 @@ model:
 
 fit:
     method: jax_adam
-    maxiter: 30
+    maxiter: 100
     learning_rate: 0.08
     tolerance: 1.0e-5
     patience: 24
     prior_weight: 1.0
     fast_warmstart_only: false
-    fast_grid_search: true
+    fast_grid_search: false
     redshift_grid_size: 5
     redshift_grid_width: 0.4
     fast_grid_parameters:
