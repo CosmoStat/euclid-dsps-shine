@@ -61,10 +61,12 @@ def is_inferred(config: dict[str, Any], parameter: str) -> bool:
 
 def is_comparable_fit_parameter(config: dict[str, Any] | None, parameter: str) -> bool:
     """Return True when fit-vs-truth/proxy plots are scientifically meaningful."""
+    if parameter == "dust_av":
+        return False
     if parameter in {"z_obs", *DERIVED_PARAMETERS}:
         return True
     if config is None:
-        return parameter != "dust_av"
+        return True
     return is_inferred(config, parameter)
 
 

@@ -76,6 +76,7 @@ def test_likelihood_space_defaults_to_flux() -> None:
     assert config["fit"]["flux_error_floor_frac"] == 0.0
     assert config["band_calibration"]["mode"] == "none"
     assert config["fit"]["band_calibration_offsets_mag"] == [0.0]
+    assert config["nebular_emission"] == "ssp_flux"
 
 
 def test_invalid_likelihood_space_fails_fast() -> None:
@@ -86,6 +87,14 @@ def test_invalid_likelihood_space_fails_fast() -> None:
     }
 
     with pytest.raises(ConfigValidationError, match="fit\\.likelihood_space"):
+        normalize_config(config)
+
+
+def test_invalid_nebular_emission_mode_fails_fast() -> None:
+    config = minimal_config()
+    config["nebular_emission"] = "magic_lines"
+
+    with pytest.raises(ConfigValidationError, match="nebular_emission"):
         normalize_config(config)
 
 
@@ -202,6 +211,7 @@ def test_science_config_is_main_lsst_euclid_setup() -> None:
     assert config["fit"]["flux_error_floor_frac"] == 0.02
     assert config["selection"]["nondetection_policy"] == "gaussian_flux"
     assert config["band_calibration"]["mode"] == "none"
+    assert config["nebular_emission"] == "ssp_flux"
     assert "sfh_t_peak" in config["fit"]["free_parameters"]
     assert config["bands"][0]["error_column"] == "lsst_u_el_model3_ext_odonnell_ext_error"
     assert config["bands"][0]["filter"]["path"] == "filters/LSST_LSST.u.dat"

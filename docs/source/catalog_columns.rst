@@ -236,7 +236,7 @@ the ``*_el_model3_ext*`` fluxes and noisy realizations are diagnostics.
 
 .. code-block:: bash
 
-   euclid-dsps fit --config configs/fs2_phz1_science.yaml \
+   euclid-dsps --config configs/fs2_phz1_science.yaml fit \
      --limit 32 \
      --batch-size 32 \
      --out outputs/runs/dev_fit_batch_10band
@@ -245,7 +245,7 @@ For COSMOS SED validation:
 
 .. code-block:: bash
 
-   euclid-dsps check --config configs/fs2_phz1_science.yaml \
+   euclid-dsps --config configs/fs2_phz1_science.yaml check \
      --kind cosmos \
      --limit 20 \
      --out outputs/check/cosmos

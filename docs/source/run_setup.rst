@@ -94,7 +94,15 @@ Config Shorthands
 
 ``dust_model: cosmos_proxy_fixed``
   Injects COSMOS dust columns into DSPS. These values are copied from the row
-  and must not be interpreted as inferred DSPS dust.
+  and must not be interpreted as catalog truth. Dust can be fitted in alternate
+  configs, but catalog dust columns remain proxy-only diagnostics.
+
+``nebular_emission: ssp_flux``
+  Current default. The DSPS forward model uses the SSP ``ssp_flux`` table as
+  provided. If the SSP contains line-like features, they are already inside that
+  flux table. Separate ``ssp_emline_*`` datasets are read for diagnostics only.
+  ``none`` and ``emline_table`` are reserved config values; neither should be
+  used as a science likelihood until a no-double-count convention is defined.
 
 Science Meaning
 ---------------
@@ -118,6 +126,17 @@ column group. PHZ interval priors were removed.
 ``reduced_chi2`` now means ``chi2 / dof`` with
 ``dof = max(n_valid_bands - n_free_effective, 1)``. The older per-band metric is
 reported separately as ``chi2_per_band``.
+
+Performance outputs are written for every MAP batch:
+
+* ``batch_fit_performance_summary.json`` contains wall time, seconds per
+  galaxy, throughput, backend/device metadata, and GPU-hour per galaxy when
+  JAX actually uses a GPU backend;
+* ``batch_fit_performance_by_batch.csv`` contains chunk-level throughput.
+
+Redshift attractor outputs are written as ``batch_fit_redshift_attractors.csv``
+and ``batch_fit_redshift_attractors.png``. They summarize repeated MAP redshift
+modes and are diagnostic only, not a global optimizer.
 
 Current priors are broad ``weak_physical`` priors. They are not yet POP-COSMOS
 priors. A POP-COSMOS-like mode needs exact variable mapping and learned

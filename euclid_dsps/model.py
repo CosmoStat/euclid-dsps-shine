@@ -32,6 +32,10 @@ class DspsContext:
     ssp_lgmet_jax: Any | None = None
     ssp_lg_age_gyr_jax: Any | None = None
     ssp_flux_jax: Any | None = None
+    ssp_emline_luminosity: np.ndarray | None = None
+    ssp_emline_wave: np.ndarray | None = None
+    ssp_emline_name: tuple[str, ...] = ()
+    nebular_emission_mode: str = "ssp_flux"
     jax_filters: tuple[tuple[Any, Any], ...] = ()
     cosmos_dust_k_by_code_jax: Any | None = None
 
@@ -84,11 +88,13 @@ def load_context(
     filters: dict[str, FilterCurve],
     n_sfh_bins: int = 96,
     cosmos_config: dict[str, Any] | None = None,
+    nebular_emission: str = "ssp_flux",
 ) -> DspsContext:
     from dsps import load_ssp_templates
 
     ssp = load_ssp_templates(fn=ssp_path)
     dust_k_by_code, dust_curve_names = _load_cosmos_dust_grid(ssp, cosmos_config)
+    emline_luminosity, emline_wave, emline_name = _load_ssp_emline_data(ssp_path, ssp)
     return DspsContext(
         ssp=ssp,
         filters=filters,
@@ -99,6 +105,10 @@ def load_context(
         ssp_lgmet_jax=jnp.asarray(ssp.ssp_lgmet, dtype=jnp.float32),
         ssp_lg_age_gyr_jax=jnp.asarray(ssp.ssp_lg_age_gyr, dtype=jnp.float32),
         ssp_flux_jax=jnp.asarray(ssp.ssp_flux, dtype=jnp.float32),
+        ssp_emline_luminosity=emline_luminosity,
+        ssp_emline_wave=emline_wave,
+        ssp_emline_name=emline_name,
+        nebular_emission_mode=str(nebular_emission),
         jax_filters=tuple(
             (
                 jnp.asarray(curve.wave, dtype=jnp.float32),
@@ -112,6 +122,45 @@ def load_context(
             else jnp.asarray(dust_k_by_code, dtype=jnp.float32)
         ),
     )
+
+
+def _load_ssp_emline_data(
+    ssp_path: str, ssp: Any
+) -> tuple[np.ndarray | None, np.ndarray | None, tuple[str, ...]]:
+    luminosity = getattr(ssp, "ssp_emline_luminosity", None)
+    wave = getattr(ssp, "ssp_emline_wave", None)
+    names: tuple[str, ...] = ()
+    if luminosity is not None:
+        luminosity = np.asarray(luminosity, dtype=float)
+    if wave is not None:
+        wave = np.asarray(wave, dtype=float)
+    try:
+        import h5py
+
+        with h5py.File(ssp_path, "r") as handle:
+            if luminosity is None and "ssp_emline_luminosity" in handle:
+                luminosity = np.asarray(handle["ssp_emline_luminosity"], dtype=float)
+            if wave is None and "ssp_emline_wave" in handle:
+                wave = np.asarray(handle["ssp_emline_wave"], dtype=float)
+            if "ssp_emline_name" in handle:
+                raw = np.asarray(handle["ssp_emline_name"])
+                decoded = []
+                for item in raw:
+                    if isinstance(item, (bytes, np.bytes_)):
+                        decoded.append(item.decode("utf-8", errors="replace"))
+                    else:
+                        decoded.append(str(item))
+                names = tuple(decoded)
+    except (OSError, ImportError, KeyError, TypeError):
+        pass
+    if luminosity is None:
+        return None, wave, names
+    n_lines = int(luminosity.shape[-1])
+    if wave is not None and len(wave) != n_lines:
+        wave = None
+    if not names or len(names) != n_lines:
+        names = tuple(f"line_{i:03d}" for i in range(n_lines))
+    return luminosity, wave, names
 
 
 def _load_cosmos_dust_grid(

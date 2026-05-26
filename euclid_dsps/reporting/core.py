@@ -615,12 +615,18 @@ def write_batch_outputs(
         residual_properties.to_csv(
             out / f"{label}_residuals_by_property.csv", index=False
         )
+    attractors = redshift_attractor_summary(by_row.reset_index())
+    if not attractors.empty:
+        attractors.to_csv(out / f"{label}_redshift_attractors.csv", index=False)
     write_json(out / f"{label}_summary.json", summary)
 
     plot_batch_dashboard(valid, by_row, out / f"{label}_dashboard.png")
     plot_batch_residuals_by_band(valid, out / f"{label}_residuals_by_band.png")
     plot_batch_observed_vs_model(valid, out / f"{label}_observed_vs_model.png")
     plot_batch_redshift_truth(by_row, out / f"{label}_redshift_truth.png")
+    plot_redshift_attractors(
+        by_row.reset_index(), attractors, out / f"{label}_redshift_attractors.png"
+    )
     plot_batch_parameter_truth(by_row, out / f"{label}_parameter_truth.png", config)
     plot_residuals_by_property(
         by_row.reset_index(), out / f"{label}_residuals_by_property.png"
@@ -1261,6 +1267,80 @@ def residuals_by_property(by_row: pd.DataFrame) -> pd.DataFrame:
             if row:
                 rows.append(row)
     return pd.DataFrame(rows)
+
+
+def redshift_attractor_summary(
+    by_row: pd.DataFrame,
+    bin_width: float = 0.05,
+    min_count: int = 5,
+    max_modes: int = 30,
+) -> pd.DataFrame:
+    """Summarize repeated fitted-redshift modes from MAP output."""
+    if by_row.empty or "z_obs" not in by_row:
+        return pd.DataFrame()
+    work = by_row.copy()
+    z_fit = pd.to_numeric(work["z_obs"], errors="coerce")
+    work = work.loc[np.isfinite(z_fit)].copy()
+    if work.empty:
+        return pd.DataFrame()
+    z_fit = z_fit.loc[work.index]
+    work["_z_fit_bin"] = (z_fit / bin_width).round() * bin_width
+    rows: list[dict[str, Any]] = []
+    total = len(work)
+    for z_bin, group in work.groupby("_z_fit_bin"):
+        if len(group) < min_count:
+            continue
+        group_z = pd.to_numeric(group["z_obs"], errors="coerce")
+        row: dict[str, Any] = {
+            "z_fit_bin": float(z_bin),
+            "n_galaxies": int(len(group)),
+            "fraction": float(len(group) / total),
+            "z_fit_median": float(group_z.median()),
+            "z_fit_min": float(group_z.min()),
+            "z_fit_max": float(group_z.max()),
+        }
+        if "redshift_truth" in group:
+            truth = pd.to_numeric(group["redshift_truth"], errors="coerce")
+            truth = truth[np.isfinite(truth)]
+            if not truth.empty:
+                row.update(
+                    {
+                        "z_truth_median": float(truth.median()),
+                        "z_truth_min": float(truth.min()),
+                        "z_truth_max": float(truth.max()),
+                    }
+                )
+        if "delta_z_obs_minus_truth" in group:
+            dz = pd.to_numeric(group["delta_z_obs_minus_truth"], errors="coerce")
+            finite_dz = dz[np.isfinite(dz)]
+            if not finite_dz.empty:
+                row["delta_z_median"] = float(finite_dz.median())
+                row["delta_z_mad"] = float(
+                    (finite_dz - finite_dz.median()).abs().median()
+                )
+            if "redshift_truth" in group:
+                truth = pd.to_numeric(group["redshift_truth"], errors="coerce")
+                good = np.isfinite(dz) & np.isfinite(truth)
+                if good.any():
+                    catastrophic = np.abs(dz[good]) > 0.15 * (1.0 + truth[good])
+                    row["catastrophic_fraction_0p15_1pz"] = float(
+                        catastrophic.mean()
+                    )
+        for metric in ("reduced_chi2", "chi2_per_band", "mean_residual_mag"):
+            if metric in group:
+                values = pd.to_numeric(group[metric], errors="coerce")
+                values = values[np.isfinite(values)]
+                if not values.empty:
+                    row[f"{metric}_median"] = float(values.median())
+        rows.append(row)
+    if not rows:
+        return pd.DataFrame()
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["n_galaxies", "z_fit_bin"], ascending=[False, True])
+        .head(max_modes)
+        .reset_index(drop=True)
+    )
 
 
 def _residual_property_row(
@@ -1967,8 +2047,6 @@ def posterior_comparable_frame(
         data["log10_formed_mass_msun"] = derived["log10_formed_mass_msun"].to_numpy(
             dtype=float
         )
-    if "truth_dust_av" in truth_values and "dust_av" in samples:
-        data["dust_av"] = samples["dust_av"].to_numpy(dtype=float)
     if "truth_log10_metallicity" in truth_values and "log10_metallicity" in samples:
         data["log10_metallicity"] = samples["log10_metallicity"].to_numpy(dtype=float)
     for column in samples.columns:
@@ -2699,6 +2777,57 @@ def plot_batch_redshift_truth(by_row: pd.DataFrame, path: str | Path) -> None:
     axes[1].set_xlabel(label)
     axes[1].set_ylabel("galaxies")
     axes[1].grid(alpha=0.2)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+
+
+def plot_redshift_attractors(
+    by_row: pd.DataFrame, attractors: pd.DataFrame, path: str | Path
+) -> None:
+    if by_row.empty or attractors.empty or "z_obs" not in by_row:
+        return
+    fig, axes = plt.subplots(1, 2, figsize=(10.5, 4))
+    work = by_row.copy()
+    if {"redshift_truth", "z_obs"}.issubset(work.columns):
+        sample = work[["redshift_truth", "z_obs"]].replace(
+            [np.inf, -np.inf], np.nan
+        ).dropna()
+        if len(sample) > 5000:
+            sample = sample.sample(5000, random_state=4)
+        axes[0].scatter(sample["redshift_truth"], sample["z_obs"], s=8, alpha=0.3)
+        if not sample.empty:
+            lo = float(min(sample["redshift_truth"].min(), sample["z_obs"].min()))
+            hi = float(max(sample["redshift_truth"].max(), sample["z_obs"].max()))
+            axes[0].plot([lo, hi], [lo, hi], color="black", lw=1)
+        axes[0].set_xlabel("Catalog truth redshift")
+        axes[0].set_ylabel("Inferred redshift")
+    else:
+        axes[0].scatter(np.arange(len(work)), work["z_obs"], s=8, alpha=0.3)
+        axes[0].set_xlabel("galaxy index")
+        axes[0].set_ylabel("Inferred redshift")
+
+    top = attractors.head(10)
+    for _, row in top.iterrows():
+        axes[0].axhline(
+            float(row["z_fit_bin"]),
+            color="#B85C38",
+            lw=0.8,
+            alpha=0.35,
+        )
+    axes[0].grid(alpha=0.2)
+
+    axes[1].barh(
+        top["z_fit_bin"].astype(str),
+        top["n_galaxies"],
+        color="#2F5D8C",
+        alpha=0.8,
+    )
+    axes[1].invert_yaxis()
+    axes[1].set_xlabel("galaxies in fitted-z bin")
+    axes[1].set_ylabel("fitted-z bin")
+    axes[1].grid(alpha=0.2, axis="x")
+    fig.suptitle("MAP redshift attractors", y=0.995)
     fig.tight_layout()
     fig.savefig(path, dpi=170)
     plt.close(fig)

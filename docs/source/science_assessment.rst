@@ -12,12 +12,17 @@ The active science workflow is intentionally small:
 * fit scalar stellar metallicity ``log10_metallicity``;
 * derive current SFR from fitted mass plus fitted SFH shape;
 * inject COSMOS proxy dust columns when ``dust_model: cosmos_proxy_fixed`` is
-  selected.
+  selected;
+* use ``ssp_flux`` as the SSP spectral table, with separate SSP emission-line
+  tables used only for diagnostics.
 
 ``log10_sfr`` and ``dust_av`` are not free parameters in the main science
 config. ``log10_sfr`` is only a fixed internal SFH scale before mass
 normalization. With ``dust_model: cosmos_proxy_fixed``, COSMOS dust columns
 drive attenuation and ``dust_av`` is marked inactive, not inferred.
+
+Dust catalogue columns are proxy-only. Even if a future config frees
+``dust_av``, the FS2/COSMOS dust proxy should not be plotted as ground truth.
 
 Redshift
 --------
@@ -56,7 +61,9 @@ as DSPS stellar metallicity.
 
 Fit-vs-catalog plots only include comparable active/free or derived
 parameters. Fixed inactive quantities such as ``dust_av`` under COSMOS proxy
-dust are audited but not plotted as inferred parameters.
+dust are audited but not plotted as inferred parameters. Dust is deliberately
+excluded from fit-vs-catalog truth metrics because the catalog value is not a
+DSPS attenuation truth.
 
 SED Diagnostics
 ---------------
@@ -111,6 +118,28 @@ POP-COSMOS-like until that mapping exists.
 Out Of Likelihood
 -----------------
 
-Emission-line catalog columns remain diagnostics only. The active DSPS model
-does not include a calibrated line model or compatible local line assets, so
-line columns must stay out of the likelihood.
+Emission-line catalog columns remain diagnostics only. The active fit uses
+``ssp_flux`` as the spectral table. The newer SSP asset also provides
+``ssp_emline_luminosity``, ``ssp_emline_wave``, and line names, when available.
+The pipeline reads those datasets and writes diagnostic line/filter crossings
+near fitted-redshift attractors, but it does not add the line table to the
+likelihood. Adding it naively could double-count lines already present in
+``ssp_flux``.
+
+DSPS Parameter Count
+--------------------
+
+The active science MAP fit has five free parameters:
+
+* ``z_obs``;
+* ``log10_formed_mass_msun``;
+* ``sfh_t_peak``;
+* ``sfh_tau``;
+* ``log10_metallicity``.
+
+This is not "the DSPS paper parameter count". DSPS is a differentiable SPS
+framework. The paper demonstrates differentiability through SFH, metallicity,
+dust, and nebular choices, but does not define one canonical Euclid+LSST
+photo-z fit. Any future paper-like preset must state the exact SFH model,
+metallicity model, dust model, nebular model, active parameter list, units, and
+priors.

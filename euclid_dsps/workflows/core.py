@@ -37,6 +37,7 @@ from ..model import (
     predict_batch_seds,
     run_dsps_model,
 )
+from ..nebular import write_nebular_diagnostic_outputs
 from ..performance import PerformanceRecorder, write_performance_outputs
 from ..photometry import magerr_to_fluxerr_fnu_cgs
 from ..reporting import (
@@ -102,6 +103,7 @@ def prepare_one(config: dict[str, Any]):
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
     )
     params = parameters_for_row(
         config["model"]["fixed_parameters"],
@@ -223,6 +225,7 @@ def sample_batch(
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
     )
 
     summary_rows = []
@@ -493,6 +496,7 @@ def run_batch(
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -591,6 +595,7 @@ def fit_batch(
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -655,6 +660,7 @@ def fit_batch(
             out / "sed_diagnostics_manifest.csv", index=False
         )
     write_fit_diagnostic_outputs(fits, comparison, config, out, label="batch_fit")
+    write_nebular_diagnostic_outputs(context, fits, out, label="batch_fit")
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(
@@ -1132,6 +1138,7 @@ def fit_population(
         filters,
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -1236,6 +1243,7 @@ def fit_population(
         label="population_fit",
         hyperparameters=hyper_frame,
     )
+    write_nebular_diagnostic_outputs(context, fits, out, label="population_fit")
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(

@@ -85,6 +85,9 @@ Public commands:
   for calibration tests;
 - `column_groups` instead of a long `extra_columns` list;
 - `dust_model: cosmos_proxy_fixed` so COSMOS dust columns are row-injected, not inferred as DSPS `dust_av`;
+- `nebular_emission: ssp_flux`, meaning current photometry uses whatever line
+  content is already present in the SSP flux table; separate SSP line tables
+  are diagnostic only;
 - `redshift.initial: fixed` only for MAP initialization; `z_obs` stays a free
   bounded fit parameter with no `phz_median` initialization and no photo-z prior;
 - broad non-circular `weak_physical` priors for the current DSPS parameterization;
@@ -100,9 +103,18 @@ Batch MAP writes:
 - `batch_fit_photometry_comparison.*`: observed vs model photometry;
 - `chi2_per_band` and `reduced_chi2_dof`: per-band diagnostic and
   DOF-corrected reduced chi2 are reported separately;
+- `batch_fit_performance_summary.json` and
+  `batch_fit_performance_by_batch.csv`: wall time, seconds per galaxy,
+  throughput, backend/device metadata, and GPU-hour per galaxy when a GPU
+  backend is used;
+- `batch_fit_redshift_attractors.csv`: repeated MAP redshift modes and their
+  truth/proxy diagnostics;
+- `batch_fit_nebular_*.csv`: diagnostic-only SSP emission-line inventory and
+  line/filter crossings near fitted-redshift attractors when the SSP asset
+  exposes `ssp_emline_*`;
 - `batch_fit_parameter_audit.csv`: labels fixed, free, derived, or row-injected columns;
 - fit-vs-catalog truth/proxy plots skip inactive fixed parameters such as
-  `dust_av` under COSMOS proxy dust;
+  `dust_av` under COSMOS proxy dust; dust is never treated as catalog truth;
 - `sed_diagnostics/`: best and worst DSPS SED diagnostics, COSMOS proxy SED overlays, filters, and photometry constraints for sampled rows;
 - `normalized_config.json`: exact expanded config used for audit.
 
@@ -113,6 +125,20 @@ Posterior runs write `posterior_samples.csv`, `posterior_summary.csv`, posterior
 Current priors are `weak_physical`: broad, stabilizing, and non-circular.
 
 Do not call them POP-COSMOS priors yet. POP-COSMOS uses learned population priors from rich COSMOS photometry; matching that requires exact parameter mapping, units, and selection treatment before implementation.
+
+## Current Fit Size
+
+The science MAP fit has five active parameters:
+
+- `z_obs`;
+- `log10_formed_mass_msun`;
+- `sfh_t_peak`;
+- `sfh_tau`;
+- `log10_metallicity`.
+
+DSPS itself is a differentiable SPS framework, not one fixed photo-z fitting
+model with a canonical parameter count. A later Diffstar preset should define
+its own explicit parameter mapping and priors.
 
 ## Development Checks
 

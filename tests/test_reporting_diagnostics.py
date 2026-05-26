@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from euclid_dsps.config import normalize_config
 from euclid_dsps.reporting.core import (
     fit_objective_components,
     fit_parameter_audit,
     parameter_truth_metrics,
+    redshift_attractor_summary,
     summarize_by_row,
 )
-from euclid_dsps.semantics import active_parameters, inactive_parameters
+from euclid_dsps.semantics import (
+    active_parameters,
+    inactive_parameters,
+    is_comparable_fit_parameter,
+)
 
 
 def _config() -> dict:
@@ -118,6 +124,16 @@ def test_cosmos_proxy_dust_is_inactive_not_inferred() -> None:
     assert "log10_metallicity" in metrics["parameter"].tolist()
 
 
+def test_dust_av_is_never_truth_comparable_even_when_free() -> None:
+    config = _config()
+    config["fit"]["free_parameters"]["dust_av"] = {
+        "initial": 0.2,
+        "bounds": [0.0, 2.5],
+    }
+
+    assert not is_comparable_fit_parameter(config, "dust_av")
+
+
 def test_fit_objective_components_writes_photometric_and_prior_terms() -> None:
     fits = pd.DataFrame(
             {
@@ -156,3 +172,20 @@ def test_summarize_by_row_uses_flux_chi_and_dof_reduced_chi2() -> None:
     assert summary.loc[0, "chi2_per_band"] == 14.0 / 3.0
     assert summary.loc[0, "reduced_chi2_dof"] == 7.0
     assert summary.loc[0, "reduced_chi2"] == 7.0
+
+
+def test_redshift_attractor_summary_counts_repeated_fit_modes() -> None:
+    by_row = pd.DataFrame(
+        {
+            "z_obs": [0.401, 0.402, 0.398, 0.85, 0.851],
+            "redshift_truth": [0.1, 0.2, 0.3, 0.8, 0.9],
+            "delta_z_obs_minus_truth": [0.301, 0.202, 0.098, 0.05, -0.049],
+            "reduced_chi2": [1.0, 2.0, 1.5, 0.8, 0.9],
+        }
+    )
+
+    summary = redshift_attractor_summary(by_row, min_count=2)
+
+    assert summary.loc[0, "z_fit_bin"] == 0.4
+    assert summary.loc[0, "n_galaxies"] == 3
+    assert summary.loc[1, "z_fit_bin"] == pytest.approx(0.85)

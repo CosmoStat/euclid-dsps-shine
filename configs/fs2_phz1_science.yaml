@@ -4,6 +4,7 @@ extends: presets/fs2_common.yaml
 runtime: auto
 bands: lsst_euclid_10
 dust_model: cosmos_proxy_fixed
+nebular_emission: ssp_flux
 prior_set: weak_physical
 
 band_calibration:

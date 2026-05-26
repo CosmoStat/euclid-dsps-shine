@@ -10,10 +10,12 @@ workflow/docs small enough to audit.
 
 ## Current Phase
 
-Planning phase after `science_fit_new_features_1000` and
-`science_fit_calib_offsets_1000` diagnostics. MAP redshift stays free and
+Implementation phase after `science_fit_new_features_1000` and
+`science_fit_calib_offsets_1000` diagnostics. Runtime cost diagnostics,
+redshift-attractor summaries, diagnostic-only nebular line/filter crossings, and
+Diffstar assessment docs are now implemented. MAP redshift stays free and
 single-start for quick tests. MCMC/posterior, redshift grid/global search, and
-Diffstar SFH are deferred.
+Diffstar SFH implementation are deferred.
 
 ## Active Public Workflow
 
@@ -254,6 +256,21 @@ Audit task before matching DSPS-literature parameterization:
   two-row science CLI smoke with `runtime:auto`, and one-row
   `conda run -n shine euclid-dsps fit` smoke. `ruff` is not installed in the
   current shell/conda base, so it could not be run this pass.
+- Added per-run and per-batch performance summaries with seconds/galaxy,
+  galaxies/second, device/backend metadata, and GPU-hour per galaxy when JAX
+  uses a GPU backend.
+- Added MAP redshift-attractor diagnostics:
+  `*_redshift_attractors.csv` and `*_redshift_attractors.png`.
+- Added diagnostic-only SSP nebular-line inventory and line/filter crossing
+  outputs from `ssp_emline_*` when available. This does not change the
+  likelihood.
+- Dust is no longer compared to catalog truth/proxy in parameter metrics, even
+  if `dust_av` is made free in a future config.
+- Added DSPS parameter-count audit docs and Diffstar integration assessment.
+- Removed API reference from the main docs navigation to keep science docs
+  focused.
+- Current verification after this pass: `compileall`, full `pytest`
+  (`76 passed, 1 skipped`), and smoke fit on `configs/smoke_test.yaml`.
 
 ## Remaining Work
 

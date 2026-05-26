@@ -68,6 +68,7 @@ SUPPORTED_REPORTING_LEVELS = {"full", "light"}
 SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
 SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
+SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
 SUPPORTED_REDSHIFT_INITIALS = {
     "catalog_column",
     "fixed",
@@ -485,6 +486,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config.setdefault("extra_columns", [])
     config.setdefault("cosmos_sed", {})
     config.setdefault("band_calibration", {})
+    config.setdefault("nebular_emission", "ssp_flux")
 
     raw_redshift = dict(config["redshift"] or {})
     redshift = dict(DEFAULT_REDSHIFT_CONFIG)
@@ -791,6 +793,7 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_redshift(config.get("redshift", {}), errors)
     _validate_model(config.get("model", {}), errors)
     _validate_fit(config.get("fit", {}), errors)
+    _validate_nebular_emission(config.get("nebular_emission"), errors)
     _validate_sample(config.get("sample", {}), config.get("fit", {}), errors)
     _validate_truth(config.get("truth", {}), errors)
     _validate_runtime(config.get("runtime", {}), errors)
@@ -950,6 +953,8 @@ def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
             _optional_string(
                 prior.get("max_column"), "redshift.prior_z.max_column", errors
             )
+
+
 def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     n_sfh_bins = model.get("n_sfh_bins")
     if not isinstance(n_sfh_bins, int) or n_sfh_bins < 2:
@@ -967,6 +972,17 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
         for name, column in parameter_columns.items():
             if not isinstance(name, str) or not isinstance(column, str) or not column:
                 errors.append("model.parameter_columns keys and values must be strings")
+
+
+def _validate_nebular_emission(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, str):
+        errors.append("nebular_emission must be a string")
+        return
+    if value not in SUPPORTED_NEBULAR_EMISSION_MODES:
+        errors.append(
+            "nebular_emission must be one of "
+            f"{sorted(SUPPORTED_NEBULAR_EMISSION_MODES)}"
+        )
 
 
 def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
