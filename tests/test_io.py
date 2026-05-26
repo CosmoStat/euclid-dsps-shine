@@ -21,13 +21,13 @@ from euclid_dsps.io import (
 def test_ab_magnitude_flux_roundtrip() -> None:
     flux = abmag_to_flux_fnu_cgs(0.0)
 
-    assert math.isclose(flux, 10 ** (-0.4 * 48.6))
+    assert flux == pytest.approx(3631.0e-23)
     assert math.isclose(flux_fnu_cgs_to_abmag(flux), 0.0, abs_tol=1.0e-12)
 
 
 def test_microjy_conversions() -> None:
     assert math.isclose(microjy_to_flux_fnu_cgs(1.0), 1.0e-29)
-    assert math.isclose(microjy_to_abmag(1.0), 23.9)
+    assert microjy_to_abmag(1.0) == pytest.approx(23.90006562228223)
     assert np.isnan(microjy_to_abmag(-1.0))
 
 
@@ -38,6 +38,21 @@ def test_truth_value_transform_scale_offset_and_log10() -> None:
     assert truth_value_from_spec(row, {"column": "dust", "scale": 4.05}) == 0.81
     assert truth_value_from_spec(row, {"column": "dust", "offset": 1.0}) == 1.2
     assert truth_value_from_spec(row, {"column": "missing"}) is None
+
+
+def test_truth_value_converts_log_stellar_mass_h2_to_msun() -> None:
+    row = {"log_stellar_mass": 10.0}
+
+    value = truth_value_from_spec(
+        row,
+        {
+            "column": "log_stellar_mass",
+            "transform": "log_stellar_mass_h2_to_msun",
+            "h": 0.67,
+        },
+    )
+
+    assert value == pytest.approx(10.0 + 2.0 * np.log10(0.67))
 
 
 def test_load_row_indices_deduplicates_and_sorts(tmp_path) -> None:
@@ -60,7 +75,7 @@ def test_build_observation_supports_configured_units() -> None:
     assert obs.row_index == 11
     assert [band.name for band in obs.bands] == ["fnu", "mag", "ujy"]
     assert math.isclose(obs.bands[1].flux_fnu_cgs, abmag_to_flux_fnu_cgs(23.0))
-    assert math.isclose(obs.bands[2].mag_ab, 23.9)
+    assert obs.bands[2].mag_ab == pytest.approx(23.90006562228223)
 
 
 def test_build_observation_uses_catalog_flux_error_for_sigma_mag() -> None:

@@ -8,6 +8,21 @@ SELECT
   -- redshift labels
   `true_redshift_halo` AS `z_true`,
   `phz_mode_1` AS `z_phz`,
+  `true_redshift_gal` AS `z_true_gal`,
+  `observed_redshift_gal` AS `z_obs_gal`,
+  `redshift_step`,
+  `zp` AS `z_deepz`,
+  `phz_flags`,
+  `phz_median`,
+  `phz_min_70`,
+  `phz_max_70`,
+  `phz_min_90`,
+  `phz_max_90`,
+  `phz_min_95`,
+  `phz_max_95`,
+  `phz_mode_1_area`,
+  `phz_mode_2`,
+  `phz_mode_2_area`,
 
   -- COSMOS SED latent templates
   `sed_cosmos_1`,
@@ -48,15 +63,60 @@ SELECT
   `euclid_nisp_h_el_model3_ext_odonnell_ext_error`,
   `euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization`,
 
-  -- LSST photometry
+  -- LSST u
   `lsst_u`,
+  `lsst_u_abs`,
+  `lsst_u_el_model3_ext`,
+  `lsst_u_el_model3_ext_odonnell_ext`,
+  `lsst_u_el_model3_ext_odonnell_ext_error`,
+  `lsst_u_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST g
   `lsst_g`,
+  `lsst_g_abs`,
+  `lsst_g_el_model3_ext`,
+  `lsst_g_el_model3_ext_odonnell_ext`,
+  `lsst_g_el_model3_ext_odonnell_ext_error`,
+  `lsst_g_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST r
   `lsst_r`,
+  `lsst_r_abs`,
+  `lsst_r_el_model3_ext`,
+  `lsst_r_el_model3_ext_odonnell_ext`,
+  `lsst_r_el_model3_ext_odonnell_ext_error`,
+  `lsst_r_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST i
   `lsst_i`,
+  `lsst_i_abs`,
+  `lsst_i_el_model3_ext`,
+  `lsst_i_el_model3_ext_odonnell_ext`,
+  `lsst_i_el_model3_ext_odonnell_ext_error`,
+  `lsst_i_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST z
   `lsst_z`,
+  `lsst_z_abs`,
+  `lsst_z_el_model3_ext`,
+  `lsst_z_el_model3_ext_odonnell_ext`,
+  `lsst_z_el_model3_ext_odonnell_ext_error`,
+  `lsst_z_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST y
   `lsst_y`,
+  `lsst_y_abs`,
+  `lsst_y_el_model3_ext`,
+  `lsst_y_el_model3_ext_odonnell_ext`,
+  `lsst_y_el_model3_ext_odonnell_ext_error`,
+  `lsst_y_el_model3_ext_odonnell_ext_error_realization`,
 
   -- physical truth labels
+  `log_stellar_mass`,
+  `log_ml_r01`,
+  `abs_mag_r01`,
+  `log_luminosity_r01`,
+  `abs_mag_uv_unextincted`,
   `metallicity` AS `metallicity_true`,
   `log_sfr` AS `log_sfr_true`,
   POW(10, `log_sfr`) AS `sfr_true`,
@@ -132,40 +192,84 @@ WHERE
   AND `sed_cosmos_1` IS NOT NULL
   AND `sed_cosmos_2` IS NOT NULL
 
-  -- required Euclid continuum photometry
+  -- required continuum photometry
   AND `euclid_vis` IS NOT NULL
   AND `euclid_nisp_y` IS NOT NULL
   AND `euclid_nisp_j` IS NOT NULL
   AND `euclid_nisp_h` IS NOT NULL
+  AND `lsst_u` IS NOT NULL
+  AND `lsst_g` IS NOT NULL
+  AND `lsst_r` IS NOT NULL
+  AND `lsst_i` IS NOT NULL
+  AND `lsst_z` IS NOT NULL
+  AND `lsst_y` IS NOT NULL
 
-  -- required Euclid absolute/rest-frame fluxes
+  -- required absolute/rest-frame fluxes
   AND `euclid_vis_abs` IS NOT NULL
   AND `euclid_nisp_y_abs` IS NOT NULL
   AND `euclid_nisp_j_abs` IS NOT NULL
   AND `euclid_nisp_h_abs` IS NOT NULL
+  AND `lsst_u_abs` IS NOT NULL
+  AND `lsst_g_abs` IS NOT NULL
+  AND `lsst_r_abs` IS NOT NULL
+  AND `lsst_i_abs` IS NOT NULL
+  AND `lsst_z_abs` IS NOT NULL
+  AND `lsst_y_abs` IS NOT NULL
 
-  -- required Euclid full observed fluxes
+  -- required full observed fluxes
   AND `euclid_vis_el_model3_ext_odonnell_ext` IS NOT NULL
   AND `euclid_nisp_y_el_model3_ext_odonnell_ext` IS NOT NULL
   AND `euclid_nisp_j_el_model3_ext_odonnell_ext` IS NOT NULL
   AND `euclid_nisp_h_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_u_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_g_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_r_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_i_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_z_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_y_el_model3_ext_odonnell_ext` IS NOT NULL
 
-  -- required Euclid errors / noisy realizations
+  -- required errors / noisy realizations
   AND `euclid_vis_el_model3_ext_odonnell_ext_error` IS NOT NULL
   AND `euclid_nisp_y_el_model3_ext_odonnell_ext_error` IS NOT NULL
   AND `euclid_nisp_j_el_model3_ext_odonnell_ext_error` IS NOT NULL
   AND `euclid_nisp_h_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_u_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_g_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_r_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_i_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_z_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_y_el_model3_ext_odonnell_ext_error` IS NOT NULL
 
   AND `euclid_vis_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
   AND `euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
   AND `euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
   AND `euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_u_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_g_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_r_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_i_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_z_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_y_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
 
   -- required redshift labels
   AND `phz_mode_1` IS NOT NULL
   AND `true_redshift_halo` IS NOT NULL
+  AND `true_redshift_gal` IS NOT NULL
+  AND `observed_redshift_gal` IS NOT NULL
+  AND `zp` IS NOT NULL
+  AND `phz_flags` IS NOT NULL
+  AND `phz_median` IS NOT NULL
+  AND `phz_min_70` IS NOT NULL
+  AND `phz_max_70` IS NOT NULL
+  AND `phz_min_90` IS NOT NULL
+  AND `phz_max_90` IS NOT NULL
+  AND `phz_min_95` IS NOT NULL
+  AND `phz_max_95` IS NOT NULL
+  AND `phz_mode_1_area` IS NOT NULL
 
   -- required physical labels
+  AND `log_stellar_mass` IS NOT NULL
+  AND `log_ml_r01` IS NOT NULL
   AND `metallicity` IS NOT NULL
   AND `log_sfr` IS NOT NULL
 

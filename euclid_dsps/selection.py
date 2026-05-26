@@ -11,15 +11,28 @@ def select_galaxy_row(
     band_columns: list[str],
     index: int | None = None,
     require_positive_flux: bool = True,
+    nondetection_policy: str | None = None,
     sort_by_flux: str | None = None,
 ) -> tuple[int, pd.Series]:
     """Select one galaxy for a smoke-test run."""
     work = df.copy()
-    if require_positive_flux:
-        mask = np.ones(len(work), dtype=bool)
+    policy = (
+        str(nondetection_policy)
+        if nondetection_policy is not None
+        else ("drop" if require_positive_flux else "gaussian_flux")
+    )
+    if policy == "upper_limit":
+        raise NotImplementedError("Upper-limit likelihood is not implemented")
+    mask = np.ones(len(work), dtype=bool)
+    if policy == "drop":
         for column in band_columns:
             mask &= np.isfinite(work[column].to_numpy()) & (work[column].to_numpy() > 0)
-        work = work.loc[mask]
+    elif policy == "gaussian_flux":
+        for column in band_columns:
+            mask &= np.isfinite(work[column].to_numpy())
+    else:
+        raise ValueError(f"Unsupported nondetection_policy: {policy}")
+    work = work.loc[mask]
     if work.empty:
         raise ValueError("No galaxy satisfies the configured selection.")
 

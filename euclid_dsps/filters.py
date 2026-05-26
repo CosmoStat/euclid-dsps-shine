@@ -85,7 +85,7 @@ def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
         or kind == "dat"
         or (
             "path" in filter_config
-            and str(filter_config["path"]).endswith((".dat", ".txt", ".ascii"))
+            and str(filter_config["path"]).endswith((".dat", ".txt", ".ascii", ".csv"))
         )
     ):
         path = Path(filter_config["path"])
@@ -115,7 +115,7 @@ def load_ascii_filter(
     name: str, path: Path, filter_config: dict[str, Any]
 ) -> FilterCurve:
     """Load two-column ASCII throughput files."""
-    data = np.loadtxt(path)
+    data = _load_two_column_ascii(path)
     wave = np.asarray(data[:, 0], dtype=float)
     transmission = np.asarray(data[:, 1], dtype=float)
     wave = wave * _wave_unit_to_angstrom_factor(
@@ -128,6 +128,17 @@ def load_ascii_filter(
     return FilterCurve(
         name=name, wave=wave[mask], transmission=transmission[mask], source=str(path)
     )
+
+
+def _load_two_column_ascii(path: Path) -> np.ndarray:
+    """Read whitespace- or comma-separated two-column numeric tables."""
+    try:
+        data = np.loadtxt(path)
+    except ValueError:
+        data = np.loadtxt(path, delimiter=",")
+    if data.ndim != 2 or data.shape[1] < 2:
+        raise ValueError(f"Filter file must contain at least two columns: {path}")
+    return np.asarray(data[:, :2], dtype=float)
 
 
 def load_fits_filter(

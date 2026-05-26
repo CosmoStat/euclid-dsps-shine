@@ -12,8 +12,8 @@ The project keeps the scientific boundary narrow:
 * ``euclid_dsps.io`` owns the parquet row contract and photometry unit
   conversions.
 * ``euclid_dsps.fit`` and ``euclid_dsps.mcmc`` own inference.
-* ``euclid_dsps.pipeline`` composes CLI workflows.
-* ``euclid_dsps.reports`` writes CSV, JSON, and plot artifacts.
+* ``euclid_dsps.workflows`` composes CLI workflows.
+* ``euclid_dsps.reporting`` writes CSV, JSON, and plot artifacts.
 
 .. toctree::
    :maxdepth: 2
@@ -26,11 +26,5 @@ The project keeps the scientific boundary narrow:
    cosmos_sed
    run_setup
    science_assessment
+   diffstar_assessment
    testing
-   refactor_roadmap
-
-.. toctree::
-   :maxdepth: 2
-   :caption: Reference
-
-   api

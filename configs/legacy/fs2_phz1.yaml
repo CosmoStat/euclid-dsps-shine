@@ -5,9 +5,10 @@ runtime:
     # WSL-safe default. For a working CUDA JAX install, use:
     # jax_platforms: "cuda,cpu"
     # disable_jax_plugin_autoload: false
-    jax_platforms: "cpu"
-    disable_jax_plugin_autoload: true
+    jax_platforms: "cuda"
+    disable_jax_plugin_autoload: false
     xla_python_client_preallocate: false
+    require_gpu: true
 
 selection:
     index: 0
@@ -47,6 +48,26 @@ extra_columns:
     - euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization
     - euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization
     - euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization
+    - z_true_gal
+    - z_obs_gal
+    - redshift_step
+    - z_deepz
+    - phz_flags
+    - phz_median
+    - phz_min_70
+    - phz_max_70
+    - phz_min_90
+    - phz_max_90
+    - phz_min_95
+    - phz_max_95
+    - phz_mode_1_area
+    - phz_mode_2
+    - phz_mode_2_area
+    - log_stellar_mass
+    - log_ml_r01
+    - abs_mag_r01
+    - log_luminosity_r01
+    - abs_mag_uv_unextincted
     - ebv_cosmos_1
     - ebv_cosmos_2
     - ext_curve_cosmos_1
@@ -71,6 +92,8 @@ extra_columns:
     - num_p_halo
 
 cosmos_sed:
+    value_added_data_dir: "Data/value_added_data"
+    catalog_h: 0.67
     lephare_data_dir: "/home/maxime/.cache/lephare/data"
     template_subdir: "sed/GAL/COSMOS_SED"
     template_list: "COSMOS_MOD.list"
@@ -92,8 +115,8 @@ cosmos_sed:
     sample_plot_count: 12
 
 redshift:
-    column: z_phz
-    truth_column: z_true
+    column: phz_median
+    truth_column: z_true_gal
     fixed_value: 0.5
     min: 0.0001
     max: 6.0
@@ -128,6 +151,7 @@ model:
     n_sfh_bins: 96
     fixed_parameters:
         log10_sfr: 0.0
+        log10_formed_mass_msun: 10.0
         sfh_t_peak: 4.0
         sfh_tau: 0.6
         log10_metallicity: -2.0
@@ -142,17 +166,32 @@ fit:
     learning_rate: 0.1
     tolerance: 1.0e-5
     patience: 18
+    priors:
+        z_obs:
+            type: uniform
+        log10_formed_mass_msun:
+            type: normal
+            loc: 10.0
+            scale: 1.5
     population:
         prior_weight: 1.0
         sigma_floor: 0.03
         hyper_mu_scale: 5.0
+        relations:
+            log10_metallicity:
+                predictor: log10_formed_mass_msun
+                pivot: 10.0
+                intercept_initial: -2.25
+                slope_initial: 0.15
+                sigma_initial: 0.35
+                slope_scale: 0.7
     free_parameters:
         z_obs:
             initial: from_base
             bounds: [0.001, 6.0]
-        log10_sfr:
-            initial: 0.0
-            bounds: [-4.5, 2.8]
+        log10_formed_mass_msun:
+            initial: 10.0
+            bounds: [6.0, 13.0]
         dust_av:
             initial: 0.2
             bounds: [0.0, 3.0]
@@ -176,13 +215,7 @@ sample:
     save_samples: true
     priors:
         z_obs:
-            type: truncated_normal
-            loc: from_base
-            scale: 0.15
-        log10_sfr:
-            type: truncated_normal
-            loc: 0.0
-            scale: 1.3
+            type: uniform
         dust_av:
             type: scaled_beta
             alpha: 1.2
@@ -191,8 +224,12 @@ sample:
             type: uniform
 
 truth:
-    redshift_column: z_true
+    redshift_column: z_true_gal
     parameter_columns:
+        log10_formed_mass_msun:
+            column: log_stellar_mass
+            transform: log_stellar_mass_h2_to_msun
+            h: 0.67
         log10_metallicity:
             column: metallicity_true
             offset: -10.61

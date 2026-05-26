@@ -79,6 +79,12 @@ Observed Continuum Fluxes
 
 Columns such as:
 
+* ``lsst_u``
+* ``lsst_g``
+* ``lsst_r``
+* ``lsst_i``
+* ``lsst_z``
+* ``lsst_y``
 * ``euclid_vis``
 * ``euclid_nisp_y``
 * ``euclid_nisp_j``
@@ -96,6 +102,7 @@ Rest-Frame Absolute Fluxes
 Columns ending in ``_abs`` represent rest-frame flux densities normalized at
 10 parsec:
 
+* ``lsst_u_abs`` through ``lsst_y_abs``
 * ``euclid_vis_abs``
 * ``euclid_nisp_y_abs``
 * ``euclid_nisp_j_abs``
@@ -203,6 +210,48 @@ Use:
 
 for likelihood-based inference, noisy photometric simulations, or differentiable
 survey forward-model validation.
+
+The ``*_error`` columns are flux-density uncertainties in the same units as the
+catalog fluxes. When a band config declares ``error_column``, the pipeline
+converts the flux uncertainty into a local AB-magnitude uncertainty,
+
+.. math::
+
+   \sigma_m \simeq \frac{2.5}{\ln 10}\frac{\sigma_F}{F},
+
+and uses it in the photometric likelihood. This gives high signal-to-noise
+objects stronger weight and prevents faint noisy points from dominating the fit
+as if every band had the same fixed ``sigma_mag``. ``sigma_mag_floor`` and
+``sigma_mag_ceiling`` in the config keep the weights numerically stable.
+
+The noisy realization columns are not uncertainties. They are one simulated
+measurement drawn from the survey-like flux plus noise model. Use them when the
+experiment should mimic measured survey photometry; use the corresponding
+``*_error`` columns for the likelihood denominator and chi-square.
+
+The science config wires catalog flux errors for all ten LSST+Euclid bands.
+The fitted flux columns remain the continuum columns because the current DSPS
+model has continuum plus dust but not a calibrated nebular-emission likelihood;
+the ``*_el_model3_ext*`` fluxes and noisy realizations are diagnostics.
+
+.. code-block:: bash
+
+   euclid-dsps --config configs/fs2_phz1_science.yaml fit \
+     --limit 32 \
+     --batch-size 32 \
+     --out outputs/runs/dev_fit_batch_10band
+
+For COSMOS SED validation:
+
+.. code-block:: bash
+
+   euclid-dsps --config configs/fs2_phz1_science.yaml check \
+     --kind cosmos \
+     --limit 20 \
+     --out outputs/check/cosmos
+
+The continuum-only target set is the default science target because the current
+DSPS model has continuum plus dust, but not nebular emission lines.
 
 References
 ----------

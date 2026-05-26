@@ -18,6 +18,10 @@ from jax.scipy.optimize import minimize as jax_minimize
 
 from .io import GalaxyObservation
 from .model import DspsContext, ModelResult, model_mags_jax, run_dsps_model
+from .photometry import abmag_to_fnu_cgs, abmag_to_fnu_cgs_jax, magerr_to_fluxerr_fnu_cgs
+
+
+_FIT_DTYPE = jnp.float32
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,7 @@ class PopulationFitResult:
     batch: BatchFitResult
     hyper_mu: dict[str, float]
     hyper_sigma: dict[str, float]
+    hyper_relations: list[dict[str, Any]]
     loss: float
 
 
@@ -64,12 +69,15 @@ def fit_one_galaxy(
     method = str(fit_config.get("method", "jax_adam")).lower()
     if method in {"jax_adam", "jax_adam_vmap"}:
         observed_mag, sigma_mag, _ = _observation_arrays(observation)
+        observed_flux, flux_error = _observation_flux_arrays(observation)
         batch = fit_galaxy_batch_adam(
             context=context,
             base_params_rows=[base_params],
             observed_mag=np.asarray(observed_mag)[None, :],
             sigma_mag=np.asarray(sigma_mag)[None, :],
             fit_config=fit_config,
+            observed_flux=np.asarray(observed_flux)[None, :],
+            flux_error=np.asarray(flux_error)[None, :],
         )
         best_params = {
             name: float(batch.best_parameter_matrix[0, index])
@@ -98,7 +106,31 @@ def fit_one_galaxy(
     lower = bounds[:, 0]
     upper = bounds[:, 1]
     x0 = jnp.clip(x0, lower, upper)
-    observed_mag, sigma_mag, finite_mask = _observation_arrays(observation)
+    base_parameter_names = list(base_params)
+    prior_arrays = _prepare_prior_arrays(
+        fit_config.get("priors", {}),
+        names,
+        base_parameter_names,
+        np.asarray(
+            [[float(base_params[name]) for name in base_parameter_names]], dtype=float
+        ),
+        np.asarray(bounds, dtype=float),
+    )
+    prior_arrays_jax = {
+        key: jnp.asarray(value[0]) for key, value in prior_arrays.items()
+    }
+    observed_mag, sigma_mag, _ = _observation_arrays(observation)
+    observed_flux, flux_error = _observation_flux_arrays(observation)
+    observed_fit, sigma_fit, finite_mask = _fit_arrays_for_likelihood(
+        np.asarray(observed_mag)[None, :],
+        np.asarray(sigma_mag)[None, :],
+        fit_config,
+        observed_flux=np.asarray(observed_flux)[None, :],
+        flux_error=np.asarray(flux_error)[None, :],
+    )
+    observed_fit = jnp.asarray(observed_fit[0], dtype=float)
+    sigma_fit = jnp.asarray(sigma_fit[0], dtype=float)
+    finite_mask = jnp.asarray(finite_mask[0])
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
     tolerance = float(fit_config.get("tolerance", 1.0e-5))
@@ -115,9 +147,22 @@ def fit_one_galaxy(
     def objective(x: jnp.ndarray) -> jnp.ndarray:
         params = unpack_jax(x)
         model_mag = model_mags_jax(context, params)
-        chi = jnp.where(finite_mask, (observed_mag - model_mag) / sigma_mag, 0.0)
+        model_values = _model_values_for_likelihood(model_mag, fit_config)
+        chi = jnp.where(finite_mask, (observed_fit - model_values) / sigma_fit, 0.0)
         chi2 = jnp.sum(chi**2)
-        return jnp.nan_to_num(chi2, nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
+        prior = _physical_prior_penalty(
+            x,
+            lower,
+            upper,
+            prior_arrays_jax["prior_gaussian_mask"],
+            prior_arrays_jax["prior_gaussian_loc"],
+            prior_arrays_jax["prior_gaussian_scale"],
+            prior_arrays_jax["prior_beta_mask"],
+            prior_arrays_jax["prior_beta_alpha"],
+            prior_arrays_jax["prior_beta_beta"],
+        )
+        objective_value = chi2 + float(fit_config.get("prior_weight", 1.0)) * prior
+        return jnp.nan_to_num(objective_value, nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
     value_and_grad = jax.jit(jax.value_and_grad(objective))
     if method == "jax_adam":
@@ -181,6 +226,73 @@ def _observation_arrays(
     sigma_mag = jnp.asarray([band.sigma_mag for band in observation.bands], dtype=float)
     finite_mask = jnp.isfinite(observed_mag) & jnp.isfinite(sigma_mag) & (sigma_mag > 0)
     return observed_mag, sigma_mag, finite_mask
+
+
+def _observation_flux_arrays(observation: GalaxyObservation) -> tuple[np.ndarray, np.ndarray]:
+    observed_flux = np.asarray(
+        [band.flux_fnu_cgs for band in observation.bands], dtype=float
+    )
+    flux_error = np.asarray(
+        [
+            (
+                band.flux_error_fnu_cgs
+                if band.flux_error_fnu_cgs is not None
+                else magerr_to_fluxerr_fnu_cgs(band.flux_fnu_cgs, band.sigma_mag)
+            )
+            for band in observation.bands
+        ],
+        dtype=float,
+    )
+    return observed_flux, flux_error
+
+
+def _likelihood_space(fit_config: dict[str, Any]) -> str:
+    return str(fit_config.get("likelihood_space", "flux")).lower()
+
+
+def _fit_arrays_for_likelihood(
+    observed_mag: np.ndarray,
+    sigma_mag: np.ndarray,
+    fit_config: dict[str, Any],
+    observed_flux: np.ndarray | None = None,
+    flux_error: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    likelihood_space = _likelihood_space(fit_config)
+    if likelihood_space == "mag":
+        observed = np.asarray(observed_mag, dtype=float)
+        sigma = np.asarray(sigma_mag, dtype=float)
+    elif likelihood_space == "flux":
+        if observed_flux is None:
+            observed = np.asarray(abmag_to_fnu_cgs(observed_mag), dtype=float)
+        else:
+            observed = np.asarray(observed_flux, dtype=float)
+        if flux_error is None:
+            sigma = np.asarray(
+                magerr_to_fluxerr_fnu_cgs(observed, sigma_mag), dtype=float
+            )
+        else:
+            sigma = np.asarray(flux_error, dtype=float)
+        floor_frac = float(fit_config.get("flux_error_floor_frac", 0.0))
+        jitter = float(fit_config.get("flux_error_jitter", 0.0))
+        sigma = np.sqrt(sigma**2 + (floor_frac * observed) ** 2 + jitter**2)
+    else:
+        raise ValueError(f"Unsupported fit.likelihood_space: {likelihood_space}")
+    mask = np.isfinite(observed) & np.isfinite(sigma) & (sigma > 0.0)
+    return observed, sigma, mask
+
+
+def _model_values_for_likelihood(model_mag: jnp.ndarray, fit_config: dict[str, Any]):
+    model_mag = _apply_band_calibration(model_mag, fit_config)
+    if _likelihood_space(fit_config) == "flux":
+        return abmag_to_fnu_cgs_jax(model_mag)
+    return model_mag
+
+
+def _apply_band_calibration(model_mag: jnp.ndarray, fit_config: dict[str, Any]):
+    offsets = fit_config.get("band_calibration_offsets_mag") or []
+    if not offsets:
+        return model_mag
+    return model_mag + jnp.asarray(offsets, dtype=model_mag.dtype)
 
 
 def _fit_bounded_adam(
@@ -282,7 +394,10 @@ def _fit_bounded_bfgs(
         )
     )
     success = bool(getattr(opt, "success", False)) and np.isfinite(best_value_f)
-    message = f"jax_bfgs status={int(getattr(opt, 'status', -1))}, nit={int(getattr(opt, 'nit', -1))}"
+    message = (
+        f"jax_bfgs status={int(getattr(opt, 'status', -1))}, "
+        f"nit={int(getattr(opt, 'nit', -1))}"
+    )
     state = {"iteration": int(getattr(opt, "nit", -1)), "x": best_x}
     return best_x, state, best_value_f, best_grad_norm, success, message
 
@@ -323,6 +438,9 @@ def _unpack_numpy(
     return params
 
 
+_OPTIMIZER_CACHE = {}
+
+
 def fit_galaxy_batch_adam(
     context: DspsContext,
     base_params_rows: list[dict[str, float]],
@@ -330,43 +448,79 @@ def fit_galaxy_batch_adam(
     sigma_mag: np.ndarray,
     fit_config: dict[str, Any],
     truth_theta: np.ndarray | None = None,
+    observed_flux: np.ndarray | None = None,
+    flux_error: np.ndarray | None = None,
+    initial_theta: np.ndarray | None = None,
 ) -> BatchFitResult:
     """Fit many independent galaxies in one JAX-vmapped Adam run."""
-    setup = _prepare_batch_fit(base_params_rows, fit_config)
+    setup = _prepare_batch_fit(base_params_rows, fit_config, initial_theta=initial_theta)
     truth_theta_arr, has_truth = _prepare_truth_theta(setup["theta0"], truth_theta)
-    theta0 = jnp.asarray(setup["theta0"])
-    base_matrix = jnp.asarray(setup["base_matrix"])
-    observed = jnp.asarray(observed_mag)
-    sigma = jnp.asarray(sigma_mag)
-    mask = jnp.isfinite(observed) & jnp.isfinite(sigma) & (sigma > 0)
-    lower = jnp.asarray(setup["lower"])
-    upper = jnp.asarray(setup["upper"])
+    theta0 = jnp.asarray(setup["theta0"], dtype=_FIT_DTYPE)
+    base_matrix = jnp.asarray(setup["base_matrix"], dtype=_FIT_DTYPE)
+    observed_values, sigma_values, valid_mask = _fit_arrays_for_likelihood(
+        observed_mag,
+        sigma_mag,
+        fit_config,
+        observed_flux=observed_flux,
+        flux_error=flux_error,
+    )
+    observed = jnp.asarray(observed_values, dtype=_FIT_DTYPE)
+    sigma = jnp.asarray(sigma_values, dtype=_FIT_DTYPE)
+    mask = jnp.asarray(valid_mask)
+    warm_observed_mag = jnp.asarray(observed_mag, dtype=_FIT_DTYPE)
+    warm_mask = jnp.isfinite(warm_observed_mag) & jnp.isfinite(
+        jnp.asarray(sigma_mag, dtype=_FIT_DTYPE)
+    )
+    lower = jnp.asarray(setup["lower"], dtype=_FIT_DTYPE)
+    upper = jnp.asarray(setup["upper"], dtype=_FIT_DTYPE)
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
-
-    optimize = _build_independent_adam_optimizer(
-        context=context,
-        parameter_names=setup["parameter_names"],
-        free_indices=setup["free_indices"],
-        maxiter=maxiter,
-        learning_rate=learning_rate,
-        prior_weight=float(fit_config.get("prior_weight", 1.0)),
+    prior_weight = float(fit_config.get("prior_weight", 1.0))
+    band_offsets_mag = tuple(
+        float(value) for value in fit_config.get("band_calibration_offsets_mag", [])
     )
+
+    cache_key = (
+        "independent",
+        id(context),
+        tuple(setup["parameter_names"]),
+        tuple(setup["free_names"]),
+        maxiter,
+        learning_rate,
+        prior_weight,
+        _likelihood_space(fit_config),
+        band_offsets_mag,
+    )
+    if cache_key not in _OPTIMIZER_CACHE:
+        _OPTIMIZER_CACHE[cache_key] = _build_independent_adam_optimizer(
+            context=context,
+            parameter_names=setup["parameter_names"],
+            free_indices=setup["free_indices"],
+            maxiter=maxiter,
+            learning_rate=learning_rate,
+            prior_weight=prior_weight,
+            likelihood_space=_likelihood_space(fit_config),
+            band_offsets_mag=band_offsets_mag,
+        )
+    optimize = _OPTIMIZER_CACHE[cache_key]
+
     best_theta, chi2, grad_norm, model_mags, trace_arrays = optimize(
         theta0,
         base_matrix,
         observed,
         sigma,
         mask,
+        warm_observed_mag,
+        warm_mask,
         lower,
         upper,
         jnp.asarray(setup["prior_gaussian_mask"]),
-        jnp.asarray(setup["prior_gaussian_loc"]),
-        jnp.asarray(setup["prior_gaussian_scale"]),
+        jnp.asarray(setup["prior_gaussian_loc"], dtype=_FIT_DTYPE),
+        jnp.asarray(setup["prior_gaussian_scale"], dtype=_FIT_DTYPE),
         jnp.asarray(setup["prior_beta_mask"]),
-        jnp.asarray(setup["prior_beta_alpha"]),
-        jnp.asarray(setup["prior_beta_beta"]),
-        jnp.asarray(truth_theta_arr),
+        jnp.asarray(setup["prior_beta_alpha"], dtype=_FIT_DTYPE),
+        jnp.asarray(setup["prior_beta_beta"], dtype=_FIT_DTYPE),
+        jnp.asarray(truth_theta_arr, dtype=_FIT_DTYPE),
     )
     best_matrix = _apply_free_values(
         base_matrix, best_theta, jnp.asarray(setup["free_indices"])
@@ -396,6 +550,8 @@ def fit_population_batch_adam(
     fit_config: dict[str, Any],
     initial_theta: np.ndarray | None = None,
     truth_theta: np.ndarray | None = None,
+    observed_flux: np.ndarray | None = None,
+    flux_error: np.ndarray | None = None,
 ) -> PopulationFitResult:
     """Joint MAP fit with a Gaussian population prior over free parameters."""
     setup = _prepare_batch_fit(
@@ -404,43 +560,111 @@ def fit_population_batch_adam(
     truth_theta_arr, has_truth = _prepare_truth_theta(setup["theta0"], truth_theta)
     theta0 = jnp.asarray(setup["theta0"])
     base_matrix = jnp.asarray(setup["base_matrix"])
-    observed = jnp.asarray(observed_mag)
-    sigma = jnp.asarray(sigma_mag)
-    mask = jnp.isfinite(observed) & jnp.isfinite(sigma) & (sigma > 0)
+    observed_values, sigma_values, valid_mask = _fit_arrays_for_likelihood(
+        observed_mag,
+        sigma_mag,
+        fit_config,
+        observed_flux=observed_flux,
+        flux_error=flux_error,
+    )
+    observed = jnp.asarray(observed_values)
+    sigma = jnp.asarray(sigma_values)
+    mask = jnp.asarray(valid_mask)
+    warm_observed_mag = jnp.asarray(observed_mag)
+    warm_mask = jnp.isfinite(warm_observed_mag) & jnp.isfinite(jnp.asarray(sigma_mag))
     lower = jnp.asarray(setup["lower"])
     upper = jnp.asarray(setup["upper"])
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
     pop = fit_config.get("population", {})
 
-    optimize = _build_population_adam_optimizer(
-        context=context,
-        parameter_names=setup["parameter_names"],
-        free_indices=setup["free_indices"],
-        maxiter=maxiter,
-        learning_rate=learning_rate,
-        sigma_floor=float(pop.get("sigma_floor", 0.03)),
-        prior_weight=float(pop.get("prior_weight", 1.0)),
-        hyper_mu_scale=float(pop.get("hyper_mu_scale", 5.0)),
-        physical_prior_weight=float(fit_config.get("prior_weight", 1.0)),
+    sigma_floor = float(pop.get("sigma_floor", 0.03))
+    prior_weight = float(pop.get("prior_weight", 1.0))
+    hyper_mu_scale = float(pop.get("hyper_mu_scale", 5.0))
+    physical_prior_weight = float(fit_config.get("prior_weight", 1.0))
+    band_offsets_mag = tuple(
+        float(value) for value in fit_config.get("band_calibration_offsets_mag", [])
     )
-    best_theta, mu, sigma_pop, loss, chi2, grad_norm, model_mags, trace_arrays = (
-        optimize(
-            theta0,
-            base_matrix,
-            observed,
-            sigma,
-            mask,
-            lower,
-            upper,
-            jnp.asarray(setup["prior_gaussian_mask"]),
-            jnp.asarray(setup["prior_gaussian_loc"]),
-            jnp.asarray(setup["prior_gaussian_scale"]),
-            jnp.asarray(setup["prior_beta_mask"]),
-            jnp.asarray(setup["prior_beta_alpha"]),
-            jnp.asarray(setup["prior_beta_beta"]),
-            jnp.asarray(truth_theta_arr),
+
+    cache_key = (
+        "population",
+        id(context),
+        tuple(setup["parameter_names"]),
+        tuple(setup["free_names"]),
+        maxiter,
+        learning_rate,
+        sigma_floor,
+        prior_weight,
+        hyper_mu_scale,
+        physical_prior_weight,
+        _likelihood_space(fit_config),
+        band_offsets_mag,
+        tuple(setup["population_relation_default_mask"]),
+        tuple(setup["population_relation_target_pos"]),
+        tuple(setup["population_relation_predictor_free_pos"]),
+        tuple(setup["population_relation_predictor_base_index"]),
+    )
+
+    if cache_key not in _OPTIMIZER_CACHE:
+        _OPTIMIZER_CACHE[cache_key] = _build_population_adam_optimizer(
+            context=context,
+            parameter_names=setup["parameter_names"],
+            free_indices=setup["free_indices"],
+            maxiter=maxiter,
+            learning_rate=learning_rate,
+            sigma_floor=sigma_floor,
+            prior_weight=prior_weight,
+            hyper_mu_scale=hyper_mu_scale,
+            physical_prior_weight=physical_prior_weight,
+            likelihood_space=_likelihood_space(fit_config),
+            band_offsets_mag=band_offsets_mag,
+            relation_default_mask=jnp.asarray(
+                setup["population_relation_default_mask"]
+            ),
+            relation_target_pos=jnp.asarray(setup["population_relation_target_pos"]),
+            relation_predictor_free_pos=jnp.asarray(
+                setup["population_relation_predictor_free_pos"]
+            ),
+            relation_predictor_base_index=jnp.asarray(
+                setup["population_relation_predictor_base_index"]
+            ),
+            relation_pivot=jnp.asarray(setup["population_relation_pivot"]),
+            relation_intercept0=jnp.asarray(setup["population_relation_intercept0"]),
+            relation_slope0=jnp.asarray(setup["population_relation_slope0"]),
+            relation_sigma0=jnp.asarray(setup["population_relation_sigma0"]),
+            relation_slope_scale=jnp.asarray(setup["population_relation_slope_scale"]),
         )
+    optimize = _OPTIMIZER_CACHE[cache_key]
+
+    (
+        best_theta,
+        mu,
+        sigma_pop,
+        relation_intercept,
+        relation_slope,
+        relation_sigma,
+        loss,
+        chi2,
+        grad_norm,
+        model_mags,
+        trace_arrays,
+    ) = optimize(
+        theta0,
+        base_matrix,
+        observed,
+        sigma,
+        mask,
+        warm_observed_mag,
+        warm_mask,
+        lower,
+        upper,
+        jnp.asarray(setup["prior_gaussian_mask"]),
+        jnp.asarray(setup["prior_gaussian_loc"]),
+        jnp.asarray(setup["prior_gaussian_scale"]),
+        jnp.asarray(setup["prior_beta_mask"]),
+        jnp.asarray(setup["prior_beta_alpha"]),
+        jnp.asarray(setup["prior_beta_beta"]),
+        jnp.asarray(truth_theta_arr),
     )
     best_matrix = _apply_free_values(
         base_matrix, best_theta, jnp.asarray(setup["free_indices"])
@@ -471,6 +695,12 @@ def fit_population_batch_adam(
                 setup["free_names"], np.asarray(sigma_pop), strict=True
             )
         },
+        hyper_relations=_population_relation_hyper_rows(
+            setup,
+            np.asarray(relation_intercept),
+            np.asarray(relation_slope),
+            np.asarray(relation_sigma),
+        ),
         loss=float(loss),
     )
 
@@ -484,12 +714,15 @@ def _prepare_batch_fit(
         raise ValueError("Cannot fit an empty batch")
     free = fit_config["free_parameters"]
     free_names = list(free)
-    parameter_names = list(base_params_rows[0])
+    parameter_names = _parameter_names_for_rows(base_params_rows)
     missing = [name for name in free_names if name not in parameter_names]
     if missing:
         raise ValueError(f"Free parameters missing from base params: {missing}")
     base_matrix = np.asarray(
-        [[float(row[name]) for name in parameter_names] for row in base_params_rows],
+        [
+            [float(row.get(name, np.nan)) for name in parameter_names]
+            for row in base_params_rows
+        ],
         dtype=float,
     )
     bounds = np.asarray(
@@ -508,7 +741,8 @@ def _prepare_batch_fit(
         theta0 = np.asarray(initial_theta, dtype=float)
         if theta0.shape != (len(base_params_rows), len(free_names)):
             raise ValueError(
-                f"initial_theta shape must be {(len(base_params_rows), len(free_names))}, got {theta0.shape}"
+                "initial_theta shape must be "
+                f"{(len(base_params_rows), len(free_names))}, got {theta0.shape}"
             )
     theta0 = np.clip(theta0, bounds[:, 0], bounds[:, 1])
     prior_arrays = _prepare_prior_arrays(
@@ -517,6 +751,13 @@ def _prepare_batch_fit(
         parameter_names,
         base_matrix,
         bounds,
+    )
+    relation_arrays = _prepare_population_relation_arrays(
+        fit_config.get("population", {}),
+        free_names,
+        parameter_names,
+        base_matrix,
+        theta0,
     )
     return {
         "parameter_names": parameter_names,
@@ -529,7 +770,20 @@ def _prepare_batch_fit(
         "lower": bounds[:, 0],
         "upper": bounds[:, 1],
         **prior_arrays,
+        **relation_arrays,
     }
+
+
+def _parameter_names_for_rows(base_params_rows: list[dict[str, float]]) -> list[str]:
+    """Build a stable schema when optional per-row prior/catalog keys are missing."""
+    names = list(base_params_rows[0])
+    seen = set(names)
+    for row in base_params_rows[1:]:
+        for name in row:
+            if name not in seen:
+                names.append(name)
+                seen.add(name)
+    return names
 
 
 def _prepare_prior_arrays(
@@ -563,7 +817,25 @@ def _prepare_prior_arrays(
                 loc_values = np.full(n_rows, float(loc), dtype=float)
             gaussian_mask[:, index] = True
             gaussian_loc[:, index] = loc_values
-            gaussian_scale[:, index] = max(float(spec.get("scale", 1.0)), 1.0e-6)
+            scale = spec.get("scale", 1.0)
+            if scale == "from_base":
+                scale_name = str(spec.get("scale_parameter", f"{name}_prior_sigma"))
+                if scale_name not in parameter_names:
+                    raise ValueError(
+                        f"fit.priors.{name}.scale='from_base' needs parameter "
+                        f"{scale_name!r} in base parameters"
+                    )
+                scale_values = np.asarray(
+                    base_matrix[:, parameter_names.index(scale_name)], dtype=float
+                )
+                scale_values = np.where(
+                    np.isfinite(scale_values) & (scale_values > 0),
+                    scale_values,
+                    1.0,
+                )
+                gaussian_scale[:, index] = np.maximum(scale_values, 1.0e-6)
+            else:
+                gaussian_scale[:, index] = max(float(scale), 1.0e-6)
         elif prior_type == "scaled_beta":
             beta_mask[:, index] = True
             beta_alpha[:, index] = max(float(spec.get("alpha", 1.0)), 1.0e-6)
@@ -579,6 +851,109 @@ def _prepare_prior_arrays(
         "prior_beta_alpha": beta_alpha,
         "prior_beta_beta": beta_beta,
     }
+
+
+def _prepare_population_relation_arrays(
+    population: dict[str, Any],
+    free_names: list[str],
+    parameter_names: list[str],
+    base_matrix: np.ndarray,
+    theta0: np.ndarray,
+) -> dict[str, np.ndarray]:
+    relations = population.get("relations", {}) if isinstance(population, dict) else {}
+    target_pos: list[int] = []
+    predictor_free_pos: list[int] = []
+    predictor_base_index: list[int] = []
+    pivot: list[float] = []
+    intercept0: list[float] = []
+    slope0: list[float] = []
+    sigma0: list[float] = []
+    slope_scale: list[float] = []
+    default_mask = np.ones(len(free_names), dtype=float)
+    relation_names: list[tuple[str, str]] = []
+
+    if not isinstance(relations, dict):
+        relations = {}
+    for target_name, spec in relations.items():
+        if not spec or not bool(spec.get("enabled", True)):
+            continue
+        if target_name not in free_names:
+            raise ValueError(
+                f"fit.population.relations target {target_name!r} must be a free parameter"
+            )
+        predictor_name = str(spec.get("predictor", ""))
+        if predictor_name not in parameter_names:
+            raise ValueError(
+                f"fit.population.relations.{target_name}.predictor={predictor_name!r} "
+                "must exist in model parameters"
+            )
+        target_index = free_names.index(target_name)
+        target_pos.append(target_index)
+        default_mask[target_index] = 0.0
+        predictor_base_index.append(parameter_names.index(predictor_name))
+        predictor_free_pos.append(
+            free_names.index(predictor_name) if predictor_name in free_names else -1
+        )
+        predictor_values = base_matrix[:, parameter_names.index(predictor_name)]
+        raw_pivot = spec.get("pivot", "median")
+        pivot.append(
+            float(np.nanmedian(predictor_values))
+            if raw_pivot == "median"
+            else float(raw_pivot)
+        )
+        target_values = theta0[:, target_index]
+        intercept0.append(
+            float(spec.get("intercept_initial", np.nanmean(target_values)))
+        )
+        slope0.append(float(spec.get("slope_initial", 0.0)))
+        sigma0.append(
+            max(
+                float(spec.get("sigma_initial", np.nanstd(target_values) + 0.2)), 1.0e-3
+            )
+        )
+        slope_scale.append(max(float(spec.get("slope_scale", 2.0)), 1.0e-6))
+        relation_names.append((str(target_name), predictor_name))
+
+    return {
+        "population_relation_default_mask": default_mask,
+        "population_relation_target_pos": np.asarray(target_pos, dtype=np.int32),
+        "population_relation_predictor_free_pos": np.asarray(
+            predictor_free_pos, dtype=np.int32
+        ),
+        "population_relation_predictor_base_index": np.asarray(
+            predictor_base_index, dtype=np.int32
+        ),
+        "population_relation_pivot": np.asarray(pivot, dtype=float),
+        "population_relation_intercept0": np.asarray(intercept0, dtype=float),
+        "population_relation_slope0": np.asarray(slope0, dtype=float),
+        "population_relation_sigma0": np.asarray(sigma0, dtype=float),
+        "population_relation_slope_scale": np.asarray(slope_scale, dtype=float),
+        "population_relation_names": np.asarray(relation_names, dtype=object),
+    }
+
+
+def _population_relation_hyper_rows(
+    setup: dict[str, Any],
+    intercept: np.ndarray,
+    slope: np.ndarray,
+    sigma: np.ndarray,
+) -> list[dict[str, Any]]:
+    names = np.asarray(setup["population_relation_names"], dtype=object)
+    pivots = np.asarray(setup["population_relation_pivot"], dtype=float)
+    rows: list[dict[str, Any]] = []
+    for index in range(len(intercept)):
+        target, predictor = names[index]
+        rows.append(
+            {
+                "target_parameter": str(target),
+                "predictor_parameter": str(predictor),
+                "pivot": float(pivots[index]),
+                "intercept": float(intercept[index]),
+                "slope": float(slope[index]),
+                "sigma": float(sigma[index]),
+            }
+        )
+    return rows
 
 
 def _prepare_truth_theta(
@@ -599,13 +974,27 @@ def _build_independent_adam_optimizer(
     maxiter: int,
     learning_rate: float,
     prior_weight: float,
+    likelihood_space: str,
+    band_offsets_mag: tuple[float, ...],
 ):
     free_indices_jax = jnp.asarray(free_indices)
+    band_offsets_jax = (
+        jnp.asarray(band_offsets_mag, dtype=_FIT_DTYPE)
+        if band_offsets_mag
+        else None
+    )
 
     def single_chi2(theta, base, observed, sigma, mask):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
         model_mag = model_mags_jax(context, params)
-        chi = jnp.where(mask, (observed - model_mag) / sigma, 0.0)
+        if band_offsets_jax is not None:
+            model_mag = model_mag + band_offsets_jax
+        model_values = (
+            abmag_to_fnu_cgs_jax(model_mag)
+            if likelihood_space == "flux"
+            else model_mag
+        )
+        chi = jnp.where(mask, (observed - model_values) / sigma, 0.0)
         return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
     def single_objective(
@@ -644,10 +1033,17 @@ def _build_independent_adam_optimizer(
 
     def single_mags(theta, base):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        return model_mags_jax(context, params)
+        model_mag = model_mags_jax(context, params)
+        if band_offsets_jax is not None:
+            model_mag = model_mag + band_offsets_jax
+        return model_mag
 
     batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
-    log_sfr_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
+    amplitude_free_pos = _free_position(
+        parameter_names, free_indices, "log10_formed_mass_msun"
+    )
+    if amplitude_free_pos is None:
+        amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
     @jax.jit
     def optimize(
@@ -656,6 +1052,8 @@ def _build_independent_adam_optimizer(
         observed,
         sigma,
         mask,
+        warm_observed_mag,
+        warm_mask,
         lower,
         upper,
         prior_gaussian_mask,
@@ -666,15 +1064,15 @@ def _build_independent_adam_optimizer(
         prior_beta_beta,
         truth_theta,
     ):
-        theta0 = _warm_start_log10_sfr(
+        theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
-            observed,
-            mask,
+            warm_observed_mag,
+            warm_mask,
             lower,
             upper,
             batch_mags,
-            log_sfr_free_pos,
+            amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         m0 = jnp.zeros_like(y0)
@@ -765,7 +1163,7 @@ def _build_independent_adam_optimizer(
         (_, _, _, best_theta, _, best_grad), metrics = jax.lax.scan(
             step,
             carry0,
-            jnp.arange(maxiter, dtype=jnp.float64),
+            jnp.arange(maxiter, dtype=jnp.int32),
         )
         best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
             best_theta, base_matrix, observed, sigma, mask
@@ -786,13 +1184,36 @@ def _build_population_adam_optimizer(
     prior_weight: float,
     hyper_mu_scale: float,
     physical_prior_weight: float,
+    likelihood_space: str,
+    band_offsets_mag: tuple[float, ...],
+    relation_default_mask: jnp.ndarray,
+    relation_target_pos: jnp.ndarray,
+    relation_predictor_free_pos: jnp.ndarray,
+    relation_predictor_base_index: jnp.ndarray,
+    relation_pivot: jnp.ndarray,
+    relation_intercept0: jnp.ndarray,
+    relation_slope0: jnp.ndarray,
+    relation_sigma0: jnp.ndarray,
+    relation_slope_scale: jnp.ndarray,
 ):
     free_indices_jax = jnp.asarray(free_indices)
+    band_offsets_jax = (
+        jnp.asarray(band_offsets_mag, dtype=_FIT_DTYPE)
+        if band_offsets_mag
+        else None
+    )
 
     def single_chi2(theta, base, observed, sigma, mask):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
         model_mag = model_mags_jax(context, params)
-        chi = jnp.where(mask, (observed - model_mag) / sigma, 0.0)
+        if band_offsets_jax is not None:
+            model_mag = model_mag + band_offsets_jax
+        model_values = (
+            abmag_to_fnu_cgs_jax(model_mag)
+            if likelihood_space == "flux"
+            else model_mag
+        )
+        chi = jnp.where(mask, (observed - model_values) / sigma, 0.0)
         return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
     batch_chi2_grad = jax.vmap(
@@ -804,10 +1225,15 @@ def _build_population_adam_optimizer(
         theta,
         mu,
         raw_sigma,
+        relation_intercept,
+        relation_slope,
+        relation_raw_sigma,
         base_matrix,
         observed,
         sigma,
         mask,
+        warm_observed_mag,
+        warm_mask,
         lower,
         upper,
         prior_gaussian_mask,
@@ -819,8 +1245,22 @@ def _build_population_adam_optimizer(
     ):
         chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
-        prior = 0.5 * jnp.sum(
-            ((theta - mu) / sigma_pop) ** 2 + 2.0 * jnp.log(sigma_pop), axis=1
+        default_prior = 0.5 * jnp.sum(
+            relation_default_mask
+            * (((theta - mu) / sigma_pop) ** 2 + 2.0 * jnp.log(sigma_pop)),
+            axis=1,
+        )
+        relation_prior = _population_relation_prior_penalty(
+            theta,
+            base_matrix,
+            relation_intercept,
+            relation_slope,
+            relation_raw_sigma,
+            sigma_floor,
+            relation_target_pos,
+            relation_predictor_free_pos,
+            relation_predictor_base_index,
+            relation_pivot,
         )
         physical_prior = _physical_prior_penalty(
             theta,
@@ -833,22 +1273,34 @@ def _build_population_adam_optimizer(
             prior_beta_alpha,
             prior_beta_beta,
         )
-        hyper = 0.5 * jnp.sum((mu / hyper_mu_scale) ** 2)
+        hyper = 0.5 * jnp.sum(relation_default_mask * (mu / hyper_mu_scale) ** 2)
+        relation_hyper = 0.5 * jnp.sum(
+            (relation_intercept / hyper_mu_scale) ** 2
+            + (relation_slope / relation_slope_scale) ** 2
+        )
         return (
             0.5 * jnp.sum(chi2)
-            + prior_weight * jnp.sum(prior)
+            + prior_weight * (jnp.sum(default_prior) + jnp.sum(relation_prior))
             + physical_prior_weight * jnp.sum(physical_prior)
             + hyper
+            + relation_hyper
         )
 
-    value_and_grad = jax.value_and_grad(loss, argnums=(0, 1, 2))
+    value_and_grad = jax.value_and_grad(loss, argnums=(0, 1, 2, 3, 4, 5))
 
     def single_mags(theta, base):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        return model_mags_jax(context, params)
+        model_mag = model_mags_jax(context, params)
+        if band_offsets_jax is not None:
+            model_mag = model_mag + band_offsets_jax
+        return model_mag
 
     batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
-    log_sfr_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
+    amplitude_free_pos = _free_position(
+        parameter_names, free_indices, "log10_formed_mass_msun"
+    )
+    if amplitude_free_pos is None:
+        amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
     @jax.jit
     def optimize(
@@ -857,6 +1309,8 @@ def _build_population_adam_optimizer(
         observed,
         sigma,
         mask,
+        warm_observed_mag,
+        warm_mask,
         lower,
         upper,
         prior_gaussian_mask,
@@ -867,42 +1321,64 @@ def _build_population_adam_optimizer(
         prior_beta_beta,
         truth_theta,
     ):
-        theta0 = _warm_start_log10_sfr(
+        theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
-            observed,
-            mask,
+            warm_observed_mag,
+            warm_mask,
             lower,
             upper,
             batch_mags,
-            log_sfr_free_pos,
+            amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
         mu0 = jnp.nanmean(theta0, axis=0)
         raw_sigma0 = _softplus_inverse(jnp.nanstd(theta0, axis=0) + 0.2)
+        relation_raw_sigma0 = _softplus_inverse(relation_sigma0)
         m_y = jnp.zeros_like(y0)
         v_y = jnp.zeros_like(y0)
         m_mu = jnp.zeros_like(mu0)
         v_mu = jnp.zeros_like(mu0)
         m_sigma = jnp.zeros_like(raw_sigma0)
         v_sigma = jnp.zeros_like(raw_sigma0)
+        m_relation_intercept = jnp.zeros_like(relation_intercept0)
+        v_relation_intercept = jnp.zeros_like(relation_intercept0)
+        m_relation_slope = jnp.zeros_like(relation_slope0)
+        v_relation_slope = jnp.zeros_like(relation_slope0)
+        m_relation_sigma = jnp.zeros_like(relation_raw_sigma0)
+        v_relation_sigma = jnp.zeros_like(relation_raw_sigma0)
         best_theta = theta0
         best_mu = mu0
         best_raw_sigma = raw_sigma0
+        best_relation_intercept = relation_intercept0
+        best_relation_slope = relation_slope0
+        best_relation_raw_sigma = relation_raw_sigma0
         best_loss = jnp.inf
         carry0 = (
             y0,
             mu0,
             raw_sigma0,
+            relation_intercept0,
+            relation_slope0,
+            relation_raw_sigma0,
             m_y,
             v_y,
             m_mu,
             v_mu,
             m_sigma,
             v_sigma,
+            m_relation_intercept,
+            v_relation_intercept,
+            m_relation_slope,
+            v_relation_slope,
+            m_relation_sigma,
+            v_relation_sigma,
             best_theta,
             best_mu,
             best_raw_sigma,
+            best_relation_intercept,
+            best_relation_slope,
+            best_relation_raw_sigma,
             best_loss,
         )
 
@@ -920,15 +1396,27 @@ def _build_population_adam_optimizer(
                 y,
                 mu,
                 raw_sigma,
+                relation_intercept,
+                relation_slope,
+                relation_raw_sigma,
                 m_y,
                 v_y,
                 m_mu,
                 v_mu,
                 m_sigma,
                 v_sigma,
+                m_relation_intercept,
+                v_relation_intercept,
+                m_relation_slope,
+                v_relation_slope,
+                m_relation_sigma,
+                v_relation_sigma,
                 best_theta,
                 best_mu,
                 best_raw_sigma,
+                best_relation_intercept,
+                best_relation_slope,
+                best_relation_raw_sigma,
                 best_loss,
             ) = carry
             theta = _unconstrained_to_bounded(y, lower, upper)
@@ -936,6 +1424,9 @@ def _build_population_adam_optimizer(
                 theta,
                 mu,
                 raw_sigma,
+                relation_intercept,
+                relation_slope,
+                relation_raw_sigma,
                 base_matrix,
                 observed,
                 sigma,
@@ -949,12 +1440,22 @@ def _build_population_adam_optimizer(
                 prior_beta_alpha,
                 prior_beta_beta,
             )
-            grad_theta_direct, grad_mu, grad_sigma = grads
+            (
+                grad_theta_direct,
+                grad_mu,
+                grad_sigma,
+                grad_relation_intercept,
+                grad_relation_slope,
+                grad_relation_sigma,
+            ) = grads
             _, grad_y = jax.value_and_grad(
                 lambda yy: loss(
                     _unconstrained_to_bounded(yy, lower, upper),
                     mu,
                     raw_sigma,
+                    relation_intercept,
+                    relation_slope,
+                    relation_raw_sigma,
                     base_matrix,
                     observed,
                     sigma,
@@ -973,14 +1474,47 @@ def _build_population_adam_optimizer(
             best_theta = jnp.where(improved, theta, best_theta)
             best_mu = jnp.where(improved, mu, best_mu)
             best_raw_sigma = jnp.where(improved, raw_sigma, best_raw_sigma)
+            best_relation_intercept = jnp.where(
+                improved, relation_intercept, best_relation_intercept
+            )
+            best_relation_slope = jnp.where(
+                improved, relation_slope, best_relation_slope
+            )
+            best_relation_raw_sigma = jnp.where(
+                improved, relation_raw_sigma, best_relation_raw_sigma
+            )
             best_loss = jnp.where(improved, value, best_loss)
             y, m_y, v_y = adam_update(y, grad_y, m_y, v_y, iteration)
             mu, m_mu, v_mu = adam_update(mu, grad_mu, m_mu, v_mu, iteration)
             raw_sigma, m_sigma, v_sigma = adam_update(
                 raw_sigma, grad_sigma, m_sigma, v_sigma, iteration
             )
+            relation_intercept, m_relation_intercept, v_relation_intercept = (
+                adam_update(
+                    relation_intercept,
+                    grad_relation_intercept,
+                    m_relation_intercept,
+                    v_relation_intercept,
+                    iteration,
+                )
+            )
+            relation_slope, m_relation_slope, v_relation_slope = adam_update(
+                relation_slope,
+                grad_relation_slope,
+                m_relation_slope,
+                v_relation_slope,
+                iteration,
+            )
+            relation_raw_sigma, m_relation_sigma, v_relation_sigma = adam_update(
+                relation_raw_sigma,
+                grad_relation_sigma,
+                m_relation_sigma,
+                v_relation_sigma,
+                iteration,
+            )
             y = jnp.clip(y, -30.0, 30.0)
             raw_sigma = jnp.clip(raw_sigma, -8.0, 4.0)
+            relation_raw_sigma = jnp.clip(relation_raw_sigma, -8.0, 4.0)
             metrics = jnp.concatenate(
                 [
                     jnp.asarray(
@@ -1001,24 +1535,49 @@ def _build_population_adam_optimizer(
                 y,
                 mu,
                 raw_sigma,
+                relation_intercept,
+                relation_slope,
+                relation_raw_sigma,
                 m_y,
                 v_y,
                 m_mu,
                 v_mu,
                 m_sigma,
                 v_sigma,
+                m_relation_intercept,
+                v_relation_intercept,
+                m_relation_slope,
+                v_relation_slope,
+                m_relation_sigma,
+                v_relation_sigma,
                 best_theta,
                 best_mu,
                 best_raw_sigma,
+                best_relation_intercept,
+                best_relation_slope,
+                best_relation_raw_sigma,
                 best_loss,
             ), metrics
 
-        (*_, best_theta, best_mu, best_raw_sigma, best_loss), metrics = jax.lax.scan(
+        (
+            (
+                *_,
+                best_theta,
+                best_mu,
+                best_raw_sigma,
+                best_relation_intercept,
+                best_relation_slope,
+                best_relation_raw_sigma,
+                best_loss,
+            ),
+            metrics,
+        ) = jax.lax.scan(
             step,
             carry0,
-            jnp.arange(maxiter, dtype=jnp.float64),
+            jnp.arange(maxiter, dtype=jnp.int32),
         )
         sigma_pop = jax.nn.softplus(best_raw_sigma) + sigma_floor
+        relation_sigma = jax.nn.softplus(best_relation_raw_sigma) + sigma_floor
         chi2, grad = jax.vmap(
             jax.value_and_grad(single_chi2, argnums=0),
             in_axes=(0, 0, 0, 0, 0),
@@ -1028,6 +1587,9 @@ def _build_population_adam_optimizer(
             best_theta,
             best_mu,
             sigma_pop,
+            best_relation_intercept,
+            best_relation_slope,
+            relation_sigma,
             best_loss,
             chi2,
             jnp.linalg.norm(grad, axis=1),
@@ -1070,6 +1632,36 @@ def _physical_prior_penalty(
     return jnp.sum(gaussian + beta, axis=-1)
 
 
+def _population_relation_prior_penalty(
+    theta,
+    base_matrix,
+    relation_intercept,
+    relation_slope,
+    relation_raw_sigma,
+    sigma_floor,
+    target_pos,
+    predictor_free_pos,
+    predictor_base_index,
+    pivot,
+):
+    if relation_intercept.shape[0] == 0:
+        return jnp.zeros(theta.shape[0])
+    target_values = theta[:, target_pos]
+    free_predictor = jnp.take(theta, jnp.maximum(predictor_free_pos, 0), axis=1)
+    base_predictor = jnp.take(base_matrix, jnp.maximum(predictor_base_index, 0), axis=1)
+    predictor = jnp.where(
+        predictor_free_pos[None, :] >= 0, free_predictor, base_predictor
+    )
+    loc = relation_intercept[None, :] + relation_slope[None, :] * (
+        predictor - pivot[None, :]
+    )
+    sigma_rel = jax.nn.softplus(relation_raw_sigma) + sigma_floor
+    penalty = 0.5 * ((target_values - loc) / sigma_rel[None, :]) ** 2 + jnp.log(
+        sigma_rel[None, :]
+    )
+    return jnp.sum(penalty, axis=1)
+
+
 def _apply_free_values(base, theta, free_indices):
     return base.at[..., free_indices].set(theta)
 
@@ -1084,14 +1676,16 @@ def _free_position(
     return int(positions[0]) if len(positions) else None
 
 
-def _warm_start_log10_sfr(
+def _warm_start_amplitude(
     theta0, base_matrix, observed, mask, lower, upper, batch_mags, free_pos: int | None
 ):
     if free_pos is None:
         return theta0
     model_mag = batch_mags(theta0, base_matrix)
     delta_mag = jnp.where(mask, model_mag - observed, jnp.nan)
-    delta_log10_sfr = jnp.nanmedian(delta_mag, axis=1) / 2.5
+    delta_log10_sfr = (
+        jnp.nanmedian(delta_mag, axis=1) / jnp.asarray(2.5, dtype=theta0.dtype)
+    ).astype(theta0.dtype)
     warmed = theta0.at[:, free_pos].set(
         theta0[:, free_pos] + jnp.nan_to_num(delta_log10_sfr)
     )

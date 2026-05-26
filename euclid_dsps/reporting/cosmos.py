@@ -399,7 +399,8 @@ def plot_rest_color_residuals(metrics: pd.DataFrame, path: str | Path) -> None:
         sharex=True,
     )
     axes = np.atleast_1d(axes)
-    x = work["z_true"] if "z_true" in work else np.arange(len(work))
+    z_column = "z_true_gal" if "z_true_gal" in work else "z_true"
+    x = work[z_column] if z_column in work else np.arange(len(work))
     color = work["color_kind"] if "color_kind" in work else None
     for ax, column in zip(axes, columns, strict=True):
         mask = np.isfinite(work[column]) & np.isfinite(x)
@@ -414,7 +415,7 @@ def plot_rest_color_residuals(metrics: pd.DataFrame, path: str | Path) -> None:
         ax.set_ylabel(column.replace("rest_color_residual_", "").replace("_mag", ""))
         if color is not None:
             fig.colorbar(scatter, ax=ax, label="color_kind")
-    axes[-1].set_xlabel("z_true" if "z_true" in work else "sample index")
+    axes[-1].set_xlabel(z_column if z_column in work else "sample index")
     fig.suptitle("DSPS - COSMOS rest-color residuals [mag]", y=0.995)
     fig.tight_layout()
     fig.savefig(path, dpi=220)
@@ -423,7 +424,8 @@ def plot_rest_color_residuals(metrics: pd.DataFrame, path: str | Path) -> None:
 
 def plot_branch1_residual_heatmap(metrics: pd.DataFrame, path: str | Path) -> None:
     """Plot median rest-SED RMS residual by redshift bin and color kind."""
-    needed = {"rms_log_sed_residual", "z_true", "color_kind"}
+    z_column = "z_true_gal" if "z_true_gal" in metrics else "z_true"
+    needed = {"rms_log_sed_residual", z_column, "color_kind"}
     if metrics.empty or not needed.issubset(metrics):
         return
     work = metrics.replace([np.inf, -np.inf], np.nan).dropna(subset=list(needed))
@@ -431,7 +433,7 @@ def plot_branch1_residual_heatmap(metrics: pd.DataFrame, path: str | Path) -> No
         return
     work = work.copy()
     work["z_bin"] = pd.cut(
-        pd.to_numeric(work["z_true"], errors="coerce"),
+        pd.to_numeric(work[z_column], errors="coerce"),
         bins=[0.0, 0.5, 1.0, 1.5, 2.5, 4.5, np.inf],
         include_lowest=True,
     ).astype(str)
@@ -449,7 +451,7 @@ def plot_branch1_residual_heatmap(metrics: pd.DataFrame, path: str | Path) -> No
     ax.set_xticklabels(pivot.columns, rotation=35, ha="right", fontsize=8)
     ax.set_yticks(np.arange(len(pivot.index)))
     ax.set_yticklabels([str(item) for item in pivot.index])
-    ax.set_xlabel("z_true bin")
+    ax.set_xlabel(f"{z_column} bin")
     ax.set_ylabel("color_kind")
     ax.set_title(r"Median RMS $\Delta\log_{10}L_\nu$ by population")
     fig.colorbar(image, ax=ax, label=r"median RMS $\Delta\log_{10}L_\nu$")
@@ -527,7 +529,7 @@ def _plot_worst_sed_panel(
     ax.set_yscale("log")
     rms = metrics.get("rms_log_sed_residual", np.nan)
     color_kind = metrics.get("color_kind", np.nan)
-    ax.set_title(f"row {row_index}, RMS={rms:.2f}, k={color_kind}", fontsize=8)
+    ax.set_title(f"row {row_index}, RMS={rms:.2f}, color_kind={color_kind}", fontsize=8)
     ax.tick_params(labelsize=7)
     ax.set_xlabel(r"$\lambda_\mathrm{rest}$ [$\AA$]", fontsize=8)
     ax.set_ylabel(r"$L_\nu$", fontsize=8)
@@ -586,6 +588,55 @@ def plot_observed_flux_residuals(frame: pd.DataFrame, path: str | Path) -> None:
         ax.set_title(target_set)
     axes[-1].set_xlabel("band")
     fig.tight_layout()
+    fig.savefig(path, dpi=220)
+    plt.close(fig)
+
+
+def plot_population_validation_summary(summary: pd.DataFrame, path: str | Path) -> None:
+    """Plot grouped population-validation medians from summary CSV rows."""
+    if summary.empty or not {"grouping", "group", "median", "count"}.issubset(summary):
+        return
+    work = summary.replace([np.inf, -np.inf], np.nan).dropna(subset=["median"])
+    if work.empty:
+        return
+    preferred = [
+        "color_kind",
+        "z_bin",
+        "apparent_mag_bin",
+        "log_sfr_bin",
+        "metallicity_bin",
+        "stellar_mass_bin",
+        "template_pair",
+        "dust_curve_pair",
+    ]
+    groupings = [item for item in preferred if item in set(work["grouping"])]
+    groupings = groupings[:6]
+    if not groupings:
+        return
+    n_cols = 2
+    n_rows = int(np.ceil(len(groupings) / n_cols))
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(12.0, max(3.0 * n_rows, 3.2)),
+        squeeze=False,
+    )
+    for ax, grouping in zip(axes.ravel(), groupings, strict=False):
+        subset = work[work["grouping"] == grouping].copy()
+        subset = subset.sort_values("count", ascending=False).head(12)
+        subset = subset.sort_values("median")
+        labels = subset["group"].astype(str).to_list()
+        values = subset["median"].to_numpy(dtype=float)
+        ax.barh(np.arange(len(values)), values, color="#4C78A8", alpha=0.82)
+        ax.axvline(0.0, color="black", lw=0.8)
+        ax.set_yticks(np.arange(len(values)))
+        ax.set_yticklabels(labels, fontsize=7)
+        ax.set_title(grouping)
+        ax.set_xlabel("median metric")
+    for ax in axes.ravel()[len(groupings) :]:
+        ax.axis("off")
+    fig.suptitle("Population-level validation summary", y=0.995)
+    fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.965))
     fig.savefig(path, dpi=220)
     plt.close(fig)
 

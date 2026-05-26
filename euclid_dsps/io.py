@@ -11,6 +11,16 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .photometry import (
+    abmag_to_fnu_cgs,
+    fluxerr_fnu_cgs_to_magerr,
+    fnu_cgs_to_abmag,
+    microjy_to_fnu_cgs,
+)
+from .photometry import (
+    microjy_to_abmag as _microjy_to_abmag,
+)
+
 
 @dataclass(frozen=True)
 class BandObservation:
@@ -40,6 +50,39 @@ def write_json(path: str | Path, payload: Any) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with Path(path).open("w", encoding="utf-8") as stream:
         json.dump(to_jsonable(payload), stream, indent=2, sort_keys=True)
+
+
+def configured_output_formats(config: dict[str, Any]) -> list[str]:
+    """Return configured tabular output formats."""
+    raw = (config.get("output", {}) or {}).get("format", "both")
+    if isinstance(raw, str):
+        if raw == "both":
+            return ["parquet", "csv"]
+        return [raw]
+    formats = [str(item) for item in raw]
+    return formats or ["parquet", "csv"]
+
+
+def write_dataframe_outputs(
+    frame: pd.DataFrame,
+    out_dir: str | Path,
+    stem: str,
+    config: dict[str, Any],
+    index: bool = False,
+) -> list[str]:
+    """Write a dataframe in configured formats and return filenames."""
+    out = ensure_dir(out_dir)
+    written: list[str] = []
+    formats = configured_output_formats(config)
+    if "parquet" in formats:
+        path = out / f"{stem}.parquet"
+        frame.to_parquet(path, index=index)
+        written.append(path.name)
+    if "csv" in formats:
+        path = out / f"{stem}.csv"
+        frame.to_csv(path, index=index)
+        written.append(path.name)
+    return written
 
 
 def to_jsonable(value: Any) -> Any:
@@ -111,6 +154,13 @@ def truth_value_from_spec(row: dict[str, Any], spec: Any) -> float | None:
             if value <= 0:
                 return None
             value = float(np.log10(value))
+        elif transform == "log_stellar_mass_h2_to_msun":
+            h = float(spec.get("h"))
+            if not np.isfinite(h) or h <= 0:
+                raise ValueError(
+                    "truth log_stellar_mass_h2_to_msun transform needs h > 0"
+                )
+            value = float(value + 2.0 * np.log10(h))
         elif transform not in {None, "linear"}:
             raise ValueError(f"Unsupported truth transform: {transform}")
         value = value * float(spec.get("scale", 1.0))
@@ -175,26 +225,22 @@ def load_row_indices(path: str | Path) -> list[int]:
 
 def flux_fnu_cgs_to_abmag(flux: float) -> float:
     """Convert F_nu in erg/s/cm^2/Hz to AB magnitude."""
-    if not np.isfinite(flux) or flux <= 0:
-        return float("nan")
-    return float(-2.5 * np.log10(flux) - 48.6)
+    return float(fnu_cgs_to_abmag(flux))
 
 
 def abmag_to_flux_fnu_cgs(mag: float) -> float:
     """Convert AB magnitude to F_nu in erg/s/cm^2/Hz."""
-    return float(10 ** (-0.4 * (mag + 48.6)))
+    return float(abmag_to_fnu_cgs(mag))
 
 
 def microjy_to_flux_fnu_cgs(flux_microjy: float) -> float:
     """Convert microJansky to F_nu in erg/s/cm^2/Hz."""
-    return float(flux_microjy * 1.0e-29)
+    return float(microjy_to_fnu_cgs(flux_microjy))
 
 
 def microjy_to_abmag(flux_microjy: float) -> float:
     """Convert microJansky to AB magnitude."""
-    if not np.isfinite(flux_microjy) or flux_microjy <= 0:
-        return float("nan")
-    return float(-2.5 * np.log10(flux_microjy) + 23.9)
+    return float(_microjy_to_abmag(flux_microjy))
 
 
 def flux_error_to_sigma_mag(
@@ -204,24 +250,23 @@ def flux_error_to_sigma_mag(
     ceiling: float | None = None,
 ) -> float:
     """Convert a flux-density uncertainty into a local AB-mag uncertainty."""
-    if (
-        not np.isfinite(flux_fnu_cgs)
-        or not np.isfinite(flux_error_fnu_cgs)
-        or flux_fnu_cgs <= 0.0
-        or flux_error_fnu_cgs <= 0.0
-    ):
-        return float("nan")
-    sigma = float((2.5 / np.log(10.0)) * abs(flux_error_fnu_cgs / flux_fnu_cgs))
-    if floor is not None and np.isfinite(floor):
-        sigma = max(sigma, float(floor))
-    if ceiling is not None and np.isfinite(ceiling):
-        sigma = min(sigma, float(ceiling))
-    return sigma
+    return float(
+        fluxerr_fnu_cgs_to_magerr(
+            flux_fnu_cgs, flux_error_fnu_cgs, floor=floor, ceiling=ceiling
+        )
+    )
 
 
 def build_observation(
     row_index: int, row: pd.Series, band_configs: list[dict[str, Any]]
 ) -> GalaxyObservation:
+    """Build one photometric observation from a catalog row.
+
+    When a band declares ``error_column``, the catalog flux-density error is
+    converted to a local AB-magnitude uncertainty and used by the likelihood.
+    The configured ``sigma_mag`` remains the fallback for bands without usable
+    per-object errors.
+    """
     bands = []
     for band in band_configs:
         column = band["column"]

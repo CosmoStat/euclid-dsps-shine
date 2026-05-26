@@ -29,6 +29,7 @@ from .model import (
     predict_batch_derived,
     predict_batch_mags,
 )
+from .photometry import abmag_to_fnu_cgs_jax, magerr_to_fluxerr_fnu_cgs
 
 
 class ScaledBetaDistribution(dist.Distribution):
@@ -78,6 +79,8 @@ class MCMCResult:
     posterior_model_mags: np.ndarray
     observed_mag: np.ndarray
     sigma_mag: np.ndarray
+    observed_flux_fnu_cgs: np.ndarray
+    flux_error_fnu_cgs: np.ndarray
     band_names: list[str]
     diagnostics: dict[str, Any]
 
@@ -93,8 +96,34 @@ def sample_one_galaxy(
     """Sample posterior over configured free parameters with NumPyro HMC/NUTS."""
     observed_mag = jnp.asarray([band.mag_ab for band in observation.bands], dtype=float)
     sigma_mag = jnp.asarray([band.sigma_mag for band in observation.bands], dtype=float)
-    finite = jnp.isfinite(observed_mag) & jnp.isfinite(sigma_mag) & (sigma_mag > 0)
+    observed_flux = jnp.asarray(
+        [band.flux_fnu_cgs for band in observation.bands], dtype=float
+    )
+    flux_error = jnp.asarray(
+        [
+            (
+                band.flux_error_fnu_cgs
+                if band.flux_error_fnu_cgs is not None
+                else magerr_to_fluxerr_fnu_cgs(band.flux_fnu_cgs, band.sigma_mag)
+            )
+            for band in observation.bands
+        ],
+        dtype=float,
+    )
+    if str(fit_config.get("likelihood_space", "flux")).lower() == "flux":
+        floor_frac = float(fit_config.get("flux_error_floor_frac", 0.0))
+        jitter = float(fit_config.get("flux_error_jitter", 0.0))
+        observed = observed_flux
+        sigma = jnp.sqrt(flux_error**2 + (floor_frac * observed_flux) ** 2 + jitter**2)
+        finite = jnp.isfinite(observed) & jnp.isfinite(sigma) & (sigma > 0)
+    else:
+        observed = observed_mag
+        sigma = sigma_mag
+        finite = jnp.isfinite(observed_mag) & jnp.isfinite(sigma_mag) & (sigma_mag > 0)
     band_names = [band.name for band in observation.bands]
+    band_offsets = jnp.asarray(
+        fit_config.get("band_calibration_offsets_mag", []), dtype=float
+    )
 
     free = fit_config["free_parameters"]
     free_names = list(free)
@@ -103,17 +132,21 @@ def sample_one_galaxy(
     def model():
         params = {key: jnp.asarray(value) for key, value in base_params.items()}
         for name in free_names:
+            prior_spec = priors.get(name, {})
             params[name] = numpyro.sample(
                 name,
-                _prior_distribution(
-                    name, free[name], priors.get(name, {}), base_params
-                ),
+                _prior_distribution(name, free[name], prior_spec, base_params),
             )
         model_mag = model_mags_jax(context, params)
+        if band_offsets.size:
+            model_mag = model_mag + band_offsets
         numpyro.deterministic("model_mag", model_mag)
-        numpyro.sample(
-            "obs", dist.Normal(model_mag, sigma_mag).mask(finite), obs=observed_mag
-        )
+        if str(fit_config.get("likelihood_space", "flux")).lower() == "flux":
+            model_obs = abmag_to_fnu_cgs_jax(model_mag)
+            numpyro.deterministic("model_flux_fnu_cgs", model_obs)
+        else:
+            model_obs = model_mag
+        numpyro.sample("obs", dist.Normal(model_obs, sigma).mask(finite), obs=observed)
 
     init_params = _initial_params(initial_params, free, free_names)
     kernel_kwargs = {}
@@ -139,7 +172,9 @@ def sample_one_galaxy(
         for name, values in mcmc.get_samples().items()
         if name in free_names
     }
-    posterior_model_mags = _posterior_model_mags(context, base_params, samples)
+    posterior_model_mags = _posterior_model_mags(
+        context, base_params, samples, fit_config
+    )
     derived_samples = _posterior_derived(context, base_params, samples)
     return MCMCResult(
         samples=samples,
@@ -148,12 +183,15 @@ def sample_one_galaxy(
         posterior_model_mags=posterior_model_mags,
         observed_mag=np.asarray(observed_mag),
         sigma_mag=np.asarray(sigma_mag),
+        observed_flux_fnu_cgs=np.asarray(observed_flux),
+        flux_error_fnu_cgs=np.asarray(flux_error),
         band_names=band_names,
         diagnostics=_diagnostics(
             mcmc,
             sample_config=sample_config,
             sampler=sampler,
             initial_params=init_params,
+            likelihood_space=str(fit_config.get("likelihood_space", "flux")).lower(),
         ),
     )
 
@@ -222,7 +260,7 @@ def _prior_distribution(
 ):
     low, high = [float(value) for value in fit_spec["bounds"]]
     loc = _prior_location(name, fit_spec, prior_spec, base_params)
-    scale = float(prior_spec.get("scale", max((high - low) / 4.0, 1.0e-3)))
+    scale = _prior_scale(name, prior_spec, base_params, max((high - low) / 4.0, 1.0e-3))
     prior_type = str(prior_spec.get("type", "truncated_normal"))
     if prior_type == "uniform":
         return dist.Uniform(low, high)
@@ -249,11 +287,31 @@ def _prior_location(
     return float(value)
 
 
+def _prior_scale(
+    name: str,
+    prior_spec: dict[str, Any],
+    base_params: dict[str, float],
+    fallback: float,
+) -> float:
+    value = prior_spec.get("scale", fallback)
+    if value == "from_base":
+        scale_name = str(prior_spec.get("scale_parameter", f"{name}_prior_sigma"))
+        return max(float(base_params.get(scale_name, fallback)), 1.0e-6)
+    return max(float(value), 1.0e-6)
+
+
 def _posterior_model_mags(
-    context: DspsContext, base_params: dict[str, float], samples: dict[str, np.ndarray]
+    context: DspsContext,
+    base_params: dict[str, float],
+    samples: dict[str, np.ndarray],
+    fit_config: dict[str, Any],
 ) -> np.ndarray:
     parameter_names, matrix = _posterior_parameter_matrix(base_params, samples)
-    return predict_batch_mags(context, parameter_names, matrix)
+    mags = predict_batch_mags(context, parameter_names, matrix)
+    offsets = np.asarray(fit_config.get("band_calibration_offsets_mag", []), dtype=float)
+    if offsets.size:
+        mags = mags + offsets
+    return mags
 
 
 def _posterior_derived(
@@ -301,6 +359,7 @@ def _diagnostics(
     sample_config: dict[str, Any],
     sampler: str,
     initial_params: dict[str, jnp.ndarray] | None = None,
+    likelihood_space: str = "flux",
 ) -> dict[str, Any]:
     extra = mcmc.get_extra_fields()
     diagnostics: dict[str, Any] = {}
@@ -315,6 +374,7 @@ def _diagnostics(
     diagnostics["n_samples"] = int(len(next(iter(mcmc.get_samples().values()))))
     diagnostics["backend"] = f"numpyro_{sampler}"
     diagnostics["sampler"] = sampler
+    diagnostics["likelihood_space"] = likelihood_space
     diagnostics["num_warmup"] = int(sample_config.get("num_warmup", 100))
     diagnostics["num_chains"] = int(sample_config.get("num_chains", 1))
     diagnostics["chain_method"] = str(sample_config.get("chain_method", "parallel"))

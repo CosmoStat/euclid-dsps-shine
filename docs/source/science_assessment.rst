@@ -1,241 +1,145 @@
 Science Assessment
 ==================
 
-Scope
------
+Active Model
+------------
 
-This page documents scientific assumptions, current weaknesses, and required
-model changes for the Euclid Flagship / CosmoHub DSPS prototype.
+The active science workflow is intentionally small:
 
-The catalog does not contain wavelength-by-wavelength truth spectra. The
-COSMOS-template reconstruction is therefore a pseudo-ground-truth diagnostic,
-not physical SPS truth.
+* fit ``z_obs`` from photometry with no photo-z prior;
+* fit ``log10_formed_mass_msun`` as the SED amplitude;
+* fit lognormal SFH shape parameters ``sfh_t_peak`` and ``sfh_tau``;
+* fit scalar stellar metallicity ``log10_metallicity``;
+* derive current SFR from fitted mass plus fitted SFH shape;
+* inject COSMOS proxy dust columns when ``dust_model: cosmos_proxy_fixed`` is
+  selected;
+* use ``ssp_flux`` as the SSP spectral table, with separate SSP emission-line
+  tables used only for diagnostics.
 
-Current Forward Model
----------------------
+``log10_sfr`` and ``dust_av`` are not free parameters in the main science
+config. ``log10_sfr`` is only a fixed internal SFH scale before mass
+normalization. With ``dust_model: cosmos_proxy_fixed``, COSMOS dust columns
+drive attenuation and ``dust_av`` is marked inactive, not inferred.
 
-``euclid_dsps.model`` implements a compact differentiable DSPS model:
+Dust catalogue columns are proxy-only. Even if a future config frees
+``dust_av``, the FS2/COSMOS dust proxy should not be plotted as ground truth.
 
-* lognormal SFH baseline with ``log10_sfr``, ``sfh_t_peak``, and ``sfh_tau``;
-* optional smooth burst term with ``sfh_burst_fraction``, ``sfh_burst_time``,
-  and ``sfh_burst_width``;
-* optional smooth quench term with ``sfh_quench_time``, ``sfh_quench_width``,
-  and ``sfh_quench_depth``;
-* scalar stellar metallicity ``log10_metallicity`` and scatter
-  ``metallicity_scatter``;
-* either Salim-style scalar dust or row-resolved two-component COSMOS dust;
-* observed-frame broad-band AB photometry through configured filters.
+Redshift
+--------
 
-The 10-band COSMOS comparison config uses:
+The science preset does not initialize ``z_obs`` from ``phz_median`` and does
+not use a photo-z prior. ``redshift.initial: fixed`` is only the MAP starting
+value; fitted ``z_obs`` is free within configured bounds. Redshift multi-start
+MAP was removed, so posterior runs should be used when redshift degeneracy is
+scientifically important.
 
-* LSST ``ugrizy`` plus Euclid VIS/Y/J/H in the photometric likelihood;
-* Euclid catalog error columns where available;
-* COSMOS two-component attenuation from ``ebv_cosmos_*``,
-  ``ext_curve_cosmos_*``, and ``frac_cosmos_*``;
-* continuum-only branch-2 targets by default.
+PHZ interval priors were removed. Redshift validation must compare fitted
+``z_obs`` against ``z_true_gal``.
 
-Current Scientific Problems
----------------------------
+Photometric Errors
+------------------
 
-1. No explicit stellar mass parameter.
+The active 10-band config uses continuum flux columns as fit targets and
+per-band catalog uncertainties from ``*_el_model3_ext_odonnell_ext_error`` for
+LSST and Euclid. Those uncertainties are converted from flux units into local
+AB-magnitude errors for reporting, but the default MAP and MCMC likelihood is
+Gaussian in ``Fnu`` cgs flux space. Set ``fit.likelihood_space: mag`` only for
+legacy diagnostics.
 
-   ``log10_sfr`` still acts as luminosity/SFH amplitude. This mixes amplitude,
-   recent SFR, and stellar mass. A physical SPS fit needs stellar mass or
-   formed mass as a fitted parameter, with SFR derived from the SFH.
+Truth And Proxies
+-----------------
 
-2. SFH still too low-dimensional.
+Catalog truth columns are diagnostics, not likelihood terms.
 
-   The burst/quench extension is an improvement over a pure lognormal, but it
-   is not equivalent to PROVABGS NMF SFHs or Prospector non-parametric SFHs.
-   Red/quiescent and post-starburst galaxies remain likely failure modes.
+``log_stellar_mass`` is converted from catalog ``h`` units for mass comparison.
+The fitted DSPS amplitude is ``log10_formed_mass_msun``. This is formed mass,
+not necessarily surviving stellar mass, so an offset relative to catalog stellar
+mass can be semantic rather than a pure conversion bug.
+``log_sfr_true`` is compared to derived current SFR. ``metallicity_true`` is
+treated as a proxy only: gas-phase oxygen abundance is not the same observable
+as DSPS stellar metallicity.
 
-3. Metallicity truth is not stellar metallicity truth.
+Fit-vs-catalog plots only include comparable active/free or derived
+parameters. Fixed inactive quantities such as ``dust_av`` under COSMOS proxy
+dust are audited but not plotted as inferred parameters. Dust is deliberately
+excluded from fit-vs-catalog truth metrics because the catalog value is not a
+DSPS attenuation truth.
 
-   ``metallicity_true`` is gas-phase ``12 + log(O/H)``. DSPS uses stellar
-   metallicity for SSP weighting. The ``metallicity_true - 10.61`` conversion
-   is a plotting proxy only.
+SED Diagnostics
+---------------
 
-4. Dust truth is parameterization-dependent.
+COSMOS-template SED reconstruction is pseudo-ground truth. It helps inspect
+whether fitted DSPS SEDs have plausible broad-band shapes. It is not physical
+SPS truth.
 
-   ``dust_ebv_true`` is built from COSMOS template attenuation components.
-   It is not a calibrated truth value for DSPS ``dust_av``. The COSMOS dust
-   mode reduces mismatch for template diagnostics, but it still inherits the
-   template-model assumptions.
+Photometric markers in SED plots are model-anchored ratios. They are visual
+residual diagnostics, not an independent rest-frame spectrum. SED diagnostics
+also include a flux-space residual panel showing
+``(F_obs - F_model) / sigma_F`` per band.
 
-5. No emission-line model.
+Batch MAP runs split SED diagnostics between worst-fit and best-fit galaxies.
+COSMOS proxy SED CSVs and manifests include the scalar normalization factor and
+normalization-band residuals. Large COSMOS/DSPS height mismatches should be
+debugged as normalization, filter, dust, redshift, or template-unit issues
+before being interpreted as physical disagreement.
 
-   DSPS currently models continuum+dust only. Branch-2 must not score this
-   model against ``*_el_model3_ext*`` targets unless an emission-line module is
-   added.
+Non-Detections And Calibration
+------------------------------
 
-6. LSST filters may still be approximate.
+In flux-space mode, finite non-positive fluxes with valid errors are kept by
+``selection.nondetection_policy: gaussian_flux``. ``upper_limit`` is reserved
+but not implemented.
 
-   Euclid passbands are loaded from local ASCII files. LSST bands need exact
-   throughput files for precision runs; top-hat/auto filters are acceptable
-   only for development diagnostics.
+``band_calibration.mode: fixed_offsets`` can test fixed per-band zero-point
+offsets. Offsets are applied to the model during likelihood evaluation, never
+to both data and model.
 
-7. Population model incomplete.
+Goodness Of Fit
+---------------
 
-   Current population MAP regularizes fitted parameters inside each chunk. It
-   is not a learned galaxy population model like pop-cosmos.
-
-Why Burst/Quench SFH Exists
----------------------------
-
-The burst/quench extension is not an invented shape for plot fitting. It is a
-small differentiable approximation to two established lessons from the SED
-literature:
-
-* `PROVABGS <https://arxiv.org/abs/2202.01809>`__ models DESI BGS galaxies
-  with a richer SPS parameterization including NMF SFH coefficients and burst
-  terms. Its mock challenge reports that SED-model priors significantly affect
-  posteriors and that spectroscopy+photometry constrains galaxy properties
-  better than photometry alone.
-* `How to Measure Galaxy SFHs II
-  <https://arxiv.org/abs/1811.03637>`__ shows that non-parametric SFHs are
-  flexible enough to recover broader SFH shapes, but posterior SFR(t) is highly
-  prior-dependent even with UV--IR photometry.
-* `pop-cosmos <https://arxiv.org/abs/2402.00935>`__ uses a population model
-  calibrated to 26-band COSMOS photometry and a state-of-the-art SPS forward
-  model, motivating population-level priors and diagnostics rather than only
-  independent galaxy fits.
-
-The implemented SFH remains deliberately conservative:
-
-.. math::
-
-   \mathrm{SFR}(t) =
-   \left[\mathrm{SFR}_{lognormal}(t) +
-   A_{burst}\exp\left(-\frac{(t-t_{burst})^2}{2\sigma_{burst}^2}\right)\right]
-   \left[1 - d_q\,\sigma\left(\frac{t-t_q}{w_q}\right)\right].
-
-This keeps the model JAX-vectorized and differentiable while allowing:
-
-* excess recent/intermediate star formation through the burst term;
-* smooth suppression after a quench time;
-* explicit priors on burst amplitude and quench depth.
-
-The model is still a stepping stone. Best next model: explicit stellar mass
-plus a small non-parametric or NMF SFH basis with a documented prior.
+``reduced_chi2`` is the DOF-corrected value ``chi2 / dof``. The number of valid
+bands, effective free parameters, and DOF are written per object. The old
+``chi2 / n_bands`` diagnostic is still available as ``chi2_per_band``.
 
 Priors
 ------
 
-Implemented fit priors are penalties in the JAX objective. Reported ``chi2``
-remains the photometric chi-square.
+Current named prior sets:
 
-Current 10-band priors:
+* ``weak_physical``: broad stabilizing priors used by
+  ``configs/fs2_phz1_science.yaml``;
+* ``flat_debug``: flat priors inside configured fit bounds;
+* ``popcosmos_like``: reserved and intentionally unavailable until exact
+  POP-COSMOS parameter mapping, units, and selection treatment are implemented.
 
-* ``z_obs``: truncated-normal centered on row ``z_phz``.
-* ``log10_sfr``: broad normal amplitude prior.
-* ``sfh_t_peak`` and ``sfh_tau``: broad smooth-SFH priors.
-* ``sfh_burst_fraction``: scaled-beta prior favoring no burst but allowing
-  burst solutions.
-* ``sfh_burst_time``: broad time prior.
-* ``sfh_quench_time`` and ``sfh_quench_depth``: broad quench priors, with
-  shallow/no quench preferred unless photometry supports stronger quenching.
-* ``log10_metallicity``: broad normal prior inside configured bounds.
+Current priors are not POP-COSMOS priors yet. Do not label results as
+POP-COSMOS-like until that mapping exists.
 
-Limitations:
+Out Of Likelihood
+-----------------
 
-* no mass-metallicity prior;
-* no SFR-mass main-sequence prior;
-* no redshift-dependent population prior;
-* no dust-mass-SFR relation;
-* no explicit selection function.
+Emission-line catalog columns remain diagnostics only. The active fit uses
+``ssp_flux`` as the spectral table. The newer SSP asset also provides
+``ssp_emline_luminosity``, ``ssp_emline_wave``, and line names, when available.
+The pipeline reads those datasets and writes diagnostic line/filter crossings
+near fitted-redshift attractors, but it does not add the line table to the
+likelihood. Adding it naively could double-count lines already present in
+``ssp_flux``.
 
-Required Science Changes
-------------------------
+DSPS Parameter Count
+--------------------
 
-1. Add stellar mass or formed mass.
+The active science MAP fit has five free parameters:
 
-   Fit amplitude as ``log10_stellar_mass`` or ``log10_formed_mass``. Derive
-   ``sfr_at_obs`` from the SFH. Keep ``log_sfr_true`` only as external
-   diagnostic.
+* ``z_obs``;
+* ``log10_formed_mass_msun``;
+* ``sfh_t_peak``;
+* ``sfh_tau``;
+* ``log10_metallicity``.
 
-2. Replace burst/quench patch with a basis SFH.
-
-   Candidate paths:
-
-   * PROVABGS-like NMF SFH coefficients plus burst term;
-   * Prospector-style non-parametric bins with continuity/stochastic prior;
-   * low-rank SFH basis learned from simulations or COSMOS templates.
-
-3. Add calibrated photo-z likelihood.
-
-   Use PHZ uncertainty/PDF columns if available. Current fixed-width
-   ``z_phz`` prior is only a placeholder.
-
-4. Add exact LSST passbands.
-
-   Replace any approximate LSST filters before interpreting 10-band residuals
-   scientifically.
-
-5. Add emission lines or remove emission-line target sets from science runs.
-
-   Emission-line comparison requires nebular line modelling tied to SFR,
-   metallicity, ionization, and dust. Until then, main branch-2 score remains
-   continuum-only.
-
-6. Add population-level validation.
-
-   Report metrics versus ``color_kind``, ``z_true``, apparent magnitude, SFR
-   proxy, metallicity proxy, template ID pair, and dust curve pair. Single-row
-   visual inspection is insufficient.
-
-7. Add posterior checks.
-
-   MAP is useful for speed. Scientific inference needs posterior calibration:
-   HMC/NUTS for small subsets, simulation-based calibration or coverage tests
-   for larger experiments.
-
-8. Add image-level chromatic PSF prototype.
-
-   Standard GalSim prototype first: profile times SED, bandpass integration,
-   chromatic PSF convolution. JAX-GalSim second, after standard GalSim
-   validation.
-
-Comparisons And Validity
-------------------------
-
-Branch 1: rest-frame SED shape.
-
-* compares COSMOS proxy SED and DSPS attenuated rest SED on common wavelength
-  grid;
-* least-squares scales DSPS to COSMOS over configured wavelength range;
-* reports RMS log residual, median absolute log residual, slope residuals,
-  D4000-like residual, and Euclid rest-color residuals.
-
-Valid use: spectral-shape diagnostic.
-
-Invalid use: proof that DSPS recovered true physical SPS parameters.
-
-Branch 2: observed photometry.
-
-* compares DSPS observed-frame model flux to configured catalog target columns;
-* default target set is ``continuum_internal_dust``;
-* noisy target set uses catalog ``*_error`` columns for chi-square when
-  explicitly enabled.
-
-Valid use: survey-like photometry residual diagnostic.
-
-Invalid use: continuum DSPS scored against emission-line targets.
-
-COSMOS proxy SED.
-
-* reconstructed from COSMOS template IDs, extinction curves, E(B-V), and
-  component fractions;
-* normalized to Euclid ``*_abs`` fluxes;
-* useful as template-level pseudo-ground-truth.
-
-Invalid use: exact wavelength-by-wavelength physical truth.
-
-References
-----------
-
-* Hahn et al., ``The DESI PRObabilistic Value-Added Bright Galaxy Survey
-  (PROVABGS) Mock Challenge``, arXiv:2202.01809.
-* Leja et al., ``How to Measure Galaxy Star Formation Histories II:
-  Nonparametric Models``, arXiv:1811.03637.
-* Alsing et al., ``pop-cosmos: A comprehensive picture of the galaxy population
-  from COSMOS data``, arXiv:2402.00935.
+This is not "the DSPS paper parameter count". DSPS is a differentiable SPS
+framework. The paper demonstrates differentiability through SFH, metallicity,
+dust, and nebular choices, but does not define one canonical Euclid+LSST
+photo-z fit. Any future paper-like preset must state the exact SFH model,
+metallicity model, dust model, nebular model, active parameter list, units, and
+priors.
