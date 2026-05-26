@@ -11,7 +11,7 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
     runtime = runtime_config or {}
     platforms = runtime.get("jax_platforms")
     if platforms:
-        os.environ.setdefault("EUCLID_DSPS_JAX_PLATFORMS", str(platforms))
+        os.environ["EUCLID_DSPS_JAX_PLATFORMS"] = str(platforms)
     if "disable_jax_plugin_autoload" in runtime:
         os.environ.setdefault(
             "EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD",
@@ -46,9 +46,11 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
 
 def configure_jax_runtime() -> None:
     """Set conservative JAX defaults unless caller already configured them."""
-    os.environ.setdefault(
-        "JAX_PLATFORMS", os.environ.get("EUCLID_DSPS_JAX_PLATFORMS", "cpu")
-    )
+    requested = os.environ.get("EUCLID_DSPS_JAX_PLATFORMS")
+    if requested and requested.lower() == "auto":
+        os.environ.pop("JAX_PLATFORMS", None)
+    elif requested:
+        os.environ.setdefault("JAX_PLATFORMS", requested)
     os.environ.setdefault(
         "XLA_PYTHON_CLIENT_PREALLOCATE",
         os.environ.get("EUCLID_DSPS_XLA_PYTHON_CLIENT_PREALLOCATE", "false"),

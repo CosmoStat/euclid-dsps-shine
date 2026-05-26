@@ -79,6 +79,12 @@ Observed Continuum Fluxes
 
 Columns such as:
 
+* ``lsst_u``
+* ``lsst_g``
+* ``lsst_r``
+* ``lsst_i``
+* ``lsst_z``
+* ``lsst_y``
 * ``euclid_vis``
 * ``euclid_nisp_y``
 * ``euclid_nisp_j``
@@ -96,6 +102,7 @@ Rest-Frame Absolute Fluxes
 Columns ending in ``_abs`` represent rest-frame flux densities normalized at
 10 parsec:
 
+* ``lsst_u_abs`` through ``lsst_y_abs``
 * ``euclid_vis_abs``
 * ``euclid_nisp_y_abs``
 * ``euclid_nisp_j_abs``
@@ -222,9 +229,10 @@ measurement drawn from the survey-like flux plus noise model. Use them when the
 experiment should mimic measured survey photometry; use the corresponding
 ``*_error`` columns for the likelihood denominator and chi-square.
 
-The science config already wires the Euclid survey-like errors for the Euclid
-bands and uses fixed fallback errors for bands without catalog uncertainty
-columns:
+The science config wires catalog flux errors for all ten LSST+Euclid bands.
+The fitted flux columns remain the continuum columns because the current DSPS
+model has continuum plus dust but not a calibrated nebular-emission likelihood;
+the ``*_el_model3_ext*`` fluxes and noisy realizations are diagnostics.
 
 .. code-block:: bash
 

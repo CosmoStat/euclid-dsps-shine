@@ -20,6 +20,7 @@ from cycler import cycler
 
 from ..io import GalaxyObservation, ensure_dir, write_json
 from ..model import ModelResult, comparison_rows
+from ..semantics import active_parameters, is_comparable_fit_parameter
 
 
 def configure_plot_style() -> None:
@@ -153,11 +154,25 @@ def write_sed_diagnostic_outputs(
     sed.to_csv(sed_path, index=False)
 
     truth_path = None
+    truth_metadata: dict[str, Any] = {}
     if ground_truth_sed is not None:
         truth = _ground_truth_sed_frame(ground_truth_sed)
         if truth is not None and not truth.empty:
             truth_path = out / f"{stem}_ground_truth_sed.csv"
             truth.to_csv(truth_path, index=False)
+            for key in (
+                "ground_truth_scale_factor",
+                "ground_truth_normalization_bands",
+                "ground_truth_norm_median_abs_rel_residual",
+                "ground_truth_norm_max_abs_rel_residual",
+            ):
+                if key in truth:
+                    value = truth[key].iloc[0]
+                    truth_metadata[key] = (
+                        float(value)
+                        if isinstance(value, (int, float, np.number))
+                        else value
+                    )
 
     comparison = pd.DataFrame(comparison_rows(observation, result))
     phot_path = out / f"{stem}_photometry.csv"
@@ -178,6 +193,7 @@ def write_sed_diagnostic_outputs(
         "photometry": phot_path.name,
         "ground_truth_sed": truth_path.name if truth_path else None,
         "has_ground_truth_sed": truth_path is not None,
+        **truth_metadata,
     }
 
 
@@ -257,14 +273,17 @@ def write_mcmc_batch_outputs(
 
 
 def write_population_corner_outputs(
-    fits: pd.DataFrame, free_parameters: list[str], out_dir: str | Path
+    fits: pd.DataFrame,
+    free_parameters: list[str],
+    out_dir: str | Path,
+    config: dict[str, Any] | None = None,
 ) -> None:
     """Write population-level MAP point-estimate distributions."""
     out = ensure_dir(out_dir)
     params = _fit_parameter_frame(fits, free_parameters)
     if params.empty:
         return
-    paired_params, paired_truth = paired_fit_truth_frames(fits)
+    paired_params, paired_truth = paired_fit_truth_frames(fits, config=config)
     params.to_csv(out / "population_map_parameters.csv", index=False)
     params.describe(percentiles=[0.05, 0.16, 0.5, 0.84, 0.95]).transpose().to_csv(
         out / "population_map_parameter_summary.csv"
@@ -278,7 +297,7 @@ def write_population_corner_outputs(
         paired_truth.describe(
             percentiles=[0.05, 0.16, 0.5, 0.84, 0.95]
         ).transpose().to_csv(out / "population_truth_parameter_summary.csv")
-        metrics = parameter_truth_metrics(fits)
+        metrics = parameter_truth_metrics(fits, config=config)
         if not metrics.empty:
             metrics.to_csv(out / "population_parameter_truth_metrics.csv", index=False)
         plot_corner_overlay(
@@ -343,7 +362,9 @@ def plot_population_parameter_histograms(
     plt.close(fig)
 
 
-def parameter_truth_metrics(frame: pd.DataFrame) -> pd.DataFrame:
+def parameter_truth_metrics(
+    frame: pd.DataFrame, config: dict[str, Any] | None = None
+) -> pd.DataFrame:
     """Summarize paired inferred-vs-truth parameter errors."""
     rows = []
     pairs: list[tuple[str, str, str]] = []
@@ -353,7 +374,9 @@ def parameter_truth_metrics(frame: pd.DataFrame) -> pd.DataFrame:
         if col.startswith("truth_"):
             parameter = col[6:]
             fit_col = f"fit_{parameter}"
-            if fit_col in frame.columns:
+            if fit_col in frame.columns and is_comparable_fit_parameter(
+                config, parameter
+            ):
                 pairs.append((parameter, fit_col, col))
 
     for parameter, fit_col, truth_col in pairs:
@@ -537,6 +560,7 @@ def write_batch_outputs(
     out_dir: str | Path,
     label: str = "batch",
     reporting_level: str = "full",
+    config: dict[str, Any] | None = None,
 ) -> None:
     """Write aggregate tables and plots for multi-galaxy runs."""
     out = ensure_dir(out_dir)
@@ -583,7 +607,7 @@ def write_batch_outputs(
             summary["mad_delta_z_obs_minus_truth"] = float(
                 (dz - dz.median()).abs().median()
             )
-    truth_metrics = parameter_truth_metrics(by_row.reset_index())
+    truth_metrics = parameter_truth_metrics(by_row.reset_index(), config=config)
     if not truth_metrics.empty:
         truth_metrics.to_csv(out / f"{label}_truth_metrics.csv", index=False)
     residual_properties = residuals_by_property(by_row.reset_index())
@@ -597,9 +621,13 @@ def write_batch_outputs(
     plot_batch_residuals_by_band(valid, out / f"{label}_residuals_by_band.png")
     plot_batch_observed_vs_model(valid, out / f"{label}_observed_vs_model.png")
     plot_batch_redshift_truth(by_row, out / f"{label}_redshift_truth.png")
-    plot_batch_parameter_truth(by_row, out / f"{label}_parameter_truth.png")
+    plot_batch_parameter_truth(by_row, out / f"{label}_parameter_truth.png", config)
     plot_residuals_by_property(
         by_row.reset_index(), out / f"{label}_residuals_by_property.png"
+    )
+    plot_color_redshift_diagnostics(valid, by_row, out / f"{label}_color_redshift.png")
+    plot_physical_population_diagnostics(
+        by_row.reset_index(), out / f"{label}_physical_population.png"
     )
     plot_population_bias_heatmap(
         by_row.reset_index(), out / f"{label}_bias_heatmap.png"
@@ -631,6 +659,7 @@ def fit_parameter_audit(fits: pd.DataFrame, config: dict[str, Any]) -> pd.DataFr
     free = config.get("fit", {}).get("free_parameters", {}) or {}
     fixed = config.get("model", {}).get("fixed_parameters", {}) or {}
     injected = config.get("model", {}).get("parameter_columns", {}) or {}
+    active = set(active_parameters(config))
     derived = {
         "t_obs_gyr",
         "formed_mass_msun",
@@ -645,7 +674,7 @@ def fit_parameter_audit(fits: pd.DataFrame, config: dict[str, Any]) -> pd.DataFr
             [np.inf, -np.inf], np.nan
         )
         finite = values.dropna()
-        source = _fit_parameter_source(name, free, fixed, injected, derived)
+        source = _fit_parameter_source(name, free, fixed, injected, derived, active)
         warning_flags = _fit_parameter_warning_flags(name, source, finite, free)
         row: dict[str, Any] = {
             "parameter": name,
@@ -655,6 +684,7 @@ def fit_parameter_audit(fits: pd.DataFrame, config: dict[str, Any]) -> pd.DataFr
             "is_fixed": bool(name in fixed and name not in free),
             "is_row_injected": bool(name in injected and name not in free),
             "is_derived": bool(name in derived),
+            "active_in_forward_model": bool(name in active),
             "n": int(len(finite)),
             "n_unique": int(finite.nunique()) if not finite.empty else 0,
             "warning_flags": ",".join(warning_flags),
@@ -744,15 +774,16 @@ def _fit_parameter_source(
     fixed: dict[str, Any],
     injected: dict[str, Any],
     derived: set[str],
+    active: set[str],
 ) -> str:
     if name in free:
         return "free"
     if name in derived:
         return "derived"
     if name in injected:
-        return "row_injected"
+        return "row_injected" if name in active else "inactive_row_injected"
     if name in fixed:
-        return "fixed"
+        return "fixed" if name in active else "inactive_fixed"
     if name.endswith("_prior_sigma"):
         return "prior_context"
     return "reported_not_configured"
@@ -781,9 +812,10 @@ def _fit_parameter_warning_flags(
 
 
 def _photometric_chi2_by_row(fits: pd.DataFrame, comparison: pd.DataFrame) -> pd.Series:
-    if not comparison.empty and {"row_index", "chi"}.issubset(comparison.columns):
+    chi_column = "chi_flux" if "chi_flux" in comparison.columns else "chi"
+    if not comparison.empty and {"row_index", chi_column}.issubset(comparison.columns):
         grouped = comparison.assign(
-            _chi2=pd.to_numeric(comparison["chi"], errors="coerce") ** 2
+            _chi2=pd.to_numeric(comparison[chi_column], errors="coerce") ** 2
         )
         chi2 = grouped.groupby("row_index")["_chi2"].sum()
         return fits["row_index"].map(chi2).fillna(fits.get("chi2", 0.0)).astype(float)
@@ -808,7 +840,7 @@ def _physical_prior_components(
         prior_type = str((spec or {}).get("type", "normal"))
         if prior_type in {"normal", "truncated_normal"}:
             loc = _prior_loc(fits, name, spec)
-            scale = max(float((spec or {}).get("scale", 1.0)), 1.0e-6)
+            scale = _prior_scale(fits, name, spec)
             gaussian += 0.5 * ((values - loc) / scale) ** 2 + np.log(scale)
         elif prior_type == "scaled_beta":
             bounds = free.get(name, {}).get("bounds", [0.0, 1.0])
@@ -902,6 +934,17 @@ def _prior_loc(fits: pd.DataFrame, name: str, spec: dict[str, Any]) -> pd.Series
     return pd.Series(float(loc), index=fits.index)
 
 
+def _prior_scale(fits: pd.DataFrame, name: str, spec: dict[str, Any]) -> pd.Series:
+    scale = spec.get("scale", 1.0)
+    if scale == "from_base":
+        scale_name = str(spec.get("scale_parameter", f"{name}_prior_sigma"))
+        values = _fit_values(fits, scale_name)
+        if values is None:
+            return pd.Series(np.ones(len(fits)), index=fits.index)
+        return values.fillna(1.0).clip(lower=1.0e-6)
+    return pd.Series(max(float(scale), 1.0e-6), index=fits.index)
+
+
 def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None:
     """Plot a heatmap of reduced chi2 in the Redshift-Mass plane."""
     z_col = "redshift_truth" if "redshift_truth" in by_row else "z_obs"
@@ -963,6 +1006,141 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
     plt.close(fig)
 
 
+def plot_color_redshift_diagnostics(
+    comparison: pd.DataFrame, by_row: pd.DataFrame, path: str | Path
+) -> None:
+    """Plot broad-band color-redshift diagnostics, POP-COSMOS style."""
+    z_col = "redshift_truth" if "redshift_truth" in by_row else "z_obs"
+    if comparison.empty or z_col not in by_row or "observed_mag_ab" not in comparison:
+        return
+    mags = comparison.pivot_table(
+        index="row_index", columns="band", values="observed_mag_ab", aggfunc="median"
+    )
+    z = by_row[z_col].reindex(mags.index)
+    color_pairs = [
+        ("lsst_u", "lsst_g"),
+        ("lsst_g", "lsst_r"),
+        ("lsst_r", "lsst_i"),
+        ("lsst_i", "lsst_z"),
+        ("lsst_z", "lsst_y"),
+        ("euclid_nisp_y", "euclid_nisp_j"),
+        ("euclid_nisp_j", "euclid_nisp_h"),
+    ]
+    available = [(a, b) for a, b in color_pairs if a in mags and b in mags]
+    if not available:
+        return
+    n_cols = min(4, len(available))
+    n_rows = int(np.ceil(len(available) / n_cols))
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(3.0 * n_cols, 2.2 * n_rows))
+    axes = np.atleast_1d(axes).ravel()
+    visible = 0
+    for ax, (blue, red) in zip(axes, available, strict=False):
+        color = (mags[blue] - mags[red]).replace([np.inf, -np.inf], np.nan)
+        work = pd.DataFrame({"z": z, "color": color}).dropna()
+        if len(work) < 5:
+            ax.set_visible(False)
+            continue
+        visible += 1
+        if len(work) > 250:
+            ax.hexbin(work["z"], work["color"], gridsize=36, mincnt=1, cmap="viridis")
+        else:
+            ax.scatter(work["z"], work["color"], s=8, alpha=0.5)
+        ax.set_xlabel(_parameter_display_label(z_col))
+        ax.set_ylabel(f"{blue}-{red} [mag]")
+    for ax in axes[len(available) :]:
+        ax.set_visible(False)
+    if visible == 0:
+        plt.close(fig)
+        return
+    fig.suptitle("Color-redshift diagnostics", y=0.995)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+
+
+def plot_physical_population_diagnostics(by_row: pd.DataFrame, path: str | Path) -> None:
+    """Plot fitted/proxy physical relations in redshift bins."""
+    if by_row.empty:
+        return
+    z_col = "redshift_truth" if "redshift_truth" in by_row else "z_obs"
+    mass_col = _first_present(
+        by_row,
+        ["fit_log10_formed_mass_msun", "catalog_log_stellar_mass"],
+    )
+    sfr_col = _first_present(by_row, ["fit_log10_sfr_at_obs", "catalog_log_sfr"])
+    metallicity_col = _first_present(
+        by_row, ["fit_log10_metallicity", "catalog_log10_metallicity_proxy"]
+    )
+    dust_col = _first_present(
+        by_row, ["fit_dust_av", "catalog_dust_av_proxy", "catalog_dust_ebv_proxy"]
+    )
+    if z_col not in by_row or mass_col is None:
+        return
+    rows = [
+        ("log SFR", sfr_col),
+        ("log sSFR", "__ssfr__" if sfr_col else None),
+        ("log metallicity", metallicity_col),
+        ("dust proxy/Av", dust_col),
+    ]
+    rows = [(label, col) for label, col in rows if col is not None]
+    if not rows:
+        return
+    work = by_row.copy()
+    if "__ssfr__" in [col for _, col in rows]:
+        work["__ssfr__"] = pd.to_numeric(work[sfr_col], errors="coerce") - pd.to_numeric(
+            work[mass_col], errors="coerce"
+        )
+    z_values = pd.to_numeric(work[z_col], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
+    finite_z = z_values.dropna()
+    if len(finite_z) < 8:
+        return
+    quantiles = np.linspace(0.0, 1.0, min(5, len(finite_z)) + 1)
+    edges = np.unique(np.quantile(finite_z, quantiles))
+    if len(edges) < 3:
+        return
+    n_cols = len(edges) - 1
+    fig, axes = plt.subplots(
+        len(rows),
+        n_cols,
+        figsize=(2.7 * n_cols, 2.25 * len(rows)),
+        squeeze=False,
+    )
+    visible = 0
+    for row_index, (ylabel, y_col) in enumerate(rows):
+        for col_index in range(n_cols):
+            lo, hi = edges[col_index], edges[col_index + 1]
+            mask = (z_values >= lo) & (z_values <= hi if col_index == n_cols - 1 else z_values < hi)
+            subset = work.loc[mask, [mass_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
+            ax = axes[row_index, col_index]
+            if len(subset) < 3:
+                ax.set_visible(False)
+                continue
+            visible += 1
+            ax.scatter(subset[mass_col], subset[y_col], s=7, alpha=0.35)
+            if row_index == 0:
+                ax.set_title(f"{lo:.2f} <= z < {hi:.2f}", fontsize=8)
+            if row_index == len(rows) - 1:
+                ax.set_xlabel(_parameter_display_label(mass_col))
+            if col_index == 0:
+                ax.set_ylabel(ylabel)
+    if visible == 0:
+        plt.close(fig)
+        return
+    fig.suptitle("Physical population diagnostics", y=0.995)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+
+
+def _first_present(frame: pd.DataFrame, columns: list[str]) -> str | None:
+    for column in columns:
+        if column in frame:
+            return column
+    return None
+
+
 def summarize_by_band(valid: pd.DataFrame) -> pd.DataFrame:
     return valid.groupby("band").agg(
         n=("row_index", "count"),
@@ -989,15 +1167,19 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
         for col in valid.columns
         if col in {"z_obs", "redshift_truth", "delta_z_obs_minus_truth"}
         or col in {"z_obs_source", "redshift_truth_source"}
+        or col in {"n_valid_bands", "n_free_effective", "dof"}
+        or col in {"redshift_initial_mode", "redshift_prior_mode"}
+        or col in {"dust_parameter_active", "dust_parameter_inferred", "dust_model"}
         or col.startswith("param_")
         or col.startswith("fit_")
         or col.startswith("truth_")
         or col.startswith("delta_")
         or col.startswith("catalog_")
     ]
+    chi_column = "chi_flux" if "chi_flux" in valid.columns else "chi"
     aggregations: dict[str, tuple[str, Any]] = {
         "n_bands": ("band", "count"),
-        "chi2": ("chi", lambda x: float(np.nansum(x**2))),
+        "chi2": (chi_column, lambda x: float(np.nansum(x**2))),
         "mean_residual_mag": ("residual_mag_model_minus_observed", "mean"),
         "median_residual_mag": ("residual_mag_model_minus_observed", "median"),
         "rms_residual_mag": (
@@ -1012,7 +1194,19 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
     for col in context_columns:
         aggregations[col] = (col, "first")
     by_row = valid.groupby("row_index").agg(**aggregations)
-    derived_columns = {"reduced_chi2": by_row["chi2"] / by_row["n_bands"].clip(lower=1)}
+    if "n_valid_bands" not in by_row:
+        by_row["n_valid_bands"] = by_row["n_bands"]
+    if "n_free_effective" not in by_row:
+        by_row["n_free_effective"] = 0
+    if "dof" not in by_row:
+        by_row["dof"] = (by_row["n_valid_bands"] - by_row["n_free_effective"]).clip(
+            lower=1
+        )
+    derived_columns = {
+        "chi2_per_band": by_row["chi2"] / by_row["n_valid_bands"].clip(lower=1),
+        "reduced_chi2": by_row["chi2"] / by_row["dof"].clip(lower=1),
+        "reduced_chi2_dof": by_row["chi2"] / by_row["dof"].clip(lower=1),
+    }
 
     for col in list(by_row.columns):
         if col.startswith("truth_"):
@@ -1168,10 +1362,10 @@ def plot_redshift_distributions(
 
 def plot_physical_parameters_distributions(df: pd.DataFrame, path: str | Path) -> None:
     params_map = {
-        "log10_metallicity_true": "Ground Truth log10(Z)",
-        "sfr_true": "Ground Truth SFR [Msun/yr]",
-        "log_sfr_true": "Ground Truth log10(SFR)",
-        "dust_ebv_true": "Ground Truth E(B-V)",
+        "log10_metallicity_true": "Catalog proxy log10(Z)",
+        "sfr_true": "Catalog truth SFR [Msun/yr]",
+        "log_sfr_true": "Catalog truth log10(SFR)",
+        "dust_ebv_true": "Catalog proxy E(B-V)",
     }
     valid_params = [p for p in params_map if p in df.columns]
     if not valid_params:
@@ -1276,15 +1470,15 @@ def plot_sed_diagnostic(
     ground_truth_sed: Any | None = None,
     include_filters: bool = True,
 ) -> None:
-    """Plot DSPS-vs-ground-truth SED plus observed/model photometry residuals."""
+    """Plot DSPS SED, COSMOS proxy SED, and model-anchored photometry residuals."""
     fig, axes = plt.subplots(
-        2,
+        3,
         1,
-        figsize=(8.6, 7.0),
-        gridspec_kw={"height_ratios": [2.2, 1.0]},
+        figsize=(8.6, 8.2),
+        gridspec_kw={"height_ratios": [2.2, 1.0, 0.72]},
         sharex=False,
     )
-    ax_sed, ax_phot = axes
+    ax_sed, ax_phot, ax_flux = axes
     mask = _sed_plot_mask(result.wave, result.dusted_rest_sed)
     if mask.any():
         ax_sed.plot(
@@ -1310,10 +1504,17 @@ def plot_sed_diagnostic(
             truth_scaled,
         )
         if truth_mask.any():
+            label = f"{truth['ground_truth_label'].iloc[0]} scaled"
+            if "ground_truth_scale_factor" in truth:
+                scale = pd.to_numeric(
+                    truth["ground_truth_scale_factor"], errors="coerce"
+                ).iloc[0]
+                if np.isfinite(scale):
+                    label = f"{label} (alpha={scale:.3g})"
             ax_sed.plot(
                 truth_wave[truth_mask],
                 truth_scaled[truth_mask],
-                label=f"{truth['ground_truth_label'].iloc[0]} scaled",
+                label=label,
                 lw=1.2,
                 ls="--",
                 alpha=0.9,
@@ -1374,29 +1575,53 @@ def plot_sed_diagnostic(
                     ha="left",
                     va="bottom",
                 )
-            ax_resid = ax_phot.twinx()
-            ax_resid.axhline(0.0, color="0.35", lw=0.8, alpha=0.45)
-            ax_resid.plot(
+            chi_flux = (
+                pd.to_numeric(comparison["chi_flux"], errors="coerce").to_numpy(
+                    dtype=float
+                )
+                if "chi_flux" in comparison
+                else np.full(len(comparison), np.nan)
+            )
+            ax_flux.axhline(0.0, color="0.2", lw=0.9)
+            ax_flux.scatter(
                 x_obs,
-                comparison["residual_mag_observed_minus_model"].to_numpy(dtype=float),
+                -chi_flux,
+                s=18,
+                color="#1F4E79",
+                alpha=0.8,
+                label="flux residual",
+            )
+            ax_flux.plot(
+                x_obs,
+                -chi_flux,
                 color="#B85C38",
                 lw=0.8,
                 alpha=0.8,
-                label="obs-model",
             )
-            ax_resid.set_ylabel("residual mag")
-            ax_resid.grid(False)
+            ax_flux.set_ylabel(r"$(F_{obs}-F_{model})/\sigma_F$")
+            ax_flux.grid(alpha=0.2)
 
     ax_sed.set_xscale("log")
     ax_sed.set_yscale("log")
     ax_sed.set_ylabel("rest Lsun / Hz")
     ax_sed.set_title(f"SED diagnostic, z={z_obs:.3f}")
+    ax_sed.text(
+        0.01,
+        0.02,
+        "Photometry markers are model-anchored ratios, not an independent rest-frame spectrum.",
+        transform=ax_sed.transAxes,
+        fontsize=7,
+        va="bottom",
+        ha="left",
+        bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.65, "pad": 2},
+    )
     ax_sed.legend(fontsize=8, loc="best")
     ax_phot.set_xscale("log")
     ax_phot.invert_yaxis()
-    ax_phot.set_xlabel("rest-frame wavelength [Angstrom]")
     ax_phot.set_ylabel("AB mag")
     ax_phot.legend(fontsize=8, loc="best")
+    ax_flux.set_xscale("log")
+    ax_flux.set_xlabel("rest-frame wavelength [Angstrom]")
     fig.tight_layout()
     fig.savefig(path, dpi=180)
     plt.close(fig)
@@ -1513,7 +1738,7 @@ def _plot_sed_photometry_constraints(
         ecolor="#1F4E79",
         elinewidth=0.75,
         capsize=1.5,
-        label="observed phot. constraint",
+        label="model-anchored phot. ratio",
         zorder=5,
     )
     ax.scatter(
@@ -1571,6 +1796,14 @@ def _ground_truth_sed_frame(ground_truth_sed: Any | None) -> pd.DataFrame | None
             display = raw * factor
         output["ground_truth_unscaled_lnu_lsun_per_hz"] = raw
         output["ground_truth_unscaled_lnu_lsun_per_hz_display"] = display
+    for column in (
+        "ground_truth_scale_factor",
+        "ground_truth_normalization_bands",
+        "ground_truth_norm_median_abs_rel_residual",
+        "ground_truth_norm_max_abs_rel_residual",
+    ):
+        if column in frame:
+            output[column] = frame[column].iloc[0]
     return output
 
 
@@ -2185,7 +2418,9 @@ def _truth_parameter_frame(
     return pd.DataFrame(data)
 
 
-def paired_fit_truth_frames(fits: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def paired_fit_truth_frames(
+    fits: pd.DataFrame, config: dict[str, Any] | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return aligned frames for parameters with both ``fit_`` and ``truth_`` columns."""
     inferred = {}
     truth = {}
@@ -2193,6 +2428,8 @@ def paired_fit_truth_frames(fits: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFr
         if not col.startswith("truth_"):
             continue
         parameter = col[6:]
+        if not is_comparable_fit_parameter(config, parameter):
+            continue
         fit_col = f"fit_{parameter}"
         if fit_col in fits:
             inferred[parameter] = fits[fit_col].to_numpy(dtype=float)
@@ -2467,13 +2704,20 @@ def plot_batch_redshift_truth(by_row: pd.DataFrame, path: str | Path) -> None:
     plt.close(fig)
 
 
-def plot_batch_parameter_truth(by_row: pd.DataFrame, path: str | Path) -> None:
+def plot_batch_parameter_truth(
+    by_row: pd.DataFrame,
+    path: str | Path,
+    config: dict[str, Any] | None = None,
+) -> None:
     # Find all parameters that have both fit and truth
     params = []
     for col in by_row.columns:
         if col.startswith("truth_"):
             param_name = col[6:]
-            if f"fit_{param_name}" in by_row.columns:
+            if (
+                f"fit_{param_name}" in by_row.columns
+                and is_comparable_fit_parameter(config, param_name)
+            ):
                 params.append(param_name)
 
     if not params:
@@ -2505,7 +2749,7 @@ def plot_batch_parameter_truth(by_row: pd.DataFrame, path: str | Path) -> None:
         )
         ax_scatter.plot([lo, hi], [lo, hi], color="black", lw=1)
         ax_scatter.set_xlabel(
-            f"{_truth_legend_label(param)} {_parameter_display_label(param)}"
+            f"{_truth_legend_label(param, by_row)} {_parameter_display_label(param)}"
         )
         ax_scatter.set_ylabel(f"inferred {_parameter_display_label(param)}")
         ax_scatter.grid(alpha=0.2)
@@ -2513,7 +2757,8 @@ def plot_batch_parameter_truth(by_row: pd.DataFrame, path: str | Path) -> None:
         ax_hist.hist(work[delta_col], bins=60, alpha=0.75)
         ax_hist.axvline(0, color="black", lw=1)
         ax_hist.set_xlabel(
-            f"inferred {_parameter_display_label(param)} - {_truth_legend_label(param)}"
+            f"inferred {_parameter_display_label(param)} - "
+            f"{_truth_legend_label(param, by_row)}"
         )
         ax_hist.set_ylabel("galaxies")
         ax_hist.grid(alpha=0.2)
@@ -2683,9 +2928,13 @@ def _truth_kind_from_frame(frame: pd.DataFrame, parameter: str) -> str:
     return "proxy" if parameter in {"dust_av", "log10_metallicity"} else "direct"
 
 
-def _truth_legend_label(parameter: str) -> str:
-    kind = " (proxy)" if parameter in {"dust_av", "log10_metallicity"} else ""
-    return f"Ground Truth{kind}"
+def _truth_legend_label(parameter: str, frame: pd.DataFrame | None = None) -> str:
+    kind = _truth_kind_from_frame(frame, parameter) if frame is not None else None
+    if kind is None:
+        kind = "proxy" if parameter in {"dust_av", "log10_metallicity"} else "direct"
+    if kind == "proxy":
+        return "Catalog proxy"
+    return "Catalog truth"
 
 
 def _parameter_display_label(parameter: str) -> str:

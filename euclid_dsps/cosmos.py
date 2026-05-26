@@ -653,7 +653,7 @@ def normalize_cosmos_sed(
 def normalization_band_specs(
     cosmos_config: dict[str, Any], band_configs: list[dict[str, Any]]
 ) -> list[dict[str, str]]:
-    """Return normalization band mapping to Euclid absolute-flux columns."""
+    """Return normalization band mapping to rest-frame absolute-flux columns."""
     explicit = cosmos_config.get("normalization_bands")
     if explicit:
         return [
@@ -667,8 +667,7 @@ def normalization_band_specs(
     for band in band_configs:
         name = str(band["name"])
         column = str(band["column"])
-        if name in EUCLID_BAND_NAMES:
-            specs.append({"band_name": name, "target_column": f"{column}_abs"})
+        specs.append({"band_name": name, "target_column": f"{column}_abs"})
     return specs
 
 
@@ -1054,25 +1053,20 @@ def photometry_target_sets(
 ) -> list[dict[str, Any]]:
     """Build branch-2 target column sets for configured photometric bands."""
     all_bands = [(str(band["name"]), str(band["column"])) for band in band_configs]
-    euclid_bands = [
-        (str(band["name"]), str(band["column"]))
-        for band in band_configs
-        if str(band["name"]) in EUCLID_BAND_NAMES
-    ]
     specs = [
         ("continuum_internal_dust", "{base}", None, all_bands),
-        ("emission_lines_internal_dust", "{base}_el_model3_ext", None, euclid_bands),
+        ("emission_lines_internal_dust", "{base}_el_model3_ext", None, all_bands),
         (
             "emission_lines_internal_dust_mw",
             "{base}_el_model3_ext_odonnell_ext",
             None,
-            euclid_bands,
+            all_bands,
         ),
         (
             "noisy_observation",
             "{base}_el_model3_ext_odonnell_ext_error_realization",
             "{base}_el_model3_ext_odonnell_ext_error",
-            euclid_bands,
+            all_bands,
         ),
     ]
     requested = set(names or [])

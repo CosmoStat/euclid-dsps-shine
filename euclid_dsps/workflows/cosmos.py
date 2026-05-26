@@ -412,6 +412,7 @@ def reconstruct_cosmos_seds(
             out,
             label="cosmos_dsps_likelihood",
             reporting_level=_reporting_level(config),
+            config=config,
         )
         if not dsps_fit_frame.empty:
             write_fit_diagnostic_outputs(

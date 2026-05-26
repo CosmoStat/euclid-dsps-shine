@@ -243,7 +243,7 @@ def test_photometry_target_sets_continuum_uses_all_configured_bands() -> None:
     assert target_sets[0]["bands"][0]["target_column"] == "lsst_u"
 
 
-def test_photometry_target_sets_noisy_uses_euclid_error_columns_only() -> None:
+def test_photometry_target_sets_noisy_uses_all_configured_error_columns() -> None:
     bands = [
         {"name": "lsst_u", "column": "lsst_u"},
         {"name": "euclid_vis", "column": "euclid_vis"},
@@ -251,9 +251,16 @@ def test_photometry_target_sets_noisy_uses_euclid_error_columns_only() -> None:
 
     target_sets = photometry_target_sets(bands, ["noisy_observation"])
 
-    assert [item["band_name"] for item in target_sets[0]["bands"]] == ["euclid_vis"]
+    assert [item["band_name"] for item in target_sets[0]["bands"]] == [
+        "lsst_u",
+        "euclid_vis",
+    ]
     assert (
         target_sets[0]["bands"][0]["error_column"]
+        == "lsst_u_el_model3_ext_odonnell_ext_error"
+    )
+    assert (
+        target_sets[0]["bands"][1]["error_column"]
         == "euclid_vis_el_model3_ext_odonnell_ext_error"
     )
 

@@ -21,6 +21,7 @@ assets:
      likelihood.py   Shared likelihood helpers.
      mcmc.py         NumPyro posterior sampling.
      model.py        Native DSPS boundary.
+     photometry.py   Central AB magnitude and Fnu flux conversions.
      pipeline.py     Deprecated compatibility facade for workflow imports.
      reports.py      Deprecated compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
@@ -80,7 +81,7 @@ Layer Responsibilities
   Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,
   ``ebv_cosmos_*``, ``ext_curve_cosmos_*``, and ``frac_cosmos_*``.
   It owns SciPIC value-added or LePhare template/extinction loading,
-  attenuation, synthetic photometry, Euclid absolute-flux normalization,
+  attenuation, synthetic photometry, rest-frame absolute-flux normalization,
   population validation, and COSMOS-vs-DSPS metrics.
 
 ``jax_runtime.py``

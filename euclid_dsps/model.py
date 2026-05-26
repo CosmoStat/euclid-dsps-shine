@@ -17,7 +17,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from .filters import FilterCurve
-from .io import GalaxyObservation, abmag_to_flux_fnu_cgs
+from .io import GalaxyObservation
+from .photometry import abmag_to_fnu_cgs
 
 
 @dataclass
@@ -160,6 +161,7 @@ def parameters_for_row(
         if column in row and np.isfinite(row[column]):
             params[param_name] = float(row[column])
     params["z_obs"] = resolve_redshift(params, row, redshift_config or {})
+    params.update(redshift_prior_parameters(params["z_obs"], row, redshift_config or {}))
     return params
 
 
@@ -192,6 +194,23 @@ def resolve_redshift(
     return float(np.clip(value, z_min, z_max))
 
 
+def redshift_prior_parameters(
+    z_value: float, row: dict[str, Any], redshift_config: dict[str, Any]
+) -> dict[str, float]:
+    """Return row-level redshift prior metadata consumed by fit priors."""
+    prior = redshift_config.get("prior_z") or {}
+    if not isinstance(prior, dict) or str(prior.get("mode", "none")) != "gaussian":
+        return {}
+    sigma = float(prior.get("sigma", 0.35))
+    if bool(prior.get("scale_with_1pz", True)):
+        sigma *= 1.0 + max(float(z_value), 0.0)
+    sigma = max(sigma, float(prior.get("sigma_min", 0.02)))
+    return {
+        "z_obs_prior_mu": float(z_value),
+        "z_obs_prior_sigma": float(sigma),
+    }
+
+
 def _random_uniform_redshift(
     row: dict[str, Any], redshift_config: dict[str, Any], z_min: float, z_max: float
 ) -> float:
@@ -199,9 +218,7 @@ def _random_uniform_redshift(
     payload = "|".join(
         f"{key}={row[key]}" for key in sorted(row) if np.isscalar(row[key])
     )
-    digest = hashlib.blake2b(
-        f"{seed}|{payload}".encode("utf-8"), digest_size=8
-    ).digest()
+    digest = hashlib.blake2b(f"{seed}|{payload}".encode(), digest_size=8).digest()
     unit = int.from_bytes(digest, "big") / float(2**64 - 1)
     return z_min + unit * (z_max - z_min)
 
@@ -218,7 +235,7 @@ def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResul
     for (name, curve), mag in zip(context.filters.items(), model_mags, strict=True):
         photometry[name] = {
             "model_mag_ab": float(mag),
-            "model_flux_fnu_cgs": abmag_to_flux_fnu_cgs(float(mag)),
+            "model_flux_fnu_cgs": float(abmag_to_fnu_cgs(float(mag))),
             "filter_source": curve.source,
             "effective_wavelength_angstrom": curve.effective_wavelength,
             "filter_wave_angstrom": curve.wave,
@@ -593,9 +610,19 @@ def comparison_rows(
     for observed in observation.bands:
         model = result.photometry[observed.name]
         residual = observed.mag_ab - model["model_mag_ab"]
+        model_flux = float(model["model_flux_fnu_cgs"])
+        observed_flux = float(observed.flux_fnu_cgs)
+        flux_error = observed.flux_error_fnu_cgs
+        if flux_error is None or not np.isfinite(flux_error) or flux_error <= 0:
+            flux_error = abs(observed_flux) * np.log(10.0) * 0.4 * observed.sigma_mag
         flux_ratio = (
-            model["model_flux_fnu_cgs"] / observed.flux_fnu_cgs
-            if observed.flux_fnu_cgs > 0
+            model_flux / observed_flux
+            if observed_flux > 0
+            else float("nan")
+        )
+        chi_flux = (
+            (model_flux - observed_flux) / flux_error
+            if flux_error > 0
             else float("nan")
         )
         rows.append(
@@ -603,16 +630,18 @@ def comparison_rows(
                 "band": observed.name,
                 "column": observed.column,
                 "effective_wavelength_angstrom": model["effective_wavelength_angstrom"],
-                "observed_flux_fnu_cgs": observed.flux_fnu_cgs,
+                "observed_flux_fnu_cgs": observed_flux,
+                "observed_flux_error_fnu_cgs": float(flux_error),
                 "observed_mag_ab": observed.mag_ab,
                 "sigma_mag": observed.sigma_mag,
-                "model_flux_fnu_cgs": model["model_flux_fnu_cgs"],
+                "model_flux_fnu_cgs": model_flux,
                 "model_mag_ab": model["model_mag_ab"],
                 "residual_mag_observed_minus_model": residual,
                 "residual_mag_model_minus_observed": -residual,
                 "flux_ratio_model_over_observed": flux_ratio,
                 "fractional_flux_residual_model_minus_observed": flux_ratio - 1.0,
                 "chi": residual / observed.sigma_mag,
+                "chi_flux": chi_flux,
                 "filter_source": model["filter_source"],
             }
         )

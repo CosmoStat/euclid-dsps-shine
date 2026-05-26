@@ -38,6 +38,7 @@ from ..model import (
     run_dsps_model,
 )
 from ..performance import PerformanceRecorder, write_performance_outputs
+from ..photometry import magerr_to_fluxerr_fnu_cgs
 from ..reporting import (
     write_batch_outputs,
     write_eda_outputs,
@@ -51,6 +52,7 @@ from ..reporting import (
     write_workflow_comparison,
 )
 from ..selection import select_galaxy_row
+from ..semantics import is_forward_active, is_inferred
 
 try:
     from tqdm.auto import tqdm
@@ -90,6 +92,7 @@ def prepare_one(config: dict[str, Any]):
         require_positive_flux=bool(
             config["selection"].get("require_positive_flux", True)
         ),
+        nondetection_policy=config["selection"].get("nondetection_policy"),
         sort_by_flux=config["selection"].get("sort_by_flux"),
     )
     observation = build_observation(row_index, row, config["bands"])
@@ -545,7 +548,9 @@ def run_batch(
     comparison = pd.DataFrame(rows)
     write_dataframe_outputs(comparison, out, "batch_photometry_comparison", config)
     perf.mark("write_primary_outputs", n_rows=len(comparison))
-    write_batch_outputs(comparison, out, label="batch", reporting_level=reporting_level)
+    write_batch_outputs(
+        comparison, out, label="batch", reporting_level=reporting_level, config=config
+    )
     if sed_manifest_rows:
         pd.DataFrame(sed_manifest_rows).to_csv(
             out / "sed_diagnostics_manifest.csv", index=False
@@ -639,7 +644,11 @@ def fit_batch(
             trace, out, label="batch_fit", make_plots=reporting_level == "full"
         )
     write_batch_outputs(
-        comparison, out, label="batch_fit", reporting_level=reporting_level
+        comparison,
+        out,
+        label="batch_fit",
+        reporting_level=reporting_level,
+        config=config,
     )
     if sed_manifest_rows:
         pd.DataFrame(sed_manifest_rows).to_csv(
@@ -720,7 +729,56 @@ def _write_worst_fit_sed_samples(
 ) -> list[dict[str, Any]]:
     if limit <= 0 or fits.empty:
         return []
-    selected = _worst_fit_rows(fits, comparison, limit)
+    worst_limit = max(1, (limit + 1) // 2)
+    best_limit = max(0, limit - worst_limit)
+    worst = _ranked_fit_rows(fits, comparison, worst_limit, worst=True)
+    used = set(int(value) for value in worst.get("row_index", []))
+    best = _ranked_fit_rows(
+        fits,
+        comparison,
+        best_limit + len(used),
+        worst=False,
+    )
+    if not best.empty and used:
+        best = best[~best["row_index"].astype(int).isin(used)].head(best_limit)
+    manifest = []
+    manifest.extend(
+        _write_selected_fit_sed_samples(
+            context,
+            worst,
+            config,
+            out,
+            mode="fit_worst",
+            limit=worst_limit,
+            selection_reason="worst_fit",
+        )
+    )
+    manifest.extend(
+        _write_selected_fit_sed_samples(
+            context,
+            best,
+            config,
+            out,
+            mode="fit_best",
+            limit=best_limit,
+            selection_reason="best_fit",
+        )
+    )
+    return manifest
+
+
+def _write_selected_fit_sed_samples(
+    context,
+    selected: pd.DataFrame,
+    config: dict[str, Any],
+    out: Path,
+    *,
+    mode: str,
+    limit: int,
+    selection_reason: str,
+) -> list[dict[str, Any]]:
+    if limit <= 0:
+        return []
     if selected.empty:
         return []
 
@@ -758,7 +816,7 @@ def _write_worst_fit_sed_samples(
         fit_rows,
         config,
         out,
-        mode="fit_worst",
+        mode=mode,
         chunk_index=0,
         remaining=limit,
     )
@@ -772,15 +830,17 @@ def _write_worst_fit_sed_samples(
     }
     for row in manifest:
         row_index = int(row.get("row_index", -1))
-        row["selection_reason"] = "worst_fit"
+        row["selection_reason"] = selection_reason
         row["selection_rank"] = ranks.get(row_index)
         row["selection_score"] = scores.get(row_index)
     return manifest
 
 
-def _worst_fit_rows(
-    fits: pd.DataFrame, comparison: pd.DataFrame, limit: int
+def _ranked_fit_rows(
+    fits: pd.DataFrame, comparison: pd.DataFrame, limit: int, *, worst: bool
 ) -> pd.DataFrame:
+    if limit <= 0:
+        return pd.DataFrame()
     work = fits.copy()
     if "row_index" not in work:
         return pd.DataFrame()
@@ -806,15 +866,16 @@ def _worst_fit_rows(
         score = work["reduced_chi2"]
     else:
         score = pd.Series(np.zeros(len(work)), index=work.index)
+    fill_value = -np.inf if worst else np.inf
     work["sed_diagnostic_score"] = score.replace([np.inf, -np.inf], np.nan).fillna(
-        -np.inf
+        fill_value
     )
     if "reduced_chi2" not in work:
         work["reduced_chi2"] = work["sed_diagnostic_score"]
     return (
         work.sort_values(
             ["sed_diagnostic_score", "reduced_chi2"],
-            ascending=[False, False],
+            ascending=[not worst, not worst],
             na_position="last",
         )
         .drop_duplicates("row_index")
@@ -1014,6 +1075,11 @@ def _ground_truth_sed_for_row(
     except Exception as exc:  # pragma: no cover - report unexpected data issue
         return None, f"failed:{type(exc).__name__}:{exc}"
 
+    rel_residual = np.asarray(
+        list(cosmos_result.relative_residuals_vs_catalog_abs.values()), dtype=float
+    )
+    finite_rel = rel_residual[np.isfinite(rel_residual)]
+    norm_bands = sorted(cosmos_result.synthetic_abs_fluxes_after)
     return (
         pd.DataFrame(
             {
@@ -1025,6 +1091,18 @@ def _ground_truth_sed_for_row(
                     cosmos_result.wave_angstrom, cosmos_result.flambda_unscaled
                 ),
                 "ground_truth_label": "COSMOS proxy",
+                "ground_truth_scale_factor": cosmos_result.alpha,
+                "ground_truth_normalization_bands": ",".join(norm_bands),
+                "ground_truth_norm_median_abs_rel_residual": (
+                    float(np.nanmedian(np.abs(finite_rel)))
+                    if finite_rel.size
+                    else float("nan")
+                ),
+                "ground_truth_norm_max_abs_rel_residual": (
+                    float(np.nanmax(np.abs(finite_rel)))
+                    if finite_rel.size
+                    else float("nan")
+                ),
             }
         ),
         "ok",
@@ -1136,7 +1214,11 @@ def fit_population(
             make_plots=reporting_level == "full",
         )
     write_batch_outputs(
-        comparison, out, label="population_fit", reporting_level=reporting_level
+        comparison,
+        out,
+        label="population_fit",
+        reporting_level=reporting_level,
+        config=config,
     )
     if sed_manifest_rows:
         pd.DataFrame(sed_manifest_rows).to_csv(
@@ -1144,7 +1226,7 @@ def fit_population(
         )
     if reporting_level == "full":
         write_population_corner_outputs(
-            fits, list(config["fit"]["free_parameters"]), out
+            fits, list(config["fit"]["free_parameters"]), out, config=config
         )
     write_fit_diagnostic_outputs(
         fits,
@@ -1236,6 +1318,9 @@ def _row_context(
 ) -> dict[str, float | str]:
     values: dict[str, float | str] = {}
     values["z_obs"] = float(params["z_obs"])
+    values["dust_parameter_active"] = bool(is_forward_active(config, "dust_av"))
+    values["dust_parameter_inferred"] = bool(is_inferred(config, "dust_av"))
+    values["dust_model"] = str(config.get("dust_model", "salim"))
     redshift = config.get("redshift", {})
     redshift_initial = str(redshift.get("initial", "catalog_column"))
     if redshift_initial == "random_uniform":
@@ -1298,6 +1383,10 @@ def _fit_dataframe_batch(
     perf: PerformanceRecorder | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     observed_mag, observed_flux, sigma_mag = _photometry_arrays(batch, config["bands"])
+    flux_error = _flux_error_arrays(batch, config["bands"], observed_flux, sigma_mag)
+    valid_band_mask = _valid_band_mask(
+        observed_mag, observed_flux, sigma_mag, flux_error, config["fit"]
+    )
     if perf is not None:
         perf.mark("prepare_photometry", chunk_index=chunk_index, n_rows=len(batch))
     base_rows = [
@@ -1325,6 +1414,8 @@ def _fit_dataframe_batch(
             config["fit"],
             initial_theta=_initial_theta_from_map(batch, config, map_init),
             truth_theta=truth_theta,
+            observed_flux=observed_flux,
+            flux_error=flux_error,
         )
         if perf is not None:
             perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
@@ -1372,6 +1463,8 @@ def _fit_dataframe_batch(
             sigma_mag,
             config["fit"],
             truth_theta=truth_theta,
+            observed_flux=observed_flux,
+            flux_error=flux_error,
         )
         if perf is not None:
             perf.mark("jax_optimize", chunk_index=chunk_index, n_rows=len(batch))
@@ -1401,17 +1494,55 @@ def _fit_dataframe_batch(
         }
         if "z_obs" in fit_result.free_parameter_names:
             context_values["z_obs_source"] = "DSPS fit"
+        context_values["redshift_initial_mode"] = str(
+            config.get("redshift", {}).get("initial", "catalog_column")
+        )
+        context_values["redshift_prior_mode"] = str(
+            (config.get("redshift", {}).get("prior_z") or {}).get("mode", "none")
+        )
+        z_initial = (
+            _initial_value(
+                config["fit"]["free_parameters"]["z_obs"],
+                "z_obs",
+                base_rows[local_index],
+            )
+            if "z_obs" in config["fit"]["free_parameters"]
+            else base_rows[local_index].get("z_obs", np.nan)
+        )
         n_bands = len(config["bands"])
+        n_valid_bands = int(np.asarray(valid_band_mask[local_index]).sum())
+        flux_values = np.asarray(observed_flux[local_index], dtype=float)
+        flux_errors = np.asarray(flux_error[local_index], dtype=float)
+        finite_flux_error = np.isfinite(flux_errors) & (flux_errors > 0.0)
+        n_nondetected_bands = int(
+            (np.isfinite(flux_values) & (flux_values <= 0.0) & finite_flux_error).sum()
+        )
+        n_masked_bands = int(n_bands - n_valid_bands)
+        n_free_effective = len(config["fit"]["free_parameters"])
+        dof = max(n_valid_bands - n_free_effective, 1)
+        chi2_value = float(fit_result.chi2[local_index])
         fit_rows.append(
             {
                 "row_index": int(row_index),
                 "chunk_index": int(chunk_index),
                 "success": bool(fit_result.success[local_index]),
                 "message": fit_result.message,
-                "chi2": float(fit_result.chi2[local_index]),
-                "reduced_chi2": float(fit_result.chi2[local_index]) / max(n_bands, 1),
+                "chi2": chi2_value,
+                "chi2_per_band": chi2_value / max(n_valid_bands, 1),
+                "reduced_chi2": chi2_value / dof,
+                "reduced_chi2_dof": chi2_value / dof,
                 "gradient_norm": float(fit_result.gradient_norm[local_index]),
                 "n_bands": n_bands,
+                "n_valid_bands": n_valid_bands,
+                "n_masked_bands": n_masked_bands,
+                "n_nondetected_bands": n_nondetected_bands,
+                "n_upper_limit_bands": 0,
+                "nondetection_policy": str(
+                    config.get("selection", {}).get("nondetection_policy", "drop")
+                ),
+                "n_free_effective": n_free_effective,
+                "dof": dof,
+                "z_initial": float(z_initial),
                 "device": fit_result.device,
                 **{f"fit_{key}": value for key, value in params.items()},
                 **derived_values,
@@ -1422,10 +1553,16 @@ def _fit_dataframe_batch(
             model_mag = float(fit_result.model_mags[local_index, band_index])
             obs_mag = float(observed_mag[local_index, band_index])
             obs_flux = float(observed_flux[local_index, band_index])
+            obs_flux_error = float(flux_error[local_index, band_index])
             sigma = float(sigma_mag[local_index, band_index])
             model_flux = abmag_to_flux_fnu_cgs(model_mag)
             flux_ratio = model_flux / obs_flux if obs_flux > 0 else float("nan")
             residual = obs_mag - model_mag
+            chi_flux = (
+                (model_flux - obs_flux) / obs_flux_error
+                if obs_flux_error > 0
+                else float("nan")
+            )
             comparison_rows.append(
                 {
                     "row_index": int(row_index),
@@ -1435,6 +1572,19 @@ def _fit_dataframe_batch(
                         band_index
                     ].effective_wavelength,
                     "observed_flux_fnu_cgs": obs_flux,
+                    "observed_flux_error_fnu_cgs": obs_flux_error,
+                    "band_used_in_likelihood": bool(
+                        valid_band_mask[local_index, band_index]
+                    ),
+                    "band_is_nondetection": bool(
+                        np.isfinite(obs_flux) and obs_flux <= 0.0 and obs_flux_error > 0.0
+                    ),
+                    "n_valid_bands": n_valid_bands,
+                    "n_masked_bands": n_masked_bands,
+                    "n_nondetected_bands": n_nondetected_bands,
+                    "n_upper_limit_bands": 0,
+                    "n_free_effective": n_free_effective,
+                    "dof": dof,
                     "observed_mag_ab": obs_mag,
                     "sigma_mag": sigma,
                     "model_flux_fnu_cgs": model_flux,
@@ -1444,6 +1594,7 @@ def _fit_dataframe_batch(
                     "flux_ratio_model_over_observed": flux_ratio,
                     "fractional_flux_residual_model_minus_observed": flux_ratio - 1.0,
                     "chi": residual / sigma if sigma > 0 else float("nan"),
+                    "chi_flux": chi_flux,
                     "filter_source": filter_curves[band_index].source,
                     **context_values,
                 }
@@ -1508,6 +1659,15 @@ def _initial_theta_from_map(
             values.append(float(item[col]))
         rows.append(values)
     return np.asarray(rows, dtype=float)
+
+
+def _initial_value(
+    spec: dict[str, Any], name: str, base_params: dict[str, float]
+) -> float:
+    value = spec.get("initial", base_params.get(name, 0.0))
+    if isinstance(value, str):
+        value = base_params[name] if value == "from_base" else value
+    return float(value)
 
 
 def _forward_dataframe_batch(
@@ -1642,6 +1802,59 @@ def _sigma_mag_array(
                 )
         sigma.append(value if np.isfinite(value) and value > 0.0 else fallback)
     return sigma
+
+
+def _flux_error_arrays(
+    batch: pd.DataFrame,
+    band_configs: list[dict[str, Any]],
+    observed_flux: np.ndarray,
+    sigma_mag: np.ndarray,
+) -> np.ndarray:
+    columns = []
+    for band_index, band in enumerate(band_configs):
+        flux = np.asarray(observed_flux[:, band_index], dtype=float)
+        fallback = np.asarray(
+            magerr_to_fluxerr_fnu_cgs(flux, sigma_mag[:, band_index]), dtype=float
+        )
+        error_column = band.get("error_column")
+        if not error_column or error_column not in batch:
+            columns.append(fallback)
+            continue
+        raw_errors = batch[str(error_column)].astype(float).to_numpy()
+        error_units = band.get("error_units", band.get("units", "fnu_cgs"))
+        if error_units == "fnu_cgs":
+            errors = raw_errors
+        elif error_units in {"microjy", "ujy"}:
+            errors = np.asarray(
+                [microjy_to_flux_fnu_cgs(value) for value in raw_errors], dtype=float
+            )
+        elif error_units == "abmag":
+            errors = np.asarray(
+                magerr_to_fluxerr_fnu_cgs(flux, raw_errors), dtype=float
+            )
+        else:
+            raise ValueError(
+                f"Unsupported photometry error units for {band['name']}: {error_units}"
+            )
+        errors = np.where(np.isfinite(errors) & (errors > 0.0), errors, fallback)
+        columns.append(errors)
+    return pd.DataFrame(columns).transpose().to_numpy(dtype=float)
+
+
+def _valid_band_mask(
+    observed_mag: np.ndarray,
+    observed_flux: np.ndarray,
+    sigma_mag: np.ndarray,
+    flux_error: np.ndarray,
+    fit_config: dict[str, Any],
+) -> np.ndarray:
+    if str(fit_config.get("likelihood_space", "flux")).lower() == "flux":
+        sigma = np.asarray(flux_error, dtype=float)
+        observed = np.asarray(observed_flux, dtype=float)
+    else:
+        sigma = np.asarray(sigma_mag, dtype=float)
+        observed = np.asarray(observed_mag, dtype=float)
+    return np.isfinite(observed) & np.isfinite(sigma) & (sigma > 0.0)
 
 
 def _load_row_indices_set(row_indices_file: str | None) -> set[int] | None:

@@ -32,6 +32,12 @@ euclid-dsps fit \
   --out outputs/runs/science_fit
 ```
 
+Optional Snakemake wrapper:
+
+```bash
+snakemake -j1
+```
+
 Run one galaxy:
 
 ```bash
@@ -69,9 +75,18 @@ Public commands:
 `configs/fs2_phz1_science.yaml` is intentionally short. It uses:
 
 - `bands: lsst_euclid_10` for LSST `ugrizy` + Euclid VIS/Y/J/H;
+- local passbands from `filters/` and catalog flux errors from
+  `*_el_model3_ext_odonnell_ext_error`;
+- `fit.likelihood_space: flux`, so inference optimizes Gaussian residuals in
+  `Fnu` cgs flux units; AB magnitudes remain reporting/legacy diagnostics;
+- `selection.nondetection_policy: gaussian_flux`, so finite non-positive fluxes
+  with valid errors remain usable constraints in flux space;
+- `band_calibration.mode: none` by default, with optional fixed per-band offsets
+  for calibration tests;
 - `column_groups` instead of a long `extra_columns` list;
 - `dust_model: cosmos_proxy_fixed` so COSMOS dust columns are row-injected, not inferred as DSPS `dust_av`;
-- `redshift.initial: random_uniform`, then `z_obs` is fitted with a broad flat prior;
+- `redshift.initial: fixed` only for MAP initialization; `z_obs` stays a free
+  bounded fit parameter with no `phz_median` initialization and no photo-z prior;
 - broad non-circular `weak_physical` priors for the current DSPS parameterization;
 - `plot_ground_truth: true` so SED diagnostics overlay the COSMOS proxy when local resources exist.
 
@@ -83,8 +98,12 @@ Batch MAP writes:
 
 - `batch_fit_results.*`: recovered parameters, derived SFR, truth/proxy columns, optimizer diagnostics;
 - `batch_fit_photometry_comparison.*`: observed vs model photometry;
+- `chi2_per_band` and `reduced_chi2_dof`: per-band diagnostic and
+  DOF-corrected reduced chi2 are reported separately;
 - `batch_fit_parameter_audit.csv`: labels fixed, free, derived, or row-injected columns;
-- `sed_diagnostics/`: DSPS SED, COSMOS proxy SED, filters, and photometry constraints for sampled rows;
+- fit-vs-catalog truth/proxy plots skip inactive fixed parameters such as
+  `dust_av` under COSMOS proxy dust;
+- `sed_diagnostics/`: best and worst DSPS SED diagnostics, COSMOS proxy SED overlays, filters, and photometry constraints for sampled rows;
 - `normalized_config.json`: exact expanded config used for audit.
 
 Posterior runs write `posterior_samples.csv`, `posterior_summary.csv`, posterior predictive photometry, and diagnostics.
