@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reporting/` writes tables and plots, and `workflows/` composes CLI workflows. Configurations live in `configs/`; the single active science setup is `configs/popcosmos_binned.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
+The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reporting/` writes tables and plots, and `workflows/` composes CLI workflows. Configurations live in `configs/`; the active science setups are `configs/popcosmos_binned.yaml` and `configs/popcosmos_diffstar.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
 
 ## Build, Test, and Development Commands
 
@@ -29,6 +29,7 @@ Run the main checks:
 python -m compileall euclid_dsps scripts
 python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --index 0 --out outputs/runs/dev_popcosmos_one --sed-samples 1
 python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --limit 20 --batch-size 5 --out outputs/runs/dev_popcosmos_batch --sed-samples 4
+python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_one_short --sed-samples 1
 ```
 
 Use `fit` only with a small `--limit` while iterating because it runs one optimizer per galaxy.

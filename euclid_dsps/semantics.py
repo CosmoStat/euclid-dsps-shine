@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .parameters import POPCOSMOS_PARAMETER_NAMES
+from .parameters import DIFFSTAR_REDUCED6_PARAMETER_NAMES, POPCOSMOS_PARAMETER_NAMES
 
 DERIVED_PARAMETERS = {
     "t_obs_gyr",
@@ -33,6 +33,19 @@ def active_parameters(config: dict[str, Any]) -> list[str]:
     active.add("z_obs")
     if model.get("sfh_model") == "popcosmos_bins":
         active = set(POPCOSMOS_PARAMETER_NAMES[:12])
+        if model.get("nebular_model") == "gas_grid":
+            active.update({"log10_gas_metallicity", "log10_gas_ionization"})
+        if model.get("agn_model") == "template_grid":
+            active.update({"ln_fagn", "ln_tauagn"})
+        return sorted(active)
+    if model.get("sfh_model") == "diffstar_reduced6":
+        active = set(DIFFSTAR_REDUCED6_PARAMETER_NAMES[:12])
+        active.update(
+            {
+                "diffstar_indx_hi",
+                "diffstar_qlglgdt",
+            }
+        )
         if model.get("nebular_model") == "gas_grid":
             active.update({"log10_gas_metallicity", "log10_gas_ionization"})
         if model.get("agn_model") == "template_grid":

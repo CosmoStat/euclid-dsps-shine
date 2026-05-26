@@ -20,7 +20,7 @@ import numpy as np
 
 from .filters import FilterCurve
 from .io import GalaxyObservation
-from .parameters import POPCOSMOS_PARAMETER_NAMES
+from .parameters import DIFFSTAR_FIXED_PARAMETER_DEFAULTS, POPCOSMOS_PARAMETER_NAMES
 from .photometry import abmag_to_fnu_cgs
 
 
@@ -213,15 +213,18 @@ def _normalized_model_config(model_config: dict[str, Any] | None) -> dict[str, A
     config.setdefault("sfh_model", sfh_model)
     config.setdefault(
         "stellar_metallicity_model",
-        "single" if sfh_model == "popcosmos_bins" else "mdf",
+        "single" if sfh_model in {"popcosmos_bins", "diffstar_reduced6"} else "mdf",
     )
     config.setdefault(
         "dust_model",
-        "charlot_fall" if sfh_model == "popcosmos_bins" else "legacy",
+        "charlot_fall"
+        if sfh_model in {"popcosmos_bins", "diffstar_reduced6"}
+        else "legacy",
     )
     config.setdefault("igm_model", "none")
     config.setdefault("nebular_model", "fixed_ssp")
     config.setdefault("agn_model", "none")
+    config.setdefault("birth_cloud_slope", -1.0)
     config.setdefault("z_sun", 0.0134)
     return config
 
@@ -518,6 +521,8 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
     model_config = _normalized_model_config(context.model_config)
     if str(model_config.get("sfh_model", "lognormal")) == "popcosmos_bins":
         return run_popcosmos_binned_model_jax(context, params)
+    if str(model_config.get("sfh_model", "lognormal")) == "diffstar_reduced6":
+        return run_diffstar_reduced6_model_jax(context, params)
     return run_lognormal_model_jax(context, params)
 
 
@@ -657,6 +662,106 @@ def run_popcosmos_binned_model_jax(
     )
 
 
+def run_diffstar_reduced6_model_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> JaxModelResult:
+    """PopCosmos-like forward model using a six-free-parameter Diffstar SFH.
+
+    The catalog/config interface does not currently provide halo assembly
+    parameters, so Diffstar is evaluated with ``DEFAULT_MAH_PARAMS`` from
+    diffmah. Gas, dust, IGM, AGN, metallicity, and GPU memory behavior follow
+    the current PopCosmos FSPS-grid path.
+    """
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    model_config = _normalized_model_config(context.model_config)
+    if str(model_config.get("stellar_metallicity_model")) != "single":
+        raise ValueError(
+            "sfh_model='diffstar_reduced6' requires "
+            "model.stellar_metallicity_model='single'."
+        )
+    if str(model_config.get("dust_model")) != "charlot_fall":
+        raise ValueError(
+            "sfh_model='diffstar_reduced6' requires model.dust_model='charlot_fall'."
+        )
+
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
+    raw_sfr_table = build_diffstar_sfh_table_jax(gal_t_table, t_obs, params)
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
+        gal_t_table,
+        raw_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+        params["log10_stellar_mass"],
+    )
+    age_weights = calc_age_weights_from_sfh_table(
+        gal_t_table,
+        gal_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+    )
+    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
+    lgmet_abs = jnp.log10(jnp.asarray(context.z_sun, dtype=jnp.float32)) + jnp.asarray(
+        params["log10_stellar_metallicity"], dtype=jnp.float32
+    )
+    ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
+        _context_ssp_lgmet(context),
+        ssp_flux_grid,
+        lgmet_abs,
+    )
+    sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    intrinsic_stellar_sed = jnp.nan_to_num(
+        sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    dusted_by_age = apply_charlot_fall_by_age_jax(
+        _context_ssp_wave(context),
+        ssp_lg_age_gyr,
+        sed_by_age,
+        params["tau2"],
+        params["dust_index_n"],
+        params["tau1_over_tau2"],
+        birth_cloud_slope=float(model_config.get("birth_cloud_slope", -1.0)),
+    )
+    dusted_sed = jnp.nan_to_num(
+        dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    dusted_sed = add_agn_component_jax(
+        context,
+        _context_ssp_wave(context),
+        intrinsic_stellar_sed,
+        dusted_sed,
+        params,
+        model_config,
+    )
+    dusted_sed = apply_igm_transmission_jax(
+        _context_ssp_wave(context),
+        dusted_sed,
+        z_obs,
+        model_config,
+    )
+    model_mags = predict_mags_jax(
+        context, _context_ssp_wave(context), dusted_sed, z_obs
+    )
+    return JaxModelResult(
+        wave=_context_ssp_wave(context),
+        rest_sed=intrinsic_stellar_sed,
+        dusted_rest_sed=dusted_sed,
+        model_mags=model_mags,
+        t_obs_gyr=t_obs,
+        formed_mass_msun=formed_mass,
+        surviving_stellar_mass_msun=surviving_mass,
+        sfr_at_obs_msun_per_yr=gal_sfr_table[-1],
+        sfr_bins_msun_per_yr=project_sfh_to_popcosmos_sfr_bins_jax(
+            gal_t_table, gal_sfr_table, t_obs
+        ),
+        lookback_bin_edges_gyr=build_popcosmos_lookback_bin_edges_jax(t_obs),
+    )
+
+
 def build_popcosmos_lookback_bin_edges_jax(t_obs: jnp.ndarray) -> jnp.ndarray:
     """Return PopCosmos-like seven-bin lookback edges in Gyr.
 
@@ -710,6 +815,111 @@ def build_popcosmos_sfh_table_jax(
     bin_index = jnp.searchsorted(edges, lookback, side="right") - 1
     bin_index = jnp.clip(bin_index, 0, 6)
     return jnp.clip(sfr_bins[bin_index], 1.0e-30, jnp.inf)
+
+
+def build_diffstar_sfh_table_jax(
+    gal_t_table: jnp.ndarray,
+    t_obs: jnp.ndarray,
+    params: dict[str, Any],
+) -> jnp.ndarray:
+    """Evaluate a Diffstar SFH table using default Diffmah MAH parameters."""
+    (
+        calc_sfh_singlegal,
+        default_diffstar_params,
+        diffstar_params_cls,
+        default_mah_params,
+        fb,
+    ) = _import_diffstar_api()
+    diffstar_params = diffstar_params_cls(
+        _jax_param(params, "diffstar_lgmcrit", default_diffstar_params.lgmcrit),
+        _jax_param(
+            params, "diffstar_lgy_at_mcrit", default_diffstar_params.lgy_at_mcrit
+        ),
+        _jax_param(params, "diffstar_indx_lo", default_diffstar_params.indx_lo),
+        _jax_param(
+            params,
+            "diffstar_indx_hi",
+            DIFFSTAR_FIXED_PARAMETER_DEFAULTS["diffstar_indx_hi"],
+        ),
+        _jax_param(params, "diffstar_lg_qt", default_diffstar_params.lg_qt),
+        _jax_param(
+            params,
+            "diffstar_qlglgdt",
+            DIFFSTAR_FIXED_PARAMETER_DEFAULTS["diffstar_qlglgdt"],
+        ),
+        _jax_param(params, "diffstar_lg_drop", default_diffstar_params.lg_drop),
+        _jax_param(params, "diffstar_lg_rejuv", default_diffstar_params.lg_rejuv),
+    )
+    sfh = calc_sfh_singlegal(
+        diffstar_params,
+        default_mah_params,
+        jnp.asarray(gal_t_table, dtype=jnp.float32),
+        lgt0=jnp.log10(jnp.maximum(t_obs, 1.0e-6)),
+        fb=fb,
+    )
+    return jnp.nan_to_num(jnp.clip(sfh, 1.0e-14, jnp.inf), nan=1.0e-14)
+
+
+def _import_diffstar_api():
+    try:
+        from diffmah.defaults import DEFAULT_MAH_PARAMS
+        from diffstar import calc_sfh_singlegal
+        from diffstar.defaults import DEFAULT_DIFFSTAR_PARAMS, FB, DiffstarParams
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        raise ImportError(
+            "model.sfh_model='diffstar_reduced6' requires optional packages "
+            "diffstar and diffmah. Install with "
+            "`python -m pip install 'euclid-dsps-shine[diffstar]'`, or in this "
+            "project's conda workflow with "
+            "`conda run -n shine python -m pip install diffstar diffmah`."
+        ) from exc
+    return (
+        calc_sfh_singlegal,
+        DEFAULT_DIFFSTAR_PARAMS,
+        DiffstarParams,
+        DEFAULT_MAH_PARAMS,
+        FB,
+    )
+
+
+def _jax_param(params: dict[str, Any], name: str, default: float) -> jnp.ndarray:
+    return jnp.asarray(params.get(name, default), dtype=jnp.float32)
+
+
+def project_sfh_to_popcosmos_sfr_bins_jax(
+    gal_t_table: jnp.ndarray, gal_sfr_table: jnp.ndarray, t_obs: jnp.ndarray
+) -> jnp.ndarray:
+    """Project any SFH table into PopCosmos lookback-bin average SFRs."""
+    t_table = jnp.asarray(gal_t_table, dtype=jnp.float32)
+    sfr_table = jnp.asarray(gal_sfr_table, dtype=jnp.float32)
+    dt = jnp.diff(t_table)
+    dm = 0.5 * (sfr_table[1:] + sfr_table[:-1]) * dt
+    cumulative = jnp.concatenate(
+        [jnp.zeros(1, dtype=sfr_table.dtype), jnp.cumsum(dm)]
+    )
+    lookback_edges = build_popcosmos_lookback_bin_edges_jax(t_obs)
+    t_high = jnp.asarray(t_obs, dtype=jnp.float32) - lookback_edges[:-1]
+    t_low = jnp.asarray(t_obs, dtype=jnp.float32) - lookback_edges[1:]
+    t_min = t_table[0]
+    t_max = t_table[-1]
+    t_low = jnp.clip(t_low, t_min, t_max)
+    t_high = jnp.clip(t_high, t_min, t_max)
+    mass = jnp.interp(t_high, t_table, cumulative) - jnp.interp(
+        t_low, t_table, cumulative
+    )
+    width = jnp.maximum(t_high - t_low, 1.0e-6)
+    return jnp.clip(mass / width, 1.0e-30, jnp.inf)
+
+
+def project_sfh_to_popcosmos_dlogsfr_jax(
+    gal_t_table: jnp.ndarray, gal_sfr_table: jnp.ndarray, t_obs: jnp.ndarray
+) -> jnp.ndarray:
+    """Project any SFH to six adjacent PopCosmos log-SFR ratios."""
+    sfr_bins = project_sfh_to_popcosmos_sfr_bins_jax(
+        gal_t_table, gal_sfr_table, t_obs
+    )
+    log_sfr = jnp.log10(jnp.maximum(sfr_bins, 1.0e-30))
+    return log_sfr[:-1] - log_sfr[1:]
 
 
 def normalize_sfh_to_stellar_mass_jax(

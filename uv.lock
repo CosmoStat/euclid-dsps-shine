@@ -326,6 +326,28 @@ wheels = [
 ]
 
 [[package]]
+name = "diffmah"
+version = "0.7.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jax" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/89/37/080b79a669bcf6ccb17eaa1108a807b49e424005adb84245a27675105ed6/diffmah-0.7.3.tar.gz", hash = "sha256:45ae5fcc1c1dd8d5379ab44a3b14cf72a2c0e5c7aeab0bf29660318357582583", size = 156869, upload-time = "2025-07-17T12:20:14.458Z" }
+
+[[package]]
+name = "diffstar"
+version = "1.0.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "diffmah" },
+    { name = "h5py" },
+    { name = "jax" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/b4/cb1bf4337ad10b5255f00573f2268612eff350063937dfa06ea8b3be7484/diffstar-1.0.2.tar.gz", hash = "sha256:0b5712464fe7bd29fd03d2222d1b624279e1208c9cf06a83d9229ca05cc1e0b2", size = 252151, upload-time = "2026-05-06T15:45:59.883Z" }
+
+[[package]]
 name = "docutils"
 version = "0.22.4"
 source = { registry = "https://pypi.org/simple" }
@@ -373,6 +395,10 @@ dev = [
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "sphinx-rtd-theme" },
 ]
+diffstar = [
+    { name = "diffmah" },
+    { name = "diffstar" },
+]
 docs = [
     { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -384,6 +410,8 @@ requires-dist = [
     { name = "astropy" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0" },
     { name = "corner" },
+    { name = "diffmah", marker = "extra == 'diffstar'" },
+    { name = "diffstar", marker = "extra == 'diffstar'" },
     { name = "dsps" },
     { name = "h5py" },
     { name = "jax" },
@@ -401,7 +429,7 @@ requires-dist = [
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=2.0" },
     { name = "tqdm" },
 ]
-provides-extras = ["dev", "docs"]
+provides-extras = ["diffstar", "dev", "docs"]
 
 [[package]]
 name = "fonttools"

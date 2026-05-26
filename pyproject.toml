@@ -23,6 +23,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+diffstar = [
+    "diffstar",
+    "diffmah",
+]
 dev = [
     "black>=24.0",
     "pytest>=8.0",

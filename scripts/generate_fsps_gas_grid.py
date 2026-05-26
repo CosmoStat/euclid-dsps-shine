@@ -18,7 +18,6 @@ from typing import Any
 
 import h5py
 import numpy as np
-
 from fsps_grid_common import (
     DEFAULT_REFERENCE_SSP,
     FspsGridError,

@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from .parameters import POPCOSMOS_PARAMETER_NAMES
+from .parameters import DIFFSTAR_REDUCED6_PARAMETER_NAMES, POPCOSMOS_PARAMETER_NAMES
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,14 @@ DEFAULT_MODEL_PARAMETERS = {
     "log10_gas_ionization": -2.0,
     "ln_fagn": -8.0,
     "ln_tauagn": 2.302585,
+    "diffstar_lgmcrit": 12.0,
+    "diffstar_lgy_at_mcrit": -10.0,
+    "diffstar_indx_lo": 1.0,
+    "diffstar_indx_hi": -1.0,
+    "diffstar_lg_qt": 1.0,
+    "diffstar_qlglgdt": -0.50725,
+    "diffstar_lg_drop": -1.01773,
+    "diffstar_lg_rejuv": -0.212307,
 }
 
 DEFAULT_REDSHIFT_CONFIG = {
@@ -86,7 +94,7 @@ SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
 SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
 SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
-SUPPORTED_SFH_MODELS = {"lognormal", "popcosmos_bins"}
+SUPPORTED_SFH_MODELS = {"lognormal", "popcosmos_bins", "diffstar_reduced6"}
 SUPPORTED_STELLAR_METALLICITY_MODELS = {"mdf", "single"}
 SUPPORTED_MODEL_DUST_MODELS = {"legacy", "charlot_fall"}
 SUPPORTED_IGM_MODELS = {"none", "madau95_approx"}
@@ -113,6 +121,24 @@ PRIOR_SETS = {
         "sfh_t_peak": {"type": "normal", "loc": 4.0, "scale": 3.0},
         "sfh_tau": {"type": "normal", "loc": 0.8, "scale": 0.8},
         "log10_metallicity": {"type": "normal", "loc": -2.4, "scale": 0.6},
+    },
+    "flat_diffstar_popcosmos": {
+        "z_obs": {"type": "uniform"},
+        "log10_stellar_mass": {"type": "uniform"},
+        "diffstar_lgmcrit": {"type": "uniform"},
+        "diffstar_lgy_at_mcrit": {"type": "uniform"},
+        "diffstar_indx_lo": {"type": "uniform"},
+        "diffstar_lg_qt": {"type": "uniform"},
+        "diffstar_lg_drop": {"type": "uniform"},
+        "diffstar_lg_rejuv": {"type": "uniform"},
+        "log10_stellar_metallicity": {"type": "uniform"},
+        "tau2": {"type": "uniform"},
+        "dust_index_n": {"type": "uniform"},
+        "tau1_over_tau2": {"type": "uniform"},
+        "log10_gas_metallicity": {"type": "uniform"},
+        "log10_gas_ionization": {"type": "uniform"},
+        "ln_fagn": {"type": "uniform"},
+        "ln_tauagn": {"type": "uniform"},
     },
 }
 
@@ -530,15 +556,18 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["model"]["sfh_model"] = sfh_model
     config["model"].setdefault(
         "stellar_metallicity_model",
-        "single" if sfh_model == "popcosmos_bins" else "mdf",
+        "single" if sfh_model in {"popcosmos_bins", "diffstar_reduced6"} else "mdf",
     )
     config["model"].setdefault(
         "dust_model",
-        "charlot_fall" if sfh_model == "popcosmos_bins" else "legacy",
+        "charlot_fall"
+        if sfh_model in {"popcosmos_bins", "diffstar_reduced6"}
+        else "legacy",
     )
     config["model"].setdefault("igm_model", "none")
     config["model"].setdefault("nebular_model", "fixed_ssp")
     config["model"].setdefault("agn_model", "none")
+    config["model"].setdefault("birth_cloud_slope", -1.0)
     config["model"].setdefault("z_sun", 0.0134)
 
     config["fit"].setdefault(
@@ -1022,6 +1051,9 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     agn_model = str(model.get("agn_model", "none"))
     if agn_model not in SUPPORTED_AGN_MODELS:
         errors.append(f"model.agn_model must be one of {sorted(SUPPORTED_AGN_MODELS)}")
+    _finite_float(
+        model.get("birth_cloud_slope", -1.0), "model.birth_cloud_slope", errors
+    )
     _positive_float(model.get("z_sun", 0.0134), "model.z_sun", errors)
     if nebular_model == "gas_grid":
         _require_model_path(model.get("gas_grid_path"), "model.gas_grid_path", errors)
@@ -1060,6 +1092,8 @@ def _validate_model_fit_contract(
     sfh_model = str(model.get("sfh_model", "lognormal"))
     if sfh_model == "popcosmos_bins":
         _validate_popcosmos_free_parameters(model, free_names, errors)
+    elif sfh_model == "diffstar_reduced6":
+        _validate_diffstar_free_parameters(model, free_names, errors)
     elif sfh_model == "lognormal":
         _validate_lognormal_free_parameters(free_names, errors)
 
@@ -1111,6 +1145,66 @@ def _validate_popcosmos_free_parameters(
             errors.append(
                 f"fit.free_parameters.{name} is not used by "
                 "model.sfh_model='popcosmos_bins'"
+            )
+
+
+def _validate_diffstar_free_parameters(
+    model: dict[str, Any], free_names: set[str], errors: list[str]
+) -> None:
+    legacy_forbidden = {
+        "sfh_t_peak",
+        "sfh_tau",
+        "log10_sfr",
+        "dlog10_sfr_1",
+        "dlog10_sfr_2",
+        "dlog10_sfr_3",
+        "dlog10_sfr_4",
+        "dlog10_sfr_5",
+        "dlog10_sfr_6",
+        "log10_metallicity",
+        "metallicity_scatter",
+    }
+    forbidden_active = sorted(free_names & legacy_forbidden)
+    for name in forbidden_active:
+        errors.append(
+            f"fit.free_parameters.{name} is ignored by "
+            "model.sfh_model='diffstar_reduced6'"
+        )
+
+    if str(model.get("stellar_metallicity_model", "single")) != "single":
+        errors.append(
+            "model.sfh_model='diffstar_reduced6' requires "
+            "model.stellar_metallicity_model='single'"
+        )
+    if str(model.get("dust_model", "charlot_fall")) != "charlot_fall":
+        errors.append(
+            "model.sfh_model='diffstar_reduced6' requires "
+            "model.dust_model='charlot_fall'"
+        )
+
+    allowed = set(DIFFSTAR_REDUCED6_PARAMETER_NAMES)
+    nebular_model = str(model.get("nebular_model", "fixed_ssp"))
+    agn_model = str(model.get("agn_model", "none"))
+    gas_names = {"log10_gas_metallicity", "log10_gas_ionization"}
+    agn_names = {"ln_fagn", "ln_tauagn"}
+    if nebular_model != "gas_grid":
+        allowed -= gas_names
+        for name in sorted(free_names & gas_names):
+            errors.append(
+                f"fit.free_parameters.{name} requires model.nebular_model='gas_grid'"
+            )
+    if agn_model == "none":
+        allowed -= agn_names
+        for name in sorted(free_names & agn_names):
+            errors.append(
+                f"fit.free_parameters.{name} requires model.agn_model='template_grid'"
+            )
+    unknown = sorted(free_names - allowed)
+    for name in unknown:
+        if name not in legacy_forbidden and name not in gas_names and name not in agn_names:
+            errors.append(
+                f"fit.free_parameters.{name} is not used by "
+                "model.sfh_model='diffstar_reduced6'"
             )
 
 

@@ -19,6 +19,18 @@ The codebase should still import under ``uv`` for tests and packaging checks:
    uv run python -m compileall euclid_dsps scripts
    uv run euclid-dsps --help
 
+Diffstar SFH Optional Extra
+---------------------------
+
+``configs/popcosmos_diffstar.yaml`` requires ``diffstar`` and ``diffmah``. In
+the runtime environment:
+
+.. code-block:: bash
+
+   python -m pip install -e '.[diffstar]'
+
+The standard binned-SFH config does not require this optional extra.
+
 FSPS And python-FSPS
 --------------------
 

@@ -9,7 +9,10 @@ from euclid_dsps.config import (
     validate_catalog_columns,
 )
 from euclid_dsps.io import required_catalog_columns
-from euclid_dsps.parameters import POPCOSMOS_PARAMETER_NAMES
+from euclid_dsps.parameters import (
+    DIFFSTAR_REDUCED6_PARAMETER_NAMES,
+    POPCOSMOS_PARAMETER_NAMES,
+)
 
 
 def minimal_config() -> dict:
@@ -154,6 +157,25 @@ def test_popcosmos_binned_forbids_legacy_free_parameters() -> None:
         normalize_config(config)
 
 
+def test_diffstar_forbids_binned_sfh_free_parameters() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "diffstar_reduced6",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "dlog10_sfr_1": {"initial": 0.0, "bounds": [-3.0, 3.0]},
+        }
+    }
+
+    with pytest.raises(ConfigValidationError, match="dlog10_sfr_1"):
+        normalize_config(config)
+
+
 def test_fixed_band_calibration_expands_to_fit_offsets() -> None:
     config = minimal_config()
     config["band_calibration"] = {
@@ -243,7 +265,7 @@ def test_validate_catalog_columns_reports_missing_columns() -> None:
         validate_catalog_columns(config, {"euclid_vis", "z_phz", "z_true", "ra_gal"})
 
 
-def test_only_standalone_popcosmos_config_is_main_setup() -> None:
+def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     config = load_config("configs/popcosmos_binned.yaml")
 
     band_names = [band["name"] for band in config["bands"]]
@@ -276,6 +298,29 @@ def test_only_standalone_popcosmos_config_is_main_setup() -> None:
     assert config["runtime"]["require_gpu"] is False
     assert "lsst_u_el_model3_ext_odonnell_ext_error" in config["extra_columns"]
     assert config["fit"]["free_parameters"]["ln_tauagn"]["initial"] == 2.302585
+    assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
+        1.609438,
+        5.010635,
+    ]
+
+
+def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:
+    config = load_config("configs/popcosmos_diffstar.yaml")
+
+    assert tuple(config["fit"]["free_parameters"]) == DIFFSTAR_REDUCED6_PARAMETER_NAMES
+    assert config["model"]["sfh_model"] == "diffstar_reduced6"
+    assert config["model"]["stellar_metallicity_model"] == "single"
+    assert config["model"]["dust_model"] == "charlot_fall"
+    assert config["model"]["nebular_model"] == "gas_grid"
+    assert config["model"]["gas_grid_path"] == "Data/popcosmos_gas_ssp_grid.h5"
+    assert config["model"]["agn_model"] == "template_grid"
+    assert (
+        config["model"]["agn_template_path"]
+        == "Data/popcosmos_agn_template_grid.h5"
+    )
+    assert config["model"]["z_sun"] == 0.0134
+    assert config["model"]["fixed_parameters"]["diffstar_indx_hi"] == -1.0
+    assert config["model"]["fixed_parameters"]["diffstar_qlglgdt"] == -0.50725
     assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
         1.609438,
         5.010635,

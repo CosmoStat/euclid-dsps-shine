@@ -2,17 +2,25 @@
 
 ## Current State
 
-The repository now has one active configuration:
+Branch objective: integrate the Diffstar SFH implementation from
+`feature/diffstar` into the current PopCosmos FSPS gas/AGN workflow without
+losing the generated-grid scripts, GPU/JIT memory fixes, or documentation
+cleanup.
+
+The repository currently has two active production configurations:
 
 ```text
 configs/popcosmos_binned.yaml
+configs/popcosmos_diffstar.yaml
 ```
 
-It is standalone and represents the most advanced PopCosmos-like DSPS/JAX path:
+They are standalone and represent the most advanced PopCosmos-like DSPS/JAX
+paths:
 
 - LSST `ugrizy` plus Euclid VIS/Y/J/H photometry.
 - Flux-space likelihood with catalog per-band flux errors.
-- Seven-bin PopCosmos-like SFH ratios.
+- Seven-bin PopCosmos-like SFH ratios in `popcosmos_binned.yaml`.
+- Six-free-parameter Diffstar SFH in `popcosmos_diffstar.yaml`.
 - Single stellar metallicity.
 - Charlot-Fall age-dependent dust.
 - Madau95-style approximate IGM.
@@ -20,10 +28,10 @@ It is standalone and represents the most advanced PopCosmos-like DSPS/JAX path:
   `Data/popcosmos_gas_ssp_grid.h5`.
 - Generated FSPS/CLUMPY AGN template grid:
   `Data/popcosmos_agn_template_grid.h5`.
-- Full 16-parameter fit including gas and AGN parameters.
+- Full 16-parameter fit including SFH, gas, and AGN parameters in both configs.
 
 Older config variants, presets, examples, and partial smoke configs have been
-removed from source. Tests now target the single active config plus low-level
+removed from source. Tests now target the active configs plus low-level
 synthetic fixtures.
 
 ## Scientific Caveats
@@ -70,12 +78,24 @@ python -m euclid_dsps.cli \
   --sed-samples 4
 ```
 
+Diffstar short one-row fit:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_diffstar.yaml \
+  fit --index 0 \
+  --fit-maxiter 20 \
+  --out outputs/runs/dev_popcosmos_diffstar_one_short \
+  --sed-samples 1
+```
+
 Verification:
 
 ```bash
 uv run python -m compileall euclid_dsps scripts
 uv run pytest tests
 uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --help
+uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --help
 ```
 
 ## Remaining Work
@@ -87,62 +107,37 @@ uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --he
 
 ## Latest Verification
 
-2026-05-26 15:00 CEST cleanup verification:
+2026-05-26 combined Diffstar branch:
 
-- `find configs -maxdepth 3 -type f` returns only
-  `configs/popcosmos_binned.yaml`.
+- Created `feature/pop-cosmos-diffstar` from `feature/pop-cosmos`.
+- Source Diffstar commit: `497895a Add Diffstar PopCosmos model path` on
+  `feature/diffstar`.
+- Ported the Diffstar SFH path while keeping the current production FSPS
+  gas/AGN grid scripts, `gas_grid_path`/`agn_template_path` config contract,
+  dynamic JAX context arguments, and four-corner gas-grid interpolation.
+- Added `configs/popcosmos_diffstar.yaml` as the combined gas + AGN + Diffstar
+  configuration. `configs/` now contains only:
+  `configs/popcosmos_binned.yaml` and `configs/popcosmos_diffstar.yaml`.
+- Added the optional packaging extra `diffstar` for `diffstar` and `diffmah`.
+- Updated tests and docs to describe both production configs and the Diffstar
+  caveat that halo assembly currently uses Diffmah defaults until catalog MAH
+  inputs are wired.
+
+2026-05-26 verification:
+
+- `git diff --check` passed.
 - `uv run python -m compileall euclid_dsps scripts` passed.
-- `uv run pytest` passed: 92 passed, 1 skipped.
+- `uv run pytest` passed after installing the optional Diffstar extra: 103
+  passed.
+- `uv run --extra diffstar pytest tests/test_model.py -k diffstar` passed: 2
+  passed, 17 deselected.
+- `uv run --extra dev ruff check euclid_dsps scripts tests` passed.
 - `uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit
   --help` passed.
-- Sphinx build was not run because Sphinx is not installed in the current
-  `uv` environment (`No module named sphinx`).
-
-2026-05-26 JIT/GPU cleanup:
-
-- Added dynamic model-argument binding for large context arrays in
-  `euclid_dsps.model`.
-- Updated single-row, independent batched Adam, and population Adam paths to
-  pass SSP/gas/AGN/filter arrays as explicit JAX arguments to jitted functions.
-- Updated post-fit batch prediction/reporting paths (`predict_batch_mags`,
-  `predict_batch_derived`, `predict_batch_seds`) to use the same dynamic
-  context-array arguments, so SED diagnostics do not re-capture the gas grid as
-  an XLA constant after optimization.
-- Reworked gas-grid interpolation to gather only the four bracketing
-  gas-metallicity/gas-ionization slabs before interpolation, instead of
-  materializing an intermediate across the full gas-ionization grid.
-- Single-row JIT is enabled by default again; set `fit.jit: false` only for
-  debugging.
-- Verification passed: `uv run python -m compileall euclid_dsps scripts`, `uv
-  run pytest tests/test_workflows_smoke.py tests/test_model.py
-  tests/test_fit_memory.py` (23 passed), `uv run pytest tests/test_model.py
-  tests/test_fit_memory.py tests/test_config.py` (38 passed), `uv run pytest`
-  (94 passed, 1 skipped), and `uv run python -m euclid_dsps.cli --config
-  configs/popcosmos_binned.yaml fit --help`.
-
-2026-05-26 user CUDA run inspection:
-
-- `outputs/runs/dev_popcosmos_gpu_batch4/batch_fit_results.parquet` exists with
-  16 rows.
-- `outputs/runs/dev_popcosmos_gpu_batch4/batch_fit_photometry_comparison.parquet`
-  exists with 160 rows.
-- The reported crash happened after primary fit outputs were written, during
-  post-fit SED/report generation with `--sed-samples 2`.
-
-2026-05-26 final pre-commit audit:
-
-- Documentation and launch commands now reference only
-  `configs/popcosmos_binned.yaml`; stale references to removed configs were
-  removed from source docs and `AGENTS.md`.
-- Gas and AGN HDF5 metadata/shape inspection passed without loading full
-  datasets:
-  gas `(7, 7, 12, 107, 11149)`, AGN `(9, 11149)`.
-- AGN script default `agn_tau` grid now matches the documented/generated
-  PopCosmos grid: `5, 10, 20, 30, 40, 60, 80, 100, 150`.
-- Verification passed: `uv run python scripts/generate_fsps_gas_grid.py
-  --help`, `uv run python scripts/generate_fsps_agn_grid.py --help`, `uv run
-  python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --help`,
-  `uv run python -m compileall euclid_dsps scripts`, `uv run pytest` (95
-  passed, 1 skipped), and `git diff --check`.
-- `uv run ruff check euclid_dsps scripts tests` could not run because `ruff` is
-  not installed in the current `uv` environment.
+- `uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit
+  --help` passed.
+- `JAX_PLATFORMS=cpu XLA_PYTHON_CLIENT_PREALLOCATE=false uv run --extra
+  diffstar python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml
+  fit --index 0 --fit-maxiter 1 --out
+  outputs/runs/dev_popcosmos_diffstar_one_short --sed-samples 0` passed and
+  wrote the expected diagnostic outputs.

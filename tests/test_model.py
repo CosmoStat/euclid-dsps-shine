@@ -15,9 +15,10 @@ from euclid_dsps.model import (
     apply_charlot_fall_by_age_jax,
     apply_cosmos_two_component_dust_jax,
     apply_igm_transmission_jax,
+    build_diffstar_sfh_table_jax,
+    build_lognormal_sfh,
     build_popcosmos_lookback_bin_edges_jax,
     build_popcosmos_sfh_table_jax,
-    build_lognormal_sfh,
     comparison_rows,
     interpolate_gas_ssp_grid_jax,
     interpolate_ssp_stellar_metallicity_jax,
@@ -28,9 +29,14 @@ from euclid_dsps.model import (
     predict_batch_derived,
     predict_batch_mags,
     predict_batch_seds,
+    project_sfh_to_popcosmos_dlogsfr_jax,
+    project_sfh_to_popcosmos_sfr_bins_jax,
     run_dsps_model_jax,
 )
-from euclid_dsps.parameters import POPCOSMOS_PARAMETER_NAMES
+from euclid_dsps.parameters import (
+    DIFFSTAR_REDUCED6_PARAMETER_NAMES,
+    POPCOSMOS_PARAMETER_NAMES,
+)
 
 
 def _synthetic_context(model_config: dict | None = None) -> DspsContext:
@@ -113,6 +119,28 @@ def _popcosmos_params() -> dict[str, float]:
     return {name: values[name] for name in POPCOSMOS_PARAMETER_NAMES}
 
 
+def _diffstar_params() -> dict[str, float]:
+    values = {
+        "z_obs": 0.5,
+        "log10_stellar_mass": 10.0,
+        "diffstar_lgmcrit": 12.0,
+        "diffstar_lgy_at_mcrit": -10.0,
+        "diffstar_indx_lo": 1.0,
+        "diffstar_lg_qt": 1.0,
+        "diffstar_lg_drop": -1.0,
+        "diffstar_lg_rejuv": -0.2,
+        "log10_stellar_metallicity": 0.0,
+        "tau2": 0.2,
+        "dust_index_n": -0.7,
+        "tau1_over_tau2": 1.0,
+        "log10_gas_metallicity": -0.2,
+        "log10_gas_ionization": -2.4,
+        "ln_fagn": -8.0,
+        "ln_tauagn": np.log(10.0),
+    }
+    return {name: values[name] for name in DIFFSTAR_REDUCED6_PARAMETER_NAMES}
+
+
 def test_lognormal_sfh_stays_positive_and_peak_controls_shape() -> None:
     time = np.linspace(0.1, 10.0, 128)
 
@@ -175,6 +203,21 @@ def test_popcosmos_sfh_ratios_follow_documented_sign() -> None:
         build_popcosmos_sfh_table_jax(t_obs - lookback_midpoints, t_obs, params)
     )
     assert sfr[0] > sfr[1]
+
+
+def test_sfh_projection_to_popcosmos_bins_and_ratios() -> None:
+    t_obs = jnp.asarray(10.0)
+    time = jnp.linspace(0.01, t_obs, 256)
+    rising_sfr = time
+
+    bins = project_sfh_to_popcosmos_sfr_bins_jax(time, rising_sfr, t_obs)
+    ratios = project_sfh_to_popcosmos_dlogsfr_jax(time, rising_sfr, t_obs)
+
+    assert bins.shape == (7,)
+    assert ratios.shape == (6,)
+    assert np.all(np.isfinite(np.asarray(bins)))
+    assert np.all(np.isfinite(np.asarray(ratios)))
+    assert float(bins[0]) > float(bins[-1])
 
 
 def test_stellar_mass_normalization_matches_surviving_mass() -> None:
@@ -332,6 +375,48 @@ def test_popcosmos_batch_prediction_paths_use_dynamic_context_args() -> None:
     assert seds.dusted_rest_sed.shape == (1, len(context.ssp_wave_jax))
     assert np.all(np.isfinite(mags))
     assert np.all(np.isfinite(seds.rest_sed))
+
+
+def test_diffstar_sfh_positive_and_finite_when_installed() -> None:
+    pytest.importorskip("diffstar")
+    pytest.importorskip("diffmah")
+    time = jnp.linspace(0.05, 5.0, 32)
+
+    sfh = build_diffstar_sfh_table_jax(time, jnp.asarray(5.0), _diffstar_params())
+
+    assert np.all(np.isfinite(np.asarray(sfh)))
+    assert np.all(np.asarray(sfh) > 0.0)
+
+
+def test_diffstar_complete_jax_grad_model_mags_when_installed() -> None:
+    pytest.importorskip("diffstar")
+    pytest.importorskip("diffmah")
+    context = _synthetic_context(
+        {
+            "sfh_model": "diffstar_reduced6",
+            "stellar_metallicity_model": "single",
+            "dust_model": "charlot_fall",
+            "igm_model": "none",
+            "nebular_model": "gas_grid",
+            "agn_model": "template_grid",
+            "z_sun": 0.0134,
+        }
+    )
+    params = _diffstar_params()
+
+    def objective(values: jnp.ndarray) -> jnp.ndarray:
+        local = dict(params)
+        local["log10_stellar_mass"] = values[0]
+        local["tau2"] = values[1]
+        return jnp.sum(run_dsps_model_jax(context, local).model_mags)
+
+    result = run_dsps_model_jax(context, params)
+    grad = jax.grad(objective)(jnp.asarray([10.0, 0.2]))
+
+    assert result.sfr_bins_msun_per_yr.shape == (7,)
+    assert result.lookback_bin_edges_gyr.shape == (8,)
+    assert np.all(np.isfinite(np.asarray(result.model_mags)))
+    assert np.all(np.isfinite(np.asarray(grad)))
 
 
 def test_legacy_lognormal_config_still_runs() -> None:

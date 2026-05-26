@@ -1,15 +1,18 @@
 # DSPS PopCosmos
 
-DSPS/JAX fitting workflow for Euclid + LSST photometry with one active
-PopCosmos-like configuration:
+DSPS/JAX fitting workflow for Euclid + LSST photometry with two PopCosmos-like
+production configurations:
 
 ```text
 configs/popcosmos_binned.yaml
+configs/popcosmos_diffstar.yaml
 ```
 
-That config fits the full 16-parameter branch: redshift, stellar mass, six SFH
-bin ratios, stellar metallicity, Charlot-Fall dust, gas metallicity, gas
-ionization, AGN fraction, and AGN torus optical depth. The gas and AGN pieces
+`popcosmos_binned.yaml` fits redshift, stellar mass, six PopCosmos-like SFH bin
+ratios, stellar metallicity, Charlot-Fall dust, gas metallicity, gas ionization,
+AGN fraction, and AGN torus optical depth. `popcosmos_diffstar.yaml` keeps the
+same gas/dust/AGN/redshift/metallicity surface but replaces the six SFH bin
+ratios with the six-free-parameter Diffstar SFH path. The gas and AGN pieces
 come from generated FSPS HDF5 assets in `Data/`.
 
 ## Setup
@@ -17,6 +20,13 @@ come from generated FSPS HDF5 assets in `Data/`.
 ```bash
 conda activate shine
 python -m pip install -e .
+```
+
+For the Diffstar config, also install the optional SFH dependencies in the same
+environment:
+
+```bash
+python -m pip install -e '.[diffstar]'
 ```
 
 Install FSPS/python-FSPS in the same environment:
@@ -118,6 +128,17 @@ python -m euclid_dsps.cli \
   --sed-samples 1
 ```
 
+Diffstar one-row short fit:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_diffstar.yaml \
+  fit --index 0 \
+  --fit-maxiter 20 \
+  --out outputs/runs/dev_popcosmos_diffstar_one_short \
+  --sed-samples 1
+```
+
 Batched fit:
 
 ```bash
@@ -127,6 +148,18 @@ python -m euclid_dsps.cli \
   --batch-size 5 \
   --out outputs/runs/dev_popcosmos_batch \
   --sed-samples 4
+```
+
+Diffstar GPU smoke, start small because the same gas grid and optimizer buffers
+must fit in device memory:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_diffstar.yaml \
+  fit --limit 16 \
+  --batch-size 4 \
+  --out outputs/runs/dev_popcosmos_diffstar_gpu_batch4 \
+  --sed-samples 2
 ```
 
 Posterior smoke:
@@ -146,6 +179,7 @@ python -m euclid_dsps.cli \
 uv run python -m compileall euclid_dsps scripts
 uv run pytest tests
 uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --help
+uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --help
 ```
 
 The optimizer and post-fit batch prediction paths pass large SSP/gas/AGN arrays

@@ -45,16 +45,17 @@ assets:
        workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
-     popcosmos_binned.yaml Single active LSST+Euclid gas+AGN setup.
+     popcosmos_binned.yaml   LSST+Euclid gas+AGN setup with binned SFH.
+     popcosmos_diffstar.yaml LSST+Euclid gas+AGN setup with Diffstar SFH.
    scripts/
      quickstart_one_galaxy.py
      convert_euclid_filters.py
    Data/             Local data and DSPS assets, not source.
    outputs/          Generated run outputs, not source.
 
-The active runtime path is intentionally narrow: one config, generated FSPS
-assets in ``Data/``, and CLI workflows under ``fit``, ``posterior``, and
-``check``.
+The active runtime path is intentionally narrow: two production configs,
+generated FSPS assets in ``Data/``, and CLI workflows under ``fit``,
+``posterior``, and ``check``.
 
 Layer Responsibilities
 ----------------------

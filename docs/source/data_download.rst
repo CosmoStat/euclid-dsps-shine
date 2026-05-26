@@ -4,7 +4,7 @@ Data And FSPS Assets
 Catalog
 -------
 
-The single active config expects the Euclid FS2 PHZ parquet at:
+The active PopCosmos configs expect the Euclid FS2 PHZ parquet at:
 
 .. code-block:: text
 
@@ -116,7 +116,7 @@ Expected shape:
 
 The AGN grid uses the native FSPS/Nenkova optical depths
 ``5, 10, 20, 30, 40, 60, 80, 100, 150``. The fit parameter ``ln_tauagn`` is
-bounded to ``[ln(5), ln(150)]`` in ``configs/popcosmos_binned.yaml``.
+bounded to ``[ln(5), ln(150)]`` in both production configs.
 
 Files Not Tracked
 -----------------

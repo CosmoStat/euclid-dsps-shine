@@ -4,12 +4,13 @@ Science Assessment
 Implemented State
 -----------------
 
-The current branch has one active PopCosmos-like model configuration:
-``configs/popcosmos_binned.yaml``.
+The current branch has two active PopCosmos-like model configurations:
+``configs/popcosmos_binned.yaml`` and ``configs/popcosmos_diffstar.yaml``.
 
 Implemented pieces:
 
 * seven-bin PopCosmos-like SFH parameterization;
+* optional six-free-parameter Diffstar SFH parameterization;
 * free ``z_obs`` from LSST+Euclid photometry, with no photo-z prior;
 * single stellar metallicity interpolation;
 * Charlot-Fall age-dependent dust;
@@ -62,6 +63,23 @@ The active 16-parameter vector is:
 ``ln_tauagn`` is initialized at ``ln(10)`` and bounded to
 ``[ln(5), ln(150)]`` because those are the native FSPS/CLUMPY template limits.
 
+The Diffstar config uses the same redshift, stellar mass, metallicity, dust,
+gas, and AGN parameters but replaces the six ``dlog10_sfr`` terms with:
+
+.. code-block:: text
+
+   diffstar_lgmcrit
+   diffstar_lgy_at_mcrit
+   diffstar_indx_lo
+   diffstar_lg_qt
+   diffstar_lg_drop
+   diffstar_lg_rejuv
+
+``diffstar_indx_hi`` and ``diffstar_qlglgdt`` are fixed because the current
+catalog interface does not yet expose a full halo assembly history. Diffstar
+uses ``DEFAULT_MAH_PARAMS`` from diffmah, so better fits are plausible but must
+be demonstrated by comparing chi2, residuals, and posterior stability.
+
 Known Caveats
 -------------
 
@@ -76,6 +94,8 @@ Scientific caveats kept in the model and asset metadata:
   ``fagn * integrated stellar Lbol`` and is marked approximate until the exact
   FSPS/CLUMPY bolometric convention is independently audited;
 * the IGM implementation is a stable Madau95-style approximation;
+* the Diffstar path uses default diffmah MAH parameters until halo-history
+  inputs are wired into the catalog/config layer;
 * broad-band photometry alone can trade AGN, dust, gas, and SFH parameters
   against each other, so posterior checks remain important.
 
