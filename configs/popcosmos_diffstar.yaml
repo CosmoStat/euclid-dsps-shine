@@ -63,8 +63,8 @@ fit:
     likelihood_space: flux
     flux_error_floor_frac: 0.02
     flux_error_jitter: 0.0
-    maxiter: 800
-    learning_rate: 0.03
+    maxiter: 200
+    learning_rate: 0.05
     tolerance: 1.0e-5
     patience: 24
     prior_weight: 1.0
