@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,10 +41,12 @@ DEFAULT_REDSHIFT_CONFIG = {
     "min": 1.0e-4,
     "max": 6.0,
     "seed": 42,
+    "prior_z": {"mode": "none"},
 }
 
 SUPPORTED_PHOTOMETRY_UNITS = {"fnu_cgs", "abmag", "microjy", "ujy"}
 SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
+SUPPORTED_LIKELIHOOD_SPACES = {"flux", "mag"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
@@ -63,7 +66,15 @@ SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
 }
 SUPPORTED_REPORTING_LEVELS = {"full", "light"}
 SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
-SUPPORTED_REDSHIFT_INITIALS = {"catalog_column", "fixed", "random_uniform"}
+SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
+SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
+SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
+SUPPORTED_REDSHIFT_INITIALS = {
+    "catalog_column",
+    "fixed",
+    "random_uniform",
+}
+SUPPORTED_REDSHIFT_PRIORS = {"none", "gaussian", "top_hat", "phz_interval"}
 
 PRIOR_SETS = {
     "flat_debug": {
@@ -83,6 +94,12 @@ PRIOR_SETS = {
 }
 
 RUNTIME_PRESETS = {
+    "auto": {
+        "jax_platforms": "auto",
+        "disable_jax_plugin_autoload": False,
+        "xla_python_client_preallocate": False,
+        "require_gpu": False,
+    },
     "cpu": {
         "jax_platforms": "cpu",
         "disable_jax_plugin_autoload": True,
@@ -137,9 +154,13 @@ BAND_PRESETS = {
             "column": "lsst_u",
             "units": "fnu_cgs",
             "sigma_mag": 0.05,
+            "error_column": "lsst_u_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/lsst_u.csv",
+                "path": "filters/LSST_LSST.u.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -148,9 +169,13 @@ BAND_PRESETS = {
             "column": "lsst_g",
             "units": "fnu_cgs",
             "sigma_mag": 0.05,
+            "error_column": "lsst_g_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/lsst_g.csv",
+                "path": "filters/LSST_LSST.g.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -159,9 +184,13 @@ BAND_PRESETS = {
             "column": "lsst_r",
             "units": "fnu_cgs",
             "sigma_mag": 0.05,
+            "error_column": "lsst_r_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/lsst_r.csv",
+                "path": "filters/LSST_LSST.r.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -170,9 +199,13 @@ BAND_PRESETS = {
             "column": "lsst_i",
             "units": "fnu_cgs",
             "sigma_mag": 0.05,
+            "error_column": "lsst_i_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/lsst_i.csv",
+                "path": "filters/LSST_LSST.i.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -181,9 +214,13 @@ BAND_PRESETS = {
             "column": "lsst_z",
             "units": "fnu_cgs",
             "sigma_mag": 0.05,
+            "error_column": "lsst_z_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/lsst_z.csv",
+                "path": "filters/LSST_LSST.z.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -192,9 +229,13 @@ BAND_PRESETS = {
             "column": "lsst_y",
             "units": "fnu_cgs",
             "sigma_mag": 0.05,
+            "error_column": "lsst_y_el_model3_ext_odonnell_ext_error",
+            "error_units": "fnu_cgs",
+            "sigma_mag_floor": 0.01,
+            "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/lsst_y.csv",
+                "path": "filters/LSST_LSST.y.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -209,7 +250,7 @@ BAND_PRESETS = {
             "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/euclid_vis.csv",
+                "path": "filters/Euclid_VIS.vis.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -224,7 +265,7 @@ BAND_PRESETS = {
             "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/euclid_nisp_y.csv",
+                "path": "filters/Euclid_NISP.Y.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -239,7 +280,7 @@ BAND_PRESETS = {
             "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/euclid_nisp_j.csv",
+                "path": "filters/Euclid_NISP.J.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -254,7 +295,7 @@ BAND_PRESETS = {
             "sigma_mag_ceiling": 0.5,
             "filter": {
                 "kind": "ascii",
-                "path": "Data/value_added_data/filters/euclid_nisp_h.csv",
+                "path": "filters/Euclid_NISP.H.dat",
                 "wave_unit": "angstrom",
             },
         },
@@ -294,6 +335,12 @@ COLUMN_GROUPS = {
         "euclid_nisp_y_abs",
         "euclid_nisp_j_abs",
         "euclid_nisp_h_abs",
+        "lsst_u_abs",
+        "lsst_g_abs",
+        "lsst_r_abs",
+        "lsst_i_abs",
+        "lsst_z_abs",
+        "lsst_y_abs",
         "ebv_cosmos_1",
         "ebv_cosmos_2",
         "ext_curve_cosmos_1",
@@ -305,20 +352,44 @@ COLUMN_GROUPS = {
         "euclid_nisp_y_el_model3_ext_odonnell_ext_error",
         "euclid_nisp_j_el_model3_ext_odonnell_ext_error",
         "euclid_nisp_h_el_model3_ext_odonnell_ext_error",
+        "lsst_u_el_model3_ext_odonnell_ext_error",
+        "lsst_g_el_model3_ext_odonnell_ext_error",
+        "lsst_r_el_model3_ext_odonnell_ext_error",
+        "lsst_i_el_model3_ext_odonnell_ext_error",
+        "lsst_z_el_model3_ext_odonnell_ext_error",
+        "lsst_y_el_model3_ext_odonnell_ext_error",
     ],
     "emission_line_diagnostics": [
         "euclid_vis_el_model3_ext",
         "euclid_nisp_y_el_model3_ext",
         "euclid_nisp_j_el_model3_ext",
         "euclid_nisp_h_el_model3_ext",
+        "lsst_u_el_model3_ext",
+        "lsst_g_el_model3_ext",
+        "lsst_r_el_model3_ext",
+        "lsst_i_el_model3_ext",
+        "lsst_z_el_model3_ext",
+        "lsst_y_el_model3_ext",
         "euclid_vis_el_model3_ext_odonnell_ext",
         "euclid_nisp_y_el_model3_ext_odonnell_ext",
         "euclid_nisp_j_el_model3_ext_odonnell_ext",
         "euclid_nisp_h_el_model3_ext_odonnell_ext",
+        "lsst_u_el_model3_ext_odonnell_ext",
+        "lsst_g_el_model3_ext_odonnell_ext",
+        "lsst_r_el_model3_ext_odonnell_ext",
+        "lsst_i_el_model3_ext_odonnell_ext",
+        "lsst_z_el_model3_ext_odonnell_ext",
+        "lsst_y_el_model3_ext_odonnell_ext",
         "euclid_vis_el_model3_ext_odonnell_ext_error_realization",
         "euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization",
         "euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization",
         "euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization",
+        "lsst_u_el_model3_ext_odonnell_ext_error_realization",
+        "lsst_g_el_model3_ext_odonnell_ext_error_realization",
+        "lsst_r_el_model3_ext_odonnell_ext_error_realization",
+        "lsst_i_el_model3_ext_odonnell_ext_error_realization",
+        "lsst_z_el_model3_ext_odonnell_ext_error_realization",
+        "lsst_y_el_model3_ext_odonnell_ext_error_realization",
     ],
     "morphology_halo": [
         "ra_gal",
@@ -414,6 +485,8 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config.setdefault("output", {})
     config.setdefault("extra_columns", [])
     config.setdefault("cosmos_sed", {})
+    config.setdefault("band_calibration", {})
+    config.setdefault("nebular_emission", "ssp_flux")
 
     raw_redshift = dict(config["redshift"] or {})
     redshift = dict(DEFAULT_REDSHIFT_CONFIG)
@@ -440,12 +513,20 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         },
     )
     config["fit"].setdefault("method", "jax_adam")
+    config["fit"].setdefault("likelihood_space", "flux")
+    config["fit"].setdefault("flux_error_floor_frac", 0.0)
+    config["fit"].setdefault("flux_error_jitter", 0.0)
     config["fit"].setdefault("maxiter", 80)
     config["fit"].setdefault("learning_rate", 0.1)
     config["fit"].setdefault("tolerance", 1.0e-5)
     config["fit"].setdefault("patience", 18)
     config["fit"].setdefault("prior_weight", 1.0)
     config["fit"].setdefault("priors", {})
+    config["band_calibration"] = dict(config["band_calibration"] or {})
+    config["band_calibration"].setdefault("mode", "none")
+    config["band_calibration"].setdefault("offsets_mag", {})
+    config["band_calibration"].setdefault("flux_multipliers", {})
+    _apply_band_calibration(config)
     config["fit"]["population"] = dict(config["fit"].get("population") or {})
     config["fit"]["population"].setdefault("prior_weight", 1.0)
     config["fit"]["population"].setdefault("sigma_floor", 0.03)
@@ -469,9 +550,14 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["sample"].setdefault("save_samples", True)
     config["sample"].setdefault("priors", {})
     _apply_prior_set(config)
+    _apply_redshift_prior(config)
 
     config["selection"].setdefault("index", None)
     config["selection"].setdefault("require_positive_flux", True)
+    config["selection"].setdefault(
+        "nondetection_policy",
+        "drop" if config["selection"].get("require_positive_flux", True) else "gaussian_flux",
+    )
     config["selection"].setdefault("sort_by_flux", None)
 
     config["truth"].setdefault("redshift_column", redshift.get("truth_column"))
@@ -635,6 +721,50 @@ def _apply_prior_set(config: dict[str, Any]) -> None:
     config["sample"]["priors"] = sample_priors
 
 
+def _apply_redshift_prior(config: dict[str, Any]) -> None:
+    prior = config.get("redshift", {}).get("prior_z") or {}
+    if not isinstance(prior, dict) or str(prior.get("mode", "none")) != "gaussian":
+        return
+    free = set(config["fit"]["free_parameters"])
+    if "z_obs" not in free:
+        return
+    z_prior = {
+        "type": "normal",
+        "loc": "from_base",
+        "scale": "from_base",
+        "scale_parameter": "z_obs_prior_sigma",
+    }
+    config["fit"].setdefault("priors", {})
+    config["sample"].setdefault("priors", {})
+    config["fit"]["priors"]["z_obs"] = {**config["fit"]["priors"].get("z_obs", {}), **z_prior}
+    config["sample"]["priors"]["z_obs"] = {
+        **config["sample"]["priors"].get("z_obs", {}),
+        **z_prior,
+    }
+
+
+def _apply_band_calibration(config: dict[str, Any]) -> None:
+    calibration = config.get("band_calibration", {}) or {}
+    mode = str(calibration.get("mode", "none"))
+    offsets_mag = calibration.get("offsets_mag") or {}
+    flux_multipliers = calibration.get("flux_multipliers") or {}
+    values = []
+    multipliers = []
+    for band in config["bands"]:
+        name = str(band["name"])
+        offset = 0.0
+        multiplier = 1.0
+        if mode == "fixed_offsets":
+            offset = float(offsets_mag.get(name, 0.0))
+            multiplier = float(flux_multipliers.get(name, 1.0))
+            if multiplier > 0.0:
+                offset += -2.5 * math.log10(multiplier)
+        values.append(offset)
+        multipliers.append(multiplier)
+    config["fit"]["band_calibration_offsets_mag"] = values
+    config["fit"]["band_calibration_flux_multipliers"] = multipliers
+
+
 def _named_preset(presets: dict[str, Any], name: str, label: str) -> Any:
     if name not in presets:
         raise ConfigValidationError(
@@ -659,14 +789,17 @@ def validate_config(config: dict[str, Any]) -> None:
     _require_nonempty(config, "catalog_path", errors)
     _require_nonempty(config, "ssp_path", errors)
     _validate_bands(config.get("bands"), errors)
+    _validate_selection(config.get("selection", {}), errors)
     _validate_redshift(config.get("redshift", {}), errors)
     _validate_model(config.get("model", {}), errors)
     _validate_fit(config.get("fit", {}), errors)
+    _validate_nebular_emission(config.get("nebular_emission"), errors)
     _validate_sample(config.get("sample", {}), config.get("fit", {}), errors)
     _validate_truth(config.get("truth", {}), errors)
     _validate_runtime(config.get("runtime", {}), errors)
     _validate_reporting(config.get("reporting", {}), errors)
     _validate_output(config.get("output", {}), errors)
+    _validate_band_calibration(config.get("band_calibration", {}), errors)
     _validate_cosmos_sed(config.get("cosmos_sed", {}), errors)
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
@@ -702,6 +835,19 @@ def _require_nonempty(config: dict[str, Any], key: str, errors: list[str]) -> No
     value = config.get(key)
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{key} must be a non-empty path string")
+
+
+def _validate_selection(selection: dict[str, Any], errors: list[str]) -> None:
+    policy = str(selection.get("nondetection_policy", "drop"))
+    if policy not in SUPPORTED_NONDETECTION_POLICIES:
+        errors.append(
+            "selection.nondetection_policy must be one of "
+            f"{sorted(SUPPORTED_NONDETECTION_POLICIES)}"
+        )
+    if policy == "upper_limit":
+        errors.append(
+            "selection.nondetection_policy='upper_limit' is reserved but not implemented"
+        )
 
 
 def _validate_bands(value: Any, errors: list[str]) -> None:
@@ -760,9 +906,14 @@ def _validate_bands(value: Any, errors: list[str]) -> None:
 
 
 def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
-    for removed_key in ("prior_interval", "prior_intervals", "phz_interval"):
+    for removed_key in ("prior_interval", "prior_intervals"):
         if removed_key in redshift:
             errors.append(f"redshift.{removed_key} was removed; fit z_obs directly")
+    if "multi_start" in redshift:
+        errors.append(
+            "redshift.multi_start was removed; use posterior sampling for "
+            "redshift inference"
+        )
     initial = redshift.get("initial", "catalog_column")
     if initial not in SUPPORTED_REDSHIFT_INITIALS:
         errors.append(
@@ -776,6 +927,32 @@ def _validate_redshift(redshift: dict[str, Any], errors: list[str]) -> None:
     z_max = _finite_float(redshift.get("max"), "redshift.max", errors)
     if z_min is not None and z_max is not None and z_min >= z_max:
         errors.append("redshift.min must be smaller than redshift.max")
+    prior = redshift.get("prior_z", {"mode": "none"})
+    if prior is None:
+        prior = {"mode": "none"}
+    if not isinstance(prior, dict):
+        errors.append("redshift.prior_z must be a mapping")
+    else:
+        mode = str(prior.get("mode", "none"))
+        if mode not in SUPPORTED_REDSHIFT_PRIORS:
+            errors.append(
+                f"redshift.prior_z.mode must be one of {sorted(SUPPORTED_REDSHIFT_PRIORS)}"
+            )
+        if mode == "gaussian":
+            _positive_float(prior.get("sigma", 0.35), "redshift.prior_z.sigma", errors)
+            _positive_float(
+                prior.get("sigma_min", 0.02), "redshift.prior_z.sigma_min", errors
+            )
+        if mode in {"top_hat", "phz_interval"}:
+            _positive_float(
+                prior.get("penalty", 1.0e6), "redshift.prior_z.penalty", errors
+            )
+            _optional_string(
+                prior.get("min_column"), "redshift.prior_z.min_column", errors
+            )
+            _optional_string(
+                prior.get("max_column"), "redshift.prior_z.max_column", errors
+            )
 
 
 def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
@@ -797,6 +974,17 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
                 errors.append("model.parameter_columns keys and values must be strings")
 
 
+def _validate_nebular_emission(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, str):
+        errors.append("nebular_emission must be a string")
+        return
+    if value not in SUPPORTED_NEBULAR_EMISSION_MODES:
+        errors.append(
+            "nebular_emission must be one of "
+            f"{sorted(SUPPORTED_NEBULAR_EMISSION_MODES)}"
+        )
+
+
 def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
     for removed_key in (
         "fast_warmstart_only",
@@ -811,6 +999,18 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
     method = str(fit.get("method", "jax_adam")).lower()
     if method not in SUPPORTED_FIT_METHODS:
         errors.append(f"fit.method must be one of {sorted(SUPPORTED_FIT_METHODS)}")
+    likelihood_space = str(fit.get("likelihood_space", "flux")).lower()
+    if likelihood_space not in SUPPORTED_LIKELIHOOD_SPACES:
+        errors.append(
+            "fit.likelihood_space must be one of "
+            f"{sorted(SUPPORTED_LIKELIHOOD_SPACES)}"
+        )
+    _nonnegative_float(
+        fit.get("flux_error_floor_frac", 0.0), "fit.flux_error_floor_frac", errors
+    )
+    _nonnegative_float(
+        fit.get("flux_error_jitter", 0.0), "fit.flux_error_jitter", errors
+    )
     _positive_int(fit.get("maxiter"), "fit.maxiter", errors)
     _positive_float(fit.get("learning_rate"), "fit.learning_rate", errors)
     _positive_float(fit.get("tolerance"), "fit.tolerance", errors)
@@ -1036,6 +1236,33 @@ def _validate_output(output: dict[str, Any], errors: list[str]) -> None:
         errors.append("output.verbose_benchmark must be a boolean")
 
 
+def _validate_band_calibration(
+    calibration: dict[str, Any], errors: list[str]
+) -> None:
+    if not isinstance(calibration, dict):
+        errors.append("band_calibration must be a mapping")
+        return
+    mode = str(calibration.get("mode", "none"))
+    if mode not in SUPPORTED_BAND_CALIBRATION_MODES:
+        errors.append(
+            "band_calibration.mode must be one of "
+            f"{sorted(SUPPORTED_BAND_CALIBRATION_MODES)}"
+        )
+    for key in ("offsets_mag", "flux_multipliers"):
+        values = calibration.get(key, {})
+        if values is None:
+            continue
+        if not isinstance(values, dict):
+            errors.append(f"band_calibration.{key} must be a mapping")
+            continue
+        for band_name, value in values.items():
+            if not isinstance(band_name, str) or not band_name:
+                errors.append(f"band_calibration.{key} keys must be band names")
+            _finite_float(value, f"band_calibration.{key}.{band_name}", errors)
+            if key == "flux_multipliers":
+                _positive_float(value, f"band_calibration.{key}.{band_name}", errors)
+
+
 def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
     if not isinstance(cosmos_sed, dict):
         errors.append("cosmos_sed must be a mapping")
@@ -1193,6 +1420,13 @@ def _positive_float(value: Any, label: str, errors: list[str]) -> float | None:
     result = _finite_float(value, label, errors)
     if result is not None and result <= 0.0:
         errors.append(f"{label} must be > 0")
+    return result
+
+
+def _nonnegative_float(value: Any, label: str, errors: list[str]) -> float | None:
+    result = _finite_float(value, label, errors)
+    if result is not None and result < 0.0:
+        errors.append(f"{label} must be >= 0")
     return result
 
 

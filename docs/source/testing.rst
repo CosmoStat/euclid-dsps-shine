@@ -73,6 +73,6 @@ Manual smoke commands should include:
 
 .. code-block:: bash
 
-   euclid-dsps fit --config configs/fs2_phz1_science.yaml --index 0 --out outputs/runs/dev_fit_one
-   euclid-dsps fit --config configs/fs2_phz1_science.yaml --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_fit_batch
-   euclid-dsps check --config configs/fs2_phz1_science.yaml --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check
+   euclid-dsps --config configs/fs2_phz1_science.yaml fit --index 0 --out outputs/runs/dev_fit_one
+   euclid-dsps --config configs/fs2_phz1_science.yaml fit --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_fit_batch
+   euclid-dsps --config configs/fs2_phz1_science.yaml check --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check

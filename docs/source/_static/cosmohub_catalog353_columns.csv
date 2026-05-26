@@ -10,7 +10,7 @@ z_obs_gal,observed_redshift_gal,redshift,float,dimensionless,Observed galaxy red
 z_deepz,zp,redshift,double,dimensionless,DeepZ mode of the p(z) distribution.,
 redshift_step,redshift_step,redshift,smallint,index,Redshift step from the Flagship DM lensing healpix maps.,
 phz_flags,phz_flags,redshift,tinyint,flag,NNPZ photometric-redshift quality flag.,0 means no known issue; 1 means insufficient neighbours for robust photo-z.
-phz_median,phz_median,redshift,float,dimensionless,NNPZ median of the photometric-redshift PDF.,Diagnostic only in the active science config; DSPS fits z_obs from photometry.
+phz_median,phz_median,redshift,float,dimensionless,NNPZ median of the photometric-redshift PDF.,Diagnostic-only photo-z estimate; active science config does not use it for z_obs initialization or priors.
 phz_min_70,phz_min_70,redshift,float,dimensionless,Lower edge of the NNPZ 70 percent PDF interval.,
 phz_max_70,phz_max_70,redshift,float,dimensionless,Upper edge of the NNPZ 70 percent PDF interval.,
 phz_min_90,phz_min_90,redshift,float,dimensionless,Lower edge of the NNPZ 90 percent PDF interval.,
@@ -37,12 +37,42 @@ euclid_vis_el_model3_ext,euclid_vis_el_model3_ext,photometry,float,erg s^-1 cm^-
 euclid_vis_el_model3_ext_odonnell_ext,euclid_vis_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"Euclid VIS flux including emission lines, internal attenuation, and Milky Way extinction.",Branch-2 target set C.
 euclid_vis_el_model3_ext_odonnell_ext_error,euclid_vis_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the Euclid VIS Milky-Way-extincted flux.,Used for chi-square in branch-2 target set D.
 euclid_vis_el_model3_ext_odonnell_ext_error_realization,euclid_vis_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the Euclid VIS Milky-Way-extincted flux.,Branch-2 target set D.
-lsst_u,lsst_u,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST u-band flux density.,
-lsst_g,lsst_g,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST g-band flux density.,
-lsst_r,lsst_r,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST r-band flux density.,
-lsst_i,lsst_i,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST i-band flux density.,
-lsst_z,lsst_z,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST z-band flux density.,
-lsst_y,lsst_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Simulated LSST y-band flux density.,
+lsst_u,lsst_u,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed continuum flux including internal attenuation in LSST u-band.,Active science fit target.
+lsst_u_abs,lsst_u_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame flux density at 10 parsec in LSST u-band.,Used for COSMOS proxy SED diagnostics when present.
+lsst_u_el_model3_ext,lsst_u_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST u flux including continuum, emission lines, and internal attenuation.",Diagnostic only until DSPS emission-line likelihood is implemented.
+lsst_u_el_model3_ext_odonnell_ext,lsst_u_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST u flux including emission lines, internal attenuation, and Milky Way extinction.",Survey-like forward-modeled flux; diagnostic only in the active fit.
+lsst_u_el_model3_ext_odonnell_ext_error,lsst_u_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the LSST u Milky-Way-extincted flux.,Used as per-band likelihood uncertainty in the active 10-band config.
+lsst_u_el_model3_ext_odonnell_ext_error_realization,lsst_u_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the LSST u Milky-Way-extincted flux.,"Use for noisy-observation diagnostics, not as the uncertainty."
+lsst_g,lsst_g,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed continuum flux including internal attenuation in LSST g-band.,Active science fit target.
+lsst_g_abs,lsst_g_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame flux density at 10 parsec in LSST g-band.,Used for COSMOS proxy SED diagnostics when present.
+lsst_g_el_model3_ext,lsst_g_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST g flux including continuum, emission lines, and internal attenuation.",Diagnostic only until DSPS emission-line likelihood is implemented.
+lsst_g_el_model3_ext_odonnell_ext,lsst_g_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST g flux including emission lines, internal attenuation, and Milky Way extinction.",Survey-like forward-modeled flux; diagnostic only in the active fit.
+lsst_g_el_model3_ext_odonnell_ext_error,lsst_g_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the LSST g Milky-Way-extincted flux.,Used as per-band likelihood uncertainty in the active 10-band config.
+lsst_g_el_model3_ext_odonnell_ext_error_realization,lsst_g_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the LSST g Milky-Way-extincted flux.,"Use for noisy-observation diagnostics, not as the uncertainty."
+lsst_r,lsst_r,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed continuum flux including internal attenuation in LSST r-band.,Active science fit target.
+lsst_r_abs,lsst_r_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame flux density at 10 parsec in LSST r-band.,Used for COSMOS proxy SED diagnostics when present.
+lsst_r_el_model3_ext,lsst_r_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST r flux including continuum, emission lines, and internal attenuation.",Diagnostic only until DSPS emission-line likelihood is implemented.
+lsst_r_el_model3_ext_odonnell_ext,lsst_r_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST r flux including emission lines, internal attenuation, and Milky Way extinction.",Survey-like forward-modeled flux; diagnostic only in the active fit.
+lsst_r_el_model3_ext_odonnell_ext_error,lsst_r_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the LSST r Milky-Way-extincted flux.,Used as per-band likelihood uncertainty in the active 10-band config.
+lsst_r_el_model3_ext_odonnell_ext_error_realization,lsst_r_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the LSST r Milky-Way-extincted flux.,"Use for noisy-observation diagnostics, not as the uncertainty."
+lsst_i,lsst_i,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed continuum flux including internal attenuation in LSST i-band.,Active science fit target.
+lsst_i_abs,lsst_i_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame flux density at 10 parsec in LSST i-band.,Used for COSMOS proxy SED diagnostics when present.
+lsst_i_el_model3_ext,lsst_i_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST i flux including continuum, emission lines, and internal attenuation.",Diagnostic only until DSPS emission-line likelihood is implemented.
+lsst_i_el_model3_ext_odonnell_ext,lsst_i_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST i flux including emission lines, internal attenuation, and Milky Way extinction.",Survey-like forward-modeled flux; diagnostic only in the active fit.
+lsst_i_el_model3_ext_odonnell_ext_error,lsst_i_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the LSST i Milky-Way-extincted flux.,Used as per-band likelihood uncertainty in the active 10-band config.
+lsst_i_el_model3_ext_odonnell_ext_error_realization,lsst_i_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the LSST i Milky-Way-extincted flux.,"Use for noisy-observation diagnostics, not as the uncertainty."
+lsst_z,lsst_z,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed continuum flux including internal attenuation in LSST z-band.,Active science fit target.
+lsst_z_abs,lsst_z_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame flux density at 10 parsec in LSST z-band.,Used for COSMOS proxy SED diagnostics when present.
+lsst_z_el_model3_ext,lsst_z_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST z flux including continuum, emission lines, and internal attenuation.",Diagnostic only until DSPS emission-line likelihood is implemented.
+lsst_z_el_model3_ext_odonnell_ext,lsst_z_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST z flux including emission lines, internal attenuation, and Milky Way extinction.",Survey-like forward-modeled flux; diagnostic only in the active fit.
+lsst_z_el_model3_ext_odonnell_ext_error,lsst_z_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the LSST z Milky-Way-extincted flux.,Used as per-band likelihood uncertainty in the active 10-band config.
+lsst_z_el_model3_ext_odonnell_ext_error_realization,lsst_z_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the LSST z Milky-Way-extincted flux.,"Use for noisy-observation diagnostics, not as the uncertainty."
+lsst_y,lsst_y,photometry,float,erg s^-1 cm^-2 Hz^-1,Observed continuum flux including internal attenuation in LSST y-band.,Active science fit target.
+lsst_y_abs,lsst_y_abs,rest-frame photometry,float,erg s^-1 cm^-2 Hz^-1 at 10 pc,Rest-frame flux density at 10 parsec in LSST y-band.,Used for COSMOS proxy SED diagnostics when present.
+lsst_y_el_model3_ext,lsst_y_el_model3_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST y flux including continuum, emission lines, and internal attenuation.",Diagnostic only until DSPS emission-line likelihood is implemented.
+lsst_y_el_model3_ext_odonnell_ext,lsst_y_el_model3_ext_odonnell_ext,photometry,float,erg s^-1 cm^-2 Hz^-1,"LSST y flux including emission lines, internal attenuation, and Milky Way extinction.",Survey-like forward-modeled flux; diagnostic only in the active fit.
+lsst_y_el_model3_ext_odonnell_ext_error,lsst_y_el_model3_ext_odonnell_ext_error,photometry,float,erg s^-1 cm^-2 Hz^-1,Flux uncertainty for the LSST y Milky-Way-extincted flux.,Used as per-band likelihood uncertainty in the active 10-band config.
+lsst_y_el_model3_ext_odonnell_ext_error_realization,lsst_y_el_model3_ext_odonnell_ext_error_realization,photometry,float,erg s^-1 cm^-2 Hz^-1,Noisy realization of the LSST y Milky-Way-extincted flux.,"Use for noisy-observation diagnostics, not as the uncertainty."
 log_stellar_mass,log_stellar_mass,physical truth,float,log10(Msun h^-2),Base-10 logarithm of catalog stellar mass.,Convert to log10(Msun) as log_stellar_mass + 2 log10(h).
 log_ml_r01,log_ml_r01,physical truth,float,log10(Msun/Lsun),Logarithm of stellar-mass-to-luminosity ratio in SDSS 0.1-r band.,
 abs_mag_r01,abs_mag_r01,rest-frame photometry,float,mag + 5 log10(h),Absolute magnitude in the SDSS 0.1-r band in h=1 units.,

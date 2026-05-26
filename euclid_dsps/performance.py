@@ -62,21 +62,41 @@ def write_performance_outputs(
     out = ensure_dir(out_dir)
     frame = pd.DataFrame(rows)
     frame.to_csv(out / f"{label}_performance_benchmark.csv", index=False)
+    by_batch = _performance_by_batch(frame)
+    if not by_batch.empty:
+        by_batch.to_csv(out / f"{label}_performance_by_batch.csv", index=False)
     numeric = frame.select_dtypes(include="number")
+    total_seconds = float(frame["total_seconds"].max())
+    device = _jax_device_metadata()
+    n_galaxies = _processed_galaxies(frame)
+    n_gpu = int(device.get("n_devices", 0)) if device.get("backend") == "gpu" else 0
     summary: dict[str, Any] = {
         "n_stages": int(len(frame)),
-        "total_seconds": float(frame["total_seconds"].max()),
+        "total_seconds": total_seconds,
+        "n_galaxies_processed": int(n_galaxies),
+        "batch_size_max": _max_batch_size(frame),
+        "seconds_per_galaxy": (
+            float(total_seconds / n_galaxies) if n_galaxies > 0 else None
+        ),
+        "galaxies_per_second": (
+            float(n_galaxies / total_seconds) if total_seconds > 0 else None
+        ),
+        "device": device,
+        "n_gpu": n_gpu,
+        "gpu_hours_total": (
+            float(total_seconds * n_gpu / 3600.0) if n_gpu > 0 else None
+        ),
+        "gpu_hours_per_galaxy": (
+            float(total_seconds * n_gpu / 3600.0 / n_galaxies)
+            if n_gpu > 0 and n_galaxies > 0
+            else None
+        ),
     }
     if "rss_peak_mb" in numeric:
         summary["rss_peak_mb_max"] = float(numeric["rss_peak_mb"].max())
     if "gpu_memory_used_mb" in numeric and numeric["gpu_memory_used_mb"].notna().any():
         summary["gpu_memory_used_mb_max"] = float(
             numeric["gpu_memory_used_mb"].dropna().max()
-        )
-    if "n_rows" in numeric:
-        chunk_rows = frame["stage"].astype(str).str.contains("chunk", na=False)
-        summary["n_rows_processed"] = int(
-            numeric.loc[chunk_rows, "n_rows"].fillna(0).sum()
         )
     write_json(out / f"{label}_performance_summary.json", summary)
 
@@ -114,3 +134,92 @@ def _gpu_memory_used_mb() -> float | None:
         except ValueError:
             continue
     return max(values) if values else None
+
+
+def _processed_galaxies(frame: pd.DataFrame) -> int:
+    if "n_rows" not in frame:
+        return 0
+    stages = frame["stage"].astype(str)
+    priority = [
+        "fit_chunk",
+        "forward_chunk",
+        "fit_population_chunk",
+    ]
+    for stage in priority:
+        mask = stages == stage
+        if mask.any():
+            return int(pd.to_numeric(frame.loc[mask, "n_rows"], errors="coerce").sum())
+    if "chunk_index" in frame:
+        chunked = frame[frame["chunk_index"].notna()].copy()
+        if not chunked.empty:
+            per_chunk = pd.to_numeric(chunked["n_rows"], errors="coerce").groupby(
+                chunked["chunk_index"]
+            )
+            return int(per_chunk.max().fillna(0).sum())
+    return 0
+
+
+def _max_batch_size(frame: pd.DataFrame) -> int | None:
+    if "n_rows" not in frame:
+        return None
+    values = pd.to_numeric(frame["n_rows"], errors="coerce").dropna()
+    if values.empty:
+        return None
+    return int(values.max())
+
+
+def _performance_by_batch(frame: pd.DataFrame) -> pd.DataFrame:
+    if "chunk_index" not in frame:
+        return pd.DataFrame()
+    work = frame[frame["chunk_index"].notna()].copy()
+    if work.empty:
+        return pd.DataFrame()
+    if "n_rows" in work:
+        work["n_rows"] = pd.to_numeric(work["n_rows"], errors="coerce")
+    else:
+        work["n_rows"] = 0
+    work["elapsed_seconds"] = pd.to_numeric(
+        work["elapsed_seconds"], errors="coerce"
+    ).fillna(0.0)
+    rows = []
+    for chunk_index, group in work.groupby("chunk_index"):
+        elapsed = float(group["elapsed_seconds"].sum())
+        n_rows = (
+            int(group["n_rows"].dropna().max())
+            if group["n_rows"].notna().any()
+            else 0
+        )
+        rows.append(
+            {
+                "chunk_index": int(chunk_index),
+                "n_rows": n_rows,
+                "elapsed_seconds_sum": elapsed,
+                "seconds_per_galaxy": elapsed / n_rows if n_rows > 0 else None,
+                "galaxies_per_second": n_rows / elapsed if elapsed > 0 else None,
+                "stages": ",".join(group["stage"].astype(str).tolist()),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("chunk_index")
+
+
+def _jax_device_metadata() -> dict[str, Any]:
+    try:
+        import jax
+
+        devices = jax.devices()
+        backend = (jax.default_backend() or "").lower()
+    except Exception as exc:  # pragma: no cover - defensive runtime probe
+        return {"backend": "unknown", "n_devices": 0, "error": str(exc)}
+    names = []
+    platforms = []
+    for device in devices:
+        names.append(str(getattr(device, "device_kind", "") or device))
+        platforms.append(str(getattr(device, "platform", "") or backend))
+    normalized_backend = "gpu" if backend in {"gpu", "cuda", "rocm"} else backend
+    return {
+        "backend": normalized_backend,
+        "jax_backend": backend,
+        "n_devices": len(devices),
+        "device_kinds": sorted(set(names)),
+        "platforms": sorted(set(platforms)),
+    }

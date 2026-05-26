@@ -1,9 +1,12 @@
 catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
-ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
+#  ssp_path: "Data/ssp_data_fsps_v3.2_lgmet_age.h5"
+# configs/presets/fs2_common.yaml
+ssp_path: "Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5"
 
 selection:
     index: 0
-    require_positive_flux: true
+    require_positive_flux: false
+    nondetection_policy: gaussian_flux
     sort_by_flux:
 
 eda:
@@ -49,7 +52,7 @@ truth:
         log10_formed_mass_msun:
             column: log_stellar_mass
             transform: log_stellar_mass_h2_to_msun
-            h: 0.67
+            h: 0.73
         log10_metallicity:
             column: metallicity_true
             offset: -10.61

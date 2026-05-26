@@ -47,19 +47,45 @@ Checks without fitting:
    euclid-dsps check --index 0 --out outputs/check/row0_forward
    euclid-dsps check --kind cosmos --limit 20 --out outputs/check/cosmos
 
+Optional reproducible wrapper:
+
+.. code-block:: bash
+
+   snakemake -j1
+
+Override Snakemake run settings with ``--config run_dir=... limit=...``.
+
 Config Shorthands
 -----------------
 
+``runtime: auto``
+  Default science runtime. Lets JAX choose an available backend and clears stale
+  ``JAX_PLATFORMS=cuda`` values inside the process, so CPU-only conda installs
+  do not fail before fitting starts.
+
 ``runtime: gpu``
   Expands to CUDA JAX settings with ``require_gpu: true`` and NVIDIA device
-  check.
+  check. Use only when the active environment exposes CUDA JAX.
 
 ``bands: lsst_euclid_10``
-  Expands to LSST ``ugrizy`` plus Euclid VIS/Y/J/H with catalog Euclid error
-  columns.
+  Expands to LSST ``ugrizy`` plus Euclid VIS/Y/J/H with local passbands from
+  ``filters/`` and catalog flux-error columns for all ten bands.
 
 ``bands: euclid_4``
   Expands to Euclid VIS/Y/J/H only.
+
+``fit.likelihood_space: flux``
+  Uses Gaussian residuals in ``Fnu`` cgs flux units for MAP and MCMC inference.
+  ``mag`` remains available for legacy comparisons.
+
+``selection.nondetection_policy: gaussian_flux``
+  Keeps finite negative/non-positive flux measurements when a valid flux error
+  exists. ``drop`` is the legacy positive-flux-only behavior. ``upper_limit`` is
+  reserved and fails validation until an upper-limit likelihood exists.
+
+``band_calibration.mode: fixed_offsets``
+  Applies fixed per-band magnitude offsets or flux multipliers to the model
+  during likelihood evaluation. Defaults are null and do not change physics.
 
 ``column_groups``
   Replaces long ``extra_columns`` lists. Useful groups are ``truth_basic``,
@@ -68,7 +94,15 @@ Config Shorthands
 
 ``dust_model: cosmos_proxy_fixed``
   Injects COSMOS dust columns into DSPS. These values are copied from the row
-  and must not be interpreted as inferred DSPS dust.
+  and must not be interpreted as catalog truth. Dust can be fitted in alternate
+  configs, but catalog dust columns remain proxy-only diagnostics.
+
+``nebular_emission: ssp_flux``
+  Current default. The DSPS forward model uses the SSP ``ssp_flux`` table as
+  provided. If the SSP contains line-like features, they are already inside that
+  flux table. Separate ``ssp_emline_*`` datasets are read for diagnostics only.
+  ``none`` and ``emline_table`` are reserved config values; neither should be
+  used as a science likelihood until a no-double-count convention is defined.
 
 Science Meaning
 ---------------
@@ -81,10 +115,28 @@ The current fit infers:
 * stellar metallicity proxy ``log10_metallicity``;
 * derived current SFR from fitted mass plus SFH shape.
 
-Truth columns are diagnostics only. The science preset does not feed photo-z
-into DSPS. ``redshift.initial`` draws a deterministic random value inside broad
-bounds, then ``z_obs`` is fitted with a flat prior. PHZ interval priors were
-removed.
+Truth columns are diagnostics only. The science preset fits ``z_obs`` from
+Euclid + LSST photometry with no photo-z prior and no ``phz_median``
+initialization. ``redshift.initial: fixed`` only supplies the MAP starting
+value; ``z_obs`` remains a free bounded parameter. Multi-start MAP redshift was
+removed because posterior sampling is the intended inference path.
+``phz_median`` remains available only through the optional ``phz_diagnostics``
+column group. PHZ interval priors were removed.
+
+``reduced_chi2`` now means ``chi2 / dof`` with
+``dof = max(n_valid_bands - n_free_effective, 1)``. The older per-band metric is
+reported separately as ``chi2_per_band``.
+
+Performance outputs are written for every MAP batch:
+
+* ``batch_fit_performance_summary.json`` contains wall time, seconds per
+  galaxy, throughput, backend/device metadata, and GPU-hour per galaxy when
+  JAX actually uses a GPU backend;
+* ``batch_fit_performance_by_batch.csv`` contains chunk-level throughput.
+
+Redshift attractor outputs are written as ``batch_fit_redshift_attractors.csv``
+and ``batch_fit_redshift_attractors.png``. They summarize repeated MAP redshift
+modes and are diagnostic only, not a global optimizer.
 
 Current priors are broad ``weak_physical`` priors. They are not yet POP-COSMOS
 priors. A POP-COSMOS-like mode needs exact variable mapping and learned

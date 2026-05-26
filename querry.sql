@@ -63,13 +63,53 @@ SELECT
   `euclid_nisp_h_el_model3_ext_odonnell_ext_error`,
   `euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization`,
 
-  -- LSST photometry
+  -- LSST u
   `lsst_u`,
+  `lsst_u_abs`,
+  `lsst_u_el_model3_ext`,
+  `lsst_u_el_model3_ext_odonnell_ext`,
+  `lsst_u_el_model3_ext_odonnell_ext_error`,
+  `lsst_u_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST g
   `lsst_g`,
+  `lsst_g_abs`,
+  `lsst_g_el_model3_ext`,
+  `lsst_g_el_model3_ext_odonnell_ext`,
+  `lsst_g_el_model3_ext_odonnell_ext_error`,
+  `lsst_g_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST r
   `lsst_r`,
+  `lsst_r_abs`,
+  `lsst_r_el_model3_ext`,
+  `lsst_r_el_model3_ext_odonnell_ext`,
+  `lsst_r_el_model3_ext_odonnell_ext_error`,
+  `lsst_r_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST i
   `lsst_i`,
+  `lsst_i_abs`,
+  `lsst_i_el_model3_ext`,
+  `lsst_i_el_model3_ext_odonnell_ext`,
+  `lsst_i_el_model3_ext_odonnell_ext_error`,
+  `lsst_i_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST z
   `lsst_z`,
+  `lsst_z_abs`,
+  `lsst_z_el_model3_ext`,
+  `lsst_z_el_model3_ext_odonnell_ext`,
+  `lsst_z_el_model3_ext_odonnell_ext_error`,
+  `lsst_z_el_model3_ext_odonnell_ext_error_realization`,
+
+  -- LSST y
   `lsst_y`,
+  `lsst_y_abs`,
+  `lsst_y_el_model3_ext`,
+  `lsst_y_el_model3_ext_odonnell_ext`,
+  `lsst_y_el_model3_ext_odonnell_ext_error`,
+  `lsst_y_el_model3_ext_odonnell_ext_error_realization`,
 
   -- physical truth labels
   `log_stellar_mass`,
@@ -152,34 +192,64 @@ WHERE
   AND `sed_cosmos_1` IS NOT NULL
   AND `sed_cosmos_2` IS NOT NULL
 
-  -- required Euclid continuum photometry
+  -- required continuum photometry
   AND `euclid_vis` IS NOT NULL
   AND `euclid_nisp_y` IS NOT NULL
   AND `euclid_nisp_j` IS NOT NULL
   AND `euclid_nisp_h` IS NOT NULL
+  AND `lsst_u` IS NOT NULL
+  AND `lsst_g` IS NOT NULL
+  AND `lsst_r` IS NOT NULL
+  AND `lsst_i` IS NOT NULL
+  AND `lsst_z` IS NOT NULL
+  AND `lsst_y` IS NOT NULL
 
-  -- required Euclid absolute/rest-frame fluxes
+  -- required absolute/rest-frame fluxes
   AND `euclid_vis_abs` IS NOT NULL
   AND `euclid_nisp_y_abs` IS NOT NULL
   AND `euclid_nisp_j_abs` IS NOT NULL
   AND `euclid_nisp_h_abs` IS NOT NULL
+  AND `lsst_u_abs` IS NOT NULL
+  AND `lsst_g_abs` IS NOT NULL
+  AND `lsst_r_abs` IS NOT NULL
+  AND `lsst_i_abs` IS NOT NULL
+  AND `lsst_z_abs` IS NOT NULL
+  AND `lsst_y_abs` IS NOT NULL
 
-  -- required Euclid full observed fluxes
+  -- required full observed fluxes
   AND `euclid_vis_el_model3_ext_odonnell_ext` IS NOT NULL
   AND `euclid_nisp_y_el_model3_ext_odonnell_ext` IS NOT NULL
   AND `euclid_nisp_j_el_model3_ext_odonnell_ext` IS NOT NULL
   AND `euclid_nisp_h_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_u_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_g_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_r_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_i_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_z_el_model3_ext_odonnell_ext` IS NOT NULL
+  AND `lsst_y_el_model3_ext_odonnell_ext` IS NOT NULL
 
-  -- required Euclid errors / noisy realizations
+  -- required errors / noisy realizations
   AND `euclid_vis_el_model3_ext_odonnell_ext_error` IS NOT NULL
   AND `euclid_nisp_y_el_model3_ext_odonnell_ext_error` IS NOT NULL
   AND `euclid_nisp_j_el_model3_ext_odonnell_ext_error` IS NOT NULL
   AND `euclid_nisp_h_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_u_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_g_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_r_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_i_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_z_el_model3_ext_odonnell_ext_error` IS NOT NULL
+  AND `lsst_y_el_model3_ext_odonnell_ext_error` IS NOT NULL
 
   AND `euclid_vis_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
   AND `euclid_nisp_y_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
   AND `euclid_nisp_j_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
   AND `euclid_nisp_h_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_u_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_g_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_r_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_i_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_z_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
+  AND `lsst_y_el_model3_ext_odonnell_ext_error_realization` IS NOT NULL
 
   -- required redshift labels
   AND `phz_mode_1` IS NOT NULL

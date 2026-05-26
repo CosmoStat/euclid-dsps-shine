@@ -116,6 +116,7 @@ def reconstruct_cosmos_seds(
             filters,
             n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
             cosmos_config=cosmos_config,
+            nebular_emission=config.get("nebular_emission", "ssp_flux"),
         )
     perf.mark("load_resources", n_bands=len(config["bands"]), dsps_mode=dsps_mode)
 
@@ -412,6 +413,7 @@ def reconstruct_cosmos_seds(
             out,
             label="cosmos_dsps_likelihood",
             reporting_level=_reporting_level(config),
+            config=config,
         )
         if not dsps_fit_frame.empty:
             write_fit_diagnostic_outputs(

@@ -79,6 +79,24 @@ def test_select_galaxy_row_uses_configured_index() -> None:
     assert row["z_phz"] == 0.5
 
 
+def test_select_galaxy_row_keeps_negative_flux_with_gaussian_policy() -> None:
+    df = pd.DataFrame(
+        {"band_a": [-1.0, 2.0], "band_b": [1.0, 2.0]},
+        index=[10, 11],
+    )
+
+    row_index, row = select_galaxy_row(
+        df,
+        band_columns=["band_a", "band_b"],
+        index=10,
+        require_positive_flux=False,
+        nondetection_policy="gaussian_flux",
+    )
+
+    assert row_index == 10
+    assert row["band_a"] == -1.0
+
+
 def test_run_eda_writes_expected_outputs(tmp_path) -> None:
     config = synthetic_config()
     out = tmp_path / "eda"

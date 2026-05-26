@@ -11,6 +11,16 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .photometry import (
+    abmag_to_fnu_cgs,
+    fluxerr_fnu_cgs_to_magerr,
+    fnu_cgs_to_abmag,
+    microjy_to_fnu_cgs,
+)
+from .photometry import (
+    microjy_to_abmag as _microjy_to_abmag,
+)
+
 
 @dataclass(frozen=True)
 class BandObservation:
@@ -215,26 +225,22 @@ def load_row_indices(path: str | Path) -> list[int]:
 
 def flux_fnu_cgs_to_abmag(flux: float) -> float:
     """Convert F_nu in erg/s/cm^2/Hz to AB magnitude."""
-    if not np.isfinite(flux) or flux <= 0:
-        return float("nan")
-    return float(-2.5 * np.log10(flux) - 48.6)
+    return float(fnu_cgs_to_abmag(flux))
 
 
 def abmag_to_flux_fnu_cgs(mag: float) -> float:
     """Convert AB magnitude to F_nu in erg/s/cm^2/Hz."""
-    return float(10 ** (-0.4 * (mag + 48.6)))
+    return float(abmag_to_fnu_cgs(mag))
 
 
 def microjy_to_flux_fnu_cgs(flux_microjy: float) -> float:
     """Convert microJansky to F_nu in erg/s/cm^2/Hz."""
-    return float(flux_microjy * 1.0e-29)
+    return float(microjy_to_fnu_cgs(flux_microjy))
 
 
 def microjy_to_abmag(flux_microjy: float) -> float:
     """Convert microJansky to AB magnitude."""
-    if not np.isfinite(flux_microjy) or flux_microjy <= 0:
-        return float("nan")
-    return float(-2.5 * np.log10(flux_microjy) + 23.9)
+    return float(_microjy_to_abmag(flux_microjy))
 
 
 def flux_error_to_sigma_mag(
@@ -244,19 +250,11 @@ def flux_error_to_sigma_mag(
     ceiling: float | None = None,
 ) -> float:
     """Convert a flux-density uncertainty into a local AB-mag uncertainty."""
-    if (
-        not np.isfinite(flux_fnu_cgs)
-        or not np.isfinite(flux_error_fnu_cgs)
-        or flux_fnu_cgs <= 0.0
-        or flux_error_fnu_cgs <= 0.0
-    ):
-        return float("nan")
-    sigma = float((2.5 / np.log(10.0)) * abs(flux_error_fnu_cgs / flux_fnu_cgs))
-    if floor is not None and np.isfinite(floor):
-        sigma = max(sigma, float(floor))
-    if ceiling is not None and np.isfinite(ceiling):
-        sigma = min(sigma, float(ceiling))
-    return sigma
+    return float(
+        fluxerr_fnu_cgs_to_magerr(
+            flux_fnu_cgs, flux_error_fnu_cgs, floor=floor, ceiling=ceiling
+        )
+    )
 
 
 def build_observation(

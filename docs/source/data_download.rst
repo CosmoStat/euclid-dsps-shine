@@ -24,8 +24,9 @@ CosmoHub SQL Query
 ------------------
 
 Run the repository SQL in CosmoHub and export the result as parquet. The query
-aliases catalog columns to the names consumed by the configs and includes the
-new value-added diagnostics used for stellar-mass and photo-z validation:
+aliases catalog columns to the names consumed by the configs and includes
+continuum fluxes, rest-frame fluxes, survey-like fluxes, flux errors, and noisy
+realizations for LSST ``ugrizy`` plus Euclid VIS/Y/J/H:
 
 .. literalinclude:: ../../querry.sql
    :language: sql
@@ -43,26 +44,24 @@ The default config requires these canonical columns:
 
    * - Column
      - Purpose
-   * - ``phz_median``
-     - Default redshift estimate used as DSPS ``z_obs``.
-   * - ``phz_min_70``, ``phz_max_70``
-     - NNPZ interval used to derive the row-level redshift prior width.
    * - ``z_true_gal``
      - Preferred truth redshift for galaxy-level diagnostics.
-   * - ``euclid_vis``, ``euclid_nisp_y``, ``euclid_nisp_j``, ``euclid_nisp_h``
-     - Euclid photometry, interpreted as ``Fnu`` in ``erg/s/cm^2/Hz``.
+   * - ``lsst_u`` ... ``lsst_y``, ``euclid_vis`` ... ``euclid_nisp_h``
+     - Continuum photometry interpreted as ``Fnu`` in ``erg/s/cm^2/Hz`` and
+       used by the active DSPS fit.
+   * - ``*_el_model3_ext_odonnell_ext_error``
+     - Per-band flux uncertainties used as the likelihood denominator.
    * - ``sed_cosmos_1``, ``sed_cosmos_2``
      - COSMOS template IDs in local LePhare ``COSMOS_MOD.list`` order.
    * - ``frac_cosmos_1``, ``frac_cosmos_2``
      - Component fractions for COSMOS proxy SED reconstruction. The current
        local parquet contains them, so the default reconstruction policy is
        strict and reports fraction diagnostics.
-   * - ``euclid_*_abs``
-     - Rest-frame Euclid flux density at 10 parsec, used to normalize the
-       COSMOS proxy SED.
-   * - ``euclid_*_el_model3_ext*``
-     - Forward-modelled Euclid flux target variants for observed-frame branch-2
-       diagnostics.
+   * - ``*_abs``
+     - Rest-frame flux density at 10 parsec, used for COSMOS proxy SED
+       diagnostics and normalization checks.
+   * - ``*_el_model3_ext*``
+     - Forward-modelled flux target variants for observed-frame diagnostics.
    * - ``metallicity_true``
      - Gas-phase oxygen abundance truth. Reports convert it to a metallicity proxy with ``offset: -10.61``.
    * - ``log_stellar_mass``
@@ -88,13 +87,17 @@ The production FS2 config expects:
 
    Data/ssp_data_fsps_v3.2_lgmet_age.h5
 
-Euclid passbands are loaded from ``filters/`` in the Euclid-only config. The
-10-band config uses the SciPIC ``value_added_data/filters`` CSV passbands for
-LSST and Euclid so the photometry and pseudo-SED resources share the same local
-data release.
+The active 10-band config loads passbands from the repository ``filters/``
+directory:
 
 .. code-block:: text
 
+   filters/LSST_LSST.u.dat
+   filters/LSST_LSST.g.dat
+   filters/LSST_LSST.r.dat
+   filters/LSST_LSST.i.dat
+   filters/LSST_LSST.z.dat
+   filters/LSST_LSST.y.dat
    filters/Euclid_VIS.vis.dat
    filters/Euclid_NISP.Y.dat
    filters/Euclid_NISP.J.dat
@@ -103,7 +106,7 @@ data release.
 Optional Rest-Frame Flux Columns
 --------------------------------
 
-CosmoHub tooltips expose rest-frame Euclid flux columns such as
+CosmoHub tooltips expose rest-frame flux columns such as ``lsst_u_abs`` and
 ``euclid_nisp_h_abs`` with the description "rest-frame flux at 10 parsec".
 
 When these ``*_abs`` columns are present in the parquet row, the SED diagnostic

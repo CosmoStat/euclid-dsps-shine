@@ -22,6 +22,67 @@ CATALOG_353_URL = "https://cosmohub.pic.es/catalogs/353"
 CATALOG_353_TABLE = "euclid_fs2_mock_dr_v1_1_phz"
 
 
+def _lsst_band_columns(band: str) -> tuple[CatalogColumn, ...]:
+    name = f"lsst_{band}"
+    label = f"LSST {band}"
+    return (
+        CatalogColumn(
+            name,
+            name,
+            "photometry",
+            "float",
+            "erg s^-1 cm^-2 Hz^-1",
+            f"Observed continuum flux including internal attenuation in {label}-band.",
+            "Active science fit target.",
+        ),
+        CatalogColumn(
+            f"{name}_abs",
+            f"{name}_abs",
+            "rest-frame photometry",
+            "float",
+            "erg s^-1 cm^-2 Hz^-1 at 10 pc",
+            f"Rest-frame flux density at 10 parsec in {label}-band.",
+            "Used for COSMOS proxy SED diagnostics when present.",
+        ),
+        CatalogColumn(
+            f"{name}_el_model3_ext",
+            f"{name}_el_model3_ext",
+            "photometry",
+            "float",
+            "erg s^-1 cm^-2 Hz^-1",
+            f"{label} flux including continuum, emission lines, and internal attenuation.",
+            "Diagnostic only until DSPS emission-line likelihood is implemented.",
+        ),
+        CatalogColumn(
+            f"{name}_el_model3_ext_odonnell_ext",
+            f"{name}_el_model3_ext_odonnell_ext",
+            "photometry",
+            "float",
+            "erg s^-1 cm^-2 Hz^-1",
+            f"{label} flux including emission lines, internal attenuation, and Milky Way extinction.",
+            "Survey-like forward-modeled flux; diagnostic only in the active fit.",
+        ),
+        CatalogColumn(
+            f"{name}_el_model3_ext_odonnell_ext_error",
+            f"{name}_el_model3_ext_odonnell_ext_error",
+            "photometry",
+            "float",
+            "erg s^-1 cm^-2 Hz^-1",
+            f"Flux uncertainty for the {label} Milky-Way-extincted flux.",
+            "Used as per-band likelihood uncertainty in the active 10-band config.",
+        ),
+        CatalogColumn(
+            f"{name}_el_model3_ext_odonnell_ext_error_realization",
+            f"{name}_el_model3_ext_odonnell_ext_error_realization",
+            "photometry",
+            "float",
+            "erg s^-1 cm^-2 Hz^-1",
+            f"Noisy realization of the {label} Milky-Way-extincted flux.",
+            "Use for noisy-observation diagnostics, not as the uncertainty.",
+        ),
+    )
+
+
 CATALOG_COLUMNS: tuple[CatalogColumn, ...] = (
     CatalogColumn(
         "ra_gal",
@@ -73,7 +134,7 @@ CATALOG_COLUMNS: tuple[CatalogColumn, ...] = (
         "float",
         "dimensionless",
         "First mode of the photometric-redshift probability distribution.",
-        "Used as fixed DSPS z_obs by the default config.",
+        "Diagnostic/legacy photo-z column; active science fits DSPS z_obs from photometry.",
     ),
     CatalogColumn(
         "z_true_gal",
@@ -348,54 +409,12 @@ CATALOG_COLUMNS: tuple[CatalogColumn, ...] = (
         "Noisy realization of the Euclid VIS Milky-Way-extincted flux.",
         "Branch-2 target set D.",
     ),
-    CatalogColumn(
-        "lsst_u",
-        "lsst_u",
-        "photometry",
-        "float",
-        "erg s^-1 cm^-2 Hz^-1",
-        "Simulated LSST u-band flux density.",
-    ),
-    CatalogColumn(
-        "lsst_g",
-        "lsst_g",
-        "photometry",
-        "float",
-        "erg s^-1 cm^-2 Hz^-1",
-        "Simulated LSST g-band flux density.",
-    ),
-    CatalogColumn(
-        "lsst_r",
-        "lsst_r",
-        "photometry",
-        "float",
-        "erg s^-1 cm^-2 Hz^-1",
-        "Simulated LSST r-band flux density.",
-    ),
-    CatalogColumn(
-        "lsst_i",
-        "lsst_i",
-        "photometry",
-        "float",
-        "erg s^-1 cm^-2 Hz^-1",
-        "Simulated LSST i-band flux density.",
-    ),
-    CatalogColumn(
-        "lsst_z",
-        "lsst_z",
-        "photometry",
-        "float",
-        "erg s^-1 cm^-2 Hz^-1",
-        "Simulated LSST z-band flux density.",
-    ),
-    CatalogColumn(
-        "lsst_y",
-        "lsst_y",
-        "photometry",
-        "float",
-        "erg s^-1 cm^-2 Hz^-1",
-        "Simulated LSST y-band flux density.",
-    ),
+    *_lsst_band_columns("u"),
+    *_lsst_band_columns("g"),
+    *_lsst_band_columns("r"),
+    *_lsst_band_columns("i"),
+    *_lsst_band_columns("z"),
+    *_lsst_band_columns("y"),
     CatalogColumn(
         "log_stellar_mass",
         "log_stellar_mass",

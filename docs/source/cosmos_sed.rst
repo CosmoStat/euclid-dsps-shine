@@ -41,5 +41,6 @@ Interpretation
 
 The science preset uses ``dust_model: cosmos_proxy_fixed``. COSMOS dust columns
 are injected into DSPS so SED shape comparison is not mixed with a free dust
-fit. Emission-line target sets stay out of the likelihood until a compatible
-line model or SSP line assets exist.
+fit. Rest-frame ``*_abs`` columns from LSST and Euclid anchor the proxy SED
+when present. Emission-line target sets stay out of the likelihood until a
+compatible line model or SSP line assets exist.
