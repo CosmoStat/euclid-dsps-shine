@@ -1,12 +1,12 @@
-"""Reproducible entry points for Euclid+LSST DSPS science runs."""
+"""Reproducible entry points for PopCosmos-like DSPS runs."""
 
-configfile: "configs/fs2_phz1_science.yaml"
+configfile: "configs/popcosmos_binned.yaml"
 
-RUN_DIR = config.get("run_dir", "outputs/runs/science_fit_snakemake")
-LIMIT = int(config.get("limit", 1000))
-BATCH_SIZE = int(config.get("batch_size", 2048))
-SED_SAMPLES = int(config.get("sed_samples", 24))
-SCIENCE_CONFIG = config.get("science_config", "configs/fs2_phz1_science.yaml")
+RUN_DIR = config.get("run_dir", "outputs/runs/popcosmos_fit_snakemake")
+LIMIT = int(config.get("limit", 100))
+BATCH_SIZE = int(config.get("batch_size", 64))
+SED_SAMPLES = int(config.get("sed_samples", 8))
+SCIENCE_CONFIG = config.get("science_config", "configs/popcosmos_binned.yaml")
 
 
 rule all:
@@ -23,11 +23,11 @@ rule science_fit:
         config=f"{RUN_DIR}/normalized_config.json",
     shell:
         """
-        euclid-dsps fit \
+        euclid-dsps \
           --config {SCIENCE_CONFIG} \
+          fit \
           --limit {LIMIT} \
           --batch-size {BATCH_SIZE} \
           --sed-samples {SED_SAMPLES} \
           --out {RUN_DIR}
         """
-

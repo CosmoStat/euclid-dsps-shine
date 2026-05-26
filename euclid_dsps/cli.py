@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default="configs/fs2_phz1_science.yaml",
+        default="configs/popcosmos_binned.yaml",
         help="YAML configuration file.",
     )
     sub = parser.add_subparsers(

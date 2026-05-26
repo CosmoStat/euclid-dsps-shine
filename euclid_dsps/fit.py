@@ -17,7 +17,13 @@ import numpy as np
 from jax.scipy.optimize import minimize as jax_minimize
 
 from .io import GalaxyObservation
-from .model import DspsContext, ModelResult, model_mags_jax, run_dsps_model
+from .model import (
+    DspsContext,
+    ModelResult,
+    dynamic_model_args,
+    model_mags_jax_dynamic,
+    run_dsps_model,
+)
 from .photometry import abmag_to_fnu_cgs, abmag_to_fnu_cgs_jax, magerr_to_fluxerr_fnu_cgs
 
 
@@ -67,7 +73,7 @@ def fit_one_galaxy(
 ) -> FitResult:
     """Fit configured DSPS parameters with pure-JAX gradients."""
     method = str(fit_config.get("method", "jax_adam")).lower()
-    if method in {"jax_adam", "jax_adam_vmap"}:
+    if method == "jax_adam_vmap":
         observed_mag, sigma_mag, _ = _observation_arrays(observation)
         observed_flux, flux_error = _observation_flux_arrays(observation)
         batch = fit_galaxy_batch_adam(
@@ -131,6 +137,7 @@ def fit_one_galaxy(
     observed_fit = jnp.asarray(observed_fit[0], dtype=float)
     sigma_fit = jnp.asarray(sigma_fit[0], dtype=float)
     finite_mask = jnp.asarray(finite_mask[0])
+    model_args = dynamic_model_args(context)
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
     tolerance = float(fit_config.get("tolerance", 1.0e-5))
@@ -144,9 +151,9 @@ def fit_one_galaxy(
         params.update({name: value for name, value in zip(names, x, strict=True)})
         return params
 
-    def objective(x: jnp.ndarray) -> jnp.ndarray:
+    def objective(x: jnp.ndarray, args: tuple[Any, ...]) -> jnp.ndarray:
         params = unpack_jax(x)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, args, params)
         model_values = _model_values_for_likelihood(model_mag, fit_config)
         chi = jnp.where(finite_mask, (observed_fit - model_values) / sigma_fit, 0.0)
         chi2 = jnp.sum(chi**2)
@@ -164,7 +171,17 @@ def fit_one_galaxy(
         objective_value = chi2 + float(fit_config.get("prior_weight", 1.0)) * prior
         return jnp.nan_to_num(objective_value, nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
-    value_and_grad = jax.jit(jax.value_and_grad(objective))
+    value_and_grad_fn = jax.value_and_grad(objective, argnums=0)
+    if _should_jit_single_fit(context, fit_config):
+        compiled_value_and_grad = jax.jit(value_and_grad_fn)
+
+        def value_and_grad(x: jnp.ndarray):
+            return compiled_value_and_grad(x, model_args)
+
+    else:
+
+        def value_and_grad(x: jnp.ndarray):
+            return value_and_grad_fn(x, model_args)
     if method == "jax_adam":
         best_x, state, best_value, best_grad_norm, success, message = _fit_bounded_adam(
             value_and_grad=value_and_grad,
@@ -205,6 +222,26 @@ def fit_one_galaxy(
         model_result=best_model,
         gradient_norm=float(best_grad_norm),
     )
+
+
+def _should_jit_single_fit(context: DspsContext, fit_config: dict[str, Any]) -> bool:
+    """Use JIT unless explicitly disabled.
+
+    Large context arrays are passed as dynamic arguments to compiled model calls,
+    so the gas grid size no longer needs to disable single-galaxy JIT.
+    """
+    if "jit" in fit_config:
+        return bool(fit_config["jit"])
+    return True
+
+
+def _context_gas_grid_nbytes(context: DspsContext) -> int:
+    grid = context.ssp_flux_gas_grid_jax
+    if grid is None:
+        return 0
+    shape = getattr(grid, "shape", ())
+    dtype = np.dtype(getattr(grid, "dtype", np.float32))
+    return int(np.prod(shape, dtype=np.int64)) * dtype.itemsize
 
 
 def _initial_value(
@@ -467,6 +504,7 @@ def fit_galaxy_batch_adam(
     observed = jnp.asarray(observed_values, dtype=_FIT_DTYPE)
     sigma = jnp.asarray(sigma_values, dtype=_FIT_DTYPE)
     mask = jnp.asarray(valid_mask)
+    model_args = dynamic_model_args(context)
     warm_observed_mag = jnp.asarray(observed_mag, dtype=_FIT_DTYPE)
     warm_mask = jnp.isfinite(warm_observed_mag) & jnp.isfinite(
         jnp.asarray(sigma_mag, dtype=_FIT_DTYPE)
@@ -521,6 +559,7 @@ def fit_galaxy_batch_adam(
         jnp.asarray(setup["prior_beta_alpha"], dtype=_FIT_DTYPE),
         jnp.asarray(setup["prior_beta_beta"], dtype=_FIT_DTYPE),
         jnp.asarray(truth_theta_arr, dtype=_FIT_DTYPE),
+        model_args,
     )
     best_matrix = _apply_free_values(
         base_matrix, best_theta, jnp.asarray(setup["free_indices"])
@@ -570,6 +609,7 @@ def fit_population_batch_adam(
     observed = jnp.asarray(observed_values)
     sigma = jnp.asarray(sigma_values)
     mask = jnp.asarray(valid_mask)
+    model_args = dynamic_model_args(context)
     warm_observed_mag = jnp.asarray(observed_mag)
     warm_mask = jnp.isfinite(warm_observed_mag) & jnp.isfinite(jnp.asarray(sigma_mag))
     lower = jnp.asarray(setup["lower"])
@@ -665,6 +705,7 @@ def fit_population_batch_adam(
         jnp.asarray(setup["prior_beta_alpha"]),
         jnp.asarray(setup["prior_beta_beta"]),
         jnp.asarray(truth_theta_arr),
+        model_args,
     )
     best_matrix = _apply_free_values(
         base_matrix, best_theta, jnp.asarray(setup["free_indices"])
@@ -984,9 +1025,9 @@ def _build_independent_adam_optimizer(
         else None
     )
 
-    def single_chi2(theta, base, observed, sigma, mask):
+    def single_chi2(theta, base, observed, sigma, mask, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         model_values = (
@@ -1011,8 +1052,9 @@ def _build_independent_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
+        model_args,
     ):
-        chi2 = single_chi2(theta, base, observed, sigma, mask)
+        chi2 = single_chi2(theta, base, observed, sigma, mask, model_args)
         prior = _physical_prior_penalty(
             theta,
             lower,
@@ -1031,14 +1073,14 @@ def _build_independent_adam_optimizer(
             neginf=1.0e30,
         )
 
-    def single_mags(theta, base):
+    def single_mags(theta, base, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         return model_mag
 
-    batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
+    batch_mags = jax.vmap(single_mags, in_axes=(0, 0, None))
     amplitude_free_pos = _free_position(
         parameter_names, free_indices, "log10_formed_mass_msun"
     )
@@ -1063,7 +1105,11 @@ def _build_independent_adam_optimizer(
         prior_beta_alpha,
         prior_beta_beta,
         truth_theta,
+        model_args,
     ):
+        def batch_mags_with_args(theta, base):
+            return batch_mags(theta, base, model_args)
+
         theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
@@ -1071,7 +1117,7 @@ def _build_independent_adam_optimizer(
             warm_mask,
             lower,
             upper,
-            batch_mags,
+            batch_mags_with_args,
             amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
@@ -1109,6 +1155,7 @@ def _build_independent_adam_optimizer(
                 prior_beta_mask_i,
                 prior_beta_alpha_i,
                 prior_beta_beta_i,
+                model_args,
             )
 
         batch_objective_y_grad = jax.vmap(
@@ -1147,8 +1194,8 @@ def _build_independent_adam_optimizer(
             y = jnp.clip(
                 y - learning_rate * m_hat / (jnp.sqrt(v_hat) + 1.0e-8), -30.0, 30.0
             )
-            chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
-                theta, base_matrix, observed, sigma, mask
+            chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0, None))(
+                theta, base_matrix, observed, sigma, mask, model_args
             )
             metrics = jnp.concatenate(
                 [
@@ -1165,10 +1212,10 @@ def _build_independent_adam_optimizer(
             carry0,
             jnp.arange(maxiter, dtype=jnp.int32),
         )
-        best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
-            best_theta, base_matrix, observed, sigma, mask
+        best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0, None))(
+            best_theta, base_matrix, observed, sigma, mask, model_args
         )
-        model_mags = batch_mags(best_theta, base_matrix)
+        model_mags = batch_mags(best_theta, base_matrix, model_args)
         return best_theta, best_chi2, best_grad, model_mags, metrics
 
     return optimize
@@ -1203,9 +1250,9 @@ def _build_population_adam_optimizer(
         else None
     )
 
-    def single_chi2(theta, base, observed, sigma, mask):
+    def single_chi2(theta, base, observed, sigma, mask, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         model_values = (
@@ -1218,7 +1265,7 @@ def _build_population_adam_optimizer(
 
     batch_chi2_grad = jax.vmap(
         single_chi2,
-        in_axes=(0, 0, 0, 0, 0),
+        in_axes=(0, 0, 0, 0, 0, None),
     )
 
     def loss(
@@ -1242,8 +1289,9 @@ def _build_population_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
+        model_args,
     ):
-        chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
+        chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask, model_args)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
         default_prior = 0.5 * jnp.sum(
             relation_default_mask
@@ -1288,14 +1336,14 @@ def _build_population_adam_optimizer(
 
     value_and_grad = jax.value_and_grad(loss, argnums=(0, 1, 2, 3, 4, 5))
 
-    def single_mags(theta, base):
+    def single_mags(theta, base, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         return model_mag
 
-    batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
+    batch_mags = jax.vmap(single_mags, in_axes=(0, 0, None))
     amplitude_free_pos = _free_position(
         parameter_names, free_indices, "log10_formed_mass_msun"
     )
@@ -1320,7 +1368,11 @@ def _build_population_adam_optimizer(
         prior_beta_alpha,
         prior_beta_beta,
         truth_theta,
+        model_args,
     ):
+        def batch_mags_with_args(theta, base):
+            return batch_mags(theta, base, model_args)
+
         theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
@@ -1328,7 +1380,7 @@ def _build_population_adam_optimizer(
             warm_mask,
             lower,
             upper,
-            batch_mags,
+            batch_mags_with_args,
             amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
@@ -1431,6 +1483,8 @@ def _build_population_adam_optimizer(
                 observed,
                 sigma,
                 mask,
+                warm_observed_mag,
+                warm_mask,
                 lower,
                 upper,
                 prior_gaussian_mask,
@@ -1439,6 +1493,7 @@ def _build_population_adam_optimizer(
                 prior_beta_mask,
                 prior_beta_alpha,
                 prior_beta_beta,
+                model_args,
             )
             (
                 grad_theta_direct,
@@ -1460,6 +1515,8 @@ def _build_population_adam_optimizer(
                     observed,
                     sigma,
                     mask,
+                    warm_observed_mag,
+                    warm_mask,
                     lower,
                     upper,
                     prior_gaussian_mask,
@@ -1468,6 +1525,7 @@ def _build_population_adam_optimizer(
                     prior_beta_mask,
                     prior_beta_alpha,
                     prior_beta_beta,
+                    model_args,
                 )
             )(y)
             improved = value < best_loss
@@ -1522,7 +1580,7 @@ def _build_population_adam_optimizer(
                             value,
                             jnp.nanmean(
                                 batch_chi2_grad(
-                                    theta, base_matrix, observed, sigma, mask
+                                    theta, base_matrix, observed, sigma, mask, model_args
                                 )
                             ),
                             jnp.nanmean(jnp.linalg.norm(grad_theta_direct, axis=1)),
@@ -1580,9 +1638,9 @@ def _build_population_adam_optimizer(
         relation_sigma = jax.nn.softplus(best_relation_raw_sigma) + sigma_floor
         chi2, grad = jax.vmap(
             jax.value_and_grad(single_chi2, argnums=0),
-            in_axes=(0, 0, 0, 0, 0),
-        )(best_theta, base_matrix, observed, sigma, mask)
-        model_mags = batch_mags(best_theta, base_matrix)
+            in_axes=(0, 0, 0, 0, 0, None),
+        )(best_theta, base_matrix, observed, sigma, mask, model_args)
+        model_mags = batch_mags(best_theta, base_matrix, model_args)
         return (
             best_theta,
             best_mu,

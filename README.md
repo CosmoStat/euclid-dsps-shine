@@ -1,155 +1,191 @@
-# Euclid DSPS SHINE
+# DSPS PopCosmos
 
-DSPS-like SED inference from Euclid + LSST photometry.
+DSPS/JAX fitting workflow for Euclid + LSST photometry with two PopCosmos-like
+production configurations:
 
-Main goal:
+```text
+configs/popcosmos_binned.yaml
+configs/popcosmos_diffstar.yaml
+```
 
-- fit simple DSPS parameters from catalog photometry;
-- compare recovered redshift, mass, SFR, and metallicity proxies to FS2 truth/proxy columns;
-- compare inferred DSPS SEDs to COSMOS-template proxy SEDs;
-- keep MAP fast for batches and keep HMC/NUTS posterior sampling for selected galaxies.
+`popcosmos_binned.yaml` fits redshift, stellar mass, six PopCosmos-like SFH bin
+ratios, stellar metallicity, Charlot-Fall dust, gas metallicity, gas ionization,
+AGN fraction, and AGN torus optical depth. `popcosmos_diffstar.yaml` keeps the
+same gas/dust/AGN/redshift/metallicity surface but replaces the six SFH bin
+ratios with the six-free-parameter Diffstar SFH path. The gas and AGN pieces
+come from generated FSPS HDF5 assets in `Data/`.
 
-## Quick Start
+## Setup
 
 ```bash
 conda activate shine
 python -m pip install -e .
 ```
 
-Recommended science config:
+For the Diffstar config, also install the optional SFH dependencies in the same
+environment:
+
+```bash
+python -m pip install -e '.[diffstar]'
+```
+
+Install FSPS/python-FSPS in the same environment:
+
+```bash
+cd "$HOME/src"
+export SPS_HOME="$HOME/src/fsps"
+git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
+
+cd /home/maxime/src/DSPS-pop-cosmos
+export SPS_HOME="$HOME/src/fsps"
+uv pip install fsps
+```
+
+Sanity check:
+
+```bash
+python -c "import fsps; sp=fsps.StellarPopulation(sfh=0); print(len(sp.wavelengths)); print(sp.isoc_library, sp.spec_library)"
+```
+
+## Data And Assets
+
+The config expects:
 
 ```text
-configs/fs2_phz1_science.yaml
+Data/Euclid FS2 LC galaxy catalog_phz1.parquet
+Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5
+Data/popcosmos_gas_ssp_grid.h5
+Data/popcosmos_agn_template_grid.h5
 ```
 
-Run MAP fits and save SED diagnostics:
+Download the reference SSP if needed:
 
 ```bash
-euclid-dsps fit \
-  --limit 1000 \
-  --batch-size 512 \
-  --sed-samples 16 \
-  --out outputs/runs/science_fit
+python scripts/manage_ssp.py download fsps_v0.4.7_u-2.0
+python scripts/manage_ssp.py test Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5
 ```
 
-Optional Snakemake wrapper:
+Generate and validate the gas grid:
 
 ```bash
-snakemake -j1
+export SPS_HOME="$HOME/src/fsps"
+
+python scripts/generate_fsps_gas_grid.py \
+  --output Data/popcosmos_gas_ssp_grid.h5 \
+  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --overwrite
+
+python scripts/generate_fsps_gas_grid.py \
+  --output Data/popcosmos_gas_ssp_grid.h5 \
+  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --validate-only
 ```
 
-Run one galaxy:
+Generate and validate the AGN grid:
 
 ```bash
-euclid-dsps fit --index 0 --out outputs/runs/row0_fit
+python scripts/generate_fsps_agn_grid.py \
+  --output Data/popcosmos_agn_template_grid.h5 \
+  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --agn-tau-grid 5 10 20 30 40 60 80 100 150 \
+  --fagn-normalization 1.0 \
+  --tage-gyr 1.0 \
+  --stellar-logzsol 0.0 \
+  --overwrite
+
+python scripts/generate_fsps_agn_grid.py \
+  --output Data/popcosmos_agn_template_grid.h5 \
+  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --validate-only
 ```
 
-Run HMC/NUTS posterior checks on selected rows:
+Expected generated shapes:
+
+```text
+gas ssp_flux: (7, 7, 12, 107, 11149)
+AGN template_lnu_per_lbol: (9, 11149)
+```
+
+## Run
+
+Use CPU-safe JAX settings on WSL unless you have a CUDA-enabled JAX install:
 
 ```bash
-euclid-dsps posterior \
-  --row-indices-file outputs/runs/science_fit/hmc_row_indices.txt \
-  --num-warmup 300 \
-  --num-samples 800 \
-  --out outputs/runs/posterior_subset
+export JAX_PLATFORMS=cpu
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
 ```
 
-Run sanity checks without fitting:
+One-row short fit:
 
 ```bash
-euclid-dsps check --kind eda --out outputs/check/eda
-euclid-dsps check --index 0 --out outputs/check/row0_forward
-euclid-dsps check --kind cosmos --limit 20 --out outputs/check/cosmos
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_binned.yaml \
+  fit --index 0 \
+  --fit-maxiter 20 \
+  --out outputs/runs/dev_popcosmos_one_short \
+  --sed-samples 1
 ```
 
-## Simple CLI
-
-Public commands:
-
-- `fit`: MAP fit. Uses `--index` for one row, otherwise batch mode.
-- `posterior`: HMC/NUTS for one row or a small row list.
-- `check`: EDA, forward pass, or standalone COSMOS proxy SED checks.
-
-## Science Config
-
-`configs/fs2_phz1_science.yaml` is intentionally short. It uses:
-
-- `bands: lsst_euclid_10` for LSST `ugrizy` + Euclid VIS/Y/J/H;
-- local passbands from `filters/` and catalog flux errors from
-  `*_el_model3_ext_odonnell_ext_error`;
-- `fit.likelihood_space: flux`, so inference optimizes Gaussian residuals in
-  `Fnu` cgs flux units; AB magnitudes remain reporting/legacy diagnostics;
-- `selection.nondetection_policy: gaussian_flux`, so finite non-positive fluxes
-  with valid errors remain usable constraints in flux space;
-- `band_calibration.mode: none` by default, with optional fixed per-band offsets
-  for calibration tests;
-- `column_groups` instead of a long `extra_columns` list;
-- `dust_model: cosmos_proxy_fixed` so COSMOS dust columns are row-injected, not inferred as DSPS `dust_av`;
-- `nebular_emission: ssp_flux`, meaning current photometry uses whatever line
-  content is already present in the SSP flux table; separate SSP line tables
-  are diagnostic only;
-- `redshift.initial: fixed` only for MAP initialization; `z_obs` stays a free
-  bounded fit parameter with no `phz_median` initialization and no photo-z prior;
-- broad non-circular `weak_physical` priors for the current DSPS parameterization;
-- `plot_ground_truth: true` so SED diagnostics overlay the COSMOS proxy when local resources exist.
-
-Expanded normalized config is written in run outputs as `normalized_config.json`.
-
-## Outputs
-
-Batch MAP writes:
-
-- `batch_fit_results.*`: recovered parameters, derived SFR, truth/proxy columns, optimizer diagnostics;
-- `batch_fit_photometry_comparison.*`: observed vs model photometry;
-- `chi2_per_band` and `reduced_chi2_dof`: per-band diagnostic and
-  DOF-corrected reduced chi2 are reported separately;
-- `batch_fit_performance_summary.json` and
-  `batch_fit_performance_by_batch.csv`: wall time, seconds per galaxy,
-  throughput, backend/device metadata, and GPU-hour per galaxy when a GPU
-  backend is used;
-- `batch_fit_redshift_attractors.csv`: repeated MAP redshift modes and their
-  truth/proxy diagnostics;
-- `batch_fit_nebular_*.csv`: diagnostic-only SSP emission-line inventory and
-  line/filter crossings near fitted-redshift attractors when the SSP asset
-  exposes `ssp_emline_*`;
-- `batch_fit_parameter_audit.csv`: labels fixed, free, derived, or row-injected columns;
-- fit-vs-catalog truth/proxy plots skip inactive fixed parameters such as
-  `dust_av` under COSMOS proxy dust; dust is never treated as catalog truth;
-- `sed_diagnostics/`: best and worst DSPS SED diagnostics, COSMOS proxy SED overlays, filters, and photometry constraints for sampled rows;
-- `normalized_config.json`: exact expanded config used for audit.
-
-Posterior runs write `posterior_samples.csv`, `posterior_summary.csv`, posterior predictive photometry, and diagnostics.
-
-## Priors
-
-Current priors are `weak_physical`: broad, stabilizing, and non-circular.
-
-Do not call them POP-COSMOS priors yet. POP-COSMOS uses learned population priors from rich COSMOS photometry; matching that requires exact parameter mapping, units, and selection treatment before implementation.
-
-## Current Fit Size
-
-The science MAP fit has five active parameters:
-
-- `z_obs`;
-- `log10_formed_mass_msun`;
-- `sfh_t_peak`;
-- `sfh_tau`;
-- `log10_metallicity`.
-
-DSPS itself is a differentiable SPS framework, not one fixed photo-z fitting
-model with a canonical parameter count. A later Diffstar preset should define
-its own explicit parameter mapping and priors.
-
-## Development Checks
+Diffstar one-row short fit:
 
 ```bash
-uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-uv run euclid-dsps --help
-uv run pytest
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_diffstar.yaml \
+  fit --index 0 \
+  --fit-maxiter 20 \
+  --out outputs/runs/dev_popcosmos_diffstar_one_short \
+  --sed-samples 1
 ```
 
-GPU JAX setup may differ between `conda shine` and `uv`. Verify long GPU runs with:
+Batched fit:
 
 ```bash
-python scripts/check_jax_gpu.py --require-nvidia --hold-seconds 10
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_binned.yaml \
+  fit --limit 20 \
+  --batch-size 5 \
+  --out outputs/runs/dev_popcosmos_batch \
+  --sed-samples 4
 ```
+
+Diffstar GPU smoke, start small because the same gas grid and optimizer buffers
+must fit in device memory:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_diffstar.yaml \
+  fit --limit 16 \
+  --batch-size 4 \
+  --out outputs/runs/dev_popcosmos_diffstar_gpu_batch4 \
+  --sed-samples 2
+```
+
+Posterior smoke:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_binned.yaml \
+  posterior --index 0 \
+  --num-warmup 10 \
+  --num-samples 10 \
+  --out outputs/runs/dev_popcosmos_posterior_one
+```
+
+## Checks
+
+```bash
+uv run python -m compileall euclid_dsps scripts
+uv run pytest tests
+uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --help
+uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --help
+```
+
+The optimizer and post-fit batch prediction paths pass large SSP/gas/AGN arrays
+as dynamic JAX arguments to jitted model calls, so XLA does not compile the full
+gas grid as a closed-over constant. Gas-grid interpolation gathers only the four
+bracketing gas-metallicity/gas-ionization slabs. For GPU runs, use a
+CUDA-enabled JAX install and enough device memory for the ~2.6 GiB gas grid plus
+optimizer/reporting buffers; reduce `--batch-size` first if memory is
+exhausted.

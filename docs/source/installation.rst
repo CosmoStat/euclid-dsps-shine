@@ -1,71 +1,74 @@
 Installation
 ============
 
+Python Environment
+------------------
+
+Use the existing ``shine`` environment:
 
 .. code-block:: bash
 
    conda activate shine
    python -m pip install -e .
 
-Future ``uv`` workflow target:
+The codebase should still import under ``uv`` for tests and packaging checks:
 
 .. code-block:: bash
 
    uv sync
+   uv run python -m compileall euclid_dsps scripts
    uv run euclid-dsps --help
-   uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
 
-GPU JAX may require a different install command under ``uv`` than under
-``conda activate shine``. Keep the exact CPU/GPU commands documented before
-using ``uv`` for production GPU runs.
+Diffstar SFH Optional Extra
+---------------------------
 
-For documentation and quality tooling:
-
-.. code-block:: bash
-
-   python -m pip install sphinx sphinx-rtd-theme
-   python -m pip install pytest ruff black
-
-Core Checks
------------
-
-Run the checks used while developing:
+``configs/popcosmos_diffstar.yaml`` requires ``diffstar`` and ``diffmah``. In
+the runtime environment:
 
 .. code-block:: bash
 
-   python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-   euclid-dsps --config configs/fs2_phz1_science.yaml fit --index 0 --out outputs/runs/dev_fit_one
-   euclid-dsps --config configs/fs2_phz1_science.yaml fit --limit 20 --batch-size 5 --out outputs/runs/dev_fit_batch
+   python -m pip install -e '.[diffstar]'
 
-When posterior code changes, also run a tiny posterior smoke:
+The standard binned-SFH config does not require this optional extra.
 
-.. code-block:: bash
+FSPS And python-FSPS
+--------------------
 
-   euclid-dsps --config configs/fs2_phz1_science.yaml posterior --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_posterior_one
-
-Documentation Build
--------------------
-
-Build Sphinx documentation locally:
+The PopCosmos-like config requires generated FSPS gas and AGN grids. Install
+FSPS and python-FSPS in the runtime environment used for generation:
 
 .. code-block:: bash
 
-   python -m sphinx -W --keep-going -b html docs/source docs/build/html
+   cd "$HOME/src"
+   export SPS_HOME="$HOME/src/fsps"
+   git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
 
-Quality Tooling
----------------
+   cd /home/maxime/src/DSPS-pop-cosmos
+   export SPS_HOME="$HOME/src/fsps"
+   uv pip install fsps
 
-Run the same formatting and lint checks as CI:
-
-.. code-block:: bash
-
-   python -m black --check euclid_dsps scripts
-   python -m ruff check euclid_dsps scripts tests
-   python -m pytest tests
-
-Format code before committing:
+Check that python-FSPS sees the expected libraries:
 
 .. code-block:: bash
 
-   python -m black euclid_dsps scripts
-   python -m ruff check --fix euclid_dsps scripts tests
+   python -c "import fsps; sp=fsps.StellarPopulation(sfh=0); print(len(sp.wavelengths)); print(sp.isoc_library, sp.spec_library)"
+
+Expected local output for the current assets is ``11149`` wavelength samples
+with ``mist`` and ``c3k_a``.
+
+Quality Checks
+--------------
+
+.. code-block:: bash
+
+   uv run python -m compileall euclid_dsps scripts
+   uv run pytest tests
+   uv run python -m sphinx -W --keep-going -b html docs/source docs/build/html
+
+GPU Note
+--------
+
+The default documented commands use CPU-safe JAX settings because the local
+``shine`` environment may not have CUDA-enabled ``jaxlib``. For GPU production,
+install a matching CUDA JAX stack first and keep large FSPS grids out of JAX
+closures so XLA does not compile them as constants.

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from euclid_dsps.config import (
@@ -11,6 +9,10 @@ from euclid_dsps.config import (
     validate_catalog_columns,
 )
 from euclid_dsps.io import required_catalog_columns
+from euclid_dsps.parameters import (
+    DIFFSTAR_REDUCED6_PARAMETER_NAMES,
+    POPCOSMOS_PARAMETER_NAMES,
+)
 
 
 def minimal_config() -> dict:
@@ -95,6 +97,82 @@ def test_invalid_nebular_emission_mode_fails_fast() -> None:
     config["nebular_emission"] = "magic_lines"
 
     with pytest.raises(ConfigValidationError, match="nebular_emission"):
+        normalize_config(config)
+
+
+def test_gas_grid_required_when_gas_params_free() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "log10_gas_metallicity": {"initial": 0.0, "bounds": [-2.5, 0.5]},
+        }
+    }
+
+    with pytest.raises(ConfigValidationError, match="model\\.nebular_model='gas_grid'"):
+        normalize_config(config)
+
+
+def test_agn_grid_required_when_agn_params_free() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "ln_fagn": {"initial": -8.0, "bounds": [-14.0, 1.0]},
+        }
+    }
+
+    with pytest.raises(ConfigValidationError, match="model\\.agn_model='template_grid'"):
+        normalize_config(config)
+
+
+def test_popcosmos_binned_forbids_legacy_free_parameters() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "sfh_tau": {"initial": 0.6, "bounds": [0.08, 4.0]},
+        }
+    }
+
+    with pytest.raises(ConfigValidationError, match="sfh_tau"):
+        normalize_config(config)
+
+
+def test_diffstar_forbids_binned_sfh_free_parameters() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "diffstar_reduced6",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "dlog10_sfr_1": {"initial": 0.0, "bounds": [-3.0, 3.0]},
+        }
+    }
+
+    with pytest.raises(ConfigValidationError, match="dlog10_sfr_1"):
         normalize_config(config)
 
 
@@ -187,32 +265,24 @@ def test_validate_catalog_columns_reports_missing_columns() -> None:
         validate_catalog_columns(config, {"euclid_vis", "z_phz", "z_true", "ra_gal"})
 
 
-def test_legacy_euclid_config_was_moved_to_examples() -> None:
-    assert Path("configs/legacy/fs2_phz1.yaml").exists()
-    assert not Path("configs/fs2_phz1.yaml").exists()
-
-
-def test_science_config_is_main_lsst_euclid_setup() -> None:
-    config = load_config("configs/fs2_phz1_science.yaml")
+def test_popcosmos_binned_config_is_main_binned_setup() -> None:
+    config = load_config("configs/popcosmos_binned.yaml")
 
     band_names = [band["name"] for band in config["bands"]]
     assert len(band_names) == 10
     assert {"euclid_vis", "euclid_nisp_h", "lsst_u", "lsst_y"}.issubset(band_names)
-    assert config["cosmos_sed"]["observed_photometry_target_sets"] == [
-        "continuum_internal_dust"
-    ]
-    assert config["cosmos_sed"]["use_cosmos_dust_in_dsps"] is True
-    assert "dust_av" not in config["fit"]["free_parameters"]
-    assert "log10_sfr" not in config["fit"]["free_parameters"]
-    assert "log10_formed_mass_msun" in config["fit"]["free_parameters"]
-    assert set(config["sample"]["priors"]) == set(config["fit"]["free_parameters"])
-    assert config["fit"]["priors"]["z_obs"]["type"] == "uniform"
+    assert tuple(config["fit"]["free_parameters"]) == POPCOSMOS_PARAMETER_NAMES
+    assert config["model"]["sfh_model"] == "popcosmos_bins"
+    assert config["model"]["nebular_model"] == "gas_grid"
+    assert config["model"]["gas_grid_path"] == "Data/popcosmos_gas_ssp_grid.h5"
+    assert config["model"]["agn_model"] == "template_grid"
+    assert (
+        config["model"]["agn_template_path"]
+        == "Data/popcosmos_agn_template_grid.h5"
+    )
     assert config["fit"]["likelihood_space"] == "flux"
     assert config["fit"]["flux_error_floor_frac"] == 0.02
     assert config["selection"]["nondetection_policy"] == "gaussian_flux"
-    assert config["band_calibration"]["mode"] == "none"
-    assert config["nebular_emission"] == "ssp_flux"
-    assert "sfh_t_peak" in config["fit"]["free_parameters"]
     assert config["bands"][0]["error_column"] == "lsst_u_el_model3_ext_odonnell_ext_error"
     assert config["bands"][0]["filter"]["path"] == "filters/LSST_LSST.u.dat"
     assert config["bands"][6]["error_column"].endswith("_error")
@@ -226,23 +296,35 @@ def test_science_config_is_main_lsst_euclid_setup() -> None:
     assert config["runtime"]["jax_platforms"] == "auto"
     assert config["runtime"]["disable_jax_plugin_autoload"] is False
     assert config["runtime"]["require_gpu"] is False
-
-
-def test_science_config_expands_shorthands() -> None:
-    config = load_config("configs/fs2_phz1_science.yaml")
-
-    band_names = [band["name"] for band in config["bands"]]
-    assert len(band_names) == 10
-    assert band_names[:2] == ["lsst_u", "lsst_g"]
-    assert config["runtime"]["require_gpu"] is False
-    assert config["cosmos_sed"]["use_cosmos_dust_in_dsps"] is True
-    assert config["model"]["parameter_columns"]["cosmos_ebv_1"] == "ebv_cosmos_1"
-    assert "phz_min_70" not in config["extra_columns"]
-    assert "phz_median" not in config["extra_columns"]
     assert "lsst_u_el_model3_ext_odonnell_ext_error" in config["extra_columns"]
-    assert "lsst_y_abs" in config["extra_columns"]
-    assert config["reporting"]["plot_ground_truth"] is True
-    assert config["fit"]["priors"]["z_obs"]["type"] == "uniform"
+    assert config["fit"]["free_parameters"]["ln_tauagn"]["initial"] == 2.302585
+    assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
+        1.609438,
+        5.010635,
+    ]
+
+
+def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:
+    config = load_config("configs/popcosmos_diffstar.yaml")
+
+    assert tuple(config["fit"]["free_parameters"]) == DIFFSTAR_REDUCED6_PARAMETER_NAMES
+    assert config["model"]["sfh_model"] == "diffstar_reduced6"
+    assert config["model"]["stellar_metallicity_model"] == "single"
+    assert config["model"]["dust_model"] == "charlot_fall"
+    assert config["model"]["nebular_model"] == "gas_grid"
+    assert config["model"]["gas_grid_path"] == "Data/popcosmos_gas_ssp_grid.h5"
+    assert config["model"]["agn_model"] == "template_grid"
+    assert (
+        config["model"]["agn_template_path"]
+        == "Data/popcosmos_agn_template_grid.h5"
+    )
+    assert config["model"]["z_sun"] == 0.0134
+    assert config["model"]["fixed_parameters"]["diffstar_indx_hi"] == -1.0
+    assert config["model"]["fixed_parameters"]["diffstar_qlglgdt"] == -0.50725
+    assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
+        1.609438,
+        5.010635,
+    ]
 
 
 def test_cosmos_sed_defaults_are_normalized() -> None:

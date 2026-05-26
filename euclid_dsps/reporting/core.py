@@ -20,7 +20,11 @@ from cycler import cycler
 
 from ..io import GalaxyObservation, ensure_dir, write_json
 from ..model import ModelResult, comparison_rows
-from ..semantics import active_parameters, is_comparable_fit_parameter
+from ..semantics import (
+    DERIVED_PARAMETERS,
+    active_parameters,
+    is_comparable_fit_parameter,
+)
 
 
 def configure_plot_style() -> None:
@@ -666,13 +670,7 @@ def fit_parameter_audit(fits: pd.DataFrame, config: dict[str, Any]) -> pd.DataFr
     fixed = config.get("model", {}).get("fixed_parameters", {}) or {}
     injected = config.get("model", {}).get("parameter_columns", {}) or {}
     active = set(active_parameters(config))
-    derived = {
-        "t_obs_gyr",
-        "formed_mass_msun",
-        "log10_formed_mass_msun",
-        "sfr_at_obs_msun_per_yr",
-        "log10_sfr_at_obs",
-    }
+    derived = set(DERIVED_PARAMETERS)
     rows = []
     for column in sorted(c for c in fits.columns if c.startswith("fit_")):
         name = column[4:]

@@ -1,0 +1,145 @@
+catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
+ssp_path: "Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5"
+
+runtime: auto
+bands: lsst_euclid_10
+nebular_emission: ssp_flux
+prior_set: flat_diffstar_popcosmos
+
+column_groups:
+    - truth_basic
+    - photometry_errors
+
+selection:
+    index: 0
+    require_positive_flux: false
+    nondetection_policy: gaussian_flux
+    sort_by_flux:
+
+redshift:
+    initial: fixed
+    column:
+    truth_column: z_true_gal
+    fixed_value: 0.5
+    min: 0.0001
+    max: 6.0
+    seed: 42
+    prior_z:
+        mode: none
+
+truth:
+    redshift_column: z_true_gal
+    parameter_columns:
+        log10_formed_mass_msun:
+            column: log_stellar_mass
+            transform: log_stellar_mass_h2_to_msun
+            h: 0.73
+        log10_metallicity:
+            column: metallicity_true
+            offset: -10.61
+        log10_sfr_at_obs: log_sfr_true
+        dust_av:
+            column: dust_ebv_true
+            scale: 4.05
+
+model:
+    n_sfh_bins: 96
+    sfh_model: diffstar_reduced6
+    stellar_metallicity_model: single
+    dust_model: charlot_fall
+    igm_model: madau95_approx
+    nebular_model: gas_grid
+    gas_grid_path: Data/popcosmos_gas_ssp_grid.h5
+    agn_model: template_grid
+    agn_template_path: Data/popcosmos_agn_template_grid.h5
+    z_sun: 0.0134
+    birth_cloud_slope: -1.0
+    fixed_parameters:
+        diffstar_indx_hi: -1.0
+        diffstar_qlglgdt: -0.50725
+
+fit:
+    method: jax_adam
+    likelihood_space: flux
+    flux_error_floor_frac: 0.02
+    flux_error_jitter: 0.0
+    maxiter: 200
+    learning_rate: 0.05
+    tolerance: 1.0e-5
+    patience: 24
+    prior_weight: 1.0
+    free_parameters:
+        z_obs:
+            initial: 1.0
+            bounds: [0.001, 6.0]
+        log10_stellar_mass:
+            initial: 10.0
+            bounds: [6.0, 13.0]
+        diffstar_lgmcrit:
+            initial: 12.0
+            bounds: [9.0, 14.5]
+        diffstar_lgy_at_mcrit:
+            initial: -10.0
+            bounds: [-13.0, -8.0]
+        diffstar_indx_lo:
+            initial: 1.0
+            bounds: [0.0, 5.0]
+        diffstar_lg_qt:
+            initial: 1.0
+            bounds: [-1.0, 1.5]
+        diffstar_lg_drop:
+            initial: -1.0
+            bounds: [-4.0, 0.0]
+        diffstar_lg_rejuv:
+            initial: -0.2
+            bounds: [-4.0, 1.0]
+        log10_stellar_metallicity:
+            initial: 0.0
+            bounds: [-2.5, 0.5]
+        tau2:
+            initial: 0.3
+            bounds: [0.0, 4.0]
+        dust_index_n:
+            initial: -0.7
+            bounds: [-2.5, 0.5]
+        tau1_over_tau2:
+            initial: 1.0
+            bounds: [0.0, 5.0]
+        log10_gas_metallicity:
+            initial: 0.0
+            bounds: [-2.5, 0.5]
+        log10_gas_ionization:
+            initial: -2.0
+            bounds: [-4.5, -0.5]
+        ln_fagn:
+            initial: -8.0
+            bounds: [-14.0, 1.0]
+        ln_tauagn:
+            initial: 2.302585
+            bounds: [1.609438, 5.010635]
+
+sample:
+    sampler: nuts
+    num_warmup: 100
+    num_samples: 200
+    num_chains: 1
+    chain_method: parallel
+    target_accept_prob: 0.85
+    max_tree_depth: 10
+    num_steps: 8
+    dense_mass: false
+    seed: 42
+    progress_bar: true
+    init_from_map: true
+    save_samples: true
+    priors: {}
+
+reporting:
+    level: full
+    save_sed_samples: 16
+    plot_filters: true
+    plot_ground_truth: true
+
+output:
+    format: parquet
+    verbose_benchmark: true

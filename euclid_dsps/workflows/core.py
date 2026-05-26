@@ -104,6 +104,7 @@ def prepare_one(config: dict[str, Any]):
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     params = parameters_for_row(
         config["model"]["fixed_parameters"],
@@ -226,6 +227,7 @@ def sample_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
 
     summary_rows = []
@@ -497,6 +499,7 @@ def run_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -596,6 +599,7 @@ def fit_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -1139,6 +1143,7 @@ def fit_population(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 

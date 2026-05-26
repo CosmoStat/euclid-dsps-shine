@@ -1,146 +1,198 @@
-Run Setup
-=========
+Run And Fit
+===========
 
-Use the science preset unless you are debugging internals:
+Production Configs
+------------------
+
+There are two active PopCosmos-like production configs:
 
 .. code-block:: text
 
-   configs/fs2_phz1_science.yaml
+   configs/popcosmos_binned.yaml
+   configs/popcosmos_diffstar.yaml
 
-This preset expands to the full internal schema at load time. Every audited run
-writes ``normalized_config.json`` beside the outputs.
+Both are standalone and use:
 
-Main Commands
+* LSST ``ugrizy`` + Euclid VIS/Y/J/H;
+* flux-space likelihood with catalog flux errors;
+* single stellar metallicity;
+* Charlot-Fall age-dependent dust;
+* FSPS gas SSP grid over gas metallicity and ionization;
+* FSPS/CLUMPY AGN template grid over ``agn_tau``.
+
+``popcosmos_binned.yaml`` fits six PopCosmos-like SFH bin ratios.
+``popcosmos_diffstar.yaml`` keeps the same gas/dust/AGN surface but replaces
+those ratios with the six-free-parameter Diffstar SFH. Install the optional
+dependency set before using it:
+
+.. code-block:: bash
+
+   python -m pip install -e '.[diffstar]'
+
+CPU Runtime
+-----------
+
+Use this on WSL or CPU-only environments:
+
+.. code-block:: bash
+
+   export JAX_PLATFORMS=cpu
+   export XLA_PYTHON_CLIENT_PREALLOCATE=false
+
+GPU Runtime
+-----------
+
+Use this only in an environment with CUDA-enabled JAX:
+
+.. code-block:: bash
+
+   export JAX_PLATFORMS=cuda
+   export XLA_PYTHON_CLIENT_PREALLOCATE=false
+   export TF_GPU_ALLOCATOR=cuda_malloc_async
+
+The fit and post-fit batch prediction paths pass large SSP/gas/AGN arrays as
+dynamic JAX arguments, so JIT does not compile the full gas grid as a
+closed-over constant. Gas-grid interpolation gathers only the four bracketing
+gas-metallicity/gas-ionization slabs, but the grid plus optimizer/reporting
+buffers still must fit in device memory. If a GPU run exhausts memory, reduce
+``--batch-size`` first.
+
+One Row
+-------
+
+Short optimizer smoke:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --index 0 \
+     --fit-maxiter 20 \
+     --out outputs/runs/dev_popcosmos_one_short \
+     --sed-samples 1
+
+Production-style one-row run:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --index 0 \
+     --out outputs/runs/dev_popcosmos_one \
+     --sed-samples 1
+
+Diffstar one-row smoke:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_diffstar.yaml \
+     fit --index 0 \
+     --fit-maxiter 20 \
+     --out outputs/runs/dev_popcosmos_diffstar_one_short \
+     --sed-samples 1
+
+Batched MAP
+-----------
+
+Small batch:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --limit 20 \
+     --batch-size 5 \
+     --out outputs/runs/dev_popcosmos_batch \
+     --sed-samples 4
+
+Larger batch:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --limit 1000 \
+     --batch-size 64 \
+     --out outputs/runs/popcosmos_fit_1000 \
+     --sed-samples 16
+
+Diffstar GPU smoke, starting from the known safe batch size:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_diffstar.yaml \
+     fit --limit 16 \
+     --batch-size 4 \
+     --out outputs/runs/dev_popcosmos_diffstar_gpu_batch4 \
+     --sed-samples 2
+
+Forward Check
 -------------
 
-MAP fit:
+Run the model without optimization:
 
 .. code-block:: bash
 
-   euclid-dsps fit \
-     --limit 1000 \
-     --batch-size 512 \
-     --sed-samples 16 \
-     --out outputs/runs/science_fit
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --index 0 \
+     --no-optimize \
+     --out outputs/runs/dev_popcosmos_forward \
+     --sed-samples 1
 
-One row:
-
-.. code-block:: bash
-
-   euclid-dsps fit --index 0 --out outputs/runs/row0_fit
-
-Posterior subset:
-
-.. code-block:: bash
-
-   euclid-dsps posterior \
-     --row-indices-file outputs/rows_for_hmc.txt \
-     --num-warmup 300 \
-     --num-samples 800 \
-     --out outputs/runs/posterior_subset
-
-Checks without fitting:
-
-.. code-block:: bash
-
-   euclid-dsps check --kind eda --out outputs/check/eda
-   euclid-dsps check --index 0 --out outputs/check/row0_forward
-   euclid-dsps check --kind cosmos --limit 20 --out outputs/check/cosmos
-
-Optional reproducible wrapper:
-
-.. code-block:: bash
-
-   snakemake -j1
-
-Override Snakemake run settings with ``--config run_dir=... limit=...``.
-
-Config Shorthands
------------------
-
-``runtime: auto``
-  Default science runtime. Lets JAX choose an available backend and clears stale
-  ``JAX_PLATFORMS=cuda`` values inside the process, so CPU-only conda installs
-  do not fail before fitting starts.
-
-``runtime: gpu``
-  Expands to CUDA JAX settings with ``require_gpu: true`` and NVIDIA device
-  check. Use only when the active environment exposes CUDA JAX.
-
-``bands: lsst_euclid_10``
-  Expands to LSST ``ugrizy`` plus Euclid VIS/Y/J/H with local passbands from
-  ``filters/`` and catalog flux-error columns for all ten bands.
-
-``bands: euclid_4``
-  Expands to Euclid VIS/Y/J/H only.
-
-``fit.likelihood_space: flux``
-  Uses Gaussian residuals in ``Fnu`` cgs flux units for MAP and MCMC inference.
-  ``mag`` remains available for legacy comparisons.
-
-``selection.nondetection_policy: gaussian_flux``
-  Keeps finite negative/non-positive flux measurements when a valid flux error
-  exists. ``drop`` is the legacy positive-flux-only behavior. ``upper_limit`` is
-  reserved and fails validation until an upper-limit likelihood exists.
-
-``band_calibration.mode: fixed_offsets``
-  Applies fixed per-band magnitude offsets or flux multipliers to the model
-  during likelihood evaluation. Defaults are null and do not change physics.
-
-``column_groups``
-  Replaces long ``extra_columns`` lists. Useful groups are ``truth_basic``,
-  ``cosmos_proxy``, ``photometry_errors``, ``emission_line_diagnostics``, and
-  ``morphology_halo``. ``phz_diagnostics`` exists only for explicit audits.
-
-``dust_model: cosmos_proxy_fixed``
-  Injects COSMOS dust columns into DSPS. These values are copied from the row
-  and must not be interpreted as catalog truth. Dust can be fitted in alternate
-  configs, but catalog dust columns remain proxy-only diagnostics.
-
-``nebular_emission: ssp_flux``
-  Current default. The DSPS forward model uses the SSP ``ssp_flux`` table as
-  provided. If the SSP contains line-like features, they are already inside that
-  flux table. Separate ``ssp_emline_*`` datasets are read for diagnostics only.
-  ``none`` and ``emline_table`` are reserved config values; neither should be
-  used as a science likelihood until a no-double-count convention is defined.
-
-Science Meaning
+Posterior Smoke
 ---------------
 
-The current fit infers:
+.. code-block:: bash
 
-* ``z_obs``;
-* ``log10_formed_mass_msun``;
-* lognormal SFH shape ``sfh_t_peak`` and ``sfh_tau``;
-* stellar metallicity proxy ``log10_metallicity``;
-* derived current SFR from fitted mass plus SFH shape.
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     posterior --index 0 \
+     --num-warmup 10 \
+     --num-samples 10 \
+     --out outputs/runs/dev_popcosmos_posterior_one
 
-Truth columns are diagnostics only. The science preset fits ``z_obs`` from
-Euclid + LSST photometry with no photo-z prior and no ``phz_median``
-initialization. ``redshift.initial: fixed`` only supplies the MAP starting
-value; ``z_obs`` remains a free bounded parameter. Multi-start MAP redshift was
-removed because posterior sampling is the intended inference path.
-``phz_median`` remains available only through the optional ``phz_diagnostics``
-column group. PHZ interval priors were removed.
+Parameter Vector
+----------------
 
-``reduced_chi2`` now means ``chi2 / dof`` with
-``dof = max(n_valid_bands - n_free_effective, 1)``. The older per-band metric is
-reported separately as ``chi2_per_band``.
+The active fit parameters are:
 
-Performance outputs are written for every MAP batch:
+.. code-block:: text
 
-* ``batch_fit_performance_summary.json`` contains wall time, seconds per
-  galaxy, throughput, backend/device metadata, and GPU-hour per galaxy when
-  JAX actually uses a GPU backend;
-* ``batch_fit_performance_by_batch.csv`` contains chunk-level throughput.
+   z_obs
+   log10_stellar_mass
+   dlog10_sfr_1 ... dlog10_sfr_6
+   log10_stellar_metallicity
+   tau2
+   dust_index_n
+   tau1_over_tau2
+   log10_gas_metallicity
+   log10_gas_ionization
+   ln_fagn
+   ln_tauagn
 
-Redshift attractor outputs are written as ``batch_fit_redshift_attractors.csv``
-and ``batch_fit_redshift_attractors.png``. They summarize repeated MAP redshift
-modes and are diagnostic only, not a global optimizer.
+``ln_tauagn`` is restricted to the native FSPS/CLUMPY template range
+``[ln(5), ln(150)]``.
 
-Current priors are broad ``weak_physical`` priors. They are not yet POP-COSMOS
-priors. A POP-COSMOS-like mode needs exact variable mapping and learned
-population-prior calibration before it should be used.
+The Diffstar config uses the same non-SFH parameters but replaces
+``dlog10_sfr_1 ... dlog10_sfr_6`` with:
 
-Legacy configs live under ``configs/legacy`` as examples only. Active runs
-should start from ``fit``, ``posterior``, and ``check``.
+.. code-block:: text
+
+   diffstar_lgmcrit
+   diffstar_lgy_at_mcrit
+   diffstar_indx_lo
+   diffstar_lg_qt
+   diffstar_lg_drop
+   diffstar_lg_rejuv
+
+``diffstar_indx_hi`` and ``diffstar_qlglgdt`` are fixed in the config.
+
+Outputs
+-------
+
+MAP runs write normalized config, fit results, photometry comparisons,
+optimizer diagnostics, performance summaries, and optional SED diagnostics under
+the requested output directory.

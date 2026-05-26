@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reports.py` writes tables and plots, and `pipeline.py` composes CLI workflows. Configurations live in `configs/`; the active science setup is `configs/fs2_phz1_science.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
+The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reporting/` writes tables and plots, and `workflows/` composes CLI workflows. Configurations live in `configs/`; the active science setups are `configs/popcosmos_binned.yaml` and `configs/popcosmos_diffstar.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
 
 ## Build, Test, and Development Commands
 
@@ -17,7 +17,7 @@ The project should also be kept compatible with a future `uv` workflow. When dep
 
 ```bash
 uv sync
-uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
+uv run python -m compileall euclid_dsps scripts
 uv run euclid-dsps --help
 ```
 
@@ -26,9 +26,10 @@ If GPU JAX setup differs between `conda shine` and `uv`, document the exact comm
 Run the main checks:
 
 ```bash
-python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-euclid-dsps fit --config configs/fs2_phz1_science.yaml --index 0 --out outputs/runs/dev_fit_one
-euclid-dsps fit --config configs/fs2_phz1_science.yaml --limit 20 --batch-size 5 --out outputs/runs/dev_fit_batch
+python -m compileall euclid_dsps scripts
+python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --index 0 --out outputs/runs/dev_popcosmos_one --sed-samples 1
+python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --limit 20 --batch-size 5 --out outputs/runs/dev_popcosmos_batch --sed-samples 4
+python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_one_short --sed-samples 1
 ```
 
 Use `fit` only with a small `--limit` while iterating because it runs one optimizer per galaxy.
@@ -39,10 +40,10 @@ Use Python 3.11+ with type hints and small, explicit functions. Keep DSPS-specif
 
 ## Testing Guidelines
 
-There is no formal test suite yet. For changes, run `compileall`, one-row `fit`, and a small batch `fit`. If touching posterior logic, also run:
+For changes, run `compileall`, `pytest`, one-row `fit`, and a small batch `fit`. If touching posterior logic, also run:
 
 ```bash
-euclid-dsps posterior --config configs/fs2_phz1_science.yaml --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_posterior_one
+python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml posterior --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_popcosmos_posterior_one
 ```
 
 ## Commit & Pull Request Guidelines

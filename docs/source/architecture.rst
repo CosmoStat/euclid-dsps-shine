@@ -45,18 +45,17 @@ assets:
        workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
-     fs2_phz1_science.yaml Active LSST+Euclid science setup.
-     legacy/         Old config examples, not active workflow defaults.
-     smoke_test.yaml Lightweight smoke-test setup.
+     popcosmos_binned.yaml   LSST+Euclid gas+AGN setup with binned SFH.
+     popcosmos_diffstar.yaml LSST+Euclid gas+AGN setup with Diffstar SFH.
    scripts/
      quickstart_one_galaxy.py
      convert_euclid_filters.py
    Data/             Local data and DSPS assets, not source.
    outputs/          Generated run outputs, not source.
 
-The current package has good high-level boundaries. The main cleanup need is
-not a rewrite; it is reducing module size and documenting contracts so new
-science experiments stay local to config, model, fit, or reporting layers.
+The active runtime path is intentionally narrow: two production configs,
+generated FSPS assets in ``Data/``, and CLI workflows under ``fit``,
+``posterior``, and ``check``.
 
 Layer Responsibilities
 ----------------------
