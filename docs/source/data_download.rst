@@ -1,115 +1,125 @@
-Data Download
-=============
+Data And FSPS Assets
+====================
 
-Catalog Source
---------------
+Catalog
+-------
 
-The default workflow expects the Euclid FS2 PHZ parquet file at:
+The single active config expects the Euclid FS2 PHZ parquet at:
 
 .. code-block:: text
 
    Data/Euclid FS2 LC galaxy catalog_phz1.parquet
 
-The data used by the default configuration was queried from CosmoHub catalog
-353:
+The local query is kept in ``querry.sql`` and targets CosmoHub catalog 353:
 
 .. code-block:: text
 
    https://cosmohub.pic.es/catalogs/353
 
-``Data/`` is local runtime state and is ignored by git. Keep large parquet
-files, SSP templates, downloaded DSPS assets, and local data manifests there.
+It should export LSST ``ugrizy`` and Euclid VIS/Y/J/H continuum fluxes,
+per-band flux errors, redshift truth, and basic physical proxy columns. See
+:doc:`catalog_columns` for the selected column contract.
 
-CosmoHub SQL Query
-------------------
+Reference SSP
+-------------
 
-Run the repository SQL in CosmoHub and export the result as parquet. The query
-aliases catalog columns to the names consumed by the configs and includes
-continuum fluxes, rest-frame fluxes, survey-like fluxes, flux errors, and noisy
-realizations for LSST ``ugrizy`` plus Euclid VIS/Y/J/H:
-
-.. literalinclude:: ../../querry.sql
-   :language: sql
-
-Column Contract
----------------
-
-See :doc:`catalog_columns` for the complete documented subset selected by the
-SQL query, including source names, aliases, units, and project usage notes.
-
-The default config requires these canonical columns:
-
-.. list-table::
-   :header-rows: 1
-
-   * - Column
-     - Purpose
-   * - ``z_true_gal``
-     - Preferred truth redshift for galaxy-level diagnostics.
-   * - ``lsst_u`` ... ``lsst_y``, ``euclid_vis`` ... ``euclid_nisp_h``
-     - Continuum photometry interpreted as ``Fnu`` in ``erg/s/cm^2/Hz`` and
-       used by the active DSPS fit.
-   * - ``*_el_model3_ext_odonnell_ext_error``
-     - Per-band flux uncertainties used as the likelihood denominator.
-   * - ``sed_cosmos_1``, ``sed_cosmos_2``
-     - COSMOS template IDs in local LePhare ``COSMOS_MOD.list`` order.
-   * - ``frac_cosmos_1``, ``frac_cosmos_2``
-     - Component fractions for COSMOS proxy SED reconstruction. The current
-       local parquet contains them, so the default reconstruction policy is
-       strict and reports fraction diagnostics.
-   * - ``*_abs``
-     - Rest-frame flux density at 10 parsec, used for COSMOS proxy SED
-       diagnostics and normalization checks.
-   * - ``*_el_model3_ext*``
-     - Forward-modelled flux target variants for observed-frame diagnostics.
-   * - ``metallicity_true``
-     - Gas-phase oxygen abundance truth. Reports convert it to a metallicity proxy with ``offset: -10.61``.
-   * - ``log_stellar_mass``
-     - Stellar mass in ``log10(Msun h^-2)``. Reports convert it to
-       ``log10(Msun)`` using the configured catalog ``h`` value.
-   * - ``log_sfr_true``
-     - Catalog log SFR truth. Reports compare it with derived ``log10_sfr_at_obs``.
-   * - ``dust_ebv_true``
-     - Intrinsic dust color-excess proxy. Reports convert it to ``A_V`` with ``scale: 4.05``.
-
-Local DSPS Assets
------------------
-
-Download small DSPS smoke-test assets into ``Data/``:
+Download the reference DSPS SSP used to align the generated grids:
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/smoke_test.yaml download-assets --out Data
+   python scripts/manage_ssp.py download fsps_v0.4.7_u-2.0
+   python scripts/manage_ssp.py test Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5
 
-The production FS2 config expects:
-
-.. code-block:: text
-
-   Data/ssp_data_fsps_v3.2_lgmet_age.h5
-
-The active 10-band config loads passbands from the repository ``filters/``
-directory:
+The config path is:
 
 .. code-block:: text
 
-   filters/LSST_LSST.u.dat
-   filters/LSST_LSST.g.dat
-   filters/LSST_LSST.r.dat
-   filters/LSST_LSST.i.dat
-   filters/LSST_LSST.z.dat
-   filters/LSST_LSST.y.dat
-   filters/Euclid_VIS.vis.dat
-   filters/Euclid_NISP.Y.dat
-   filters/Euclid_NISP.J.dat
-   filters/Euclid_NISP.H.dat
+   Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5
 
-Optional Rest-Frame Flux Columns
---------------------------------
+FSPS Setup
+----------
 
-CosmoHub tooltips expose rest-frame flux columns such as ``lsst_u_abs`` and
-``euclid_nisp_h_abs`` with the description "rest-frame flux at 10 parsec".
+Generation requires python-FSPS and ``SPS_HOME``:
 
-When these ``*_abs`` columns are present in the parquet row, the SED diagnostic
-uses them to anchor the rest-frame pseudo-SED directly. If they are absent, the
-diagnostic falls back to converting observed fluxes to rest-frame luminosity
-density with the luminosity distance.
+.. code-block:: bash
+
+   conda activate shine
+   export SPS_HOME="$HOME/src/fsps"
+
+   python -c "import fsps; sp=fsps.StellarPopulation(sfh=0); print(len(sp.wavelengths)); print(sp.isoc_library, sp.spec_library)"
+
+The expected local setup reports ``11149`` wavelengths, ``mist`` isochrones,
+and ``c3k_a`` spectra.
+
+Gas Grid
+--------
+
+Generate the production gas SSP grid:
+
+.. code-block:: bash
+
+   python scripts/generate_fsps_gas_grid.py \
+     --output Data/popcosmos_gas_ssp_grid.h5 \
+     --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --overwrite
+
+Validate it:
+
+.. code-block:: bash
+
+   python scripts/generate_fsps_gas_grid.py \
+     --output Data/popcosmos_gas_ssp_grid.h5 \
+     --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --validate-only
+
+Expected shape:
+
+.. code-block:: text
+
+   ssp_flux: (7, 7, 12, 107, 11149)
+
+The axes are gas metallicity, gas ionization, stellar metallicity, SSP age, and
+wavelength. The spectra use the DSPS ``Lsun/Hz/Msun formed`` convention.
+
+AGN Grid
+--------
+
+Generate the AGN template grid:
+
+.. code-block:: bash
+
+   python scripts/generate_fsps_agn_grid.py \
+     --output Data/popcosmos_agn_template_grid.h5 \
+     --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --agn-tau-grid 5 10 20 30 40 60 80 100 150 \
+     --fagn-normalization 1.0 \
+     --tage-gyr 1.0 \
+     --stellar-logzsol 0.0 \
+     --overwrite
+
+Validate it:
+
+.. code-block:: bash
+
+   python scripts/generate_fsps_agn_grid.py \
+     --output Data/popcosmos_agn_template_grid.h5 \
+     --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --validate-only
+
+Expected shape:
+
+.. code-block:: text
+
+   template_lnu_per_lbol: (9, 11149)
+
+The AGN grid uses the native FSPS/Nenkova optical depths
+``5, 10, 20, 30, 40, 60, 80, 100, 150``. The fit parameter ``ln_tauagn`` is
+bounded to ``[ln(5), ln(150)]`` in ``configs/popcosmos_binned.yaml``.
+
+Files Not Tracked
+-----------------
+
+All generated ``.h5`` assets, parquet catalogs, and run outputs stay under
+``Data/`` or ``outputs/`` and should not be committed.

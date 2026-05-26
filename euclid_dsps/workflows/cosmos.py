@@ -117,6 +117,7 @@ def reconstruct_cosmos_seds(
             n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
             cosmos_config=cosmos_config,
             nebular_emission=config.get("nebular_emission", "ssp_flux"),
+            model_config=config.get("model"),
         )
     perf.mark("load_resources", n_bands=len(config["bands"]), dsps_mode=dsps_mode)
 

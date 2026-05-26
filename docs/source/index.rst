@@ -26,5 +26,4 @@ The project keeps the scientific boundary narrow:
    cosmos_sed
    run_setup
    science_assessment
-   diffstar_assessment
    testing

@@ -9,6 +9,8 @@ from typing import Any
 
 import yaml
 
+from .parameters import POPCOSMOS_PARAMETER_NAMES
+
 
 @dataclass(frozen=True)
 class Paths:
@@ -31,6 +33,21 @@ DEFAULT_MODEL_PARAMETERS = {
     "cosmos_frac_2": 0.5,
     "cosmos_ext_curve_1": 0.0,
     "cosmos_ext_curve_2": 0.0,
+    "log10_stellar_mass": 10.0,
+    "dlog10_sfr_1": 0.0,
+    "dlog10_sfr_2": 0.0,
+    "dlog10_sfr_3": 0.0,
+    "dlog10_sfr_4": 0.0,
+    "dlog10_sfr_5": 0.0,
+    "dlog10_sfr_6": 0.0,
+    "log10_stellar_metallicity": 0.0,
+    "tau2": 0.3,
+    "dust_index_n": -0.7,
+    "tau1_over_tau2": 1.0,
+    "log10_gas_metallicity": 0.0,
+    "log10_gas_ionization": -2.0,
+    "ln_fagn": -8.0,
+    "ln_tauagn": 2.302585,
 }
 
 DEFAULT_REDSHIFT_CONFIG = {
@@ -69,6 +86,12 @@ SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
 SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
 SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
+SUPPORTED_SFH_MODELS = {"lognormal", "popcosmos_bins"}
+SUPPORTED_STELLAR_METALLICITY_MODELS = {"mdf", "single"}
+SUPPORTED_MODEL_DUST_MODELS = {"legacy", "charlot_fall"}
+SUPPORTED_IGM_MODELS = {"none", "madau95_approx"}
+SUPPORTED_NEBULAR_MODELS = {"fixed_ssp", "gas_grid"}
+SUPPORTED_AGN_MODELS = {"none", "template_grid"}
 SUPPORTED_REDSHIFT_INITIALS = {
     "catalog_column",
     "fixed",
@@ -503,6 +526,20 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["model"]["fixed_parameters"] = fixed
     config["model"].setdefault("parameter_columns", {})
     config["model"].setdefault("n_sfh_bins", 96)
+    sfh_model = str(config["model"].get("sfh_model", "lognormal"))
+    config["model"]["sfh_model"] = sfh_model
+    config["model"].setdefault(
+        "stellar_metallicity_model",
+        "single" if sfh_model == "popcosmos_bins" else "mdf",
+    )
+    config["model"].setdefault(
+        "dust_model",
+        "charlot_fall" if sfh_model == "popcosmos_bins" else "legacy",
+    )
+    config["model"].setdefault("igm_model", "none")
+    config["model"].setdefault("nebular_model", "fixed_ssp")
+    config["model"].setdefault("agn_model", "none")
+    config["model"].setdefault("z_sun", 0.0134)
 
     config["fit"].setdefault(
         "free_parameters",
@@ -793,6 +830,7 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_redshift(config.get("redshift", {}), errors)
     _validate_model(config.get("model", {}), errors)
     _validate_fit(config.get("fit", {}), errors)
+    _validate_model_fit_contract(config.get("model", {}), config.get("fit", {}), errors)
     _validate_nebular_emission(config.get("nebular_emission"), errors)
     _validate_sample(config.get("sample", {}), config.get("fit", {}), errors)
     _validate_truth(config.get("truth", {}), errors)
@@ -959,6 +997,44 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     n_sfh_bins = model.get("n_sfh_bins")
     if not isinstance(n_sfh_bins, int) or n_sfh_bins < 2:
         errors.append("model.n_sfh_bins must be an integer >= 2")
+    sfh_model = str(model.get("sfh_model", "lognormal"))
+    if sfh_model not in SUPPORTED_SFH_MODELS:
+        errors.append(f"model.sfh_model must be one of {sorted(SUPPORTED_SFH_MODELS)}")
+    stellar_model = str(model.get("stellar_metallicity_model", "mdf"))
+    if stellar_model not in SUPPORTED_STELLAR_METALLICITY_MODELS:
+        errors.append(
+            "model.stellar_metallicity_model must be one of "
+            f"{sorted(SUPPORTED_STELLAR_METALLICITY_MODELS)}"
+        )
+    dust_model = str(model.get("dust_model", "legacy"))
+    if dust_model not in SUPPORTED_MODEL_DUST_MODELS:
+        errors.append(
+            f"model.dust_model must be one of {sorted(SUPPORTED_MODEL_DUST_MODELS)}"
+        )
+    igm_model = str(model.get("igm_model", "none"))
+    if igm_model not in SUPPORTED_IGM_MODELS:
+        errors.append(f"model.igm_model must be one of {sorted(SUPPORTED_IGM_MODELS)}")
+    nebular_model = str(model.get("nebular_model", "fixed_ssp"))
+    if nebular_model not in SUPPORTED_NEBULAR_MODELS:
+        errors.append(
+            f"model.nebular_model must be one of {sorted(SUPPORTED_NEBULAR_MODELS)}"
+        )
+    agn_model = str(model.get("agn_model", "none"))
+    if agn_model not in SUPPORTED_AGN_MODELS:
+        errors.append(f"model.agn_model must be one of {sorted(SUPPORTED_AGN_MODELS)}")
+    _positive_float(model.get("z_sun", 0.0134), "model.z_sun", errors)
+    if nebular_model == "gas_grid":
+        _require_model_path(model.get("gas_grid_path"), "model.gas_grid_path", errors)
+    else:
+        _optional_string(model.get("gas_grid_path"), "model.gas_grid_path", errors)
+    if agn_model == "template_grid":
+        _require_model_path(
+            model.get("agn_template_path"), "model.agn_template_path", errors
+        )
+    else:
+        _optional_string(
+            model.get("agn_template_path"), "model.agn_template_path", errors
+        )
     fixed = model.get("fixed_parameters")
     if not isinstance(fixed, dict):
         errors.append("model.fixed_parameters must be a mapping")
@@ -972,6 +1048,97 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
         for name, column in parameter_columns.items():
             if not isinstance(name, str) or not isinstance(column, str) or not column:
                 errors.append("model.parameter_columns keys and values must be strings")
+
+
+def _validate_model_fit_contract(
+    model: dict[str, Any], fit: dict[str, Any], errors: list[str]
+) -> None:
+    free = fit.get("free_parameters", {})
+    if not isinstance(free, dict):
+        return
+    free_names = set(free)
+    sfh_model = str(model.get("sfh_model", "lognormal"))
+    if sfh_model == "popcosmos_bins":
+        _validate_popcosmos_free_parameters(model, free_names, errors)
+    elif sfh_model == "lognormal":
+        _validate_lognormal_free_parameters(free_names, errors)
+
+
+def _validate_popcosmos_free_parameters(
+    model: dict[str, Any], free_names: set[str], errors: list[str]
+) -> None:
+    legacy_forbidden = {
+        "sfh_t_peak",
+        "sfh_tau",
+        "log10_sfr",
+        "metallicity_scatter",
+    }
+    forbidden_active = sorted(free_names & legacy_forbidden)
+    for name in forbidden_active:
+        errors.append(
+            f"fit.free_parameters.{name} is ignored by model.sfh_model='popcosmos_bins'"
+        )
+
+    if str(model.get("stellar_metallicity_model", "single")) != "single":
+        errors.append(
+            "model.sfh_model='popcosmos_bins' requires "
+            "model.stellar_metallicity_model='single'"
+        )
+    if str(model.get("dust_model", "charlot_fall")) != "charlot_fall":
+        errors.append(
+            "model.sfh_model='popcosmos_bins' requires "
+            "model.dust_model='charlot_fall'"
+        )
+
+    allowed = set(POPCOSMOS_PARAMETER_NAMES)
+    nebular_model = str(model.get("nebular_model", "fixed_ssp"))
+    agn_model = str(model.get("agn_model", "none"))
+    gas_names = {"log10_gas_metallicity", "log10_gas_ionization"}
+    agn_names = {"ln_fagn", "ln_tauagn"}
+    if nebular_model != "gas_grid":
+        allowed -= gas_names
+        for name in sorted(free_names & gas_names):
+            errors.append(
+                f"fit.free_parameters.{name} requires model.nebular_model='gas_grid'"
+            )
+    if agn_model == "none":
+        allowed -= agn_names
+        for name in sorted(free_names & agn_names):
+            errors.append(f"fit.free_parameters.{name} requires model.agn_model='template_grid'")
+    unknown = sorted(free_names - allowed)
+    for name in unknown:
+        if name not in legacy_forbidden and name not in gas_names and name not in agn_names:
+            errors.append(
+                f"fit.free_parameters.{name} is not used by "
+                "model.sfh_model='popcosmos_bins'"
+            )
+
+
+def _validate_lognormal_free_parameters(
+    free_names: set[str], errors: list[str]
+) -> None:
+    allowed = {
+        "z_obs",
+        "log10_sfr",
+        "sfh_t_peak",
+        "sfh_tau",
+        "log10_metallicity",
+        "metallicity_scatter",
+        "dust_av",
+        "dust_slope",
+        "log10_formed_mass_msun",
+        "cosmos_ebv_1",
+        "cosmos_ebv_2",
+        "cosmos_frac_1",
+        "cosmos_frac_2",
+        "cosmos_ext_curve_1",
+        "cosmos_ext_curve_2",
+    }
+    ignored = sorted(free_names - allowed)
+    for name in ignored:
+        errors.append(
+            f"fit.free_parameters.{name} is not used by model.sfh_model='lognormal'"
+        )
 
 
 def _validate_nebular_emission(value: Any, errors: list[str]) -> None:
@@ -1402,6 +1569,11 @@ def _configured_catalog_columns(config: dict[str, Any]) -> set[str]:
 def _optional_string(value: Any, label: str, errors: list[str]) -> None:
     if value is not None and not isinstance(value, str):
         errors.append(f"{label} must be a string or null")
+
+
+def _require_model_path(value: Any, label: str, errors: list[str]) -> None:
+    if not isinstance(value, str) or not value.strip():
+        errors.append(f"{label} must be a non-empty path string")
 
 
 def _finite_float(value: Any, label: str, errors: list[str]) -> float | None:

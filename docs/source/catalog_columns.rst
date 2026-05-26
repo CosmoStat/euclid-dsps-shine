@@ -236,7 +236,7 @@ the ``*_el_model3_ext*`` fluxes and noisy realizations are diagnostics.
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/fs2_phz1_science.yaml fit \
+   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit \
      --limit 32 \
      --batch-size 32 \
      --out outputs/runs/dev_fit_batch_10band
@@ -245,13 +245,13 @@ For COSMOS SED validation:
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/fs2_phz1_science.yaml check \
+   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml check \
      --kind cosmos \
      --limit 20 \
      --out outputs/check/cosmos
 
-The continuum-only target set is the default science target because the current
-DSPS model has continuum plus dust, but not nebular emission lines.
+The active fit target is the continuum photometry with catalog flux errors. Gas
+and AGN spectral components come from the generated FSPS assets.
 
 References
 ----------

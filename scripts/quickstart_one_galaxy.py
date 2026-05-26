@@ -9,7 +9,7 @@ from euclid_dsps.workflows import fit_one, run_one
 
 
 def main() -> None:
-    config = load_config("configs/smoke_test.yaml")
+    config = load_config("configs/popcosmos_binned.yaml")
     run_one(config, "outputs/runs/script_one")
     fit_one(config, "outputs/runs/script_fit_one")
 
