@@ -19,6 +19,8 @@ paths:
 
 - LSST `ugrizy` plus Euclid VIS/Y/J/H photometry.
 - Flux-space likelihood with catalog per-band flux errors.
+- Configurable photometric objective, with Gaussian chi-square as the current
+  default and POP-COSMOS-style Student-t support being added for comparison.
 - Seven-bin PopCosmos-like SFH ratios in `popcosmos_binned.yaml`.
 - Six-free-parameter Diffstar SFH in `popcosmos_diffstar.yaml`.
 - Single stellar metallicity.
@@ -100,12 +102,59 @@ uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --
 
 ## Remaining Work
 
+- Compare Gaussian chi-square and Student-t photometric objectives on the same
+  FS2 rows and inspect whether the heavier-tailed likelihood reduces redshift
+  attractors or just hides band-level outliers.
 - Audit AGN normalization against FSPS internals or external CLUMPY convention.
 - Scale the CUDA batch run beyond the validated small batch once GPU memory and
   wall time are acceptable.
 - Add synthetic recovery tests with known DSPS-generated parameters.
 
 ## Latest Verification
+
+2026-05-27 Student-t likelihood switch:
+
+- Confirmed from Thorp et al., *Scaleable inference of galaxy properties and
+  redshifts with a data-driven population model*, section 2.2.1, that the
+  POP-COSMOS photometric likelihood is a per-band flux Student-t with 2 degrees
+  of freedom.
+- Added `fit.photometric_likelihood` with `gaussian` and `student_t` modes,
+  defaulting to Gaussian chi-square for backward compatibility.
+- Added `fit.student_t_dof`, default `2.0`, and CLI override
+  `--fit-likelihood student_t`.
+- Added mode-aware `fit_quality`/`reduced_fit_quality` diagnostics that follow
+  the configured photometric likelihood. `chi2`/`reduced_chi2` remain Gaussian
+  comparison metrics at the final parameters.
+- Student-t is wired through independent MAP, population MAP, and NumPyro
+  posterior sampling.
+- Batch dashboards, objective components, redshift attractor summaries, workflow
+  MAP-vs-population plots, and SED sample ranking now prefer mode-aware fit
+  quality over Gaussian chi-square when available.
+
+2026-05-27 verification:
+
+- `uv run python -m compileall euclid_dsps scripts` passed.
+- `uv run --extra dev ruff check euclid_dsps tests` passed.
+- `uv run pytest` passed: 106 passed, 2 skipped.
+- `uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit
+  --help` passed and exposes `--fit-likelihood {gaussian,student_t}`.
+- `uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit
+  --help` passed and exposes `--fit-likelihood {gaussian,student_t}`.
+- Student-t one-row smoke passed:
+  `uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit
+  --index 0 --fit-maxiter 1 --fit-likelihood student_t --out
+  outputs/runs/dev_popcosmos_student_t_one_iter --sed-samples 0
+  --reporting-level light`.
+- Student-t batch smoke passed:
+  `uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit
+  --limit 1 --batch-size 1 --fit-maxiter 1 --fit-likelihood student_t --out
+  outputs/runs/dev_popcosmos_student_t_batch1_quality2 --sed-samples 0
+  --reporting-level light`.
+- Added the `gpu` optional dependency extra for the `uv` environment using the
+  official JAX CUDA wheel path (`jax[cuda12]`).
+- `uv sync --extra gpu` installed the CUDA JAX stack in `.venv`.
+- `uv run --extra gpu python -c "import jax; print(jax.devices());
+  print(jax.default_backend())"` reports `[CudaDevice(id=0)]` and `gpu`.
 
 2026-05-26 combined Diffstar branch:
 

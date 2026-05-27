@@ -70,5 +70,15 @@ GPU Note
 
 The default documented commands use CPU-safe JAX settings because the local
 ``shine`` environment may not have CUDA-enabled ``jaxlib``. For GPU production,
-install a matching CUDA JAX stack first and keep large FSPS grids out of JAX
-closures so XLA does not compile them as constants.
+install the project GPU extra, which follows the official JAX pip CUDA wheel
+path and brings the CUDA 12 runtime libraries into the ``uv`` environment:
+
+.. code-block:: bash
+
+   uv sync --extra gpu
+   uv run --extra gpu python -c "import jax; print(jax.devices())"
+
+If ``nvidia-smi`` works but JAX still reports only ``CpuDevice``, check that the
+command is running through ``uv run --extra gpu`` and that no stale CPU-only
+``jaxlib`` install is shadowing the project environment. Keep large FSPS grids
+out of JAX closures so XLA does not compile them as constants.

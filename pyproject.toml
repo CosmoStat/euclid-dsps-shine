@@ -23,6 +23,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = [
+    "jax[cuda12]",
+]
 diffstar = [
     "diffstar",
     "diffmah",

@@ -647,7 +647,15 @@ def _batch_fit_rows(
                 "success": bool(fit_result.success[local_index]),
                 "message": fit_result.message,
                 "chi2": float(fit_result.chi2[local_index]),
+                "photometric_objective": float(
+                    fit_result.photometric_objective[local_index]
+                ),
+                "fit_quality": float(fit_result.photometric_objective[local_index]),
                 "reduced_chi2": float(fit_result.chi2[local_index]) / max(n_bands, 1),
+                "reduced_fit_quality": float(
+                    fit_result.photometric_objective[local_index]
+                )
+                / max(n_bands, 1),
                 "gradient_norm": float(fit_result.gradient_norm[local_index]),
                 "n_bands": n_bands,
                 "device": fit_result.device,

@@ -15,6 +15,8 @@ Both are standalone and use:
 
 * LSST ``ugrizy`` + Euclid VIS/Y/J/H;
 * flux-space likelihood with catalog flux errors;
+* a configurable photometric objective: Gaussian chi-square by default, or a
+  POP-COSMOS-style Student-t likelihood with ``student_t_dof: 2.0``;
 * single stellar metallicity;
 * Charlot-Fall age-dependent dust;
 * FSPS gas SSP grid over gas metallicity and ionization;
@@ -46,6 +48,7 @@ Use this only in an environment with CUDA-enabled JAX:
 
 .. code-block:: bash
 
+   uv sync --extra gpu
    export JAX_PLATFORMS=cuda
    export XLA_PYTHON_CLIENT_PREALLOCATE=false
    export TF_GPU_ALLOCATOR=cuda_malloc_async
@@ -104,6 +107,20 @@ Small batch:
      fit --limit 20 \
      --batch-size 5 \
      --out outputs/runs/dev_popcosmos_batch \
+     --sed-samples 4
+
+To compare against the POP-COSMOS heavy-tailed photometric likelihood, switch
+only the objective and keep the same rows/config:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --limit 20 \
+     --batch-size 5 \
+     --fit-likelihood student_t \
+     --student-t-dof 2 \
+     --out outputs/runs/dev_popcosmos_batch_student_t \
      --sed-samples 4
 
 Larger batch:
@@ -196,3 +213,8 @@ Outputs
 MAP runs write normalized config, fit results, photometry comparisons,
 optimizer diagnostics, performance summaries, and optional SED diagnostics under
 the requested output directory.
+``fit_quality`` and ``reduced_fit_quality`` follow the configured photometric
+likelihood and drive the run diagnostics. ``chi2`` and ``reduced_chi2`` remain
+Gaussian diagnostics at the final parameters for cross-run comparison;
+``photometric_objective`` records the selected likelihood objective before
+normalizing by band count or degrees of freedom.

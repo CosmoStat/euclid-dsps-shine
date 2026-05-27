@@ -287,6 +287,16 @@ def add_fit_overrides(
         help=advanced_help or "Override fit.learning_rate for MAP and population steps.",
     )
     parser.add_argument(
+        "--fit-likelihood",
+        choices=("gaussian", "student_t"),
+        help="Photometric likelihood objective for MAP/posterior fits.",
+    )
+    parser.add_argument(
+        "--student-t-dof",
+        type=float,
+        help=advanced_help or "Override fit.student_t_dof when using Student-t.",
+    )
+    parser.add_argument(
         "--n-sfh-bins",
         type=int,
         help=advanced_help
@@ -375,6 +385,10 @@ def _apply_fit_overrides(config: dict, args) -> None:
         fit["maxiter"] = args.fit_maxiter
     if getattr(args, "learning_rate", None) is not None:
         fit["learning_rate"] = args.learning_rate
+    if getattr(args, "fit_likelihood", None) is not None:
+        fit["photometric_likelihood"] = args.fit_likelihood
+    if getattr(args, "student_t_dof", None) is not None:
+        fit["student_t_dof"] = args.student_t_dof
     if getattr(args, "n_sfh_bins", None) is not None:
         config.setdefault("model", {})["n_sfh_bins"] = int(args.n_sfh_bins)
 

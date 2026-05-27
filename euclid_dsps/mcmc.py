@@ -21,7 +21,7 @@ from numpyro.distributions import constraints
 from numpyro.infer import HMC, MCMC, NUTS
 from numpyro.infer.initialization import init_to_value
 
-from .fit import _initial_value
+from .fit import _initial_value, _photometric_likelihood, _student_t_dof
 from .io import GalaxyObservation
 from .model import (
     DspsContext,
@@ -110,7 +110,10 @@ def sample_one_galaxy(
         ],
         dtype=float,
     )
-    if str(fit_config.get("likelihood_space", "flux")).lower() == "flux":
+    likelihood_space = str(fit_config.get("likelihood_space", "flux")).lower()
+    photometric_likelihood = _photometric_likelihood(fit_config)
+    student_t_dof = _student_t_dof(fit_config)
+    if likelihood_space == "flux":
         floor_frac = float(fit_config.get("flux_error_floor_frac", 0.0))
         jitter = float(fit_config.get("flux_error_jitter", 0.0))
         observed = observed_flux
@@ -141,12 +144,16 @@ def sample_one_galaxy(
         if band_offsets.size:
             model_mag = model_mag + band_offsets
         numpyro.deterministic("model_mag", model_mag)
-        if str(fit_config.get("likelihood_space", "flux")).lower() == "flux":
+        if likelihood_space == "flux":
             model_obs = abmag_to_fnu_cgs_jax(model_mag)
             numpyro.deterministic("model_flux_fnu_cgs", model_obs)
         else:
             model_obs = model_mag
-        numpyro.sample("obs", dist.Normal(model_obs, sigma).mask(finite), obs=observed)
+        if photometric_likelihood == "student_t":
+            obs_dist = dist.StudentT(student_t_dof, loc=model_obs, scale=sigma)
+        else:
+            obs_dist = dist.Normal(model_obs, sigma)
+        numpyro.sample("obs", obs_dist.mask(finite), obs=observed)
 
     init_params = _initial_params(initial_params, free, free_names)
     kernel_kwargs = {}
@@ -191,7 +198,9 @@ def sample_one_galaxy(
             sample_config=sample_config,
             sampler=sampler,
             initial_params=init_params,
-            likelihood_space=str(fit_config.get("likelihood_space", "flux")).lower(),
+            likelihood_space=likelihood_space,
+            photometric_likelihood=photometric_likelihood,
+            student_t_dof=student_t_dof,
         ),
     )
 
@@ -360,6 +369,8 @@ def _diagnostics(
     sampler: str,
     initial_params: dict[str, jnp.ndarray] | None = None,
     likelihood_space: str = "flux",
+    photometric_likelihood: str = "gaussian",
+    student_t_dof: float = 2.0,
 ) -> dict[str, Any]:
     extra = mcmc.get_extra_fields()
     diagnostics: dict[str, Any] = {}
@@ -375,6 +386,8 @@ def _diagnostics(
     diagnostics["backend"] = f"numpyro_{sampler}"
     diagnostics["sampler"] = sampler
     diagnostics["likelihood_space"] = likelihood_space
+    diagnostics["photometric_likelihood"] = photometric_likelihood
+    diagnostics["student_t_dof"] = float(student_t_dof)
     diagnostics["num_warmup"] = int(sample_config.get("num_warmup", 100))
     diagnostics["num_chains"] = int(sample_config.get("num_chains", 1))
     diagnostics["chain_method"] = str(sample_config.get("chain_method", "parallel"))

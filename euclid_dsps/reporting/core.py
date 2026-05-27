@@ -210,6 +210,7 @@ def write_fit_outputs(fit_result: Any, out_dir: str | Path) -> None:
             "message": fit_result.message,
             "best_parameters": fit_result.best_parameters,
             "chi2": fit_result.chi2,
+            "photometric_objective": fit_result.photometric_objective,
             "n_bands": fit_result.n_bands,
             "gradient_norm": fit_result.gradient_norm,
         },
@@ -600,10 +601,16 @@ def write_batch_outputs(
         "n_error_rows": int(len(error_rows)),
         "median_chi2": float(by_row["chi2"].median()),
         "median_reduced_chi2": float(by_row["reduced_chi2"].median()),
+        "median_fit_quality": float(by_row["fit_quality"].median()),
+        "median_reduced_fit_quality": float(by_row["reduced_fit_quality"].median()),
         "median_abs_residual_mag": float(
             valid["residual_mag_model_minus_observed"].abs().median()
         ),
     }
+    if "fit_quality_metric" in by_row:
+        metrics = by_row["fit_quality_metric"].dropna().astype(str).unique()
+        if len(metrics) == 1:
+            summary["fit_quality_metric"] = metrics[0]
     if "delta_z_obs_minus_truth" in by_row:
         dz = by_row["delta_z_obs_minus_truth"].dropna()
         if not dz.empty:
@@ -741,6 +748,16 @@ def fit_objective_components(
     if "chunk_index" in rows:
         out["chunk_index"] = rows["chunk_index"]
     out["photometric_chi2"] = _photometric_chi2_by_row(rows, comparison)
+    out["photometric_objective"] = _photometric_objective_by_row(rows, comparison)
+    if "photometric_likelihood" in rows:
+        out["photometric_likelihood"] = rows["photometric_likelihood"].astype(str)
+    else:
+        out["photometric_likelihood"] = str(
+            config.get("fit", {}).get("photometric_likelihood", "gaussian")
+        )
+    out["fit_quality_metric"] = out["photometric_likelihood"].map(
+        _fit_quality_metric_name
+    )
     physical = _physical_prior_components(rows, config)
     for name, values in physical.items():
         out[name] = values
@@ -765,7 +782,7 @@ def fit_objective_components(
         + out["population_relation_prior_penalty"]
     )
     out["approx_objective"] = (
-        0.5 * out["photometric_chi2"]
+        0.5 * out["photometric_objective"]
         + out["physical_prior_penalty"]
         + out["population_prior_penalty"]
     )
@@ -816,16 +833,41 @@ def _fit_parameter_warning_flags(
 
 
 def _photometric_chi2_by_row(fits: pd.DataFrame, comparison: pd.DataFrame) -> pd.Series:
-    chi_column = "chi_flux" if "chi_flux" in comparison.columns else "chi"
+    chi_column = _first_present(comparison, ["chi_likelihood", "chi_flux", "chi"]) or "chi"
     if not comparison.empty and {"row_index", chi_column}.issubset(comparison.columns):
         grouped = comparison.assign(
             _chi2=pd.to_numeric(comparison[chi_column], errors="coerce") ** 2
         )
         chi2 = grouped.groupby("row_index")["_chi2"].sum()
-        return fits["row_index"].map(chi2).fillna(fits.get("chi2", 0.0)).astype(float)
-    if "chi2" in fits:
-        return pd.to_numeric(fits["chi2"], errors="coerce").fillna(0.0)
+        fallback = fits["chi2"] if "chi2" in fits else 0.0
+        return fits["row_index"].map(chi2).fillna(fallback).astype(float)
+    for column in ("gaussian_chi2", "chi2"):
+        if column in fits:
+            return pd.to_numeric(fits[column], errors="coerce").fillna(0.0)
     return pd.Series(np.zeros(len(fits)), index=fits.index)
+
+
+def _photometric_objective_by_row(
+    fits: pd.DataFrame, comparison: pd.DataFrame
+) -> pd.Series:
+    if not comparison.empty and {
+        "row_index",
+        "photometric_objective_contribution",
+    }.issubset(comparison.columns):
+        grouped = comparison.assign(
+            _objective=pd.to_numeric(
+                comparison["photometric_objective_contribution"], errors="coerce"
+            )
+        )
+        objective = grouped.groupby("row_index")["_objective"].sum()
+        fallback = (
+            fits["photometric_objective"] if "photometric_objective" in fits else 0.0
+        )
+        return fits["row_index"].map(objective).fillna(fallback).astype(float)
+    for column in ("photometric_objective", "fit_quality", "chi2"):
+        if column in fits:
+            return pd.to_numeric(fits[column], errors="coerce").fillna(0.0)
+    return _photometric_chi2_by_row(fits, comparison)
 
 
 def _physical_prior_components(
@@ -950,7 +992,7 @@ def _prior_scale(fits: pd.DataFrame, name: str, spec: dict[str, Any]) -> pd.Seri
 
 
 def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None:
-    """Plot a heatmap of reduced chi2 in the Redshift-Mass plane."""
+    """Plot a heatmap of mode-aware fit quality in the Redshift-Mass plane."""
     z_col = "redshift_truth" if "redshift_truth" in by_row else "z_obs"
     m_col = (
         "catalog_log_stellar_mass"
@@ -958,11 +1000,12 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
         else "fit_log10_formed_mass_msun"
     )
 
-    if z_col not in by_row or m_col not in by_row or "reduced_chi2" not in by_row:
+    quality_col = _fit_quality_column(by_row)
+    if z_col not in by_row or m_col not in by_row or quality_col not in by_row:
         return
 
     work = (
-        by_row[[z_col, m_col, "reduced_chi2"]]
+        by_row[[z_col, m_col, quality_col]]
         .replace([np.inf, -np.inf], np.nan)
         .dropna()
     )
@@ -980,10 +1023,10 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
                 {
                     "z_bin": pd.cut(work[z_col], bins=z_bins),
                     "m_bin": pd.cut(work[m_col], bins=m_bins),
-                    "chi2": work["reduced_chi2"],
+                    "fit_quality": work[quality_col],
                 }
             )
-            .groupby(["z_bin", "m_bin"], observed=True)["chi2"]
+            .groupby(["z_bin", "m_bin"], observed=True)["fit_quality"]
             .median()
             .unstack()
         )
@@ -996,7 +1039,7 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
             shading="flat",
             norm=matplotlib.colors.LogNorm(vmin=0.1, vmax=10.0),
         )
-        fig.colorbar(im, ax=ax, label="median reduced chi2")
+        fig.colorbar(im, ax=ax, label=f"median {quality_col}")
         ax.set_xlabel(_parameter_display_label(m_col))
         ax.set_ylabel(_parameter_display_label(z_col))
         ax.set_title("Population Fit Quality Map")
@@ -1145,24 +1188,49 @@ def _first_present(frame: pd.DataFrame, columns: list[str]) -> str | None:
     return None
 
 
+def _fit_quality_column(frame: pd.DataFrame, *, reduced: bool = True) -> str:
+    columns = (
+        ["reduced_fit_quality", "fit_quality_per_band", "reduced_chi2"]
+        if reduced
+        else ["fit_quality", "photometric_objective", "chi2"]
+    )
+    return _first_present(frame, columns) or columns[-1]
+
+
+def _fit_quality_metric_name(likelihood: Any) -> str:
+    return (
+        "student_t_neg2loglike"
+        if str(likelihood).lower().replace("-", "_") == "student_t"
+        else "gaussian_chi2"
+    )
+
+
 def summarize_by_band(valid: pd.DataFrame) -> pd.DataFrame:
-    return valid.groupby("band").agg(
-        n=("row_index", "count"),
-        effective_wavelength_angstrom=("effective_wavelength_angstrom", "median"),
-        mean_residual_mag=("residual_mag_model_minus_observed", "mean"),
-        median_residual_mag=("residual_mag_model_minus_observed", "median"),
-        std_residual_mag=("residual_mag_model_minus_observed", "std"),
-        rms_residual_mag=(
+    aggregations: dict[str, tuple[str, Any]] = {
+        "n": ("row_index", "count"),
+        "effective_wavelength_angstrom": ("effective_wavelength_angstrom", "median"),
+        "mean_residual_mag": ("residual_mag_model_minus_observed", "mean"),
+        "median_residual_mag": ("residual_mag_model_minus_observed", "median"),
+        "std_residual_mag": ("residual_mag_model_minus_observed", "std"),
+        "rms_residual_mag": (
             "residual_mag_model_minus_observed",
             lambda x: float(np.sqrt(np.nanmean(x**2))),
         ),
-        mean_abs_residual_mag=(
+        "mean_abs_residual_mag": (
             "residual_mag_model_minus_observed",
             lambda x: float(np.nanmean(np.abs(x))),
         ),
-        median_flux_ratio=("flux_ratio_model_over_observed", "median"),
-        mean_chi=("chi", "mean"),
-    )
+        "median_flux_ratio": ("flux_ratio_model_over_observed", "median"),
+        "mean_chi": ("chi", "mean"),
+    }
+    if "photometric_objective_contribution" in valid:
+        aggregations["mean_photometric_objective_contribution"] = (
+            "photometric_objective_contribution",
+            "mean",
+        )
+    if "chi_likelihood" in valid:
+        aggregations["mean_chi_likelihood"] = ("chi_likelihood", "mean")
+    return valid.groupby("band").agg(**aggregations)
 
 
 def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
@@ -1174,13 +1242,14 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
         or col in {"n_valid_bands", "n_free_effective", "dof"}
         or col in {"redshift_initial_mode", "redshift_prior_mode"}
         or col in {"dust_parameter_active", "dust_parameter_inferred", "dust_model"}
+        or col in {"photometric_likelihood", "student_t_dof", "fit_quality_metric"}
         or col.startswith("param_")
         or col.startswith("fit_")
         or col.startswith("truth_")
         or col.startswith("delta_")
         or col.startswith("catalog_")
     ]
-    chi_column = "chi_flux" if "chi_flux" in valid.columns else "chi"
+    chi_column = _first_present(valid, ["chi_likelihood", "chi_flux", "chi"]) or "chi"
     aggregations: dict[str, tuple[str, Any]] = {
         "n_bands": ("band", "count"),
         "chi2": (chi_column, lambda x: float(np.nansum(x**2))),
@@ -1195,6 +1264,11 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
             lambda x: float(np.nanmean(np.abs(x))),
         ),
     }
+    if "photometric_objective_contribution" in valid:
+        aggregations["photometric_objective"] = (
+            "photometric_objective_contribution",
+            "sum",
+        )
     for col in context_columns:
         aggregations[col] = (col, "first")
     by_row = valid.groupby("row_index").agg(**aggregations)
@@ -1206,11 +1280,29 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
         by_row["dof"] = (by_row["n_valid_bands"] - by_row["n_free_effective"]).clip(
             lower=1
         )
+    photometric_objective = (
+        by_row["photometric_objective"]
+        if "photometric_objective" in by_row
+        else by_row["chi2"]
+    )
     derived_columns = {
         "chi2_per_band": by_row["chi2"] / by_row["n_valid_bands"].clip(lower=1),
         "reduced_chi2": by_row["chi2"] / by_row["dof"].clip(lower=1),
         "reduced_chi2_dof": by_row["chi2"] / by_row["dof"].clip(lower=1),
+        "fit_quality": photometric_objective,
+        "fit_quality_per_band": photometric_objective
+        / by_row["n_valid_bands"].clip(lower=1),
+        "reduced_fit_quality": photometric_objective / by_row["dof"].clip(lower=1),
     }
+    if "photometric_objective" not in by_row:
+        derived_columns["photometric_objective"] = photometric_objective
+    if "fit_quality_metric" not in by_row:
+        if "photometric_likelihood" in by_row:
+            derived_columns["fit_quality_metric"] = by_row["photometric_likelihood"].map(
+                _fit_quality_metric_name
+            )
+        else:
+            derived_columns["fit_quality_metric"] = "gaussian_chi2"
 
     for col in list(by_row.columns):
         if col.startswith("truth_"):
@@ -1324,7 +1416,13 @@ def redshift_attractor_summary(
                     row["catastrophic_fraction_0p15_1pz"] = float(
                         catastrophic.mean()
                     )
-        for metric in ("reduced_chi2", "chi2_per_band", "mean_residual_mag"):
+        for metric in (
+            "reduced_fit_quality",
+            "fit_quality_per_band",
+            "reduced_chi2",
+            "chi2_per_band",
+            "mean_residual_mag",
+        ):
             if metric in group:
                 values = pd.to_numeric(group[metric], errors="coerce")
                 values = values[np.isfinite(values)]
@@ -1345,7 +1443,8 @@ def _residual_property_row(
     subset: pd.DataFrame, property_name: str, source_column: str, group_label: str
 ) -> dict[str, Any]:
     residual = subset["mean_residual_mag"].replace([np.inf, -np.inf], np.nan).dropna()
-    reduced = subset["reduced_chi2"].replace([np.inf, -np.inf], np.nan).dropna()
+    quality_col = _fit_quality_column(subset)
+    reduced = subset[quality_col].replace([np.inf, -np.inf], np.nan).dropna()
     if residual.empty:
         return {}
     row: dict[str, Any] = {
@@ -1359,7 +1458,11 @@ def _residual_property_row(
         "median_abs_residual_mag": float(residual.abs().median()),
     }
     if not reduced.empty:
-        row["median_reduced_chi2"] = float(reduced.median())
+        row["median_reduced_fit_quality"] = float(reduced.median())
+        if quality_col != "reduced_chi2" and "reduced_chi2" in subset:
+            chi2 = subset["reduced_chi2"].replace([np.inf, -np.inf], np.nan).dropna()
+            if not chi2.empty:
+                row["median_reduced_chi2"] = float(chi2.median())
     return row
 
 
@@ -1948,9 +2051,15 @@ def plot_fit_trace(trace: pd.DataFrame, path: str | Path) -> None:
     if trace.empty:
         return
     y_col = (
-        "chi2"
+        "objective"
+        if "objective" in trace
+        else "mean_fit_quality"
+        if "mean_fit_quality" in trace
+        else "mean_chi2_or_loss"
+        if "mean_chi2_or_loss" in trace
+        else "chi2"
         if "chi2" in trace
-        else "mean_chi2_or_loss" if "mean_chi2_or_loss" in trace else None
+        else None
     )
     if y_col is None:
         return
@@ -2327,6 +2436,10 @@ def write_workflow_comparison(
         summary["median_delta_chi2_population_minus_map"] = float(
             map_pop_fits["delta_chi2_population_minus_map"].median()
         )
+    if "delta_reduced_fit_quality_population_minus_map" in map_pop_fits:
+        summary["median_delta_reduced_fit_quality_population_minus_map"] = float(
+            map_pop_fits["delta_reduced_fit_quality_population_minus_map"].median()
+        )
     if "n_divergent" in hmc_diagnostics:
         summary["hmc_total_divergences"] = int(hmc_diagnostics["n_divergent"].sum())
     write_json(out / "workflow_comparison_summary.json", summary)
@@ -2375,7 +2488,16 @@ def workflow_parameter_comparison(
 def workflow_fit_comparison(
     map_fits: pd.DataFrame, population_fits: pd.DataFrame
 ) -> pd.DataFrame:
-    cols = ["row_index", "chi2", "reduced_chi2", "gradient_norm"]
+    cols = [
+        "row_index",
+        "chi2",
+        "reduced_chi2",
+        "fit_quality",
+        "reduced_fit_quality",
+        "fit_quality_metric",
+        "photometric_likelihood",
+        "gradient_norm",
+    ]
     left = map_fits[[col for col in cols if col in map_fits]].copy()
     right = population_fits[[col for col in cols if col in population_fits]].copy()
     merged = left.merge(right, on="row_index", suffixes=("_map", "_population"))
@@ -2386,6 +2508,16 @@ def workflow_fit_comparison(
     if {"reduced_chi2_map", "reduced_chi2_population"}.issubset(merged.columns):
         merged["delta_reduced_chi2_population_minus_map"] = (
             merged["reduced_chi2_population"] - merged["reduced_chi2_map"]
+        )
+    if {"fit_quality_map", "fit_quality_population"}.issubset(merged.columns):
+        merged["delta_fit_quality_population_minus_map"] = (
+            merged["fit_quality_population"] - merged["fit_quality_map"]
+        )
+    if {"reduced_fit_quality_map", "reduced_fit_quality_population"}.issubset(
+        merged.columns
+    ):
+        merged["delta_reduced_fit_quality_population_minus_map"] = (
+            merged["reduced_fit_quality_population"] - merged["reduced_fit_quality_map"]
         )
     return merged
 
@@ -2626,38 +2758,49 @@ def plot_map_population_parameters(comparison: pd.DataFrame, path: str | Path) -
 
 
 def plot_map_population_chi2(comparison: pd.DataFrame, path: str | Path) -> None:
-    if comparison.empty or not {"reduced_chi2_map", "reduced_chi2_population"}.issubset(
-        comparison.columns
-    ):
+    map_col = (
+        "reduced_fit_quality_map"
+        if "reduced_fit_quality_map" in comparison
+        else "reduced_chi2_map"
+    )
+    pop_col = (
+        "reduced_fit_quality_population"
+        if "reduced_fit_quality_population" in comparison
+        else "reduced_chi2_population"
+    )
+    if comparison.empty or not {map_col, pop_col}.issubset(comparison.columns):
         return
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].scatter(
-        comparison["reduced_chi2_map"],
-        comparison["reduced_chi2_population"],
+        comparison[map_col],
+        comparison[pop_col],
         s=12,
         alpha=0.5,
     )
     values = (
-        pd.concat(
-            [comparison["reduced_chi2_map"], comparison["reduced_chi2_population"]]
-        )
+        pd.concat([comparison[map_col], comparison[pop_col]])
         .replace([np.inf, -np.inf], np.nan)
         .dropna()
     )
     if not values.empty:
         lo, hi = float(values.min()), float(values.max())
         axes[0].plot([lo, hi], [lo, hi], color="black", lw=1)
-    axes[0].set_xlabel("independent MAP reduced chi2")
-    axes[0].set_ylabel("population MAP reduced chi2")
+    axes[0].set_xlabel(f"independent MAP {map_col.removesuffix('_map')}")
+    axes[0].set_ylabel(f"population MAP {pop_col.removesuffix('_population')}")
     axes[0].grid(alpha=0.2)
-    if "delta_reduced_chi2_population_minus_map" in comparison:
+    delta_col = (
+        "delta_reduced_fit_quality_population_minus_map"
+        if "delta_reduced_fit_quality_population_minus_map" in comparison
+        else "delta_reduced_chi2_population_minus_map"
+    )
+    if delta_col in comparison:
         axes[1].hist(
-            comparison["delta_reduced_chi2_population_minus_map"].dropna(),
+            comparison[delta_col].dropna(),
             bins=50,
             alpha=0.75,
         )
         axes[1].axvline(0, color="black", lw=1)
-    axes[1].set_xlabel("population - independent reduced chi2")
+    axes[1].set_xlabel(f"population - independent {delta_col.removeprefix('delta_')}")
     axes[1].set_ylabel("galaxies")
     axes[1].grid(alpha=0.2)
     fig.tight_layout()
@@ -2721,10 +2864,11 @@ def plot_batch_dashboard(
     plot_residual_boxplot(valid, axes[0, 0])
     plot_observed_model_scatter(valid, axes[0, 1])
 
-    reduced = by_row["reduced_chi2"].replace([np.inf, -np.inf], np.nan).dropna()
+    quality_col = _fit_quality_column(by_row)
+    reduced = by_row[quality_col].replace([np.inf, -np.inf], np.nan).dropna()
     if not reduced.empty:
         axes[1, 0].hist(np.log10(reduced + 1.0e-12), bins=50, alpha=0.75)
-    axes[1, 0].set_xlabel("log10 reduced chi2")
+    axes[1, 0].set_xlabel(f"log10 {quality_col}")
     axes[1, 0].set_ylabel("galaxies")
     axes[1, 0].grid(alpha=0.2)
 

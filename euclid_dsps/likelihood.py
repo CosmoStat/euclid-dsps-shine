@@ -67,6 +67,47 @@ def loglike_flux_gaussian(
     )
 
 
+def student_t_flux_neg2loglike(
+    model_flux,
+    obs_flux=None,
+    obs_flux_err=None,
+    mask=None,
+    floor_frac: float | None = None,
+    jitter: float | None = None,
+    dof: float = 2.0,
+) -> float:
+    """Return flux Student-t ``-2 log L`` without normalization constants.
+
+    For residual ``chi = (model - observed) / sigma`` this computes
+    ``(nu + 1) * log(1 + chi**2 / nu)`` per valid band. The POP-COSMOS paper
+    uses ``nu=2``.
+    """
+    if dof <= 0.0:
+        raise ValueError("Student-t degrees of freedom must be positive")
+    if isinstance(model_flux, GalaxyObservation):
+        if not isinstance(obs_flux, ModelResult):
+            raise TypeError(
+                "student_t_flux_neg2loglike(observation, result) needs a ModelResult"
+            )
+        return _student_t_flux_observation(
+            model_flux, obs_flux, floor_frac, jitter, dof
+        )
+    model_arr = np.asarray(model_flux, dtype=float)
+    obs_arr = np.asarray(obs_flux, dtype=float)
+    err_arr = np.asarray(obs_flux_err, dtype=float)
+    valid = _valid_flux_mask(model_arr, obs_arr, err_arr)
+    if mask is not None:
+        valid &= np.asarray(mask, dtype=bool)
+    sigma_eff = effective_flux_sigma(
+        obs_arr, err_arr, floor_frac=floor_frac, jitter=jitter
+    )
+    valid &= np.isfinite(sigma_eff) & (sigma_eff > 0.0)
+    if not np.any(valid):
+        return 0.0
+    chi2 = ((model_arr[valid] - obs_arr[valid]) / sigma_eff[valid]) ** 2
+    return float(np.sum((float(dof) + 1.0) * np.log1p(chi2 / float(dof))))
+
+
 def chi2_mag(
     model_mag,
     obs_mag=None,
@@ -148,3 +189,23 @@ def _chi2_flux_observation(
         for band in observation.bands
     ]
     return chi2_flux(model, obs, err, floor_frac=floor_frac, jitter=jitter)
+
+
+def _student_t_flux_observation(
+    observation: GalaxyObservation,
+    result: ModelResult,
+    floor_frac: float | None,
+    jitter: float | None,
+    dof: float,
+) -> float:
+    model = [
+        result.photometry[band.name]["model_flux_fnu_cgs"] for band in observation.bands
+    ]
+    obs = [band.flux_fnu_cgs for band in observation.bands]
+    err = [
+        band.flux_error_fnu_cgs if band.flux_error_fnu_cgs is not None else np.nan
+        for band in observation.bands
+    ]
+    return student_t_flux_neg2loglike(
+        model, obs, err, floor_frac=floor_frac, jitter=jitter, dof=dof
+    )

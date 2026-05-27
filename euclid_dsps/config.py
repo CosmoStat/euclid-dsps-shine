@@ -72,6 +72,7 @@ DEFAULT_REDSHIFT_CONFIG = {
 SUPPORTED_PHOTOMETRY_UNITS = {"fnu_cgs", "abmag", "microjy", "ujy"}
 SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
 SUPPORTED_LIKELIHOOD_SPACES = {"flux", "mag"}
+SUPPORTED_PHOTOMETRIC_LIKELIHOODS = {"gaussian", "student_t"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
@@ -580,6 +581,12 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     )
     config["fit"].setdefault("method", "jax_adam")
     config["fit"].setdefault("likelihood_space", "flux")
+    if "photometric_likelihood" not in config["fit"] and "likelihood" in config["fit"]:
+        config["fit"]["photometric_likelihood"] = config["fit"]["likelihood"]
+    config["fit"]["photometric_likelihood"] = _normalize_photometric_likelihood(
+        config["fit"].get("photometric_likelihood", "gaussian")
+    )
+    config["fit"].setdefault("student_t_dof", 2.0)
     config["fit"].setdefault("flux_error_floor_frac", 0.0)
     config["fit"].setdefault("flux_error_jitter", 0.0)
     config["fit"].setdefault("maxiter", 80)
@@ -695,6 +702,18 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
         else:
             merged[key] = value
     return merged
+
+
+def _normalize_photometric_likelihood(value: Any) -> str:
+    name = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "chi2": "gaussian",
+        "gaussian_chi2": "gaussian",
+        "normal": "gaussian",
+        "student": "student_t",
+        "studentt": "student_t",
+    }
+    return aliases.get(name, name)
 
 
 def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
@@ -1266,6 +1285,15 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
             "fit.likelihood_space must be one of "
             f"{sorted(SUPPORTED_LIKELIHOOD_SPACES)}"
         )
+    photometric_likelihood = _normalize_photometric_likelihood(
+        fit.get("photometric_likelihood", "gaussian")
+    )
+    if photometric_likelihood not in SUPPORTED_PHOTOMETRIC_LIKELIHOODS:
+        errors.append(
+            "fit.photometric_likelihood must be one of "
+            f"{sorted(SUPPORTED_PHOTOMETRIC_LIKELIHOODS)}"
+        )
+    _positive_float(fit.get("student_t_dof", 2.0), "fit.student_t_dof", errors)
     _nonnegative_float(
         fit.get("flux_error_floor_frac", 0.0), "fit.flux_error_floor_frac", errors
     )

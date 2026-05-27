@@ -870,16 +870,29 @@ def _ranked_fit_rows(
                 .rename(columns={"abs_residual": "median_abs_mag_residual"})
             )
             work = work.merge(by_row, on="row_index", how="left")
-    if "median_abs_mag_residual" in work:
-        score = work["median_abs_mag_residual"]
-    elif "reduced_chi2" in work:
-        score = work["reduced_chi2"]
+    score_column = next(
+        (
+            column
+            for column in (
+                "reduced_fit_quality",
+                "fit_quality_per_band",
+                "photometric_objective_per_band",
+                "reduced_chi2",
+                "median_abs_mag_residual",
+            )
+            if column in work
+        ),
+        None,
+    )
+    if score_column is not None:
+        score = pd.to_numeric(work[score_column], errors="coerce")
     else:
         score = pd.Series(np.zeros(len(work)), index=work.index)
     fill_value = -np.inf if worst else np.inf
     work["sed_diagnostic_score"] = score.replace([np.inf, -np.inf], np.nan).fillna(
         fill_value
     )
+    work["sed_diagnostic_score_metric"] = score_column or "constant_zero"
     if "reduced_chi2" not in work:
         work["reduced_chi2"] = work["sed_diagnostic_score"]
     return (
@@ -1534,6 +1547,16 @@ def _fit_dataframe_batch(
         n_free_effective = len(config["fit"]["free_parameters"])
         dof = max(n_valid_bands - n_free_effective, 1)
         chi2_value = float(fit_result.chi2[local_index])
+        photometric_objective = float(fit_result.photometric_objective[local_index])
+        photometric_likelihood = str(
+            config["fit"].get("photometric_likelihood", "gaussian")
+        )
+        student_t_dof = float(config["fit"].get("student_t_dof", 2.0))
+        fit_quality_metric = (
+            "student_t_neg2loglike"
+            if photometric_likelihood == "student_t"
+            else "gaussian_chi2"
+        )
         fit_rows.append(
             {
                 "row_index": int(row_index),
@@ -1544,6 +1567,18 @@ def _fit_dataframe_batch(
                 "chi2_per_band": chi2_value / max(n_valid_bands, 1),
                 "reduced_chi2": chi2_value / dof,
                 "reduced_chi2_dof": chi2_value / dof,
+                "gaussian_chi2": chi2_value,
+                "gaussian_chi2_per_band": chi2_value / max(n_valid_bands, 1),
+                "reduced_gaussian_chi2": chi2_value / dof,
+                "photometric_objective": photometric_objective,
+                "photometric_objective_per_band": photometric_objective
+                / max(n_valid_bands, 1),
+                "fit_quality": photometric_objective,
+                "fit_quality_per_band": photometric_objective / max(n_valid_bands, 1),
+                "reduced_fit_quality": photometric_objective / dof,
+                "fit_quality_metric": fit_quality_metric,
+                "photometric_likelihood": photometric_likelihood,
+                "student_t_dof": student_t_dof,
                 "gradient_norm": float(fit_result.gradient_norm[local_index]),
                 "n_bands": n_bands,
                 "n_valid_bands": n_valid_bands,
@@ -1576,6 +1611,37 @@ def _fit_dataframe_batch(
                 if obs_flux_error > 0
                 else float("nan")
             )
+            likelihood_space = str(config["fit"].get("likelihood_space", "flux")).lower()
+            if likelihood_space == "flux":
+                sigma_likelihood = float(
+                    np.sqrt(
+                        obs_flux_error**2
+                        + (
+                            float(config["fit"].get("flux_error_floor_frac", 0.0))
+                            * obs_flux
+                        )
+                        ** 2
+                        + float(config["fit"].get("flux_error_jitter", 0.0)) ** 2
+                    )
+                )
+                chi_likelihood = (
+                    (obs_flux - model_flux) / sigma_likelihood
+                    if sigma_likelihood > 0
+                    else float("nan")
+                )
+            else:
+                sigma_likelihood = sigma
+                chi_likelihood = residual / sigma if sigma > 0 else float("nan")
+            chi2_contribution = chi_likelihood**2
+            if photometric_likelihood == "student_t":
+                objective_contribution = (
+                    (student_t_dof + 1.0)
+                    * np.log1p(chi2_contribution / student_t_dof)
+                    if np.isfinite(chi2_contribution)
+                    else float("nan")
+                )
+            else:
+                objective_contribution = chi2_contribution
             comparison_rows.append(
                 {
                     "row_index": int(row_index),
@@ -1608,6 +1674,11 @@ def _fit_dataframe_batch(
                     "fractional_flux_residual_model_minus_observed": flux_ratio - 1.0,
                     "chi": residual / sigma if sigma > 0 else float("nan"),
                     "chi_flux": chi_flux,
+                    "chi_likelihood": chi_likelihood,
+                    "photometric_objective_contribution": objective_contribution,
+                    "likelihood_sigma": sigma_likelihood,
+                    "photometric_likelihood": photometric_likelihood,
+                    "student_t_dof": student_t_dof,
                     "filter_source": filter_curves[band_index].source,
                     **context_values,
                 }

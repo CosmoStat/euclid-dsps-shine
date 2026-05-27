@@ -75,6 +75,8 @@ def test_likelihood_space_defaults_to_flux() -> None:
     config = normalize_config(minimal_config())
 
     assert config["fit"]["likelihood_space"] == "flux"
+    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert config["fit"]["student_t_dof"] == 2.0
     assert config["fit"]["flux_error_floor_frac"] == 0.0
     assert config["band_calibration"]["mode"] == "none"
     assert config["fit"]["band_calibration_offsets_mag"] == [0.0]
@@ -89,6 +91,30 @@ def test_invalid_likelihood_space_fails_fast() -> None:
     }
 
     with pytest.raises(ConfigValidationError, match="fit\\.likelihood_space"):
+        normalize_config(config)
+
+
+def test_student_t_photometric_likelihood_normalizes_aliases() -> None:
+    config = minimal_config()
+    config["fit"] = {
+        "photometric_likelihood": "student-t",
+        "student_t_dof": 2.0,
+        "free_parameters": {"z_obs": {"initial": "from_base", "bounds": [0.001, 6.0]}},
+    }
+
+    normalized = normalize_config(config)
+
+    assert normalized["fit"]["photometric_likelihood"] == "student_t"
+
+
+def test_invalid_photometric_likelihood_fails_fast() -> None:
+    config = minimal_config()
+    config["fit"] = {
+        "photometric_likelihood": "cauchy-ish",
+        "free_parameters": {"z_obs": {"initial": "from_base", "bounds": [0.001, 6.0]}},
+    }
+
+    with pytest.raises(ConfigValidationError, match="fit\\.photometric_likelihood"):
         normalize_config(config)
 
 
@@ -281,6 +307,8 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
         == "Data/popcosmos_agn_template_grid.h5"
     )
     assert config["fit"]["likelihood_space"] == "flux"
+    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert config["fit"]["student_t_dof"] == 2.0
     assert config["fit"]["flux_error_floor_frac"] == 0.02
     assert config["selection"]["nondetection_policy"] == "gaussian_flux"
     assert config["bands"][0]["error_column"] == "lsst_u_el_model3_ext_odonnell_ext_error"
@@ -302,6 +330,8 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
         1.609438,
         5.010635,
     ]
+    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert config["fit"]["student_t_dof"] == 2.0
 
 
 def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:
