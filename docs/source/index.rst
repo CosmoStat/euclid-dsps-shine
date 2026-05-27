@@ -27,3 +27,4 @@ The project keeps the scientific boundary narrow:
    run_setup
    science_assessment
    testing
+   api
