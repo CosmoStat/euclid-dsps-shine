@@ -25,6 +25,7 @@ from .fit import _initial_value, _photometric_likelihood, _student_t_dof
 from .io import GalaxyObservation
 from .model import (
     DspsContext,
+    gas_metallicity_constraint_penalty_jax,
     model_mags_jax,
     predict_batch_derived,
     predict_batch_mags,
@@ -140,6 +141,12 @@ def sample_one_galaxy(
                 name,
                 _prior_distribution(name, free[name], prior_spec, base_params),
             )
+        numpyro.factor(
+            "gas_metallicity_constraint",
+            -gas_metallicity_constraint_penalty_jax(
+                params, context.model_config, penalty=jnp.inf
+            ),
+        )
         model_mag = model_mags_jax(context, params)
         if band_offsets.size:
             model_mag = model_mag + band_offsets

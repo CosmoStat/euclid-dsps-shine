@@ -4,7 +4,6 @@ ssp_path: "Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5"
 runtime: auto
 bands: lsst_euclid_10
 nebular_emission: ssp_flux
-prior_set: flat_diffstar_popcosmos
 
 column_groups:
     - truth_basic
@@ -44,7 +43,8 @@ truth:
 
 model:
     n_sfh_bins: 96
-    sfh_model: diffstar_reduced6
+    sfh_model: popcosmos_bins
+    sfh_time_grid: prospector_step
     stellar_metallicity_model: single
     dust_model: prospector_fsps
     igm_model: fsps_madau95
@@ -52,19 +52,10 @@ model:
     gas_grid_path: Data/popcosmos_chabrier_gas_ssp_grid.h5
     stellar_only_ssp_path: Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
     emission_line_corrections: none
-    agn_model: fsps_component_grid
-    agn_component_grid_path: Data/popcosmos_chabrier_agn_component_ssp_grid.h5
-    agn_host_attenuation: fsps_diffuse_unit_tau
-    agn_igm_order: fsps_after_igm
-    agn_baked_attenuation: fsps_powerlaw_unit_tau
-    agn_baked_dust_index: -0.7
+    agn_model: none
     z_sun: 0.0142
     dust_tesc_logyr: 7.0
     dust1_index: -1.0
-    birth_cloud_slope: -1.0
-    fixed_parameters:
-        diffstar_indx_hi: -1.0
-        diffstar_qlglgdt: -0.50725
 
 fit:
     method: jax_adam
@@ -85,24 +76,24 @@ fit:
         log10_stellar_mass:
             initial: 10.0
             bounds: [6.0, 13.0]
-        diffstar_lgmcrit:
-            initial: 12.0
-            bounds: [9.0, 14.5]
-        diffstar_lgy_at_mcrit:
-            initial: -10.0
-            bounds: [-13.0, -8.0]
-        diffstar_indx_lo:
-            initial: 1.0
-            bounds: [0.0, 5.0]
-        diffstar_lg_qt:
-            initial: 1.0
-            bounds: [-1.0, 1.5]
-        diffstar_lg_drop:
-            initial: -1.0
-            bounds: [-4.0, 0.0]
-        diffstar_lg_rejuv:
-            initial: -0.2
-            bounds: [-4.0, 1.0]
+        dlog10_sfr_1:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_2:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_3:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_4:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_5:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_6:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
         log10_stellar_metallicity:
             initial: 0.0
             bounds: [-2.5, 0.5]
@@ -121,12 +112,6 @@ fit:
         log10_gas_ionization:
             initial: -2.0
             bounds: [-4.5, -0.5]
-        ln_fagn:
-            initial: -8.0
-            bounds: [-14.0, 1.0]
-        ln_tauagn:
-            initial: 2.302585
-            bounds: [1.609438, 5.010635]
 
 sample:
     sampler: nuts

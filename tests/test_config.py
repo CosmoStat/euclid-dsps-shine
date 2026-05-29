@@ -45,6 +45,10 @@ def test_normalize_config_adds_defaults() -> None:
     assert config["runtime"]["jax_platforms"] == "cpu"
     assert config["runtime"]["disable_jax_plugin_autoload"] is True
     assert config["runtime"]["require_gpu"] is False
+    assert config["model"]["agn_host_attenuation_scale"] == 1.0
+    assert config["model"]["agn_igm_order"] == "pre_igm"
+    assert config["model"]["agn_baked_attenuation"] == "none"
+    assert config["model"]["agn_baked_dust_index"] == -0.7
     assert (
         config["redshift"]["fixed_value"]
         == config["model"]["fixed_parameters"]["z_obs"]
@@ -68,6 +72,47 @@ def test_invalid_fit_bounds_fail_fast() -> None:
     }
 
     with pytest.raises(ConfigValidationError, match="bounds must be increasing"):
+        normalize_config(config)
+
+
+def test_invalid_agn_host_attenuation_scale_fails_fast() -> None:
+    config = minimal_config()
+    config["model"] = {"agn_host_attenuation_scale": -0.1}
+
+    with pytest.raises(
+        ConfigValidationError,
+        match="model\\.agn_host_attenuation_scale",
+    ):
+        normalize_config(config)
+
+
+def test_invalid_agn_igm_order_fails_fast() -> None:
+    config = minimal_config()
+    config["model"] = {"agn_igm_order": "after_the_fact"}
+
+    with pytest.raises(ConfigValidationError, match="model\\.agn_igm_order"):
+        normalize_config(config)
+
+
+def test_invalid_agn_baked_attenuation_fails_fast() -> None:
+    config = minimal_config()
+    config["model"] = {"agn_baked_attenuation": "mystery_dust"}
+
+    with pytest.raises(ConfigValidationError, match="model\\.agn_baked_attenuation"):
+        normalize_config(config)
+
+
+def test_fsps_unit_tau_agn_attenuation_rejects_scaled_mode() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "agn_host_attenuation": "fsps_diffuse_unit_tau",
+        "agn_host_attenuation_scale": 0.5,
+    }
+
+    with pytest.raises(
+        ConfigValidationError,
+        match="agn_host_attenuation_scale.*fsps_diffuse_unit_tau",
+    ):
         normalize_config(config)
 
 
@@ -160,8 +205,51 @@ def test_agn_grid_required_when_agn_params_free() -> None:
         }
     }
 
-    with pytest.raises(ConfigValidationError, match="model\\.agn_model='template_grid'"):
+    with pytest.raises(ConfigValidationError, match="active AGN model"):
         normalize_config(config)
+
+
+def test_agn_none_rejects_ln_tauagn_free_parameter() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall_powerlaw",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "ln_tauagn": {"initial": 2.3, "bounds": [1.6, 5.1]},
+        }
+    }
+
+    with pytest.raises(ConfigValidationError, match="active AGN model"):
+        normalize_config(config)
+
+
+def test_fsps_component_grid_accepts_agn_free_parameters() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall_powerlaw",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "fsps_component_grid",
+        "agn_component_grid_path": "Data/popcosmos_chabrier_agn_component_ssp_grid.h5",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "ln_fagn": {"initial": -8.0, "bounds": [-14.0, 1.0]},
+            "ln_tauagn": {"initial": 2.3, "bounds": [1.6, 5.1]},
+        }
+    }
+
+    normalized = normalize_config(config)
+
+    assert normalized["model"]["agn_model"] == "fsps_component_grid"
+    assert "ln_fagn" in normalized["fit"]["free_parameters"]
+    assert "ln_tauagn" in normalized["fit"]["free_parameters"]
 
 
 def test_popcosmos_binned_forbids_legacy_free_parameters() -> None:
@@ -299,15 +387,28 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert {"euclid_vis", "euclid_nisp_h", "lsst_u", "lsst_y"}.issubset(band_names)
     assert tuple(config["fit"]["free_parameters"]) == POPCOSMOS_PARAMETER_NAMES
     assert config["model"]["sfh_model"] == "popcosmos_bins"
+    assert config["model"]["sfh_time_grid"] == "prospector_step"
+    assert config["model"]["dust_model"] == "prospector_fsps"
+    assert config["model"]["igm_model"] == "fsps_madau95"
     assert config["model"]["nebular_model"] == "gas_grid"
-    assert config["model"]["gas_grid_path"] == "Data/popcosmos_gas_ssp_grid.h5"
-    assert config["model"]["agn_model"] == "template_grid"
+    assert config["model"]["gas_grid_path"] == "Data/popcosmos_chabrier_gas_ssp_grid.h5"
     assert (
-        config["model"]["agn_template_path"]
-        == "Data/popcosmos_agn_template_grid.h5"
+        config["model"]["stellar_only_ssp_path"]
+        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
     )
+    assert config["model"]["emission_line_corrections"] == "none"
+    assert config["model"]["agn_model"] == "fsps_component_grid"
+    assert (
+        config["model"]["agn_component_grid_path"]
+        == "Data/popcosmos_chabrier_agn_component_ssp_grid.h5"
+    )
+    assert config["model"]["agn_igm_order"] == "fsps_after_igm"
+    assert config["model"]["agn_baked_attenuation"] == "fsps_powerlaw_unit_tau"
+    assert config["model"]["agn_baked_dust_index"] == -0.7
+    assert "kroupa" not in config["ssp_path"]
+    assert config["model"]["z_sun"] == 0.0142
     assert config["fit"]["likelihood_space"] == "flux"
-    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert config["fit"]["photometric_likelihood"] == "student_t"
     assert config["fit"]["student_t_dof"] == 2.0
     assert config["fit"]["flux_error_floor_frac"] == 0.02
     assert config["selection"]["nondetection_policy"] == "gaussian_flux"
@@ -330,7 +431,7 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
         1.609438,
         5.010635,
     ]
-    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert config["fit"]["photometric_likelihood"] == "student_t"
     assert config["fit"]["student_t_dof"] == 2.0
 
 
@@ -340,21 +441,66 @@ def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:
     assert tuple(config["fit"]["free_parameters"]) == DIFFSTAR_REDUCED6_PARAMETER_NAMES
     assert config["model"]["sfh_model"] == "diffstar_reduced6"
     assert config["model"]["stellar_metallicity_model"] == "single"
-    assert config["model"]["dust_model"] == "charlot_fall"
+    assert config["model"]["dust_model"] == "prospector_fsps"
+    assert config["model"]["igm_model"] == "fsps_madau95"
     assert config["model"]["nebular_model"] == "gas_grid"
-    assert config["model"]["gas_grid_path"] == "Data/popcosmos_gas_ssp_grid.h5"
-    assert config["model"]["agn_model"] == "template_grid"
+    assert config["model"]["gas_grid_path"] == "Data/popcosmos_chabrier_gas_ssp_grid.h5"
     assert (
-        config["model"]["agn_template_path"]
-        == "Data/popcosmos_agn_template_grid.h5"
+        config["model"]["stellar_only_ssp_path"]
+        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
     )
-    assert config["model"]["z_sun"] == 0.0134
+    assert config["model"]["emission_line_corrections"] == "none"
+    assert config["model"]["agn_model"] == "fsps_component_grid"
+    assert (
+        config["model"]["agn_component_grid_path"]
+        == "Data/popcosmos_chabrier_agn_component_ssp_grid.h5"
+    )
+    assert config["model"]["agn_igm_order"] == "fsps_after_igm"
+    assert config["model"]["agn_baked_attenuation"] == "fsps_powerlaw_unit_tau"
+    assert config["model"]["agn_baked_dust_index"] == -0.7
+    assert "kroupa" not in config["ssp_path"]
+    assert config["model"]["z_sun"] == 0.0142
     assert config["model"]["fixed_parameters"]["diffstar_indx_hi"] == -1.0
     assert config["model"]["fixed_parameters"]["diffstar_qlglgdt"] == -0.50725
     assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
         1.609438,
         5.010635,
     ]
+
+
+def test_popcosmos_binned_noagn_config_is_fallback_setup() -> None:
+    config = load_config("configs/popcosmos_binned_noagn.yaml")
+    free_names = tuple(config["fit"]["free_parameters"])
+
+    assert free_names == POPCOSMOS_PARAMETER_NAMES[:-2]
+    assert "ln_fagn" not in free_names
+    assert "ln_tauagn" not in free_names
+    assert config["model"]["agn_model"] == "none"
+    assert config["fit"]["photometric_likelihood"] == "student_t"
+    assert config["model"]["z_sun"] == 0.0142
+    assert config["model"]["sfh_time_grid"] == "prospector_step"
+    assert config["model"]["igm_model"] == "fsps_madau95"
+    assert (
+        config["model"]["stellar_only_ssp_path"]
+        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
+    )
+
+
+def test_popcosmos_diffstar_noagn_config_is_fallback_comparison() -> None:
+    config = load_config("configs/popcosmos_diffstar_noagn.yaml")
+    free_names = tuple(config["fit"]["free_parameters"])
+
+    assert free_names == DIFFSTAR_REDUCED6_PARAMETER_NAMES[:-2]
+    assert "ln_fagn" not in free_names
+    assert "ln_tauagn" not in free_names
+    assert config["model"]["agn_model"] == "none"
+    assert config["fit"]["photometric_likelihood"] == "student_t"
+    assert config["model"]["z_sun"] == 0.0142
+    assert config["model"]["igm_model"] == "fsps_madau95"
+    assert (
+        config["model"]["stellar_only_ssp_path"]
+        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
+    )
 
 
 def test_cosmos_sed_defaults_are_normalized() -> None:

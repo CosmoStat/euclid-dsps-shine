@@ -11,7 +11,12 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
     runtime = runtime_config or {}
     platforms = runtime.get("jax_platforms")
     if platforms:
-        os.environ["EUCLID_DSPS_JAX_PLATFORMS"] = str(platforms)
+        requested_platforms = str(platforms)
+        os.environ["EUCLID_DSPS_JAX_PLATFORMS"] = requested_platforms
+        if requested_platforms.lower() == "auto":
+            os.environ.pop("JAX_PLATFORMS", None)
+        else:
+            os.environ["JAX_PLATFORMS"] = requested_platforms
     if "disable_jax_plugin_autoload" in runtime:
         os.environ.setdefault(
             "EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD",

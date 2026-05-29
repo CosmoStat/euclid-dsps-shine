@@ -97,10 +97,24 @@ SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
 SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
 SUPPORTED_SFH_MODELS = {"lognormal", "popcosmos_bins", "diffstar_reduced6"}
 SUPPORTED_STELLAR_METALLICITY_MODELS = {"mdf", "single"}
-SUPPORTED_MODEL_DUST_MODELS = {"legacy", "charlot_fall"}
-SUPPORTED_IGM_MODELS = {"none", "madau95_approx"}
+SUPPORTED_MODEL_DUST_MODELS = {
+    "legacy",
+    "charlot_fall",
+    "charlot_fall_powerlaw",
+    "prospector_fsps",
+}
+SUPPORTED_IGM_MODELS = {"none", "madau95_approx", "fsps_madau95"}
 SUPPORTED_NEBULAR_MODELS = {"fixed_ssp", "gas_grid"}
-SUPPORTED_AGN_MODELS = {"none", "template_grid"}
+SUPPORTED_AGN_MODELS = {"none", "template_grid", "fsps_component_grid"}
+SUPPORTED_AGN_HOST_ATTENUATION_MODES = {
+    "none",
+    "diffuse",
+    "prospector_fsps",
+    "fsps_diffuse_unit_tau",
+}
+SUPPORTED_AGN_IGM_ORDERS = {"pre_igm", "fsps_after_igm"}
+SUPPORTED_AGN_BAKED_ATTENUATION_MODES = {"none", "fsps_powerlaw_unit_tau"}
+SUPPORTED_EMISSION_LINE_CORRECTIONS = {"none", "popcosmos_table"}
 SUPPORTED_REDSHIFT_INITIALS = {
     "catalog_column",
     "fixed",
@@ -559,17 +573,31 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         "stellar_metallicity_model",
         "single" if sfh_model in {"popcosmos_bins", "diffstar_reduced6"} else "mdf",
     )
+    popcosmos_like = _is_popcosmos_like_sfh(sfh_model)
     config["model"].setdefault(
         "dust_model",
-        "charlot_fall"
-        if sfh_model in {"popcosmos_bins", "diffstar_reduced6"}
-        else "legacy",
+        "charlot_fall_powerlaw" if popcosmos_like else "legacy",
+    )
+    config["model"]["dust_model"] = _normalize_model_dust_model(
+        config["model"]["dust_model"]
     )
     config["model"].setdefault("igm_model", "none")
     config["model"].setdefault("nebular_model", "fixed_ssp")
     config["model"].setdefault("agn_model", "none")
+    config["model"].setdefault("agn_host_attenuation", "none")
+    config["model"].setdefault("agn_host_attenuation_scale", 1.0)
+    config["model"].setdefault("agn_igm_order", "pre_igm")
+    config["model"].setdefault("agn_baked_attenuation", "none")
+    config["model"].setdefault("agn_baked_dust_index", -0.7)
     config["model"].setdefault("birth_cloud_slope", -1.0)
-    config["model"].setdefault("z_sun", 0.0134)
+    config["model"].setdefault("dust_tesc_logyr", 7.0)
+    config["model"].setdefault("dust1_index", -1.0)
+    config["model"].setdefault("emission_line_corrections", "none")
+    config["model"].setdefault("z_sun", 0.0142 if popcosmos_like else 0.0134)
+    config["model"].setdefault(
+        "sfh_time_grid",
+        "prospector_step" if sfh_model == "popcosmos_bins" else "linear",
+    )
 
     config["fit"].setdefault(
         "free_parameters",
@@ -714,6 +742,19 @@ def _normalize_photometric_likelihood(value: Any) -> str:
         "studentt": "student_t",
     }
     return aliases.get(name, name)
+
+
+def _normalize_model_dust_model(value: Any) -> str:
+    name = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "charlot_fall": "charlot_fall_powerlaw",
+        "charlot_fall_power_law": "charlot_fall_powerlaw",
+    }
+    return aliases.get(name, name)
+
+
+def _is_popcosmos_like_sfh(sfh_model: Any) -> bool:
+    return str(sfh_model) in {"popcosmos_bins", "diffstar_reduced6"}
 
 
 def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
@@ -1054,7 +1095,7 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
             "model.stellar_metallicity_model must be one of "
             f"{sorted(SUPPORTED_STELLAR_METALLICITY_MODELS)}"
         )
-    dust_model = str(model.get("dust_model", "legacy"))
+    dust_model = _normalize_model_dust_model(model.get("dust_model", "legacy"))
     if dust_model not in SUPPORTED_MODEL_DUST_MODELS:
         errors.append(
             f"model.dust_model must be one of {sorted(SUPPORTED_MODEL_DUST_MODELS)}"
@@ -1062,6 +1103,9 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     igm_model = str(model.get("igm_model", "none"))
     if igm_model not in SUPPORTED_IGM_MODELS:
         errors.append(f"model.igm_model must be one of {sorted(SUPPORTED_IGM_MODELS)}")
+    sfh_time_grid = str(model.get("sfh_time_grid", "linear"))
+    if sfh_time_grid not in {"linear", "prospector_step"}:
+        errors.append("model.sfh_time_grid must be one of ['linear', 'prospector_step']")
     nebular_model = str(model.get("nebular_model", "fixed_ssp"))
     if nebular_model not in SUPPORTED_NEBULAR_MODELS:
         errors.append(
@@ -1070,14 +1114,69 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     agn_model = str(model.get("agn_model", "none"))
     if agn_model not in SUPPORTED_AGN_MODELS:
         errors.append(f"model.agn_model must be one of {sorted(SUPPORTED_AGN_MODELS)}")
+    agn_host_attenuation = str(model.get("agn_host_attenuation", "none"))
+    if agn_host_attenuation not in SUPPORTED_AGN_HOST_ATTENUATION_MODES:
+        errors.append(
+            "model.agn_host_attenuation must be one of "
+            f"{sorted(SUPPORTED_AGN_HOST_ATTENUATION_MODES)}"
+        )
+    agn_host_attenuation_scale = _nonnegative_float(
+        model.get("agn_host_attenuation_scale", 1.0),
+        "model.agn_host_attenuation_scale",
+        errors,
+    )
+    if (
+        agn_host_attenuation == "fsps_diffuse_unit_tau"
+        and agn_host_attenuation_scale is not None
+        and not math.isclose(
+            agn_host_attenuation_scale,
+            1.0,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        )
+    ):
+        errors.append(
+            "model.agn_host_attenuation_scale must be 1.0 when "
+            "model.agn_host_attenuation='fsps_diffuse_unit_tau'; this mode "
+            "matches FSPS agn_dust.f90 unit-tau diffuse attenuation and does "
+            "not use a fitted scale"
+        )
+    agn_igm_order = str(model.get("agn_igm_order", "pre_igm"))
+    if agn_igm_order not in SUPPORTED_AGN_IGM_ORDERS:
+        errors.append(
+            "model.agn_igm_order must be one of "
+            f"{sorted(SUPPORTED_AGN_IGM_ORDERS)}"
+        )
+    agn_baked_attenuation = str(model.get("agn_baked_attenuation", "none"))
+    if agn_baked_attenuation not in SUPPORTED_AGN_BAKED_ATTENUATION_MODES:
+        errors.append(
+            "model.agn_baked_attenuation must be one of "
+            f"{sorted(SUPPORTED_AGN_BAKED_ATTENUATION_MODES)}"
+        )
+    _finite_float(
+        model.get("agn_baked_dust_index", -0.7),
+        "model.agn_baked_dust_index",
+        errors,
+    )
+    emission_line_corrections = str(model.get("emission_line_corrections", "none"))
+    if emission_line_corrections not in SUPPORTED_EMISSION_LINE_CORRECTIONS:
+        errors.append(
+            "model.emission_line_corrections must be one of "
+            f"{sorted(SUPPORTED_EMISSION_LINE_CORRECTIONS)}"
+        )
     _finite_float(
         model.get("birth_cloud_slope", -1.0), "model.birth_cloud_slope", errors
     )
+    _finite_float(model.get("dust_tesc_logyr", 7.0), "model.dust_tesc_logyr", errors)
+    _finite_float(model.get("dust1_index", -1.0), "model.dust1_index", errors)
     _positive_float(model.get("z_sun", 0.0134), "model.z_sun", errors)
     if nebular_model == "gas_grid":
         _require_model_path(model.get("gas_grid_path"), "model.gas_grid_path", errors)
     else:
         _optional_string(model.get("gas_grid_path"), "model.gas_grid_path", errors)
+    _optional_string(
+        model.get("stellar_only_ssp_path"), "model.stellar_only_ssp_path", errors
+    )
     if agn_model == "template_grid":
         _require_model_path(
             model.get("agn_template_path"), "model.agn_template_path", errors
@@ -1085,6 +1184,30 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     else:
         _optional_string(
             model.get("agn_template_path"), "model.agn_template_path", errors
+        )
+    if agn_model == "fsps_component_grid":
+        _require_model_path(
+            model.get("agn_component_grid_path"),
+            "model.agn_component_grid_path",
+            errors,
+        )
+    else:
+        _optional_string(
+            model.get("agn_component_grid_path"),
+            "model.agn_component_grid_path",
+            errors,
+        )
+    if emission_line_corrections == "popcosmos_table":
+        _require_model_path(
+            model.get("emission_line_correction_path"),
+            "model.emission_line_correction_path",
+            errors,
+        )
+    else:
+        _optional_string(
+            model.get("emission_line_correction_path"),
+            "model.emission_line_correction_path",
+            errors,
         )
     fixed = model.get("fixed_parameters")
     if not isinstance(fixed, dict):
@@ -1137,10 +1260,12 @@ def _validate_popcosmos_free_parameters(
             "model.sfh_model='popcosmos_bins' requires "
             "model.stellar_metallicity_model='single'"
         )
-    if str(model.get("dust_model", "charlot_fall")) != "charlot_fall":
+    if _normalize_model_dust_model(
+        model.get("dust_model", "charlot_fall_powerlaw")
+    ) not in {"charlot_fall_powerlaw", "prospector_fsps"}:
         errors.append(
             "model.sfh_model='popcosmos_bins' requires "
-            "model.dust_model='charlot_fall'"
+            "model.dust_model='charlot_fall_powerlaw' or 'prospector_fsps'"
         )
 
     allowed = set(POPCOSMOS_PARAMETER_NAMES)
@@ -1157,7 +1282,9 @@ def _validate_popcosmos_free_parameters(
     if agn_model == "none":
         allowed -= agn_names
         for name in sorted(free_names & agn_names):
-            errors.append(f"fit.free_parameters.{name} requires model.agn_model='template_grid'")
+            errors.append(
+                f"fit.free_parameters.{name} requires an active AGN model"
+            )
     unknown = sorted(free_names - allowed)
     for name in unknown:
         if name not in legacy_forbidden and name not in gas_names and name not in agn_names:
@@ -1195,10 +1322,12 @@ def _validate_diffstar_free_parameters(
             "model.sfh_model='diffstar_reduced6' requires "
             "model.stellar_metallicity_model='single'"
         )
-    if str(model.get("dust_model", "charlot_fall")) != "charlot_fall":
+    if _normalize_model_dust_model(
+        model.get("dust_model", "charlot_fall_powerlaw")
+    ) not in {"charlot_fall_powerlaw", "prospector_fsps"}:
         errors.append(
             "model.sfh_model='diffstar_reduced6' requires "
-            "model.dust_model='charlot_fall'"
+            "model.dust_model='charlot_fall_powerlaw' or 'prospector_fsps'"
         )
 
     allowed = set(DIFFSTAR_REDUCED6_PARAMETER_NAMES)
@@ -1216,7 +1345,7 @@ def _validate_diffstar_free_parameters(
         allowed -= agn_names
         for name in sorted(free_names & agn_names):
             errors.append(
-                f"fit.free_parameters.{name} requires model.agn_model='template_grid'"
+                f"fit.free_parameters.{name} requires an active AGN model"
             )
     unknown = sorted(free_names - allowed)
     for name in unknown:
