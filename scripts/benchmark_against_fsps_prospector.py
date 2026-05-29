@@ -125,6 +125,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--compressed-gas-grid",
+        default=None,
+        help=(
+            "Use model.nebular_model='compressed_gas_grid' with this "
+            "model.compressed_gas_grid_path without editing the config."
+        ),
+    )
+    parser.add_argument(
+        "--compressed-ssp",
+        default=None,
+        help=(
+            "Use model.ssp_model='compressed_basis' with this "
+            "model.compressed_ssp_path without editing the config."
+        ),
+    )
+    parser.add_argument(
+        "--compressed-agn-component-grid",
+        default=None,
+        help=(
+            "Use model.agn_model='compressed_fsps_component_grid' with this "
+            "model.compressed_agn_component_grid_path without editing the config."
+        ),
+    )
+    parser.add_argument(
         "--agn-host-attenuation",
         choices=("none", "diffuse", "prospector_fsps", "fsps_diffuse_unit_tau"),
         default=None,
@@ -227,8 +251,27 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any] | None = None
         config = load_config(args.config)
         config = _apply_runtime_override(config, args.runtime)
         apply_jax_runtime_env(config.get("runtime", {}))
-    if args.agn_template and args.agn_component_grid:
-        raise RuntimeError("--agn-template and --agn-component-grid are mutually exclusive")
+    agn_override_count = sum(
+        bool(value)
+        for value in (
+            args.agn_template,
+            args.agn_component_grid,
+            args.compressed_agn_component_grid,
+        )
+    )
+    if agn_override_count > 1:
+        raise RuntimeError(
+            "--agn-template, --agn-component-grid, and "
+            "--compressed-agn-component-grid are mutually exclusive"
+        )
+    if args.compressed_gas_grid:
+        config = copy.deepcopy(config)
+        config["model"]["nebular_model"] = "compressed_gas_grid"
+        config["model"]["compressed_gas_grid_path"] = str(args.compressed_gas_grid)
+    if args.compressed_ssp:
+        config = copy.deepcopy(config)
+        config["model"]["ssp_model"] = "compressed_basis"
+        config["model"]["compressed_ssp_path"] = str(args.compressed_ssp)
     if args.agn_template:
         config = copy.deepcopy(config)
         config["model"]["agn_model"] = "template_grid"
@@ -237,6 +280,12 @@ def run_benchmark(args: argparse.Namespace, config: dict[str, Any] | None = None
         config = copy.deepcopy(config)
         config["model"]["agn_model"] = "fsps_component_grid"
         config["model"]["agn_component_grid_path"] = str(args.agn_component_grid)
+    if args.compressed_agn_component_grid:
+        config = copy.deepcopy(config)
+        config["model"]["agn_model"] = "compressed_fsps_component_grid"
+        config["model"]["compressed_agn_component_grid_path"] = str(
+            args.compressed_agn_component_grid
+        )
     if args.agn_host_attenuation:
         config = copy.deepcopy(config)
         config["model"]["agn_host_attenuation"] = str(args.agn_host_attenuation)
@@ -718,8 +767,8 @@ def _benchmark_levels(
     if any(level in _AGN_PHOT_LEVELS or level == "agn_component_only" for level in levels):
         if not _is_active_agn_model(model_config):
             raise RuntimeError(
-                "AGN audit levels require model.agn_model='template_grid' or "
-                "'fsps_component_grid'."
+                "AGN audit levels require model.agn_model='template_grid', "
+                "'fsps_component_grid', or 'compressed_fsps_component_grid'."
             )
         _require_agn_level_model(model_config, "AGN audit")
     return levels
@@ -740,6 +789,7 @@ def _is_active_agn_model(model_config: dict[str, Any]) -> bool:
     return str(model_config.get("agn_model", "none")) in {
         "template_grid",
         "fsps_component_grid",
+        "compressed_fsps_component_grid",
     }
 
 
@@ -756,6 +806,7 @@ def _stellar_only_model_config(model_config: dict[str, Any]) -> dict[str, Any]:
     local_model["agn_model"] = "none"
     local_model.pop("agn_template_path", None)
     local_model.pop("agn_component_grid_path", None)
+    local_model.pop("compressed_agn_component_grid_path", None)
     return local_model
 
 
@@ -768,6 +819,7 @@ def _model_config_without_agn(model_config: dict[str, Any]) -> dict[str, Any]:
     local_model["agn_model"] = "none"
     local_model.pop("agn_template_path", None)
     local_model.pop("agn_component_grid_path", None)
+    local_model.pop("compressed_agn_component_grid_path", None)
     return local_model
 
 
@@ -894,8 +946,15 @@ def _require_agn_level_model(model_config: dict[str, Any], level: str) -> None:
         if not model_config.get("agn_component_grid_path"):
             raise RuntimeError(f"{level} requires model.agn_component_grid_path")
         return
+    if agn_model == "compressed_fsps_component_grid":
+        if not model_config.get("compressed_agn_component_grid_path"):
+            raise RuntimeError(
+                f"{level} requires model.compressed_agn_component_grid_path"
+            )
+        return
     raise RuntimeError(
-        f"{level} requires model.agn_model='template_grid' or 'fsps_component_grid'"
+        f"{level} requires model.agn_model='template_grid', 'fsps_component_grid', "
+        "or 'compressed_fsps_component_grid'"
     )
 
 
@@ -1027,7 +1086,12 @@ def _validate_reference_model_support(
             "model.sfh_model='popcosmos_bins' only."
         )
     agn_model = str(model_config.get("agn_model", "none"))
-    if agn_model not in {"none", "template_grid", "fsps_component_grid"}:
+    if agn_model not in {
+        "none",
+        "template_grid",
+        "fsps_component_grid",
+        "compressed_fsps_component_grid",
+    }:
         raise RuntimeError(f"Unsupported benchmark AGN model: {agn_model}")
     if _is_active_agn_model(model_config):
         if "ln_fagn" not in params or "ln_tauagn" not in params:
@@ -1068,7 +1132,10 @@ def _prospector_params(
     agebins, mass_shape = _popcosmos_agebins_and_mass_shape(t_obs, params)
     target_mstar = 10.0 ** float(params["log10_stellar_mass"])
     mass = mass_shape / np.maximum(mass_shape.sum(), 1.0e-30) * target_mstar
-    uses_gas = str(model_config.get("nebular_model", "fixed_ssp")) == "gas_grid"
+    uses_gas = str(model_config.get("nebular_model", "fixed_ssp")) in {
+        "gas_grid",
+        "compressed_gas_grid",
+    }
     uses_igm = str(model_config.get("igm_model", "none")) != "none"
     uses_agn = _is_active_agn_model(model_config)
     dust_model = str(model_config.get("dust_model", "prospector_fsps"))

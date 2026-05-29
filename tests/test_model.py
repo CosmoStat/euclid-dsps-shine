@@ -30,6 +30,7 @@ from euclid_dsps.model import (
     comparison_rows,
     fsps_madau95_igm_transmission_jax,
     gas_metallicity_constraint_penalty_jax,
+    interpolate_compressed_gas_ssp_grid_jax,
     interpolate_gas_ssp_grid_jax,
     interpolate_ssp_stellar_metallicity_jax,
     load_context,
@@ -101,6 +102,27 @@ def _synthetic_context(model_config: dict | None = None) -> DspsContext:
         context.gas_lgmet_grid_jax = jnp.asarray(gas_lgmet, dtype=jnp.float32)
         context.gas_lgu_grid_jax = jnp.asarray(gas_lgu, dtype=jnp.float32)
         context.ssp_flux_gas_grid_jax = jnp.asarray(gas_grid, dtype=jnp.float32)
+    if model_config and model_config.get("nebular_model") == "compressed_gas_grid":
+        gas_lgmet = np.asarray([-1.0, 0.0], dtype=float)
+        gas_lgu = np.asarray([-3.0, -2.0], dtype=float)
+        basis = wave_factor.reshape(-1)[None, :].astype(np.float32)
+        coeff = np.zeros(
+            (len(gas_lgmet), len(gas_lgu), len(lgmet), len(lg_age), 1),
+            dtype=np.float32,
+        )
+        met_1d = np.linspace(0.8, 1.2, len(lgmet))
+        age_1d = np.linspace(1.4, 0.5, len(lg_age))
+        for i in range(len(gas_lgmet)):
+            for j in range(len(gas_lgu)):
+                gas_factor = 1.0 + 0.05 * i + 0.03 * j
+                coeff[i, j, :, :, 0] = (
+                    1.0e-3 * gas_factor * met_1d[:, None] * age_1d[None, :]
+                )
+        context.gas_lgmet_grid_jax = jnp.asarray(gas_lgmet, dtype=jnp.float32)
+        context.gas_lgu_grid_jax = jnp.asarray(gas_lgu, dtype=jnp.float32)
+        context.compressed_gas_basis_jax = jnp.asarray(basis, dtype=jnp.float32)
+        context.compressed_gas_coeff_jax = jnp.asarray(coeff, dtype=jnp.float32)
+        context.compressed_gas_scale_jax = jnp.ones(coeff.shape[:-1], dtype=jnp.float32)
     if model_config and model_config.get("agn_model") == "template_grid":
         agn_tau = np.asarray([5.0, 10.0, 150.0], dtype=float)
         agn_template = np.stack(
@@ -134,6 +156,26 @@ def _synthetic_context(model_config: dict | None = None) -> DspsContext:
         context.agn_component_lgmet_jax = jnp.asarray(lgmet, dtype=jnp.float32)
         context.agn_component_lg_age_gyr_jax = jnp.asarray(lg_age, dtype=jnp.float32)
         context.agn_component_grid_jax = jnp.asarray(component, dtype=jnp.float32)
+    if model_config and model_config.get("agn_model") == "compressed_fsps_component_grid":
+        fagn_grid = np.asarray([1.0e-4, 1.0e-2], dtype=float)
+        agn_tau = np.asarray([5.0, 20.0], dtype=float)
+        basis = (1.0 + wave / wave.max())[None, :].astype(np.float32)
+        coeff = np.zeros(
+            (len(fagn_grid), len(agn_tau), len(lgmet), len(lg_age), 1),
+            dtype=np.float32,
+        )
+        age_factor_1d = np.linspace(1.4, 0.5, len(lg_age))
+        for i, fagn in enumerate(fagn_grid):
+            for j, tau in enumerate(agn_tau):
+                coeff[i, j, :, :, 0] = fagn * tau * 1.0e-7 * age_factor_1d[None, :]
+        context.agn_wave_jax = jnp.asarray(wave, dtype=jnp.float32)
+        context.agn_fagn_grid_jax = jnp.asarray(fagn_grid, dtype=jnp.float32)
+        context.agn_tau_grid_jax = jnp.asarray(agn_tau, dtype=jnp.float32)
+        context.agn_component_lgmet_jax = jnp.asarray(lgmet, dtype=jnp.float32)
+        context.agn_component_lg_age_gyr_jax = jnp.asarray(lg_age, dtype=jnp.float32)
+        context.compressed_agn_basis_jax = jnp.asarray(basis, dtype=jnp.float32)
+        context.compressed_agn_coeff_jax = jnp.asarray(coeff, dtype=jnp.float32)
+        context.compressed_agn_scale_jax = jnp.ones(coeff.shape[:-1], dtype=jnp.float32)
     return context
 
 
@@ -274,6 +316,70 @@ def _write_synthetic_gas_hdf5(
             )
             handle.attrs["units_gas_lgmet_grid"] = "log10(Zgas/Zsun)"
             handle.attrs["units_gas_lgu_grid"] = "log10 ionization parameter U"
+
+
+def _write_synthetic_compressed_gas_hdf5(
+    path,
+    wave: np.ndarray,
+    lg_age: np.ndarray,
+    lgmet: np.ndarray,
+    *,
+    imf_type: int = 1,
+    z_sun: float = 0.0142,
+) -> None:
+    gas_lgmet = np.asarray([-1.0, 0.0], dtype=np.float32)
+    gas_lgu = np.asarray([-3.0, -2.0], dtype=np.float32)
+    basis = np.asarray([(wave / wave.max()) + 1.0], dtype=np.float32)
+    coeff = np.ones(
+        (len(gas_lgmet), len(gas_lgu), len(lgmet), len(lg_age), 1),
+        dtype=np.float32,
+    )
+    scale = np.ones(coeff.shape[:-1], dtype=np.float32) * 1.0e-3
+    with h5py.File(path, "w") as handle:
+        handle["ssp_wave"] = np.asarray(wave, dtype=np.float32)
+        handle["ssp_lg_age_gyr"] = np.asarray(lg_age, dtype=np.float32)
+        handle["ssp_lgmet"] = np.asarray(lgmet, dtype=np.float32)
+        handle["gas_lgmet_grid"] = gas_lgmet
+        handle["gas_lgu_grid"] = gas_lgu
+        handle["gas_basis"] = basis
+        handle["gas_coeff"] = coeff
+        handle["gas_scale"] = scale
+        handle.attrs["asset_kind"] = "popcosmos_chabrier_compressed_gas_grid"
+        handle.attrs["imf_type"] = imf_type
+        handle.attrs["imf_name"] = "chabrier" if imf_type == 1 else "kroupa"
+        handle.attrs["z_sun"] = z_sun
+        handle.attrs["units_ssp_wave"] = "Angstrom"
+        handle.attrs["units_ssp_lg_age_gyr"] = "log10(age/Gyr)"
+        handle.attrs["units_ssp_lgmet"] = (
+            "log10(absolute stellar metallicity mass fraction)"
+        )
+        handle.attrs["units_gas_lgmet_grid"] = "log10(Zgas/Zsun)"
+        handle.attrs["units_gas_lgu_grid"] = "log10 ionization parameter U"
+
+
+def _write_synthetic_compressed_ssp_hdf5(
+    path,
+    wave: np.ndarray,
+    lg_age: np.ndarray,
+    lgmet: np.ndarray,
+    *,
+    imf_type: int = 1,
+    z_sun: float = 0.0142,
+) -> None:
+    basis = np.ones((1, len(wave)), dtype=np.float32)
+    coeff = np.ones((len(lgmet), len(lg_age), 1), dtype=np.float16)
+    scale = np.ones(coeff.shape[:-1], dtype=np.float32) * 1.0e-3
+    with h5py.File(path, "w") as handle:
+        handle["ssp_wave"] = np.asarray(wave, dtype=np.float32)
+        handle["ssp_lg_age_gyr"] = np.asarray(lg_age, dtype=np.float32)
+        handle["ssp_lgmet"] = np.asarray(lgmet, dtype=np.float32)
+        handle["ssp_basis"] = basis
+        handle["ssp_coeff"] = coeff
+        handle["ssp_scale"] = scale
+        handle.attrs["asset_kind"] = "popcosmos_chabrier_compressed_stellar_ssp"
+        handle.attrs["imf_type"] = imf_type
+        handle.attrs["imf_name"] = "chabrier" if imf_type == 1 else "kroupa"
+        handle.attrs["z_sun"] = z_sun
 
 
 def _noagn_params(params: dict[str, float]) -> dict[str, float]:
@@ -653,6 +759,28 @@ def test_gas_grid_loader_and_interpolation_from_synthetic_hdf5(tmp_path) -> None
     assert np.asarray(interpolated).mean() == pytest.approx(1.5)
 
 
+def test_compressed_gas_grid_matches_synthetic_dense_interpolation() -> None:
+    dense_context = _synthetic_context({"nebular_model": "gas_grid"})
+    compressed_context = _synthetic_context({"nebular_model": "compressed_gas_grid"})
+
+    dense = interpolate_gas_ssp_grid_jax(dense_context, -0.5, -2.5)
+    compressed = interpolate_compressed_gas_ssp_grid_jax(
+        compressed_context,
+        -0.5,
+        -2.5,
+    )
+    grad = jax.grad(
+        lambda values: jnp.sum(
+            interpolate_gas_ssp_grid_jax(compressed_context, values[0], values[1])
+        )
+    )(jnp.asarray([-0.5, -2.5]))
+
+    np.testing.assert_allclose(np.asarray(compressed), np.asarray(dense), rtol=1.0e-6)
+    assert compressed_context.ssp_flux_gas_grid_jax is None
+    assert compressed_context.compressed_gas_coeff_jax is not None
+    assert np.all(np.isfinite(np.asarray(grad)))
+
+
 def test_popcosmos_hdf5_imf_chabrier_metadata_passes(tmp_path) -> None:
     ssp_path = tmp_path / "ssp_chabrier.h5"
     _write_synthetic_ssp_hdf5(ssp_path, imf_type=1, imf_name="chabrier")
@@ -770,6 +898,57 @@ def test_popcosmos_gas_grid_axes_and_units_validation(tmp_path) -> None:
     assert context.ssp_flux_gas_grid_jax is not None
 
 
+def test_load_context_compressed_gas_grid_does_not_load_dense_grid(tmp_path) -> None:
+    ssp_path = tmp_path / "ssp_chabrier.h5"
+    gas_path = tmp_path / "compressed_gas_chabrier.h5"
+    wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
+    _write_synthetic_compressed_gas_hdf5(gas_path, wave, lg_age, lgmet)
+
+    context = load_context(
+        str(ssp_path),
+        {"wide": _wide_filter()},
+        model_config={
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "nebular_model": "compressed_gas_grid",
+            "compressed_gas_grid_path": str(gas_path),
+            "agn_model": "none",
+            "z_sun": 0.0142,
+        },
+    )
+
+    assert context.ssp_flux_gas_grid_jax is None
+    assert context.compressed_gas_basis_jax is not None
+    assert context.compressed_gas_coeff_jax is not None
+    assert context.compressed_gas_scale_jax is not None
+
+
+def test_compressed_ssp_loads_without_resident_dense_ssp_flux(tmp_path) -> None:
+    ssp_path = tmp_path / "ssp_chabrier.h5"
+    compressed_path = tmp_path / "compressed_ssp_chabrier.h5"
+    wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
+    _write_synthetic_compressed_ssp_hdf5(compressed_path, wave, lg_age, lgmet)
+
+    context = load_context(
+        str(ssp_path),
+        {"wide": _wide_filter()},
+        model_config={
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "ssp_model": "compressed_basis",
+            "compressed_ssp_path": str(compressed_path),
+            "nebular_model": "fixed_ssp",
+            "agn_model": "none",
+            "z_sun": 0.0142,
+        },
+    )
+    result = run_dsps_model_jax(context, _noagn_params(_popcosmos_params()))
+
+    assert context.ssp_flux_jax is None
+    assert context.compressed_ssp_coeff_jax.dtype == jnp.float16
+    assert np.all(np.isfinite(np.asarray(result.model_mags)))
+
+
 def test_popcosmos_gas_grid_axis_mismatch_fails(tmp_path) -> None:
     ssp_path = tmp_path / "ssp_chabrier.h5"
     gas_path = tmp_path / "gas_chabrier.h5"
@@ -825,6 +1004,15 @@ def test_gas_stellar_metallicity_constraint_valid_invalid_and_grad() -> None:
 
     assert float(gas_metallicity_constraint_penalty_jax(valid, model_config)) == 0.0
     assert float(gas_metallicity_constraint_penalty_jax(invalid, model_config)) > 0.0
+    assert (
+        float(
+            gas_metallicity_constraint_penalty_jax(
+                valid,
+                {"sfh_model": "popcosmos_bins", "nebular_model": "compressed_gas_grid"},
+            )
+        )
+        == 0.0
+    )
     grad = jax.grad(
         lambda values: gas_metallicity_constraint_penalty_jax(
             {
@@ -1265,6 +1453,89 @@ def test_fsps_component_grid_agn_scales_with_formed_mass() -> None:
 
     assert np.nanmax(low) > 0.0
     np.testing.assert_allclose(high / low, np.full_like(low, 10.0), rtol=5.0e-4)
+
+
+def test_compressed_fsps_component_grid_matches_synthetic_dense_path() -> None:
+    dense_context = _synthetic_context(
+        {
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "dust_model": "prospector_fsps",
+            "igm_model": "none",
+            "nebular_model": "fixed_ssp",
+            "agn_model": "fsps_component_grid",
+            "agn_host_attenuation": "none",
+            "z_sun": 0.0134,
+        }
+    )
+    compressed_context = _synthetic_context(
+        {
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "dust_model": "prospector_fsps",
+            "igm_model": "none",
+            "nebular_model": "fixed_ssp",
+            "agn_model": "compressed_fsps_component_grid",
+            "agn_host_attenuation": "none",
+            "z_sun": 0.0134,
+        }
+    )
+    params = _popcosmos_params()
+    params["ln_fagn"] = np.log(1.0e-3)
+    params["ln_tauagn"] = np.log(10.0)
+
+    dense = np.asarray(run_dsps_model_jax(dense_context, params).agn_sed)
+    compressed = np.asarray(run_dsps_model_jax(compressed_context, params).agn_sed)
+
+    assert compressed_context.agn_component_grid_jax is None
+    assert compressed_context.compressed_agn_coeff_jax is not None
+    np.testing.assert_allclose(compressed, dense, rtol=5.0e-5, atol=1.0e-8)
+
+
+def test_load_context_compressed_agn_component_does_not_load_dense_grid(tmp_path) -> None:
+    ssp_path = tmp_path / "ssp.h5"
+    wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
+    agn_path = tmp_path / "compressed_agn.h5"
+    fagn = np.asarray([1.0e-4, 1.0e-2], dtype=np.float32)
+    tau = np.asarray([5.0, 20.0], dtype=np.float32)
+    basis = np.vstack(
+        [
+            1.0 + wave / wave.max(),
+            0.2 + 0.1 * wave / wave.max(),
+        ]
+    ).astype(np.float32)
+    coeff = np.ones((len(fagn), len(tau), len(lgmet), len(lg_age), 2), dtype=np.float32)
+    scale = np.ones(coeff.shape[:-1], dtype=np.float32)
+    with h5py.File(agn_path, "w") as handle:
+        handle["ssp_wave"] = wave
+        handle["ssp_lg_age_gyr"] = lg_age
+        handle["ssp_lgmet"] = lgmet
+        handle["fagn_grid"] = fagn
+        handle["agn_tau_grid"] = tau
+        handle["agn_basis"] = basis
+        handle["agn_coeff"] = coeff
+        handle["agn_scale"] = scale
+        handle.attrs["imf_type"] = 1
+        handle.attrs["imf_name"] = "chabrier"
+        handle.attrs["z_sun"] = 0.0142
+
+    context = load_context(
+        str(ssp_path),
+        {"wide": _wide_filter()},
+        model_config={
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "nebular_model": "fixed_ssp",
+            "agn_model": "compressed_fsps_component_grid",
+            "compressed_agn_component_grid_path": str(agn_path),
+            "z_sun": 0.0142,
+        },
+    )
+
+    assert context.agn_component_grid_jax is None
+    assert context.compressed_agn_basis_jax is not None
+    assert context.compressed_agn_coeff_jax is not None
+    assert context.compressed_agn_scale_jax is not None
 
 
 def test_legacy_lognormal_config_still_runs() -> None:

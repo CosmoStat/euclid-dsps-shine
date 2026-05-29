@@ -62,31 +62,29 @@ compressed asset family so the final model is coherent.
 - Do not judge scientific compression only from SED plots. The gate is
   broad-band photometry, gradients, and final FSPS/Prospector closure.
 
-## Phase 0 - Clean Worktree And Data Isolation
+## Phase 0 - Clean Branch And Data Safety
 
-Start implementation in a clean worktree so compression experiments do not
-pollute the current dirty checkout or overwrite the existing runtime assets.
+Start implementation on a clean branch from `dev`. Do not create another
+worktree. The existing local `Data/` directory is the source of dense reference
+assets, and compression builders must treat it as read-only input unless the
+output path is a new file.
 
 ### Work
 
-1. Freeze or commit the current forward-model state before branching. A clean
-   worktree created from a dirty checkout will not include uncommitted code.
-2. Create an isolated worktree:
+1. Fetch `dev` and create a dedicated implementation branch:
 
    ```bash
-   git worktree add ../DSPS-ssp-compression -b feature/ssp-vram-compression HEAD
+   git fetch origin dev
+   git switch -c feature/ssp-vram-compression origin/dev
    ```
 
-3. Populate `../DSPS-ssp-compression/Data/` with the required local assets.
-   Prefer a real copy for safety. Reflinks/hardlinks are acceptable only if all
-   compression builders write to new temp files and never mutate inputs.
+2. Confirm the branch starts clean:
 
    ```bash
-   mkdir -p ../DSPS-ssp-compression/Data
-   rsync -a --ignore-existing Data/ ../DSPS-ssp-compression/Data/
+   git status --short --branch
    ```
 
-4. Validate assets in the worktree before changing model code:
+3. Validate dense reference assets before changing model code:
 
    ```bash
    python scripts/generate_fsps_ssp_grid.py \
@@ -109,15 +107,15 @@ pollute the current dirty checkout or overwrite the existing runtime assets.
 
 ### Outputs
 
-- clean worktree: `../DSPS-ssp-compression`
-- copied local `Data/` assets
+- implementation branch: `feature/ssp-vram-compression`
 - validation log under `outputs/ssp_compression/bootstrap_validation.log`
 
 ### Go Criteria
 
-- `git status --short` is clean in the compression worktree before edits.
+- `git status --short` is clean on the compression branch before edits.
 - All dense baseline assets validate.
-- No source `Data/*.h5` file is modified in place.
+- No source dense `Data/*.h5` file is modified in place. Compressed outputs use
+  new filenames such as `Data/popcosmos_chabrier_agn_component_basis_k32.h5`.
 
 ## Phase 1 - Baseline Memory And Science Inventory
 
@@ -146,6 +144,21 @@ Quantify what the dense path costs before optimizing it.
 scripts/inventory_spectral_assets.py
 scripts/profile_vram_batch.py
 ```
+
+2026-05-29 status: implemented. Both scripts are metadata-first by default and
+do not instantiate `load_context` or copy the multi-GiB gas/AGN arrays to JAX.
+Baseline outputs were written to:
+
+```text
+outputs/ssp_compression/baseline_asset_inventory.json
+outputs/ssp_compression/baseline_vram_profile.json
+outputs/ssp_compression/baseline_asset_sizes.png
+```
+
+The dense full-AGN PopCosmos config currently has an estimated float32 resident
+spectral payload of about `6.66 GiB` for base SSP + gas grid + AGN component
+grid, before JAX allocator overhead, compiled executables, optimizer state, and
+batch intermediates.
 
 ### Outputs
 
@@ -301,6 +314,131 @@ Initial candidate acceptance:
   - temporary prototype ceiling p95 `< 0.03` if FSPS/Prospector final closure
     still passes.
 
+### 2026-05-29 Follow-Up: Smaller Scientific Representations
+
+After the first `k64` gas and `k32` AGN compressed assets, the next objective is
+not just “lower k”. The first assets already reduce the dense gas+AGN spectral
+payload from about `6.66 GiB` to about `85.9 MiB`, but further reduction should
+preserve information where photometry is sensitive:
+
+- The compressed gas asset is dominated by `gas_coeff`: about `15.36 MiB`
+  raw out of an `18.32 MiB` raw compressed payload. The basis is only about
+  `2.72 MiB`; reducing coefficient storage has the largest payoff.
+- The compressed AGN asset can likely be much smaller. Sampled spectral
+  reconstruction showed AGN `k=12` is already near the `k32` error floor for
+  the current basis family, while `k=8` is still acceptable for many smooth
+  continuum checks but needs photometry gates before use.
+- A sampled dense-grid audit found the AGN component is effectively linear in
+  `fagn`: `spectrum / fagn` residuals across the `fagn_grid` were below
+  `~2e-7` relative on the sampled slices. This means the compressed AGN format
+  should drop the explicit `fagn` axis and multiply by `fagn` at runtime,
+  after adding a full benchmark/test gate.
+- After gas and AGN are compressed, the base SSP becomes the largest remaining
+  resident tensor at about `55 MiB`. Earlier SSP diagnostics showed normalized
+  low-rank stellar SSP compression is viable: `k64` had p95 log-flux errors of
+  about `0.004-0.005 dex` on the tested log-wavelength grid, and `k128` pushed
+  p95 to about `0.0015 dex`. This should be revisited because it can now save
+  more VRAM than further micro-optimizing the already-small AGN basis.
+- Gas is different: sampled reconstruction improves steadily through `k64`,
+  and line-peak preservation is visibly better at `k48-k64` than at `k16-k32`.
+  Therefore a lower-rank full-spectrum gas basis is unlikely to be the final
+  solution.
+- A naive `float16` conversion of all arrays is invalid because `gas_scale`
+  and `agn_scale` live around `1e-22..1e-11`, below or near unsafe `float16`
+  ranges. If mixed precision is used, keep scale as `float32` or store
+  `log10(scale)`.
+- Sampled mixed-precision checks suggest `basis16 + coeff16 + scale32` adds
+  only small reconstruction error for gas, and `basis32 + coeff16 + scale32`
+  is safer for AGN. This should become an explicit `mixed_float16` asset mode
+  and must be benchmarked photometrically, not enabled by dtype casting.
+- Global `int8` quantization of coefficients is plausible as an experiment,
+  but `int8` basis quantization damages small spectral structure, especially
+  for AGN. If int8 is pursued, keep the basis in float16/float32 and quantize
+  coefficients with explicit per-component or per-block scales.
+
+Updated optimization priority:
+
+1. Add a mixed-precision compressed asset format:
+   `basis_dtype`, `coeff_dtype`, `scale_storage`, quantization metadata, and a
+   loader that reconstructs in `float32` inside JAX.
+2. Add an AGN-linear-in-`fagn` compressed format:
+   `agn_coeff[agn_tau, stellar_lgmet, age, k]` plus runtime multiplication by
+   `fagn`. Benchmark it against the dense `fagn` axis before making it the
+   default.
+3. Build and benchmark:
+   - AGN `k12/k16` with `coeff=float16`, `basis=float32`, `scale=float32`;
+   - gas `k48/k64` with `coeff=float16`, `basis=float16`, `scale=float32`.
+4. Add a compressed base SSP mode, initially `k64/k128`, and benchmark
+   stellar-only, dust-only, and full photometry. This becomes high-leverage
+   once gas/AGN are no longer multi-GiB tensors.
+5. Implement the real gas science representation:
+   low-rank continuum plus sparse line luminosities. Do not rely on a smaller
+   full-spectrum basis to preserve all narrow line/filter crossings.
+6. Add filter-aware compression as a second-stage optimization: optimize
+   basis/coefficients against broad-band flux errors over sampled redshifts and
+   filters, not only pointwise SED reconstruction.
+
+Implemented follow-up slice:
+
+- `scripts/audit_compression_tradeoffs.py` now generates the method/factor/loss
+  audit from sampled dense gas/AGN spectra plus existing SSP diagnostics. The
+  current output directory is:
+
+  ```text
+  outputs/ssp_compression/tradeoffs/
+  ```
+
+- Implemented `model.ssp_model: compressed_basis`, loaded from
+  `model.compressed_ssp_path`. In this mode `load_context` does not copy the
+  dense base `ssp_flux` tensor to JAX; it keeps `ssp_basis`, `ssp_coeff`, and
+  `ssp_scale` as the resident representation and reconstructs only the
+  metallicity-selected age-by-wavelength SSP.
+- Implemented compressed AGN assets with
+  `fagn_handling: linear_runtime_multiplier`, where `agn_coeff` has shape
+  `[agn_tau, stellar_lgmet, age, k]` instead of
+  `[fagn, agn_tau, stellar_lgmet, age, k]`.
+- Implemented explicit mixed-precision storage for compressed SSP, gas, and
+  AGN builders. The loaders preserve `float16` resident basis/coeff arrays and
+  cast selected slices to `float32` for reconstruction. Scale arrays remain
+  `float32`.
+
+Current audit recommendations:
+
+```text
+AGN default experiment:
+  fagn factored, k=12 or k=16, basis=float32, coeff=float16, scale=float32
+
+Gas default experiment:
+  k=64, basis=float16, coeff=float16, scale=float32
+  k=48 is a smaller comparison point, but needs photometry and line checks
+
+Base SSP default experiment:
+  k=64 for aggressive memory savings
+  k=128 for safer stellar-continuum validation
+```
+
+Build commands for the recommended first compact assets:
+
+```bash
+python scripts/build_compressed_ssp_grid.py \
+  --input Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5 \
+  --output Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5 \
+  --k 64 --basis-dtype float32 --coeff-dtype float16 --overwrite
+
+python scripts/build_compressed_gas_grid.py \
+  --input Data/popcosmos_chabrier_gas_ssp_grid.h5 \
+  --output Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5 \
+  --k 64 --basis-dtype float16 --coeff-dtype float16 --overwrite
+
+python scripts/build_compressed_agn_component_grid.py \
+  --input Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+  --output Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5 \
+  --k 12 --factor-fagn --basis-dtype float32 --coeff-dtype float16 --overwrite
+```
+
+Use `k48` gas and `k128` SSP as comparison assets when exploring the final
+memory/accuracy frontier.
+
 ## Phase 3 - Build Compressed Assets
 
 Add builders that read dense assets and write compressed scientific assets.
@@ -315,6 +453,28 @@ scripts/build_compressed_agn_component_grid.py
 scripts/build_compressed_gas_grid.py
 scripts/validate_compressed_spectral_asset.py
 ```
+
+2026-05-29 status:
+
+- `scripts/build_compressed_agn_component_grid.py` implemented for the dense
+  FSPS-native AGN component grid.
+- `scripts/build_compressed_gas_grid.py` implemented as a first low-rank
+  full-spectrum gas-grid prototype.
+- `scripts/validate_compressed_spectral_asset.py` validates both compressed
+  AGN and compressed gas assets without loading dense source grids.
+- `scripts/benchmark_dense_vs_compressed_spectral_assets.py` added for
+  identical-parameter dense-vs-compressed photometry checks with progress
+  reporting. It loads one level at a time and defaults to lazy dense AGN slice
+  reads to avoid preloading the multi-GiB dense AGN tensor twice.
+- `scripts/benchmark_photometry_engines.py` added for subprocess-isolated
+  comparison of `dsps_dense_lazy`, `dsps_dense_resident`, `dsps_compressed`,
+  and `fsps_prospector`, with wall time and peak RSS recorded per engine/level.
+  Dense-lazy reads dense AGN HDF5 slices per point; dense-resident is skipped by
+  a memory guard when estimated static payload plus overhead is too close to
+  available memory.
+- `scripts/build_compressed_ssp_grid.py` is now implemented. It became useful
+  after gas/AGN compression because the base SSP is then the largest remaining
+  resident spectral tensor.
 
 ### Required Metadata
 
@@ -386,7 +546,7 @@ Compressed modes:
 
 ```yaml
 model:
-  ssp_representation: compressed_basis
+  ssp_model: compressed_basis
   compressed_ssp_path: Data/popcosmos_chabrier_stellar_ssp_basis_k64.h5
   nebular_model: compressed_gas_grid
   compressed_gas_grid_path: Data/popcosmos_chabrier_gas_grid_basis_k64.h5
@@ -398,6 +558,19 @@ The exact key names can change during implementation, but the principle cannot:
 if a config asks for a compressed mode, missing compressed arrays must raise a
 clear error.
 
+2026-05-29 status: the first compressed runtime modes exist:
+
+```yaml
+model:
+  nebular_model: compressed_gas_grid
+  compressed_gas_grid_path: Data/popcosmos_chabrier_gas_grid_basis_k64.h5
+  agn_model: compressed_fsps_component_grid
+  compressed_agn_component_grid_path: Data/popcosmos_chabrier_agn_component_basis_k32.h5
+```
+
+The dense gas/AGN fields remain `None` in these modes. There is no silent
+fallback to the dense `ssp_flux` or `agn_lnu_per_mformed` grids.
+
 ### Context
 
 Add compressed fields to `DspsContext`, for example:
@@ -407,10 +580,12 @@ compressed_ssp_basis_jax
 compressed_ssp_coeff_jax
 compressed_gas_basis_jax
 compressed_gas_coeff_jax
-compressed_gas_line_wave_jax
-compressed_gas_line_luminosity_jax
+compressed_gas_scale_jax
+compressed_gas_line_wave_jax          future continuum-plus-lines mode
+compressed_gas_line_luminosity_jax    future continuum-plus-lines mode
 compressed_agn_basis_jax
 compressed_agn_coeff_jax
+compressed_agn_scale_jax
 ```
 
 For compressed modes, the dense fields for that component should remain `None`.
@@ -441,6 +616,12 @@ dusted = young_sed * diffuse_dust * birth_cloud_dust
 
 For gas lines, apply dust at `line_wave` and rasterize/project line fluxes
 without materializing the full dense gas tensor.
+
+Current gas-compressed implementation note: the first `compressed_gas_grid`
+mode reconstructs a low-rank approximation of the full gas spectrum after
+interpolating in `(gas_lgmet, gas_lgu)`. This is useful for VRAM testing, but
+it remains a prototype for science because it does not yet separate nebular
+continuum and sparse emission-line luminosities.
 
 For AGN, preserve the validated semantics:
 
@@ -516,6 +697,45 @@ Metrics:
 - non-finite and effectively-faint counts kept explicit;
 - gradient and optimizer smoke tests.
 
+Initial command template:
+
+```bash
+python scripts/benchmark_dense_vs_compressed_spectral_assets.py \
+  --dense-config configs/popcosmos_binned.yaml \
+  --compressed-gas-grid Data/popcosmos_chabrier_gas_grid_basis_k64.h5 \
+  --compressed-agn-component-grid Data/popcosmos_chabrier_agn_component_basis_k32.h5 \
+  --levels stellar_plus_gas full_noagn stellar_plus_agn full_agn \
+  --n 50 \
+  --seed 0 \
+  --runtime cpu \
+  --out outputs/benchmarks/dense_vs_compressed_popcosmos_n50
+```
+
+Use `--runtime gpu` only after a small CPU residual check and after estimating
+resident payloads with `scripts/profile_vram_batch.py`.
+Use `--dense-agn-mode resident` only when deliberately measuring the true dense
+resident AGN mode; the default `lazy` mode prevents avoidable OOM during
+photometric residual checks.
+
+Three-engine comparison template:
+
+```bash
+python scripts/benchmark_photometry_engines.py \
+  --config configs/popcosmos_binned.yaml \
+  --compressed-gas-grid Data/popcosmos_chabrier_gas_grid_basis_k64.h5 \
+  --compressed-agn-component-grid Data/popcosmos_chabrier_agn_component_basis_k32.h5 \
+  --engines dsps_dense_lazy dsps_compressed fsps_prospector \
+  --levels stellar_plus_gas full_noagn stellar_plus_agn full_agn \
+  --n 50 \
+  --seed 0 \
+  --runtime cpu \
+  --out outputs/benchmarks/photometry_engines_n50
+```
+
+Add `dsps_dense_resident` to `--engines` only when explicitly auditing the true
+resident mode. The memory guard skips runs that are likely to OOM; use
+`--no-memory-guard` only for deliberate stress testing.
+
 ### FSPS/Prospector
 
 After dense-vs-compressed passes:
@@ -524,6 +744,8 @@ After dense-vs-compressed passes:
 python scripts/benchmark_against_fsps_prospector.py \
   --runtime cpu \
   --config configs/popcosmos_binned.yaml \
+  --compressed-gas-grid Data/popcosmos_chabrier_gas_grid_basis_k64.h5 \
+  --compressed-agn-component-grid Data/popcosmos_chabrier_agn_component_basis_k32.h5 \
   --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn \
            stellar_plus_agn stellar_plus_dust_plus_agn \
            stellar_plus_gas_plus_agn full_agn \
@@ -534,6 +756,8 @@ python scripts/benchmark_against_fsps_prospector.py \
 python scripts/benchmark_against_fsps_prospector.py \
   --runtime cpu \
   --config configs/popcosmos_binned.yaml \
+  --compressed-gas-grid Data/popcosmos_chabrier_gas_grid_basis_k64.h5 \
+  --compressed-agn-component-grid Data/popcosmos_chabrier_agn_component_basis_k32.h5 \
   --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn \
            stellar_plus_agn stellar_plus_dust_plus_agn \
            stellar_plus_gas_plus_agn full_agn \
@@ -542,8 +766,7 @@ python scripts/benchmark_against_fsps_prospector.py \
   --out outputs/benchmarks/compressed_popcosmos_binned_n500
 ```
 
-The config used for these commands must point to compressed assets once the
-compressed modes exist.
+These commands inject compressed asset paths without editing the science config.
 
 ### Runtime Benchmarks
 
@@ -580,7 +803,7 @@ Compare dense and compressed modes on the same GPU:
 
 ## Recommended Implementation Order
 
-1. Create the clean worktree with copied `Data/`.
+1. Create the clean branch from `dev` and validate the existing dense `Data/`.
 2. Add baseline asset and GPU memory profiling.
 3. Build and validate compressed AGN component assets first.
 4. Add `compressed_fsps_component_grid` JAX mode and benchmark AGN-only and

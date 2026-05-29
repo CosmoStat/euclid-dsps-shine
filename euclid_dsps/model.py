@@ -46,10 +46,16 @@ class DspsContext:
     ssp_lgmet_jax: Any | None = None
     ssp_lg_age_gyr_jax: Any | None = None
     ssp_flux_jax: Any | None = None
+    compressed_ssp_basis_jax: Any | None = None
+    compressed_ssp_coeff_jax: Any | None = None
+    compressed_ssp_scale_jax: Any | None = None
     ssp_surviving_mstar_jax: Any | None = None
     gas_lgmet_grid_jax: Any | None = None
     gas_lgu_grid_jax: Any | None = None
     ssp_flux_gas_grid_jax: Any | None = None
+    compressed_gas_basis_jax: Any | None = None
+    compressed_gas_coeff_jax: Any | None = None
+    compressed_gas_scale_jax: Any | None = None
     agn_wave_jax: Any | None = None
     agn_fagn_grid_jax: Any | None = None
     agn_tau_grid_jax: Any | None = None
@@ -59,6 +65,9 @@ class DspsContext:
     agn_component_lgmet_jax: Any | None = None
     agn_component_lg_age_gyr_jax: Any | None = None
     agn_component_grid_jax: Any | None = None
+    compressed_agn_basis_jax: Any | None = None
+    compressed_agn_coeff_jax: Any | None = None
+    compressed_agn_scale_jax: Any | None = None
     ssp_emline_luminosity: np.ndarray | None = None
     ssp_emline_wave: np.ndarray | None = None
     ssp_emline_name: tuple[str, ...] = ()
@@ -72,10 +81,16 @@ DYNAMIC_CONTEXT_FIELDS = (
     "ssp_lgmet_jax",
     "ssp_lg_age_gyr_jax",
     "ssp_flux_jax",
+    "compressed_ssp_basis_jax",
+    "compressed_ssp_coeff_jax",
+    "compressed_ssp_scale_jax",
     "ssp_surviving_mstar_jax",
     "gas_lgmet_grid_jax",
     "gas_lgu_grid_jax",
     "ssp_flux_gas_grid_jax",
+    "compressed_gas_basis_jax",
+    "compressed_gas_coeff_jax",
+    "compressed_gas_scale_jax",
     "agn_wave_jax",
     "agn_fagn_grid_jax",
     "agn_tau_grid_jax",
@@ -85,6 +100,9 @@ DYNAMIC_CONTEXT_FIELDS = (
     "agn_component_lgmet_jax",
     "agn_component_lg_age_gyr_jax",
     "agn_component_grid_jax",
+    "compressed_agn_basis_jax",
+    "compressed_agn_coeff_jax",
+    "compressed_agn_scale_jax",
     "jax_filters",
     "cosmos_dust_k_by_code_jax",
 )
@@ -172,12 +190,20 @@ def load_context(
     model_config = _normalized_model_config(model_config)
     ssp = load_ssp_templates(fn=ssp_path)
     _validate_popcosmos_ssp_metadata(ssp_path, model_config)
+    compressed_ssp_basis, compressed_ssp_coeff, compressed_ssp_scale = (
+        _load_optional_compressed_ssp_grid(model_config, ssp)
+    )
     dust_k_by_code, dust_curve_names = _load_cosmos_dust_grid(ssp, cosmos_config)
     emline_luminosity, emline_wave, emline_name = _load_ssp_emline_data(ssp_path, ssp)
     surviving_mstar = _load_ssp_surviving_mstar(ssp_path, ssp)
-    gas_lgmet_grid, gas_lgu_grid, ssp_flux_gas_grid = _load_optional_gas_grid(
-        model_config, ssp
-    )
+    (
+        gas_lgmet_grid,
+        gas_lgu_grid,
+        ssp_flux_gas_grid,
+        compressed_gas_basis,
+        compressed_gas_coeff,
+        compressed_gas_scale,
+    ) = _load_optional_gas_grid(model_config, ssp)
     (
         agn_wave,
         agn_fagn_grid,
@@ -188,6 +214,9 @@ def load_context(
         agn_component_lgmet,
         agn_component_lg_age_gyr,
         agn_component_grid,
+        compressed_agn_basis,
+        compressed_agn_coeff,
+        compressed_agn_scale,
     ) = _load_optional_agn_grid(model_config, ssp)
     return DspsContext(
         ssp=ssp,
@@ -200,7 +229,20 @@ def load_context(
         ssp_wave_jax=jnp.asarray(ssp.ssp_wave, dtype=jnp.float32),
         ssp_lgmet_jax=jnp.asarray(ssp.ssp_lgmet, dtype=jnp.float32),
         ssp_lg_age_gyr_jax=jnp.asarray(ssp.ssp_lg_age_gyr, dtype=jnp.float32),
-        ssp_flux_jax=jnp.asarray(ssp.ssp_flux, dtype=jnp.float32),
+        ssp_flux_jax=(
+            None
+            if str(model_config.get("ssp_model", "dense")) == "compressed_basis"
+            else jnp.asarray(ssp.ssp_flux, dtype=jnp.float32)
+        ),
+        compressed_ssp_basis_jax=_jax_optional_array_preserve_float(
+            compressed_ssp_basis
+        ),
+        compressed_ssp_coeff_jax=_jax_optional_array_preserve_float(
+            compressed_ssp_coeff
+        ),
+        compressed_ssp_scale_jax=_jax_optional_array_preserve_float(
+            compressed_ssp_scale
+        ),
         ssp_surviving_mstar_jax=(
             None
             if surviving_mstar is None
@@ -220,6 +262,21 @@ def load_context(
             None
             if ssp_flux_gas_grid is None
             else jnp.asarray(ssp_flux_gas_grid, dtype=jnp.float32)
+        ),
+        compressed_gas_basis_jax=(
+            None
+            if compressed_gas_basis is None
+            else _jax_array_preserve_float(compressed_gas_basis)
+        ),
+        compressed_gas_coeff_jax=(
+            None
+            if compressed_gas_coeff is None
+            else _jax_array_preserve_float(compressed_gas_coeff)
+        ),
+        compressed_gas_scale_jax=(
+            None
+            if compressed_gas_scale is None
+            else jnp.asarray(compressed_gas_scale, dtype=jnp.float32)
         ),
         agn_wave_jax=(
             None if agn_wave is None else jnp.asarray(agn_wave, dtype=jnp.float32)
@@ -264,6 +321,21 @@ def load_context(
             if agn_component_grid is None
             else jnp.asarray(agn_component_grid, dtype=jnp.float32)
         ),
+        compressed_agn_basis_jax=(
+            None
+            if compressed_agn_basis is None
+            else _jax_array_preserve_float(compressed_agn_basis)
+        ),
+        compressed_agn_coeff_jax=(
+            None
+            if compressed_agn_coeff is None
+            else _jax_array_preserve_float(compressed_agn_coeff)
+        ),
+        compressed_agn_scale_jax=(
+            None
+            if compressed_agn_scale is None
+            else jnp.asarray(compressed_agn_scale, dtype=jnp.float32)
+        ),
         ssp_emline_luminosity=emline_luminosity,
         ssp_emline_wave=emline_wave,
         ssp_emline_name=emline_name,
@@ -287,6 +359,7 @@ def _normalized_model_config(model_config: dict[str, Any] | None) -> dict[str, A
     config = dict(model_config or {})
     sfh_model = str(config.get("sfh_model", "lognormal"))
     config.setdefault("sfh_model", sfh_model)
+    config.setdefault("ssp_model", "dense")
     popcosmos_like = _is_popcosmos_like_model_config(config)
     config.setdefault(
         "stellar_metallicity_model",
@@ -317,16 +390,200 @@ def _normalized_model_config(model_config: dict[str, Any] | None) -> dict[str, A
     return config
 
 
+def _jax_array_preserve_float(value: np.ndarray) -> jnp.ndarray:
+    """Copy float16/float32 compressed payloads without upcasting resident arrays."""
+    array = np.asarray(value)
+    if array.dtype == np.float16:
+        return jnp.asarray(array, dtype=jnp.float16)
+    return jnp.asarray(array, dtype=jnp.float32)
+
+
+def _jax_optional_array_preserve_float(value: np.ndarray | None) -> jnp.ndarray | None:
+    if value is None:
+        return None
+    return _jax_array_preserve_float(value)
+
+
+def _load_optional_compressed_ssp_grid(
+    model_config: dict[str, Any], ssp: Any
+) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    ssp_model = str(model_config.get("ssp_model", "dense"))
+    if ssp_model == "dense":
+        return None, None, None
+    if ssp_model != "compressed_basis":
+        raise ValueError(f"Unsupported model.ssp_model: {ssp_model}")
+    path = model_config.get("compressed_ssp_path")
+    if not path:
+        raise ValueError(
+            "model.ssp_model='compressed_basis' requires model.compressed_ssp_path"
+        )
+    return _load_compressed_ssp_grid(path, reference_ssp=ssp, model_config=model_config)
+
+
+def _load_compressed_ssp_grid(
+    path: str | Path,
+    reference_ssp: Any,
+    model_config: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    grid_path = Path(path).expanduser()
+    if not grid_path.exists():
+        raise FileNotFoundError(f"Compressed SSP grid file not found: {grid_path}")
+    try:
+        import h5py
+    except ImportError as exc:  # pragma: no cover - pyproject requires h5py
+        raise RuntimeError("h5py is required to load compressed SSP grids") from exc
+    required = (
+        "ssp_wave",
+        "ssp_lg_age_gyr",
+        "ssp_lgmet",
+        "ssp_basis",
+        "ssp_coeff",
+    )
+    with h5py.File(grid_path, "r") as handle:
+        missing = [key for key in required if key not in handle]
+        if missing:
+            raise ValueError(
+                f"Compressed SSP grid {grid_path} is missing datasets: "
+                f"{', '.join(missing)}"
+            )
+        attrs = _hdf5_attrs(handle)
+        wave = np.asarray(handle["ssp_wave"], dtype=float)
+        lg_age = np.asarray(handle["ssp_lg_age_gyr"], dtype=float)
+        lgmet = np.asarray(handle["ssp_lgmet"], dtype=float)
+        basis = _read_float_dataset_preserve_dtype(handle["ssp_basis"])
+        coeff = _read_float_dataset_preserve_dtype(handle["ssp_coeff"])
+        scale = (
+            np.asarray(handle["ssp_scale"], dtype=np.float32)
+            if "ssp_scale" in handle
+            else np.ones(coeff.shape[:-1], dtype=np.float32)
+        )
+    if basis.ndim != 2 or basis.shape[1] != len(wave):
+        raise ValueError("Compressed SSP grid ssp_basis must have shape (n_basis, n_wave)")
+    expected_coeff_shape = (len(lgmet), len(lg_age), basis.shape[0])
+    if coeff.ndim != 3 or coeff.shape != expected_coeff_shape:
+        raise ValueError(
+            "Compressed SSP grid ssp_coeff must have shape "
+            "(n_ssp_lgmet, n_ssp_lg_age_gyr, n_basis)"
+        )
+    if scale.shape != expected_coeff_shape[:-1]:
+        raise ValueError(
+            "Compressed SSP grid ssp_scale must have shape "
+            "(n_ssp_lgmet, n_ssp_lg_age_gyr)"
+        )
+    _validate_compressed_ssp_reference_axes(grid_path, reference_ssp, wave, lg_age, lgmet)
+    _validate_popcosmos_ssp_metadata(grid_path, model_config or {})
+    _validate_compressed_asset_dtype_metadata(
+        grid_path,
+        attrs,
+        {"ssp_basis": basis.dtype, "ssp_coeff": coeff.dtype, "ssp_scale": scale.dtype},
+    )
+    return basis, coeff, scale
+
+
+def _read_float_dataset_preserve_dtype(dataset: Any) -> np.ndarray:
+    dtype = np.dtype(dataset.dtype)
+    if dtype == np.dtype(np.float16):
+        return np.asarray(dataset, dtype=np.float16)
+    if dtype == np.dtype(np.float32):
+        return np.asarray(dataset, dtype=np.float32)
+    return np.asarray(dataset, dtype=np.float32)
+
+
+def _assert_axis_close(
+    path: Path,
+    name: str,
+    expected: np.ndarray,
+    actual: np.ndarray,
+    atol: float,
+) -> None:
+    expected = np.asarray(expected, dtype=float)
+    actual = np.asarray(actual, dtype=float)
+    if expected.shape != actual.shape or not np.allclose(
+        actual, expected, rtol=_AXIS_RTOL, atol=atol
+    ):
+        raise ValueError(
+            f"Compressed SSP grid {path} axis {name} does not match the reference "
+            f"SSP; expected shape {expected.shape}, got {actual.shape}; "
+            f"tolerances are rtol={_AXIS_RTOL}, atol={atol}."
+        )
+
+
+def _validate_compressed_ssp_reference_axes(
+    path: Path,
+    reference_ssp: Any,
+    wave: np.ndarray,
+    lg_age: np.ndarray,
+    lgmet: np.ndarray,
+) -> None:
+    _assert_axis_close(path, "ssp_wave", np.asarray(reference_ssp.ssp_wave), wave, _WAVE_ATOL)
+    _assert_axis_close(
+        path,
+        "ssp_lg_age_gyr",
+        np.asarray(reference_ssp.ssp_lg_age_gyr),
+        lg_age,
+        _LOG_AXIS_ATOL,
+    )
+    _assert_axis_close(
+        path,
+        "ssp_lgmet",
+        np.asarray(reference_ssp.ssp_lgmet),
+        lgmet,
+        _LOG_AXIS_ATOL,
+    )
+
+
+def _validate_compressed_asset_dtype_metadata(
+    path: Path, attrs: dict[str, Any], actual: dict[str, np.dtype]
+) -> None:
+    declared = _json_attr(attrs, "compressed_dtypes")
+    if not declared:
+        return
+    mismatches = []
+    for name, dtype in actual.items():
+        expected = declared.get(name)
+        if expected is not None and str(expected) != str(np.dtype(dtype)):
+            mismatches.append(f"{name}: metadata={expected}, dataset={np.dtype(dtype)}")
+    if mismatches:
+        raise ValueError(
+            f"Compressed asset {path} has inconsistent dtype metadata: "
+            f"{'; '.join(mismatches)}"
+        )
+
+
 def _load_optional_gas_grid(
     model_config: dict[str, Any],
     ssp: Any | None = None,
-) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-    if str(model_config.get("nebular_model", "fixed_ssp")) != "gas_grid":
-        return None, None, None
-    path = model_config.get("gas_grid_path")
-    if not path:
-        raise ValueError("model.nebular_model='gas_grid' requires model.gas_grid_path")
-    return _load_gas_ssp_grid(path, reference_ssp=ssp, model_config=model_config)
+) -> tuple[
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    nebular_model = str(model_config.get("nebular_model", "fixed_ssp"))
+    if nebular_model == "fixed_ssp":
+        return None, None, None, None, None, None
+    if nebular_model == "gas_grid":
+        path = model_config.get("gas_grid_path")
+        if not path:
+            raise ValueError("model.nebular_model='gas_grid' requires model.gas_grid_path")
+        gas_lgmet, gas_lgu, ssp_flux = _load_gas_ssp_grid(
+            path, reference_ssp=ssp, model_config=model_config
+        )
+        return gas_lgmet, gas_lgu, ssp_flux, None, None, None
+    if nebular_model == "compressed_gas_grid":
+        path = model_config.get("compressed_gas_grid_path")
+        if not path:
+            raise ValueError(
+                "model.nebular_model='compressed_gas_grid' requires "
+                "model.compressed_gas_grid_path"
+            )
+        gas_lgmet, gas_lgu, basis, coeff, scale = _load_compressed_gas_ssp_grid(
+            path, reference_ssp=ssp, model_config=model_config
+        )
+        return gas_lgmet, gas_lgu, None, basis, coeff, scale
+    raise ValueError(f"Unsupported model.nebular_model: {nebular_model}")
 
 
 def _load_gas_ssp_grid(
@@ -411,6 +668,88 @@ def _load_gas_ssp_grid(
     return gas_lgmet_grid, gas_lgu_grid, ssp_flux
 
 
+def _load_compressed_gas_ssp_grid(
+    path: str | Path,
+    reference_ssp: Any | None = None,
+    model_config: dict[str, Any] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load a low-rank gas SSP grid without materializing dense spectra."""
+    grid_path = Path(path).expanduser()
+    if not grid_path.exists():
+        raise FileNotFoundError(f"Compressed gas SSP grid file not found: {grid_path}")
+    try:
+        import h5py
+    except ImportError as exc:  # pragma: no cover - pyproject requires h5py
+        raise RuntimeError("h5py is required to load compressed gas SSP grids") from exc
+
+    required = (
+        "ssp_wave",
+        "ssp_lg_age_gyr",
+        "ssp_lgmet",
+        "gas_lgmet_grid",
+        "gas_lgu_grid",
+        "gas_basis",
+        "gas_coeff",
+    )
+    with h5py.File(grid_path, "r") as handle:
+        missing = [key for key in required if key not in handle]
+        if missing:
+            raise ValueError(
+                f"Compressed gas SSP grid {grid_path} is missing datasets: "
+                f"{', '.join(missing)}"
+            )
+        attrs = _hdf5_attrs(handle)
+        gas_lgmet_grid = np.asarray(handle["gas_lgmet_grid"], dtype=float)
+        gas_lgu_grid = np.asarray(handle["gas_lgu_grid"], dtype=float)
+        ssp_wave = np.asarray(handle["ssp_wave"], dtype=float)
+        ssp_lg_age_gyr = np.asarray(handle["ssp_lg_age_gyr"], dtype=float)
+        ssp_lgmet = np.asarray(handle["ssp_lgmet"], dtype=float)
+        basis = _read_float_dataset_preserve_dtype(handle["gas_basis"])
+        coeff = _read_float_dataset_preserve_dtype(handle["gas_coeff"])
+        scale = (
+            np.asarray(handle["gas_scale"], dtype=np.float32)
+            if "gas_scale" in handle
+            else np.ones(coeff.shape[:-1], dtype=np.float32)
+        )
+
+    if basis.ndim != 2 or basis.shape[1] != len(ssp_wave):
+        raise ValueError(
+            "Compressed gas SSP grid gas_basis must have shape (n_basis, n_wave)"
+        )
+    expected_coeff_shape = (
+        len(gas_lgmet_grid),
+        len(gas_lgu_grid),
+        len(ssp_lgmet),
+        len(ssp_lg_age_gyr),
+        basis.shape[0],
+    )
+    if coeff.ndim != 5 or coeff.shape != expected_coeff_shape:
+        raise ValueError(
+            "Compressed gas SSP grid gas_coeff must have shape "
+            "(n_gas_lgmet, n_gas_lgu, n_ssp_lgmet, n_ssp_lg_age_gyr, n_basis)"
+        )
+    if scale.shape != expected_coeff_shape[:-1]:
+        raise ValueError(
+            "Compressed gas SSP grid gas_scale must have shape "
+            "(n_gas_lgmet, n_gas_lgu, n_ssp_lgmet, n_ssp_lg_age_gyr)"
+        )
+    _validate_gas_grid_reference_axes(
+        grid_path,
+        reference_ssp,
+        ssp_wave,
+        ssp_lg_age_gyr,
+        ssp_lgmet,
+        model_config,
+    )
+    _validate_popcosmos_gas_metadata(grid_path, attrs, model_config)
+    _validate_compressed_asset_dtype_metadata(
+        grid_path,
+        attrs,
+        {"gas_basis": basis.dtype, "gas_coeff": coeff.dtype, "gas_scale": scale.dtype},
+    )
+    return gas_lgmet_grid, gas_lgu_grid, basis, coeff, scale
+
+
 def _load_optional_agn_grid(
     model_config: dict[str, Any],
     reference_ssp: Any | None = None,
@@ -424,10 +763,13 @@ def _load_optional_agn_grid(
     np.ndarray | None,
     np.ndarray | None,
     np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
 ]:
     agn_model = str(model_config.get("agn_model", "none"))
     if agn_model == "none":
-        return None, None, None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None, None, None, None, None
     if agn_model == "fsps_component_grid":
         path = model_config.get("agn_component_grid_path")
         if not path:
@@ -438,7 +780,20 @@ def _load_optional_agn_grid(
         wave, fagn, tau, lgmet, lg_age, grid = _load_agn_component_grid(
             path, model_config=model_config, reference_ssp=reference_ssp
         )
-        return wave, fagn, tau, None, None, None, lgmet, lg_age, grid
+        return wave, fagn, tau, None, None, None, lgmet, lg_age, grid, None, None, None
+    if agn_model == "compressed_fsps_component_grid":
+        path = model_config.get("compressed_agn_component_grid_path")
+        if not path:
+            raise ValueError(
+                "model.agn_model='compressed_fsps_component_grid' requires "
+                "model.compressed_agn_component_grid_path"
+            )
+        wave, fagn, tau, lgmet, lg_age, basis, coeff, scale = (
+            _load_compressed_agn_component_grid(
+                path, model_config=model_config, reference_ssp=reference_ssp
+            )
+        )
+        return wave, fagn, tau, None, None, None, lgmet, lg_age, None, basis, coeff, scale
     if agn_model != "template_grid":
         raise ValueError(f"Unsupported model.agn_model: {agn_model}")
     path = model_config.get("agn_template_path")
@@ -449,7 +804,7 @@ def _load_optional_agn_grid(
     wave, fagn, tau, tage, logzsol, grid = _load_agn_template_grid(
         path, model_config=model_config
     )
-    return wave, fagn, tau, tage, logzsol, grid, None, None, None
+    return wave, fagn, tau, tage, logzsol, grid, None, None, None, None, None, None
 
 
 def _load_agn_template_grid(
@@ -595,6 +950,123 @@ def _load_agn_component_grid(
     )
     _validate_popcosmos_agn_metadata(grid_path, attrs, model_config)
     return wave, fagn_grid, tau_grid, lgmet, lg_age, component
+
+
+def _load_compressed_agn_component_grid(
+    path: str | Path,
+    model_config: dict[str, Any] | None = None,
+    reference_ssp: Any | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+    np.ndarray,
+]:
+    """Load a low-rank FSPS-native AGN component grid.
+
+    The compressed representation stores spectra as
+    ``agn_scale * (agn_coeff @ agn_basis)`` and never materializes the dense
+    ``(fagn, tau, Z, age, wave)`` tensor during context loading.
+    """
+    grid_path = Path(path).expanduser()
+    if not grid_path.exists():
+        raise FileNotFoundError(f"Compressed AGN component grid file not found: {grid_path}")
+    try:
+        import h5py
+    except ImportError as exc:  # pragma: no cover - pyproject requires h5py
+        raise RuntimeError(
+            "h5py is required to load compressed AGN component grids"
+        ) from exc
+
+    required = (
+        "ssp_wave",
+        "ssp_lg_age_gyr",
+        "ssp_lgmet",
+        "fagn_grid",
+        "agn_tau_grid",
+        "agn_basis",
+        "agn_coeff",
+    )
+    with h5py.File(grid_path, "r") as handle:
+        missing = [key for key in required if key not in handle]
+        if missing:
+            raise ValueError(
+                f"Compressed AGN component grid {grid_path} is missing datasets: "
+                f"{', '.join(missing)}"
+            )
+        attrs = _hdf5_attrs(handle)
+        wave = np.asarray(handle["ssp_wave"], dtype=float)
+        lg_age = np.asarray(handle["ssp_lg_age_gyr"], dtype=float)
+        lgmet = np.asarray(handle["ssp_lgmet"], dtype=float)
+        fagn_grid = np.asarray(handle["fagn_grid"], dtype=float)
+        tau_grid = np.asarray(handle["agn_tau_grid"], dtype=float)
+        basis = _read_float_dataset_preserve_dtype(handle["agn_basis"])
+        coeff = _read_float_dataset_preserve_dtype(handle["agn_coeff"])
+        scale = (
+            np.asarray(handle["agn_scale"], dtype=np.float32)
+            if "agn_scale" in handle
+            else np.ones(coeff.shape[:-1], dtype=np.float32)
+        )
+        fagn_handling = str(attrs.get("fagn_handling", "grid_interpolation"))
+
+    if basis.ndim != 2 or basis.shape[1] != len(wave):
+        raise ValueError(
+            "Compressed AGN component grid agn_basis must have shape "
+            "(n_basis, n_wave)"
+        )
+    if fagn_handling == "linear_runtime_multiplier":
+        expected_coeff_shape = (
+            len(tau_grid),
+            len(lgmet),
+            len(lg_age),
+            basis.shape[0],
+        )
+        shape_message = "(n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr, n_basis)"
+        scale_shape_message = "(n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr)"
+    else:
+        expected_coeff_shape = (
+            len(fagn_grid),
+            len(tau_grid),
+            len(lgmet),
+            len(lg_age),
+            basis.shape[0],
+        )
+        shape_message = (
+            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, "
+            "n_ssp_lg_age_gyr, n_basis)"
+        )
+        scale_shape_message = (
+            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr)"
+        )
+    if coeff.shape != expected_coeff_shape:
+        raise ValueError(
+            "Compressed AGN component grid agn_coeff must have shape "
+            f"{shape_message}"
+        )
+    expected_scale_shape = expected_coeff_shape[:-1]
+    if scale.shape != expected_scale_shape:
+        raise ValueError(
+            "Compressed AGN component grid agn_scale must have shape "
+            f"{scale_shape_message}"
+        )
+    _validate_agn_component_reference_axes(
+        grid_path,
+        reference_ssp,
+        wave,
+        lg_age,
+        lgmet,
+    )
+    _validate_popcosmos_agn_metadata(grid_path, attrs, model_config)
+    _validate_compressed_asset_dtype_metadata(
+        grid_path,
+        attrs,
+        {"agn_basis": basis.dtype, "agn_coeff": coeff.dtype, "agn_scale": scale.dtype},
+    )
+    return wave, fagn_grid, tau_grid, lgmet, lg_age, basis, coeff, scale
 
 
 def _validate_agn_component_reference_axes(
@@ -1313,9 +1785,8 @@ def run_popcosmos_binned_model_jax(
     sfr_bins = jnp.clip(sfr_bins_raw * formed_scale, 1.0e-30, jnp.inf)
     lookback_edges = build_popcosmos_lookback_bin_edges_jax(t_obs)
 
-    stellar_ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
-        _context_ssp_lgmet(context),
-        _context_ssp_flux(context),
+    stellar_ssp_flux_z = interpolate_context_ssp_stellar_metallicity_jax(
+        context,
         lgmet_abs,
     )
     stellar_sed_by_age = (
@@ -1324,10 +1795,10 @@ def run_popcosmos_binned_model_jax(
     stellar_intrinsic_sed = jnp.nan_to_num(
         stellar_sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
-    ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
-        _context_ssp_lgmet(context),
-        ssp_flux_grid,
+    ssp_flux_z = interpolate_popcosmos_ssp_stellar_metallicity_jax(
+        context,
+        params,
+        model_config,
         lgmet_abs,
     )
     sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
@@ -1457,9 +1928,8 @@ def run_diffstar_reduced6_model_jax(
         ssp_lg_age_gyr,
         t_obs,
     )
-    stellar_ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
-        _context_ssp_lgmet(context),
-        _context_ssp_flux(context),
+    stellar_ssp_flux_z = interpolate_context_ssp_stellar_metallicity_jax(
+        context,
         lgmet_abs,
     )
     stellar_sed_by_age = (
@@ -1468,10 +1938,10 @@ def run_diffstar_reduced6_model_jax(
     stellar_intrinsic_sed = jnp.nan_to_num(
         stellar_sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
-    ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
-        _context_ssp_lgmet(context),
-        ssp_flux_grid,
+    ssp_flux_z = interpolate_popcosmos_ssp_stellar_metallicity_jax(
+        context,
+        params,
+        model_config,
         lgmet_abs,
     )
     sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
@@ -1892,6 +2362,64 @@ def interpolate_ssp_stellar_metallicity_jax(
     )
 
 
+def interpolate_context_ssp_stellar_metallicity_jax(
+    context: DspsContext, lgmet_abs: jnp.ndarray
+) -> jnp.ndarray:
+    """Interpolate the base SSP, using compressed coefficients when configured."""
+    if (
+        context.compressed_ssp_basis_jax is None
+        or context.compressed_ssp_coeff_jax is None
+        or context.compressed_ssp_scale_jax is None
+    ):
+        return interpolate_ssp_stellar_metallicity_jax(
+            _context_ssp_lgmet(context),
+            _context_ssp_flux(context),
+            lgmet_abs,
+        )
+    coeff = context.compressed_ssp_coeff_jax
+    scale = context.compressed_ssp_scale_jax
+    coeff_z = _interp_axis0_linear(
+        _context_ssp_lgmet(context),
+        coeff,
+        jnp.asarray(lgmet_abs, dtype=jnp.float32),
+    )
+    scale_z = _interp_axis0_linear(
+        _context_ssp_lgmet(context),
+        scale,
+        jnp.asarray(lgmet_abs, dtype=jnp.float32),
+    )
+    weighted_coeff = jnp.asarray(coeff_z, dtype=jnp.float32) * jnp.asarray(
+        scale_z, dtype=jnp.float32
+    )[:, None]
+    basis = jnp.asarray(context.compressed_ssp_basis_jax, dtype=jnp.float32)
+    reconstructed = jnp.einsum("ak,kw->aw", weighted_coeff, basis)
+    return jnp.nan_to_num(reconstructed, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
+
+
+def interpolate_popcosmos_ssp_stellar_metallicity_jax(
+    context: DspsContext,
+    params: dict[str, Any],
+    model_config: dict[str, Any],
+    lgmet_abs: jnp.ndarray,
+) -> jnp.ndarray:
+    """Return the SSP/gas grid at one stellar metallicity for PopCosmos paths."""
+    if str(model_config.get("nebular_model", "fixed_ssp")) in {
+        "gas_grid",
+        "compressed_gas_grid",
+    }:
+        ssp_flux_grid = interpolate_gas_ssp_grid_jax(
+            context,
+            params["log10_gas_metallicity"],
+            params["log10_gas_ionization"],
+        )
+        return interpolate_ssp_stellar_metallicity_jax(
+            _context_ssp_lgmet(context),
+            ssp_flux_grid,
+            lgmet_abs,
+        )
+    return interpolate_context_ssp_stellar_metallicity_jax(context, lgmet_abs)
+
+
 def log10_stellar_metallicity_to_absolute_jax(
     log10_stellar_metallicity: jnp.ndarray, z_sun: float
 ) -> jnp.ndarray:
@@ -2136,10 +2664,15 @@ def interpolate_gas_ssp_grid_jax(
     log10_gas_ionization: jnp.ndarray,
 ) -> jnp.ndarray:
     """Interpolate a gas SSP grid to gas metallicity and ionization."""
+    if context.ssp_flux_gas_grid_jax is None:
+        return interpolate_compressed_gas_ssp_grid_jax(
+            context,
+            log10_gas_metallicity,
+            log10_gas_ionization,
+        )
     if (
         context.gas_lgmet_grid_jax is None
         or context.gas_lgu_grid_jax is None
-        or context.ssp_flux_gas_grid_jax is None
     ):
         raise ValueError("model.nebular_model='gas_grid' requires a loaded gas grid")
     gas_z_lo, gas_z_hi, gas_z_weight = _interp_bracket(
@@ -2160,6 +2693,61 @@ def interpolate_gas_ssp_grid_jax(
     return low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
 
 
+def interpolate_compressed_gas_ssp_grid_jax(
+    context: DspsContext,
+    log10_gas_metallicity: jnp.ndarray,
+    log10_gas_ionization: jnp.ndarray,
+) -> jnp.ndarray:
+    """Interpolate a low-rank gas SSP grid and reconstruct only the selected grid."""
+    if (
+        context.gas_lgmet_grid_jax is None
+        or context.gas_lgu_grid_jax is None
+        or context.compressed_gas_basis_jax is None
+        or context.compressed_gas_coeff_jax is None
+        or context.compressed_gas_scale_jax is None
+    ):
+        raise ValueError(
+            "model.nebular_model='compressed_gas_grid' requires a loaded "
+            "compressed gas grid"
+        )
+    gas_z_lo, gas_z_hi, gas_z_weight = _interp_bracket(
+        context.gas_lgmet_grid_jax,
+        log10_gas_metallicity,
+    )
+    gas_u_lo, gas_u_hi, gas_u_weight = _interp_bracket(
+        context.gas_lgu_grid_jax,
+        log10_gas_ionization,
+    )
+    coeff = jnp.asarray(context.compressed_gas_coeff_jax)
+    scale = jnp.asarray(context.compressed_gas_scale_jax, dtype=jnp.float32)
+    basis = jnp.asarray(context.compressed_gas_basis_jax)
+
+    wc00 = jnp.asarray(coeff[gas_z_lo, gas_u_lo], dtype=jnp.float32) * scale[
+        gas_z_lo, gas_u_lo
+    ][..., None]
+    wc01 = jnp.asarray(coeff[gas_z_lo, gas_u_hi], dtype=jnp.float32) * scale[
+        gas_z_lo, gas_u_hi
+    ][..., None]
+    wc10 = jnp.asarray(coeff[gas_z_hi, gas_u_lo], dtype=jnp.float32) * scale[
+        gas_z_hi, gas_u_lo
+    ][..., None]
+    wc11 = jnp.asarray(coeff[gas_z_hi, gas_u_hi], dtype=jnp.float32) * scale[
+        gas_z_hi, gas_u_hi
+    ][..., None]
+    low_u = wc00 * (1.0 - gas_u_weight) + wc01 * gas_u_weight
+    high_u = wc10 * (1.0 - gas_u_weight) + wc11 * gas_u_weight
+    weighted_coeff = low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
+    reconstructed = jnp.einsum(
+        "mak,kw->maw", weighted_coeff, jnp.asarray(basis, dtype=jnp.float32)
+    )
+    return jnp.nan_to_num(
+        reconstructed,
+        nan=0.0,
+        posinf=1.0e30,
+        neginf=-1.0e30,
+    )
+
+
 def gas_metallicity_constraint_penalty_jax(
     params: dict[str, Any],
     model_config: dict[str, Any] | None,
@@ -2168,7 +2756,8 @@ def gas_metallicity_constraint_penalty_jax(
     """Hard PopCosmos-like constraint enforcing log10(Zgas/Zsun) >= log10(Zstar/Zsun)."""
     config = _normalized_model_config(model_config)
     if (
-        str(config.get("nebular_model", "fixed_ssp")) != "gas_grid"
+        str(config.get("nebular_model", "fixed_ssp"))
+        not in {"gas_grid", "compressed_gas_grid"}
         or not _is_popcosmos_like_model_config(config)
     ):
         return jnp.asarray(0.0, dtype=jnp.float32)
@@ -2241,6 +2830,17 @@ def agn_component_jax(
         return jnp.zeros_like(wave, dtype=jnp.float32)
     if agn_model == "fsps_component_grid":
         agn_lnu = agn_component_from_ssp_grid_jax(
+            context,
+            wave,
+            params,
+            config,
+            age_weights=age_weights,
+            formed_mass=formed_mass,
+            stellar_lgmet_abs=stellar_lgmet_abs,
+        )
+        return jnp.nan_to_num(agn_lnu, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
+    if agn_model == "compressed_fsps_component_grid":
+        agn_lnu = agn_component_from_compressed_grid_jax(
             context,
             wave,
             params,
@@ -2337,6 +2937,86 @@ def agn_component_from_ssp_grid_jax(
     weights = jnp.asarray(age_weights, dtype=jnp.float32)[:, None]
     mass = jnp.asarray(formed_mass, dtype=jnp.float32)
     agn_native = jnp.sum(grid_z * weights * mass, axis=0)
+    agn_lnu = jnp.interp(
+        jnp.asarray(wave, dtype=jnp.float32),
+        context.agn_wave_jax,
+        agn_native,
+        left=0.0,
+        right=0.0,
+    )
+    return apply_agn_host_attenuation_jax(wave, agn_lnu, params, model_config)
+
+
+def agn_component_from_compressed_grid_jax(
+    context: DspsContext,
+    wave: jnp.ndarray,
+    params: dict[str, Any],
+    model_config: dict[str, Any],
+    *,
+    age_weights: jnp.ndarray | None,
+    formed_mass: jnp.ndarray | float | None,
+    stellar_lgmet_abs: jnp.ndarray | float | None,
+) -> jnp.ndarray:
+    """Convolve a compressed FSPS-native AGN component grid with the SFH."""
+    if (
+        context.agn_wave_jax is None
+        or context.agn_fagn_grid_jax is None
+        or context.agn_tau_grid_jax is None
+        or context.agn_component_lgmet_jax is None
+        or context.agn_component_lg_age_gyr_jax is None
+        or context.compressed_agn_basis_jax is None
+        or context.compressed_agn_coeff_jax is None
+    ):
+        raise ValueError(
+            "model.agn_model='compressed_fsps_component_grid' requires a "
+            "loaded compressed AGN component grid"
+        )
+    if age_weights is None or formed_mass is None or stellar_lgmet_abs is None:
+        raise ValueError(
+            "model.agn_model='compressed_fsps_component_grid' requires age "
+            "weights, formed mass, and absolute stellar metallicity from the "
+            "SFH path"
+        )
+    fagn = jnp.exp(jnp.asarray(params["ln_fagn"], dtype=jnp.float32))
+    tauagn = jnp.exp(jnp.asarray(params["ln_tauagn"], dtype=jnp.float32))
+    coeff = jnp.asarray(context.compressed_agn_coeff_jax)
+    fagn_is_factored = coeff.ndim == 4
+    coeff_for_tau = (
+        coeff
+        if fagn_is_factored
+        else _interp_axis0_linear(context.agn_fagn_grid_jax, coeff, fagn)
+    )
+    coeff_tau = _interp_axis0_linear(context.agn_tau_grid_jax, coeff_for_tau, tauagn)
+    coeff_z = _interp_axis0_linear(
+        context.agn_component_lgmet_jax,
+        coeff_tau,
+        jnp.asarray(stellar_lgmet_abs, dtype=jnp.float32),
+    )
+    if context.compressed_agn_scale_jax is None:
+        scale_z = jnp.ones(coeff_z.shape[:-1], dtype=jnp.float32)
+    else:
+        scale = jnp.asarray(context.compressed_agn_scale_jax, dtype=jnp.float32)
+        scale_for_tau = (
+            scale
+            if fagn_is_factored
+            else _interp_axis0_linear(context.agn_fagn_grid_jax, scale, fagn)
+        )
+        scale_tau = _interp_axis0_linear(context.agn_tau_grid_jax, scale_for_tau, tauagn)
+        scale_z = _interp_axis0_linear(
+            context.agn_component_lgmet_jax,
+            scale_tau,
+            jnp.asarray(stellar_lgmet_abs, dtype=jnp.float32),
+        )
+    weights = jnp.asarray(age_weights, dtype=jnp.float32)[:, None]
+    mass = jnp.asarray(formed_mass, dtype=jnp.float32)
+    galaxy_coeff = jnp.sum(
+        jnp.asarray(coeff_z, dtype=jnp.float32) * scale_z[:, None] * weights * mass,
+        axis=0,
+    )
+    if fagn_is_factored:
+        galaxy_coeff = galaxy_coeff * fagn
+    basis = jnp.asarray(context.compressed_agn_basis_jax, dtype=jnp.float32)
+    agn_native = jnp.matmul(galaxy_coeff, basis)
     agn_lnu = jnp.interp(
         jnp.asarray(wave, dtype=jnp.float32),
         context.agn_wave_jax,
@@ -2490,7 +3170,10 @@ def _popcosmos_dlog10_sfr(params: dict[str, Any]) -> jnp.ndarray:
 def _popcosmos_ssp_flux_grid(
     context: DspsContext, params: dict[str, Any], model_config: dict[str, Any]
 ) -> jnp.ndarray:
-    if str(model_config.get("nebular_model", "fixed_ssp")) == "gas_grid":
+    if str(model_config.get("nebular_model", "fixed_ssp")) in {
+        "gas_grid",
+        "compressed_gas_grid",
+    }:
         return interpolate_gas_ssp_grid_jax(
             context,
             params["log10_gas_metallicity"],
@@ -2503,9 +3186,9 @@ def _interp_axis0_linear(
     x_grid: jnp.ndarray, values: jnp.ndarray, x: jnp.ndarray
 ) -> jnp.ndarray:
     x_grid = jnp.asarray(x_grid, dtype=jnp.float32)
-    values = jnp.asarray(values, dtype=jnp.float32)
+    values = jnp.asarray(values)
     if x_grid.shape[0] == 1:
-        return values[0]
+        return jnp.asarray(values[0], dtype=jnp.float32)
     x_clipped = jnp.clip(jnp.asarray(x, dtype=jnp.float32), x_grid[0], x_grid[-1])
     hi = jnp.searchsorted(x_grid, x_clipped, side="right")
     hi = jnp.clip(hi, 1, x_grid.shape[0] - 1)
@@ -2513,7 +3196,9 @@ def _interp_axis0_linear(
     x0 = x_grid[lo]
     x1 = x_grid[hi]
     weight = (x_clipped - x0) / jnp.maximum(x1 - x0, 1.0e-12)
-    return values[lo] * (1.0 - weight) + values[hi] * weight
+    return jnp.asarray(values[lo], dtype=jnp.float32) * (1.0 - weight) + jnp.asarray(
+        values[hi], dtype=jnp.float32
+    ) * weight
 
 
 def _jax_result_derived_array(result: JaxModelResult) -> jnp.ndarray:
@@ -2632,6 +3317,15 @@ def _context_ssp_lg_age_gyr(context: DspsContext) -> jnp.ndarray:
 def _context_ssp_flux(context: DspsContext) -> jnp.ndarray:
     if context.ssp_flux_jax is not None:
         return context.ssp_flux_jax
+    if (
+        context.compressed_ssp_basis_jax is not None
+        or context.compressed_ssp_coeff_jax is not None
+    ):
+        raise ValueError(
+            "model.ssp_model='compressed_basis' cannot be expanded through "
+            "_context_ssp_flux; use metallicity-specific compressed SSP "
+            "interpolation instead."
+        )
     return jnp.asarray(context.ssp.ssp_flux, dtype=jnp.float32)
 
 

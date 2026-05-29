@@ -30,6 +30,8 @@ def test_fsps_prospector_benchmark_help_works_without_reference_packages() -> No
     assert "--stellar-ssp" in result.stdout
     assert "--agn-template" in result.stdout
     assert "--agn-component-grid" in result.stdout
+    assert "--compressed-gas-grid" in result.stdout
+    assert "--compressed-agn-component-grid" in result.stdout
     assert "--agn-host-attenuation" in result.stdout
     assert "--agn-host-attenuation-scale" in result.stdout
     assert "--agn-igm-order" in result.stdout

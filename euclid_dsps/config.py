@@ -96,6 +96,7 @@ SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
 SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
 SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
 SUPPORTED_SFH_MODELS = {"lognormal", "popcosmos_bins", "diffstar_reduced6"}
+SUPPORTED_SSP_MODELS = {"dense", "compressed_basis"}
 SUPPORTED_STELLAR_METALLICITY_MODELS = {"mdf", "single"}
 SUPPORTED_MODEL_DUST_MODELS = {
     "legacy",
@@ -104,8 +105,13 @@ SUPPORTED_MODEL_DUST_MODELS = {
     "prospector_fsps",
 }
 SUPPORTED_IGM_MODELS = {"none", "madau95_approx", "fsps_madau95"}
-SUPPORTED_NEBULAR_MODELS = {"fixed_ssp", "gas_grid"}
-SUPPORTED_AGN_MODELS = {"none", "template_grid", "fsps_component_grid"}
+SUPPORTED_NEBULAR_MODELS = {"fixed_ssp", "gas_grid", "compressed_gas_grid"}
+SUPPORTED_AGN_MODELS = {
+    "none",
+    "template_grid",
+    "fsps_component_grid",
+    "compressed_fsps_component_grid",
+}
 SUPPORTED_AGN_HOST_ATTENUATION_MODES = {
     "none",
     "diffuse",
@@ -567,6 +573,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["model"]["fixed_parameters"] = fixed
     config["model"].setdefault("parameter_columns", {})
     config["model"].setdefault("n_sfh_bins", 96)
+    config["model"].setdefault("ssp_model", "dense")
     sfh_model = str(config["model"].get("sfh_model", "lognormal"))
     config["model"]["sfh_model"] = sfh_model
     config["model"].setdefault(
@@ -1089,6 +1096,9 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     sfh_model = str(model.get("sfh_model", "lognormal"))
     if sfh_model not in SUPPORTED_SFH_MODELS:
         errors.append(f"model.sfh_model must be one of {sorted(SUPPORTED_SFH_MODELS)}")
+    ssp_model = str(model.get("ssp_model", "dense"))
+    if ssp_model not in SUPPORTED_SSP_MODELS:
+        errors.append(f"model.ssp_model must be one of {sorted(SUPPORTED_SSP_MODELS)}")
     stellar_model = str(model.get("stellar_metallicity_model", "mdf"))
     if stellar_model not in SUPPORTED_STELLAR_METALLICITY_MODELS:
         errors.append(
@@ -1170,10 +1180,30 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     _finite_float(model.get("dust_tesc_logyr", 7.0), "model.dust_tesc_logyr", errors)
     _finite_float(model.get("dust1_index", -1.0), "model.dust1_index", errors)
     _positive_float(model.get("z_sun", 0.0134), "model.z_sun", errors)
+    if ssp_model == "compressed_basis":
+        _require_model_path(
+            model.get("compressed_ssp_path"), "model.compressed_ssp_path", errors
+        )
+    else:
+        _optional_string(
+            model.get("compressed_ssp_path"), "model.compressed_ssp_path", errors
+        )
     if nebular_model == "gas_grid":
         _require_model_path(model.get("gas_grid_path"), "model.gas_grid_path", errors)
     else:
         _optional_string(model.get("gas_grid_path"), "model.gas_grid_path", errors)
+    if nebular_model == "compressed_gas_grid":
+        _require_model_path(
+            model.get("compressed_gas_grid_path"),
+            "model.compressed_gas_grid_path",
+            errors,
+        )
+    else:
+        _optional_string(
+            model.get("compressed_gas_grid_path"),
+            "model.compressed_gas_grid_path",
+            errors,
+        )
     _optional_string(
         model.get("stellar_only_ssp_path"), "model.stellar_only_ssp_path", errors
     )
@@ -1195,6 +1225,18 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
         _optional_string(
             model.get("agn_component_grid_path"),
             "model.agn_component_grid_path",
+            errors,
+        )
+    if agn_model == "compressed_fsps_component_grid":
+        _require_model_path(
+            model.get("compressed_agn_component_grid_path"),
+            "model.compressed_agn_component_grid_path",
+            errors,
+        )
+    else:
+        _optional_string(
+            model.get("compressed_agn_component_grid_path"),
+            "model.compressed_agn_component_grid_path",
             errors,
         )
     if emission_line_corrections == "popcosmos_table":
@@ -1273,11 +1315,12 @@ def _validate_popcosmos_free_parameters(
     agn_model = str(model.get("agn_model", "none"))
     gas_names = {"log10_gas_metallicity", "log10_gas_ionization"}
     agn_names = {"ln_fagn", "ln_tauagn"}
-    if nebular_model != "gas_grid":
+    if nebular_model not in {"gas_grid", "compressed_gas_grid"}:
         allowed -= gas_names
         for name in sorted(free_names & gas_names):
             errors.append(
-                f"fit.free_parameters.{name} requires model.nebular_model='gas_grid'"
+                f"fit.free_parameters.{name} requires model.nebular_model='gas_grid' "
+                "or 'compressed_gas_grid'"
             )
     if agn_model == "none":
         allowed -= agn_names
@@ -1335,11 +1378,12 @@ def _validate_diffstar_free_parameters(
     agn_model = str(model.get("agn_model", "none"))
     gas_names = {"log10_gas_metallicity", "log10_gas_ionization"}
     agn_names = {"ln_fagn", "ln_tauagn"}
-    if nebular_model != "gas_grid":
+    if nebular_model not in {"gas_grid", "compressed_gas_grid"}:
         allowed -= gas_names
         for name in sorted(free_names & gas_names):
             errors.append(
-                f"fit.free_parameters.{name} requires model.nebular_model='gas_grid'"
+                f"fit.free_parameters.{name} requires model.nebular_model='gas_grid' "
+                "or 'compressed_gas_grid'"
             )
     if agn_model == "none":
         allowed -= agn_names

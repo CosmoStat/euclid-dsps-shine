@@ -14,6 +14,9 @@ SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import build_compressed_agn_component_grid  # noqa: E402
+import build_compressed_gas_grid  # noqa: E402
+import build_compressed_ssp_grid  # noqa: E402
 import generate_fsps_agn_component_grid  # noqa: E402
 import generate_fsps_agn_grid  # noqa: E402
 import generate_fsps_gas_grid  # noqa: E402
@@ -99,6 +102,69 @@ def test_ssp_generator_help_does_not_require_fsps() -> None:
 
     assert result.returncode == 0
     assert "python-fsps" in result.stdout
+
+
+def test_compressed_agn_builder_help_does_not_load_dense_grid() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/build_compressed_agn_component_grid.py", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "--k" in result.stdout
+    assert "--normalization" in result.stdout
+
+
+def test_compressed_gas_builder_help_does_not_load_dense_grid() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/build_compressed_gas_grid.py", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "--k" in result.stdout
+    assert "--normalization" in result.stdout
+
+
+def test_dense_vs_compressed_benchmark_help_does_not_load_assets() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/benchmark_dense_vs_compressed_spectral_assets.py",
+            "--help",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "--dense-config" in result.stdout
+    assert "--compressed-gas-grid" in result.stdout
+    assert "--dense-agn-mode" in result.stdout
+
+
+def test_photometry_engines_benchmark_help_does_not_load_assets() -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/benchmark_photometry_engines.py", "--help"],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "dsps_dense_lazy" in result.stdout
+    assert "dsps_dense_resident" in result.stdout
+    assert "fsps_prospector" in result.stdout
+    assert "--compressed-gas-grid" in result.stdout
 
 
 def test_gas_generator_missing_sps_home_is_actionable(tmp_path) -> None:
@@ -366,6 +432,226 @@ def test_agn_generator_default_tau_grid_matches_popcosmos_config() -> None:
         100.0,
         150.0,
     ]
+
+
+def test_compressed_agn_builder_round_trips_low_rank_grid(tmp_path) -> None:
+    dense_path = tmp_path / "dense_agn.h5"
+    compressed_path = tmp_path / "compressed_agn.h5"
+    wave = np.asarray([1000.0, 2000.0, 3000.0, 4000.0, 5000.0], dtype=np.float32)
+    age = np.asarray([-3.0, -2.0, -1.0], dtype=np.float32)
+    lgmet = np.asarray([-2.0, -1.0], dtype=np.float32)
+    fagn = np.asarray([1.0e-4, 1.0e-2], dtype=np.float32)
+    tau = np.asarray([5.0, 20.0], dtype=np.float32)
+    basis0 = 1.0 + wave / wave.max()
+    basis1 = 0.4 + 0.2 * wave / wave.max()
+    dense = np.zeros((len(fagn), len(tau), len(lgmet), len(age), len(wave)), dtype=np.float32)
+    for i, fagn_value in enumerate(fagn):
+        for j, tau_value in enumerate(tau):
+            for m, met_value in enumerate(lgmet):
+                for a, age_value in enumerate(age):
+                    dense[i, j, m, a] = (
+                        fagn_value * tau_value * (1.0 + m) * basis0
+                        + 0.01 * (1.0 + a) * (1.0 + abs(age_value)) * basis1
+                    )
+    with h5py.File(dense_path, "w") as handle:
+        handle["ssp_wave"] = wave
+        handle["ssp_lg_age_gyr"] = age
+        handle["ssp_lgmet"] = lgmet
+        handle["fagn_grid"] = fagn
+        handle["agn_tau_grid"] = tau
+        handle["agn_lnu_per_mformed"] = dense
+        handle.attrs["asset_kind"] = "popcosmos_chabrier_agn_component_ssp_grid"
+        handle.attrs["imf_type"] = 1
+        handle.attrs["imf_name"] = "chabrier"
+        handle.attrs["z_sun"] = 0.0142
+        handle.attrs["units_agn_lnu_per_mformed"] = "Lsun/Hz/Msun formed"
+
+    args = SimpleNamespace(
+        input=str(dense_path),
+        output=str(compressed_path),
+        k=2,
+        oversample=2,
+        seed=0,
+        normalization="none",
+        compression="none",
+        gzip_level=4,
+        overwrite=True,
+        no_progress=True,
+    )
+    output = build_compressed_agn_component_grid.build_compressed_grid(args)
+    summary = build_compressed_agn_component_grid.validate_compressed_grid(output)
+
+    assert summary["k_basis"] == 2
+    with h5py.File(output, "r") as handle:
+        coeff = np.asarray(handle["agn_coeff"])
+        basis = np.asarray(handle["agn_basis"])
+        scale = np.asarray(handle["agn_scale"])
+    reconstructed = (coeff @ basis) * scale[..., None]
+    np.testing.assert_allclose(reconstructed, dense, rtol=2.0e-5, atol=1.0e-7)
+
+
+def test_compressed_agn_builder_can_factor_linear_fagn_axis(tmp_path) -> None:
+    dense_path = tmp_path / "dense_agn_linear.h5"
+    compressed_path = tmp_path / "compressed_agn_linear.h5"
+    wave = np.asarray([1000.0, 2000.0, 3000.0, 4000.0], dtype=np.float32)
+    age = np.asarray([-3.0, -2.0], dtype=np.float32)
+    lgmet = np.asarray([-2.0], dtype=np.float32)
+    fagn = np.asarray([0.1, 1.0], dtype=np.float32)
+    tau = np.asarray([5.0, 20.0], dtype=np.float32)
+    shape = (len(fagn), len(tau), len(lgmet), len(age), len(wave))
+    dense = np.zeros(shape, dtype=np.float32)
+    template = np.asarray([1.0, 2.0, 1.5, 0.5], dtype=np.float32)
+    for i, fagn_value in enumerate(fagn):
+        for j, tau_value in enumerate(tau):
+            for a, _age_value in enumerate(age):
+                dense[i, j, 0, a] = fagn_value * (tau_value + a) * template
+    with h5py.File(dense_path, "w") as handle:
+        handle["ssp_wave"] = wave
+        handle["ssp_lg_age_gyr"] = age
+        handle["ssp_lgmet"] = lgmet
+        handle["fagn_grid"] = fagn
+        handle["agn_tau_grid"] = tau
+        handle["agn_lnu_per_mformed"] = dense
+        handle.attrs["asset_kind"] = "popcosmos_chabrier_agn_component_ssp_grid"
+        handle.attrs["imf_type"] = 1
+        handle.attrs["imf_name"] = "chabrier"
+        handle.attrs["z_sun"] = 0.0142
+
+    args = SimpleNamespace(
+        input=str(dense_path),
+        output=str(compressed_path),
+        k=1,
+        oversample=1,
+        seed=0,
+        normalization="none",
+        compression="none",
+        gzip_level=4,
+        overwrite=True,
+        no_progress=True,
+        factor_fagn=True,
+        basis_dtype="float32",
+        coeff_dtype="float16",
+    )
+    output = build_compressed_agn_component_grid.build_compressed_grid(args)
+    summary = build_compressed_agn_component_grid.validate_compressed_grid(output)
+
+    assert summary["fagn_handling"] == "linear_runtime_multiplier"
+    with h5py.File(output, "r") as handle:
+        assert handle["agn_coeff"].shape == (len(tau), len(lgmet), len(age), 1)
+        assert handle["agn_coeff"].dtype == np.dtype("float16")
+
+
+def test_compressed_gas_builder_round_trips_low_rank_grid(tmp_path) -> None:
+    dense_path = tmp_path / "dense_gas.h5"
+    compressed_path = tmp_path / "compressed_gas.h5"
+    wave = np.asarray([1000.0, 2000.0, 3000.0, 4000.0, 5000.0], dtype=np.float32)
+    age = np.asarray([-3.0, -2.0, -1.0], dtype=np.float32)
+    lgmet = np.asarray([-2.0, -1.0], dtype=np.float32)
+    gas_lgmet = np.asarray([-1.0, 0.0], dtype=np.float32)
+    gas_lgu = np.asarray([-3.0, -2.0], dtype=np.float32)
+    basis0 = 1.0 + wave / wave.max()
+    basis1 = 0.4 + 0.2 * wave / wave.max()
+    dense = np.zeros(
+        (len(gas_lgmet), len(gas_lgu), len(lgmet), len(age), len(wave)),
+        dtype=np.float32,
+    )
+    for i, _gas_z in enumerate(gas_lgmet):
+        for j, _gas_u in enumerate(gas_lgu):
+            for m, _met_value in enumerate(lgmet):
+                for a, age_value in enumerate(age):
+                    dense[i, j, m, a] = (
+                        (1.0 + i + 0.2 * j) * (1.0 + m) * basis0
+                        + 0.01 * (1.0 + a) * (1.0 + abs(age_value)) * basis1
+                    )
+    with h5py.File(dense_path, "w") as handle:
+        handle["ssp_wave"] = wave
+        handle["ssp_lg_age_gyr"] = age
+        handle["ssp_lgmet"] = lgmet
+        handle["gas_lgmet_grid"] = gas_lgmet
+        handle["gas_lgu_grid"] = gas_lgu
+        handle["ssp_flux"] = dense
+        handle.attrs["asset_kind"] = "popcosmos_chabrier_gas_ssp_grid"
+        handle.attrs["imf_type"] = 1
+        handle.attrs["imf_name"] = "chabrier"
+        handle.attrs["z_sun"] = 0.0142
+        handle.attrs["units_ssp_flux"] = "Lsun/Hz/Msun formed"
+        handle.attrs["units_ssp_wave"] = "Angstrom"
+        handle.attrs["units_ssp_lg_age_gyr"] = "log10(age/Gyr)"
+        handle.attrs["units_ssp_lgmet"] = (
+            "log10(absolute stellar metallicity mass fraction)"
+        )
+        handle.attrs["units_gas_lgmet_grid"] = "log10(Zgas/Zsun)"
+        handle.attrs["units_gas_lgu_grid"] = "log10 ionization parameter U"
+
+    args = SimpleNamespace(
+        input=str(dense_path),
+        output=str(compressed_path),
+        k=2,
+        oversample=2,
+        seed=0,
+        normalization="none",
+        compression="none",
+        gzip_level=4,
+        overwrite=True,
+        no_progress=True,
+    )
+    output = build_compressed_gas_grid.build_compressed_grid(args)
+    summary = build_compressed_gas_grid.validate_compressed_grid(output)
+
+    assert summary["k_basis"] == 2
+    with h5py.File(output, "r") as handle:
+        coeff = np.asarray(handle["gas_coeff"])
+        basis = np.asarray(handle["gas_basis"])
+        scale = np.asarray(handle["gas_scale"])
+    reconstructed = (coeff @ basis) * scale[..., None]
+    np.testing.assert_allclose(reconstructed, dense, rtol=2.0e-5, atol=1.0e-7)
+
+
+def test_compressed_ssp_builder_round_trips_low_rank_grid(tmp_path) -> None:
+    dense_path = tmp_path / "dense_ssp.h5"
+    compressed_path = tmp_path / "compressed_ssp.h5"
+    wave = np.asarray([1000.0, 2000.0, 3000.0, 4000.0], dtype=np.float32)
+    age = np.asarray([-3.0, -2.0], dtype=np.float32)
+    lgmet = np.asarray([-2.0, -1.0], dtype=np.float32)
+    basis0 = 1.0 + wave / wave.max()
+    basis1 = 0.4 + 0.2 * wave / wave.max()
+    dense = np.zeros((len(lgmet), len(age), len(wave)), dtype=np.float32)
+    for m, _met_value in enumerate(lgmet):
+        for a, age_value in enumerate(age):
+            dense[m, a] = (1.0 + m) * basis0 + 0.01 * (1.0 + abs(age_value)) * basis1
+    with h5py.File(dense_path, "w") as handle:
+        handle["ssp_wave"] = wave
+        handle["ssp_lg_age_gyr"] = age
+        handle["ssp_lgmet"] = lgmet
+        handle["ssp_flux"] = dense
+        handle.attrs["asset_kind"] = "popcosmos_chabrier_ssp_grid"
+        handle.attrs["imf_type"] = 1
+        handle.attrs["imf_name"] = "chabrier"
+        handle.attrs["z_sun"] = 0.0142
+
+    args = SimpleNamespace(
+        input=str(dense_path),
+        output=str(compressed_path),
+        k=2,
+        oversample=2,
+        seed=0,
+        normalization="none",
+        basis_dtype="float32",
+        coeff_dtype="float32",
+        compression="none",
+        gzip_level=4,
+        overwrite=True,
+    )
+    output = build_compressed_ssp_grid.build_compressed_grid(args)
+    summary = build_compressed_ssp_grid.validate_compressed_grid(output)
+
+    assert summary["k_basis"] == 2
+    with h5py.File(output, "r") as handle:
+        coeff = np.asarray(handle["ssp_coeff"])
+        basis = np.asarray(handle["ssp_basis"])
+        scale = np.asarray(handle["ssp_scale"])
+    reconstructed = (coeff @ basis) * scale[..., None]
+    np.testing.assert_allclose(reconstructed, dense, rtol=2.0e-5, atol=1.0e-7)
 
 
 def _install_fake_fsps(monkeypatch, tmp_path: Path) -> None:

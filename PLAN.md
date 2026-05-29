@@ -216,13 +216,117 @@ uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --
   disk-level HDF5 compression. The compressed representation must be consumed
   directly by JAX; decoding back to dense gas/AGN tensors is explicitly
   non-goal.
-- First implementation step is now to create a clean isolated worktree with a
-  copied `Data/` directory before touching compression code.
+- First implementation step is now to create a clean branch from `dev`, without
+  creating a separate worktree. Existing dense `Data/` assets are reference
+  inputs and must not be modified in place.
 - Priority order is AGN component compression first, then gas compression with
   continuum-plus-sparse-lines, then optional base SSP compression.
 - Required gates are dense-vs-compressed benchmarks for AGN-only, gas-only,
   `full_noagn`, and `full_agn`, followed by FSPS/Prospector runs at `n=50` and
   `n=500`.
+
+2026-05-29 VRAM-compression implementation slice:
+
+- Added metadata-first inventory and VRAM-estimation scripts under
+  `scripts/inventory_spectral_assets.py` and `scripts/profile_vram_batch.py`.
+  They do not instantiate `load_context` by default.
+- Baseline metadata outputs were generated under `outputs/ssp_compression/`.
+  The current dense full-AGN PopCosmos config has about `6.66 GiB` of estimated
+  float32 resident spectral payload before JAX overhead and batch intermediates.
+- Added `scripts/build_compressed_agn_component_grid.py` and
+  `agn_model: compressed_fsps_component_grid`, which loads `agn_basis`,
+  `agn_coeff`, and `agn_scale` instead of the dense AGN component tensor.
+- Added `scripts/build_compressed_gas_grid.py` and
+  `nebular_model: compressed_gas_grid`, which loads `gas_basis`, `gas_coeff`,
+  and `gas_scale` instead of the dense gas `ssp_flux` tensor.
+- The first compressed gas mode is explicitly a full-spectrum low-rank
+  prototype for VRAM and dense-vs-compressed testing. It is not yet the final
+  continuum-plus-sparse-lines science representation.
+- Added `scripts/validate_compressed_spectral_asset.py` for compressed AGN and
+  gas assets. It validates compressed files without reading dense source grids.
+- Added `scripts/benchmark_dense_vs_compressed_spectral_assets.py` for
+  identical-parameter dense-vs-compressed photometry checks with progress
+  reporting. It now loads one benchmark level at a time and uses lazy dense
+  AGN HDF5 slice reads by default, so the default command does not preload the
+  dense AGN grid twice.
+- Added `scripts/benchmark_photometry_engines.py` for subprocess-isolated
+  `dsps_dense_lazy`, `dsps_dense_resident`, `dsps_compressed`, and
+  `fsps_prospector` comparison, including per-engine wall time and peak RSS.
+  Dense-lazy keeps the dense FSPS AGN component physics but reads only the HDF5
+  slices required for each point. Dense-resident has a memory guard and is
+  skipped when its estimated static payload plus overhead is too close to
+  `MemAvailable`.
+- Updated the FSPS/Prospector benchmark harness so compressed gas and
+  compressed AGN configs can be passed after the compressed assets exist.
+- Targeted verification passed with `python -m compileall euclid_dsps scripts
+  tests/test_config.py tests/test_model.py tests/test_fsps_grid_scripts.py` and
+  `pytest -q tests/test_config.py tests/test_model.py
+  tests/test_fsps_grid_scripts.py`.
+
+2026-05-29 deeper VRAM-compression analysis:
+
+- The current compressed gas asset is coefficient dominated:
+  `gas_coeff` is about `15.36 MiB` raw, while `gas_basis` is about `2.72 MiB`.
+  Further wins should target coefficient dtype/rank or a different gas
+  representation, not HDF5 repacking.
+- Sampled rank truncation indicates AGN can likely shrink from `k32` toward
+  `k12-k16` with little information loss, pending broad-band benchmarks.
+- Sampled dense AGN slices show `agn_lnu_per_mformed / fagn` is effectively
+  invariant across `fagn_grid` at the `~1e-7` relative level. The next AGN
+  compressed format should remove the explicit `fagn` axis and apply `fagn` as
+  a runtime multiplier, after a dedicated benchmark/test gate.
+- Gas still benefits from `k48-k64`; dropping full-spectrum gas to low ranks
+  damages line-sensitive structure. The preferred final representation remains
+  low-rank continuum plus sparse emission-line luminosities.
+- After gas/AGN compression, the base SSP is now the largest resident tensor
+  left, about `55 MiB`. Revisit compressed base SSP modes at `k64/k128`; this
+  can save more memory than small AGN basis tweaks once the multi-GiB grids are
+  gone.
+- Naively storing all compressed arrays as `float16` is unsafe because the
+  scale arrays are around `1e-22..1e-11`. Mixed precision should keep scale as
+  `float32` or store `log10(scale)`, and reconstruct in `float32`.
+- Next experiments should benchmark mixed-precision assets:
+  AGN `basis=float32, coeff=float16, scale=float32` at `k12/k16`; gas
+  `basis=float16, coeff=float16, scale=float32` at `k48/k64`; and optional
+  coefficient-only int8 quantization with explicit scales.
+
+2026-05-29 compression tradeoff audit and implementation update:
+
+- Added `scripts/audit_compression_tradeoffs.py`. It samples dense gas/AGN
+  spectra without materializing full dense tensors and writes
+  `outputs/ssp_compression/tradeoffs/compression_tradeoff.csv`,
+  `compression_tradeoff_summary.json`, `compression_factor_vs_loss.png`, and
+  `candidate_payload_mib.png`.
+- Audit highlights from `n=256` sampled dense spectra:
+  - AGN `fagn_factored_svd_k12_coeff16_basis32`: estimated payload
+    `0.82 MiB`, compression factor `~4800x`, median sampled p95 relative loss
+    `2.4e-4`.
+  - AGN `fagn_factored_svd_k8_coeff16_basis32`: estimated payload
+    `0.56 MiB`, compression factor `~7000x`, median sampled p95 relative loss
+    `5.8e-4`.
+  - Gas `k64 mixed_f16`: estimated payload `9.28 MiB`, compression factor
+    `~288x`, median sampled p95 relative loss `3.7e-3`.
+  - Gas `k48 mixed_f16`: estimated payload `7.02 MiB`, compression factor
+    `~381x`, median sampled p95 relative loss `6.2e-3`.
+  - Stellar SSP `k64` remains the recommended first compact SSP point from
+    existing log-flux diagnostics: estimated payload `4.47 MiB`, p95
+    `0.00437 dex`; `k128` is safer at `8.90 MiB`, p95 `0.00135 dex`.
+- Implemented explicit runtime support for:
+  - `model.ssp_model: compressed_basis` with `model.compressed_ssp_path`;
+  - compressed SSP payloads `ssp_basis`, `ssp_coeff`, `ssp_scale`;
+  - compressed AGN assets with `fagn_handling: linear_runtime_multiplier`,
+    meaning `fagn` is multiplied at runtime and the coefficient tensor drops
+    the `fagn` axis;
+  - mixed-precision compressed payloads where basis/coefficients can stay
+    `float16` resident on device while selected slices are reconstructed in
+    `float32`.
+- Added `scripts/build_compressed_ssp_grid.py`; extended
+  `scripts/build_compressed_agn_component_grid.py` with `--factor-fagn`,
+  `--basis-dtype`, and `--coeff-dtype`; extended
+  `scripts/build_compressed_gas_grid.py` with `--basis-dtype` and
+  `--coeff-dtype`.
+- Benchmark harnesses now accept `--compressed-ssp` in addition to compressed
+  gas and AGN paths.
 
 ### Implementation Plan: PopCosmos Benchmark Closure
 

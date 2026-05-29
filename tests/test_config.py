@@ -190,6 +190,44 @@ def test_gas_grid_required_when_gas_params_free() -> None:
         normalize_config(config)
 
 
+def test_compressed_gas_grid_accepts_gas_free_parameters() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall_powerlaw",
+        "nebular_model": "compressed_gas_grid",
+        "compressed_gas_grid_path": "Data/popcosmos_chabrier_gas_grid_basis_k64.h5",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "log10_gas_metallicity": {"initial": 0.0, "bounds": [-2.5, 0.5]},
+            "log10_gas_ionization": {"initial": -2.0, "bounds": [-4.0, -1.0]},
+        }
+    }
+
+    normalized = normalize_config(config)
+
+    assert normalized["model"]["nebular_model"] == "compressed_gas_grid"
+    assert "log10_gas_metallicity" in normalized["fit"]["free_parameters"]
+    assert "log10_gas_ionization" in normalized["fit"]["free_parameters"]
+
+
+def test_compressed_gas_grid_requires_path() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall_powerlaw",
+        "nebular_model": "compressed_gas_grid",
+        "agn_model": "none",
+    }
+
+    with pytest.raises(ConfigValidationError, match="compressed_gas_grid_path"):
+        normalize_config(config)
+
+
 def test_agn_grid_required_when_agn_params_free() -> None:
     config = minimal_config()
     config["model"] = {
@@ -250,6 +288,82 @@ def test_fsps_component_grid_accepts_agn_free_parameters() -> None:
     assert normalized["model"]["agn_model"] == "fsps_component_grid"
     assert "ln_fagn" in normalized["fit"]["free_parameters"]
     assert "ln_tauagn" in normalized["fit"]["free_parameters"]
+
+
+def test_compressed_fsps_component_grid_accepts_agn_free_parameters() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall_powerlaw",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "compressed_fsps_component_grid",
+        "compressed_agn_component_grid_path": (
+            "Data/popcosmos_chabrier_agn_component_basis_k32.h5"
+        ),
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "ln_fagn": {"initial": -8.0, "bounds": [-14.0, 1.0]},
+            "ln_tauagn": {"initial": 2.3, "bounds": [1.6, 5.1]},
+        }
+    }
+
+    normalized = normalize_config(config)
+
+    assert normalized["model"]["agn_model"] == "compressed_fsps_component_grid"
+    assert "ln_fagn" in normalized["fit"]["free_parameters"]
+    assert "ln_tauagn" in normalized["fit"]["free_parameters"]
+
+
+def test_compressed_fsps_component_grid_requires_path() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "dust_model": "charlot_fall_powerlaw",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "compressed_fsps_component_grid",
+    }
+
+    with pytest.raises(ConfigValidationError, match="compressed_agn_component_grid_path"):
+        normalize_config(config)
+
+
+def test_compressed_ssp_model_requires_path() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "ssp_model": "compressed_basis",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+
+    with pytest.raises(ConfigValidationError, match="compressed_ssp_path"):
+        normalize_config(config)
+
+
+def test_compressed_ssp_model_accepts_path() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "popcosmos_bins",
+        "stellar_metallicity_model": "single",
+        "ssp_model": "compressed_basis",
+        "compressed_ssp_path": "Data/popcosmos_chabrier_stellar_ssp_basis_k64.h5",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "z_obs": {"initial": 0.5, "bounds": [0.01, 2.0]},
+        }
+    }
+
+    normalized = normalize_config(config)
+
+    assert normalized["model"]["ssp_model"] == "compressed_basis"
+    assert "compressed_ssp_path" in normalized["model"]
 
 
 def test_popcosmos_binned_forbids_legacy_free_parameters() -> None:
