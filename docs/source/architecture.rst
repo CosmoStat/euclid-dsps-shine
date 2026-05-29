@@ -45,17 +45,21 @@ assets:
        workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
-     popcosmos_binned.yaml   LSST+Euclid gas+AGN setup with binned SFH.
-     popcosmos_diffstar.yaml LSST+Euclid gas+AGN setup with Diffstar SFH.
+     popcosmos_binned.yaml          Full AGN setup with binned SFH.
+     popcosmos_diffstar.yaml        Full AGN setup with Diffstar SFH.
+     popcosmos_binned_noagn.yaml    No-AGN binned fallback.
+     popcosmos_diffstar_noagn.yaml  No-AGN Diffstar fallback.
    scripts/
-     quickstart_one_galaxy.py
-     convert_euclid_filters.py
+     generate_fsps_ssp_grid.py
+     generate_fsps_gas_grid.py
+     generate_fsps_agn_component_grid.py
+     benchmark_against_fsps_prospector.py
    Data/             Local data and DSPS assets, not source.
    outputs/          Generated run outputs, not source.
 
-The active runtime path is intentionally narrow: two production configs,
-generated FSPS assets in ``Data/``, and CLI workflows under ``fit``,
-``posterior``, and ``check``.
+The active runtime path is intentionally narrow: full AGN configs by default,
+no-AGN configs for ablation/fallback, generated FSPS assets in ``Data/``, and
+CLI workflows under ``fit``, ``posterior``, and ``check``.
 
 Layer Responsibilities
 ----------------------
@@ -76,7 +80,8 @@ Layer Responsibilities
 ``model.py``
   Contains the native DSPS boundary. Other modules should pass normalized
   dataclasses and parameter dictionaries into this layer rather than importing
-  DSPS directly.
+  DSPS directly. This is where SSP interpolation, SFH weighting, dust, gas,
+  AGN, IGM, and filter integration are combined.
 
 ``cosmos.py``
   Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,

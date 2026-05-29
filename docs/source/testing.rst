@@ -73,7 +73,25 @@ Manual smoke commands should include:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_one_short --sed-samples 1
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_popcosmos_batch
-   python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_one_short --sed-samples 1
+   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_fullagn_one_short --sed-samples 1
+   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --limit 20 --batch-size 2 --sed-samples 4 --out outputs/runs/dev_popcosmos_fullagn_batch
+   python -m euclid_dsps.cli --config configs/popcosmos_binned_noagn.yaml fit --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_popcosmos_noagn_batch
+   python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short --sed-samples 1
    python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml check --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check
+
+Benchmark smoke:
+
+.. code-block:: bash
+
+   MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
+     --runtime cpu \
+     --config configs/popcosmos_binned.yaml \
+     --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+     --agn-host-attenuation fsps_diffuse_unit_tau \
+     --agn-igm-order fsps_after_igm \
+     --agn-baked-attenuation fsps_powerlaw_unit_tau \
+     --agn-baked-dust-index -0.7 \
+     --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn stellar_plus_agn stellar_plus_dust_plus_agn stellar_plus_gas_plus_agn full_agn \
+     --n 5 \
+     --seed 0 \
+     --out outputs/benchmarks/smoke_popcosmos_full_forward

@@ -22,6 +22,7 @@ import h5py
 import numpy as np
 from fsps_grid_common import (
     DEFAULT_REFERENCE_SSP,
+    POPCOSMOS_Z_SUN,
     FspsGridError,
     ensure_output_path,
     fail,
@@ -35,7 +36,7 @@ from fsps_grid_common import (
     write_attrs,
 )
 
-DEFAULT_OUTPUT = "Data/popcosmos_agn_template_grid.h5"
+DEFAULT_OUTPUT = "Data/popcosmos_chabrier_agn_template_grid.h5"
 DEFAULT_AGN_TAU_GRID = [5.0, 10.0, 20.0, 30.0, 40.0, 60.0, 80.0, 100.0, 150.0]
 
 
@@ -67,16 +68,54 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="FSPS fagn value used for finite-difference AGN isolation.",
     )
     parser.add_argument(
+        "--fagn-grid",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional FSPS fagn grid for audit templates. When set, the output "
+            "template is 5D: fagn x agn_tau x tage_gyr x stellar_logzsol x wave."
+        ),
+    )
+    parser.add_argument(
         "--tage-gyr",
         type=float,
         default=1.0,
         help="SSP age used to define the stellar bolometric normalization.",
     )
     parser.add_argument(
+        "--tage-grid",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional SSP-age grid in Gyr for audit templates. When set, the "
+            "output template is 5D."
+        ),
+    )
+    parser.add_argument(
         "--stellar-logzsol",
         type=float,
         default=0.0,
         help="Stellar log(Z/Zsun) used for the normalization spectrum.",
+    )
+    parser.add_argument(
+        "--stellar-logzsol-grid",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Optional stellar log(Z/Zsun) grid for audit templates. When set, "
+            "the output template is 5D."
+        ),
+    )
+    parser.add_argument(
+        "--signed-delta",
+        action="store_true",
+        help=(
+            "Store signed FSPS finite differences instead of clipping negative "
+            "AGN deltas to zero. Recommended for audit templates."
+        ),
     )
     parser.add_argument(
         "--dtype",
@@ -163,8 +202,35 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
 
     output = ensure_output_path(args.output, args.overwrite)
     agn_tau_grid = parse_grid(args.agn_tau_grid, "--agn-tau-grid", min_size=1)
+    fagn_grid = parse_grid(
+        args.fagn_grid if args.fagn_grid is not None else [args.fagn_normalization],
+        "--fagn-grid",
+        min_size=1,
+    )
+    tage_grid = parse_grid(
+        args.tage_grid if args.tage_grid is not None else [args.tage_gyr],
+        "--tage-grid",
+        min_size=1,
+    )
+    if np.any(tage_grid <= 0.0):
+        raise FspsGridError("--tage-grid values must be positive")
+    stellar_logzsol_grid = parse_grid(
+        (
+            args.stellar_logzsol_grid
+            if args.stellar_logzsol_grid is not None
+            else [args.stellar_logzsol]
+        ),
+        "--stellar-logzsol-grid",
+        min_size=1,
+    )
+    audit_grid = (
+        args.signed_delta
+        or args.fagn_grid is not None
+        or args.tage_grid is not None
+        or args.stellar_logzsol_grid is not None
+    )
     progress = progress_bar(
-        total=len(agn_tau_grid) + 4,
+        total=int(len(fagn_grid) * len(agn_tau_grid) * len(tage_grid) * len(stellar_logzsol_grid)) + 3,
         enabled=not args.no_progress,
         desc="FSPS AGN grid",
         unit="step",
@@ -181,55 +247,94 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
         sp = fsps.StellarPopulation(
             zcontinuous=1,
             sfh=0,
-            imf_type=2,
+            imf_type=1,
             add_neb_emission=0,
             add_igm_absorption=0,
             add_dust_emission=1,
             dust_type=0,
             dust1=0.0,
             dust2=0.0,
-            logzsol=float(args.stellar_logzsol),
+            logzsol=float(stellar_logzsol_grid[0]),
         )
         sp.params["fagn"] = 0.0
-        sp.params["logzsol"] = float(args.stellar_logzsol)
+        sp.params["logzsol"] = float(stellar_logzsol_grid[0])
         if progress is not None:
             progress.update(1)
 
         if progress is not None:
-            progress.set_postfix(stage="stellar_lbol")
-        wave, stellar = sp.get_spectrum(tage=float(args.tage_gyr), peraa=False)
+            progress.set_postfix(stage="discover_wave")
+        wave, stellar = sp.get_spectrum(tage=float(tage_grid[0]), peraa=False)
         wave = np.asarray(wave, dtype=np.float64)
         stellar = np.asarray(stellar, dtype=np.float64)
         if stellar.ndim != 1:
             raise FspsGridError(
                 "FSPS returned an unexpected non-1D spectrum for AGN normalization"
             )
-        lbol_stellar = lbol_from_lnu(wave, stellar)
-        if not np.isfinite(lbol_stellar) or lbol_stellar <= 0.0:
-            raise FspsGridError("Could not compute a positive stellar bolometric luminosity")
         if progress is not None:
             progress.update(1)
 
-        template = np.zeros((len(agn_tau_grid), len(wave)), dtype=np.dtype(args.dtype))
-        for tau_index, agn_tau in enumerate(agn_tau_grid):
-            if progress is not None:
-                progress.set_postfix(stage="template", agn_tau=f"{float(agn_tau):g}")
-            sp.params["agn_tau"] = float(agn_tau)
-            sp.params["fagn"] = float(args.fagn_normalization)
-            wave_agn, with_agn = sp.get_spectrum(tage=float(args.tage_gyr), peraa=False)
-            if np.asarray(wave_agn).shape != wave.shape or not np.allclose(wave_agn, wave):
-                raise FspsGridError("FSPS AGN wavelength grid changed between evaluations")
-            delta = np.asarray(with_agn, dtype=np.float64) - stellar
-            template[tau_index, :] = np.clip(
-                delta / (float(args.fagn_normalization) * lbol_stellar),
-                0.0,
-                np.inf,
-            )
-            if progress is None:
-                print(f"generated agn_tau={float(agn_tau):g}", flush=True)
-            else:
-                progress.update(1)
-            sp.params["fagn"] = 0.0
+        template_shape = (
+            (len(fagn_grid), len(agn_tau_grid), len(tage_grid), len(stellar_logzsol_grid), len(wave))
+            if audit_grid
+            else (len(agn_tau_grid), len(wave))
+        )
+        template = np.zeros(template_shape, dtype=np.dtype(args.dtype))
+        lbol_grid = np.zeros((len(tage_grid), len(stellar_logzsol_grid)), dtype=np.float64)
+        for age_index, tage_gyr in enumerate(tage_grid):
+            for logz_index, stellar_logzsol in enumerate(stellar_logzsol_grid):
+                sp.params["fagn"] = 0.0
+                sp.params["logzsol"] = float(stellar_logzsol)
+                wave_base, stellar = sp.get_spectrum(tage=float(tage_gyr), peraa=False)
+                if np.asarray(wave_base).shape != wave.shape or not np.allclose(wave_base, wave):
+                    raise FspsGridError("FSPS AGN wavelength grid changed between evaluations")
+                stellar = np.asarray(stellar, dtype=np.float64)
+                lbol_stellar = lbol_from_lnu(wave, stellar)
+                if not np.isfinite(lbol_stellar) or lbol_stellar <= 0.0:
+                    raise FspsGridError(
+                        "Could not compute a positive stellar bolometric luminosity"
+                    )
+                lbol_grid[age_index, logz_index] = lbol_stellar
+                for fagn_index, fagn_normalization in enumerate(fagn_grid):
+                    for tau_index, agn_tau in enumerate(agn_tau_grid):
+                        if progress is not None:
+                            progress.set_postfix(
+                                stage="template",
+                                fagn=f"{float(fagn_normalization):g}",
+                                agn_tau=f"{float(agn_tau):g}",
+                                tage=f"{float(tage_gyr):g}",
+                                logz=f"{float(stellar_logzsol):g}",
+                            )
+                        sp.params["agn_tau"] = float(agn_tau)
+                        sp.params["fagn"] = float(fagn_normalization)
+                        wave_agn, with_agn = sp.get_spectrum(
+                            tage=float(tage_gyr), peraa=False
+                        )
+                        if np.asarray(wave_agn).shape != wave.shape or not np.allclose(
+                            wave_agn, wave
+                        ):
+                            raise FspsGridError(
+                                "FSPS AGN wavelength grid changed between evaluations"
+                            )
+                        delta = np.asarray(with_agn, dtype=np.float64) - stellar
+                        normalized = delta / (float(fagn_normalization) * lbol_stellar)
+                        if not args.signed_delta:
+                            normalized = np.clip(normalized, 0.0, np.inf)
+                        if audit_grid:
+                            template[fagn_index, tau_index, age_index, logz_index, :] = normalized
+                        else:
+                            template[tau_index, :] = normalized
+                        if progress is None:
+                            print(
+                                "generated "
+                                f"fagn={float(fagn_normalization):g} "
+                                f"agn_tau={float(agn_tau):g} "
+                                f"tage={float(tage_gyr):g} "
+                                f"logzsol={float(stellar_logzsol):g}",
+                                flush=True,
+                            )
+                        else:
+                            progress.update(1)
+                        sp.params["fagn"] = 0.0
 
         if progress is not None:
             progress.set_postfix(stage="write_hdf5")
@@ -238,10 +343,14 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
             args,
             fsps,
             sp,
+            fagn_grid,
             agn_tau_grid,
+            tage_grid,
+            stellar_logzsol_grid,
             wave,
             template,
-            lbol_stellar,
+            lbol_grid,
+            audit_grid,
         )
         if progress is not None:
             progress.update(1)
@@ -251,7 +360,7 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
     return output
 
 
-def validate_agn_grid(args: argparse.Namespace) -> tuple[int, int]:
+def validate_agn_grid(args: argparse.Namespace) -> tuple[int, ...]:
     total = 1
     if not args.skip_model_validation:
         total += 1 if args.skip_forward_run else 2
@@ -285,21 +394,37 @@ def _write_agn_grid(
     args: argparse.Namespace,
     fsps: Any,
     sp: Any,
+    fagn_grid: np.ndarray,
     agn_tau_grid: np.ndarray,
+    tage_grid: np.ndarray,
+    stellar_logzsol_grid: np.ndarray,
     wave: np.ndarray,
     template: np.ndarray,
-    lbol_stellar: float,
+    lbol_grid: np.ndarray,
+    audit_grid: bool,
 ) -> None:
     compression, compression_opts = _compression_options(args)
+    baked_dust_index = float(sp.params.get("dust_index", -0.7))
     if output.exists():
         output.unlink()
     with h5py.File(output, "w") as handle:
         handle["wave"] = np.asarray(wave, dtype=np.float32)
+        if audit_grid:
+            handle["fagn_grid"] = np.asarray(fagn_grid, dtype=np.float32)
+            handle["fagn_normalization_grid"] = np.asarray(fagn_grid, dtype=np.float32)
+            handle["tage_gyr_grid"] = np.asarray(tage_grid, dtype=np.float32)
+            handle["stellar_logzsol_grid"] = np.asarray(
+                stellar_logzsol_grid, dtype=np.float32
+            )
+            handle["stellar_lbol_lsun_grid"] = np.asarray(lbol_grid, dtype=np.float32)
         handle["agn_tau_grid"] = agn_tau_grid
+        chunks = (
+            (1, 1, 1, 1, len(wave)) if audit_grid else (1, len(wave))
+        )
         handle.create_dataset(
             "template_lnu_per_lbol",
             data=template,
-            chunks=(1, len(wave)),
+            chunks=chunks,
             compression=compression,
             compression_opts=compression_opts,
         )
@@ -308,20 +433,45 @@ def _write_agn_grid(
         )
         attrs.update(
             {
-                "asset_kind": "popcosmos_agn_template_grid",
+                "asset_kind": (
+                    "popcosmos_chabrier_agn_fspsdiff_audit_grid"
+                    if audit_grid
+                    else "popcosmos_chabrier_agn_template_grid"
+                ),
+                "imf_type": 1,
+                "imf_name": "chabrier",
+                "z_sun": POPCOSMOS_Z_SUN,
+                "dust_type": 0,
+                "agn_baked_attenuation": "fsps_powerlaw_unit_tau",
+                "agn_baked_dust_index": baked_dust_index,
+                "fsps_controls": {
+                    "sfh": 0,
+                    "imf_type": 1,
+                    "imf_name": "chabrier",
+                    "add_neb_emission": 0,
+                    "add_dust_emission": 1,
+                    "dust_type": 0,
+                    "dust_index": baked_dust_index,
+                    "peraa": False,
+                },
                 "units_wave": "Angstrom",
                 "units_template_lnu_per_lbol": "Lsun/Hz per Lsun bolometric",
                 "agn_tau_grid": agn_tau_grid,
-                "fagn_normalization": float(args.fagn_normalization),
-                "tage_gyr": float(args.tage_gyr),
-                "stellar_logzsol": float(args.stellar_logzsol),
-                "stellar_lbol_lsun": float(lbol_stellar),
+                "fagn_normalization": float(fagn_grid[0]),
+                "fagn_grid": fagn_grid,
+                "tage_gyr": float(tage_grid[0]),
+                "tage_gyr_grid": tage_grid,
+                "stellar_logzsol": float(stellar_logzsol_grid[0]),
+                "stellar_logzsol_grid": stellar_logzsol_grid,
+                "stellar_lbol_lsun": float(lbol_grid[0, 0]),
+                "signed_delta": bool(args.signed_delta),
+                "template_shape": tuple(int(value) for value in template.shape),
                 "normalization_convention": (
                     "template = (FSPS spectrum with fagn=fagn_normalization - "
                     "FSPS spectrum with fagn=0) / "
                     "(fagn_normalization * integrated stellar Lbol)"
                 ),
-                "normalization_status": "approximate",
+                "normalization_status": "audit" if audit_grid else "approximate",
                 "scientific_caveat": (
                     "FSPS documents fagn as AGN luminosity divided by stellar "
                     "bolometric luminosity, but this asset uses a repository-local "

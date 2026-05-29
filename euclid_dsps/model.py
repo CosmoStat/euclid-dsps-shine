@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import hashlib
 import copy
+import csv
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,13 @@ from .parameters import DIFFSTAR_FIXED_PARAMETER_DEFAULTS, POPCOSMOS_PARAMETER_N
 from .photometry import abmag_to_fnu_cgs
 
 
+POPCOSMOS_Z_SUN = 0.0142
+LEGACY_Z_SUN = 0.0134
+_AXIS_RTOL = 0.0
+_WAVE_ATOL = 1.0e-4
+_LOG_AXIS_ATOL = 1.0e-6
+
+
 @dataclass
 class DspsContext:
     ssp: Any
@@ -37,12 +46,19 @@ class DspsContext:
     ssp_lgmet_jax: Any | None = None
     ssp_lg_age_gyr_jax: Any | None = None
     ssp_flux_jax: Any | None = None
+    ssp_surviving_mstar_jax: Any | None = None
     gas_lgmet_grid_jax: Any | None = None
     gas_lgu_grid_jax: Any | None = None
     ssp_flux_gas_grid_jax: Any | None = None
     agn_wave_jax: Any | None = None
+    agn_fagn_grid_jax: Any | None = None
     agn_tau_grid_jax: Any | None = None
+    agn_tage_grid_jax: Any | None = None
+    agn_logzsol_grid_jax: Any | None = None
     agn_template_grid_jax: Any | None = None
+    agn_component_lgmet_jax: Any | None = None
+    agn_component_lg_age_gyr_jax: Any | None = None
+    agn_component_grid_jax: Any | None = None
     ssp_emline_luminosity: np.ndarray | None = None
     ssp_emline_wave: np.ndarray | None = None
     ssp_emline_name: tuple[str, ...] = ()
@@ -56,12 +72,19 @@ DYNAMIC_CONTEXT_FIELDS = (
     "ssp_lgmet_jax",
     "ssp_lg_age_gyr_jax",
     "ssp_flux_jax",
+    "ssp_surviving_mstar_jax",
     "gas_lgmet_grid_jax",
     "gas_lgu_grid_jax",
     "ssp_flux_gas_grid_jax",
     "agn_wave_jax",
+    "agn_fagn_grid_jax",
     "agn_tau_grid_jax",
+    "agn_tage_grid_jax",
+    "agn_logzsol_grid_jax",
     "agn_template_grid_jax",
+    "agn_component_lgmet_jax",
+    "agn_component_lg_age_gyr_jax",
+    "agn_component_grid_jax",
     "jax_filters",
     "cosmos_dust_k_by_code_jax",
 )
@@ -89,6 +112,12 @@ class JaxModelResult:
     sfr_at_obs_msun_per_yr: jnp.ndarray
     sfr_bins_msun_per_yr: jnp.ndarray
     lookback_bin_edges_gyr: jnp.ndarray
+    stellar_intrinsic_sed: jnp.ndarray | None = None
+    stellar_dusted_sed: jnp.ndarray | None = None
+    gas_sed: jnp.ndarray | None = None
+    agn_sed: jnp.ndarray | None = None
+    pre_igm_sed: jnp.ndarray | None = None
+    post_igm_sed: jnp.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -142,17 +171,29 @@ def load_context(
 
     model_config = _normalized_model_config(model_config)
     ssp = load_ssp_templates(fn=ssp_path)
+    _validate_popcosmos_ssp_metadata(ssp_path, model_config)
     dust_k_by_code, dust_curve_names = _load_cosmos_dust_grid(ssp, cosmos_config)
     emline_luminosity, emline_wave, emline_name = _load_ssp_emline_data(ssp_path, ssp)
+    surviving_mstar = _load_ssp_surviving_mstar(ssp_path, ssp)
     gas_lgmet_grid, gas_lgu_grid, ssp_flux_gas_grid = _load_optional_gas_grid(
-        model_config
+        model_config, ssp
     )
-    agn_wave, agn_tau_grid, agn_template_grid = _load_optional_agn_grid(model_config)
+    (
+        agn_wave,
+        agn_fagn_grid,
+        agn_tau_grid,
+        agn_tage_grid,
+        agn_logzsol_grid,
+        agn_template_grid,
+        agn_component_lgmet,
+        agn_component_lg_age_gyr,
+        agn_component_grid,
+    ) = _load_optional_agn_grid(model_config, ssp)
     return DspsContext(
         ssp=ssp,
         filters=filters,
         n_sfh_bins=n_sfh_bins,
-        z_sun=float(model_config.get("z_sun", 0.0134)),
+        z_sun=float(model_config.get("z_sun", LEGACY_Z_SUN)),
         model_config=model_config,
         cosmos_dust_k_by_code=dust_k_by_code,
         cosmos_dust_curve_names=dust_curve_names,
@@ -160,6 +201,11 @@ def load_context(
         ssp_lgmet_jax=jnp.asarray(ssp.ssp_lgmet, dtype=jnp.float32),
         ssp_lg_age_gyr_jax=jnp.asarray(ssp.ssp_lg_age_gyr, dtype=jnp.float32),
         ssp_flux_jax=jnp.asarray(ssp.ssp_flux, dtype=jnp.float32),
+        ssp_surviving_mstar_jax=(
+            None
+            if surviving_mstar is None
+            else jnp.asarray(surviving_mstar, dtype=jnp.float32)
+        ),
         gas_lgmet_grid_jax=(
             None
             if gas_lgmet_grid is None
@@ -178,15 +224,45 @@ def load_context(
         agn_wave_jax=(
             None if agn_wave is None else jnp.asarray(agn_wave, dtype=jnp.float32)
         ),
+        agn_fagn_grid_jax=(
+            None
+            if agn_fagn_grid is None
+            else jnp.asarray(agn_fagn_grid, dtype=jnp.float32)
+        ),
         agn_tau_grid_jax=(
             None
             if agn_tau_grid is None
             else jnp.asarray(agn_tau_grid, dtype=jnp.float32)
         ),
+        agn_tage_grid_jax=(
+            None
+            if agn_tage_grid is None
+            else jnp.asarray(agn_tage_grid, dtype=jnp.float32)
+        ),
+        agn_logzsol_grid_jax=(
+            None
+            if agn_logzsol_grid is None
+            else jnp.asarray(agn_logzsol_grid, dtype=jnp.float32)
+        ),
         agn_template_grid_jax=(
             None
             if agn_template_grid is None
             else jnp.asarray(agn_template_grid, dtype=jnp.float32)
+        ),
+        agn_component_lgmet_jax=(
+            None
+            if agn_component_lgmet is None
+            else jnp.asarray(agn_component_lgmet, dtype=jnp.float32)
+        ),
+        agn_component_lg_age_gyr_jax=(
+            None
+            if agn_component_lg_age_gyr is None
+            else jnp.asarray(agn_component_lg_age_gyr, dtype=jnp.float32)
+        ),
+        agn_component_grid_jax=(
+            None
+            if agn_component_grid is None
+            else jnp.asarray(agn_component_grid, dtype=jnp.float32)
         ),
         ssp_emline_luminosity=emline_luminosity,
         ssp_emline_wave=emline_wave,
@@ -211,37 +287,52 @@ def _normalized_model_config(model_config: dict[str, Any] | None) -> dict[str, A
     config = dict(model_config or {})
     sfh_model = str(config.get("sfh_model", "lognormal"))
     config.setdefault("sfh_model", sfh_model)
+    popcosmos_like = _is_popcosmos_like_model_config(config)
     config.setdefault(
         "stellar_metallicity_model",
-        "single" if sfh_model in {"popcosmos_bins", "diffstar_reduced6"} else "mdf",
+        "single" if popcosmos_like else "mdf",
     )
     config.setdefault(
         "dust_model",
-        "charlot_fall"
-        if sfh_model in {"popcosmos_bins", "diffstar_reduced6"}
-        else "legacy",
+        "charlot_fall_powerlaw" if popcosmos_like else "legacy",
     )
+    config["dust_model"] = _normalize_model_dust_model(config["dust_model"])
     config.setdefault("igm_model", "none")
     config.setdefault("nebular_model", "fixed_ssp")
     config.setdefault("agn_model", "none")
+    config.setdefault("agn_host_attenuation", "none")
+    config.setdefault("agn_host_attenuation_scale", 1.0)
+    config.setdefault("agn_igm_order", "pre_igm")
+    config.setdefault("agn_baked_attenuation", "none")
+    config.setdefault("agn_baked_dust_index", -0.7)
     config.setdefault("birth_cloud_slope", -1.0)
-    config.setdefault("z_sun", 0.0134)
+    config.setdefault("dust_tesc_logyr", 7.0)
+    config.setdefault("dust1_index", -1.0)
+    config.setdefault("emission_line_corrections", "none")
+    config.setdefault("z_sun", POPCOSMOS_Z_SUN if popcosmos_like else LEGACY_Z_SUN)
+    config.setdefault(
+        "sfh_time_grid",
+        "prospector_step" if sfh_model == "popcosmos_bins" else "linear",
+    )
     return config
 
 
 def _load_optional_gas_grid(
     model_config: dict[str, Any],
+    ssp: Any | None = None,
 ) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
     if str(model_config.get("nebular_model", "fixed_ssp")) != "gas_grid":
         return None, None, None
     path = model_config.get("gas_grid_path")
     if not path:
         raise ValueError("model.nebular_model='gas_grid' requires model.gas_grid_path")
-    return _load_gas_ssp_grid(path)
+    return _load_gas_ssp_grid(path, reference_ssp=ssp, model_config=model_config)
 
 
 def _load_gas_ssp_grid(
     path: str | Path,
+    reference_ssp: Any | None = None,
+    model_config: dict[str, Any] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     grid_path = Path(path).expanduser()
     if not grid_path.exists():
@@ -251,26 +342,46 @@ def _load_gas_ssp_grid(
     except ImportError as exc:  # pragma: no cover - pyproject requires h5py
         raise RuntimeError("h5py is required to load gas SSP grids") from exc
 
-    required = (
+    required_axes = (
         "ssp_wave",
         "ssp_lg_age_gyr",
         "ssp_lgmet",
         "gas_lgmet_grid",
         "gas_lgu_grid",
-        "ssp_flux",
+    )
+    enriched_required = (
+        "nebular_continuum_flux",
+        "line_flux_grid",
+        "emline_wavelengths",
     )
     with h5py.File(grid_path, "r") as handle:
-        missing = [key for key in required if key not in handle]
+        missing = [key for key in required_axes if key not in handle]
+        has_ssp_flux = "ssp_flux" in handle
+        has_enriched_lines = all(key in handle for key in enriched_required)
+        if not has_ssp_flux and not has_enriched_lines:
+            missing.append("ssp_flux or enriched line datasets")
         if missing:
             raise ValueError(
                 f"Gas SSP grid {grid_path} is missing datasets: {', '.join(missing)}"
             )
+        attrs = _hdf5_attrs(handle)
         gas_lgmet_grid = np.asarray(handle["gas_lgmet_grid"], dtype=float)
         gas_lgu_grid = np.asarray(handle["gas_lgu_grid"], dtype=float)
         ssp_wave = np.asarray(handle["ssp_wave"], dtype=float)
         ssp_lg_age_gyr = np.asarray(handle["ssp_lg_age_gyr"], dtype=float)
         ssp_lgmet = np.asarray(handle["ssp_lgmet"], dtype=float)
-        ssp_flux = np.asarray(handle["ssp_flux"], dtype=np.float32)
+        if _requires_popcosmos_table_corrections(model_config):
+            if not has_enriched_lines:
+                raise ValueError(
+                    "model.emission_line_corrections='popcosmos_table' requires "
+                    "gas grid datasets nebular_continuum_flux, line_flux_grid, "
+                    "and emline_wavelengths"
+                )
+            ssp_flux = _corrected_enriched_gas_flux(handle, ssp_wave, model_config)
+        elif has_ssp_flux:
+            ssp_flux = np.asarray(handle["ssp_flux"], dtype=np.float32)
+        else:
+            ssp_flux = _corrected_enriched_gas_flux(handle, ssp_wave, model_config)
 
     expected_ndim = 5
     if ssp_flux.ndim != expected_ndim:
@@ -288,25 +399,70 @@ def _load_gas_ssp_grid(
             "Gas SSP grid stellar metallicity/age/wavelength axes do not match "
             "ssp_flux trailing dimensions"
         )
+    _validate_gas_grid_reference_axes(
+        grid_path,
+        reference_ssp,
+        ssp_wave,
+        ssp_lg_age_gyr,
+        ssp_lgmet,
+        model_config,
+    )
+    _validate_popcosmos_gas_metadata(grid_path, attrs, model_config)
     return gas_lgmet_grid, gas_lgu_grid, ssp_flux
 
 
 def _load_optional_agn_grid(
     model_config: dict[str, Any],
-) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-    if str(model_config.get("agn_model", "none")) != "template_grid":
-        return None, None, None
+    reference_ssp: Any | None = None,
+) -> tuple[
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray | None,
+]:
+    agn_model = str(model_config.get("agn_model", "none"))
+    if agn_model == "none":
+        return None, None, None, None, None, None, None, None, None
+    if agn_model == "fsps_component_grid":
+        path = model_config.get("agn_component_grid_path")
+        if not path:
+            raise ValueError(
+                "model.agn_model='fsps_component_grid' requires "
+                "model.agn_component_grid_path"
+            )
+        wave, fagn, tau, lgmet, lg_age, grid = _load_agn_component_grid(
+            path, model_config=model_config, reference_ssp=reference_ssp
+        )
+        return wave, fagn, tau, None, None, None, lgmet, lg_age, grid
+    if agn_model != "template_grid":
+        raise ValueError(f"Unsupported model.agn_model: {agn_model}")
     path = model_config.get("agn_template_path")
     if not path:
         raise ValueError(
             "model.agn_model='template_grid' requires model.agn_template_path"
         )
-    return _load_agn_template_grid(path)
+    wave, fagn, tau, tage, logzsol, grid = _load_agn_template_grid(
+        path, model_config=model_config
+    )
+    return wave, fagn, tau, tage, logzsol, grid, None, None, None
 
 
 def _load_agn_template_grid(
     path: str | Path,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    model_config: dict[str, Any] | None = None,
+) -> tuple[
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray,
+    np.ndarray | None,
+    np.ndarray | None,
+    np.ndarray,
+]:
     grid_path = Path(path).expanduser()
     if not grid_path.exists():
         raise FileNotFoundError(f"AGN template grid file not found: {grid_path}")
@@ -322,15 +478,496 @@ def _load_agn_template_grid(
             raise ValueError(
                 f"AGN template grid {grid_path} is missing datasets: {', '.join(missing)}"
             )
+        attrs = _hdf5_attrs(handle)
         wave = np.asarray(handle["wave"], dtype=float)
+        fagn_grid = (
+            np.asarray(handle["fagn_grid"], dtype=float)
+            if "fagn_grid" in handle
+            else (
+                np.asarray(handle["fagn_normalization_grid"], dtype=float)
+                if "fagn_normalization_grid" in handle
+                else None
+            )
+        )
         tau_grid = np.asarray(handle["agn_tau_grid"], dtype=float)
+        tage_grid = (
+            np.asarray(handle["tage_gyr_grid"], dtype=float)
+            if "tage_gyr_grid" in handle
+            else None
+        )
+        logzsol_grid = (
+            np.asarray(handle["stellar_logzsol_grid"], dtype=float)
+            if "stellar_logzsol_grid" in handle
+            else None
+        )
         template_grid = np.asarray(handle["template_lnu_per_lbol"], dtype=float)
 
-    if template_grid.ndim != 2 or template_grid.shape != (len(tau_grid), len(wave)):
-        raise ValueError(
-            "AGN template_lnu_per_lbol must have shape (n_agn_tau_grid, n_wave)"
+    if template_grid.ndim == 2 and template_grid.shape == (len(tau_grid), len(wave)):
+        pass
+    elif template_grid.ndim == 5:
+        if fagn_grid is None or tage_grid is None or logzsol_grid is None:
+            raise ValueError(
+                "5D AGN template_lnu_per_lbol requires fagn_grid or "
+                "fagn_normalization_grid, tage_gyr_grid, and stellar_logzsol_grid"
+            )
+        expected_shape = (
+            len(fagn_grid),
+            len(tau_grid),
+            len(tage_grid),
+            len(logzsol_grid),
+            len(wave),
         )
-    return wave, tau_grid, template_grid
+        if template_grid.shape != expected_shape:
+            raise ValueError(
+                "5D AGN template_lnu_per_lbol must have shape "
+                "(n_fagn_grid, n_agn_tau_grid, n_tage_gyr_grid, "
+                "n_stellar_logzsol_grid, n_wave)"
+            )
+    else:
+        raise ValueError(
+            "AGN template_lnu_per_lbol must have shape (n_agn_tau_grid, n_wave) "
+            "or (n_fagn_grid, n_agn_tau_grid, n_tage_gyr_grid, "
+            "n_stellar_logzsol_grid, n_wave)"
+        )
+    _validate_popcosmos_agn_metadata(grid_path, attrs, model_config)
+    return wave, fagn_grid, tau_grid, tage_grid, logzsol_grid, template_grid
+
+
+def _load_agn_component_grid(
+    path: str | Path,
+    model_config: dict[str, Any] | None = None,
+    reference_ssp: Any | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Load an FSPS-native AGN component SSP grid.
+
+    Expected units are ``Lsun/Hz/Msun formed`` for
+    ``agn_lnu_per_mformed[fagn, agn_tau, Zstar, age, wave]``.
+    """
+    grid_path = Path(path).expanduser()
+    if not grid_path.exists():
+        raise FileNotFoundError(f"AGN component grid file not found: {grid_path}")
+    try:
+        import h5py
+    except ImportError as exc:  # pragma: no cover - pyproject requires h5py
+        raise RuntimeError("h5py is required to load AGN component grids") from exc
+
+    required = (
+        "ssp_wave",
+        "ssp_lg_age_gyr",
+        "ssp_lgmet",
+        "fagn_grid",
+        "agn_tau_grid",
+        "agn_lnu_per_mformed",
+    )
+    with h5py.File(grid_path, "r") as handle:
+        missing = [key for key in required if key not in handle]
+        if missing:
+            raise ValueError(
+                f"AGN component grid {grid_path} is missing datasets: "
+                f"{', '.join(missing)}"
+            )
+        attrs = _hdf5_attrs(handle)
+        wave = np.asarray(handle["ssp_wave"], dtype=float)
+        lg_age = np.asarray(handle["ssp_lg_age_gyr"], dtype=float)
+        lgmet = np.asarray(handle["ssp_lgmet"], dtype=float)
+        fagn_grid = np.asarray(handle["fagn_grid"], dtype=float)
+        tau_grid = np.asarray(handle["agn_tau_grid"], dtype=float)
+        component = np.asarray(handle["agn_lnu_per_mformed"], dtype=np.float32)
+
+    expected_shape = (
+        len(fagn_grid),
+        len(tau_grid),
+        len(lgmet),
+        len(lg_age),
+        len(wave),
+    )
+    if component.ndim != 5 or component.shape != expected_shape:
+        raise ValueError(
+            "AGN component grid agn_lnu_per_mformed must have shape "
+            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr, n_wave)"
+        )
+    _validate_agn_component_reference_axes(
+        grid_path,
+        reference_ssp,
+        wave,
+        lg_age,
+        lgmet,
+    )
+    _validate_popcosmos_agn_metadata(grid_path, attrs, model_config)
+    return wave, fagn_grid, tau_grid, lgmet, lg_age, component
+
+
+def _validate_agn_component_reference_axes(
+    path: Path,
+    reference_ssp: Any | None,
+    wave: np.ndarray,
+    lg_age: np.ndarray,
+    lgmet: np.ndarray,
+) -> None:
+    if reference_ssp is None:
+        return
+    expected_axes = {
+        "ssp_wave": np.asarray(reference_ssp.ssp_wave, dtype=float),
+        "ssp_lg_age_gyr": np.asarray(reference_ssp.ssp_lg_age_gyr, dtype=float),
+        "ssp_lgmet": np.asarray(reference_ssp.ssp_lgmet, dtype=float),
+    }
+    actual_axes = {
+        "ssp_wave": np.asarray(wave, dtype=float),
+        "ssp_lg_age_gyr": np.asarray(lg_age, dtype=float),
+        "ssp_lgmet": np.asarray(lgmet, dtype=float),
+    }
+    tolerances = {
+        "ssp_wave": _WAVE_ATOL,
+        "ssp_lg_age_gyr": _LOG_AXIS_ATOL,
+        "ssp_lgmet": _LOG_AXIS_ATOL,
+    }
+    for key, actual in actual_axes.items():
+        expected = expected_axes[key]
+        if actual.shape != expected.shape or not np.allclose(
+            actual, expected, rtol=_AXIS_RTOL, atol=tolerances[key]
+        ):
+            raise ValueError(
+                f"AGN component grid {path} {key} axis is incompatible with "
+                f"the base SSP axis. Expected shape {expected.shape}, got "
+                f"{actual.shape}; tolerances are rtol={_AXIS_RTOL}, "
+                f"atol={tolerances[key]}."
+            )
+
+
+def _normalize_model_dust_model(value: Any) -> str:
+    name = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "charlot_fall": "charlot_fall_powerlaw",
+        "charlot_fall_power_law": "charlot_fall_powerlaw",
+    }
+    return aliases.get(name, name)
+
+
+def _is_popcosmos_like_model_config(model_config: dict[str, Any] | None) -> bool:
+    config = model_config or {}
+    return str(config.get("sfh_model", "lognormal")) in {
+        "popcosmos_bins",
+        "diffstar_reduced6",
+    }
+
+
+def _hdf5_attrs(handle: Any) -> dict[str, Any]:
+    return {str(key): _decode_hdf5_attr(value) for key, value in handle.attrs.items()}
+
+
+def _decode_hdf5_attr(value: Any) -> Any:
+    if isinstance(value, (bytes, np.bytes_)):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, np.ndarray):
+        return [_decode_hdf5_attr(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _json_attr(attrs: dict[str, Any], key: str) -> dict[str, Any]:
+    raw = attrs.get(key)
+    if raw in (None, ""):
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _float_attr(attrs: dict[str, Any], key: str) -> float | None:
+    value = attrs.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if np.isfinite(result) else None
+
+
+def _imf_metadata(attrs: dict[str, Any]) -> tuple[float | None, str | None]:
+    imf_type = _float_attr(attrs, "imf_type")
+    imf_name = attrs.get("imf_name")
+    if imf_name is not None:
+        imf_name = str(imf_name).strip().lower()
+    controls = _json_attr(attrs, "fsps_controls")
+    if imf_type is None and "imf_type" in controls:
+        try:
+            imf_type = float(controls["imf_type"])
+        except (TypeError, ValueError):
+            imf_type = None
+    if imf_name is None and "imf_name" in controls:
+        imf_name = str(controls["imf_name"]).strip().lower()
+    return imf_type, imf_name
+
+
+def _validate_popcosmos_ssp_metadata(
+    ssp_path: str | Path, model_config: dict[str, Any]
+) -> None:
+    if not _is_popcosmos_like_model_config(model_config):
+        return
+    path = Path(ssp_path).expanduser()
+    try:
+        import h5py
+
+        with h5py.File(path, "r") as handle:
+            attrs = _hdf5_attrs(handle)
+    except OSError as exc:
+        raise ValueError(f"Could not read PopCosmos-like SSP metadata: {path}") from exc
+    _validate_popcosmos_asset_name(path, "SSP")
+    _validate_popcosmos_imf(path, attrs, "SSP")
+    _validate_popcosmos_z_sun(path, attrs, model_config, "SSP")
+
+
+def _validate_popcosmos_gas_metadata(
+    path: Path, attrs: dict[str, Any], model_config: dict[str, Any] | None
+) -> None:
+    if not _is_popcosmos_like_model_config(model_config):
+        return
+    _validate_popcosmos_asset_name(path, "gas SSP grid")
+    _validate_popcosmos_imf(path, attrs, "gas SSP grid")
+    _validate_popcosmos_z_sun(path, attrs, model_config, "gas SSP grid")
+    required_units = {
+        "units_ssp_wave": "angstrom",
+        "units_ssp_lg_age_gyr": "log10(age/gyr)",
+        "units_ssp_lgmet": "log10(absolute stellar metallicity mass fraction)",
+        "units_gas_lgmet_grid": "log10(zgas/zsun)",
+        "units_gas_lgu_grid": "log10",
+    }
+    missing = []
+    for key, needle in required_units.items():
+        value = str(attrs.get(key, "")).strip().lower()
+        if needle not in value:
+            missing.append(key)
+    if missing:
+        raise ValueError(
+            f"PopCosmos-like gas SSP grid {path} is missing required unit metadata: "
+            f"{', '.join(missing)}"
+        )
+
+
+def _validate_popcosmos_agn_metadata(
+    path: Path, attrs: dict[str, Any], model_config: dict[str, Any] | None
+) -> None:
+    if not _is_popcosmos_like_model_config(model_config):
+        return
+    _validate_popcosmos_asset_name(path, "AGN template grid")
+    _validate_popcosmos_imf(path, attrs, "AGN template grid")
+    _validate_popcosmos_z_sun(path, attrs, model_config, "AGN template grid")
+
+
+def _validate_popcosmos_asset_name(path: Path, label: str) -> None:
+    if "kroupa" in path.name.lower():
+        raise ValueError(
+            f"PopCosmos-like {label} path must not contain 'kroupa': {path}"
+        )
+
+
+def _validate_popcosmos_imf(path: Path, attrs: dict[str, Any], label: str) -> None:
+    imf_type, imf_name = _imf_metadata(attrs)
+    if imf_type is None and imf_name is None:
+        raise ValueError(
+            f"PopCosmos-like {label} {path} is missing IMF metadata; expected "
+            "imf_type=1 or imf_name='chabrier'."
+        )
+    errors = []
+    if imf_type is not None and not np.isclose(imf_type, 1.0, rtol=0.0, atol=0.0):
+        errors.append(f"imf_type={imf_type!r}")
+    if imf_name is not None and imf_name != "chabrier":
+        errors.append(f"imf_name={imf_name!r}")
+    if not errors:
+        return
+    raise ValueError(
+        f"PopCosmos-like {label} {path} must consistently declare a Chabrier IMF "
+        f"(imf_type=1 when present and imf_name='chabrier' when present); found "
+        f"imf_type={imf_type!r}, imf_name={imf_name!r}."
+    )
+
+
+def _validate_popcosmos_z_sun(
+    path: Path, attrs: dict[str, Any], model_config: dict[str, Any] | None, label: str
+) -> None:
+    z_sun_attr = _float_attr(attrs, "z_sun")
+    if z_sun_attr is None:
+        raise ValueError(
+            f"PopCosmos-like {label} {path} is missing z_sun metadata; expected "
+            f"z_sun={float(_normalized_model_config(model_config).get('z_sun'))}."
+        )
+    z_sun_config = float(_normalized_model_config(model_config).get("z_sun"))
+    if not np.isclose(z_sun_attr, z_sun_config, rtol=0.0, atol=1.0e-8):
+        raise ValueError(
+            f"PopCosmos-like {label} z_sun mismatch for {path}: config has "
+            f"{z_sun_config}, HDF5 metadata has {z_sun_attr}."
+        )
+
+
+def _validate_gas_grid_reference_axes(
+    path: Path,
+    reference_ssp: Any | None,
+    ssp_wave: np.ndarray,
+    ssp_lg_age_gyr: np.ndarray,
+    ssp_lgmet: np.ndarray,
+    model_config: dict[str, Any] | None,
+) -> None:
+    if reference_ssp is None:
+        return
+    reference_axes = {
+        "ssp_wave": np.asarray(reference_ssp.ssp_wave, dtype=float),
+        "ssp_lg_age_gyr": np.asarray(reference_ssp.ssp_lg_age_gyr, dtype=float),
+        "ssp_lgmet": np.asarray(reference_ssp.ssp_lgmet, dtype=float),
+    }
+    actual_axes = {
+        "ssp_wave": np.asarray(ssp_wave, dtype=float),
+        "ssp_lg_age_gyr": np.asarray(ssp_lg_age_gyr, dtype=float),
+        "ssp_lgmet": np.asarray(ssp_lgmet, dtype=float),
+    }
+    tolerances = {
+        "ssp_wave": _WAVE_ATOL,
+        "ssp_lg_age_gyr": _LOG_AXIS_ATOL,
+        "ssp_lgmet": _LOG_AXIS_ATOL,
+    }
+    for key, actual in actual_axes.items():
+        expected = reference_axes[key]
+        if actual.shape != expected.shape or not np.allclose(
+            actual, expected, rtol=_AXIS_RTOL, atol=tolerances[key]
+        ):
+            raise ValueError(
+                f"Gas SSP grid {path} {key} axis is incompatible with the base SSP "
+                f"axis. Expected shape {expected.shape}, got {actual.shape}; "
+                f"tolerances are rtol={_AXIS_RTOL}, atol={tolerances[key]}."
+            )
+    if _is_popcosmos_like_model_config(model_config):
+        # Axis units are validated from metadata separately for PopCosmos-like grids.
+        return
+
+
+def _requires_popcosmos_table_corrections(
+    model_config: dict[str, Any] | None,
+) -> bool:
+    return (
+        str(_normalized_model_config(model_config).get("emission_line_corrections"))
+        == "popcosmos_table"
+    )
+
+
+def _corrected_enriched_gas_flux(
+    handle: Any, ssp_wave: np.ndarray, model_config: dict[str, Any] | None
+) -> np.ndarray:
+    continuum = np.asarray(handle["nebular_continuum_flux"], dtype=np.float32)
+    line_grid = np.asarray(handle["line_flux_grid"], dtype=np.float32)
+    line_wave = np.asarray(handle["emline_wavelengths"], dtype=float)
+    if line_grid.shape[:-1] != continuum.shape[:-1]:
+        raise ValueError(
+            "Gas SSP grid line_flux_grid must have shape "
+            "(n_gas_lgmet, n_gas_lgu, n_stellar_lgmet, n_age, n_line)"
+        )
+    if continuum.ndim != 5 or line_grid.ndim != 5 or line_grid.shape[-1] != len(
+        line_wave
+    ):
+        raise ValueError("Gas SSP grid enriched line datasets have incompatible shapes")
+    line_names = _line_names_from_hdf5(handle, line_grid.shape[-1])
+    multipliers = _line_correction_multipliers(line_names, model_config)
+    corrected = np.array(continuum, copy=True)
+    wave = np.asarray(ssp_wave, dtype=float)
+    for line_index, line_wavelength in enumerate(line_wave):
+        wave_index = int(np.argmin(np.abs(wave - float(line_wavelength))))
+        corrected[..., wave_index] += (
+            line_grid[..., line_index] * multipliers[line_index]
+        )
+    return np.asarray(corrected, dtype=np.float32)
+
+
+def _line_names_from_hdf5(handle: Any, n_lines: int) -> tuple[str, ...]:
+    for key in ("line_name", "line_names", "emline_names", "ssp_emline_name"):
+        if key not in handle:
+            continue
+        raw = np.asarray(handle[key])
+        names = []
+        for item in raw:
+            names.append(str(_decode_hdf5_attr(item)))
+        if len(names) == n_lines:
+            return tuple(names)
+    return tuple(f"line_{index:03d}" for index in range(n_lines))
+
+
+def _line_correction_multipliers(
+    line_names: tuple[str, ...], model_config: dict[str, Any] | None
+) -> np.ndarray:
+    config = _normalized_model_config(model_config)
+    if str(config.get("emission_line_corrections")) == "none":
+        return np.ones(len(line_names), dtype=np.float32)
+    if str(config.get("emission_line_corrections")) != "popcosmos_table":
+        raise ValueError(
+            f"Unsupported model.emission_line_corrections: "
+            f"{config.get('emission_line_corrections')}"
+        )
+    path = config.get("emission_line_correction_path")
+    if not path:
+        raise ValueError(
+            "model.emission_line_corrections='popcosmos_table' requires "
+            "model.emission_line_correction_path"
+        )
+    corrections = _read_emission_line_correction_table(path)
+    multipliers = np.ones(len(line_names), dtype=np.float32)
+    missing = []
+    for index, name in enumerate(line_names):
+        if name not in corrections:
+            missing.append(name)
+            continue
+        multipliers[index] = np.float32(1.0 + corrections[name])
+    if missing:
+        raise ValueError(
+            "Emission-line correction table is missing lines present in the gas "
+            f"grid: {', '.join(missing)}"
+        )
+    if not np.all(np.isfinite(multipliers)):
+        raise ValueError("Emission-line correction multipliers contain non-finite values")
+    return multipliers
+
+
+def _read_emission_line_correction_table(path: str | Path) -> dict[str, float]:
+    table_path = Path(path).expanduser()
+    if not table_path.exists():
+        raise FileNotFoundError(f"Emission-line correction table not found: {table_path}")
+    required = {
+        "line_name",
+        "line_wavelength",
+        "fractional_correction",
+        "fractional_variance",
+    }
+    corrections: dict[str, float] = {}
+    with table_path.open("r", encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        if reader.fieldnames is None or not required.issubset(reader.fieldnames):
+            raise ValueError(
+                f"Emission-line correction table {table_path} must contain columns "
+                f"{sorted(required)}"
+            )
+        for row in reader:
+            name = str(row["line_name"]).strip()
+            if not name:
+                raise ValueError("Emission-line correction table has an empty line_name")
+            for key in ("line_wavelength", "fractional_correction", "fractional_variance"):
+                try:
+                    value = float(row[key])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"Emission-line correction table {table_path} has non-numeric "
+                        f"{key} for line {name!r}"
+                    ) from exc
+                if not np.isfinite(value):
+                    raise ValueError(
+                        f"Emission-line correction table {table_path} has non-finite "
+                        f"{key} for line {name!r}"
+                    )
+            corrections[name] = float(row["fractional_correction"])
+    return corrections
 
 
 def _load_ssp_emline_data(
@@ -370,6 +1007,41 @@ def _load_ssp_emline_data(
     if not names or len(names) != n_lines:
         names = tuple(f"line_{i:03d}" for i in range(n_lines))
     return luminosity, wave, names
+
+
+def _load_ssp_surviving_mstar(
+    ssp_path: str | Path,
+    ssp: Any,
+) -> np.ndarray | None:
+    """Load optional FSPS surviving-mass fractions from an SSP HDF5."""
+    path = Path(ssp_path).expanduser()
+    candidates = (
+        "ssp_surviving_mstar",
+        "ssp_stellar_mass",
+        "ssp_mstar_remaining",
+    )
+    try:
+        import h5py
+    except ImportError:  # pragma: no cover - pyproject requires h5py
+        return None
+    with h5py.File(path, "r") as handle:
+        for name in candidates:
+            if name not in handle:
+                continue
+            values = np.asarray(handle[name], dtype=np.float32)
+            expected = (len(ssp.ssp_lgmet), len(ssp.ssp_lg_age_gyr))
+            if values.shape != expected:
+                raise ValueError(
+                    f"SSP surviving-mass dataset {name!r} in {path} has shape "
+                    f"{values.shape}; expected {expected}"
+                )
+            if not np.all(np.isfinite(values)) or np.any(values <= 0.0):
+                raise ValueError(
+                    f"SSP surviving-mass dataset {name!r} in {path} must be "
+                    "positive and finite"
+                )
+            return np.clip(values, 1.0e-4, 2.0)
+    return None
 
 
 def _load_cosmos_dust_grid(
@@ -485,6 +1157,16 @@ def _random_uniform_redshift(
 
 def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResult:
     """Run DSPS from simple SFH/metallicity parameters to SED and photometry."""
+    if float(
+        gas_metallicity_constraint_penalty_jax(
+            params, context.model_config, penalty=1.0
+        )
+    ) > 0.0:
+        raise ValueError(
+            "PopCosmos-like gas metallicity constraint violated: "
+            "log10_gas_metallicity must be >= log10_stellar_metallicity "
+            "(both in log10(Z/Zsun))."
+        )
     jax_result = run_dsps_model_jax(context, params)
     rest_sed = np.asarray(jax_result.rest_sed, dtype=float)
     wave = np.asarray(jax_result.wave, dtype=float)
@@ -568,6 +1250,12 @@ def run_lognormal_model_jax(
         sfr_at_obs_msun_per_yr=gal_sfr_table[-1],
         sfr_bins_msun_per_yr=jnp.full((7,), jnp.nan, dtype=jnp.float32),
         lookback_bin_edges_gyr=jnp.full((8,), jnp.nan, dtype=jnp.float32),
+        stellar_intrinsic_sed=sed_info.rest_sed,
+        stellar_dusted_sed=dusted_sed,
+        gas_sed=jnp.zeros_like(dusted_sed),
+        agn_sed=jnp.zeros_like(dusted_sed),
+        pre_igm_sed=dusted_sed,
+        post_igm_sed=dusted_sed,
     )
 
 
@@ -581,77 +1269,127 @@ def run_popcosmos_binned_model_jax(
     model_config = _normalized_model_config(context.model_config)
     z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
-    t_start = jnp.minimum(jnp.asarray(0.001, dtype=jnp.float32), t_obs * 0.01)
-    t_start = jnp.maximum(t_start, jnp.asarray(1.0e-5, dtype=jnp.float32))
-    gal_t_table = jnp.linspace(
-        t_start, jnp.maximum(t_obs, t_start * 1.01), context.n_sfh_bins
-    )
-    raw_sfr_table = build_popcosmos_sfh_table_jax(gal_t_table, t_obs, params)
-    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
-    gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
-        gal_t_table,
-        raw_sfr_table,
-        ssp_lg_age_gyr,
+    gal_t_table, raw_sfr_table = build_popcosmos_sfh_time_grid_jax(
         t_obs,
-        params["log10_stellar_mass"],
+        params,
+        context.n_sfh_bins,
+        model_config,
     )
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    if str(model_config.get("sfh_time_grid", "prospector_step")) == "prospector_step":
+        age_weights = popcosmos_age_weights_jax(t_obs, params, ssp_lg_age_gyr)
+        gal_sfr_table, formed_mass, surviving_mass = (
+            normalize_sfh_to_stellar_mass_with_age_weights_jax(
+                gal_t_table,
+                raw_sfr_table,
+                ssp_lg_age_gyr,
+                age_weights,
+                params["log10_stellar_mass"],
+                frac_surviving_by_age,
+            )
+        )
+    else:
+        gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
+            gal_t_table,
+            raw_sfr_table,
+            ssp_lg_age_gyr,
+            t_obs,
+            params["log10_stellar_mass"],
+            frac_surviving_by_age,
+        )
+        age_weights = calc_age_weights_from_sfh_table(
+            gal_t_table,
+            gal_sfr_table,
+            ssp_lg_age_gyr,
+            t_obs,
+        )
     sfr_bins_raw = logsfr_ratios_to_sfr_bins_jax(_popcosmos_dlog10_sfr(params))
     formed_raw = jnp.trapezoid(raw_sfr_table, gal_t_table) * 1.0e9
     formed_scale = formed_mass / jnp.maximum(formed_raw, 1.0e-30)
     sfr_bins = jnp.clip(sfr_bins_raw * formed_scale, 1.0e-30, jnp.inf)
     lookback_edges = build_popcosmos_lookback_bin_edges_jax(t_obs)
 
-    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
-    lgmet_abs = jnp.log10(jnp.asarray(context.z_sun, dtype=jnp.float32)) + jnp.asarray(
-        params["log10_stellar_metallicity"], dtype=jnp.float32
+    stellar_ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
+        _context_ssp_lgmet(context),
+        _context_ssp_flux(context),
+        lgmet_abs,
     )
+    stellar_sed_by_age = (
+        jnp.clip(stellar_ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    )
+    stellar_intrinsic_sed = jnp.nan_to_num(
+        stellar_sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
     ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
         _context_ssp_lgmet(context),
         ssp_flux_grid,
         lgmet_abs,
     )
-    age_weights = calc_age_weights_from_sfh_table(
-        gal_t_table,
-        gal_sfr_table,
-        ssp_lg_age_gyr,
-        t_obs,
-    )
     sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
     intrinsic_stellar_sed = jnp.nan_to_num(
         sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    dusted_by_age = apply_charlot_fall_by_age_jax(
+    gas_sed = jnp.nan_to_num(
+        intrinsic_stellar_sed - stellar_intrinsic_sed,
+        nan=0.0,
+        posinf=1.0e30,
+        neginf=-1.0e30,
+    )
+    stellar_dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        _context_ssp_wave(context),
+        ssp_lg_age_gyr,
+        stellar_sed_by_age,
+        params["tau2"],
+        params["dust_index_n"],
+        params["tau1_over_tau2"],
+        model_config,
+    )
+    stellar_dusted_sed = jnp.nan_to_num(
+        stellar_dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
         _context_ssp_wave(context),
         ssp_lg_age_gyr,
         sed_by_age,
         params["tau2"],
         params["dust_index_n"],
         params["tau1_over_tau2"],
+        model_config,
     )
     dusted_sed = jnp.nan_to_num(
         dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    dusted_sed = add_agn_component_jax(
+    agn_sed = agn_component_jax(
         context,
         _context_ssp_wave(context),
         intrinsic_stellar_sed,
-        dusted_sed,
         params,
         model_config,
+        age_weights=age_weights,
+        formed_mass=formed_mass,
+        stellar_lgmet_abs=lgmet_abs,
+        template_tage_gyr=t_obs,
+        stellar_logzsol=params["log10_stellar_metallicity"],
     )
-    dusted_sed = apply_igm_transmission_jax(
+    pre_igm_sed, post_igm_sed = combine_agn_and_igm_jax(
         _context_ssp_wave(context),
         dusted_sed,
+        agn_sed,
         z_obs,
         model_config,
     )
     model_mags = predict_mags_jax(
-        context, _context_ssp_wave(context), dusted_sed, z_obs
+        context, _context_ssp_wave(context), post_igm_sed, z_obs
     )
     return JaxModelResult(
         wave=_context_ssp_wave(context),
         rest_sed=intrinsic_stellar_sed,
-        dusted_rest_sed=dusted_sed,
+        dusted_rest_sed=post_igm_sed,
         model_mags=model_mags,
         t_obs_gyr=t_obs,
         formed_mass_msun=formed_mass,
@@ -659,6 +1397,12 @@ def run_popcosmos_binned_model_jax(
         sfr_at_obs_msun_per_yr=gal_sfr_table[-1],
         sfr_bins_msun_per_yr=sfr_bins,
         lookback_bin_edges_gyr=lookback_edges,
+        stellar_intrinsic_sed=stellar_intrinsic_sed,
+        stellar_dusted_sed=stellar_dusted_sed,
+        gas_sed=gas_sed,
+        agn_sed=agn_sed,
+        pre_igm_sed=pre_igm_sed,
+        post_igm_sed=post_igm_sed,
     )
 
 
@@ -681,9 +1425,13 @@ def run_diffstar_reduced6_model_jax(
             "sfh_model='diffstar_reduced6' requires "
             "model.stellar_metallicity_model='single'."
         )
-    if str(model_config.get("dust_model")) != "charlot_fall":
+    if str(model_config.get("dust_model")) not in {
+        "charlot_fall_powerlaw",
+        "prospector_fsps",
+    }:
         raise ValueError(
-            "sfh_model='diffstar_reduced6' requires model.dust_model='charlot_fall'."
+            "sfh_model='diffstar_reduced6' requires "
+            "model.dust_model='charlot_fall_powerlaw' or 'prospector_fsps'."
         )
 
     z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
@@ -691,12 +1439,17 @@ def run_diffstar_reduced6_model_jax(
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
     raw_sfr_table = build_diffstar_sfh_table_jax(gal_t_table, t_obs, params)
     ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
     gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
         gal_t_table,
         raw_sfr_table,
         ssp_lg_age_gyr,
         t_obs,
         params["log10_stellar_mass"],
+        frac_surviving_by_age,
     )
     age_weights = calc_age_weights_from_sfh_table(
         gal_t_table,
@@ -704,10 +1457,18 @@ def run_diffstar_reduced6_model_jax(
         ssp_lg_age_gyr,
         t_obs,
     )
-    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
-    lgmet_abs = jnp.log10(jnp.asarray(context.z_sun, dtype=jnp.float32)) + jnp.asarray(
-        params["log10_stellar_metallicity"], dtype=jnp.float32
+    stellar_ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
+        _context_ssp_lgmet(context),
+        _context_ssp_flux(context),
+        lgmet_abs,
     )
+    stellar_sed_by_age = (
+        jnp.clip(stellar_ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    )
+    stellar_intrinsic_sed = jnp.nan_to_num(
+        stellar_sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    ssp_flux_grid = _popcosmos_ssp_flux_grid(context, params, model_config)
     ssp_flux_z = interpolate_ssp_stellar_metallicity_jax(
         _context_ssp_lgmet(context),
         ssp_flux_grid,
@@ -717,39 +1478,62 @@ def run_diffstar_reduced6_model_jax(
     intrinsic_stellar_sed = jnp.nan_to_num(
         sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    dusted_by_age = apply_charlot_fall_by_age_jax(
+    gas_sed = jnp.nan_to_num(
+        intrinsic_stellar_sed - stellar_intrinsic_sed,
+        nan=0.0,
+        posinf=1.0e30,
+        neginf=-1.0e30,
+    )
+    stellar_dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        _context_ssp_wave(context),
+        ssp_lg_age_gyr,
+        stellar_sed_by_age,
+        params["tau2"],
+        params["dust_index_n"],
+        params["tau1_over_tau2"],
+        model_config,
+    )
+    stellar_dusted_sed = jnp.nan_to_num(
+        stellar_dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
         _context_ssp_wave(context),
         ssp_lg_age_gyr,
         sed_by_age,
         params["tau2"],
         params["dust_index_n"],
         params["tau1_over_tau2"],
-        birth_cloud_slope=float(model_config.get("birth_cloud_slope", -1.0)),
+        model_config,
     )
     dusted_sed = jnp.nan_to_num(
         dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    dusted_sed = add_agn_component_jax(
+    agn_sed = agn_component_jax(
         context,
         _context_ssp_wave(context),
         intrinsic_stellar_sed,
-        dusted_sed,
         params,
         model_config,
+        age_weights=age_weights,
+        formed_mass=formed_mass,
+        stellar_lgmet_abs=lgmet_abs,
+        template_tage_gyr=t_obs,
+        stellar_logzsol=params["log10_stellar_metallicity"],
     )
-    dusted_sed = apply_igm_transmission_jax(
+    pre_igm_sed, post_igm_sed = combine_agn_and_igm_jax(
         _context_ssp_wave(context),
         dusted_sed,
+        agn_sed,
         z_obs,
         model_config,
     )
     model_mags = predict_mags_jax(
-        context, _context_ssp_wave(context), dusted_sed, z_obs
+        context, _context_ssp_wave(context), post_igm_sed, z_obs
     )
     return JaxModelResult(
         wave=_context_ssp_wave(context),
         rest_sed=intrinsic_stellar_sed,
-        dusted_rest_sed=dusted_sed,
+        dusted_rest_sed=post_igm_sed,
         model_mags=model_mags,
         t_obs_gyr=t_obs,
         formed_mass_msun=formed_mass,
@@ -759,6 +1543,12 @@ def run_diffstar_reduced6_model_jax(
             gal_t_table, gal_sfr_table, t_obs
         ),
         lookback_bin_edges_gyr=build_popcosmos_lookback_bin_edges_jax(t_obs),
+        stellar_intrinsic_sed=stellar_intrinsic_sed,
+        stellar_dusted_sed=stellar_dusted_sed,
+        gas_sed=gas_sed,
+        agn_sed=agn_sed,
+        pre_igm_sed=pre_igm_sed,
+        post_igm_sed=post_igm_sed,
     )
 
 
@@ -815,6 +1605,110 @@ def build_popcosmos_sfh_table_jax(
     bin_index = jnp.searchsorted(edges, lookback, side="right") - 1
     bin_index = jnp.clip(bin_index, 0, 6)
     return jnp.clip(sfr_bins[bin_index], 1.0e-30, jnp.inf)
+
+
+def build_popcosmos_sfh_time_grid_jax(
+    t_obs: jnp.ndarray,
+    params: dict[str, Any],
+    n_sfh_bins: int,
+    model_config: dict[str, Any] | None = None,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Build the PopCosmos SFH table using the configured time-grid convention."""
+    config = _normalized_model_config(model_config)
+    mode = str(config.get("sfh_time_grid", "prospector_step"))
+    if mode == "linear":
+        t_start = jnp.minimum(jnp.asarray(0.001, dtype=jnp.float32), t_obs * 0.01)
+        t_start = jnp.maximum(t_start, jnp.asarray(1.0e-5, dtype=jnp.float32))
+        gal_t_table = jnp.linspace(
+            t_start, jnp.maximum(t_obs, t_start * 1.01), int(n_sfh_bins)
+        )
+        return gal_t_table, build_popcosmos_sfh_table_jax(gal_t_table, t_obs, params)
+    if mode == "prospector_step":
+        return build_popcosmos_prospector_step_sfh_table_jax(t_obs, params)
+    raise ValueError(f"Unsupported model.sfh_time_grid: {mode}")
+
+
+def build_popcosmos_prospector_step_sfh_table_jax(
+    t_obs: jnp.ndarray, params: dict[str, Any]
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Return a Prospector/FastStepBasis-like step SFH table.
+
+    Prospector converts log-age bins into two tabular-SFH samples around each
+    bin edge using a small epsilon. Mirroring that convention removes the
+    age-bin integration error from the DSPS benchmark without changing the
+    PopCosmos seven-bin parameterization.
+    """
+    t_safe = jnp.maximum(jnp.asarray(t_obs, dtype=jnp.float32), 1.0e-5)
+    edges = build_popcosmos_lookback_bin_edges_jax(t_safe)
+    low = edges[:-1]
+    high = edges[1:]
+    low = low.at[0].set(jnp.maximum(low[0], jnp.asarray(1.0e-4, dtype=jnp.float32)))
+    high = jnp.maximum(high, low + jnp.asarray(1.01e-3, dtype=jnp.float32))
+    high = high.at[-1].set(jnp.maximum(high[-1], t_safe))
+    age_edges = jnp.concatenate([low[:1], high])
+    epsilon = jnp.asarray(1.0e-4, dtype=jnp.float32)
+    age_points = jnp.sort(
+        jnp.concatenate([age_edges * (1.0 - epsilon), age_edges * (1.0 + epsilon)])
+    )[1:-1]
+    age_points = jnp.minimum(age_points, t_safe * (1.0 - epsilon))
+    gal_t_table = (t_safe - age_points)[::-1]
+    sfr_bins = logsfr_ratios_to_sfr_bins_jax(_popcosmos_dlog10_sfr(params))
+    sfr_table = jnp.repeat(sfr_bins, 2)[::-1]
+    return (
+        jnp.clip(gal_t_table, jnp.asarray(1.0e-3, dtype=jnp.float32), t_safe),
+        jnp.clip(sfr_table, 1.0e-30, jnp.inf),
+    )
+
+
+def popcosmos_age_weights_jax(
+    t_obs: jnp.ndarray,
+    params: dict[str, Any],
+    ssp_lg_age_gyr: jnp.ndarray,
+) -> jnp.ndarray:
+    """Integrate PopCosmos age bins directly onto the SSP age grid.
+
+    DSPS' generic SFH-table age weighting interpolates a cumulative-mass table
+    in log cosmic time. That is appropriate for smooth SFHs, but it distorts the
+    sharp seven-bin PopCosmos step SFH. This direct overlap integral mirrors the
+    mass-in-age-bin convention used by Prospector/FastStepBasis.
+    """
+    t_safe = jnp.maximum(jnp.asarray(t_obs, dtype=jnp.float32), 1.0e-5)
+    pop_edges = build_popcosmos_lookback_bin_edges_jax(t_safe)
+    pop_low = pop_edges[:-1]
+    pop_high = pop_edges[1:]
+    pop_low = pop_low.at[0].set(jnp.maximum(pop_low[0], jnp.asarray(1.0e-4)))
+    pop_high = jnp.maximum(pop_high, pop_low + jnp.asarray(1.01e-3))
+    pop_high = pop_high.at[-1].set(jnp.maximum(pop_high[-1], t_safe))
+
+    sfr_bins = logsfr_ratios_to_sfr_bins_jax(_popcosmos_dlog10_sfr(params))
+    ssp_edges = ssp_lg_age_bin_edges_jax(ssp_lg_age_gyr)
+    ssp_low = 10.0 ** ssp_edges[:-1]
+    ssp_high = 10.0 ** ssp_edges[1:]
+
+    overlap = jnp.maximum(
+        0.0,
+        jnp.minimum(ssp_high[:, None], pop_high[None, :])
+        - jnp.maximum(ssp_low[:, None], pop_low[None, :]),
+    )
+    mass_by_age = jnp.sum(overlap * sfr_bins[None, :], axis=1)
+    total_mass = jnp.maximum(jnp.sum(mass_by_age), 1.0e-30)
+    weights = mass_by_age / total_mass
+    return jnp.nan_to_num(weights, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def ssp_lg_age_bin_edges_jax(ssp_lg_age_gyr: jnp.ndarray) -> jnp.ndarray:
+    """Return log10(age/Gyr) bin edges around sorted SSP age centers."""
+    ages = jnp.asarray(ssp_lg_age_gyr, dtype=jnp.float32)
+    mid = 0.5 * (ages[1:] + ages[:-1])
+    first = ages[0] - 0.5 * (ages[1] - ages[0])
+    last = ages[-1] + 0.5 * (ages[-1] - ages[-2])
+    return jnp.concatenate(
+        [
+            jnp.asarray([first], dtype=jnp.float32),
+            mid,
+            jnp.asarray([last], dtype=jnp.float32),
+        ]
+    )
 
 
 def build_diffstar_sfh_table_jax(
@@ -928,6 +1822,7 @@ def normalize_sfh_to_stellar_mass_jax(
     ssp_lg_age_gyr: jnp.ndarray,
     t_obs: jnp.ndarray,
     log10_stellar_mass: jnp.ndarray,
+    frac_surviving_by_age: jnp.ndarray | None = None,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Scale an SFH so the DSPS surviving mass matches log10_stellar_mass."""
     from dsps.imf.surviving_mstar import surviving_mstar
@@ -939,8 +1834,42 @@ def normalize_sfh_to_stellar_mass_jax(
         ssp_lg_age_gyr,
         t_obs,
     )
-    frac_surviving_by_age = surviving_mstar(ssp_lg_age_gyr + 9.0)
+    if frac_surviving_by_age is None:
+        frac_surviving_by_age = surviving_mstar(ssp_lg_age_gyr + 9.0)
+    else:
+        frac_surviving_by_age = jnp.asarray(frac_surviving_by_age, dtype=jnp.float32)
     mean_frac_surviving = jnp.sum(age_weights * frac_surviving_by_age)
+    mean_frac_surviving = jnp.clip(mean_frac_surviving, 1.0e-4, 1.0)
+    formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
+    target_surviving_mass = 10.0 ** jnp.asarray(log10_stellar_mass, dtype=jnp.float32)
+    target_formed_mass = target_surviving_mass / mean_frac_surviving
+    scale = target_formed_mass / jnp.maximum(formed_mass, 1.0e-30)
+    scaled_sfr = jnp.clip(gal_sfr_table * scale, 1.0e-30, jnp.inf)
+    scaled_formed_mass = jnp.trapezoid(scaled_sfr, gal_t_table) * 1.0e9
+    scaled_surviving_mass = scaled_formed_mass * mean_frac_surviving
+    return scaled_sfr, scaled_formed_mass, scaled_surviving_mass
+
+
+def normalize_sfh_to_stellar_mass_with_age_weights_jax(
+    gal_t_table: jnp.ndarray,
+    gal_sfr_table: jnp.ndarray,
+    ssp_lg_age_gyr: jnp.ndarray,
+    age_weights: jnp.ndarray,
+    log10_stellar_mass: jnp.ndarray,
+    frac_surviving_by_age: jnp.ndarray | None = None,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Scale an SFH using precomputed SSP age weights."""
+    from dsps.imf.surviving_mstar import surviving_mstar
+
+    weights = jnp.asarray(age_weights, dtype=jnp.float32)
+    weights = weights / jnp.maximum(jnp.sum(weights), 1.0e-30)
+    if frac_surviving_by_age is None:
+        frac_surviving_by_age = surviving_mstar(
+            jnp.asarray(ssp_lg_age_gyr, dtype=jnp.float32) + 9.0
+        )
+    else:
+        frac_surviving_by_age = jnp.asarray(frac_surviving_by_age, dtype=jnp.float32)
+    mean_frac_surviving = jnp.sum(weights * frac_surviving_by_age)
     mean_frac_surviving = jnp.clip(mean_frac_surviving, 1.0e-4, 1.0)
     formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
     target_surviving_mass = 10.0 ** jnp.asarray(log10_stellar_mass, dtype=jnp.float32)
@@ -961,6 +1890,51 @@ def interpolate_ssp_stellar_metallicity_jax(
         jnp.asarray(ssp_flux, dtype=jnp.float32),
         jnp.asarray(lgmet_abs, dtype=jnp.float32),
     )
+
+
+def log10_stellar_metallicity_to_absolute_jax(
+    log10_stellar_metallicity: jnp.ndarray, z_sun: float
+) -> jnp.ndarray:
+    """Convert log10(Zstar/Zsun) to absolute log10(Zstar)."""
+    return jnp.log10(jnp.asarray(z_sun, dtype=jnp.float32)) + jnp.asarray(
+        log10_stellar_metallicity, dtype=jnp.float32
+    )
+
+
+def apply_popcosmos_dust_by_age_jax(
+    wave: jnp.ndarray,
+    ssp_lg_age_gyr: jnp.ndarray,
+    sed_by_age: jnp.ndarray,
+    tau2: jnp.ndarray,
+    dust_index_n: jnp.ndarray,
+    tau1_over_tau2: jnp.ndarray,
+    model_config: dict[str, Any] | None,
+) -> jnp.ndarray:
+    """Apply the configured PopCosmos-like age-dependent attenuation model."""
+    config = _normalized_model_config(model_config)
+    mode = str(config.get("dust_model", "charlot_fall_powerlaw"))
+    if mode == "charlot_fall_powerlaw":
+        return apply_charlot_fall_by_age_jax(
+            wave,
+            ssp_lg_age_gyr,
+            sed_by_age,
+            tau2,
+            dust_index_n,
+            tau1_over_tau2,
+            birth_cloud_slope=float(config.get("birth_cloud_slope", -1.0)),
+        )
+    if mode == "prospector_fsps":
+        return apply_prospector_fsps_dust_by_age_jax(
+            wave,
+            ssp_lg_age_gyr,
+            sed_by_age,
+            tau2,
+            dust_index_n,
+            tau1_over_tau2,
+            dust_tesc_logyr=float(config.get("dust_tesc_logyr", 7.0)),
+            dust1_index=float(config.get("dust1_index", -1.0)),
+        )
+    raise ValueError(f"Unsupported model.dust_model: {mode}")
 
 
 def apply_charlot_fall_by_age_jax(
@@ -990,26 +1964,170 @@ def apply_charlot_fall_by_age_jax(
     return jnp.asarray(sed_by_age, dtype=jnp.float32) * transmission
 
 
+def apply_prospector_fsps_dust_by_age_jax(
+    wave: jnp.ndarray,
+    ssp_lg_age_gyr: jnp.ndarray,
+    sed_by_age: jnp.ndarray,
+    tau2: jnp.ndarray,
+    dust_index_n: jnp.ndarray,
+    tau1_over_tau2: jnp.ndarray,
+    dust_tesc_logyr: float = 7.0,
+    dust1_index: float = -1.0,
+) -> jnp.ndarray:
+    """Approximate Prospector/FSPS dust_type=4 plus birth-cloud attenuation.
+
+    The diffuse component follows a Calzetti/Kriek-Conroy-like curve via DSPS'
+    Noll+09 kernel, normalized so ``tau2`` is the V-band optical depth. The
+    birth-cloud component is a V-band optical depth with FSPS-style power-law
+    index ``dust1_index`` and applies only below ``dust_tesc_logyr``.
+    """
+    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=jnp.float32), 1.0)
+    tau2_safe = jnp.maximum(jnp.asarray(tau2, dtype=jnp.float32), 0.0)
+    tau1 = jnp.maximum(jnp.asarray(tau1_over_tau2, dtype=jnp.float32), 0.0) * tau2_safe
+    diffuse_shape = _prospector_fsps_diffuse_shape_jax(wave_safe, dust_index_n)
+    diffuse = tau2_safe * diffuse_shape
+    birth = tau1 * (wave_safe / 5500.0) ** jnp.asarray(
+        dust1_index, dtype=jnp.float32
+    )
+    age_logyr = jnp.asarray(ssp_lg_age_gyr, dtype=jnp.float32) + 9.0
+    young = age_logyr <= jnp.asarray(dust_tesc_logyr, dtype=jnp.float32)
+    old_trans = jnp.exp(-jnp.clip(diffuse, 0.0, 80.0))
+    young_trans = jnp.exp(-jnp.clip(diffuse + birth, 0.0, 80.0))
+    transmission = jnp.where(young[:, None], young_trans[None, :], old_trans[None, :])
+    return jnp.asarray(sed_by_age, dtype=jnp.float32) * transmission
+
+
+def _prospector_fsps_diffuse_shape_jax(
+    wave_angstrom: jnp.ndarray, dust_index_n: jnp.ndarray
+) -> jnp.ndarray:
+    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=jnp.float32), 1.0)
+    slope = jnp.asarray(dust_index_n, dtype=jnp.float32)
+    calzetti = _fsps_calzetti_tau_shape_jax(wave)
+    eb = 0.85 - 1.9 * slope
+    lamuvb = jnp.asarray(2175.0, dtype=jnp.float32)
+    dlam = jnp.asarray(350.0, dtype=jnp.float32)
+    drude = eb * (wave * dlam) ** 2 / (
+        (wave**2 - lamuvb**2) ** 2 + (wave * dlam) ** 2
+    )
+    shape = (calzetti + drude / 4.05) * (wave / 5500.0) ** slope
+    return jnp.clip(jnp.nan_to_num(shape, nan=0.0, posinf=1.0e6, neginf=0.0), 0.0, 1.0e6)
+
+
+def _fsps_calzetti_tau_shape_jax(wave_angstrom: jnp.ndarray) -> jnp.ndarray:
+    """FSPS Calzetti optical-depth shape used inside dust_type=4."""
+    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=jnp.float32), 1.0)
+    inv_micron = 10_000.0 / wave
+    red = 1.17 * (-1.857 + 1.04 * inv_micron) + 1.78
+    blue = 1.17 * (
+        -2.156
+        + 1.509 * inv_micron
+        - 0.198 * inv_micron**2
+        + 0.011 * inv_micron**3
+    ) + 1.78
+    cal00 = jnp.where(wave > 6300.0, red, blue) / (0.44 * 4.05)
+    return jnp.maximum(cal00, 0.0)
+
+
 def apply_igm_transmission_jax(
     wave_rest: jnp.ndarray,
     rest_sed: jnp.ndarray,
     z_obs: jnp.ndarray,
     model_config: dict[str, Any] | None,
 ) -> jnp.ndarray:
-    """Apply a stable JAX approximation to Madau95 IGM transmission."""
+    """Apply the configured IGM transmission model."""
     mode = str(_normalized_model_config(model_config).get("igm_model", "none"))
     if mode == "none":
         return rest_sed
-    if mode != "madau95_approx":
-        raise ValueError(f"Unsupported model.igm_model: {mode}")
+    if mode == "madau95_approx":
+        wave = jnp.maximum(jnp.asarray(wave_rest, dtype=jnp.float32), 1.0)
+        z = jnp.maximum(jnp.asarray(z_obs, dtype=jnp.float32), 0.0)
+        below_lya = jnp.clip((1216.0 - wave) / 1216.0, 0.0, 1.0)
+        below_limit = jnp.clip((912.0 - wave) / 912.0, 0.0, 1.0)
+        tau_forest = 0.35 * z**1.6 * below_lya**1.2 * (1216.0 / wave) ** 0.7
+        tau_continuum = 1.8 * z**2.0 * below_limit**1.5 * (912.0 / wave) ** 2.0
+        transmission = jnp.exp(-jnp.clip(tau_forest + tau_continuum, 0.0, 80.0))
+        return jnp.asarray(rest_sed, dtype=jnp.float32) * transmission
+    if mode == "fsps_madau95":
+        return jnp.asarray(rest_sed, dtype=jnp.float32) * fsps_madau95_igm_transmission_jax(
+            wave_rest, z_obs
+        )
+    raise ValueError(f"Unsupported model.igm_model: {mode}")
+
+
+def fsps_madau95_igm_transmission_jax(
+    wave_rest: jnp.ndarray, z_obs: jnp.ndarray, factor: float = 1.0
+) -> jnp.ndarray:
+    """JAX port of FSPS ``igm_absorb.f90`` Madau95 transmission."""
     wave = jnp.maximum(jnp.asarray(wave_rest, dtype=jnp.float32), 1.0)
-    z = jnp.maximum(jnp.asarray(z_obs, dtype=jnp.float32), 0.0)
-    below_lya = jnp.clip((1216.0 - wave) / 1216.0, 0.0, 1.0)
-    below_limit = jnp.clip((912.0 - wave) / 912.0, 0.0, 1.0)
-    tau_forest = 0.35 * z**1.6 * below_lya**1.2 * (1216.0 / wave) ** 0.7
-    tau_continuum = 1.8 * z**2.0 * below_limit**1.5 * (912.0 / wave) ** 2.0
-    transmission = jnp.exp(-jnp.clip(tau_forest + tau_continuum, 0.0, 80.0))
-    return jnp.asarray(rest_sed, dtype=jnp.float32) * transmission
+    z1 = 1.0 + jnp.maximum(jnp.asarray(z_obs, dtype=jnp.float32), 0.0)
+    lobs = wave * z1
+    lylim = jnp.asarray(911.75, dtype=jnp.float32)
+    lyw = jnp.asarray(
+        [
+            1215.67,
+            1025.72,
+            972.537,
+            949.743,
+            937.803,
+            930.748,
+            926.226,
+            923.150,
+            920.963,
+            919.352,
+            918.129,
+            917.181,
+            916.429,
+            915.824,
+            915.329,
+            914.919,
+            914.576,
+        ],
+        dtype=jnp.float32,
+    )
+    lycoeff = jnp.asarray(
+        [
+            0.0036,
+            0.0017,
+            0.0011846,
+            0.0009410,
+            0.0007960,
+            0.0006967,
+            0.0006236,
+            0.0005665,
+            0.0005200,
+            0.0004817,
+            0.0004487,
+            0.0004200,
+            0.0003947,
+            0.000372,
+            0.000352,
+            0.0003334,
+            0.00031644,
+        ],
+        dtype=jnp.float32,
+    )
+    tau = jnp.zeros_like(wave)
+    for index in range(17):
+        line_wave = lyw[index]
+        mask = wave <= line_wave
+        term = lycoeff[index] * (lobs / line_wave) ** 3.46
+        tau = tau + jnp.where(mask, term, 0.0)
+        if index == 0:
+            tau = tau + jnp.where(mask, 0.0017 * (lobs / line_wave) ** 1.68, 0.0)
+
+    xc = lobs / lylim
+    lyman_limit_mask = wave <= lylim
+    tau_lyc = (
+        0.25 * xc**3 * (z1**0.46 - xc**0.46)
+        + 9.4 * xc**1.5 * (z1**0.18 - xc**0.18)
+        - 0.7 * xc**3 * (xc ** (-1.32) - z1 ** (-1.32))
+        - 0.023 * (z1**1.68 - xc**1.68)
+    )
+    tau = tau + jnp.where(lyman_limit_mask, tau_lyc, 0.0)
+    max_index = jnp.argmax(tau)
+    tau_max = tau[max_index]
+    tau = jnp.where(jnp.arange(wave.shape[0]) <= max_index, tau_max, tau)
+    return jnp.exp(-jnp.clip(tau * jnp.asarray(factor, dtype=jnp.float32), 0.0, 80.0))
 
 
 def interpolate_gas_ssp_grid_jax(
@@ -1042,6 +2160,28 @@ def interpolate_gas_ssp_grid_jax(
     return low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
 
 
+def gas_metallicity_constraint_penalty_jax(
+    params: dict[str, Any],
+    model_config: dict[str, Any] | None,
+    penalty: float = 1.0e30,
+) -> jnp.ndarray:
+    """Hard PopCosmos-like constraint enforcing log10(Zgas/Zsun) >= log10(Zstar/Zsun)."""
+    config = _normalized_model_config(model_config)
+    if (
+        str(config.get("nebular_model", "fixed_ssp")) != "gas_grid"
+        or not _is_popcosmos_like_model_config(config)
+    ):
+        return jnp.asarray(0.0, dtype=jnp.float32)
+    gas = jnp.asarray(params["log10_gas_metallicity"], dtype=jnp.float32)
+    stellar = jnp.asarray(params["log10_stellar_metallicity"], dtype=jnp.float32)
+    valid = gas >= stellar
+    return jnp.where(
+        valid,
+        jnp.asarray(0.0, dtype=jnp.float32),
+        jnp.asarray(penalty, dtype=jnp.float32),
+    )
+
+
 def _interp_bracket(
     x_grid: jnp.ndarray, x: jnp.ndarray
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
@@ -1070,9 +2210,48 @@ def add_agn_component_jax(
     stellar Lnu SED. This is an approximation until the exact FSPS/CLUMPY
     convention is audited.
     """
+    agn_lnu = agn_component_jax(
+        context,
+        wave,
+        intrinsic_stellar_sed,
+        params,
+        model_config,
+    )
+    return jnp.asarray(dusted_sed, dtype=jnp.float32) + agn_lnu
+
+
+def agn_component_jax(
+    context: DspsContext,
+    wave: jnp.ndarray,
+    intrinsic_stellar_sed: jnp.ndarray,
+    params: dict[str, Any],
+    model_config: dict[str, Any] | None,
+    *,
+    age_weights: jnp.ndarray | None = None,
+    formed_mass: jnp.ndarray | float | None = None,
+    stellar_lgmet_abs: jnp.ndarray | float | None = None,
+    template_tage_gyr: jnp.ndarray | float | None = None,
+    stellar_logzsol: jnp.ndarray | float | None = None,
+) -> jnp.ndarray:
+    """Return the DSPS AGN rest-frame Lnu component before IGM attenuation."""
     config = _normalized_model_config(model_config)
-    if str(config.get("agn_model", "none")) == "none":
-        return dusted_sed
+    wave = jnp.asarray(wave, dtype=jnp.float32)
+    agn_model = str(config.get("agn_model", "none"))
+    if agn_model == "none":
+        return jnp.zeros_like(wave, dtype=jnp.float32)
+    if agn_model == "fsps_component_grid":
+        agn_lnu = agn_component_from_ssp_grid_jax(
+            context,
+            wave,
+            params,
+            config,
+            age_weights=age_weights,
+            formed_mass=formed_mass,
+            stellar_lgmet_abs=stellar_lgmet_abs,
+        )
+        return jnp.nan_to_num(agn_lnu, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
+    if agn_model != "template_grid":
+        raise ValueError(f"Unsupported model.agn_model: {agn_model}")
     if (
         context.agn_wave_jax is None
         or context.agn_tau_grid_jax is None
@@ -1081,26 +2260,224 @@ def add_agn_component_jax(
         raise ValueError("model.agn_model='template_grid' requires a loaded AGN grid")
     tauagn = jnp.exp(jnp.asarray(params["ln_tauagn"], dtype=jnp.float32))
     fagn = jnp.exp(jnp.asarray(params["ln_fagn"], dtype=jnp.float32))
-    template_tau = _interp_axis0_linear(
-        context.agn_tau_grid_jax,
-        context.agn_template_grid_jax,
+    template_tau = _interpolate_agn_template_jax(
+        context,
+        fagn,
         tauagn,
+        (
+            jnp.asarray(template_tage_gyr, dtype=jnp.float32)
+            if template_tage_gyr is not None
+            else jnp.asarray(config.get("agn_template_tage_gyr", 1.0), dtype=jnp.float32)
+        ),
+        (
+            jnp.asarray(stellar_logzsol, dtype=jnp.float32)
+            if stellar_logzsol is not None
+            else jnp.asarray(
+                config.get("agn_template_stellar_logzsol", 0.0),
+                dtype=jnp.float32,
+            )
+        ),
     )
     template = jnp.interp(
-        jnp.asarray(wave, dtype=jnp.float32),
+        wave,
         context.agn_wave_jax,
         template_tau,
         left=0.0,
         right=0.0,
     )
     c_angstrom_per_s = 2.99792458e18
-    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=jnp.float32), 1.0)
+    wave_safe = jnp.maximum(wave, 1.0)
     lbol_stellar = jnp.trapezoid(
         jnp.maximum(intrinsic_stellar_sed, 0.0) * c_angstrom_per_s / wave_safe**2,
         wave_safe,
     )
-    agn_lnu = fagn * jnp.maximum(lbol_stellar, 0.0) * jnp.maximum(template, 0.0)
-    return jnp.asarray(dusted_sed, dtype=jnp.float32) + agn_lnu
+    agn_lnu = fagn * jnp.maximum(lbol_stellar, 0.0) * template
+    agn_lnu = apply_agn_host_attenuation_jax(wave, agn_lnu, params, config)
+    return jnp.nan_to_num(agn_lnu, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
+
+
+def agn_component_from_ssp_grid_jax(
+    context: DspsContext,
+    wave: jnp.ndarray,
+    params: dict[str, Any],
+    model_config: dict[str, Any],
+    *,
+    age_weights: jnp.ndarray | None,
+    formed_mass: jnp.ndarray | float | None,
+    stellar_lgmet_abs: jnp.ndarray | float | None,
+) -> jnp.ndarray:
+    """Convolve an FSPS-native AGN component SSP grid with the SFH weights."""
+    if (
+        context.agn_wave_jax is None
+        or context.agn_fagn_grid_jax is None
+        or context.agn_tau_grid_jax is None
+        or context.agn_component_lgmet_jax is None
+        or context.agn_component_lg_age_gyr_jax is None
+        or context.agn_component_grid_jax is None
+    ):
+        raise ValueError(
+            "model.agn_model='fsps_component_grid' requires a loaded AGN "
+            "component grid"
+        )
+    if age_weights is None or formed_mass is None or stellar_lgmet_abs is None:
+        raise ValueError(
+            "model.agn_model='fsps_component_grid' requires age weights, formed "
+            "mass, and absolute stellar metallicity from the SFH path"
+        )
+    fagn = jnp.exp(jnp.asarray(params["ln_fagn"], dtype=jnp.float32))
+    tauagn = jnp.exp(jnp.asarray(params["ln_tauagn"], dtype=jnp.float32))
+    grid = jnp.asarray(context.agn_component_grid_jax, dtype=jnp.float32)
+    grid_fagn = _interp_axis0_linear(context.agn_fagn_grid_jax, grid, fagn)
+    grid_tau = _interp_axis0_linear(context.agn_tau_grid_jax, grid_fagn, tauagn)
+    grid_z = _interp_axis0_linear(
+        context.agn_component_lgmet_jax,
+        grid_tau,
+        jnp.asarray(stellar_lgmet_abs, dtype=jnp.float32),
+    )
+    weights = jnp.asarray(age_weights, dtype=jnp.float32)[:, None]
+    mass = jnp.asarray(formed_mass, dtype=jnp.float32)
+    agn_native = jnp.sum(grid_z * weights * mass, axis=0)
+    agn_lnu = jnp.interp(
+        jnp.asarray(wave, dtype=jnp.float32),
+        context.agn_wave_jax,
+        agn_native,
+        left=0.0,
+        right=0.0,
+    )
+    return apply_agn_host_attenuation_jax(wave, agn_lnu, params, model_config)
+
+
+def _interpolate_agn_template_jax(
+    context: DspsContext,
+    fagn: jnp.ndarray,
+    tauagn: jnp.ndarray,
+    template_tage_gyr: jnp.ndarray,
+    stellar_logzsol: jnp.ndarray,
+) -> jnp.ndarray:
+    template_grid = jnp.asarray(context.agn_template_grid_jax, dtype=jnp.float32)
+    if template_grid.ndim == 2:
+        return _interp_axis0_linear(
+            context.agn_tau_grid_jax,
+            template_grid,
+            tauagn,
+        )
+    if (
+        template_grid.ndim == 5
+        and context.agn_fagn_grid_jax is not None
+        and context.agn_tau_grid_jax is not None
+        and context.agn_tage_grid_jax is not None
+        and context.agn_logzsol_grid_jax is not None
+    ):
+        template_fagn = _interp_axis0_linear(
+            context.agn_fagn_grid_jax,
+            template_grid,
+            fagn,
+        )
+        template_tau = _interp_axis0_linear(
+            context.agn_tau_grid_jax,
+            template_fagn,
+            tauagn,
+        )
+        template_age = _interp_axis0_linear(
+            context.agn_tage_grid_jax,
+            template_tau,
+            template_tage_gyr,
+        )
+        return _interp_axis0_linear(
+            context.agn_logzsol_grid_jax,
+            template_age,
+            stellar_logzsol,
+        )
+    raise ValueError(
+        "AGN template grid must be 2D legacy (agn_tau, wave) or 5D audit "
+        "(fagn, agn_tau, tage_gyr, stellar_logzsol, wave)"
+    )
+
+
+def apply_agn_host_attenuation_jax(
+    wave: jnp.ndarray,
+    agn_lnu: jnp.ndarray,
+    params: dict[str, Any],
+    model_config: dict[str, Any] | None,
+) -> jnp.ndarray:
+    """Apply optional host attenuation to the AGN component for audit experiments."""
+    config = _normalized_model_config(model_config)
+    mode = str(config.get("agn_host_attenuation", "none"))
+    if mode == "none":
+        return jnp.asarray(agn_lnu, dtype=jnp.float32)
+    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=jnp.float32), 1.0)
+    slope = jnp.asarray(params.get("dust_index_n", -0.7), dtype=jnp.float32)
+
+    if mode == "fsps_diffuse_unit_tau":
+        shape = _prospector_fsps_diffuse_shape_jax(wave_safe, slope)
+        baked_mode = str(config.get("agn_baked_attenuation", "none"))
+        if baked_mode == "none":
+            optical_depth = shape
+        elif baked_mode == "fsps_powerlaw_unit_tau":
+            baked_shape = _fsps_powerlaw_unit_tau_shape_jax(
+                wave_safe,
+                jnp.asarray(config.get("agn_baked_dust_index", -0.7), dtype=jnp.float32),
+            )
+            optical_depth = shape - baked_shape
+        else:
+            raise ValueError(f"Unsupported model.agn_baked_attenuation: {baked_mode}")
+        transmission = jnp.exp(-jnp.clip(optical_depth, -80.0, 80.0))
+        return jnp.asarray(agn_lnu, dtype=jnp.float32) * transmission
+
+    tau2 = jnp.maximum(jnp.asarray(params.get("tau2", 0.0), dtype=jnp.float32), 0.0)
+    scale = jnp.maximum(
+        jnp.asarray(config.get("agn_host_attenuation_scale", 1.0), dtype=jnp.float32),
+        0.0,
+    )
+    if mode == "diffuse":
+        shape = (wave_safe / 5500.0) ** slope
+    elif mode == "prospector_fsps":
+        shape = _prospector_fsps_diffuse_shape_jax(wave_safe, slope)
+    else:
+        raise ValueError(f"Unsupported model.agn_host_attenuation: {mode}")
+    transmission = jnp.exp(-jnp.clip(scale * tau2 * shape, 0.0, 80.0))
+    return jnp.asarray(agn_lnu, dtype=jnp.float32) * transmission
+
+
+def _fsps_powerlaw_unit_tau_shape_jax(
+    wave_angstrom: jnp.ndarray, dust_index: jnp.ndarray
+) -> jnp.ndarray:
+    """FSPS ``dust_type=0`` AGN attenuation shape at unit V-band optical depth."""
+    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=jnp.float32), 1.0)
+    slope = jnp.asarray(dust_index, dtype=jnp.float32)
+    shape = (wave / 5500.0) ** slope
+    return jnp.clip(
+        jnp.nan_to_num(shape, nan=0.0, posinf=1.0e6, neginf=0.0),
+        0.0,
+        1.0e6,
+    )
+
+
+def combine_agn_and_igm_jax(
+    wave: jnp.ndarray,
+    dusted_sed: jnp.ndarray,
+    agn_sed: jnp.ndarray,
+    z_obs: jnp.ndarray,
+    model_config: dict[str, Any] | None,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Combine stellar/gas and AGN spectra with the configured IGM ordering."""
+    config = _normalized_model_config(model_config)
+    order = str(config.get("agn_igm_order", "pre_igm"))
+    wave = jnp.asarray(wave, dtype=jnp.float32)
+    dusted = jnp.asarray(dusted_sed, dtype=jnp.float32)
+    agn = jnp.asarray(agn_sed, dtype=jnp.float32)
+    if order == "pre_igm":
+        pre_igm = dusted + agn
+        post_igm = apply_igm_transmission_jax(wave, pre_igm, z_obs, config)
+    elif order == "fsps_after_igm":
+        pre_igm = dusted
+        post_igm = apply_igm_transmission_jax(wave, dusted, z_obs, config) + agn
+    else:
+        raise ValueError(f"Unsupported model.agn_igm_order: {order}")
+    return (
+        jnp.nan_to_num(pre_igm, nan=0.0, posinf=1.0e30, neginf=-1.0e30),
+        jnp.nan_to_num(post_igm, nan=0.0, posinf=1.0e30, neginf=-1.0e30),
+    )
 
 
 def _popcosmos_dlog10_sfr(params: dict[str, Any]) -> jnp.ndarray:
@@ -1127,6 +2504,8 @@ def _interp_axis0_linear(
 ) -> jnp.ndarray:
     x_grid = jnp.asarray(x_grid, dtype=jnp.float32)
     values = jnp.asarray(values, dtype=jnp.float32)
+    if x_grid.shape[0] == 1:
+        return values[0]
     x_clipped = jnp.clip(jnp.asarray(x, dtype=jnp.float32), x_grid[0], x_grid[-1])
     hi = jnp.searchsorted(x_grid, x_clipped, side="right")
     hi = jnp.clip(hi, 1, x_grid.shape[0] - 1)
@@ -1254,6 +2633,27 @@ def _context_ssp_flux(context: DspsContext) -> jnp.ndarray:
     if context.ssp_flux_jax is not None:
         return context.ssp_flux_jax
     return jnp.asarray(context.ssp.ssp_flux, dtype=jnp.float32)
+
+
+def _context_ssp_surviving_mstar(context: DspsContext) -> jnp.ndarray | None:
+    if context.ssp_surviving_mstar_jax is not None:
+        return jnp.asarray(context.ssp_surviving_mstar_jax, dtype=jnp.float32)
+    if context.ssp is not None and hasattr(context.ssp, "ssp_surviving_mstar"):
+        return jnp.asarray(context.ssp.ssp_surviving_mstar, dtype=jnp.float32)
+    return None
+
+
+def _context_surviving_mstar_by_age(
+    context: DspsContext, lgmet_abs: jnp.ndarray
+) -> jnp.ndarray | None:
+    grid = _context_ssp_surviving_mstar(context)
+    if grid is None:
+        return None
+    return _interp_axis0_linear(
+        _context_ssp_lgmet(context),
+        grid,
+        jnp.asarray(lgmet_abs, dtype=jnp.float32),
+    )
 
 
 _BATCH_PREDICT_CACHE = {}

@@ -22,20 +22,22 @@ The codebase should still import under ``uv`` for tests and packaging checks:
 Diffstar SFH Optional Extra
 ---------------------------
 
-``configs/popcosmos_diffstar.yaml`` requires ``diffstar`` and ``diffmah``. In
-the runtime environment:
+``configs/popcosmos_diffstar.yaml`` and
+``configs/popcosmos_diffstar_noagn.yaml`` require ``diffstar`` and ``diffmah``.
+In the runtime environment:
 
 .. code-block:: bash
 
    python -m pip install -e '.[diffstar]'
 
-The standard binned-SFH config does not require this optional extra.
+The standard binned-SFH configs do not require this optional extra.
 
 FSPS And python-FSPS
 --------------------
 
-The PopCosmos-like config requires generated FSPS gas and AGN grids. Install
-FSPS and python-FSPS in the runtime environment used for generation:
+The PopCosmos-like configs require generated FSPS SSP, gas, and AGN component
+grids. Install FSPS and python-FSPS in the runtime environment used for
+generation:
 
 .. code-block:: bash
 
@@ -43,9 +45,9 @@ FSPS and python-FSPS in the runtime environment used for generation:
    export SPS_HOME="$HOME/src/fsps"
    git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
 
-   cd /home/maxime/src/DSPS-pop-cosmos
+   cd /home/maxime/src/DSPS
    export SPS_HOME="$HOME/src/fsps"
-   uv pip install fsps
+   python -m pip install fsps
 
 Check that python-FSPS sees the expected libraries:
 
@@ -54,7 +56,8 @@ Check that python-FSPS sees the expected libraries:
    python -c "import fsps; sp=fsps.StellarPopulation(sfh=0); print(len(sp.wavelengths)); print(sp.isoc_library, sp.spec_library)"
 
 Expected local output for the current assets is ``11149`` wavelength samples
-with ``mist`` and ``c3k_a``.
+with ``mist`` and ``c3k_a``. See :doc:`data_download` for the exact generation
+commands.
 
 Quality Checks
 --------------

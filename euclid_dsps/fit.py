@@ -21,6 +21,7 @@ from .model import (
     DspsContext,
     ModelResult,
     dynamic_model_args,
+    gas_metallicity_constraint_penalty_jax,
     model_mags_jax_dynamic,
     run_dsps_model,
 )
@@ -171,6 +172,7 @@ def fit_one_galaxy(
 
     def objective(x: jnp.ndarray, args: tuple[Any, ...]) -> jnp.ndarray:
         photometric_objective, _ = photometric_metrics(x, args)
+        params = unpack_jax(x)
         prior = _physical_prior_penalty(
             x,
             lower,
@@ -184,6 +186,7 @@ def fit_one_galaxy(
         )
         objective_value = (
             photometric_objective + float(fit_config.get("prior_weight", 1.0)) * prior
+            + gas_metallicity_constraint_penalty_jax(params, context.model_config)
         )
         return jnp.nan_to_num(objective_value, nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
@@ -1144,6 +1147,7 @@ def _build_independent_adam_optimizer(
         photometric_objective = single_photometric_objective(
             theta, base, observed, sigma, mask, model_args
         )
+        params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
         prior = _physical_prior_penalty(
             theta,
             lower,
@@ -1156,7 +1160,9 @@ def _build_independent_adam_optimizer(
             prior_beta_beta,
         )
         return jnp.nan_to_num(
-            photometric_objective + prior_weight * prior,
+            photometric_objective
+            + prior_weight * prior
+            + gas_metallicity_constraint_penalty_jax(params, context.model_config),
             nan=1.0e30,
             posinf=1.0e30,
             neginf=1.0e30,
@@ -1425,6 +1431,12 @@ def _build_population_adam_optimizer(
         photometric_objective = batch_photometric_objective(
             theta, base_matrix, observed, sigma, mask, model_args
         )
+        gas_constraints = jax.vmap(
+            lambda theta_i, base_i: gas_metallicity_constraint_penalty_jax(
+                _params_from_vectors(theta_i, base_i, parameter_names, free_indices_jax),
+                context.model_config,
+            )
+        )(theta, base_matrix)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
         default_prior = 0.5 * jnp.sum(
             relation_default_mask
@@ -1461,6 +1473,7 @@ def _build_population_adam_optimizer(
         )
         return (
             0.5 * jnp.sum(photometric_objective)
+            + jnp.sum(gas_constraints)
             + prior_weight * (jnp.sum(default_prior) + jnp.sum(relation_prior))
             + physical_prior_weight * jnp.sum(physical_prior)
             + hyper

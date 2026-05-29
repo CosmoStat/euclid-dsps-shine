@@ -22,6 +22,7 @@ The project keeps the scientific boundary narrow:
    installation
    architecture
    data_download
+   forward_model
    catalog_columns
    cosmos_sed
    run_setup

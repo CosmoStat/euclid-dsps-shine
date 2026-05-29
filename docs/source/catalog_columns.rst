@@ -229,10 +229,12 @@ measurement drawn from the survey-like flux plus noise model. Use them when the
 experiment should mimic measured survey photometry; use the corresponding
 ``*_error`` columns for the likelihood denominator and chi-square.
 
-The science config wires catalog flux errors for all ten LSST+Euclid bands.
-The fitted flux columns remain the continuum columns because the current DSPS
-model has continuum plus dust but not a calibrated nebular-emission likelihood;
-the ``*_el_model3_ext*`` fluxes and noisy realizations are diagnostics.
+The science config wires catalog fluxes and catalog flux errors for all ten
+LSST+Euclid bands. The current DSPS model includes stellar light, dust, raw
+FSPS/CLOUDY gas, AGN, and IGM, so the active PopCosmos-like setup uses the
+survey-like ``*_el_model3_ext_odonnell_ext`` photometry columns where configured
+by the band preset. The gas emission-line treatment is still raw FSPS/CLOUDY,
+not PopCosmos line-calibrated.
 
 .. code-block:: bash
 
@@ -250,8 +252,8 @@ For COSMOS SED validation:
      --limit 20 \
      --out outputs/check/cosmos
 
-The active fit target is the continuum photometry with catalog flux errors. Gas
-and AGN spectral components come from the generated FSPS assets.
+Gas and AGN spectral components come from the generated FSPS assets. Noisy
+realization columns remain diagnostics unless explicitly selected in config.
 
 References
 ----------

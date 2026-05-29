@@ -20,6 +20,7 @@ import h5py
 import numpy as np
 from fsps_grid_common import (
     DEFAULT_REFERENCE_SSP,
+    POPCOSMOS_Z_SUN,
     FspsGridError,
     assert_wave_matches,
     axes_from_reference_or_fsps,
@@ -34,7 +35,7 @@ from fsps_grid_common import (
     write_attrs,
 )
 
-DEFAULT_OUTPUT = "Data/popcosmos_gas_ssp_grid.h5"
+DEFAULT_OUTPUT = "Data/popcosmos_chabrier_gas_ssp_grid.h5"
 DEFAULT_GAS_LGMET_GRID = [-2.5, -2.0, -1.5, -1.0, -0.5, 0.0, 0.5]
 DEFAULT_GAS_LGU_GRID = [-4.0, -3.5, -3.0, -2.5, -2.0, -1.5, -1.0]
 
@@ -257,16 +258,28 @@ def generate_gas_grid(args: argparse.Namespace) -> Path:
         attrs = fsps_metadata(fsps, sp, sys.argv if sys.argv else ["generate_fsps_gas_grid.py"])
         attrs.update(
             {
-                "asset_kind": "popcosmos_gas_ssp_grid",
+                "asset_kind": "popcosmos_chabrier_gas_ssp_grid",
+                "imf_type": 1,
+                "imf_name": "chabrier",
+                "z_sun": POPCOSMOS_Z_SUN,
+                "dust_type": 0,
                 "units_ssp_flux": "Lsun/Hz/Msun formed",
                 "units_ssp_wave": "Angstrom",
                 "units_ssp_lg_age_gyr": "log10(age/Gyr)",
                 "units_ssp_lgmet": "log10(absolute stellar metallicity mass fraction)",
                 "units_gas_lgmet_grid": "log10(Zgas/Zsun), passed to FSPS gas_logz",
                 "units_gas_lgu_grid": "log10 ionization parameter, passed to FSPS gas_logu",
+                "gas_grid_axes": {
+                    "ssp_wave": "Angstrom",
+                    "ssp_lg_age_gyr": "log10(age/Gyr)",
+                    "ssp_lgmet": "log10(absolute stellar metallicity mass fraction)",
+                    "gas_lgmet_grid": "log10(Zgas/Zsun)",
+                    "gas_lgu_grid": "log10 ionization parameter U",
+                },
                 "fsps_controls": {
                     "sfh": 0,
-                    "imf_type": 2,
+                    "imf_type": 1,
+                    "imf_name": "chabrier",
                     "add_neb_emission": 1,
                     "add_neb_continuum": 1,
                     "peraa": False,
@@ -308,7 +321,7 @@ def _build_stellar_population(fsps: Any, zcontinuous: int) -> Any:
     return fsps.StellarPopulation(
         zcontinuous=zcontinuous,
         sfh=0,
-        imf_type=2,
+        imf_type=1,
         add_neb_emission=1,
         add_neb_continuum=1,
         add_igm_absorption=0,

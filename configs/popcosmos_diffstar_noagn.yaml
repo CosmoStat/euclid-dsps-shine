@@ -52,16 +52,10 @@ model:
     gas_grid_path: Data/popcosmos_chabrier_gas_ssp_grid.h5
     stellar_only_ssp_path: Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
     emission_line_corrections: none
-    agn_model: fsps_component_grid
-    agn_component_grid_path: Data/popcosmos_chabrier_agn_component_ssp_grid.h5
-    agn_host_attenuation: fsps_diffuse_unit_tau
-    agn_igm_order: fsps_after_igm
-    agn_baked_attenuation: fsps_powerlaw_unit_tau
-    agn_baked_dust_index: -0.7
+    agn_model: none
     z_sun: 0.0142
     dust_tesc_logyr: 7.0
     dust1_index: -1.0
-    birth_cloud_slope: -1.0
     fixed_parameters:
         diffstar_indx_hi: -1.0
         diffstar_qlglgdt: -0.50725
@@ -121,12 +115,6 @@ fit:
         log10_gas_ionization:
             initial: -2.0
             bounds: [-4.5, -0.5]
-        ln_fagn:
-            initial: -8.0
-            bounds: [-14.0, 1.0]
-        ln_tauagn:
-            initial: 2.302585
-            bounds: [1.609438, 5.010635]
 
 sample:
     sampler: nuts

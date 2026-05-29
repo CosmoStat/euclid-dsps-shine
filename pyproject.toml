@@ -75,3 +75,6 @@ known-third-party = ["dsps"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "fsps: tests that require python-fsps and Prospector reference packages",
+]
