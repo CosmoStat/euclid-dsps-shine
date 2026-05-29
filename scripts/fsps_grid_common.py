@@ -19,9 +19,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 DEFAULT_REFERENCE_SSP = (
-    "Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5"
+    "Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5"
 )
+DEFAULT_STELLAR_ONLY_SSP = "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
 C_ANGSTROM_PER_S = 2.99792458e18
+POPCOSMOS_Z_SUN = 0.0142
 
 
 class FspsGridError(RuntimeError):
@@ -206,6 +208,8 @@ def build_metallicity_plan(
 
 
 def fsps_metadata(fsps_module: Any, sp: Any, command: list[str]) -> dict[str, Any]:
+    isochrones = _decode_metadata_value(getattr(sp, "isoc_library", "unknown"))
+    spectral_library = _decode_metadata_value(getattr(sp, "spec_library", "unknown"))
     return {
         "generated_at_utc": dt.datetime.now(dt.UTC).isoformat(),
         "generated_by": " ".join(command),
@@ -214,9 +218,22 @@ def fsps_metadata(fsps_module: Any, sp: Any, command: list[str]) -> dict[str, An
         "python_fsps_version": str(getattr(fsps_module, "__version__", "unknown")),
         "fsps_version": str(getattr(sp, "fsps_version", "unknown")),
         "sps_home": os.environ.get("SPS_HOME", ""),
-        "isoc_library": str(getattr(sp, "isoc_library", "unknown")),
-        "spec_library": str(getattr(sp, "spec_library", "unknown")),
+        "isoc_library": isochrones,
+        "spec_library": spectral_library,
+        "isochrones": isochrones,
+        "spectral_library": spectral_library,
     }
+
+
+def _decode_metadata_value(value: Any) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    text = str(value)
+    aliases = {
+        "mist": "MIST",
+        "c3k_a": "C3K_A",
+    }
+    return aliases.get(text.lower(), text)
 
 
 def write_attrs(handle: h5py.File, attrs: dict[str, Any]) -> None:
@@ -282,7 +299,70 @@ def validate_gas_grid_hdf5(
     return flux_shape  # type: ignore[return-value]
 
 
-def validate_agn_grid_hdf5(path: str | Path) -> tuple[int, int]:
+def validate_ssp_grid_hdf5(
+    path: str | Path, require_popcosmos_chabrier: bool = True
+) -> tuple[int, int, int]:
+    grid_path = Path(path).expanduser()
+    required = ("ssp_wave", "ssp_lg_age_gyr", "ssp_lgmet", "ssp_flux")
+    with h5py.File(grid_path, "r") as handle:
+        missing = [key for key in required if key not in handle]
+        if missing:
+            raise FspsGridError(
+                f"SSP grid {grid_path} is missing datasets: {', '.join(missing)}"
+            )
+        axes = {key: np.asarray(handle[key]) for key in required[:-1]}
+        flux_shape = tuple(handle["ssp_flux"].shape)
+        expected = (
+            len(axes["ssp_lgmet"]),
+            len(axes["ssp_lg_age_gyr"]),
+            len(axes["ssp_wave"]),
+        )
+        if len(flux_shape) != 3 or flux_shape != expected:
+            raise FspsGridError(
+                f"SSP grid ssp_flux shape {flux_shape} does not match axes {expected}"
+            )
+        _validate_monotonic_axes(axes)
+
+        if "ssp_emline_luminosity" in handle:
+            if "ssp_emline_wave" not in handle:
+                raise FspsGridError(
+                    "SSP grid has ssp_emline_luminosity but no ssp_emline_wave"
+                )
+            line_shape = tuple(handle["ssp_emline_luminosity"].shape)
+            n_line = len(handle["ssp_emline_wave"])
+            expected_line_shape = (
+                len(axes["ssp_lgmet"]),
+                len(axes["ssp_lg_age_gyr"]),
+                n_line,
+            )
+            if line_shape != expected_line_shape:
+                raise FspsGridError(
+                    "SSP grid ssp_emline_luminosity shape "
+                    f"{line_shape} does not match axes {expected_line_shape}"
+                )
+            if "ssp_emline_name" in handle and len(handle["ssp_emline_name"]) != n_line:
+                raise FspsGridError(
+                    "SSP grid ssp_emline_name length does not match ssp_emline_wave"
+                )
+
+        if "ssp_surviving_mstar" in handle:
+            surviving_shape = tuple(handle["ssp_surviving_mstar"].shape)
+            expected_surviving_shape = (
+                len(axes["ssp_lgmet"]),
+                len(axes["ssp_lg_age_gyr"]),
+            )
+            if surviving_shape != expected_surviving_shape:
+                raise FspsGridError(
+                    "SSP grid ssp_surviving_mstar shape "
+                    f"{surviving_shape} does not match axes {expected_surviving_shape}"
+                )
+
+        if require_popcosmos_chabrier:
+            _validate_popcosmos_chabrier_attrs(handle, grid_path)
+    return flux_shape  # type: ignore[return-value]
+
+
+def validate_agn_grid_hdf5(path: str | Path) -> tuple[int, ...]:
     grid_path = Path(path).expanduser()
     required = ("wave", "agn_tau_grid", "template_lnu_per_lbol")
     with h5py.File(grid_path, "r") as handle:
@@ -294,11 +374,41 @@ def validate_agn_grid_hdf5(path: str | Path) -> tuple[int, int]:
         wave = np.asarray(handle["wave"])
         tau = np.asarray(handle["agn_tau_grid"])
         template_shape = tuple(handle["template_lnu_per_lbol"].shape)
-        if len(template_shape) != 2 or template_shape != (len(tau), len(wave)):
-            raise FspsGridError(
-                "AGN template_lnu_per_lbol must have shape (n_agn_tau, n_wave)"
+        if len(template_shape) == 2 and template_shape == (len(tau), len(wave)):
+            axes = {"wave": wave, "agn_tau_grid": tau}
+        elif len(template_shape) == 5:
+            fagn_key = (
+                "fagn_grid" if "fagn_grid" in handle else "fagn_normalization_grid"
             )
-        _validate_monotonic_axes({"wave": wave, "agn_tau_grid": tau})
+            required_axes = (fagn_key, "tage_gyr_grid", "stellar_logzsol_grid")
+            missing_axes = [key for key in required_axes if key not in handle]
+            if missing_axes:
+                raise FspsGridError(
+                    "5D AGN template grid is missing axis datasets: "
+                    f"{', '.join(missing_axes)}"
+                )
+            fagn = np.asarray(handle[fagn_key])
+            tage = np.asarray(handle["tage_gyr_grid"])
+            logzsol = np.asarray(handle["stellar_logzsol_grid"])
+            expected = (len(fagn), len(tau), len(tage), len(logzsol), len(wave))
+            if template_shape != expected:
+                raise FspsGridError(
+                    "5D AGN template_lnu_per_lbol must have shape "
+                    "(n_fagn, n_agn_tau, n_tage_gyr, n_stellar_logzsol, n_wave)"
+                )
+            axes = {
+                "wave": wave,
+                fagn_key: fagn,
+                "agn_tau_grid": tau,
+                "tage_gyr_grid": tage,
+                "stellar_logzsol_grid": logzsol,
+            }
+        else:
+            raise FspsGridError(
+                "AGN template_lnu_per_lbol must have shape (n_agn_tau, n_wave) "
+                "or (n_fagn, n_agn_tau, n_tage_gyr, n_stellar_logzsol, n_wave)"
+            )
+        _validate_monotonic_axes(axes)
     return template_shape  # type: ignore[return-value]
 
 
@@ -326,11 +436,12 @@ def validate_gas_grid_with_model(
             "sfh_model": "popcosmos_bins",
             "stellar_metallicity_model": "single",
             "dust_model": "charlot_fall",
+            "emission_line_corrections": "none",
             "igm_model": "none",
             "nebular_model": "gas_grid",
             "gas_grid_path": str(grid_path),
             "agn_model": "none",
-            "z_sun": 0.0134,
+            "z_sun": POPCOSMOS_Z_SUN,
         },
     )
     if not skip_run:
@@ -371,7 +482,7 @@ def validate_agn_grid_with_model(
             "nebular_model": "fixed_ssp",
             "agn_model": "template_grid",
             "agn_template_path": str(grid_path),
-            "z_sun": 0.0134,
+            "z_sun": POPCOSMOS_Z_SUN,
         },
     )
     if progress is not None:
@@ -427,3 +538,44 @@ def _validate_monotonic_axes(axes: dict[str, np.ndarray]) -> None:
             raise FspsGridError(f"{key} contains non-finite values")
         if len(values) > 1 and not np.all(np.diff(values) > 0.0):
             raise FspsGridError(f"{key} must be strictly increasing")
+
+
+def _validate_popcosmos_chabrier_attrs(handle: h5py.File, path: Path) -> None:
+    if "kroupa" in path.name.lower():
+        raise FspsGridError(
+            f"PopCosmos-like SSP path must not contain 'kroupa': {path}"
+        )
+    imf_type = handle.attrs.get("imf_type")
+    imf_name = _decode_metadata_value(handle.attrs.get("imf_name", "")).lower()
+    imf_errors = []
+    if imf_type is None:
+        imf_errors.append("missing imf_type")
+    elif not np.isclose(float(imf_type), 1.0, rtol=0.0, atol=0.0):
+        imf_errors.append(f"imf_type={imf_type!r}")
+    if not imf_name:
+        imf_errors.append("missing imf_name")
+    elif imf_name != "chabrier":
+        imf_errors.append(f"imf_name={imf_name!r}")
+    if imf_errors:
+        raise FspsGridError(
+            "PopCosmos-like SSP metadata must consistently declare "
+            "imf_type=1 and imf_name='chabrier'; found "
+            + ", ".join(imf_errors)
+        )
+    z_sun = handle.attrs.get("z_sun")
+    if z_sun is None or not np.isclose(float(z_sun), POPCOSMOS_Z_SUN, rtol=0, atol=5.0e-6):
+        raise FspsGridError(
+            f"PopCosmos-like SSP metadata z_sun must be {POPCOSMOS_Z_SUN}"
+        )
+    required_units = (
+        "units_ssp_wave",
+        "units_ssp_lg_age_gyr",
+        "units_ssp_lgmet",
+        "units_ssp_flux",
+    )
+    missing_units = [key for key in required_units if key not in handle.attrs]
+    if missing_units:
+        raise FspsGridError(
+            "PopCosmos-like SSP metadata is missing unit attrs: "
+            + ", ".join(missing_units)
+        )
