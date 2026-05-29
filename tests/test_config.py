@@ -557,6 +557,8 @@ def test_popcosmos_binned_compressed_config_overrides_only_runtime_assets() -> N
     assert compressed["model"]["sfh_model"] == dense["model"]["sfh_model"]
     assert compressed["model"]["dust_model"] == dense["model"]["dust_model"]
     assert compressed["model"]["igm_model"] == dense["model"]["igm_model"]
+    assert compressed["runtime"]["jax_platforms"] == "cuda"
+    assert compressed["runtime"]["require_gpu"] is True
     assert compressed["model"]["ssp_model"] == "compressed_basis"
     assert (
         compressed["model"]["compressed_ssp_path"]

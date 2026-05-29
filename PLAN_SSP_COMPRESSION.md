@@ -53,7 +53,8 @@ compressed asset family so the final model is coherent.
 
 `configs/popcosmos_binned_compressed.yaml` is the CLI entry point for the full
 16-parameter PopCosmos-like binned model with compressed resident assets. It
-inherits `configs/popcosmos_binned.yaml` and switches:
+inherits `configs/popcosmos_binned.yaml`, forces the `gpu` runtime preset to
+avoid silent CPU fallback, and switches:
 
 ```yaml
 model:
