@@ -2403,10 +2403,15 @@ def interpolate_popcosmos_ssp_stellar_metallicity_jax(
     lgmet_abs: jnp.ndarray,
 ) -> jnp.ndarray:
     """Return the SSP/gas grid at one stellar metallicity for PopCosmos paths."""
-    if str(model_config.get("nebular_model", "fixed_ssp")) in {
-        "gas_grid",
-        "compressed_gas_grid",
-    }:
+    nebular_model = str(model_config.get("nebular_model", "fixed_ssp"))
+    if nebular_model == "compressed_gas_grid":
+        return interpolate_compressed_gas_ssp_stellar_metallicity_jax(
+            context,
+            params["log10_gas_metallicity"],
+            params["log10_gas_ionization"],
+            lgmet_abs,
+        )
+    if nebular_model == "gas_grid":
         ssp_flux_grid = interpolate_gas_ssp_grid_jax(
             context,
             params["log10_gas_metallicity"],
@@ -2739,6 +2744,74 @@ def interpolate_compressed_gas_ssp_grid_jax(
     weighted_coeff = low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
     reconstructed = jnp.einsum(
         "mak,kw->maw", weighted_coeff, jnp.asarray(basis, dtype=jnp.float32)
+    )
+    return jnp.nan_to_num(
+        reconstructed,
+        nan=0.0,
+        posinf=1.0e30,
+        neginf=-1.0e30,
+    )
+
+
+def interpolate_compressed_gas_ssp_stellar_metallicity_jax(
+    context: DspsContext,
+    log10_gas_metallicity: jnp.ndarray,
+    log10_gas_ionization: jnp.ndarray,
+    lgmet_abs: jnp.ndarray,
+) -> jnp.ndarray:
+    """Interpolate compressed gas and stellar-metallicity axes before expansion.
+
+    This is algebraically equivalent to reconstructing the gas-selected
+    ``[stellar_lgmet, age, wave]`` grid and then interpolating the stellar
+    metallicity axis, but it avoids materializing that extra metallicity axis in
+    vmapped galaxy batches.
+    """
+    if (
+        context.gas_lgmet_grid_jax is None
+        or context.gas_lgu_grid_jax is None
+        or context.compressed_gas_basis_jax is None
+        or context.compressed_gas_coeff_jax is None
+        or context.compressed_gas_scale_jax is None
+    ):
+        raise ValueError(
+            "model.nebular_model='compressed_gas_grid' requires a loaded "
+            "compressed gas grid"
+        )
+    gas_z_lo, gas_z_hi, gas_z_weight = _interp_bracket(
+        context.gas_lgmet_grid_jax,
+        log10_gas_metallicity,
+    )
+    gas_u_lo, gas_u_hi, gas_u_weight = _interp_bracket(
+        context.gas_lgu_grid_jax,
+        log10_gas_ionization,
+    )
+    coeff = jnp.asarray(context.compressed_gas_coeff_jax)
+    scale = jnp.asarray(context.compressed_gas_scale_jax, dtype=jnp.float32)
+
+    wc00 = jnp.asarray(coeff[gas_z_lo, gas_u_lo], dtype=jnp.float32) * scale[
+        gas_z_lo, gas_u_lo
+    ][..., None]
+    wc01 = jnp.asarray(coeff[gas_z_lo, gas_u_hi], dtype=jnp.float32) * scale[
+        gas_z_lo, gas_u_hi
+    ][..., None]
+    wc10 = jnp.asarray(coeff[gas_z_hi, gas_u_lo], dtype=jnp.float32) * scale[
+        gas_z_hi, gas_u_lo
+    ][..., None]
+    wc11 = jnp.asarray(coeff[gas_z_hi, gas_u_hi], dtype=jnp.float32) * scale[
+        gas_z_hi, gas_u_hi
+    ][..., None]
+    low_u = wc00 * (1.0 - gas_u_weight) + wc01 * gas_u_weight
+    high_u = wc10 * (1.0 - gas_u_weight) + wc11 * gas_u_weight
+    weighted_coeff = low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
+    coeff_z = _interp_axis0_linear(
+        _context_ssp_lgmet(context),
+        weighted_coeff,
+        jnp.asarray(lgmet_abs, dtype=jnp.float32),
+    )
+    reconstructed = jnp.einsum(
+        "ak,kw->aw",
+        coeff_z,
+        jnp.asarray(context.compressed_gas_basis_jax, dtype=jnp.float32),
     )
     return jnp.nan_to_num(
         reconstructed,

@@ -31,6 +31,7 @@ from euclid_dsps.model import (
     fsps_madau95_igm_transmission_jax,
     gas_metallicity_constraint_penalty_jax,
     interpolate_compressed_gas_ssp_grid_jax,
+    interpolate_compressed_gas_ssp_stellar_metallicity_jax,
     interpolate_gas_ssp_grid_jax,
     interpolate_ssp_stellar_metallicity_jax,
     load_context,
@@ -778,6 +779,44 @@ def test_compressed_gas_grid_matches_synthetic_dense_interpolation() -> None:
     np.testing.assert_allclose(np.asarray(compressed), np.asarray(dense), rtol=1.0e-6)
     assert compressed_context.ssp_flux_gas_grid_jax is None
     assert compressed_context.compressed_gas_coeff_jax is not None
+    assert np.all(np.isfinite(np.asarray(grad)))
+
+
+def test_compressed_gas_direct_stellar_metallicity_interp_matches_dense_path() -> None:
+    context = _synthetic_context({"nebular_model": "compressed_gas_grid"})
+    lgmet_abs = jnp.asarray(-2.0)
+    full_grid = interpolate_compressed_gas_ssp_grid_jax(context, -0.5, -2.5)
+    dense_path = interpolate_ssp_stellar_metallicity_jax(
+        context.ssp_lgmet_jax,
+        full_grid,
+        lgmet_abs,
+    )
+    direct_path = interpolate_compressed_gas_ssp_stellar_metallicity_jax(
+        context,
+        -0.5,
+        -2.5,
+        lgmet_abs,
+    )
+    grad = jax.grad(
+        lambda values: jnp.sum(
+            interpolate_compressed_gas_ssp_stellar_metallicity_jax(
+                context,
+                values[0],
+                values[1],
+                values[2],
+            )
+        )
+    )(jnp.asarray([-0.5, -2.5, -2.0]))
+
+    assert direct_path.shape == (
+        context.ssp_lg_age_gyr_jax.shape[0],
+        context.ssp_wave_jax.shape[0],
+    )
+    np.testing.assert_allclose(
+        np.asarray(direct_path),
+        np.asarray(dense_path),
+        rtol=1.0e-6,
+    )
     assert np.all(np.isfinite(np.asarray(grad)))
 
 
