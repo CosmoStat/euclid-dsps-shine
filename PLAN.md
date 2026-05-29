@@ -7,30 +7,44 @@ Branch objective: integrate the Diffstar SFH implementation from
 losing the generated-grid scripts, GPU/JIT memory fixes, or documentation
 cleanup.
 
-The repository currently has two active production configurations:
+The repository currently has four active PopCosmos-like configurations:
 
 ```text
 configs/popcosmos_binned.yaml
 configs/popcosmos_diffstar.yaml
+configs/popcosmos_binned_noagn.yaml
+configs/popcosmos_diffstar_noagn.yaml
 ```
 
-They are standalone and represent the most advanced PopCosmos-like DSPS/JAX
-paths:
+The full AGN configs are now the recommended default path:
+`popcosmos_binned` first, `popcosmos_diffstar` as the comparison. The no-AGN
+configs remain available for controlled ablations and fallback debugging.
+
+They are standalone and represent the current PopCosmos-like DSPS/JAX paths:
 
 - LSST `ugrizy` plus Euclid VIS/Y/J/H photometry.
 - Flux-space likelihood with catalog per-band flux errors.
-- Configurable photometric objective, with Gaussian chi-square as the current
-  default and POP-COSMOS-style Student-t support being added for comparison.
+- Configurable photometric objective, with POP-COSMOS-style Student-t as the
+  current default for both full AGN and no-AGN PopCosmos-like configs.
 - Seven-bin PopCosmos-like SFH ratios in `popcosmos_binned.yaml`.
 - Six-free-parameter Diffstar SFH in `popcosmos_diffstar.yaml`.
 - Single stellar metallicity.
-- Charlot-Fall age-dependent dust.
+- Explicit age-dependent dust modes:
+  `charlot_fall_powerlaw` preserves the previous behavior, while
+  `prospector_fsps` is the current approximate Prospector/FSPS-like target mode.
 - Madau95-style approximate IGM.
-- Generated FSPS gas SSP grid:
-  `Data/popcosmos_gas_ssp_grid.h5`.
-- Generated FSPS/CLUMPY AGN template grid:
-  `Data/popcosmos_agn_template_grid.h5`.
-- Full 16-parameter fit including SFH, gas, and AGN parameters in both configs.
+- PopCosmos-like assets must be explicit Chabrier assets with HDF5 metadata:
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5`,
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5`,
+  `Data/popcosmos_chabrier_gas_ssp_grid.h5`, and
+  `Data/popcosmos_chabrier_agn_component_ssp_grid.h5`.
+- The first one-row `popcosmos_binned_noagn` smoke fit passes after generating
+  those assets, with `EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0` and
+  `JAX_PLATFORMS=cuda` in the `shine` environment.
+- PopCosmos-like `z_sun` is `0.0142`; metallicity conversion is
+  `log10(Zstar_abs) = log10(0.0142) + log10_stellar_metallicity`.
+- Full configs keep the 16-parameter fit including SFH, gas, and AGN.
+  No-AGN configs remove `ln_fagn` and `ln_tauagn`.
 
 Older config variants, presets, examples, and partial smoke configs have been
 removed from source. Tests now target the active configs plus low-level
@@ -42,9 +56,29 @@ synthetic fixtures.
   POP-COSMOS population model.
 - Independent gas and stellar metallicity variation in FSPS is useful for
   fitting but not fully self-consistent for all nebular line ratios.
-- AGN normalization follows the repository convention
-  `fagn * integrated stellar Lbol`; exact FSPS/CLUMPY bolometric normalization
-  still needs an independent audit.
+- A hard PopCosmos-like constraint now enforces
+  `log10_gas_metallicity >= log10_stellar_metallicity`, with both quantities in
+  `log10(Z/Zsun)`.
+- `model.emission_line_corrections: none` means the gas grid is
+  `uncalibrated_cloudy`. This remains usable for development but is non-final
+  for a science prior. `popcosmos_table` support exists for enriched grids with
+  `nebular_continuum_flux`, `emline_wavelengths`, and `line_flux_grid`.
+- `prospector_fsps` dust is a JAX approximation to the FSPS/Prospector
+  `dust_type=4` plus birth-cloud behavior. It uses `dust2=tau2`,
+  `dust1=tau1_over_tau2*tau2`, `dust_tesc_logyr=7.0`, and
+  `dust1_index=-1.0`, but still needs direct FSPS/Prospector benchmarking before
+  it can be called an exact reproduction.
+- Legacy `agn_model: template_grid` still follows the repository convention
+  `fagn * integrated stellar Lbol` and remains an audit-only approximation.
+  The active `agn_model: fsps_component_grid` path instead loads an FSPS-native
+  AGN component SSP grid and convolves it with the same SFH weights as the
+  stellar SSP.
+- `agn_host_attenuation: fsps_diffuse_unit_tau` is the current FSPS-aligned
+  AGN host attenuation convention: it applies the PopCosmos/Prospector-like
+  diffuse `dust_type=4` attenuation curve at unit V-band optical depth to the
+  AGN component, matching the local FSPS `agn_dust.f90` convention instead of
+  multiplying by `dust2`. The older `diffuse` and `prospector_fsps` scaled AGN
+  modes remain diagnostics only.
 - The IGM model is a stable Madau95-style approximation.
 - The fit and post-fit batch prediction paths pass large SSP/gas/AGN arrays as
   dynamic JAX arguments so JIT can stay enabled without compiling the gas grid
@@ -55,8 +89,10 @@ synthetic fixtures.
 
 ## Standard Commands
 
-Generate/validate FSPS gas and AGN assets as documented in
-`docs/source/data_download.rst`.
+Generate/validate the FSPS Chabrier SSP, gas, and AGN assets as documented in
+`docs/source/data_download.rst`. The Chabrier SSP is generated locally with
+`scripts/generate_fsps_ssp_grid.py`; it is not a legacy `manage_ssp.py`
+download.
 
 Short one-row fit:
 
@@ -65,7 +101,7 @@ python -m euclid_dsps.cli \
   --config configs/popcosmos_binned.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_one_short \
+  --out outputs/runs/dev_popcosmos_fullagn_one_short \
   --sed-samples 1
 ```
 
@@ -75,8 +111,8 @@ Batched fit:
 python -m euclid_dsps.cli \
   --config configs/popcosmos_binned.yaml \
   fit --limit 20 \
-  --batch-size 5 \
-  --out outputs/runs/dev_popcosmos_batch \
+  --batch-size 2 \
+  --out outputs/runs/dev_popcosmos_fullagn_batch \
   --sed-samples 4
 ```
 
@@ -87,7 +123,7 @@ python -m euclid_dsps.cli \
   --config configs/popcosmos_diffstar.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_diffstar_one_short \
+  --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short \
   --sed-samples 1
 ```
 
@@ -102,15 +138,880 @@ uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --
 
 ## Remaining Work
 
-- Compare Gaussian chi-square and Student-t photometric objectives on the same
-  FS2 rows and inspect whether the heavier-tailed likelihood reduces redshift
-  attractors or just hides band-level outliers.
-- Audit AGN normalization against FSPS internals or external CLUMPY convention.
-- Scale the CUDA batch run beyond the validated small batch once GPU memory and
-  wall time are acceptable.
+### SSP Shape And Compression Investigation
+
+2026-05-28 SSP shape investigation phase started:
+
+- Scope: inspect the Chabrier SSP HDF5 assets, generate plots by wavelength,
+  age, and metallicity dimensions, and compare simple compression candidates
+  for reducing SSP storage without erasing spectral information.
+- Primary assets: `Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5` and
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5`.
+- Candidate diagnostics: sample spectra, age and metallicity tracks, spectral
+  heatmaps, SVD energy/error, piecewise quadratic fits in log wavelength, and a
+  simple Haar-wavelet proxy on a log-wavelength grid.
+- Outputs should be written under `outputs/ssp_shape_investigation/` and kept
+  out of source.
+
+2026-05-28 SSP shape investigation phase completed:
+
+- Added `scripts/investigate_ssp_shapes.py`, a reproducible HDF5 diagnostic
+  script for SSP shape plots and simple compression-error metrics.
+- Generated plots and metrics under `outputs/ssp_shape_investigation/`,
+  including wavelength, age, and metallicity slices; heatmaps; noNE-vs-wNE
+  ratios; SVD energy; reconstruction examples; and compression tradeoffs.
+- The active Chabrier SSP grids are both `12 x 107 x 11149`; the default
+  compression diagnostics focus on 900-30000 Angstrom, which contains 9239 of
+  the 11149 wavelength samples.
+- Initial result: a shared low-rank basis is the strongest first candidate for
+  stellar-continuum compression. On a 2048-point log-wavelength grid, 32 SVD
+  components give p95 log-flux errors around 0.013-0.015 dex at roughly 24x
+  nominal compression, and 64 components give p95 errors around 0.004-0.005 dex
+  at roughly 12x nominal compression.
+- Piecewise quadratics are not competitive for narrow spectral structure:
+  they only reach p95 below 0.05 dex at low compression, especially for the
+  fixed-nebular SSP.
+- Haar-style sparsity is useful as a baseline but not clearly better than SVD
+  at the tested tolerances. If wavelets are pursued, use a real codec with
+  quantization and explicit coefficient/index storage accounting.
+- New priority if compression becomes implementation work: split continuum and
+  emission-line information before compressing gas or fixed-nebular grids,
+  rather than fitting narrow lines with smooth polynomial segments.
+
+2026-05-28 SSP compression documentation extension started:
+
+- Scope: make cleaner summary plots, add explicit interpolation/knot-storage
+  tests, document candidate compressed representations, and clarify the VRAM
+  tradeoff for larger galaxy batches.
+- Additional diagnostics should distinguish file size, resident VRAM size,
+  interpolation reconstruction error, and extra compute from on-the-fly
+  decoding.
+
+2026-05-28 SSP compression documentation extension completed:
+
+- Extended `scripts/investigate_ssp_shapes.py` with log-wavelength knot
+  interpolation tests and cleaner compression-frontier plots.
+- Added `outputs/ssp_shape_investigation/popcosmos_asset_size_summary.png` to
+  show that the gas SSP grid dominates the resident tensor size.
+- Added `docs/source/ssp_compression.rst` and linked it from the docs index.
+  The doc recommends a low-rank continuum representation plus separate sparse
+  line storage, and records the key caveat that VRAM only drops if JAX consumes
+  the compressed representation directly.
+- Verification: `uv run python -m compileall scripts/investigate_ssp_shapes.py`,
+  `uv run ruff check scripts/investigate_ssp_shapes.py`, and
+  `uv run sphinx-build -b html docs/source /tmp/dsps_docs_ssp_check` pass.
+
+2026-05-28 dedicated implementation planning update:
+
+- Added `PLAN_SSP_COMPRESSION.md` as the complete execution plan for testing
+  linear-flux compression, continuum/line separation, compressed HDF5 assets,
+  JAX integration, age-dependent dust handling, and dense-vs-compressed
+  benchmarks.
+- Next step remains gated on explicit user approval before implementing the
+  compressed-grid experiments or changing model code.
+
+2026-05-29 VRAM-compression planning update:
+
+- Reframed `PLAN_SSP_COMPRESSION.md` around resident GPU memory reduction, not
+  disk-level HDF5 compression. The compressed representation must be consumed
+  directly by JAX; decoding back to dense gas/AGN tensors is explicitly
+  non-goal.
+- First implementation step is now to create a clean isolated worktree with a
+  copied `Data/` directory before touching compression code.
+- Priority order is AGN component compression first, then gas compression with
+  continuum-plus-sparse-lines, then optional base SSP compression.
+- Required gates are dense-vs-compressed benchmarks for AGN-only, gas-only,
+  `full_noagn`, and `full_agn`, followed by FSPS/Prospector runs at `n=50` and
+  `n=500`.
+
+### Implementation Plan: PopCosmos Benchmark Closure
+
+2026-05-28 forward-model closure phase started:
+
+- Scope: implement the next correction slice after the noNE benchmark report:
+  diagnose and fix verified DSPS/FSPS mismatches in the pure-stellar
+  normalization, redshift/luminosity-distance/filter path, UV/IGM behavior,
+  Prospector/FSPS-like dust, and then gas/line-continuum handling.
+- Current gate remains unchanged: do not train the first learned prior until
+  `stellar_only`, `stellar_plus_dust`, `stellar_plus_gas`, and `full_noagn`
+  pass the benchmark criteria or any remaining approximation is explicitly
+  named and accepted.
+
+Goal: turn the current PopCosmos-like no-AGN path into a benchmarked prior-v0
+forward model. The `n=500` FSPS/Prospector benchmark in
+`outputs/benchmarks/popcosmos_binned_noagn_fsps_n500/` runs end to end, but its
+residuals are not yet within the recommended prior-readiness thresholds.
+
+Phase 1 - Pure-stellar baseline:
+
+- Add a pure-stellar Chabrier SSP generation mode, with
+  `add_neb_emission=0` and `add_neb_continuum=0`.
+- Write it to an unambiguous path such as
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5`.
+- Add HDF5 attrs making the no-nebular contract explicit:
+  `imf_type=1`, `imf_name=chabrier`, `z_sun=0.0142`,
+  `add_neb_emission=0`, `add_neb_continuum=0`, units, FSPS version, isochrones,
+  and spectral library.
+- Extend the benchmark so `stellar_only` and `stellar_plus_dust` use this
+  pure-stellar SSP on the DSPS side. The current `fixed_ssp` path uses the base
+  SSP and therefore includes fixed nebular emission if the base SSP HDF5 was
+  generated that way.
+- Tests: pure-stellar SSP validation passes; benchmark level selection uses the
+  pure-stellar context for gas-free levels; the old fixed-nebular SSP remains
+  usable only where explicitly requested.
+
+Phase 2 - Strict asset metadata:
+
+- Tighten PopCosmos-like IMF validation so contradictory metadata fails.
+  If `imf_type` exists it must be `1`; if `imf_name` exists it must be
+  `chabrier`; if both exist they must agree; if neither exists, fail.
+- Add tests for inconsistent metadata, especially `imf_type=2` with
+  `imf_name=chabrier` and `imf_type=1` with `imf_name=kroupa`.
+- Keep legacy lognormal assets compatible outside PopCosmos-like configs.
+
+Phase 3 - Benchmark diagnostics:
+
+- Extend `benchmark_summary.json` to report residual statistics per
+  `(level, band)` using finite-only counts and explicit non-finite counts.
+- Add residual correlations per `(level, band)` instead of only pooled across
+  all levels and bands.
+- Add recent-SFR diagnostics derived from the PopCosmos SFH bins, at minimum
+  the youngest-bin SFR and a recent-to-old SFR contrast.
+- Add plots for residuals against `z_obs`, `tau2`, `dust_index_n`,
+  `log10_stellar_metallicity`, `log10_gas_metallicity`,
+  `log10_gas_ionization`, and recent SFR.
+
+Phase 4 - Rerun staged benchmarks:
+
+- Rerun a tiny benchmark after each code/data change:
+  `--n 5`, then `--n 50`, then `--n 500`.
+- Compare each stage against
+  `outputs/benchmarks/popcosmos_binned_noagn_fsps_n500/`.
+- Do not move to prior training until broad bands are close to the target:
+  median `|Delta mag| < 0.02`, p95 `|Delta mag| < 0.05`, and no clear monotone
+  residual trend with redshift, dust, metallicity, gas, or recent SFR.
+
+Phase 5 - Dust/gas correction decisions:
+
+- If pure-stellar residuals remain large, audit SSP normalization, mass units,
+  age-bin mapping, luminosity distance, filter integration, and surviving-mass
+  normalization before touching gas or dust.
+- If pure-stellar passes but `stellar_plus_dust` fails, benchmark the
+  `prospector_fsps` dust curve directly against FSPS/Prospector as a function
+  of wavelength, `tau2`, `dust_index_n`, `dust1`, and age.
+- If `stellar_plus_gas` or `full_noagn` fails after the baseline is clean,
+  generate an enriched gas grid with separated continuum and line fluxes, then
+  apply the PopCosmos emission-line correction table.
+- Keep `emission_line_corrections: none` labeled as `uncalibrated_cloudy`.
+
+Phase 6 - Later AGN and production scaling:
+
+- Audit AGN normalization against FSPS internals or external CLUMPY convention
+  before recommending full AGN configs.
+- Scale CUDA batch fitting only after the no-AGN forward model passes the
+  benchmark gates.
 - Add synthetic recovery tests with known DSPS-generated parameters.
 
+2026-05-28 forward-model closure implementation update:
+
+- Fixed the dominant pure-stellar DSPS/Prospector mismatch by replacing the
+  generic log-cosmic-time DSPS age-weight interpolation with a direct overlap
+  integral from PopCosmos lookback bins onto the SSP age grid when
+  `model.sfh_time_grid: prospector_step` is active.
+- Ported FSPS Madau95 IGM attenuation into `igm_model: fsps_madau95`, replacing
+  the earlier coarse UV approximation for PopCosmos-like configs.
+- Ported the FSPS/Prospector `dust_type=4` diffuse attenuation shape into the
+  JAX `prospector_fsps` dust mode while preserving the existing age-dependent
+  architecture: diffuse dust applies to all stellar ages; birth-cloud dust
+  applies only at ages `<= dust_tesc_logyr`.
+- Added optional loading and use of `ssp_surviving_mstar` from FSPS-generated
+  SSP HDF5 files. This removes the remaining few-percent normalization offset
+  from using the DSPS analytic surviving-mass approximation for Chabrier FSPS
+  SSPs.
+- Updated `scripts/generate_fsps_ssp_grid.py` to write
+  `ssp_surviving_mstar[stellar_lgmet, age]` plus units metadata, and
+  regenerated:
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5` and
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5`.
+- Latest staged benchmark:
+  `outputs/benchmarks/popcosmos_binned_noagn_forwardfix_mstar_n20/`.
+  Finite overall residuals now show:
+  `stellar_only` median `|Delta mag| = 0.0060`, p95 `0.0107`;
+  `stellar_plus_gas` median `0.0060`, p95 `0.0183`.
+  Excluding effectively-zero flux cases with either DSPS or reference magnitude
+  `>80`, `stellar_plus_dust` median is `0.0058`, p95 `0.0154`, and
+  `full_noagn` median is `0.0058`, p95 `0.0193`.
+- Remaining blocker is the extreme-dust/tiny-flux tail where the reference
+  remains finite at magnitudes `~180` while the float32 DSPS path either
+  underflows or floors around magnitudes `~100-115`. Benchmark summaries must
+  keep reporting these non-finite/effectively-faint counts separately; prior
+  training should use flux-space likelihoods and avoid interpreting these
+  magnitude deltas as normal broadband residuals.
+- The larger `n=500` benchmark completed at
+  `outputs/benchmarks/popcosmos_binned_noagn_forwardfix_mstar_n500/`.
+  It confirms the `n=20` result: `stellar_only` median `|Delta mag| = 0.0058`,
+  p95 `0.0115`; `stellar_plus_gas` median `0.0059`, p95 `0.0178`.
+  For bright finite rows with DSPS and reference magnitudes `<80`,
+  `stellar_plus_dust` median is `0.0057`, p95 `0.0125`, and `full_noagn`
+  median is `0.0057`, p95 `0.0135`. The remaining raw dust/full p99 outliers
+  are still the expected extreme-faint magnitude tail.
+- Wrote the benchmark analysis report:
+  `outputs/benchmarks/popcosmos_binned_noagn_forwardfix_mstar_n500/analysis_report.md`.
+
 ## Latest Verification
+
+2026-05-28 forward-model closure verification:
+
+- Regenerated and validated the Chabrier noNE and fixed-nebular SSP HDF5 assets
+  with `ssp_surviving_mstar`.
+- `uv run python -m compileall euclid_dsps scripts` passed.
+- `uv run ruff check euclid_dsps/model.py euclid_dsps/config.py
+  scripts/benchmark_against_fsps_prospector.py
+  scripts/generate_fsps_ssp_grid.py scripts/fsps_grid_common.py
+  tests/test_model.py tests/test_config.py tests/test_benchmark.py
+  tests/test_fsps_grid_scripts.py` passed. The repo-wide ruff check is blocked
+  by an unrelated pre-existing import-order issue in
+  `scripts/investigate_ssp_shapes.py`.
+- `uv run pytest -q tests/test_config.py tests/test_model.py tests/test_benchmark.py`
+  passed: 72 passed, 3 skipped.
+- `uv run pytest -q` passed: 140 passed, 3 skipped.
+- `conda run -n shine bash -lc 'JAX_PLATFORMS=cpu python
+  scripts/benchmark_against_fsps_prospector.py --config
+  configs/popcosmos_binned_noagn.yaml --n 20 --seed 0 --out
+  outputs/benchmarks/popcosmos_binned_noagn_forwardfix_mstar_n20'` passed.
+
+2026-05-28 AGN benchmark audit mode:
+
+- Extended `scripts/benchmark_against_fsps_prospector.py` so configs with
+  `model.agn_model: template_grid` automatically run two additional audit
+  levels: `stellar_plus_agn` and `full_agn`.
+- The AGN reference side now passes `fagn=exp(ln_fagn)` and
+  `agn_tau=exp(ln_tauagn)` into FSPS/Prospector and enables
+  `add_dust_emission` for AGN levels.
+- The DSPS side uses the repository AGN template grid. The benchmark summary
+  explicitly labels this as an AGN audit rather than a final PopCosmos AGN
+  validation because the DSPS template-grid bolometric normalization convention
+  is still approximate.
+- Smoke run passed:
+  `outputs/benchmarks/smoke_popcosmos_binned_agn_audit_n1/`.
+  It confirms the no-AGN levels remain at `~0.005` mag while AGN levels expose
+  larger UV/blue differences, especially `lsst_u`, which is the intended audit
+  signal for the next AGN-normalization phase.
+- Verification passed:
+  `uv run python -m compileall scripts/benchmark_against_fsps_prospector.py`,
+  `uv run ruff check scripts/benchmark_against_fsps_prospector.py
+  tests/test_benchmark.py`, and `uv run pytest -q tests/test_benchmark.py`.
+- User-run AGN audit benchmark analysed:
+  `outputs/benchmarks/popcosmos_binned_agn_audit_n500/`.
+  Report written to `outputs/report/popcosmos_binned_agn_audit_n500/report.md`
+  with figures and CSV tables. The no-AGN levels remain benchmark-ready in
+  bright finite bands, but `stellar_plus_agn` has a severe UV/blue tail and
+  `full_agn` fails the readiness gates by a large margin.
+- Current AGN verdict: keep `popcosmos_binned_noagn` as the prior-v0 candidate.
+  Do not use the full AGN path for a scientific learned prior until a direct
+  SED-level AGN normalization audit resolves the template-grid versus
+  FSPS/Prospector `fagn`/`agn_tau` convention.
+
+2026-05-28 proposed AGN SED-audit implementation plan:
+
+- Do not tune `full_agn` photometry directly. First isolate the pure AGN
+  component before dust, gas, IGM, and filters can hide the source of the
+  mismatch.
+- Add DSPS component outputs for AGN debugging: intrinsic stellar SED, dusted
+  stellar SED, optional gas SED, AGN SED, pre-IGM SED, and post-IGM SED.
+- Extend the AGN template generator to support signed finite-difference
+  templates and grids over `agn_tau`, `fagn_normalization`, normalization age,
+  and normalization metallicity. Keep the current single-age/single-metallicity
+  template as the legacy approximate convention.
+- Generate a new explicit audit asset whose filename and metadata state that it
+  is an FSPS finite-difference AGN calibration grid, not yet a production
+  PopCosmos AGN asset.
+- Add an `agn_component_only` benchmark level comparing
+  `FSPS(fagn, agn_tau) - FSPS(fagn=0)` against the DSPS AGN component before
+  IGM and photometric integration.
+- Add configurable AGN host attenuation experiments:
+  `none` for the current behavior, plus at least one host-dust variant that
+  applies the diffuse Prospector/FSPS-like dust curve to the AGN component.
+- Rerun staged benchmarks in this order: tiny `agn_component_only`, `n=50`
+  AGN SED audit, then `n=500` photometric AGN audit only if the component-level
+  SED comparison is acceptable.
+
+2026-05-28 AGN SED-audit implementation started:
+
+- Scope: implement the proposed AGN component audit path, including DSPS
+  component outputs, signed/multi-axis AGN finite-difference template support,
+  an `agn_component_only` benchmark level, and configurable AGN host attenuation
+  experiments.
+
+2026-05-28 AGN SED-audit implementation completed:
+
+- `JaxModelResult` now carries debug component SEDs:
+  `stellar_intrinsic_sed`, `stellar_dusted_sed`, `gas_sed`, `agn_sed`,
+  `pre_igm_sed`, and `post_igm_sed`.
+- The PopCosmos binned and Diffstar forward paths now build the AGN component
+  separately before IGM attenuation, so benchmark code can inspect it without
+  going through filters.
+- Added `model.agn_host_attenuation` with supported values `none`, `diffuse`,
+  and `prospector_fsps`. The full AGN configs explicitly keep `none` for
+  backward-compatible behavior until the audit chooses a physical convention.
+- `scripts/generate_fsps_agn_grid.py` now supports audit grids over
+  `fagn_grid`, `agn_tau_grid`, `tage_gyr_grid`, and `stellar_logzsol_grid`,
+  with optional `--signed-delta`. The legacy 2D `agn_tau x wave` format still
+  loads and validates.
+- `scripts/benchmark_against_fsps_prospector.py` now accepts
+  `--levels agn_component_only` and writes SED-ratio audit rows with
+  `dsps_agn_lnu`, `reference_agn_lnu`, `delta_log10_lnu`, and equivalent
+  `delta_mag = -2.5 log10(DSPS_AGN/FSPS_AGN)`.
+- Added `--agn-template` to the benchmark CLI so AGN audit assets can be tested
+  without editing the science config.
+- Added `--agn-host-attenuation` to the benchmark CLI so the `none`, `diffuse`,
+  and `prospector_fsps` AGN host-attenuation experiments can be compared without
+  creating temporary YAML configs.
+- Added component-only diagnostic plots under the benchmark `diagnostics/`
+  directory, including SED ratio versus rest wavelength and point-level
+  residual trends versus `ln_fagn`, `ln_tauagn`, `z_obs`, and `tau2`.
+- Generated the first signed AGN audit asset:
+  `Data/popcosmos_chabrier_agn_fspsdiff_audit_grid.h5`, shape
+  `(5, 9, 4, 3, 11149)` for `fagn`, `agn_tau`, `tage_gyr`,
+  `stellar_logzsol`, and wavelength. This is an audit asset, not yet the
+  default science AGN template.
+- Smoke `agn_component_only` run with the audit grid passed at
+  `outputs/benchmarks/smoke_popcosmos_binned_agn_component_only_audit_grid/`.
+  The `n=1` smoke has median absolute equivalent AGN-component residual
+  `~0.33` mag and p95 `~5.26` mag over 64 sampled rest wavelengths, indicating
+  that the component-level mismatch is now directly measurable and still needs
+  science interpretation before enabling AGN prior training.
+- User-run AGN audit results analysed:
+  `outputs/benchmarks/popcosmos_binned_agn_component_only_audit_grid_n50`,
+  `outputs/benchmarks/popcosmos_binned_agn_audit_grid_nohost_n500`, and
+  `outputs/benchmarks/popcosmos_binned_agn_audit_grid_hostdust_n500`.
+  Report written to
+  `outputs/report/popcosmos_binned_agn_audit_grid_comparison_2026-05-28/report.md`.
+- The signed 5D audit grid does not materially change AGN photometry in the
+  no-host-dust convention: row-wise p95 absolute difference from the old 2D
+  template is only `~0.017` mag. `full_agn` remains at bright p95 `~20` mag.
+- `agn_host_attenuation: prospector_fsps` reduces the aggregate `full_agn`
+  bright p95 from `~20.0` mag to `~10.4` mag, but shifts the failure mode from
+  DSPS being too bright to DSPS often being too faint. This is not a final AGN
+  convention.
+- The `agn_component_only` `n=50` run shows that the component-level mismatch is
+  wavelength dependent: median absolute equivalent residual is `~0.18` mag in
+  rest `3000-10000 A`, but the p95 is `~7.1` mag globally and is dominated by
+  far-UV/Lyman and IR wavelength regions.
+- Updated verdict: the no-AGN path remains the only prior-v0 candidate. The AGN
+  path now has the right audit instrumentation, but still needs a component
+  convention/normalization fix before any scientific AGN prior training.
+- Verification passed:
+  `uv run python -m compileall euclid_dsps scripts`;
+  `uv run ruff check euclid_dsps/model.py euclid_dsps/config.py
+  scripts/benchmark_against_fsps_prospector.py scripts/generate_fsps_agn_grid.py
+  scripts/fsps_grid_common.py tests/test_model.py tests/test_benchmark.py
+  tests/test_fsps_grid_scripts.py`;
+  `uv run pytest -q tests/test_config.py tests/test_model.py
+  tests/test_benchmark.py tests/test_fsps_grid_scripts.py` with 88 passed and
+  3 skipped; latest `uv run pytest -q` with 148 passed and 3 skipped.
+
+2026-05-28 FSPS-native AGN component implementation completed:
+
+- Added `scripts/generate_fsps_agn_component_grid.py`, which writes an
+  SSP-shaped AGN component grid:
+  `agn_lnu_per_mformed[fagn, agn_tau, Zstar, age, wave] =
+  FSPS(fagn, agn_tau) - FSPS(fagn=0)`.
+  Its default `fagn` and `agn_tau` axes cover the current PopCosmos AGN prior
+  bounds, including `ln_fagn [-14, 1]` and `ln_tauagn [1.609438, 5.010635]`.
+- Added `model.agn_model: fsps_component_grid` and
+  `model.agn_component_grid_path`. This path does not use the legacy
+  `fagn * Lbol * template` normalization; the AGN component is interpolated in
+  `fagn`, `agn_tau`, and stellar metallicity, then summed over SSP age with the
+  same PopCosmos/Diffstar SFH weights and formed mass as the stellar component.
+- The AGN component grid loader validates the SSP wavelength, age, and
+  metallicity axes against the active base SSP and keeps the strict PopCosmos
+  Chabrier/z_sun metadata checks.
+- `scripts/benchmark_against_fsps_prospector.py` now accepts
+  `--agn-component-grid`, mutually exclusive with `--agn-template`, so the
+  legacy template-grid audit and the FSPS-native component-grid audit can be
+  compared without editing science YAML files.
+- Added tests covering config validation, synthetic forward scaling with
+  formed mass, benchmark level selection, and the component-grid generator
+  using the fake FSPS test backend.
+- Remaining AGN work is empirical: generate a production-size component grid,
+  rerun `agn_component_only`, then rerun `stellar_plus_agn` and `full_agn`.
+  If the component-level SED benchmark passes but photometric AGN levels still
+  fail, the next suspect is host/torus attenuation order rather than AGN
+  normalization.
+
+2026-05-28 AGN component benchmark runtime fix:
+
+- Fixed `scripts/benchmark_against_fsps_prospector.py` so
+  `--levels agn_component_only` only loads the stellar-only DSPS context and no
+  longer loads the gas-grid context.
+- Added `--runtime config|auto|cpu|gpu`; use `--runtime cpu` for large
+  component-grid audits that do not fit on the GPU.
+- Updated runtime setup so a non-auto runtime platform forces
+  `JAX_PLATFORMS`, while `auto` still clears stale platform requests.
+- Smoke benchmark passed with the small AGN component grid:
+  `outputs/benchmarks/smoke_popcosmos_binned_agn_component_grid_cpu_lazy_n1/`.
+
+2026-05-28 full-AGN lazy component-grid loading implemented:
+
+- `full_agn` and `stellar_plus_agn` benchmark levels with
+  `model.agn_model: fsps_component_grid` no longer load the full 3.9 GB AGN
+  component grid into JAX.
+- The benchmark now loads the DSPS stellar/gas context with AGN disabled, then
+  reads only the HDF5 slices needed for the sampled
+  `(fagn, agn_tau, stellar metallicity)` point, interpolates those slices, and
+  adds the AGN component before IGM and photometric integration.
+- Axis interpolation is strict: sampled AGN values outside the component-grid
+  axes now raise an explicit error instead of clipping silently.
+- This is a benchmark-only memory fix. Production fitting with
+  `fsps_component_grid` still needs a dedicated compressed/lazy model path
+  before it is safe for large runs.
+
+2026-05-29 AGN dust/gas isolation implementation started:
+
+- Scope: add a tunable AGN host-attenuation scale and two benchmark levels that
+  isolate dust+AGN and gas+AGN before attempting any `full_agn n=500` run.
+- Motivation from `full_agn_hostdust_n50`: `agn_host_attenuation: none`
+  under-attenuates the faint dusty tail, while `prospector_fsps` with full
+  strength over-attenuates some high-redshift dusty points.
+
+2026-05-29 AGN dust/gas isolation implementation completed:
+
+- Added `model.agn_host_attenuation_scale`, defaulting to `1.0`, with
+  non-negative config validation. The scale multiplies the host-dust optical
+  depth applied to the AGN component, so `0.0` is equivalent to no host
+  attenuation and `1.0` is the previous full-strength behavior.
+- Added benchmark CLI option `--agn-host-attenuation-scale`.
+- Added benchmark levels:
+  `stellar_plus_dust_plus_agn` for pure-stellar+dust+AGN, and
+  `stellar_plus_gas_plus_agn` for gas+AGN with dust disabled.
+- Verification passed:
+  `uv run python -m compileall euclid_dsps scripts`;
+  `uv run ruff check euclid_dsps/model.py euclid_dsps/config.py
+  scripts/benchmark_against_fsps_prospector.py tests/test_model.py
+  tests/test_config.py tests/test_benchmark.py`;
+  `uv run pytest -q tests/test_config.py tests/test_model.py
+  tests/test_benchmark.py` with 87 passed and 3 skipped.
+
+2026-05-29 FSPS AGN diffuse attenuation alignment started:
+
+- Scope: replace the diagnostic interpretation of
+  `agn_host_attenuation_scale` with a fixed FSPS-native AGN host attenuation
+  mode. Local FSPS source inspection shows `agn_dust.f90` applies
+  `exp(-attn_curve(...))` to the AGN dust template, without multiplying by
+  `dust2`. The existing scaled modes remain audit diagnostics, but should not
+  be used as learned science parameters.
+
+2026-05-29 FSPS AGN diffuse attenuation alignment completed:
+
+- Added `model.agn_host_attenuation: fsps_diffuse_unit_tau`. This mode applies
+  the JAX Prospector/FSPS diffuse attenuation shape directly at unit optical
+  depth and is intentionally independent of fitted `tau2`.
+- Config validation now rejects `agn_host_attenuation_scale != 1.0` with
+  `fsps_diffuse_unit_tau`, so the exact FSPS convention cannot be silently
+  turned into a learned or tuned scale.
+- The full AGN configs now use `agn_host_attenuation: fsps_diffuse_unit_tau`.
+  They remain non-recommended for prior v0 until the component-grid AGN
+  benchmark passes.
+- Benchmark isolation keeps `stellar_plus_agn` and `stellar_plus_gas_plus_agn`
+  explicitly host-dust-free; the unit-tau FSPS AGN attenuation is only used for
+  dust+AGN and full-AGN levels.
+- Verification passed:
+  `python -m compileall euclid_dsps scripts`;
+  `uv run ruff check euclid_dsps/model.py euclid_dsps/config.py
+  scripts/benchmark_against_fsps_prospector.py tests/test_model.py
+  tests/test_config.py tests/test_benchmark.py`;
+  `uv run pytest -q tests/test_config.py tests/test_model.py
+  tests/test_benchmark.py` with 89 passed and 3 skipped.
+
+2026-05-29 FSPS AGN/IGM ordering alignment started:
+
+- Scope: add an explicit `model.agn_igm_order` convention. The existing DSPS
+  behavior applies IGM after adding AGN (`pre_igm`). Local FSPS source shows
+  `compsp.f90` applies IGM before `agn_dust`, so the benchmark needs an
+  `fsps_after_igm` mode where stellar/gas light is IGM-attenuated before the
+  AGN component is added.
+
+2026-05-29 FSPS AGN/IGM ordering alignment completed:
+
+- Added `model.agn_igm_order` with supported values `pre_igm` and
+  `fsps_after_igm`. The default remains `pre_igm` for backward compatibility.
+- Full AGN PopCosmos-like configs now set `agn_igm_order: fsps_after_igm`.
+- `combine_agn_and_igm_jax` centralizes the ordering in the production forward
+  model. In `fsps_after_igm`, stellar/gas light is attenuated by IGM first and
+  the already host-attenuated AGN component is added afterward.
+- The lazy AGN component-grid benchmark path now uses the same helper, so
+  `fsps_component_grid` audits test the same ordering as production.
+- Verification passed:
+  `python -m compileall euclid_dsps scripts`;
+  `uv run ruff check euclid_dsps/model.py euclid_dsps/config.py
+  scripts/benchmark_against_fsps_prospector.py tests/test_model.py
+  tests/test_config.py tests/test_benchmark.py`;
+  `uv run pytest -q tests/test_config.py tests/test_model.py
+  tests/test_benchmark.py` with 92 passed and 3 skipped.
+
+2026-05-29 FSPS AGN baked-attenuation replacement completed:
+
+- Analysis of the after-IGM benchmark showed `stellar_plus_agn` is clean in the
+  bright regime, while `stellar_plus_dust_plus_agn` and `full_agn` remain too
+  faint in dusty blue bands. The active AGN component/template assets were
+  generated through FSPS `agn_dust` with `dust_type=0`, so they already include
+  a unit-tau power-law AGN attenuation before runtime applies the
+  `fsps_diffuse_unit_tau` target curve.
+- Added `model.agn_baked_attenuation` with supported values `none` and
+  `fsps_powerlaw_unit_tau`, plus `model.agn_baked_dust_index` defaulting to
+  `-0.7`, the FSPS default from `sps_vars.f90`.
+- In `agn_host_attenuation: fsps_diffuse_unit_tau`, DSPS now replaces baked
+  power-law attenuation by applying
+  `exp(-(tau_fsps_dust_type4 - tau_baked_dust_type0))`. This avoids stacking
+  the baked FSPS `dust_type=0` attenuation and the target `dust_type=4`
+  attenuation.
+- The full AGN PopCosmos-like configs now declare
+  `agn_baked_attenuation: fsps_powerlaw_unit_tau` and
+  `agn_baked_dust_index: -0.7`.
+- AGN grid generators now write these baked-attenuation metadata keys for newly
+  generated template/component assets.
+- Verification passed:
+  `python -m compileall euclid_dsps scripts`;
+  `uv run ruff check euclid_dsps/model.py euclid_dsps/config.py
+  scripts/benchmark_against_fsps_prospector.py
+  scripts/generate_fsps_agn_component_grid.py scripts/generate_fsps_agn_grid.py
+  tests/test_model.py tests/test_config.py tests/test_benchmark.py`;
+  `uv run pytest -q tests/test_config.py tests/test_model.py
+  tests/test_benchmark.py` with 94 passed and 3 skipped.
+
+2026-05-29 FSPS AGN baked-attenuation benchmark analysed:
+
+- User-run benchmarks completed:
+  `outputs/benchmarks/popcosmos_binned_agn_afterigm_replace_baked_n50` and
+  `outputs/benchmarks/popcosmos_binned_agn_afterigm_replace_baked_n500`.
+- The replacement fix closes the previous dusty blue-band failure. At `n=500`,
+  `full_agn` has median p95 `0.0123` mag and max p95 `0.0371` mag over the
+  finite/effectively-bright summary, while `stellar_plus_dust_plus_agn` has
+  median p95 `0.0114` mag and max p95 `0.0316` mag. Both satisfy the broad-band
+  prior-readiness target for finite observable rows.
+- Compared to the previous `fsps_unit_tau_afterigm_n500`, the `full_agn`
+  `lsst_u` p95 drops from `~5.0` mag to below the global max of `0.0371` mag,
+  confirming the failure was stacked baked `dust_type=0` plus target
+  `dust_type=4` AGN attenuation.
+- `stellar_plus_agn` still has a very faint `lsst_u` tail when all finite rows
+  are included, but it is clean in the observable regime (`mag<35` max p95
+  `0.0255` mag). This is a diagnostic faint-UV tail rather than the blocker for
+  the full dusty AGN model.
+
+2026-05-29 full forward FSPS/Prospector closure benchmark analysed:
+
+- User-run benchmark completed:
+  `outputs/benchmarks/popcosmos_binned_full_forward_fsps_closure_n500`.
+  It covers 500 sampled points, 8 benchmark levels, and 10 bands, including
+  `stellar_only`, `stellar_plus_dust`, `stellar_plus_gas`, `full_noagn`,
+  `stellar_plus_agn`, `stellar_plus_dust_plus_agn`,
+  `stellar_plus_gas_plus_agn`, and `full_agn`.
+- Report written to
+  `outputs/report/popcosmos_binned_full_forward_fsps_closure_n500/report.md`,
+  with summary tables, worst residuals, threshold sensitivity, correlations,
+  heatmaps, CDFs, and trend plots.
+- Production broad-band levels now pass the configured bright finite
+  FSPS/Prospector closure target. `full_noagn` has median band p95
+  `0.0129` mag and max band p95 `0.0166` mag. `full_agn` has median band p95
+  `0.0123` mag and max band p95 `0.0371` mag.
+- `stellar_only`, `stellar_plus_dust`, `stellar_plus_gas`, and
+  `stellar_plus_dust_plus_agn` also pass the bright finite target. Remaining
+  non-finite rows in dusty/full levels are explicit magnitude-space
+  zero-flux/effectively-faint cases and should be handled in flux space for
+  inference.
+- The only large residual tails are diagnostic component levels with dust
+  disabled: `stellar_plus_agn` and `stellar_plus_gas_plus_agn`, mainly in
+  `lsst_u/g` at very faint or high-redshift UV points. These remain documented
+  component-isolation limitations, not a production `full_agn` blocker.
+- Current verdict: the DSPS forward model is now FSPS/Prospector-like for
+  broad-band prior training. It is still not an official PopCosmos reproduction
+  because PopCosmos learned emission-line correction tables are not included;
+  the gas path remains raw FSPS/CLOUDY with
+  `emission_line_corrections: none`.
+
+2026-05-29 documentation and default-config cleanup started:
+
+- Promote the validated full AGN path to the default documented setup:
+  `configs/popcosmos_binned.yaml` first, `configs/popcosmos_diffstar.yaml` as
+  the comparison, with no-AGN configs retained only for fallback/ablation.
+- Update the full AGN configs to use `agn_model: fsps_component_grid` and
+  `Data/popcosmos_chabrier_agn_component_ssp_grid.h5`, matching the benchmark
+  that closed against FSPS/Prospector.
+- Rewrite README and Sphinx docs so the SED pipeline is understandable from
+  SSP generation to photometry, including active assets, assumptions,
+  implementation files, benchmark commands, and remaining scientific caveats.
+- Reduce `docs/source/science_assessment.rst` to the current status and caveats
+  rather than retaining stale historical AGN/no-AGN conclusions.
+- Remove unused legacy/audit HDF5 files from `Data/`, while keeping
+  `ssp_data_fsps_v3.2_lgmet_age.h5` because a legacy smoke test still
+  references it.
+
+2026-05-29 documentation and default-config cleanup completed:
+
+- `README.md` now presents the validated full AGN path as the default, documents
+  active assets, generation commands, fit commands, and the FSPS/Prospector
+  closure benchmark command.
+- Added `docs/source/forward_model.rst` as the step-by-step SED pipeline:
+  HDF5 SSP axes, SFH weights, surviving mass, dust, gas, AGN component grid,
+  IGM/order, photometry, implementation files, assumptions, and benchmark
+  status.
+- Rewrote `docs/source/data_download.rst`, `docs/source/run_setup.rst`, and
+  `docs/source/science_assessment.rst` around the current full AGN model.
+  `science_assessment.rst` is now intentionally short and only records current
+  status, validated scope, and remaining caveats.
+- Updated `docs/source/architecture.rst`, `catalog_columns.rst`,
+  `installation.rst`, `testing.rst`, and `index.rst` to match the active assets
+  and commands.
+- Updated `configs/popcosmos_binned.yaml` and `configs/popcosmos_diffstar.yaml`
+  to use `agn_model: fsps_component_grid`,
+  `agn_component_grid_path: Data/popcosmos_chabrier_agn_component_ssp_grid.h5`,
+  `stellar_only_ssp_path`, and Student-t photometric likelihood by default.
+- Removed unused legacy/audit assets from `Data/`: old Kroupa SSPs, old gas
+  grids, legacy AGN template grids, the AGN smoke/audit grids, and Windows zone
+  identifier sidecar files. Retained the active Chabrier assets and
+  `ssp_data_fsps_v3.2_lgmet_age.h5`.
+- Verification passed:
+  `python -m compileall euclid_dsps scripts`;
+  `pytest tests/test_config.py tests/test_model.py tests/test_benchmark.py
+  tests/test_fsps_grid_scripts.py` with 104 passed and 3 skipped;
+  `uv run python -m sphinx -W --keep-going -b html docs/source
+  docs/build/html`;
+  `git diff --check`.
+
+2026-05-29 didactic documentation pass started:
+
+- Add short explanations of the main acronyms and model ingredients:
+  SSP, SED, SFH, IMF, isochrones, C3K, IGM, CLOUDY, emission lines, AGN,
+  FSPS, Prospector, and DSPS.
+- Make the distinction between full AGN and no-AGN explicit in README,
+  `forward_model.rst`, and run setup.
+- Remove the Sphinx `SSP Compression Notes` page for now because compressed SSP
+  execution is not implemented in the production model.
+
+2026-05-29 didactic documentation pass completed:
+
+- `docs/source/forward_model.rst` now includes a concise glossary for SED, SSP,
+  SFH, IMF, isochrones, C3K, IGM, CLOUDY, emission lines, AGN, FSPS,
+  Prospector, and DSPS. README links to this page rather than duplicating the
+  glossary.
+- `docs/source/forward_model.rst` now explains the same concepts before the
+  step-by-step SED pipeline and records why the current FSPS/MIST/C3K/Chabrier
+  choices are used.
+- `docs/source/run_setup.rst` now defines full AGN versus no-AGN before listing
+  commands.
+- Removed `docs/source/ssp_compression.rst` from source and from the Sphinx
+  toctree. Compression remains only a historical plan item, not user-facing
+  production documentation.
+- Verification passed:
+  `python -m compileall euclid_dsps scripts`;
+  `uv run python -m sphinx -W --keep-going -b html docs/source
+  docs/build/html`.
+
+2026-05-28 fit-regression diagnosis started:
+
+- Scope: compare the user-provided 512-galaxy runs
+  `popcosmos_binned_chi2_512_b10`,
+  `popcosmos_binned_student_t_512_b10`, and
+  `popcosmos_binned_noagn_chabrier_student_t_512_b10` to explain why redshift
+  recovery degrades and why some inferred parameters are flat across galaxies.
+- Initial hypothesis to test from the generated reports: the fit is not simply
+  optimizer noise; likely contributors are changed likelihood/physics
+  contracts, forward-model mismatch in blue bands, redshift attractors, and
+  poorly constrained or inactive parameters that sit at initialization/bounds.
+
+2026-05-28 Reveal.js recap deck started:
+
+- Scope: create a didactic French slide deck summarizing the code delta from
+  `master`/`dev`/the current working tree, PopCosmos-like inference pre-work,
+  new SSP generation, DSPS photometry flow, FSPS/Prospector benchmark results,
+  and the next benchmark tests to implement.
+- Target output:
+  `outputs/reports/ssp_generation_assessment_2026-05-28/slides_popcosmos_ssp_benchmark_reveal.html`.
+- The deck should reuse the generated report figures and cite the papers behind
+  the main scientific choices.
+- Completed the deck at the target path. It uses local figures from the SSP,
+  Student-t, `n=500`, and noNE smoke benchmark reports, plus linked paper
+  references for FSPS, Chabrier, MIST, DSPS, Prospector, dust, IGM, Diffstar,
+  CLUMPY, and PopCosmos.
+- Verified the HTML parses and that all seven local image paths resolve.
+
+2026-05-28 PopCosmos benchmark-closure implementation started:
+
+- Scope: implement the first next-step slice from the `n=500` benchmark review.
+- Added `scripts/generate_fsps_ssp_grid.py --stellar-only`, which writes the
+  pure-stellar Chabrier no-nebular-emission asset
+  `Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5`.
+- Generated and validated `Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5` in the
+  `shine` conda environment. Metadata confirms `imf_type=1`,
+  `imf_name=chabrier`, `z_sun=0.0142`, `add_neb_emission=0`, and
+  `add_neb_continuum=0`.
+- Added `model.stellar_only_ssp_path` to the no-AGN configs. The benchmark also
+  accepts `--stellar-ssp` to override this path.
+- Updated `scripts/benchmark_against_fsps_prospector.py` so
+  `stellar_only` and `stellar_plus_dust` use the pure-stellar DSPS context,
+  while `stellar_plus_gas` and `full_noagn` use the Chabrier gas-grid context.
+- Tightened PopCosmos-like IMF validation so contradictory HDF5 metadata now
+  fails instead of accepting `imf_type=1` or `imf_name=chabrier` independently.
+- Extended benchmark summaries with `n_total`, `n_finite_both`,
+  `n_nonfinite_dsps`, `n_nonfinite_reference`, and `n_nonfinite_delta` per
+  `(level, band)`, plus per-level/per-band residual correlations including a
+  recent-SFR proxy.
+- Added per-level diagnostic plots under `diagnostics/` for residuals against
+  redshift, dust, metallicity, gas, and recent SFR.
+- Ran a smoke benchmark:
+  `outputs/benchmarks/smoke_popcosmos_binned_noagn_noNE/`. It completes and
+  writes `benchmark_points.csv`, `benchmark_summary.json`,
+  `delta_mag_by_band.png`, and per-level diagnostics. Residuals remain too
+  large for science use, so the next step is baseline debugging, not prior
+  training.
+- Fixed the standalone benchmark runtime setup so it applies the config
+  `runtime` block before importing `euclid_dsps.model`. This lets
+  `runtime: auto` clear a stale shell-level `JAX_PLATFORMS=cuda` request before
+  JAX is imported. Verified that `--help` works with `JAX_PLATFORMS=cuda`, that
+  a CPU-forced `shine` smoke benchmark with `--n 1` completes at
+  `outputs/benchmarks/smoke_popcosmos_binned_noagn_noNE_cpu_check/`, and that
+  `runtime: auto` clears a shell-level `JAX_PLATFORMS=cuda` for the `--n 1`
+  smoke run at
+  `outputs/benchmarks/smoke_popcosmos_binned_noagn_noNE_auto_runtime_check/`.
+- Generated the comparison report for the old fixed-nebular benchmark versus
+  the new pure-stellar noNE benchmark at
+  `outputs/report/popcosmos_binned_noagn_fsps_noNE_n500/report.md`. The
+  comparison confirms that `stellar_only` median residuals improve from
+  `0.0718` to `0.0531` mag and `stellar_plus_dust` non-finite rows drop from
+  199 to 192, but all benchmark levels still fail the prior-readiness gates.
+  Next priority is a pure-stellar normalization/UV/IGM audit before changing
+  gas or training the first learned prior.
+
+2026-05-28 FSPS/Prospector `n=500` benchmark available:
+
+- Completed benchmark directory:
+  `outputs/benchmarks/popcosmos_binned_noagn_fsps_n500/`.
+- Outputs present: `benchmark_points.csv`, `benchmark_summary.json`,
+  `delta_mag_by_band.png`, and `run.log`.
+- The benchmark has 20,000 rows: 500 sampled points x 4 levels x 10 bands.
+- It runs end to end, but residuals do not meet the recommended prior-v0
+  criteria. `stellar_only` already has broad residuals larger than target,
+  especially in LSST `u/g/r` and Euclid VIS, so the next priority is a clean
+  pure-stellar baseline before tuning dust or gas.
+- For dust/gas levels, some DSPS magnitudes are non-finite in the current
+  benchmark output while the FSPS/Prospector reference remains finite. The next
+  benchmark summary should report finite and non-finite counts explicitly per
+  `(level, band)`.
+- Updated remaining-work plan to prioritize pure-stellar SSP generation,
+  stricter IMF metadata validation, richer benchmark diagnostics, staged reruns,
+  and then dust/gas decisions.
+
+2026-05-28 SSP generation assessment report completed:
+
+- Wrote `outputs/reports/ssp_generation_assessment_2026-05-28/report.md`.
+- Generated companion diagnostics in the same directory:
+  `ssp_axis_contract.png`, `ssp_sed_flux_ratios.png`,
+  `ssp_broadband_offsets.png`, `gas_grid_reference_match.png`,
+  `fsps_prospector_benchmark_residuals.png`, plus CSV/JSON summary tables.
+- Findings: the new Chabrier base SSP is DSPS-layout compatible with the legacy
+  Kroupa `logGasU=-2` asset; the older DSPS v3.2 SSP keeps the same age and
+  stellar-metallicity axes but uses a different wavelength grid; the Chabrier
+  and Kroupa spectra are not flux-identical, as expected from the IMF change.
+- The Chabrier gas grid exactly reproduces the base SSP at
+  `gas_logu=-2`, `gas_logz=0` in the local HDF5 assets.
+- The existing `n=500` FSPS/Prospector benchmark still misses the desired
+  photometry residual targets, so the report recommends a pure-stellar
+  Chabrier SSP and a cleaner layered benchmark before calling the forward model
+  science-ready.
+
+2026-05-28 SSP generation assessment report started:
+
+- Scope: write a didactic Markdown report under `outputs/reports/` explaining
+  how the new locally generated SSP assets are produced, whether they match the
+  previous SSP assets closely enough for the current PopCosmos-like workflow,
+  and how DSPS turns physical parameters plus SSPs into broadband photometry.
+- Planned checks: inspect `scripts/generate_fsps_ssp_grid.py`,
+  `scripts/fsps_grid_common.py`, the active config asset paths, and the HDF5
+  schemas/statistics for the Chabrier, legacy Kroupa, and old DSPS SSP grids;
+  generate compact comparison plots for the report.
+
+2026-05-27 PopCosmos forward-model gap correction completed:
+
+- Added recommended no-AGN configs:
+  `configs/popcosmos_binned_noagn.yaml` and
+  `configs/popcosmos_diffstar_noagn.yaml`. They use
+  `model.agn_model: none`, Student-t photometric likelihood, and do not expose
+  `ln_fagn` or `ln_tauagn` as free parameters.
+- Updated PopCosmos-like configs and FSPS generation scripts to explicit
+  Chabrier asset names and metadata. PopCosmos-like `load_context` now rejects
+  Kroupa-named assets, missing/ambiguous IMF metadata, and `z_sun` mismatches.
+- PopCosmos-like `z_sun` is now `0.0142`; legacy lognormal defaults remain
+  compatible with `0.0134`.
+- Added `dust_model: charlot_fall_powerlaw` as the explicit name for the
+  previous behavior and `dust_model: prospector_fsps` as the current approximate
+  JAX target mode. Direct FSPS/Prospector benchmarking is still required before
+  calling this exact.
+- Added the hard `Zgas >= Zstar` constraint, strict gas-grid axis/unit
+  validation, optional enriched-grid emission-line correction support, and tests
+  for the correction affecting only the line-covered filter.
+- Added `scripts/benchmark_against_fsps_prospector.py`. It defines the CLI,
+  sampling, summary/output contract, and uses an independent
+  `prospect.sources.FastStepBasis` + python-FSPS + sedpy reference. It refuses
+  unsupported mappings rather than falling back to DSPS.
+- Smoke benchmark with `--n 5` now runs and writes
+  `outputs/benchmarks/smoke_popcosmos_binned_noagn/benchmark_points.csv`,
+  `benchmark_summary.json`, and `delta_mag_by_band.png`. Current residuals do
+  not meet the recommended prior-readiness criteria; the largest UV/dust/gas
+  discrepancies should be audited before any final learned prior.
+- Verification passed:
+  `python -m compileall euclid_dsps scripts`;
+  `pytest tests/test_config.py` (28 passed);
+  `pytest tests/test_model.py` (33 passed, 3 skipped);
+  `pytest tests/test_benchmark.py tests/test_fsps_grid_scripts.py` (6 passed);
+  full `pytest` (123 passed, 4 skipped);
+  `git diff --check`.
+
+2026-05-27 PopCosmos forward-model gap correction phase started:
+
+- Scope: remove avoidable PopCosmos-like mismatches before learning a first
+  prior, without touching the already implemented manual Student-t likelihood.
+- `configs/fs2_phz1_science.yaml` is not present in this checkout; active
+  inputs are the binned and Diffstar PopCosmos-like configs.
+- Current PopCosmos-like assets/configs still reference Kroupa-named SSP data
+  and gas metadata with `imf_type=2`; this phase will switch PopCosmos-like
+  generation/config contracts to explicit Chabrier assets and make ambiguous
+  HDF5 metadata fail loudly.
+- Planned outputs: no-AGN configs for prior v0, PopCosmos-like `z_sun=0.0142`,
+  explicit dust modes, gas metallicity and grid-axis validation, optional line
+  correction support, and an FSPS/Prospector benchmark harness.
+
+2026-05-27 group meeting report drafting:
+
+- Preparing a presentation-ready scientific report summarizing the `main` to
+  `dev` changes, the two SFH fitting paths, the PopCosmos-like configuration,
+  the cleaner SSP/gas/AGN generation, and the two comparison runs in
+  `outputs/runs/`.
+- Wrote `outputs/reports/group_meeting_popcosmos_dev_2026-05-28.md` with:
+  codebase changes from `master`/`main` to `dev`, scientific justification,
+  gas/AGN asset details, chi-square vs Student-t run comparison, caveats,
+  suggested figures, next steps, and a short meeting talk track.
+- Report uses the local `master` branch as the base because no local `main`
+  branch exists in this checkout.
+
+2026-05-27 likelihood comparison report in progress:
+
+- Comparing `outputs/runs/popcosmos_binned_chi2_512_b10` against
+  `outputs/runs/popcosmos_binned_student_t_512_b10`.
+- Goal: supervisor-ready report with paired Gaussian vs Student-t diagnostics,
+  fit quality, redshift truth/proxy residuals, band residuals, and runtime
+  comparison.
+- Added `scripts/compare_likelihood_runs.py` to generate paired comparison
+  reports.
+- Generated `outputs/reports/popcosmos_binned_chi2_vs_student_t_512/`.
+- Paired 512 shared galaxies. Student-t improves median reduced Gaussian chi2
+  from 15.76 to 1.56, median |dz| from 0.291 to 0.120, median |dz|/(1+z) from
+  0.150 to 0.060, and median mean absolute magnitude residual from 0.136 to
+  0.049.
+- Galaxy-by-galaxy tables are written, including top redshift improvements and
+  degradations for Student-t relative to Gaussian chi2.
+- `uv run python -m compileall scripts/compare_likelihood_runs.py` passed.
+- `uv run --extra dev ruff check scripts/compare_likelihood_runs.py` passed.
 
 2026-05-27 Student-t likelihood switch:
 

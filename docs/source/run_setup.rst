@@ -1,50 +1,54 @@
 Run And Fit
 ===========
 
-Production Configs
-------------------
+Recommended Configs
+-------------------
 
-There are two active PopCosmos-like production configs:
+Use full AGN by default:
 
 .. code-block:: text
 
    configs/popcosmos_binned.yaml
    configs/popcosmos_diffstar.yaml
 
-Both are standalone and use:
+Use no-AGN only for fallback/debug or controlled ablations:
 
-* LSST ``ugrizy`` + Euclid VIS/Y/J/H;
-* flux-space likelihood with catalog flux errors;
-* a configurable photometric objective: Gaussian chi-square by default, or a
-  POP-COSMOS-style Student-t likelihood with ``student_t_dof: 2.0``;
-* single stellar metallicity;
-* Charlot-Fall age-dependent dust;
-* FSPS gas SSP grid over gas metallicity and ionization;
-* FSPS/CLUMPY AGN template grid over ``agn_tau``.
+.. code-block:: text
 
-``popcosmos_binned.yaml`` fits six PopCosmos-like SFH bin ratios.
-``popcosmos_diffstar.yaml`` keeps the same gas/dust/AGN surface but replaces
-those ratios with the six-free-parameter Diffstar SFH. Install the optional
-dependency set before using it:
+   configs/popcosmos_binned_noagn.yaml
+   configs/popcosmos_diffstar_noagn.yaml
 
-.. code-block:: bash
+The default binned full-AGN config uses:
 
-   python -m pip install -e '.[diffstar]'
+* LSST ``ugrizy`` plus Euclid VIS/Y/J/H;
+* PopCosmos-like step SFH bins;
+* Chabrier FSPS SSPs with ``z_sun=0.0142``;
+* Prospector/FSPS-like dust;
+* raw FSPS/CLOUDY gas grid;
+* FSPS-native AGN component grid;
+* FSPS-like AGN host attenuation and AGN/IGM ordering;
+* flux-space Student-t likelihood with ``student_t_dof=2``.
 
-CPU Runtime
+Terminology
 -----------
 
-Use this on WSL or CPU-only environments:
+``full AGN`` means the galaxy SED includes stars, dust, gas, IGM, and an active
+galactic nucleus component. The fit includes ``ln_fagn`` and ``ln_tauagn``.
+``no-AGN`` means the AGN component is disabled and those two parameters are not
+present. No-AGN is useful when checking the stellar+dust+gas model or reducing
+memory pressure, but it is no longer the default science path.
+
+Runtime
+-------
+
+CPU-safe local runtime:
 
 .. code-block:: bash
 
    export JAX_PLATFORMS=cpu
    export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
-GPU Runtime
------------
-
-Use this only in an environment with CUDA-enabled JAX:
+GPU runtime, only with CUDA-enabled JAX:
 
 .. code-block:: bash
 
@@ -53,17 +57,13 @@ Use this only in an environment with CUDA-enabled JAX:
    export XLA_PYTHON_CLIENT_PREALLOCATE=false
    export TF_GPU_ALLOCATOR=cuda_malloc_async
 
-The fit and post-fit batch prediction paths pass large SSP/gas/AGN arrays as
-dynamic JAX arguments, so JIT does not compile the full gas grid as a
-closed-over constant. Gas-grid interpolation gathers only the four bracketing
-gas-metallicity/gas-ionization slabs, but the grid plus optimizer/reporting
-buffers still must fit in device memory. If a GPU run exhausts memory, reduce
-``--batch-size`` first.
+The full AGN component grid is about 3.9 GiB and the gas grid is about 2.7 GiB.
+The benchmark script has a lazy component-grid path, but production fitting
+loads the configured grids in the model context. Start with small batches and
+increase only after checking memory.
 
-One Row
--------
-
-Short optimizer smoke:
+One-Row Full AGN
+----------------
 
 .. code-block:: bash
 
@@ -71,7 +71,7 @@ Short optimizer smoke:
      --config configs/popcosmos_binned.yaml \
      fit --index 0 \
      --fit-maxiter 20 \
-     --out outputs/runs/dev_popcosmos_one_short \
+     --out outputs/runs/dev_popcosmos_fullagn_one_short \
      --sed-samples 1
 
 Production-style one-row run:
@@ -81,10 +81,49 @@ Production-style one-row run:
    python -m euclid_dsps.cli \
      --config configs/popcosmos_binned.yaml \
      fit --index 0 \
-     --out outputs/runs/dev_popcosmos_one \
-     --sed-samples 1
+     --out outputs/runs/dev_popcosmos_fullagn_one \
+     --sed-samples 4
 
-Diffstar one-row smoke:
+Small Batch Full AGN
+--------------------
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned.yaml \
+     fit --limit 20 \
+     --batch-size 2 \
+     --out outputs/runs/dev_popcosmos_fullagn_batch20 \
+     --sed-samples 4
+
+Increase ``--batch-size`` only after the memory footprint is known on the target
+machine.
+
+No-AGN Fallback
+---------------
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned_noagn.yaml \
+     fit --limit 20 \
+     --batch-size 5 \
+     --out outputs/runs/dev_popcosmos_noagn_batch20 \
+     --sed-samples 4
+
+The no-AGN config keeps the same SSP, dust, gas, filters, redshift, and
+likelihood surface but removes ``ln_fagn`` and ``ln_tauagn``.
+
+Diffstar
+--------
+
+Install the optional dependencies:
+
+.. code-block:: bash
+
+   python -m pip install -e '.[diffstar]'
+
+Run a short Diffstar full-AGN smoke:
 
 .. code-block:: bash
 
@@ -92,63 +131,13 @@ Diffstar one-row smoke:
      --config configs/popcosmos_diffstar.yaml \
      fit --index 0 \
      --fit-maxiter 20 \
-     --out outputs/runs/dev_popcosmos_diffstar_one_short \
+     --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short \
      --sed-samples 1
-
-Batched MAP
------------
-
-Small batch:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
-     fit --limit 20 \
-     --batch-size 5 \
-     --out outputs/runs/dev_popcosmos_batch \
-     --sed-samples 4
-
-To compare against the POP-COSMOS heavy-tailed photometric likelihood, switch
-only the objective and keep the same rows/config:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
-     fit --limit 20 \
-     --batch-size 5 \
-     --fit-likelihood student_t \
-     --student-t-dof 2 \
-     --out outputs/runs/dev_popcosmos_batch_student_t \
-     --sed-samples 4
-
-Larger batch:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
-     fit --limit 1000 \
-     --batch-size 64 \
-     --out outputs/runs/popcosmos_fit_1000 \
-     --sed-samples 16
-
-Diffstar GPU smoke, starting from the known safe batch size:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_diffstar.yaml \
-     fit --limit 16 \
-     --batch-size 4 \
-     --out outputs/runs/dev_popcosmos_diffstar_gpu_batch4 \
-     --sed-samples 2
 
 Forward Check
 -------------
 
-Run the model without optimization:
+Run the model and reporting path without optimization:
 
 .. code-block:: bash
 
@@ -156,7 +145,7 @@ Run the model without optimization:
      --config configs/popcosmos_binned.yaml \
      fit --index 0 \
      --no-optimize \
-     --out outputs/runs/dev_popcosmos_forward \
+     --out outputs/runs/dev_popcosmos_fullagn_forward \
      --sed-samples 1
 
 Posterior Smoke
@@ -169,12 +158,49 @@ Posterior Smoke
      posterior --index 0 \
      --num-warmup 10 \
      --num-samples 10 \
-     --out outputs/runs/dev_popcosmos_posterior_one
+     --out outputs/runs/dev_popcosmos_fullagn_posterior_one
+
+Benchmark Against FSPS/Prospector
+---------------------------------
+
+Small smoke:
+
+.. code-block:: bash
+
+   MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
+     --runtime cpu \
+     --config configs/popcosmos_binned.yaml \
+     --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+     --agn-host-attenuation fsps_diffuse_unit_tau \
+     --agn-igm-order fsps_after_igm \
+     --agn-baked-attenuation fsps_powerlaw_unit_tau \
+     --agn-baked-dust-index -0.7 \
+     --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn stellar_plus_agn stellar_plus_dust_plus_agn stellar_plus_gas_plus_agn full_agn \
+     --n 50 \
+     --seed 0 \
+     --out outputs/benchmarks/popcosmos_binned_full_forward_fsps_closure_n50
+
+Regression-size benchmark:
+
+.. code-block:: bash
+
+   MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
+     --runtime cpu \
+     --config configs/popcosmos_binned.yaml \
+     --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+     --agn-host-attenuation fsps_diffuse_unit_tau \
+     --agn-igm-order fsps_after_igm \
+     --agn-baked-attenuation fsps_powerlaw_unit_tau \
+     --agn-baked-dust-index -0.7 \
+     --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn stellar_plus_agn stellar_plus_dust_plus_agn stellar_plus_gas_plus_agn full_agn \
+     --n 500 \
+     --seed 1 \
+     --out outputs/benchmarks/popcosmos_binned_full_forward_fsps_closure_seed1_n500
 
 Parameter Vector
 ----------------
 
-The active fit parameters are:
+Full AGN binned config:
 
 .. code-block:: text
 
@@ -190,31 +216,13 @@ The active fit parameters are:
    ln_fagn
    ln_tauagn
 
-``ln_tauagn`` is restricted to the native FSPS/CLUMPY template range
-``[ln(5), ln(150)]``.
-
-The Diffstar config uses the same non-SFH parameters but replaces
-``dlog10_sfr_1 ... dlog10_sfr_6`` with:
-
-.. code-block:: text
-
-   diffstar_lgmcrit
-   diffstar_lgy_at_mcrit
-   diffstar_indx_lo
-   diffstar_lg_qt
-   diffstar_lg_drop
-   diffstar_lg_rejuv
-
-``diffstar_indx_hi`` and ``diffstar_qlglgdt`` are fixed in the config.
+No-AGN configs remove ``ln_fagn`` and ``ln_tauagn``. Diffstar configs replace
+the six ``dlog10_sfr`` terms with the configured Diffstar parameters.
 
 Outputs
 -------
 
-MAP runs write normalized config, fit results, photometry comparisons,
-optimizer diagnostics, performance summaries, and optional SED diagnostics under
-the requested output directory.
-``fit_quality`` and ``reduced_fit_quality`` follow the configured photometric
-likelihood and drive the run diagnostics. ``chi2`` and ``reduced_chi2`` remain
-Gaussian diagnostics at the final parameters for cross-run comparison;
-``photometric_objective`` records the selected likelihood objective before
-normalizing by band count or degrees of freedom.
+MAP runs write the normalized config, fit results, model/observed photometry,
+optimizer diagnostics, performance summaries, and optional SED diagnostics
+under the requested output directory. ``fit_quality`` follows the configured
+photometric likelihood. ``chi2`` remains a Gaussian comparison diagnostic.

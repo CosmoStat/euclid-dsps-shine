@@ -1,19 +1,56 @@
-# DSPS PopCosmos
+# DSPS PopCosmos Forward Model
 
-DSPS/JAX fitting workflow for Euclid + LSST photometry with two PopCosmos-like
-production configurations:
+This repository contains a DSPS/JAX forward-model and fitting workflow for
+Euclid + LSST photometry. The default science path is now the full PopCosmos-like
+model with gas and AGN enabled:
 
 ```text
 configs/popcosmos_binned.yaml
 configs/popcosmos_diffstar.yaml
 ```
 
-`popcosmos_binned.yaml` fits redshift, stellar mass, six PopCosmos-like SFH bin
-ratios, stellar metallicity, Charlot-Fall dust, gas metallicity, gas ionization,
-AGN fraction, and AGN torus optical depth. `popcosmos_diffstar.yaml` keeps the
-same gas/dust/AGN/redshift/metallicity surface but replaces the six SFH bin
-ratios with the six-free-parameter Diffstar SFH path. The gas and AGN pieces
-come from generated FSPS HDF5 assets in `Data/`.
+The no-AGN configs remain available for fallback/debug runs:
+
+```text
+configs/popcosmos_binned_noagn.yaml
+configs/popcosmos_diffstar_noagn.yaml
+```
+
+The binned config uses PopCosmos-style step SFH bins. The Diffstar config keeps
+the same redshift, dust, gas, and AGN surface but swaps the SFH model for the
+reduced six-parameter Diffstar path.
+
+## What The Model Does
+
+At fit time the code does not call FSPS. It loads pre-generated HDF5 spectral
+assets and evaluates the forward model in JAX:
+
+1. Load a Chabrier FSPS SSP grid with MIST isochrones and C3K spectra.
+2. Convert the sampled SFH into weights on the SSP age grid.
+3. Interpolate stellar metallicity and multiply by formed stellar mass.
+4. Apply the Prospector/FSPS-like dust model.
+5. Add nebular emission from the Chabrier gas SSP grid.
+6. Add the FSPS-native AGN component grid.
+7. Apply the FSPS-like IGM/order convention.
+8. Redshift, apply luminosity distance, integrate through LSST+Euclid filters.
+9. Fit catalog fluxes with the configured flux-space likelihood.
+
+The details and glossary are documented in `docs/source/forward_model.rst`.
+
+## Full AGN vs No-AGN
+
+`configs/popcosmos_binned.yaml` is the default full model. It fits all stellar,
+dust, gas, redshift, and AGN parameters:
+
+```text
+ln_fagn    = log AGN luminosity fraction
+ln_tauagn  = log AGN torus optical depth
+```
+
+`configs/popcosmos_binned_noagn.yaml` uses the same stellar, dust, gas,
+redshift, filters, and likelihood setup, but sets `agn_model: none` and removes
+`ln_fagn` and `ln_tauagn`. Use no-AGN only for ablations, memory debugging, or
+science tests where AGN is intentionally excluded.
 
 ## Setup
 
@@ -22,170 +59,218 @@ conda activate shine
 python -m pip install -e .
 ```
 
-For the Diffstar config, also install the optional SFH dependencies in the same
-environment:
+For Diffstar:
 
 ```bash
 python -m pip install -e '.[diffstar]'
 ```
 
-Install FSPS/python-FSPS in the same environment:
+For documentation/tests in the `uv` environment:
+
+```bash
+uv sync
+uv run python -m compileall euclid_dsps scripts
+uv run pytest tests
+```
+
+## Required Data Assets
+
+The active full-AGN pipeline expects:
+
+```text
+Data/Euclid FS2 LC galaxy catalog_phz1.parquet
+Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5
+Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
+Data/popcosmos_chabrier_gas_ssp_grid.h5
+Data/popcosmos_chabrier_agn_component_ssp_grid.h5
+```
+
+The PopCosmos-like configs reject ambiguous/Kroupa SSP metadata. Active assets
+must declare Chabrier IMF metadata and `z_sun = 0.0142`.
+
+## Generate Assets
+
+Install FSPS/python-FSPS in the same environment used for generation:
 
 ```bash
 cd "$HOME/src"
 export SPS_HOME="$HOME/src/fsps"
 git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
 
-cd /home/maxime/src/DSPS-pop-cosmos
-export SPS_HOME="$HOME/src/fsps"
-uv pip install fsps
-```
-
-Sanity check:
-
-```bash
+conda activate shine
+python -m pip install fsps
 python -c "import fsps; sp=fsps.StellarPopulation(sfh=0); print(len(sp.wavelengths)); print(sp.isoc_library, sp.spec_library)"
 ```
 
-## Data And Assets
-
-The config expects:
-
-```text
-Data/Euclid FS2 LC galaxy catalog_phz1.parquet
-Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5
-Data/popcosmos_gas_ssp_grid.h5
-Data/popcosmos_agn_template_grid.h5
-```
-
-Download the reference SSP if needed:
+Generate the fixed-nebular reference SSP:
 
 ```bash
-python scripts/manage_ssp.py download fsps_v0.4.7_u-2.0
-python scripts/manage_ssp.py test Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5
-```
-
-Generate and validate the gas grid:
-
-```bash
-export SPS_HOME="$HOME/src/fsps"
-
-python scripts/generate_fsps_gas_grid.py \
-  --output Data/popcosmos_gas_ssp_grid.h5 \
-  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
-  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+python scripts/generate_fsps_ssp_grid.py \
+  --output Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
   --overwrite
+```
 
+This SSP includes a fixed nebular setup and is the axis contract used by the gas
+and AGN grids. It is not used for the gas-free benchmark levels.
+
+Generate the pure-stellar SSP used by benchmark gas-free levels:
+
+```bash
+python scripts/generate_fsps_ssp_grid.py \
+  --stellar-only \
+  --output Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5 \
+  --overwrite
+```
+
+This SSP disables nebular emission and nebular continuum. It is the correct
+asset when the benchmark asks for `stellar_only` or `stellar_plus_dust`.
+
+Generate the gas grid:
+
+```bash
 python scripts/generate_fsps_gas_grid.py \
-  --output Data/popcosmos_gas_ssp_grid.h5 \
-  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
-  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --output Data/popcosmos_chabrier_gas_ssp_grid.h5 \
+  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --overwrite
+```
+
+This grid is raw FSPS/CLOUDY gas. It is physically motivated and benchmarked
+against FSPS broad-band photometry, but it does not include the learned
+PopCosmos line-by-line corrections.
+
+Generate the FSPS-native AGN component grid:
+
+```bash
+python scripts/generate_fsps_agn_component_grid.py \
+  --output Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --overwrite
+```
+
+This grid stores the FSPS AGN contribution as a component per SSP age and
+metallicity. It is the current validated full-AGN path.
+
+Validate existing assets without importing python-FSPS:
+
+```bash
+python scripts/generate_fsps_ssp_grid.py \
+  --output Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --validate-only
+python scripts/generate_fsps_ssp_grid.py \
+  --stellar-only \
+  --output Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5 \
+  --validate-only
+python scripts/generate_fsps_gas_grid.py \
+  --output Data/popcosmos_chabrier_gas_ssp_grid.h5 \
+  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --validate-only
+python scripts/generate_fsps_agn_component_grid.py \
+  --output Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+  --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
   --validate-only
 ```
 
-Generate and validate the AGN grid:
+## Run Fits
 
-```bash
-python scripts/generate_fsps_agn_grid.py \
-  --output Data/popcosmos_agn_template_grid.h5 \
-  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
-  --agn-tau-grid 5 10 20 30 40 60 80 100 150 \
-  --fagn-normalization 1.0 \
-  --tage-gyr 1.0 \
-  --stellar-logzsol 0.0 \
-  --overwrite
-
-python scripts/generate_fsps_agn_grid.py \
-  --output Data/popcosmos_agn_template_grid.h5 \
-  --base-ssp Data/fsps_v0.4.7_mist_c3k_a_kroupa_wNE_logGasU-2.0_logGasZ0.0.h5 \
-  --validate-only
-```
-
-Expected generated shapes:
-
-```text
-gas ssp_flux: (7, 7, 12, 107, 11149)
-AGN template_lnu_per_lbol: (9, 11149)
-```
-
-## Run
-
-Use CPU-safe JAX settings on WSL unless you have a CUDA-enabled JAX install:
+CPU-safe runtime:
 
 ```bash
 export JAX_PLATFORMS=cpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 ```
 
-One-row short fit:
+One-row full AGN smoke:
 
 ```bash
 python -m euclid_dsps.cli \
   --config configs/popcosmos_binned.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_one_short \
+  --out outputs/runs/dev_popcosmos_fullagn_one_short \
   --sed-samples 1
 ```
 
-Diffstar one-row short fit:
-
-```bash
-python -m euclid_dsps.cli \
-  --config configs/popcosmos_diffstar.yaml \
-  fit --index 0 \
-  --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_diffstar_one_short \
-  --sed-samples 1
-```
-
-Batched fit:
+Small full AGN batch:
 
 ```bash
 python -m euclid_dsps.cli \
   --config configs/popcosmos_binned.yaml \
   fit --limit 20 \
-  --batch-size 5 \
-  --out outputs/runs/dev_popcosmos_batch \
+  --batch-size 2 \
+  --out outputs/runs/dev_popcosmos_fullagn_batch20 \
   --sed-samples 4
 ```
 
-Diffstar GPU smoke, start small because the same gas grid and optimizer buffers
-must fit in device memory:
+No-AGN fallback:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/popcosmos_binned_noagn.yaml \
+  fit --limit 20 \
+  --batch-size 5 \
+  --out outputs/runs/dev_popcosmos_noagn_batch20 \
+  --sed-samples 4
+```
+
+Diffstar smoke:
 
 ```bash
 python -m euclid_dsps.cli \
   --config configs/popcosmos_diffstar.yaml \
-  fit --limit 16 \
-  --batch-size 4 \
-  --out outputs/runs/dev_popcosmos_diffstar_gpu_batch4 \
-  --sed-samples 2
+  fit --index 0 \
+  --fit-maxiter 20 \
+  --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short \
+  --sed-samples 1
 ```
 
-Posterior smoke:
+## FSPS/Prospector Benchmark
+
+The current closure benchmark is:
 
 ```bash
-python -m euclid_dsps.cli \
+mkdir -p outputs/matplotlib_cache
+
+MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
+  --runtime cpu \
   --config configs/popcosmos_binned.yaml \
-  posterior --index 0 \
-  --num-warmup 10 \
-  --num-samples 10 \
-  --out outputs/runs/dev_popcosmos_posterior_one
+  --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+  --agn-host-attenuation fsps_diffuse_unit_tau \
+  --agn-igm-order fsps_after_igm \
+  --agn-baked-attenuation fsps_powerlaw_unit_tau \
+  --agn-baked-dust-index -0.7 \
+  --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn stellar_plus_agn stellar_plus_dust_plus_agn stellar_plus_gas_plus_agn full_agn \
+  --n 500 \
+  --seed 0 \
+  --out outputs/benchmarks/popcosmos_binned_full_forward_fsps_closure_n500
 ```
+
+Report:
+
+```text
+outputs/report/popcosmos_binned_full_forward_fsps_closure_n500/report.md
+```
+
+Result: the production broad-band levels `full_noagn` and `full_agn` pass the
+FSPS/Prospector-like bright finite target. This is not a claim that official
+PopCosmos emission-line calibration has been reproduced.
+
+## Caveats
+
+- The gas grid is raw FSPS/CLOUDY. `emission_line_corrections: none` means no
+  PopCosmos learned line-by-line corrections are applied.
+- Full AGN uses a large SSP-shaped AGN component grid. It is the validated
+  science path, but it requires much more memory than the legacy AGN template.
+- The benchmark uses a lazy AGN component path to avoid loading the full 3.9 GiB
+  grid into JAX. Production fitting still loads the grid in the model context,
+  so start with small batches.
+- Very faint magnitude-space rows can be non-finite. Inference is flux-space.
 
 ## Checks
 
 ```bash
-uv run python -m compileall euclid_dsps scripts
-uv run pytest tests
-uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --help
-uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --help
+python -m compileall euclid_dsps scripts
+pytest tests/test_config.py tests/test_model.py tests/test_benchmark.py
+python -m sphinx -W --keep-going -b html docs/source docs/build/html
 ```
-
-The optimizer and post-fit batch prediction paths pass large SSP/gas/AGN arrays
-as dynamic JAX arguments to jitted model calls, so XLA does not compile the full
-gas grid as a closed-over constant. Gas-grid interpolation gathers only the four
-bracketing gas-metallicity/gas-ionization slabs. For GPU runs, use a
-CUDA-enabled JAX install and enough device memory for the ~2.6 GiB gas grid plus
-optimizer/reporting buffers; reduce `--batch-size` first if memory is
-exhausted.
