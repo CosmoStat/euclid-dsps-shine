@@ -7,18 +7,21 @@ Branch objective: integrate the Diffstar SFH implementation from
 losing the generated-grid scripts, GPU/JIT memory fixes, or documentation
 cleanup.
 
-The repository currently has four active PopCosmos-like configurations:
+The repository currently has five active PopCosmos-like configurations:
 
 ```text
 configs/popcosmos_binned.yaml
+configs/popcosmos_binned_compressed.yaml
 configs/popcosmos_diffstar.yaml
 configs/popcosmos_binned_noagn.yaml
 configs/popcosmos_diffstar_noagn.yaml
 ```
 
 The full AGN configs are now the recommended default path:
-`popcosmos_binned` first, `popcosmos_diffstar` as the comparison. The no-AGN
-configs remain available for controlled ablations and fallback debugging.
+`popcosmos_binned` first, `popcosmos_binned_compressed` for high-throughput
+GPU MAP batches once dense-vs-compressed residuals are acceptable, and
+`popcosmos_diffstar` as the comparison. The no-AGN configs remain available
+for controlled ablations and fallback debugging.
 
 They are standalone and represent the current PopCosmos-like DSPS/JAX paths:
 
@@ -45,6 +48,9 @@ They are standalone and represent the current PopCosmos-like DSPS/JAX paths:
   `log10(Zstar_abs) = log10(0.0142) + log10_stellar_metallicity`.
 - Full configs keep the 16-parameter fit including SFH, gas, and AGN.
   No-AGN configs remove `ln_fagn` and `ln_tauagn`.
+- `configs/popcosmos_binned_compressed.yaml` inherits the full binned AGN
+  config and swaps only the resident spectral assets to compressed SSP, gas,
+  and AGN component bases.
 
 Older config variants, presets, examples, and partial smoke configs have been
 removed from source. Tests now target the active configs plus low-level

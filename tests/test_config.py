@@ -549,6 +549,32 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert config["fit"]["student_t_dof"] == 2.0
 
 
+def test_popcosmos_binned_compressed_config_overrides_only_runtime_assets() -> None:
+    dense = load_config("configs/popcosmos_binned.yaml")
+    compressed = load_config("configs/popcosmos_binned_compressed.yaml")
+
+    assert tuple(compressed["fit"]["free_parameters"]) == POPCOSMOS_PARAMETER_NAMES
+    assert compressed["model"]["sfh_model"] == dense["model"]["sfh_model"]
+    assert compressed["model"]["dust_model"] == dense["model"]["dust_model"]
+    assert compressed["model"]["igm_model"] == dense["model"]["igm_model"]
+    assert compressed["model"]["ssp_model"] == "compressed_basis"
+    assert (
+        compressed["model"]["compressed_ssp_path"]
+        == "Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5"
+    )
+    assert compressed["model"]["nebular_model"] == "compressed_gas_grid"
+    assert (
+        compressed["model"]["compressed_gas_grid_path"]
+        == "Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5"
+    )
+    assert compressed["model"]["agn_model"] == "compressed_fsps_component_grid"
+    assert (
+        compressed["model"]["compressed_agn_component_grid_path"]
+        == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
+    )
+    assert compressed["fit"]["photometric_likelihood"] == "student_t"
+
+
 def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:
     config = load_config("configs/popcosmos_diffstar.yaml")
 

@@ -49,6 +49,25 @@ The gas and AGN component grids dominate resident memory. The base SSPs are
 small by comparison, but they should still be included in the long-term
 compressed asset family so the final model is coherent.
 
+## Current Compressed Runtime Entry Point
+
+`configs/popcosmos_binned_compressed.yaml` is the CLI entry point for the full
+16-parameter PopCosmos-like binned model with compressed resident assets. It
+inherits `configs/popcosmos_binned.yaml` and switches:
+
+```yaml
+model:
+  ssp_model: compressed_basis
+  compressed_ssp_path: Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
+  nebular_model: compressed_gas_grid
+  compressed_gas_grid_path: Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
+  agn_model: compressed_fsps_component_grid
+  compressed_agn_component_grid_path: Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
+```
+
+The dense config remains the reference. The compressed config is the operational
+high-throughput path for MAP batches after a dense-vs-compressed residual check.
+
 ## Non-Goals
 
 - Do not make lossless HDF5 repacking the main deliverable. It is optional IO
