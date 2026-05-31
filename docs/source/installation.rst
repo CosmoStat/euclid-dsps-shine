@@ -22,7 +22,8 @@ The codebase should still import under ``uv`` for tests and packaging checks:
 Diffstar SFH Optional Extra
 ---------------------------
 
-``configs/popcosmos_diffstar.yaml`` and
+``configs/popcosmos_diffstar.yaml``,
+``configs/popcosmos_diffstar_compressed.yaml``, and
 ``configs/popcosmos_diffstar_noagn.yaml`` require ``diffstar`` and ``diffmah``.
 In the runtime environment:
 
@@ -35,9 +36,9 @@ The standard binned-SFH configs do not require this optional extra.
 FSPS And python-FSPS
 --------------------
 
-The PopCosmos-like configs require generated FSPS SSP, gas, and AGN component
-grids. Install FSPS and python-FSPS in the runtime environment used for
-generation:
+The PopCosmos-like configs require generated FSPS SSP, gas, AGN component, and
+compressed runtime grids. Install FSPS and python-FSPS in the runtime
+environment used for generation:
 
 .. code-block:: bash
 

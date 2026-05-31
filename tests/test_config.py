@@ -559,6 +559,13 @@ def test_popcosmos_binned_compressed_config_overrides_only_runtime_assets() -> N
     assert compressed["model"]["igm_model"] == dense["model"]["igm_model"]
     assert compressed["runtime"]["jax_platforms"] == "cuda"
     assert compressed["runtime"]["require_gpu"] is True
+    assert compressed["runtime"]["tf_gpu_allocator"] == "cuda_malloc_async"
+    assert compressed["fit"]["trace_mode"] == "optimizer"
+    assert compressed["fit"]["trace_interval"] == 20
+    assert compressed["fit"]["scan_unroll"] == 1
+    assert compressed["fit"]["donate_optimizer_inputs"] is False
+    assert compressed["fit"]["remat_model_mags"] is False
+    assert compressed["fit"]["batch_grad_mode"] == "per_galaxy"
     assert compressed["model"]["ssp_model"] == "compressed_basis"
     assert (
         compressed["model"]["compressed_ssp_path"]
@@ -575,6 +582,69 @@ def test_popcosmos_binned_compressed_config_overrides_only_runtime_assets() -> N
         == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
     )
     assert compressed["fit"]["photometric_likelihood"] == "student_t"
+
+
+def test_popcosmos_diffstar_compressed_config_overrides_only_runtime_assets() -> None:
+    dense = load_config("configs/popcosmos_diffstar.yaml")
+    compressed = load_config("configs/popcosmos_diffstar_compressed.yaml")
+
+    assert compressed["model"]["sfh_model"] == "diffstar_reduced6"
+    assert compressed["model"]["sfh_model"] == dense["model"]["sfh_model"]
+    assert compressed["model"]["dust_model"] == dense["model"]["dust_model"]
+    assert compressed["model"]["igm_model"] == dense["model"]["igm_model"]
+    assert compressed["runtime"]["jax_platforms"] == "cuda"
+    assert compressed["runtime"]["require_gpu"] is True
+    assert compressed["runtime"]["tf_gpu_allocator"] == "cuda_malloc_async"
+    assert compressed["fit"]["trace_mode"] == "optimizer"
+    assert compressed["fit"]["trace_interval"] == 20
+    assert compressed["fit"]["batch_grad_mode"] == "per_galaxy"
+    assert compressed["model"]["ssp_model"] == "compressed_basis"
+    assert (
+        compressed["model"]["compressed_ssp_path"]
+        == "Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5"
+    )
+    assert compressed["model"]["nebular_model"] == "compressed_gas_grid"
+    assert (
+        compressed["model"]["compressed_gas_grid_path"]
+        == "Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5"
+    )
+    assert compressed["model"]["agn_model"] == "compressed_fsps_component_grid"
+    assert (
+        compressed["model"]["compressed_agn_component_grid_path"]
+        == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
+    )
+    assert compressed["fit"]["photometric_likelihood"] == "student_t"
+
+
+def test_fit_trace_mode_validation() -> None:
+    config = minimal_config()
+    config["fit"] = {
+        "trace_mode": "verbose",
+        "free_parameters": {"z_obs": {"initial": 0.5, "bounds": [0.01, 2.0]}},
+    }
+
+    with pytest.raises(ConfigValidationError, match="trace_mode"):
+        normalize_config(config)
+
+
+def test_fit_jax_optimizer_options_validation() -> None:
+    config = minimal_config()
+    config["fit"] = {
+        "scan_unroll": 0,
+        "donate_optimizer_inputs": "yes",
+        "remat_model_mags": "no",
+        "batch_grad_mode": "global",
+        "free_parameters": {"z_obs": {"initial": 0.5, "bounds": [0.01, 2.0]}},
+    }
+
+    with pytest.raises(ConfigValidationError) as exc:
+        normalize_config(config)
+
+    message = str(exc.value)
+    assert "scan_unroll" in message
+    assert "donate_optimizer_inputs" in message
+    assert "remat_model_mags" in message
+    assert "batch_grad_mode" in message
 
 
 def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:

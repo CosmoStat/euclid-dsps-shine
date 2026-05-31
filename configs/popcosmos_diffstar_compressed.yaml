@@ -1,4 +1,4 @@
-extends: popcosmos_binned.yaml
+extends: popcosmos_diffstar.yaml
 
 runtime: gpu
 

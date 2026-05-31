@@ -297,6 +297,48 @@ def add_fit_overrides(
         help=advanced_help or "Override fit.student_t_dof when using Student-t.",
     )
     parser.add_argument(
+        "--fit-trace-mode",
+        choices=("full", "optimizer", "none"),
+        help=advanced_help
+        or (
+            "Override fit.trace_mode. 'optimizer' avoids extra diagnostic "
+            "forward passes inside Adam iterations."
+        ),
+    )
+    parser.add_argument(
+        "--fit-trace-interval",
+        type=int,
+        help=advanced_help or "Record MAP trace diagnostics every N iterations.",
+    )
+    parser.add_argument(
+        "--fit-scan-unroll",
+        type=int,
+        help=advanced_help or "Override fit.scan_unroll for the Adam lax.scan loop.",
+    )
+    parser.add_argument(
+        "--fit-donate-inputs",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=advanced_help
+        or "Donate temporary optimizer input buffers to XLA when possible.",
+    )
+    parser.add_argument(
+        "--fit-remat-model-mags",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=advanced_help
+        or "Checkpoint model-magnitude forward calls to trade compute for memory.",
+    )
+    parser.add_argument(
+        "--fit-batch-grad-mode",
+        choices=("per_galaxy", "sum"),
+        help=advanced_help
+        or (
+            "Override fit.batch_grad_mode. 'sum' differentiates the summed "
+            "batch objective instead of vmapping per-galaxy gradients."
+        ),
+    )
+    parser.add_argument(
         "--n-sfh-bins",
         type=int,
         help=advanced_help
@@ -310,9 +352,9 @@ def add_output_overrides(
     advanced_help = None if show_advanced else argparse.SUPPRESS
     parser.add_argument(
         "--reporting-level",
-        choices=("full", "light"),
+        choices=("full", "light", "none"),
         help=advanced_help
-        or "full writes plots and tables; light writes only tables and benchmarks.",
+        or "full writes plots and tables; light/none skip plot-heavy reports.",
     )
     parser.add_argument(
         "--output-format",
@@ -389,6 +431,18 @@ def _apply_fit_overrides(config: dict, args) -> None:
         fit["photometric_likelihood"] = args.fit_likelihood
     if getattr(args, "student_t_dof", None) is not None:
         fit["student_t_dof"] = args.student_t_dof
+    if getattr(args, "fit_trace_mode", None) is not None:
+        fit["trace_mode"] = args.fit_trace_mode
+    if getattr(args, "fit_trace_interval", None) is not None:
+        fit["trace_interval"] = args.fit_trace_interval
+    if getattr(args, "fit_scan_unroll", None) is not None:
+        fit["scan_unroll"] = args.fit_scan_unroll
+    if getattr(args, "fit_donate_inputs", None) is not None:
+        fit["donate_optimizer_inputs"] = bool(args.fit_donate_inputs)
+    if getattr(args, "fit_remat_model_mags", None) is not None:
+        fit["remat_model_mags"] = bool(args.fit_remat_model_mags)
+    if getattr(args, "fit_batch_grad_mode", None) is not None:
+        fit["batch_grad_mode"] = args.fit_batch_grad_mode
     if getattr(args, "n_sfh_bins", None) is not None:
         config.setdefault("model", {})["n_sfh_bins"] = int(args.n_sfh_bins)
 

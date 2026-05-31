@@ -1680,6 +1680,17 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
     return run_lognormal_model_jax(context, params)
 
 
+def run_dsps_model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
+    """Return model magnitudes without constructing diagnostic SED outputs."""
+    model_config = _normalized_model_config(context.model_config)
+    sfh_model = str(model_config.get("sfh_model", "lognormal"))
+    if sfh_model == "popcosmos_bins":
+        return run_popcosmos_binned_model_mags_jax(context, params)
+    if sfh_model == "diffstar_reduced6":
+        return run_diffstar_reduced6_model_mags_jax(context, params)
+    return run_lognormal_model_jax(context, params).model_mags
+
+
 def run_lognormal_model_jax(
     context: DspsContext, params: dict[str, Any]
 ) -> JaxModelResult:
@@ -1877,6 +1888,105 @@ def run_popcosmos_binned_model_jax(
     )
 
 
+def run_popcosmos_binned_model_mags_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> jnp.ndarray:
+    """Likelihood-only PopCosmos binned forward path."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    model_config = _normalized_model_config(context.model_config)
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table, raw_sfr_table = build_popcosmos_sfh_time_grid_jax(
+        t_obs,
+        params,
+        context.n_sfh_bins,
+        model_config,
+    )
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    if str(model_config.get("sfh_time_grid", "prospector_step")) == "prospector_step":
+        age_weights = popcosmos_age_weights_jax(t_obs, params, ssp_lg_age_gyr)
+        _, formed_mass, _ = normalize_sfh_to_stellar_mass_with_age_weights_jax(
+            gal_t_table,
+            raw_sfr_table,
+            ssp_lg_age_gyr,
+            age_weights,
+            params["log10_stellar_mass"],
+            frac_surviving_by_age,
+        )
+    else:
+        gal_sfr_table, formed_mass, _ = normalize_sfh_to_stellar_mass_jax(
+            gal_t_table,
+            raw_sfr_table,
+            ssp_lg_age_gyr,
+            t_obs,
+            params["log10_stellar_mass"],
+            frac_surviving_by_age,
+        )
+        age_weights = calc_age_weights_from_sfh_table(
+            gal_t_table,
+            gal_sfr_table,
+            ssp_lg_age_gyr,
+            t_obs,
+        )
+    ssp_flux_z = interpolate_popcosmos_ssp_stellar_metallicity_jax(
+        context,
+        params,
+        model_config,
+        lgmet_abs,
+    )
+    sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    wave = _context_ssp_wave(context)
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        wave,
+        ssp_lg_age_gyr,
+        sed_by_age,
+        params["tau2"],
+        params["dust_index_n"],
+        params["tau1_over_tau2"],
+        model_config,
+    )
+    dusted_sed = jnp.nan_to_num(
+        dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    agn_model = str(model_config.get("agn_model", "none"))
+    if agn_model == "none":
+        agn_sed = jnp.zeros_like(dusted_sed)
+    else:
+        intrinsic_sed = (
+            jnp.zeros_like(dusted_sed)
+            if agn_model in {"fsps_component_grid", "compressed_fsps_component_grid"}
+            else jnp.nan_to_num(
+                sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+            )
+        )
+        agn_sed = agn_component_jax(
+            context,
+            wave,
+            intrinsic_sed,
+            params,
+            model_config,
+            age_weights=age_weights,
+            formed_mass=formed_mass,
+            stellar_lgmet_abs=lgmet_abs,
+            template_tage_gyr=t_obs,
+            stellar_logzsol=params["log10_stellar_metallicity"],
+        )
+    _, post_igm_sed = combine_agn_and_igm_jax(
+        wave,
+        dusted_sed,
+        agn_sed,
+        z_obs,
+        model_config,
+    )
+    return predict_mags_jax(context, wave, post_igm_sed, z_obs)
+
+
 def run_diffstar_reduced6_model_jax(
     context: DspsContext, params: dict[str, Any]
 ) -> JaxModelResult:
@@ -2020,6 +2130,90 @@ def run_diffstar_reduced6_model_jax(
         pre_igm_sed=pre_igm_sed,
         post_igm_sed=post_igm_sed,
     )
+
+
+def run_diffstar_reduced6_model_mags_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> jnp.ndarray:
+    """Likelihood-only Diffstar reduced6 forward path."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    model_config = _normalized_model_config(context.model_config)
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
+    raw_sfr_table = build_diffstar_sfh_table_jax(gal_t_table, t_obs, params)
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    gal_sfr_table, formed_mass, _ = normalize_sfh_to_stellar_mass_jax(
+        gal_t_table,
+        raw_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+        params["log10_stellar_mass"],
+        frac_surviving_by_age,
+    )
+    age_weights = calc_age_weights_from_sfh_table(
+        gal_t_table,
+        gal_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+    )
+    ssp_flux_z = interpolate_popcosmos_ssp_stellar_metallicity_jax(
+        context,
+        params,
+        model_config,
+        lgmet_abs,
+    )
+    sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    wave = _context_ssp_wave(context)
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        wave,
+        ssp_lg_age_gyr,
+        sed_by_age,
+        params["tau2"],
+        params["dust_index_n"],
+        params["tau1_over_tau2"],
+        model_config,
+    )
+    dusted_sed = jnp.nan_to_num(
+        dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    agn_model = str(model_config.get("agn_model", "none"))
+    if agn_model == "none":
+        agn_sed = jnp.zeros_like(dusted_sed)
+    else:
+        intrinsic_sed = (
+            jnp.zeros_like(dusted_sed)
+            if agn_model in {"fsps_component_grid", "compressed_fsps_component_grid"}
+            else jnp.nan_to_num(
+                sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+            )
+        )
+        agn_sed = agn_component_jax(
+            context,
+            wave,
+            intrinsic_sed,
+            params,
+            model_config,
+            age_weights=age_weights,
+            formed_mass=formed_mass,
+            stellar_lgmet_abs=lgmet_abs,
+            template_tage_gyr=t_obs,
+            stellar_logzsol=params["log10_stellar_metallicity"],
+        )
+    _, post_igm_sed = combine_agn_and_igm_jax(
+        wave,
+        dusted_sed,
+        agn_sed,
+        z_obs,
+        model_config,
+    )
+    return predict_mags_jax(context, wave, post_igm_sed, z_obs)
 
 
 def build_popcosmos_lookback_bin_edges_jax(t_obs: jnp.ndarray) -> jnp.ndarray:
@@ -3332,7 +3526,7 @@ def predict_mags_jax(
 
 def model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
     """Return only model magnitudes for likelihood/gradient code."""
-    return run_dsps_model_jax(context, params).model_mags
+    return run_dsps_model_mags_jax(context, params)
 
 
 def dynamic_model_args(context: DspsContext) -> tuple[Any, ...]:

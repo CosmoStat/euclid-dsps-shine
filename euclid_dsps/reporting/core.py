@@ -631,6 +631,9 @@ def write_batch_outputs(
         attractors.to_csv(out / f"{label}_redshift_attractors.csv", index=False)
     write_json(out / f"{label}_summary.json", summary)
 
+    if reporting_level != "full":
+        return
+
     plot_batch_dashboard(valid, by_row, out / f"{label}_dashboard.png")
     plot_batch_residuals_by_band(valid, out / f"{label}_residuals_by_band.png")
     plot_batch_observed_vs_model(valid, out / f"{label}_observed_vs_model.png")

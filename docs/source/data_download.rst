@@ -49,6 +49,9 @@ The production full-AGN path uses:
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
    Data/popcosmos_chabrier_gas_ssp_grid.h5
    Data/popcosmos_chabrier_agn_component_ssp_grid.h5
+   Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
+   Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
+   Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
 
 Generated HDF5 files are runtime assets and should not be committed.
 
@@ -64,6 +67,8 @@ FSPS repeatedly:
   the FSPS/CLOUDY nebular model;
 * the AGN component grid stores the AGN contribution that FSPS adds for each
   ``fagn`` and ``agn_tau`` value;
+* the compressed assets store SVD ``basis``, ``coeff``, and ``scale`` arrays
+  consumed directly by JAX for production fits;
 * all three spectral assets share the same wavelength, stellar age, and stellar
   metallicity axes so they can be combined safely.
 
@@ -176,6 +181,33 @@ for each age and metallicity. This is the validated AGN asset for the current
 full model. The older ``popcosmos_chabrier_agn_template_grid.h5`` is a legacy
 diagnostic template and is not the default science path.
 
+Compressed Runtime Assets
+-------------------------
+
+After the dense SSP, gas, and AGN assets exist, build the compressed production
+assets:
+
+.. code-block:: bash
+
+   python scripts/build_compressed_ssp_grid.py \
+     --input Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+     --output Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5 \
+     --k 64 --basis-dtype float32 --coeff-dtype float16 --overwrite
+
+   python scripts/build_compressed_gas_grid.py \
+     --input Data/popcosmos_chabrier_gas_ssp_grid.h5 \
+     --output Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5 \
+     --k 64 --basis-dtype float16 --coeff-dtype float16 --overwrite
+
+   python scripts/build_compressed_agn_component_grid.py \
+     --input Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+     --output Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5 \
+     --k 12 --factor-fagn --basis-dtype float32 --coeff-dtype float16 --overwrite
+
+These files are the assets used by ``configs/popcosmos_binned_compressed.yaml``
+and ``configs/popcosmos_diffstar_compressed.yaml``. See
+:doc:`ssp_compression` for the SVD format and benchmark status.
+
 Validation Commands
 -------------------
 
@@ -202,6 +234,19 @@ Validate existing files without importing python-FSPS:
      --output Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
      --reference-ssp Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
      --validate-only
+
+Validate compressed files:
+
+.. code-block:: bash
+
+   python scripts/validate_compressed_spectral_asset.py \
+     Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
+
+   python scripts/validate_compressed_spectral_asset.py \
+     Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
+
+   python scripts/validate_compressed_spectral_asset.py \
+     Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
 
 Files To Avoid
 --------------

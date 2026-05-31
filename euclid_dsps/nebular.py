@@ -27,6 +27,7 @@ def write_nebular_diagnostic_outputs(
     label: str = "batch_fit",
     top_n_lines: int = 25,
     max_modes: int = 12,
+    make_plots: bool = True,
 ) -> None:
     """Write diagnostic-only nebular tables.
 
@@ -60,9 +61,10 @@ def write_nebular_diagnostic_outputs(
     if crossings.empty:
         return
     crossings.to_csv(out / f"{label}_nebular_line_filter_crossings.csv", index=False)
-    plot_line_filter_crossings(
-        crossings, context, out / f"{label}_nebular_line_filter_crossings.png"
-    )
+    if make_plots:
+        plot_line_filter_crossings(
+            crossings, context, out / f"{label}_nebular_line_filter_crossings.png"
+        )
 
 
 def emline_inventory(context: Any) -> pd.DataFrame:

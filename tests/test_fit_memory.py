@@ -6,7 +6,9 @@ import numpy as np
 from euclid_dsps.fit import (
     _context_gas_grid_nbytes,
     _should_jit_single_fit,
+    fit_galaxy_batch_adam,
     fit_one_galaxy,
+    fit_population_batch_adam,
 )
 from euclid_dsps.io import BandObservation, GalaxyObservation
 from euclid_dsps.model import (
@@ -106,4 +108,115 @@ def test_single_fit_applies_gas_constraint_with_unpacked_params(monkeypatch) -> 
     assert result.success
     assert result.best_parameters["log10_gas_metallicity"] >= (
         result.best_parameters["log10_stellar_metallicity"]
+    )
+
+
+def test_population_fit_optimizer_trace_is_sparse(monkeypatch) -> None:
+    import euclid_dsps.fit as fit_module
+
+    def fake_model_mags(context, args, params):
+        del context, args
+        return jnp.asarray([20.0 + params["x"]], dtype=jnp.float32)
+
+    monkeypatch.setattr(fit_module, "model_mags_jax_dynamic", fake_model_mags)
+    context = DspsContext(ssp=None, filters={}, model_config={})
+    result = fit_population_batch_adam(
+        context,
+        [{"x": 0.0}, {"x": 0.2}, {"x": -0.1}],
+        observed_mag=np.asarray([[20.0], [20.1], [19.9]], dtype=float),
+        sigma_mag=np.asarray([[0.1], [0.1], [0.1]], dtype=float),
+        fit_config={
+            "maxiter": 4,
+            "learning_rate": 0.01,
+            "trace_mode": "optimizer",
+            "trace_interval": 2,
+            "free_parameters": {"x": {"initial": 0.0, "bounds": [-1.0, 1.0]}},
+        },
+    )
+
+    assert np.all(result.batch.success)
+    assert [row["iteration"] for row in result.batch.trace] == [1.0, 3.0]
+    assert all(np.isnan(row["median_chi2"]) for row in result.batch.trace)
+
+
+def test_batch_fit_jax_optimizer_options(monkeypatch) -> None:
+    import euclid_dsps.fit as fit_module
+
+    def fake_model_mags(context, args, params):
+        del context, args
+        return jnp.asarray([20.0 + 0.2 * params["x"]], dtype=jnp.float32)
+
+    monkeypatch.setattr(fit_module, "model_mags_jax_dynamic", fake_model_mags)
+    context = DspsContext(ssp=None, filters={}, model_config={})
+    result = fit_galaxy_batch_adam(
+        context,
+        [{"x": 0.0}, {"x": 0.1}],
+        observed_mag=np.asarray([[20.0], [20.1]], dtype=float),
+        sigma_mag=np.asarray([[0.1], [0.1]], dtype=float),
+        fit_config={
+            "maxiter": 3,
+            "learning_rate": 0.01,
+            "trace_mode": "optimizer",
+            "trace_interval": 2,
+            "scan_unroll": 2,
+            "donate_optimizer_inputs": True,
+            "remat_model_mags": True,
+            "batch_grad_mode": "sum",
+            "free_parameters": {"x": {"initial": 0.0, "bounds": [-1.0, 1.0]}},
+        },
+    )
+
+    assert np.all(result.success)
+    assert result.model_mags.shape == (2, 1)
+    assert [row["iteration"] for row in result.trace] == [1.0, 3.0]
+
+
+def test_batch_fit_sum_grad_mode_matches_per_galaxy_grad_mode(monkeypatch) -> None:
+    import euclid_dsps.fit as fit_module
+
+    def fake_model_mags(context, args, params):
+        del context, args
+        return jnp.asarray(
+            [20.0 + 0.2 * params["x"] - 0.05 * params["y"]],
+            dtype=jnp.float32,
+        )
+
+    monkeypatch.setattr(fit_module, "model_mags_jax_dynamic", fake_model_mags)
+    context = DspsContext(ssp=None, filters={}, model_config={})
+    common_config = {
+        "maxiter": 5,
+        "learning_rate": 0.01,
+        "trace_mode": "none",
+        "free_parameters": {
+            "x": {"initial": 0.1, "bounds": [-1.0, 1.0]},
+            "y": {"initial": -0.2, "bounds": [-1.0, 1.0]},
+        },
+    }
+    kwargs = dict(
+        context=context,
+        base_params_rows=[{"x": 0.0, "y": 0.0}, {"x": 0.1, "y": -0.1}],
+        observed_mag=np.asarray([[20.0], [20.1]], dtype=float),
+        sigma_mag=np.asarray([[0.1], [0.1]], dtype=float),
+    )
+
+    per_galaxy = fit_galaxy_batch_adam(
+        **kwargs,
+        fit_config={**common_config, "batch_grad_mode": "per_galaxy"},
+    )
+    summed = fit_galaxy_batch_adam(
+        **kwargs,
+        fit_config={**common_config, "batch_grad_mode": "sum"},
+    )
+
+    np.testing.assert_allclose(
+        summed.best_parameter_matrix,
+        per_galaxy.best_parameter_matrix,
+        rtol=1.0e-6,
+        atol=1.0e-6,
+    )
+    np.testing.assert_allclose(
+        summed.model_mags,
+        per_galaxy.model_mags,
+        rtol=1.0e-6,
+        atol=1.0e-6,
     )

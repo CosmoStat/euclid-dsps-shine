@@ -47,6 +47,7 @@ from euclid_dsps.model import (
     project_sfh_to_popcosmos_dlogsfr_jax,
     project_sfh_to_popcosmos_sfr_bins_jax,
     run_dsps_model_jax,
+    run_dsps_model_mags_jax,
 )
 from euclid_dsps.parameters import (
     DIFFSTAR_REDUCED6_PARAMETER_NAMES,
@@ -1152,6 +1153,63 @@ def test_popcosmos_binned_complete_jax_grad_model_mags() -> None:
 
     assert np.all(np.isfinite(np.asarray(mags)))
     assert np.all(np.isfinite(np.asarray(grad)))
+
+
+def test_popcosmos_binned_mags_only_matches_full_forward() -> None:
+    context = _synthetic_context(
+        {
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "dust_model": "prospector_fsps",
+            "igm_model": "fsps_madau95",
+            "nebular_model": "compressed_gas_grid",
+            "agn_model": "compressed_fsps_component_grid",
+            "agn_host_attenuation": "fsps_diffuse_unit_tau",
+            "agn_igm_order": "fsps_after_igm",
+            "z_sun": 0.0134,
+        }
+    )
+    params = _popcosmos_params()
+
+    full = run_dsps_model_jax(context, params).model_mags
+    mags_only = run_dsps_model_mags_jax(context, params)
+    grad = jax.grad(
+        lambda values: jnp.sum(
+            run_dsps_model_mags_jax(
+                context,
+                {
+                    **params,
+                    "log10_stellar_mass": values[0],
+                    "tau2": values[1],
+                },
+            )
+        )
+    )(jnp.asarray([10.0, 0.2]))
+
+    np.testing.assert_allclose(np.asarray(mags_only), np.asarray(full), rtol=1.0e-6)
+    assert np.all(np.isfinite(np.asarray(grad)))
+
+
+def test_diffstar_mags_only_matches_full_forward() -> None:
+    pytest.importorskip("diffstar")
+    context = _synthetic_context(
+        {
+            "sfh_model": "diffstar_reduced6",
+            "stellar_metallicity_model": "single",
+            "dust_model": "prospector_fsps",
+            "igm_model": "none",
+            "nebular_model": "compressed_gas_grid",
+            "agn_model": "compressed_fsps_component_grid",
+            "agn_host_attenuation": "none",
+            "z_sun": 0.0134,
+        }
+    )
+    params = _diffstar_params()
+
+    full = run_dsps_model_jax(context, params).model_mags
+    mags_only = run_dsps_model_mags_jax(context, params)
+
+    np.testing.assert_allclose(np.asarray(mags_only), np.asarray(full), rtol=1.0e-6)
 
 
 def test_popcosmos_binned_noagn_config_loads_without_agn_grid(tmp_path) -> None:

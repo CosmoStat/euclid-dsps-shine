@@ -1,8 +1,16 @@
 # DSPS PopCosmos Forward Model
 
 This repository contains a DSPS/JAX forward-model and fitting workflow for
-Euclid + LSST photometry. The default science path is now the full PopCosmos-like
-model with gas and AGN enabled:
+Euclid + LSST photometry. The default production path is now the compressed
+full PopCosmos-like model with gas and AGN enabled:
+
+```text
+configs/popcosmos_binned_compressed.yaml
+configs/popcosmos_diffstar_compressed.yaml
+```
+
+The dense full-AGN configs remain available for dense-vs-compressed and
+FSPS/Prospector closure checks:
 
 ```text
 configs/popcosmos_binned.yaml
@@ -18,7 +26,9 @@ configs/popcosmos_diffstar_noagn.yaml
 
 The binned config uses PopCosmos-style step SFH bins. The Diffstar config keeps
 the same redshift, dust, gas, and AGN surface but swaps the SFH model for the
-reduced six-parameter Diffstar path.
+reduced six-parameter Diffstar path. The compressed configs keep the same
+science surface while replacing dense resident spectral grids by SVD
+`basis/coeff/scale` assets.
 
 ## What The Model Does
 
@@ -29,8 +39,8 @@ assets and evaluates the forward model in JAX:
 2. Convert the sampled SFH into weights on the SSP age grid.
 3. Interpolate stellar metallicity and multiply by formed stellar mass.
 4. Apply the Prospector/FSPS-like dust model.
-5. Add nebular emission from the Chabrier gas SSP grid.
-6. Add the FSPS-native AGN component grid.
+5. Add nebular emission from the compressed Chabrier gas SSP grid.
+6. Add the compressed FSPS-native AGN component grid.
 7. Apply the FSPS-like IGM/order convention.
 8. Redshift, apply luminosity distance, integrate through LSST+Euclid filters.
 9. Fit catalog fluxes with the configured flux-space likelihood.
@@ -39,8 +49,8 @@ The details and glossary are documented in `docs/source/forward_model.rst`.
 
 ## Full AGN vs No-AGN
 
-`configs/popcosmos_binned.yaml` is the default full model. It fits all stellar,
-dust, gas, redshift, and AGN parameters:
+`configs/popcosmos_binned_compressed.yaml` is the default production full
+model. It fits all stellar, dust, gas, redshift, and AGN parameters:
 
 ```text
 ln_fagn    = log AGN luminosity fraction
@@ -75,7 +85,7 @@ uv run pytest tests
 
 ## Required Data Assets
 
-The active full-AGN pipeline expects:
+The active compressed full-AGN pipeline expects:
 
 ```text
 Data/Euclid FS2 LC galaxy catalog_phz1.parquet
@@ -83,6 +93,9 @@ Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5
 Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
 Data/popcosmos_chabrier_gas_ssp_grid.h5
 Data/popcosmos_chabrier_agn_component_ssp_grid.h5
+Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
+Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
+Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
 ```
 
 The PopCosmos-like configs reject ambiguous/Kroupa SSP metadata. Active assets
@@ -151,6 +164,25 @@ python scripts/generate_fsps_agn_component_grid.py \
 This grid stores the FSPS AGN contribution as a component per SSP age and
 metallicity. It is the current validated full-AGN path.
 
+Build the compressed runtime assets:
+
+```bash
+python scripts/build_compressed_ssp_grid.py \
+  --input Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5 \
+  --output Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5 \
+  --k 64 --basis-dtype float32 --coeff-dtype float16 --overwrite
+
+python scripts/build_compressed_gas_grid.py \
+  --input Data/popcosmos_chabrier_gas_ssp_grid.h5 \
+  --output Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5 \
+  --k 64 --basis-dtype float16 --coeff-dtype float16 --overwrite
+
+python scripts/build_compressed_agn_component_grid.py \
+  --input Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
+  --output Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5 \
+  --k 12 --factor-fagn --basis-dtype float32 --coeff-dtype float16 --overwrite
+```
+
 Validate existing assets without importing python-FSPS:
 
 ```bash
@@ -185,22 +217,24 @@ One-row full AGN smoke:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/popcosmos_binned.yaml \
+  --config configs/popcosmos_binned_compressed.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_fullagn_one_short \
+  --out outputs/runs/dev_popcosmos_compressed_fullagn_one_short \
   --sed-samples 1
 ```
 
-Small full AGN batch:
+Production compressed full AGN batch:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/popcosmos_binned.yaml \
-  fit --limit 20 \
-  --batch-size 2 \
-  --out outputs/runs/dev_popcosmos_fullagn_batch20 \
-  --sed-samples 4
+  --config configs/popcosmos_binned_compressed.yaml \
+  fit --limit 1000 \
+  --batch-size 128 \
+  --fit-maxiter 200 \
+  --out outputs/runs/popcosmos_binned_compressed_map_n1000_bs128 \
+  --sed-samples 0 \
+  --reporting-level light
 ```
 
 No-AGN fallback:
@@ -218,10 +252,10 @@ Diffstar smoke:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/popcosmos_diffstar.yaml \
+  --config configs/popcosmos_diffstar_compressed.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short \
+  --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short \
   --sed-samples 1
 ```
 
@@ -260,11 +294,8 @@ PopCosmos emission-line calibration has been reproduced.
 
 - The gas grid is raw FSPS/CLOUDY. `emission_line_corrections: none` means no
   PopCosmos learned line-by-line corrections are applied.
-- Full AGN uses a large SSP-shaped AGN component grid. It is the validated
-  science path, but it requires much more memory than the legacy AGN template.
-- The benchmark uses a lazy AGN component path to avoid loading the full 3.9 GiB
-  grid into JAX. Production fitting still loads the grid in the model context,
-  so start with small batches.
+- Production fitting should use the compressed config. Dense full-AGN configs
+  remain useful for reference checks, but they require much more memory.
 - Very faint magnitude-space rows can be non-finite. Inference is flux-space.
 
 ## Checks

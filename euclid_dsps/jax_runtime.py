@@ -47,6 +47,8 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
             "EUCLID_DSPS_JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
             str(runtime["jax_persistent_cache_min_compile_time_secs"]),
         )
+    if runtime.get("tf_gpu_allocator"):
+        os.environ.setdefault("TF_GPU_ALLOCATOR", str(runtime["tf_gpu_allocator"]))
 
 
 def configure_jax_runtime() -> None:

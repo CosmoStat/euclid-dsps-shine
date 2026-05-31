@@ -4,7 +4,14 @@ Run And Fit
 Recommended Configs
 -------------------
 
-Use full AGN by default:
+Use compressed full AGN for production MAP batches:
+
+.. code-block:: text
+
+   configs/popcosmos_binned_compressed.yaml
+   configs/popcosmos_diffstar_compressed.yaml
+
+Use dense full AGN for reference runs and dense-vs-compressed checks:
 
 .. code-block:: text
 
@@ -18,14 +25,15 @@ Use no-AGN only for fallback/debug or controlled ablations:
    configs/popcosmos_binned_noagn.yaml
    configs/popcosmos_diffstar_noagn.yaml
 
-The default binned full-AGN config uses:
+The compressed binned full-AGN config uses:
 
 * LSST ``ugrizy`` plus Euclid VIS/Y/J/H;
 * PopCosmos-like step SFH bins;
 * Chabrier FSPS SSPs with ``z_sun=0.0142``;
 * Prospector/FSPS-like dust;
-* raw FSPS/CLOUDY gas grid;
-* FSPS-native AGN component grid;
+* compressed SVD stellar SSP basis;
+* compressed SVD raw FSPS/CLOUDY gas grid;
+* compressed fagn-factored FSPS-native AGN component grid;
 * FSPS-like AGN host attenuation and AGN/IGM ordering;
 * flux-space Student-t likelihood with ``student_t_dof=2``.
 
@@ -57,21 +65,22 @@ GPU runtime, only with CUDA-enabled JAX:
    export XLA_PYTHON_CLIENT_PREALLOCATE=false
    export TF_GPU_ALLOCATOR=cuda_malloc_async
 
-The full AGN component grid is about 3.9 GiB and the gas grid is about 2.7 GiB.
-The benchmark script has a lazy component-grid path, but production fitting
-loads the configured grids in the model context. Start with small batches and
-increase only after checking memory.
+The dense full AGN component grid is about 3.9 GiB and the dense gas grid is
+about 2.7 GiB. Production fitting should use the compressed config, which keeps
+``basis``, ``coeff``, and ``scale`` arrays resident in JAX instead of those
+multi-GiB dense tensors. Start with a conservative batch size and increase only
+after checking memory on the target GPU.
 
-One-Row Full AGN
-----------------
+One-Row Compressed Full AGN
+---------------------------
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/popcosmos_binned_compressed.yaml \
      fit --index 0 \
      --fit-maxiter 20 \
-     --out outputs/runs/dev_popcosmos_fullagn_one_short \
+     --out outputs/runs/dev_popcosmos_compressed_fullagn_one_short \
      --sed-samples 1
 
 Production-style one-row run:
@@ -79,13 +88,32 @@ Production-style one-row run:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/popcosmos_binned_compressed.yaml \
      fit --index 0 \
-     --out outputs/runs/dev_popcosmos_fullagn_one \
+     --out outputs/runs/dev_popcosmos_compressed_fullagn_one \
      --sed-samples 4
 
-Small Batch Full AGN
---------------------
+Production Batch Compressed Full AGN
+------------------------------------
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned_compressed.yaml \
+     fit --limit 1000 \
+     --batch-size 128 \
+     --fit-maxiter 200 \
+     --out outputs/runs/popcosmos_binned_compressed_map_n1000_bs128 \
+     --sed-samples 0 \
+     --reporting-level light
+
+Increase ``--batch-size`` only after the memory footprint is known on the target
+machine.
+
+Dense Reference Full AGN
+------------------------
+
+Use the dense config only for small reference/audit runs:
 
 .. code-block:: bash
 
@@ -93,11 +121,8 @@ Small Batch Full AGN
      --config configs/popcosmos_binned.yaml \
      fit --limit 20 \
      --batch-size 2 \
-     --out outputs/runs/dev_popcosmos_fullagn_batch20 \
+     --out outputs/runs/dev_popcosmos_dense_fullagn_batch20 \
      --sed-samples 4
-
-Increase ``--batch-size`` only after the memory footprint is known on the target
-machine.
 
 No-AGN Fallback
 ---------------
@@ -128,10 +153,10 @@ Run a short Diffstar full-AGN smoke:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_diffstar.yaml \
+     --config configs/popcosmos_diffstar_compressed.yaml \
      fit --index 0 \
      --fit-maxiter 20 \
-     --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short \
+     --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short \
      --sed-samples 1
 
 Forward Check
@@ -142,10 +167,10 @@ Run the model and reporting path without optimization:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/popcosmos_binned_compressed.yaml \
      fit --index 0 \
      --no-optimize \
-     --out outputs/runs/dev_popcosmos_fullagn_forward \
+     --out outputs/runs/dev_popcosmos_compressed_fullagn_forward \
      --sed-samples 1
 
 Posterior Smoke
@@ -154,11 +179,11 @@ Posterior Smoke
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/popcosmos_binned_compressed.yaml \
      posterior --index 0 \
      --num-warmup 10 \
      --num-samples 10 \
-     --out outputs/runs/dev_popcosmos_fullagn_posterior_one
+     --out outputs/runs/dev_popcosmos_compressed_fullagn_posterior_one
 
 Benchmark Against FSPS/Prospector
 ---------------------------------

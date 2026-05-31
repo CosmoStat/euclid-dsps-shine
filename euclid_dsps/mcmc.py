@@ -25,8 +25,9 @@ from .fit import _initial_value, _photometric_likelihood, _student_t_dof
 from .io import GalaxyObservation
 from .model import (
     DspsContext,
+    dynamic_model_args,
     gas_metallicity_constraint_penalty_jax,
-    model_mags_jax,
+    model_mags_jax_dynamic,
     predict_batch_derived,
     predict_batch_mags,
 )
@@ -132,8 +133,9 @@ def sample_one_galaxy(
     free = fit_config["free_parameters"]
     free_names = list(free)
     priors = sample_config.get("priors", {})
+    model_args = dynamic_model_args(context)
 
-    def model():
+    def model(model_args):
         params = {key: jnp.asarray(value) for key, value in base_params.items()}
         for name in free_names:
             prior_spec = priors.get(name, {})
@@ -147,7 +149,7 @@ def sample_one_galaxy(
                 params, context.model_config, penalty=jnp.inf
             ),
         )
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets.size:
             model_mag = model_mag + band_offsets
         numpyro.deterministic("model_mag", model_mag)
@@ -179,6 +181,7 @@ def sample_one_galaxy(
     )
     mcmc.run(
         random.PRNGKey(int(sample_config.get("seed", 42))),
+        model_args,
         extra_fields=("diverging", "accept_prob", "num_steps"),
     )
     samples = {

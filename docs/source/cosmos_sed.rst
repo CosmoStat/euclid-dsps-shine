@@ -15,7 +15,7 @@ Batch fits can save SED diagnostics:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/popcosmos_binned_compressed.yaml \
      fit --limit 100 \
      --batch-size 50 \
      --sed-samples 8 \
@@ -26,7 +26,7 @@ Standalone COSMOS checks:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/popcosmos_binned_compressed.yaml \
      check --kind cosmos \
      --limit 20 \
      --out outputs/check/cosmos

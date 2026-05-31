@@ -73,6 +73,8 @@ SUPPORTED_PHOTOMETRY_UNITS = {"fnu_cgs", "abmag", "microjy", "ujy"}
 SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
 SUPPORTED_LIKELIHOOD_SPACES = {"flux", "mag"}
 SUPPORTED_PHOTOMETRIC_LIKELIHOODS = {"gaussian", "student_t"}
+SUPPORTED_FIT_TRACE_MODES = {"full", "optimizer", "none"}
+SUPPORTED_FIT_BATCH_GRAD_MODES = {"per_galaxy", "sum"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
@@ -90,7 +92,7 @@ SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
     "emission_lines_internal_dust_mw",
     "noisy_observation",
 }
-SUPPORTED_REPORTING_LEVELS = {"full", "light"}
+SUPPORTED_REPORTING_LEVELS = {"full", "light", "none"}
 SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
 SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
@@ -182,6 +184,7 @@ RUNTIME_PRESETS = {
         "xla_python_client_preallocate": False,
         "require_gpu": True,
         "expected_gpu_name": "NVIDIA",
+        "tf_gpu_allocator": "cuda_malloc_async",
         "jax_compilation_cache_dir": "outputs/jax_cache",
         "jax_persistent_cache_min_compile_time_secs": 1.0,
     },
@@ -496,6 +499,7 @@ DEFAULT_RUNTIME_CONFIG = {
     "xla_python_client_preallocate": False,
     "require_gpu": False,
     "expected_gpu_name": None,
+    "tf_gpu_allocator": None,
     "jax_compilation_cache_dir": None,
     "jax_persistent_cache_min_compile_time_secs": 1.0,
 }
@@ -629,6 +633,12 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["fit"].setdefault("tolerance", 1.0e-5)
     config["fit"].setdefault("patience", 18)
     config["fit"].setdefault("prior_weight", 1.0)
+    config["fit"].setdefault("trace_mode", "full")
+    config["fit"].setdefault("trace_interval", 1)
+    config["fit"].setdefault("scan_unroll", 1)
+    config["fit"].setdefault("donate_optimizer_inputs", False)
+    config["fit"].setdefault("remat_model_mags", False)
+    config["fit"].setdefault("batch_grad_mode", "per_galaxy")
     config["fit"].setdefault("priors", {})
     config["band_calibration"] = dict(config["band_calibration"] or {})
     config["band_calibration"].setdefault("mode", "none")
@@ -1478,6 +1488,22 @@ def _validate_fit(fit: dict[str, Any], errors: list[str]) -> None:
     _positive_float(fit.get("tolerance"), "fit.tolerance", errors)
     _positive_int(fit.get("patience"), "fit.patience", errors)
     _positive_float(fit.get("prior_weight", 1.0), "fit.prior_weight", errors)
+    trace_mode = str(fit.get("trace_mode", "full")).lower()
+    if trace_mode not in SUPPORTED_FIT_TRACE_MODES:
+        errors.append(
+            f"fit.trace_mode must be one of {sorted(SUPPORTED_FIT_TRACE_MODES)}"
+        )
+    _positive_int(fit.get("trace_interval", 1), "fit.trace_interval", errors)
+    _positive_int(fit.get("scan_unroll", 1), "fit.scan_unroll", errors)
+    for key in ("donate_optimizer_inputs", "remat_model_mags"):
+        if not isinstance(fit.get(key, False), bool):
+            errors.append(f"fit.{key} must be a boolean")
+    batch_grad_mode = str(fit.get("batch_grad_mode", "per_galaxy")).lower()
+    if batch_grad_mode not in SUPPORTED_FIT_BATCH_GRAD_MODES:
+        errors.append(
+            "fit.batch_grad_mode must be one of "
+            f"{sorted(SUPPORTED_FIT_BATCH_GRAD_MODES)}"
+        )
     _validate_population_config(fit.get("population", {}), errors)
     free = fit.get("free_parameters")
     if not isinstance(free, dict) or not free:
@@ -1655,6 +1681,9 @@ def _validate_runtime(runtime: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"runtime.{key} must be a boolean")
     _optional_string(
         runtime.get("expected_gpu_name"), "runtime.expected_gpu_name", errors
+    )
+    _optional_string(
+        runtime.get("tf_gpu_allocator"), "runtime.tf_gpu_allocator", errors
     )
     _optional_string(
         runtime.get("jax_compilation_cache_dir"),

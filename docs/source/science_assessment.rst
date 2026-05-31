@@ -6,15 +6,17 @@ Current Status
 
 The current DSPS model is validated as an FSPS/Prospector-like broad-band
 forward model for the active PopCosmos-like parameterization. The recommended
-default config is:
+production config is:
 
 .. code-block:: text
 
-   configs/popcosmos_binned.yaml
+   configs/popcosmos_binned_compressed.yaml
 
 It includes step SFH, Chabrier SSPs, Prospector/FSPS-like dust, raw FSPS/CLOUDY
-gas, and the FSPS-native AGN component grid. The no-AGN config remains available
-as an ablation/fallback, not as the main path.
+gas, and the FSPS-native AGN component grid through compressed SVD assets. The
+dense ``configs/popcosmos_binned.yaml`` config remains the reference for
+dense-vs-compressed and FSPS/Prospector closure checks. The no-AGN config
+remains available as an ablation/fallback, not as the main path.
 
 Benchmark Result
 ----------------
@@ -62,6 +64,7 @@ The benchmark validates the integrated broad-band behavior of:
 * raw FSPS/CLOUDY gas grid in broad bands;
 * FSPS-native AGN component grid with the current host attenuation and
   AGN/IGM ordering.
+* compressed SVD resident assets after dense-vs-compressed photometric checks.
 
 Remaining Scientific Caveats
 ----------------------------
@@ -77,22 +80,24 @@ Remaining caveats:
   Diffstar/default-MAH setup.
 * Very faint magnitude-space diagnostic rows can be non-finite. Inference uses
   flux-space likelihoods.
-* The AGN component grid is large. Benchmarking uses lazy loading; production
-  fitting loads the configured grid and should start with small batches.
+* Dense gas and AGN grids are large. Production fitting should use the
+  compressed config; dense configs are for reference and audit runs.
 
 Practical Recommendation
 ------------------------
 
-Use the full AGN binned config for new broad-band experiments:
+Use the compressed full AGN binned config for new broad-band experiments:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
-     fit --limit 20 \
-     --batch-size 2 \
-     --out outputs/runs/dev_popcosmos_fullagn_batch20 \
-     --sed-samples 4
+     --config configs/popcosmos_binned_compressed.yaml \
+     fit --limit 1000 \
+     --batch-size 128 \
+     --fit-maxiter 200 \
+     --out outputs/runs/popcosmos_binned_compressed_map_n1000_bs128 \
+     --sed-samples 0 \
+     --reporting-level light
 
 Use no-AGN only for controlled tests:
 

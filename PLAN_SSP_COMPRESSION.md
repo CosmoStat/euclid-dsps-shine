@@ -51,10 +51,12 @@ compressed asset family so the final model is coherent.
 
 ## Current Compressed Runtime Entry Point
 
-`configs/popcosmos_binned_compressed.yaml` is the CLI entry point for the full
-16-parameter PopCosmos-like binned model with compressed resident assets. It
-inherits `configs/popcosmos_binned.yaml`, forces the `gpu` runtime preset to
-avoid silent CPU fallback, and switches:
+`configs/popcosmos_binned_compressed.yaml` is the main CLI entry point for the
+full 16-parameter PopCosmos-like binned model with compressed resident assets.
+`configs/popcosmos_diffstar_compressed.yaml` applies the same compressed asset
+family to the Diffstar comparison config. Both inherit their dense reference
+configs, force the `gpu` runtime preset to avoid silent CPU fallback, and
+switch:
 
 ```yaml
 model:
@@ -66,8 +68,43 @@ model:
   compressed_agn_component_grid_path: Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
 ```
 
-The dense config remains the reference. The compressed config is the operational
-high-throughput path for MAP batches after a dense-vs-compressed residual check.
+The dense configs remain the reference. The compressed configs are the
+operational high-throughput path for MAP batches after dense-vs-compressed
+residual checks.
+
+## 2026-05-31 Wavelet Compression Audit
+
+`scripts/benchmark_wavelet_compression.py` compares the current compressed
+asset family to a sparse Haar-wavelet representation. The script samples dense
+stellar SSP, gas, and AGN spectra, reconstructs them with the existing
+compressed assets, and compares them to an oracle sparse Haar codec that stores:
+
+```text
+scale[curve]
+top_m_haar_coeff_values[curve, m]
+top_m_haar_coeff_indices[curve, m]
+```
+
+This is a VRAM-payload benchmark, not an HDF5 gzip benchmark. The sparse
+wavelet layout stores index arrays per curve, so its resident memory grows
+quickly when many coefficients are needed.
+
+Current result:
+
+- AGN: current fagn-factored SVD is decisively better. It uses about
+  `0.82 MiB` with median sampled p95 relative spectral error around
+  `2.4e-4`; the best tested Haar candidate uses about `22.6 MiB` and remains
+  much less accurate.
+- Gas: current SVD `k64` mixed precision remains smaller and more accurate on
+  the sampled spectral metric than the tested Haar candidates.
+- Base SSP: Haar top-512 is competitive on median sampled spectral loss and is
+  slightly smaller than the current SSP `k64` asset, but its worst-tail error
+  is worse and no JAX runtime representation has been validated.
+
+Decision: do not replace the current compressed runtime with wavelets now.
+Keep wavelets as a research branch only for possible SSP-only or
+continuum/line-separated gas experiments, and require a photometric closure
+benchmark before any runtime implementation.
 
 ## Non-Goals
 
@@ -662,6 +699,83 @@ For AGN, preserve the validated semantics:
 After resident tensors are compressed, profile whether per-galaxy wave
 intermediates become the next bottleneck.
 
+2026-05-30 status: first runtime optimization slice implemented.
+
+- `configs/popcosmos_binned_compressed.yaml` now sets:
+
+  ```yaml
+  fit:
+    trace_mode: optimizer
+    trace_interval: 20
+  ```
+
+- `fit.trace_mode` is validated and can be overridden from the CLI with
+  `--fit-trace-mode full|optimizer|none`; `--fit-trace-interval N` controls
+  sparse trace recording. `full` preserves the previous diagnostic behavior,
+  `optimizer` avoids per-iteration diagnostic photometry/chi2 forward passes,
+  and `none` writes no per-iteration trace rows.
+- The independent MAP optimizer and population MAP optimizer both respect this
+  setting. Population MAP also now applies the bounded-parameter chain rule
+  directly, avoiding a second full loss-gradient evaluation inside each Adam
+  iteration.
+- `model_mags_jax` now dispatches to likelihood-only PopCosmos binned and
+  Diffstar reduced6 paths. These paths compute the same final magnitudes as the
+  full diagnostic forward model but do not construct intermediate SED outputs
+  used only for reports.
+- Local GPU smoke results with the compressed full AGN binned config:
+
+  ```text
+  limit=128, batch-size=64, maxiter=20:
+    29.48 s total, 0.230 s/gal, 4.34 gal/s, 1.19 GiB GPU peak
+
+  limit=128, batch-size=64, maxiter=200:
+    188.91 s total, 1.476 s/gal, 0.678 gal/s, 2.44 GiB GPU peak
+
+  previous user run, limit=512, batch-size=64, maxiter=200:
+    676.98 s total, 1.322 s/gal, 0.756 gal/s, 4.66 GiB GPU peak
+  ```
+
+  The direct comparison is not perfectly controlled because JIT compile/cache
+  timing differs between runs, but the same compressed model now uses much less
+  peak GPU memory during the MAP loop and removes avoidable diagnostic work.
+
+2026-05-31 status: GPU allocator and batch-size phase completed.
+
+- The `gpu` runtime preset now sets `TF_GPU_ALLOCATOR=cuda_malloc_async` before
+  importing JAX. This was the highest-impact runtime change on the local RTX
+  4060 Laptop GPU.
+- Negative benchmark results kept for audit:
+
+  ```text
+  young/old dust pre-sum fast path, batch-size=64, maxiter=20:
+    jax_optimize 46.45 s, GPU 2.18 GiB
+
+  hand-decomposed calc_obs_mag photometry, batch-size=64, maxiter=20:
+    jax_optimize 45.80 s, GPU 2.20 GiB
+  ```
+
+  Both were slower and heavier than the DSPS/JAX baseline, so they were
+  reverted.
+- Positive benchmark results with `cuda_malloc_async`:
+
+  ```text
+  batch-size=96, maxiter=20:
+    warm jax_optimize 6.41 s / 96 galaxies, GPU 2.21 GiB
+
+  batch-size=128, maxiter=20:
+    warm jax_optimize 6.61 s / 128 galaxies, GPU 2.21 GiB
+
+  batch-size=128, maxiter=200:
+    warm jax_optimize 63.83 s / 128 galaxies, GPU 4.49 GiB
+  ```
+
+- `batch-size=160` and `batch-size=192` OOM on this GPU, even with
+  `cuda_malloc_async`; `batch-size=128` is the current recommended production
+  setting.
+- `--reporting-level light` now skips plot-heavy reports. In the
+  `batch-size=128`, `maxiter=20` smoke run, `write_reports` fell from about
+  four seconds to 0.34 s while preserving tables and benchmark summaries.
+
 ### Work
 
 - Benchmark max batch size for dense versus compressed modes.
@@ -695,6 +809,47 @@ benchmark.
 - wall time per galaxy does not regress enough to erase the batch-size gain;
 - fit/predict APIs expose a mode that avoids saving full SEDs in production
   batch fitting.
+
+Remaining high-leverage work after this slice:
+
+- run a real batch-size sweep on the target GPU with `batch-size` 64, 96, 128,
+  and 192 after setting `XLA_PYTHON_CLIENT_PREALLOCATE=false` and
+  `TF_GPU_ALLOCATOR=cuda_malloc_async`;
+- implement gas continuum plus sparse line storage so the gas basis can shrink
+  below the current full-spectrum `k64` compromise without losing narrow-line
+  photometry;
+- implement a filter/projected-basis photometry mode only after the compressed
+  basis-space spectra pass redshift/dust/IGM benchmarks.
+
+### JAX Compilation/Memory Knobs
+
+2026-05-31 status: tested after the compressed runtime path was stable.
+
+- `TF_GPU_ALLOCATOR=cuda_malloc_async` is retained because it removes the large
+  allocator/autotune spike and keeps `batch-size=128` viable on the local RTX
+  4060 Laptop GPU.
+- `lax.scan(..., unroll=2)` is rejected for production: warm runtime was
+  unchanged while compile/autotune pressure and GPU peak memory increased.
+- `donate_argnums` is rejected for production: JAX reported many non-donatable
+  buffers and the benchmark was slower/heavier.
+- `jax.checkpoint`/`remat` around the magnitude forward is rejected for
+  production: it increased wall time and did not lower the observed GPU peak.
+- `fit.batch_grad_mode=sum`, which differentiates a summed vmapped batch
+  objective instead of vmapping per-galaxy gradients, is also rejected for
+  production on the local GPU: warm runtime was unchanged but compile time and
+  peak memory were much worse.
+- The options remain exposed in config/CLI only to make future hardware-specific
+  benchmarks reproducible.
+- Photometry identity between the full diagnostic forward and the optimized
+  likelihood-only forward is checked by
+  `scripts/check_photometry_equivalence.py`.
+
+Detailed outputs:
+
+```text
+outputs/report/jax_compilation_investigation_2026-05-31/
+outputs/benchmarks/photometry_equivalence_popcosmos_compressed_n8/
+```
 
 ## Phase 6 - Benchmarks
 

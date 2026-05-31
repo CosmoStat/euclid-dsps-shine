@@ -73,11 +73,11 @@ Manual smoke commands should include:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_fullagn_one_short --sed-samples 1
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --limit 20 --batch-size 2 --sed-samples 4 --out outputs/runs/dev_popcosmos_fullagn_batch
+   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_compressed_fullagn_one_short --sed-samples 1
+   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml fit --limit 20 --batch-size 8 --sed-samples 0 --reporting-level light --out outputs/runs/dev_popcosmos_compressed_fullagn_batch
    python -m euclid_dsps.cli --config configs/popcosmos_binned_noagn.yaml fit --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_popcosmos_noagn_batch
-   python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short --sed-samples 1
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml check --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check
+   python -m euclid_dsps.cli --config configs/popcosmos_diffstar_compressed.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short --sed-samples 1
+   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml check --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check
 
 Benchmark smoke:
 

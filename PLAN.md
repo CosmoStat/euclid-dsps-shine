@@ -2,26 +2,166 @@
 
 ## Current State
 
+2026-05-30 speed optimization phase:
+
+- Goal: improve PopCosmos compressed MAP throughput and GPU batch capacity for
+  learned-prior/posterior production.
+- Current measured bottleneck: `jax_optimize` dominates runtime on
+  `configs/popcosmos_binned_compressed.yaml`; warm chunks take about 75 s for
+  64 galaxies at 200 Adam iterations.
+- Implementation target: remove per-iteration diagnostic forward passes from
+  the MAP loop when configured, and use a likelihood-only PopCosmos
+  `model_mags` path that avoids constructing diagnostic SED components during
+  optimization.
+- Validation target: `model_mags` fast path must match the full forward model
+  magnitudes, and the default dense/science configs must remain compatible.
+- Implemented slice: `fit.trace_mode` and `fit.trace_interval` now control
+  expensive Adam trace diagnostics. `optimizer` mode records optimizer loss and
+  gradient summaries without per-iteration photometric diagnostic forward
+  passes; `none` disables trace rows. The compressed PopCosmos config defaults
+  to `optimizer` every 20 iterations.
+- Implemented slice: PopCosmos binned and Diffstar reduced6 now have
+  likelihood-only JAX magnitude paths. MAP, population MAP, MCMC likelihoods,
+  and benchmark code that ask only for model magnitudes no longer build the
+  diagnostic SED result object.
+- Implemented slice: population MAP uses the analytic bounded-transform chain
+  rule instead of evaluating a second full loss gradient each Adam step.
+- Smoke result on the local RTX 4060 Laptop GPU with
+  `configs/popcosmos_binned_compressed.yaml`, `batch-size=64`, and 200 Adam
+  iterations: the optimized path completed 128 galaxies in 188.9 s with a
+  2.44 GiB GPU peak. The previous 512-galaxy compressed run used 4.66 GiB peak
+  and 1.32 s/gal overall; warm-chunk runtime is now lower and peak GPU memory is
+  roughly halved for the same compressed model family.
+
+2026-05-31 forward/runtime optimization phase:
+
+- Goal: continue reducing GPU memory pressure and wall time for production MAP
+  batches used before learned posterior/prior training.
+- New target: remove avoidable `age x wavelength` intermediates from
+  likelihood-only forward passes. The current dust models apply one attenuation
+  curve to old populations and one to young populations, so the fast path can
+  sum young/old SSP contributions before applying dust while preserving the
+  full diagnostic forward model unchanged.
+- Benchmarking policy: save every smoke/runtime run under `outputs/runs/` and
+  write a progress report under `outputs/report/` so the speed progression can
+  be shown externally.
+- Result: the young/old dust-sum rewrite and a hand-decomposed photometry
+  rewrite were both rejected after GPU benchmarks because they increased XLA
+  memory and runtime. They are documented as negative results, not kept in the
+  model code.
+- Kept optimization: the GPU runtime preset now sets
+  `TF_GPU_ALLOCATOR=cuda_malloc_async`, which removed the large allocator/autotune
+  memory spike on the RTX 4060 Laptop GPU.
+- Kept optimization: `--reporting-level light` now actually skips plot-heavy
+  batch reports while keeping tables, JSON summaries, and performance
+  benchmarks.
+- Current best production setting on the local GPU: compressed full-AGN binned
+  model with `batch-size=128`, `maxiter=200`, `sed-samples=0`, and
+  `reporting-level=light`. A two-chunk smoke run processed 256 galaxies in
+  175.35 s with a 4.49 GiB GPU peak; the warm optimization chunk took 63.83 s
+  for 128 galaxies, roughly twice the warm throughput of the previous
+  `batch-size=64` run.
+
+2026-05-31 JAX compilation/options investigation:
+
+- Goal: test whether JAX writing/compilation knobs can improve the compressed
+  PopCosmos MAP path beyond simply running on GPU.
+- Implemented reproducible fit options for controlled benchmarking:
+  `fit.scan_unroll`, `fit.donate_optimizer_inputs`, and
+  `fit.remat_model_mags`, exposed through the CLI as `--fit-scan-unroll`,
+  `--fit-donate-inputs`, and `--fit-remat-model-mags`.
+- Result: all three options stay disabled by default. On the local RTX 4060
+  Laptop GPU, `scan_unroll=2` gave no warm-speed improvement and much higher
+  compile/memory pressure; input donation produced JAX donation warnings and
+  was slower; rematerializing the magnitude forward was slower and did not
+  reduce the real graph memory.
+- Kept recommendation: use the compressed config defaults with the GPU runtime
+  preset, which now sets `TF_GPU_ALLOCATOR=cuda_malloc_async`.
+- Added `scripts/check_photometry_equivalence.py` to compare the full
+  diagnostic forward path against the optimized likelihood-only magnitude path.
+  The current compressed PopCosmos smoke check reports exactly zero magnitude
+  difference for the sampled points.
+- Report and plots:
+  `outputs/report/jax_compilation_investigation_2026-05-31/`.
+
+2026-05-31 advanced optimizer/MCMC investigation:
+
+- Tested a deeper JAX autodiff rewrite for independent MAP batches:
+  `vmap(value_and_grad(single_objective))` versus
+  `value_and_grad(sum(vmap(single_objective)))`. The latter is exposed as
+  `fit.batch_grad_mode: sum` and CLI `--fit-batch-grad-mode sum` for future
+  hardware benchmarks.
+- Result: rejected as production default on the local RTX 4060 Laptop GPU.
+  Warm optimization time was essentially unchanged, while compile time and peak
+  GPU memory roughly doubled. Keep `fit.batch_grad_mode: per_galaxy`.
+- MCMC path now calls `model_mags_jax_dynamic` so large compressed DSPS arrays
+  are passed as model arguments before future sampler experiments.
+- Local `shine` has NumPyro but not `blackjax`, `jaxopt`, `optax`, or `flowMC`.
+  MCLMC therefore requires a separate dependency/backend slice rather than a
+  config-only switch.
+- A compressed full-model HMC smoke with one warmup, one sample, and one
+  leapfrog was terminated after more than two minutes of CPU-heavy compilation.
+  Posterior acceleration should be benchmarked separately with a sampler
+  backend designed for this use case.
+- Report:
+  `outputs/report/jax_advanced_optimization_2026-05-31/`.
+
+2026-05-31 wavelet compression benchmark:
+
+- Added `scripts/benchmark_wavelet_compression.py` to compare the current
+  low-rank compressed assets against a sparse Haar-wavelet oracle on sampled
+  dense stellar SSP, gas, and AGN spectra.
+- The benchmark intentionally measures resident payload size and spectral
+  reconstruction loss, not disk compression. It does not add a runtime wavelet
+  mode yet.
+- Result: keep the current SVD/factored-SVD compression as the production
+  direction for gas and AGN. Sparse Haar is much worse for AGN and larger or
+  worse for gas at the tested loss levels. It is only competitive for the base
+  stellar SSP on the sampled median spectral metric, but its worst-tail error
+  and sparse-index runtime complexity need a separate photometric/JAX benchmark
+  before it can be considered.
+- Report and plots:
+  `outputs/report/wavelet_compression_benchmark_2026-05-31/`.
+
+2026-05-31 compressed production documentation/config update:
+
+- Promoted `configs/popcosmos_binned_compressed.yaml` as the documented
+  production MAP config and added `configs/popcosmos_diffstar_compressed.yaml`
+  for the compressed Diffstar comparison path.
+- Added `docs/source/ssp_compression.rst` and linked it from the Sphinx index.
+  The page documents the SVD `basis/coeff/scale` format, gas and AGN compressed
+  parameter axes, the wavelet audit result, asset build commands, and the
+  production compressed fit command.
+- Updated README and Sphinx run/setup/forward-model/science/testing docs so
+  dense configs are described as reference/closure paths while compressed
+  configs are the recommended high-throughput runtime path.
+- Validation run before commit: `compileall`, `pytest tests/test_config.py`,
+  `pytest tests/test_model.py`, `pytest tests/test_fit_memory.py
+  tests/test_mcmc.py`, Sphinx `-W --keep-going`, and compressed photometry
+  equivalence smoke all pass locally in `conda shine`.
+
 Branch objective: integrate the Diffstar SFH implementation from
 `feature/diffstar` into the current PopCosmos FSPS gas/AGN workflow without
 losing the generated-grid scripts, GPU/JIT memory fixes, or documentation
 cleanup.
 
-The repository currently has five active PopCosmos-like configurations:
+The repository currently has six active PopCosmos-like configurations:
 
 ```text
 configs/popcosmos_binned.yaml
 configs/popcosmos_binned_compressed.yaml
 configs/popcosmos_diffstar.yaml
+configs/popcosmos_diffstar_compressed.yaml
 configs/popcosmos_binned_noagn.yaml
 configs/popcosmos_diffstar_noagn.yaml
 ```
 
-The full AGN configs are now the recommended default path:
-`popcosmos_binned` first, `popcosmos_binned_compressed` for high-throughput
-GPU MAP batches once dense-vs-compressed residuals are acceptable, and
-`popcosmos_diffstar` as the comparison. The no-AGN configs remain available
-for controlled ablations and fallback debugging.
+The compressed full AGN configs are now the recommended production path:
+`popcosmos_binned_compressed` first for high-throughput GPU MAP batches, and
+`popcosmos_diffstar_compressed` as the comparison. The dense full AGN configs
+remain available for dense-vs-compressed and FSPS/Prospector closure checks.
+The no-AGN configs remain available for controlled ablations and fallback
+debugging.
 
 They are standalone and represent the current PopCosmos-like DSPS/JAX paths:
 
@@ -48,8 +188,9 @@ They are standalone and represent the current PopCosmos-like DSPS/JAX paths:
   `log10(Zstar_abs) = log10(0.0142) + log10_stellar_metallicity`.
 - Full configs keep the 16-parameter fit including SFH, gas, and AGN.
   No-AGN configs remove `ln_fagn` and `ln_tauagn`.
-- `configs/popcosmos_binned_compressed.yaml` inherits the full binned AGN
-  config and swaps only the resident spectral assets to compressed SSP, gas,
+- `configs/popcosmos_binned_compressed.yaml` and
+  `configs/popcosmos_diffstar_compressed.yaml` inherit their dense full AGN
+  configs and swap only the resident spectral assets to compressed SSP, gas,
   and AGN component bases.
 
 Older config variants, presets, examples, and partial smoke configs have been
@@ -104,10 +245,10 @@ Short one-row fit:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/popcosmos_binned.yaml \
+  --config configs/popcosmos_binned_compressed.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_fullagn_one_short \
+  --out outputs/runs/dev_popcosmos_compressed_fullagn_one_short \
   --sed-samples 1
 ```
 
@@ -115,21 +256,23 @@ Batched fit:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/popcosmos_binned.yaml \
-  fit --limit 20 \
-  --batch-size 2 \
-  --out outputs/runs/dev_popcosmos_fullagn_batch \
-  --sed-samples 4
+  --config configs/popcosmos_binned_compressed.yaml \
+  fit --limit 1000 \
+  --batch-size 128 \
+  --fit-maxiter 200 \
+  --out outputs/runs/popcosmos_binned_compressed_map_n1000_bs128 \
+  --sed-samples 0 \
+  --reporting-level light
 ```
 
 Diffstar short one-row fit:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/popcosmos_diffstar.yaml \
+  --config configs/popcosmos_diffstar_compressed.yaml \
   fit --index 0 \
   --fit-maxiter 20 \
-  --out outputs/runs/dev_popcosmos_diffstar_fullagn_one_short \
+  --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short \
   --sed-samples 1
 ```
 
@@ -138,8 +281,8 @@ Verification:
 ```bash
 uv run python -m compileall euclid_dsps scripts
 uv run pytest tests
-uv run python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --help
-uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --help
+uv run python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml fit --help
+uv run python -m euclid_dsps.cli --config configs/popcosmos_diffstar_compressed.yaml fit --help
 ```
 
 ## Remaining Work

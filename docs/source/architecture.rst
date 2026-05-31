@@ -45,10 +45,12 @@ assets:
        workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
-     popcosmos_binned.yaml          Full AGN setup with binned SFH.
-     popcosmos_diffstar.yaml        Full AGN setup with Diffstar SFH.
-     popcosmos_binned_noagn.yaml    No-AGN binned fallback.
-     popcosmos_diffstar_noagn.yaml  No-AGN Diffstar fallback.
+     popcosmos_binned_compressed.yaml    Production full AGN setup with binned SFH.
+     popcosmos_diffstar_compressed.yaml  Compressed full AGN Diffstar comparison.
+     popcosmos_binned.yaml               Dense full AGN reference setup.
+     popcosmos_diffstar.yaml             Dense full AGN Diffstar reference.
+     popcosmos_binned_noagn.yaml         No-AGN binned fallback.
+     popcosmos_diffstar_noagn.yaml       No-AGN Diffstar fallback.
    scripts/
      generate_fsps_ssp_grid.py
      generate_fsps_gas_grid.py
@@ -57,9 +59,10 @@ assets:
    Data/             Local data and DSPS assets, not source.
    outputs/          Generated run outputs, not source.
 
-The active runtime path is intentionally narrow: full AGN configs by default,
-no-AGN configs for ablation/fallback, generated FSPS assets in ``Data/``, and
-CLI workflows under ``fit``, ``posterior``, and ``check``.
+The active runtime path is intentionally narrow: compressed full AGN configs
+for production MAP batches, dense full AGN configs for reference/benchmark
+closure, no-AGN configs for ablation/fallback, generated FSPS assets in
+``Data/``, and CLI workflows under ``fit``, ``posterior``, and ``check``.
 
 Layer Responsibilities
 ----------------------

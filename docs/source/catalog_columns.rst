@@ -238,7 +238,7 @@ not PopCosmos line-calibrated.
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit \
+   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml fit \
      --limit 32 \
      --batch-size 32 \
      --out outputs/runs/dev_fit_batch_10band
@@ -247,7 +247,7 @@ For COSMOS SED validation:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml check \
+   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml check \
      --kind cosmos \
      --limit 20 \
      --out outputs/check/cosmos

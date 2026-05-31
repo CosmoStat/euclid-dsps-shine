@@ -10,13 +10,16 @@ PopCosmos-like parameterization. FSPS is used offline to generate spectral
 assets. The fit-time code then interpolates those assets in JAX, so it can be
 optimized and eventually used inside learned-prior workflows.
 
-The default science configuration is the full AGN binned-SFH model:
+The default production configuration is the compressed full AGN binned-SFH
+model:
 
 .. code-block:: text
 
-   configs/popcosmos_binned.yaml
+   configs/popcosmos_binned_compressed.yaml
 
-``configs/popcosmos_binned_noagn.yaml`` is kept as a fallback/debug config.
+``configs/popcosmos_binned.yaml`` is kept as the dense reference config for
+closure tests. ``configs/popcosmos_binned_noagn.yaml`` is kept as a
+fallback/debug config.
 
 Glossary
 --------
@@ -79,7 +82,14 @@ Glossary
 Full AGN And No-AGN Modes
 -------------------------
 
-Full AGN is the default path:
+Compressed full AGN is the production path:
+
+.. code-block:: text
+
+   configs/popcosmos_binned_compressed.yaml
+   configs/popcosmos_diffstar_compressed.yaml
+
+Dense full AGN is the reference/benchmark path:
 
 .. code-block:: text
 
@@ -122,6 +132,12 @@ setup:
      - FSPS/CLOUDY gas-varying SSP grid over gas metallicity and gas ionization.
    * - ``Data/popcosmos_chabrier_agn_component_ssp_grid.h5``
      - FSPS-native AGN component grid over ``fagn``, ``agn_tau``, stellar metallicity, SSP age, and wavelength.
+   * - ``Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5``
+     - Compressed SVD stellar SSP basis used by production fitting.
+   * - ``Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5``
+     - Compressed SVD gas grid used by production fitting.
+   * - ``Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5``
+     - Compressed fagn-factored SVD AGN component grid used by production fitting.
 
 All PopCosmos-like assets must declare:
 
@@ -154,8 +170,8 @@ reference benchmark:
 Step-By-Step SED Construction
 -----------------------------
 
-1. Load HDF5 spectral axes
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+1. Load HDF5 spectral axes or compressed bases
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``euclid_dsps.model.load_context`` reads the base SSP:
 
@@ -166,6 +182,18 @@ Step-By-Step SED Construction
    ssp_lgmet[stellar_metallicity]
    ssp_flux[stellar_metallicity, age, wave]
    ssp_surviving_mstar[stellar_metallicity, age]
+
+The compressed production config keeps the same axes but loads compact arrays:
+
+.. code-block:: text
+
+   ssp_basis[k, wave]
+   ssp_coeff[stellar_metallicity, age, k]
+   ssp_scale[stellar_metallicity, age]
+
+For dense configs, ``ssp_flux`` is resident in JAX. For compressed configs,
+``ssp_flux`` is not copied into JAX; DSPS reconstructs only the
+metallicity-specific ``[age, wave]`` slice needed for the current forward pass.
 
 The wavelength unit is Angstrom. ``ssp_lg_age_gyr`` is ``log10(age/Gyr)``.
 ``ssp_lgmet`` is absolute ``log10(Z)``. The PopCosmos-like sampled metallicity
@@ -230,7 +258,7 @@ FSPS/Prospector ``dust_type=4`` shape.
 6. Add nebular emission
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The production gas path uses:
+The dense reference gas path uses:
 
 .. code-block:: yaml
 
@@ -239,8 +267,19 @@ The production gas path uses:
      gas_grid_path: Data/popcosmos_chabrier_gas_ssp_grid.h5
      emission_line_corrections: none
 
+The compressed production gas path uses:
+
+.. code-block:: yaml
+
+   model:
+     nebular_model: compressed_gas_grid
+     compressed_gas_grid_path: Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
+     emission_line_corrections: none
+
 The gas grid axes must match the base SSP wavelength, age, and stellar
-metallicity axes. The grid is interpolated in gas metallicity and ionization.
+metallicity axes. The dense grid is interpolated in gas metallicity and
+ionization. The compressed grid interpolates in coefficient space first, then
+reconstructs only the requested ``[age, wave]`` gas slice.
 
 ``emission_line_corrections: none`` means raw FSPS/CLOUDY nebular emission. The
 code has a ``popcosmos_table`` hook for enriched line/continuum grids, but the
@@ -249,13 +288,25 @@ official PopCosmos learned correction table is not present in this repository.
 7. Add AGN
 ~~~~~~~~~~
 
-The active full AGN model uses an FSPS-native component grid:
+The dense reference full AGN model uses an FSPS-native component grid:
 
 .. code-block:: yaml
 
    model:
      agn_model: fsps_component_grid
      agn_component_grid_path: Data/popcosmos_chabrier_agn_component_ssp_grid.h5
+     agn_host_attenuation: fsps_diffuse_unit_tau
+     agn_igm_order: fsps_after_igm
+     agn_baked_attenuation: fsps_powerlaw_unit_tau
+     agn_baked_dust_index: -0.7
+
+The compressed production model uses the fagn-factored component basis:
+
+.. code-block:: yaml
+
+   model:
+     agn_model: compressed_fsps_component_grid
+     compressed_agn_component_grid_path: Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
      agn_host_attenuation: fsps_diffuse_unit_tau
      agn_igm_order: fsps_after_igm
      agn_baked_attenuation: fsps_powerlaw_unit_tau
@@ -270,6 +321,10 @@ The component grid stores:
 for each SSP age and stellar metallicity. DSPS interpolates this grid in
 ``fagn = exp(ln_fagn)``, ``agn_tau = exp(ln_tauagn)``, stellar metallicity, and
 age, then sums it with the same SFH weights as the stellar component.
+
+In compressed mode, the near-linear ``fagn`` axis is removed from storage and
+applied as a runtime multiplier. This is the main reason the AGN compressed
+asset is much smaller than the dense AGN component grid.
 
 The AGN component generated by FSPS already carries a baked unit-tau
 ``dust_type=0`` attenuation. The runtime model replaces that baked curve with

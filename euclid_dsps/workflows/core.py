@@ -664,7 +664,13 @@ def fit_batch(
             out / "sed_diagnostics_manifest.csv", index=False
         )
     write_fit_diagnostic_outputs(fits, comparison, config, out, label="batch_fit")
-    write_nebular_diagnostic_outputs(context, fits, out, label="batch_fit")
+    write_nebular_diagnostic_outputs(
+        context,
+        fits,
+        out,
+        label="batch_fit",
+        make_plots=reporting_level == "full",
+    )
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(
@@ -1261,7 +1267,13 @@ def fit_population(
         label="population_fit",
         hyperparameters=hyper_frame,
     )
-    write_nebular_diagnostic_outputs(context, fits, out, label="population_fit")
+    write_nebular_diagnostic_outputs(
+        context,
+        fits,
+        out,
+        label="population_fit",
+        make_plots=reporting_level == "full",
+    )
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(
