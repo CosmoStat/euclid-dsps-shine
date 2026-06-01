@@ -670,6 +670,92 @@ def write_fit_diagnostic_outputs(
     components = fit_objective_components(fits, comparison, config, hyperparameters)
     if not components.empty:
         components.to_csv(out / f"{label}_objective_components.csv", index=False)
+    plot_fit_free_parameter_distributions(
+        fits, config, out / f"{label}_free_parameter_distributions.png"
+    )
+
+
+def plot_fit_free_parameter_distributions(
+    fits: pd.DataFrame, config: dict[str, Any], path: str | Path
+) -> None:
+    """Plot MAP distributions for configured free parameters with fit bounds."""
+    free = config.get("fit", {}).get("free_parameters", {}) or {}
+    columns = [
+        (name, f"fit_{name}", spec or {})
+        for name, spec in free.items()
+        if f"fit_{name}" in fits
+    ]
+    if fits.empty or not columns:
+        return
+
+    ncols = min(4, len(columns))
+    nrows = int(np.ceil(len(columns) / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(4.0 * ncols, 2.8 * nrows),
+        squeeze=False,
+    )
+    axes_flat = axes.ravel()
+    for ax, (name, column, spec) in zip(axes_flat, columns, strict=False):
+        values = pd.to_numeric(fits[column], errors="coerce").replace(
+            [np.inf, -np.inf], np.nan
+        )
+        values = values.dropna()
+        if values.empty:
+            ax.axis("off")
+            continue
+        bounds = spec.get("bounds") if isinstance(spec, dict) else None
+        finite_bounds = (
+            isinstance(bounds, (list, tuple))
+            and len(bounds) == 2
+            and np.isfinite(float(bounds[0]))
+            and np.isfinite(float(bounds[1]))
+            and float(bounds[1]) > float(bounds[0])
+        )
+        if finite_bounds:
+            low = float(bounds[0])
+            high = float(bounds[1])
+            bins = np.linspace(low, high, 51)
+            span = high - low
+            near_low = float((values <= low + 0.01 * span).mean())
+            near_high = float((values >= high - 0.01 * span).mean())
+            ax.axvspan(low, low + 0.01 * span, color="#b85c38", alpha=0.10)
+            ax.axvspan(high - 0.01 * span, high, color="#b85c38", alpha=0.10)
+            ax.axvline(low, color="#555555", ls="--", lw=0.9)
+            ax.axvline(high, color="#555555", ls="--", lw=0.9)
+        else:
+            bins = 50
+            near_low = np.nan
+            near_high = np.nan
+        ax.hist(values, bins=bins, color="#2F5D8C", alpha=0.72)
+        ax.axvline(values.median(), color="black", lw=1.1)
+        ax.set_title(_parameter_display_label(name), fontsize=10)
+        ax.set_ylabel("galaxies")
+        if finite_bounds:
+            ax.text(
+                0.02,
+                0.94,
+                f"near low {near_low:.1%}\nnear high {near_high:.1%}",
+                transform=ax.transAxes,
+                va="top",
+                ha="left",
+                fontsize=8,
+                bbox={
+                    "boxstyle": "round,pad=0.25",
+                    "facecolor": "white",
+                    "edgecolor": "#cccccc",
+                    "alpha": 0.85,
+                },
+            )
+        ax.grid(alpha=0.2)
+
+    for ax in axes_flat[len(columns) :]:
+        ax.axis("off")
+    fig.suptitle("MAP free-parameter distributions", y=1.0, fontsize=13)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170, bbox_inches="tight")
+    plt.close(fig)
 
 
 def fit_parameter_audit(fits: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:

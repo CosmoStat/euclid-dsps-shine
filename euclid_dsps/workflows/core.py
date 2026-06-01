@@ -618,9 +618,27 @@ def fit_batch(
             row_indices=row_indices,
         ):
             perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
-            batch_result = _fit_dataframe_batch(
-                context, batch, config, chunk_index=chunk_index, perf=perf
+            fit_batch_frame, real_row_indices = _pad_fit_batch_to_static_size(
+                batch, batch_size
             )
+            if real_row_indices is not None:
+                perf.mark(
+                    "pad_final_chunk",
+                    chunk_index=chunk_index,
+                    n_rows=len(batch),
+                    padded_n_rows=len(fit_batch_frame),
+                )
+            batch_result = _fit_dataframe_batch(
+                context,
+                fit_batch_frame,
+                config,
+                chunk_index=chunk_index,
+                perf=perf,
+            )
+            if real_row_indices is not None:
+                batch_result = _filter_padded_fit_batch_result(
+                    batch_result, real_row_indices
+                )
             fit_rows.extend(batch_result["fit_rows"])
             comparison_rows.extend(batch_result["comparison_rows"])
             trace_rows.extend(batch_result["trace_rows"])
@@ -683,6 +701,43 @@ def fit_batch(
         },
     )
     write_performance_outputs(perf.rows, out, "batch_fit")
+
+
+def _pad_fit_batch_to_static_size(
+    batch: pd.DataFrame, target_size: int
+) -> tuple[pd.DataFrame, set[int] | None]:
+    """Pad a final MAP batch so JAX sees the same batch shape throughout a run."""
+    if target_size <= 0 or len(batch) == 0 or len(batch) >= target_size:
+        return batch, None
+    pad_count = target_size - len(batch)
+    real_row_indices = {int(index) for index in batch.index}
+    pad_rows = batch.iloc[[-1]].copy()
+    pad_rows = pd.concat([pad_rows] * pad_count)
+    pad_rows.index = [-1_000_000_000 - offset for offset in range(pad_count)]
+    padded = pd.concat([batch, pad_rows], axis=0)
+    return padded, real_row_indices
+
+
+def _filter_padded_fit_batch_result(
+    batch_result: dict[str, list[dict[str, Any]]], real_row_indices: set[int]
+) -> dict[str, list[dict[str, Any]]]:
+    """Drop synthetic padding rows before checkpoints and final reports."""
+
+    def keep_real_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = []
+        for row in rows:
+            if "row_index" not in row:
+                continue
+            if int(row["row_index"]) in real_row_indices:
+                kept.append(row)
+        return kept
+
+    return {
+        "fit_rows": keep_real_rows(batch_result["fit_rows"]),
+        "comparison_rows": keep_real_rows(batch_result["comparison_rows"]),
+        "hyper_rows": [],
+        "trace_rows": [],
+    }
 
 
 def _write_fit_chunk_checkpoint(

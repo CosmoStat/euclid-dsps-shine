@@ -8,6 +8,7 @@ from euclid_dsps.reporting.core import (
     fit_objective_components,
     fit_parameter_audit,
     parameter_truth_metrics,
+    plot_fit_free_parameter_distributions,
     redshift_attractor_summary,
     summarize_by_row,
 )
@@ -97,6 +98,22 @@ def test_fit_parameter_audit_flags_constant_free_parameter() -> None:
     assert audit.loc["dust_av", "active_in_forward_model"]
     assert "not_inferred_column" in audit.loc["dust_av", "warning_flags"]
     assert audit.loc["t_obs_gyr", "source"] == "derived"
+
+
+def test_plot_fit_free_parameter_distributions_writes_png(tmp_path) -> None:
+    fits = pd.DataFrame(
+        {
+            "row_index": [0, 1, 2],
+            "fit_z_obs": [0.4, 0.5, 0.6],
+            "fit_log10_metallicity": [-2.4, -2.2, -2.0],
+        }
+    )
+    path = tmp_path / "free_params.png"
+
+    plot_fit_free_parameter_distributions(fits, _config(), path)
+
+    assert path.exists()
+    assert path.stat().st_size > 0
 
 
 def test_cosmos_proxy_dust_is_inactive_not_inferred() -> None:

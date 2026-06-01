@@ -2,6 +2,23 @@
 
 ## Current State
 
+2026-06-01 large MAP finalization fix:
+
+- Observed failure: a `configs/popcosmos_binned_compressed.yaml` MAP run with
+  `--limit 10000 --batch-size 128` completed 78 full chunks, then crashed at
+  9984/10000 when the final 16-row chunk triggered a new JAX/XLA GPU graph
+  capture path (`cuda_blas_lt.cc` workspace failure).
+- Fix: independent batch MAP now pads partial chunks internally to the requested
+  static `batch_size`, then filters synthetic rows before checkpoint/final
+  outputs. This keeps one stable JAX batch shape for long production runs. The
+  padding is not applied to population/hierarchical fits because duplicated
+  rows would change the statistical objective.
+- Recovery tool: `scripts/finalize_fit_from_chunks.py` concatenates existing
+  `_chunks` checkpoints and regenerates aggregate MAP tables, QC plots, and
+  completion metadata without rerunning the optimizer. For the interrupted
+  n=10000 run, it can produce a scientifically usable report over the 9984
+  completed galaxies and explicitly records the missing row indices.
+
 2026-05-30 speed optimization phase:
 
 - Goal: improve PopCosmos compressed MAP throughput and GPU batch capacity for
@@ -139,6 +156,23 @@
   `pytest tests/test_model.py`, `pytest tests/test_fit_memory.py
   tests/test_mcmc.py`, Sphinx `-W --keep-going`, and compressed photometry
   equivalence smoke all pass locally in `conda shine`.
+
+2026-05-31 MCLMC posterior planning:
+
+- Added `PLAN_MCLMC.md` as the implementation plan for a BlackJAX MCLMC
+  posterior backend.
+- Current decision: do not put posterior sampling on the critical path for the
+  next MAP sprint. First run compressed MAP `n=10k`, generate QC, test SSP
+  `k128`, rerun dense-vs-compressed `n=500`, then scale to `n=100k+`.
+- MCLMC should be developed in parallel as an experimental posterior backend
+  over the compressed model. It needs a pure JAX log-density over an
+  unconstrained parameter vector, a bounded-parameter transform with Jacobian,
+  lazy BlackJAX dependency handling, and a benchmark against current NumPyro
+  HMC/NUTS on selected MAP-QC rows.
+- Use `mclmc` as the canonical spelling in config/code/docs. Treat unadjusted
+  MCLMC as an engineering/diagnostic sampler until compared against NUTS/HMC;
+  add adjusted MCLMC as the science candidate if the installed BlackJAX API
+  supports it.
 
 Branch objective: integrate the Diffstar SFH implementation from
 `feature/diffstar` into the current PopCosmos FSPS gas/AGN workflow without

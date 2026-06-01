@@ -218,8 +218,9 @@ def load_row_indices(path: str | Path) -> list[int]:
     rows = pd.read_csv(path, comment="#", header=None)
     if rows.empty:
         return []
+    values = pd.to_numeric(rows.iloc[:, 0], errors="coerce").dropna()
     return sorted(
-        {int(value) for value in rows.iloc[:, 0].dropna().astype(int).tolist()}
+        {int(value) for value in values.astype(int).tolist()}
     )
 
 
