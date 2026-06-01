@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 import time
 from typing import Any
 
@@ -295,6 +296,11 @@ def _sample_one_galaxy_mclmc(
     num_warmup = int(sample_config.get("num_warmup", 100))
     num_samples = int(sample_config.get("num_samples", 200))
     seed = int(sample_config.get("seed", 42))
+    progress_bar = bool(sample_config.get("progress_bar", True))
+    debug = bool(sample_config.get("mclmc_debug", False))
+    progress_chunk_size = int(sample_config.get("mclmc_progress_chunk_size", 16))
+    if progress_chunk_size <= 0:
+        raise ValueError("sample.mclmc_progress_chunk_size must be positive")
     dim = int(y0.shape[0])
     L = _resolve_mclmc_float(
         sample_config.get("mclmc_l", sample_config.get("L")), np.sqrt(float(dim))
@@ -316,23 +322,53 @@ def _sample_one_galaxy_mclmc(
     )
     rng_key = random.PRNGKey(seed)
     init_key, warmup_key, sample_key = random.split(rng_key, 3)
+    _mclmc_log(
+        progress_bar or debug,
+        "backend="
+        f"{jax.default_backend()} devices={_jax_device_strings()} "
+        f"dim={dim} bands={len(observation.bands)} warmup={num_warmup} "
+        f"samples={num_samples} L={L:.6g} step_size={step_size:.6g} "
+        f"chunk={progress_chunk_size}",
+    )
+    _mclmc_log(progress_bar or debug, "compiling BlackJAX MCLMC step")
     compile_start = time.perf_counter()
     state = algorithm.init(y0, init_key)
     step_fn = jax.jit(algorithm.step)
     compiled_state, _ = step_fn(warmup_key, state)
     jax.block_until_ready(compiled_state.position)
     compile_time = time.perf_counter() - compile_start
+    _mclmc_log(progress_bar or debug, f"compile done in {compile_time:.3f}s")
 
     warmup_start = time.perf_counter()
-    state, warmup_info = _scan_mclmc(step_fn, state, warmup_key, num_warmup)
+    state, warmup_info = _run_mclmc_steps(
+        step_fn,
+        state,
+        warmup_key,
+        num_warmup,
+        phase="warmup",
+        progress_bar=progress_bar,
+        debug=debug,
+        chunk_size=progress_chunk_size,
+    )
     jax.block_until_ready(state.position)
     warmup_time = time.perf_counter() - warmup_start
+    _mclmc_log(progress_bar or debug, f"warmup done in {warmup_time:.3f}s")
 
     sample_start = time.perf_counter()
-    state, sample_info = _scan_mclmc(step_fn, state, sample_key, num_samples)
+    state, sample_info = _run_mclmc_steps(
+        step_fn,
+        state,
+        sample_key,
+        num_samples,
+        phase="sample",
+        progress_bar=progress_bar,
+        debug=debug,
+        chunk_size=progress_chunk_size,
+    )
     positions = sample_info["position"]
     jax.block_until_ready(positions)
     sampling_time = time.perf_counter() - sample_start
+    _mclmc_log(progress_bar or debug, f"sampling done in {sampling_time:.3f}s")
 
     theta = jax.vmap(target.theta_from_unconstrained)(positions)
     theta_np = np.asarray(theta)
@@ -365,6 +401,7 @@ def _sample_one_galaxy_mclmc(
             num_samples=num_samples,
             L=L,
             step_size=step_size,
+            progress_chunk_size=progress_chunk_size,
             compile_time=compile_time,
             warmup_time=warmup_time,
             sampling_time=sampling_time,
@@ -376,15 +413,13 @@ def _sample_one_galaxy_mclmc(
 
 def _scan_mclmc(step_fn, state, rng_key, num_steps: int):
     if num_steps <= 0:
-        empty = jnp.empty((0,) + state.position.shape, dtype=state.position.dtype)
-        return state, {
-            "position": empty,
-            "logdensity": jnp.empty((0,), dtype=state.logdensity.dtype),
-            "energy_change": jnp.empty((0,), dtype=state.logdensity.dtype),
-            "kinetic_change": jnp.empty((0,), dtype=state.logdensity.dtype),
-            "nonans": jnp.empty((0,), dtype=bool),
-        }
-    keys = random.split(rng_key, num_steps)
+        return state, _empty_mclmc_info(state)
+    return _scan_mclmc_keys(step_fn, state, random.split(rng_key, num_steps))
+
+
+def _scan_mclmc_keys(step_fn, state, keys):
+    if keys.shape[0] <= 0:
+        return state, _empty_mclmc_info(state)
 
     def one_step(carry, key):
         new_state, info = step_fn(key, carry)
@@ -405,6 +440,93 @@ def _scan_mclmc(step_fn, state, rng_key, num_steps: int):
         "kinetic_change": kinetic_change,
         "nonans": nonans,
     }
+
+
+def _run_mclmc_steps(
+    step_fn,
+    state,
+    rng_key,
+    num_steps: int,
+    *,
+    phase: str,
+    progress_bar: bool,
+    debug: bool,
+    chunk_size: int,
+):
+    if num_steps <= 0:
+        return state, _empty_mclmc_info(state)
+    if chunk_size <= 0:
+        raise ValueError("sample.mclmc_progress_chunk_size must be positive")
+    if not progress_bar and not debug:
+        return _scan_mclmc(step_fn, state, rng_key, num_steps)
+
+    keys = random.split(rng_key, num_steps)
+    chunks: dict[str, list[jnp.ndarray]] = {
+        "position": [],
+        "logdensity": [],
+        "energy_change": [],
+        "kinetic_change": [],
+        "nonans": [],
+    }
+    pbar = _mclmc_progress_bar(
+        enabled=progress_bar,
+        total=num_steps,
+        desc=f"mclmc-{phase}",
+    )
+    try:
+        for start in range(0, num_steps, chunk_size):
+            end = min(start + chunk_size, num_steps)
+            state, info = _scan_mclmc_keys(step_fn, state, keys[start:end])
+            jax.block_until_ready(info["position"])
+            for name, values in info.items():
+                chunks[name].append(values)
+            if pbar is not None:
+                pbar.update(end - start)
+            if debug:
+                _mclmc_log(
+                    True,
+                    f"{phase} {end}/{num_steps} "
+                    f"logdensity={float(info['logdensity'][-1]):.6g} "
+                    f"nonans={float(jnp.mean(info['nonans'])):.3f}",
+                )
+    finally:
+        if pbar is not None:
+            pbar.close()
+
+    return state, {
+        name: jnp.concatenate(values, axis=0)
+        for name, values in chunks.items()
+    }
+
+
+def _empty_mclmc_info(state):
+    empty = jnp.empty((0,) + state.position.shape, dtype=state.position.dtype)
+    return {
+        "position": empty,
+        "logdensity": jnp.empty((0,), dtype=state.logdensity.dtype),
+        "energy_change": jnp.empty((0,), dtype=state.logdensity.dtype),
+        "kinetic_change": jnp.empty((0,), dtype=state.logdensity.dtype),
+        "nonans": jnp.empty((0,), dtype=bool),
+    }
+
+
+def _mclmc_progress_bar(*, enabled: bool, total: int, desc: str):
+    if not enabled:
+        return None
+    try:
+        from tqdm.auto import tqdm
+    except ImportError:  # pragma: no cover - only if tqdm is absent
+        return None
+    return tqdm(total=total, desc=desc, unit="step", dynamic_ncols=True)
+
+
+def _mclmc_log(enabled: bool, message: str) -> None:
+    if enabled:
+        print(f"[mclmc] {message}", file=sys.stderr, flush=True)
+
+
+def _jax_device_strings() -> list[str]:
+    return [f"{device.platform}:{device.id}" for device in jax.devices()]
 
 
 def _resolve_mclmc_float(value: Any, default: float) -> float:
@@ -634,6 +756,8 @@ def _diagnostics(
         diagnostics["max_tree_depth"] = int(sample_config.get("max_tree_depth", 10))
     if sampler == "hmc":
         diagnostics["num_steps"] = int(sample_config.get("num_steps", 8))
+    diagnostics["jax_backend"] = str(jax.default_backend())
+    diagnostics["jax_devices"] = _jax_device_strings()
     diagnostics["device"] = f"{jax.devices()[0].platform}:{jax.devices()[0].id}"
     diagnostics["initialized_from_map"] = bool(initial_params)
     if initial_params:
@@ -654,6 +778,7 @@ def _mclmc_diagnostics(
     num_samples: int,
     L: float,
     step_size: float,
+    progress_chunk_size: int,
     compile_time: float,
     warmup_time: float,
     sampling_time: float,
@@ -676,12 +801,15 @@ def _mclmc_diagnostics(
         "chain_method": "single",
         "mclmc_l": float(L),
         "mclmc_step_size": float(step_size),
+        "mclmc_progress_chunk_size": int(progress_chunk_size),
         "compile_time_s": float(compile_time),
         "warmup_time_s": float(warmup_time),
         "sampling_time_s": float(sampling_time),
         "samples_per_second": float(num_samples / sampling_time)
         if sampling_time > 0.0
         else float("inf"),
+        "jax_backend": str(jax.default_backend()),
+        "jax_devices": _jax_device_strings(),
         "device": f"{jax.devices()[0].platform}:{jax.devices()[0].id}",
         "initialized_from_map": bool(initial_params),
         "experimental_warning": (

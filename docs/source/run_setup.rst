@@ -198,10 +198,16 @@ Experimental BlackJAX MCLMC can be used for one 16D full-AGN galaxy:
      --num-warmup 64 \
      --num-samples 128 \
      --mclmc-step-size 0.05 \
+     --mclmc-progress-chunk-size 16 \
+     --mclmc-debug \
      --out outputs/runs/dev_popcosmos_compressed_mclmc_one
 
 MCLMC is currently an engineering posterior backend. Compare it against HMC/NUTS
 on selected rows before using it for science decisions.
+The MCLMC CLI reports the active JAX backend/devices, compilation time,
+warmup/sampling progress, and per-chunk debug summaries when
+``--mclmc-debug`` is enabled. Increase ``--mclmc-progress-chunk-size`` for
+less host synchronization once a run is stable.
 
 Benchmark Against FSPS/Prospector
 ---------------------------------

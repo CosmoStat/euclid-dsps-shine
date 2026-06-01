@@ -42,6 +42,8 @@ def test_normalize_config_adds_defaults() -> None:
     assert config["model"]["n_sfh_bins"] == 96
     assert config["fit"]["method"] == "jax_adam"
     assert config["sample"]["sampler"] == "nuts"
+    assert config["sample"]["mclmc_progress_chunk_size"] == 16
+    assert config["sample"]["mclmc_debug"] is False
     assert config["runtime"]["jax_platforms"] == "cpu"
     assert config["runtime"]["disable_jax_plugin_autoload"] is True
     assert config["runtime"]["require_gpu"] is False

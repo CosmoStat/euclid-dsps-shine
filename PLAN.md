@@ -15,6 +15,9 @@
 - Current limitation: first MCLMC backend is unadjusted MCLMC with configured
   or automatic `L` and `step_size`; it is an engineering diagnostic sampler
   until compared against HMC/NUTS on selected rows.
+- Debug/progress update: the MCLMC path now reports JAX backend/devices,
+  compile/warmup/sample phase timings, optional per-chunk diagnostics, and
+  chunked progress bars controlled by `sample.mclmc_progress_chunk_size`.
 
 2026-06-01 large MAP finalization fix:
 

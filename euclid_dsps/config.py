@@ -670,6 +670,8 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["sample"].setdefault("mclmc_l", "auto")
     config["sample"].setdefault("mclmc_step_size", "auto")
     config["sample"].setdefault("mclmc_inverse_mass_matrix", "identity")
+    config["sample"].setdefault("mclmc_progress_chunk_size", 16)
+    config["sample"].setdefault("mclmc_debug", False)
     _apply_prior_set(config)
     _apply_redshift_prior(config)
 
@@ -1622,8 +1624,11 @@ def _validate_sample(
         "num_chains",
         "max_tree_depth",
         "num_steps",
+        "mclmc_progress_chunk_size",
     ):
         _positive_int(sample.get(key), f"sample.{key}", errors)
+    if not isinstance(sample.get("mclmc_debug"), bool):
+        errors.append("sample.mclmc_debug must be a boolean")
     target = _finite_float(
         sample.get("target_accept_prob"), "sample.target_accept_prob", errors
     )

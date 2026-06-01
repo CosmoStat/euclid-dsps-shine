@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax import random
 
 from euclid_dsps.io import BandObservation, GalaxyObservation
 from euclid_dsps.model import DspsContext
@@ -11,6 +14,18 @@ mcmc = pytest.importorskip("euclid_dsps.mcmc", exc_type=ImportError)
 _prior_distribution = mcmc._prior_distribution
 _prior_location = mcmc._prior_location
 sample_one_galaxy = mcmc.sample_one_galaxy
+
+
+class _ToyMclmcState(NamedTuple):
+    position: jnp.ndarray
+    logdensity: jnp.ndarray
+
+
+class _ToyMclmcInfo(NamedTuple):
+    logdensity: jnp.ndarray
+    energy_change: jnp.ndarray
+    kinetic_change: jnp.ndarray
+    nonans: jnp.ndarray
 
 
 def test_prior_location_can_use_row_resolved_base_value() -> None:
@@ -177,5 +192,35 @@ def test_sample_one_galaxy_mclmc_smoke(monkeypatch) -> None:
 
     assert result.diagnostics["backend"] == "blackjax_mclmc"
     assert result.diagnostics["sampler"] == "mclmc"
+    assert result.diagnostics["jax_backend"]
+    assert result.diagnostics["mclmc_progress_chunk_size"] == 16
     assert result.posterior_model_mags.shape == (3, 1)
     assert set(result.samples) == {"x", "y"}
+
+
+def test_mclmc_chunked_debug_runner_keeps_all_steps() -> None:
+    def step_fn(key, state):
+        del key
+        position = state.position + 1.0
+        logdensity = jnp.sum(position)
+        return _ToyMclmcState(position, logdensity), _ToyMclmcInfo(
+            logdensity=logdensity,
+            energy_change=jnp.asarray(0.1),
+            kinetic_change=jnp.asarray(0.2),
+            nonans=jnp.asarray(True),
+        )
+
+    state, info = mcmc._run_mclmc_steps(
+        step_fn,
+        _ToyMclmcState(jnp.zeros(2), jnp.asarray(0.0)),
+        random.PRNGKey(0),
+        5,
+        phase="test",
+        progress_bar=False,
+        debug=True,
+        chunk_size=2,
+    )
+
+    assert np.allclose(np.asarray(state.position), [5.0, 5.0])
+    assert info["position"].shape == (5, 2)
+    assert np.all(np.asarray(info["nonans"]))

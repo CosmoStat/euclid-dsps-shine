@@ -258,6 +258,16 @@ def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
         help="Override sample.mclmc_step_size for BlackJAX MCLMC.",
     )
     parser.add_argument(
+        "--mclmc-progress-chunk-size",
+        type=int,
+        help="Number of MCLMC steps between progress/debug syncs.",
+    )
+    parser.add_argument(
+        "--mclmc-debug",
+        action="store_true",
+        help="Print MCLMC backend, phase, and per-chunk diagnostic messages.",
+    )
+    parser.add_argument(
         "--target-accept-prob",
         type=float,
         help="Override sample.target_accept_prob for Bayesian mode.",
@@ -413,6 +423,7 @@ def _apply_sample_overrides(config: dict, args) -> None:
         "step_size",
         "mclmc_l",
         "mclmc_step_size",
+        "mclmc_progress_chunk_size",
         "target_accept_prob",
         "seed",
     ):
@@ -425,6 +436,8 @@ def _apply_sample_overrides(config: dict, args) -> None:
         sample["progress_bar"] = False
     if getattr(args, "no_map_init", False):
         sample["init_from_map"] = False
+    if getattr(args, "mclmc_debug", False):
+        sample["mclmc_debug"] = True
 
 
 def _apply_selection_overrides(config: dict, args) -> None:
