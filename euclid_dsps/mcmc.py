@@ -379,6 +379,7 @@ def _sample_one_galaxy_mclmc(
             debug=debug,
             chunk_size=progress_chunk_size,
         )
+        _raise_if_mclmc_all_invalid(warmup_info, phase=f"{chain_label} warmup")
         jax.block_until_ready(state.position)
         warmup_time = time.perf_counter() - warmup_start
         total_warmup_time += warmup_time
@@ -399,6 +400,7 @@ def _sample_one_galaxy_mclmc(
             debug=debug,
             chunk_size=progress_chunk_size,
         )
+        _raise_if_mclmc_all_invalid(sample_info, phase=f"{chain_label} sampling")
         positions = sample_info["position"]
         jax.block_until_ready(positions)
         sampling_time = time.perf_counter() - sample_start
@@ -566,6 +568,17 @@ def _concat_mclmc_infos(infos: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.nd
         name: jnp.concatenate([info[name] for info in infos], axis=0)
         for name in infos[0]
     }
+
+
+def _raise_if_mclmc_all_invalid(info: dict[str, jnp.ndarray], *, phase: str) -> None:
+    nonans = np.asarray(info["nonans"])
+    if nonans.size and not bool(np.any(nonans)):
+        raise RuntimeError(
+            f"MCLMC produced zero valid transitions during {phase}. "
+            "The chain is stuck at the initial state; reduce the step size, "
+            "increase progress chunk size to reduce recompilation pressure, "
+            "or rerun with sample.mclmc_debug=true to inspect logdensity."
+        )
 
 
 def _mclmc_chain_summary(

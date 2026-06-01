@@ -230,3 +230,10 @@ def test_mclmc_chunked_debug_runner_keeps_all_steps() -> None:
     assert np.allclose(np.asarray(state.position), [5.0, 5.0])
     assert info["position"].shape == (5, 2)
     assert np.all(np.asarray(info["nonans"]))
+
+
+def test_mclmc_all_invalid_transitions_fail_clearly() -> None:
+    info = {"nonans": jnp.asarray([False, False])}
+
+    with pytest.raises(RuntimeError, match="zero valid transitions"):
+        mcmc._raise_if_mclmc_all_invalid(info, phase="test sampling")
