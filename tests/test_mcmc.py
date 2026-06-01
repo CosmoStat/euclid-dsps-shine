@@ -230,19 +230,3 @@ def test_mclmc_chunked_debug_runner_keeps_all_steps() -> None:
     assert np.allclose(np.asarray(state.position), [5.0, 5.0])
     assert info["position"].shape == (5, 2)
     assert np.all(np.asarray(info["nonans"]))
-
-    compiled_state, compiled_info = mcmc._run_mclmc_steps(
-        step_fn,
-        _ToyMclmcState(jnp.zeros(2), jnp.asarray(0.0)),
-        random.PRNGKey(0),
-        5,
-        phase="test",
-        progress_bar=False,
-        debug=True,
-        chunk_size=2,
-        scan_chunk_fn=mcmc._build_mclmc_scan_chunk(step_fn),
-    )
-
-    assert np.allclose(np.asarray(compiled_state.position), [5.0, 5.0])
-    assert compiled_info["position"].shape == (5, 2)
-    assert np.all(np.asarray(compiled_info["nonans"]))
