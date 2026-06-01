@@ -268,6 +268,11 @@ def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
         help="Print MCLMC backend, phase, and per-chunk diagnostic messages.",
     )
     parser.add_argument(
+        "--posterior-predictive-batch-size",
+        type=int,
+        help="Chunk size for posterior predictive model magnitudes.",
+    )
+    parser.add_argument(
         "--target-accept-prob",
         type=float,
         help="Override sample.target_accept_prob for Bayesian mode.",
@@ -424,6 +429,7 @@ def _apply_sample_overrides(config: dict, args) -> None:
         "mclmc_l",
         "mclmc_step_size",
         "mclmc_progress_chunk_size",
+        "posterior_predictive_batch_size",
         "target_accept_prob",
         "seed",
     ):

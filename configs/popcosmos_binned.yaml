@@ -16,7 +16,7 @@ selection:
     sort_by_flux:
 
 redshift:
-    initial: fixed
+    initial: random_uniform
     column:
     truth_column: z_true_gal
     fixed_value: 0.5
@@ -138,7 +138,6 @@ sample:
     progress_bar: true
     init_from_map: true
     save_samples: true
-    priors: {}
 
 reporting:
     level: full

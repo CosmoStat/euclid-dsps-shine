@@ -181,6 +181,7 @@ def test_sample_one_galaxy_mclmc_smoke(monkeypatch) -> None:
             "sampler": "mclmc",
             "num_warmup": 2,
             "num_samples": 3,
+            "num_chains": 2,
             "progress_bar": False,
             "seed": 0,
             "priors": {"x": {"type": "uniform"}, "y": {"type": "uniform"}},
@@ -194,7 +195,12 @@ def test_sample_one_galaxy_mclmc_smoke(monkeypatch) -> None:
     assert result.diagnostics["sampler"] == "mclmc"
     assert result.diagnostics["jax_backend"]
     assert result.diagnostics["mclmc_progress_chunk_size"] == 16
-    assert result.posterior_model_mags.shape == (3, 1)
+    assert result.diagnostics["num_chains"] == 2
+    assert result.diagnostics["num_samples_per_chain"] == 3
+    assert result.diagnostics["num_samples"] == 6
+    assert result.posterior_model_mags.shape == (6, 1)
+    assert result.chain_ids is not None
+    np.testing.assert_array_equal(result.chain_ids, [0, 0, 0, 1, 1, 1])
     assert set(result.samples) == {"x", "y"}
 
 

@@ -1396,7 +1396,7 @@ def _posterior_sample_rows(row_index: int, result) -> list[dict[str, Any]]:
 
 
 def _posterior_truth_values(context_values: dict[str, Any]) -> dict[str, Any]:
-    return {
+    values = {
         key: value
         for key, value in context_values.items()
         if key.startswith("truth_")
@@ -1404,6 +1404,11 @@ def _posterior_truth_values(context_values: dict[str, Any]) -> dict[str, Any]:
         or key.startswith("truth_kind_")
         or key in {"redshift_truth", "redshift_truth_source", "z_obs", "z_obs_source"}
     }
+    if "redshift_truth" in values:
+        values["truth_z_obs"] = values["redshift_truth"]
+        values["truth_source_z_obs"] = values.get("redshift_truth_source")
+        values["truth_kind_z_obs"] = "direct"
+    return values
 
 
 def _row_context(

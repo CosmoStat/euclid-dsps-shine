@@ -22,6 +22,11 @@
   Student-t objective up to an additive constant, uses a triangular transform
   for the free `log10_stellar_metallicity`/`log10_gas_metallicity` pair, and
   avoids nesting a separately jitted MCLMC step inside `lax.scan`.
+- Multi-chain update: MCLMC now supports `sample.num_chains` through sequential
+  chains to keep VRAM bounded. Posterior predictive magnitudes are written in
+  configurable chunks, chain metadata is exported, trace plots mark chain
+  boundaries, and posterior summaries/corner truth plots include catalog
+  redshift truth as `truth_z_obs`.
 
 2026-06-01 large MAP finalization fix:
 

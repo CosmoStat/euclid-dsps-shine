@@ -44,6 +44,7 @@ def test_normalize_config_adds_defaults() -> None:
     assert config["sample"]["sampler"] == "nuts"
     assert config["sample"]["mclmc_progress_chunk_size"] == 16
     assert config["sample"]["mclmc_debug"] is False
+    assert config["sample"]["posterior_predictive_batch_size"] == 512
     assert config["runtime"]["jax_platforms"] == "cpu"
     assert config["runtime"]["disable_jax_plugin_autoload"] is True
     assert config["runtime"]["require_gpu"] is False
@@ -532,7 +533,7 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert config["bands"][0]["filter"]["path"] == "filters/LSST_LSST.u.dat"
     assert config["bands"][6]["error_column"].endswith("_error")
     assert config["bands"][6]["filter"]["path"] == "filters/Euclid_VIS.vis.dat"
-    assert config["redshift"]["initial"] == "fixed"
+    assert config["redshift"]["initial"] == "random_uniform"
     assert config["redshift"]["column"] is None
     assert config["redshift"]["prior_z"]["mode"] == "none"
     assert not any(

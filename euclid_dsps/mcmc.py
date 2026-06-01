@@ -47,6 +47,7 @@ class MCMCResult:
     flux_error_fnu_cgs: np.ndarray
     band_names: list[str]
     diagnostics: dict[str, Any]
+    chain_ids: np.ndarray | None = None
 
 
 def _numpyro_modules():
@@ -222,7 +223,11 @@ def sample_one_galaxy(
         if name in free_names
     }
     posterior_model_mags = _posterior_model_mags(
-        context, base_params, samples, fit_config
+        context,
+        base_params,
+        samples,
+        fit_config,
+        batch_size=int(sample_config.get("posterior_predictive_batch_size", 512)),
     )
     derived_samples = _posterior_derived(context, base_params, samples)
     return MCMCResult(
@@ -295,6 +300,9 @@ def _sample_one_galaxy_mclmc(
     y0 = initial_unconstrained_position(target, initial_params, fit_config)
     num_warmup = int(sample_config.get("num_warmup", 100))
     num_samples = int(sample_config.get("num_samples", 200))
+    num_chains = int(sample_config.get("num_chains", 1))
+    if num_chains <= 0:
+        raise ValueError("sample.num_chains must be positive")
     seed = int(sample_config.get("seed", 42))
     progress_bar = bool(sample_config.get("progress_bar", True))
     debug = bool(sample_config.get("mclmc_debug", False))
@@ -321,18 +329,17 @@ def _sample_one_galaxy_mclmc(
         ),
     )
     rng_key = random.PRNGKey(seed)
-    init_key, compile_key, warmup_key, sample_key = random.split(rng_key, 4)
+    chain_keys = random.split(rng_key, num_chains)
     _mclmc_log(
         progress_bar or debug,
         "backend="
         f"{jax.default_backend()} devices={_jax_device_strings()} "
-        f"dim={dim} bands={len(observation.bands)} warmup={num_warmup} "
-        f"samples={num_samples} L={L:.6g} step_size={step_size:.6g} "
+        f"dim={dim} bands={len(observation.bands)} chains={num_chains} "
+        f"warmup={num_warmup} samples={num_samples} "
+        f"L={L:.6g} step_size={step_size:.6g} "
         f"chunk={progress_chunk_size}",
     )
     _mclmc_log(progress_bar or debug, "compiling BlackJAX MCLMC step")
-    compile_start = time.perf_counter()
-    state = algorithm.init(y0, init_key)
     # Keep the raw BlackJAX step inside lax.scan. A separately jitted step nested
     # in scan can trigger CUDA graph-capture failures with this forward model.
     step_fn = algorithm.step
@@ -340,50 +347,94 @@ def _sample_one_galaxy_mclmc(
         progress_chunk_size,
         max(num_warmup if num_warmup > 0 else 0, num_samples, 1),
     )
-    compiled_state, _ = _scan_mclmc(step_fn, state, compile_key, probe_steps)
+    first_init_key, first_compile_key = random.split(chain_keys[0])
+    first_state = algorithm.init(y0, first_init_key)
+    compile_start = time.perf_counter()
+    compiled_state, _ = _scan_mclmc(
+        step_fn, first_state, first_compile_key, probe_steps
+    )
     jax.block_until_ready(compiled_state.position)
     compile_time = time.perf_counter() - compile_start
     _mclmc_log(progress_bar or debug, f"compile done in {compile_time:.3f}s")
 
-    warmup_start = time.perf_counter()
-    state, warmup_info = _run_mclmc_steps(
-        step_fn,
-        state,
-        warmup_key,
-        num_warmup,
-        phase="warmup",
-        progress_bar=progress_bar,
-        debug=debug,
-        chunk_size=progress_chunk_size,
-    )
-    jax.block_until_ready(state.position)
-    warmup_time = time.perf_counter() - warmup_start
-    _mclmc_log(progress_bar or debug, f"warmup done in {warmup_time:.3f}s")
+    theta_chains: list[np.ndarray] = []
+    warmup_infos = []
+    sample_infos = []
+    chain_summaries = []
+    total_warmup_time = 0.0
+    total_sampling_time = 0.0
+    for chain_index, chain_key in enumerate(chain_keys):
+        init_key, warmup_key, sample_key = random.split(chain_key, 3)
+        state = algorithm.init(y0, init_key)
+        chain_label = f"chain {chain_index + 1}/{num_chains}"
+        _mclmc_log(progress_bar or debug, f"{chain_label} warmup start")
+        warmup_start = time.perf_counter()
+        state, warmup_info = _run_mclmc_steps(
+            step_fn,
+            state,
+            warmup_key,
+            num_warmup,
+            phase=f"mclmc-c{chain_index + 1}-warmup",
+            progress_bar=progress_bar,
+            debug=debug,
+            chunk_size=progress_chunk_size,
+        )
+        jax.block_until_ready(state.position)
+        warmup_time = time.perf_counter() - warmup_start
+        total_warmup_time += warmup_time
+        _mclmc_log(
+            progress_bar or debug,
+            f"{chain_label} warmup done in {warmup_time:.3f}s",
+        )
 
-    sample_start = time.perf_counter()
-    state, sample_info = _run_mclmc_steps(
-        step_fn,
-        state,
-        sample_key,
-        num_samples,
-        phase="sample",
-        progress_bar=progress_bar,
-        debug=debug,
-        chunk_size=progress_chunk_size,
-    )
-    positions = sample_info["position"]
-    jax.block_until_ready(positions)
-    sampling_time = time.perf_counter() - sample_start
-    _mclmc_log(progress_bar or debug, f"sampling done in {sampling_time:.3f}s")
+        _mclmc_log(progress_bar or debug, f"{chain_label} sampling start")
+        sample_start = time.perf_counter()
+        state, sample_info = _run_mclmc_steps(
+            step_fn,
+            state,
+            sample_key,
+            num_samples,
+            phase=f"mclmc-c{chain_index + 1}-sample",
+            progress_bar=progress_bar,
+            debug=debug,
+            chunk_size=progress_chunk_size,
+        )
+        positions = sample_info["position"]
+        jax.block_until_ready(positions)
+        sampling_time = time.perf_counter() - sample_start
+        total_sampling_time += sampling_time
+        _mclmc_log(
+            progress_bar or debug,
+            f"{chain_label} sampling done in {sampling_time:.3f}s",
+        )
+        theta = jax.vmap(target.theta_from_unconstrained)(positions)
+        theta_chains.append(np.asarray(theta))
+        warmup_infos.append(warmup_info)
+        sample_infos.append(sample_info)
+        chain_summaries.append(
+            _mclmc_chain_summary(
+                chain_index=chain_index,
+                warmup_time=warmup_time,
+                sampling_time=sampling_time,
+                warmup_info=warmup_info,
+                sample_info=sample_info,
+            )
+        )
 
-    theta = jax.vmap(target.theta_from_unconstrained)(positions)
-    theta_np = np.asarray(theta)
+    theta_np = np.concatenate(theta_chains, axis=0)
+    chain_ids = np.repeat(np.arange(num_chains, dtype=np.int32), num_samples)
+    warmup_info = _concat_mclmc_infos(warmup_infos)
+    sample_info = _concat_mclmc_infos(sample_infos)
     samples = {
         name: theta_np[:, index]
         for index, name in enumerate(target.free_names)
     }
     posterior_model_mags = _posterior_model_mags(
-        context, base_params, samples, fit_config
+        context,
+        base_params,
+        samples,
+        fit_config,
+        batch_size=int(sample_config.get("posterior_predictive_batch_size", 512)),
     )
     derived_samples = _posterior_derived(context, base_params, samples)
     photometric_likelihood = _photometric_likelihood(fit_config)
@@ -405,15 +456,18 @@ def _sample_one_galaxy_mclmc(
             student_t_dof=_student_t_dof(fit_config),
             num_warmup=num_warmup,
             num_samples=num_samples,
+            num_chains=num_chains,
             L=L,
             step_size=step_size,
             progress_chunk_size=progress_chunk_size,
             compile_time=compile_time,
-            warmup_time=warmup_time,
-            sampling_time=sampling_time,
+            warmup_time=total_warmup_time,
+            sampling_time=total_sampling_time,
             warmup_info=warmup_info,
             sample_info=sample_info,
+            chain_summaries=chain_summaries,
         ),
+        chain_ids=chain_ids,
     )
 
 
@@ -477,7 +531,7 @@ def _run_mclmc_steps(
     pbar = _mclmc_progress_bar(
         enabled=progress_bar,
         total=num_steps,
-        desc=f"mclmc-{phase}",
+        desc=phase,
     )
     try:
         for start in range(0, num_steps, chunk_size):
@@ -503,6 +557,43 @@ def _run_mclmc_steps(
         name: jnp.concatenate(values, axis=0)
         for name, values in chunks.items()
     }
+
+
+def _concat_mclmc_infos(infos: list[dict[str, jnp.ndarray]]) -> dict[str, jnp.ndarray]:
+    if not infos:
+        raise ValueError("No MCLMC info blocks to concatenate")
+    return {
+        name: jnp.concatenate([info[name] for info in infos], axis=0)
+        for name in infos[0]
+    }
+
+
+def _mclmc_chain_summary(
+    *,
+    chain_index: int,
+    warmup_time: float,
+    sampling_time: float,
+    warmup_info: dict[str, jnp.ndarray],
+    sample_info: dict[str, jnp.ndarray],
+) -> dict[str, Any]:
+    warmup_nonans = np.asarray(warmup_info["nonans"])
+    sample_nonans = np.asarray(sample_info["nonans"])
+    sample_logdensity = np.asarray(sample_info["logdensity"])
+    summary: dict[str, Any] = {
+        "chain": int(chain_index),
+        "warmup_time_s": float(warmup_time),
+        "sampling_time_s": float(sampling_time),
+    }
+    if warmup_nonans.size:
+        summary["warmup_fraction_nonans"] = float(warmup_nonans.mean())
+    if sample_nonans.size:
+        summary["fraction_nonans"] = float(sample_nonans.mean())
+    finite_logdensity = sample_logdensity[np.isfinite(sample_logdensity)]
+    if finite_logdensity.size:
+        summary["first_logdensity"] = float(finite_logdensity[0])
+        summary["last_logdensity"] = float(finite_logdensity[-1])
+        summary["mean_logdensity"] = float(finite_logdensity.mean())
+    return summary
 
 
 def _empty_mclmc_info(state):
@@ -681,9 +772,17 @@ def _posterior_model_mags(
     base_params: dict[str, float],
     samples: dict[str, np.ndarray],
     fit_config: dict[str, Any],
+    batch_size: int | None = None,
 ) -> np.ndarray:
     parameter_names, matrix = _posterior_parameter_matrix(base_params, samples)
-    mags = predict_batch_mags(context, parameter_names, matrix)
+    if batch_size is None or batch_size <= 0 or matrix.shape[0] <= batch_size:
+        mags = predict_batch_mags(context, parameter_names, matrix)
+    else:
+        chunks = [
+            predict_batch_mags(context, parameter_names, matrix[start : start + batch_size])
+            for start in range(0, matrix.shape[0], batch_size)
+        ]
+        mags = np.concatenate(chunks, axis=0)
     offsets = np.asarray(fit_config.get("band_calibration_offsets_mag", []), dtype=float)
     if offsets.size:
         mags = mags + offsets
@@ -782,6 +881,7 @@ def _mclmc_diagnostics(
     student_t_dof: float,
     num_warmup: int,
     num_samples: int,
+    num_chains: int,
     L: float,
     step_size: float,
     progress_chunk_size: int,
@@ -790,6 +890,7 @@ def _mclmc_diagnostics(
     sampling_time: float,
     warmup_info: dict[str, jnp.ndarray],
     sample_info: dict[str, jnp.ndarray],
+    chain_summaries: list[dict[str, Any]],
 ) -> dict[str, Any]:
     energy = np.asarray(sample_info["energy_change"])
     kinetic = np.asarray(sample_info["kinetic_change"])
@@ -802,16 +903,18 @@ def _mclmc_diagnostics(
         "photometric_likelihood": photometric_likelihood,
         "student_t_dof": float(student_t_dof),
         "num_warmup": int(num_warmup),
-        "num_samples": int(num_samples),
-        "num_chains": 1,
-        "chain_method": "single",
+        "num_warmup_per_chain": int(num_warmup),
+        "num_samples": int(num_chains * num_samples),
+        "num_samples_per_chain": int(num_samples),
+        "num_chains": int(num_chains),
+        "chain_method": "sequential",
         "mclmc_l": float(L),
         "mclmc_step_size": float(step_size),
         "mclmc_progress_chunk_size": int(progress_chunk_size),
         "compile_time_s": float(compile_time),
         "warmup_time_s": float(warmup_time),
         "sampling_time_s": float(sampling_time),
-        "samples_per_second": float(num_samples / sampling_time)
+        "samples_per_second": float((num_chains * num_samples) / sampling_time)
         if sampling_time > 0.0
         else float("inf"),
         "jax_backend": str(jax.default_backend()),
@@ -843,4 +946,5 @@ def _mclmc_diagnostics(
         diagnostics["initial_parameters"] = {
             name: float(value) for name, value in initial_params.items()
         }
+    diagnostics["chains"] = chain_summaries
     return diagnostics
