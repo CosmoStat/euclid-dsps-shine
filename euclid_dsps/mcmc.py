@@ -343,6 +343,7 @@ def _sample_one_galaxy_mclmc(
     # Keep the raw BlackJAX step inside lax.scan. A separately jitted step nested
     # in scan can trigger CUDA graph-capture failures with this forward model.
     step_fn = algorithm.step
+    scan_chunk_fn = _build_mclmc_scan_chunk(step_fn)
     probe_steps = min(
         progress_chunk_size,
         max(num_warmup if num_warmup > 0 else 0, num_samples, 1),
@@ -351,7 +352,11 @@ def _sample_one_galaxy_mclmc(
     first_state = algorithm.init(y0, first_init_key)
     compile_start = time.perf_counter()
     compiled_state, _ = _scan_mclmc(
-        step_fn, first_state, first_compile_key, probe_steps
+        step_fn,
+        first_state,
+        first_compile_key,
+        probe_steps,
+        scan_chunk_fn=scan_chunk_fn,
     )
     jax.block_until_ready(compiled_state.position)
     compile_time = time.perf_counter() - compile_start
@@ -378,6 +383,7 @@ def _sample_one_galaxy_mclmc(
             progress_bar=progress_bar,
             debug=debug,
             chunk_size=progress_chunk_size,
+            scan_chunk_fn=scan_chunk_fn,
         )
         jax.block_until_ready(state.position)
         warmup_time = time.perf_counter() - warmup_start
@@ -398,6 +404,7 @@ def _sample_one_galaxy_mclmc(
             progress_bar=progress_bar,
             debug=debug,
             chunk_size=progress_chunk_size,
+            scan_chunk_fn=scan_chunk_fn,
         )
         positions = sample_info["position"]
         jax.block_until_ready(positions)
@@ -471,10 +478,20 @@ def _sample_one_galaxy_mclmc(
     )
 
 
-def _scan_mclmc(step_fn, state, rng_key, num_steps: int):
+def _build_mclmc_scan_chunk(step_fn):
+    def scan_chunk(state, keys):
+        return _scan_mclmc_keys(step_fn, state, keys)
+
+    return jax.jit(scan_chunk)
+
+
+def _scan_mclmc(step_fn, state, rng_key, num_steps: int, *, scan_chunk_fn=None):
     if num_steps <= 0:
         return state, _empty_mclmc_info(state)
-    return _scan_mclmc_keys(step_fn, state, random.split(rng_key, num_steps))
+    keys = random.split(rng_key, num_steps)
+    if scan_chunk_fn is not None:
+        return scan_chunk_fn(state, keys)
+    return _scan_mclmc_keys(step_fn, state, keys)
 
 
 def _scan_mclmc_keys(step_fn, state, keys):
@@ -512,13 +529,16 @@ def _run_mclmc_steps(
     progress_bar: bool,
     debug: bool,
     chunk_size: int,
+    scan_chunk_fn=None,
 ):
     if num_steps <= 0:
         return state, _empty_mclmc_info(state)
     if chunk_size <= 0:
         raise ValueError("sample.mclmc_progress_chunk_size must be positive")
     if not progress_bar and not debug:
-        return _scan_mclmc(step_fn, state, rng_key, num_steps)
+        return _scan_mclmc(
+            step_fn, state, rng_key, num_steps, scan_chunk_fn=scan_chunk_fn
+        )
 
     keys = random.split(rng_key, num_steps)
     chunks: dict[str, list[jnp.ndarray]] = {
@@ -536,7 +556,11 @@ def _run_mclmc_steps(
     try:
         for start in range(0, num_steps, chunk_size):
             end = min(start + chunk_size, num_steps)
-            state, info = _scan_mclmc_keys(step_fn, state, keys[start:end])
+            chunk_keys = keys[start:end]
+            if scan_chunk_fn is None:
+                state, info = _scan_mclmc_keys(step_fn, state, chunk_keys)
+            else:
+                state, info = scan_chunk_fn(state, chunk_keys)
             jax.block_until_ready(info["position"])
             for name, values in info.items():
                 chunks[name].append(values)
