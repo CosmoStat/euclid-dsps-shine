@@ -92,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     posterior = sub.add_parser(
         "posterior",
-        help="Sample one-row or small-subset posterior with HMC/NUTS.",
+        help="Sample one-row or small-subset posterior with HMC/NUTS/MCLMC.",
     )
     posterior.add_argument(
         "--out", default="outputs/runs/posterior", help="Output directory."
@@ -217,7 +217,7 @@ def _limit_arg(args) -> int | None:
 def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--sampler",
-        choices=("nuts", "hmc"),
+        choices=("nuts", "hmc", "mclmc"),
         help="Override sample.sampler for Bayesian mode.",
     )
     parser.add_argument(
@@ -246,6 +246,16 @@ def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--step-size", type=float, help="Override initial HMC/NUTS step size."
+    )
+    parser.add_argument(
+        "--mclmc-l",
+        type=float,
+        help="Override sample.mclmc_l for BlackJAX MCLMC.",
+    )
+    parser.add_argument(
+        "--mclmc-step-size",
+        type=float,
+        help="Override sample.mclmc_step_size for BlackJAX MCLMC.",
     )
     parser.add_argument(
         "--target-accept-prob",
@@ -401,6 +411,8 @@ def _apply_sample_overrides(config: dict, args) -> None:
         "max_tree_depth",
         "num_steps",
         "step_size",
+        "mclmc_l",
+        "mclmc_step_size",
         "target_accept_prob",
         "seed",
     ):

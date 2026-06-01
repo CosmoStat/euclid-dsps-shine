@@ -19,11 +19,12 @@ assets:
      io.py           Parquet, row, unit, JSON, and CSV helpers.
      jax_runtime.py  Conservative JAX runtime setup for local WSL/shine.
      likelihood.py   Shared likelihood helpers.
-     mcmc.py         NumPyro posterior sampling.
+     mcmc.py         NumPyro and experimental BlackJAX posterior sampling.
      model.py        Native DSPS boundary.
      nebular.py      Diagnostic-only SSP emission-line tables and crossings.
      performance.py  Runtime, throughput, and device-cost summaries.
      photometry.py   Central AB magnitude and Fnu flux conversions.
+     posterior_target.py  Pure-JAX posterior target for BlackJAX samplers.
      pipeline.py     Deprecated compatibility facade for workflow imports.
      reports.py      Deprecated compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
@@ -98,9 +99,12 @@ Layer Responsibilities
   Auto switch between cpu if GPU not found. GPU runs are enabled by
   changing ``runtime.jax_platforms`` and plugin autoload settings.
 
-``fit.py`` and ``mcmc.py``
-  Own optimizer and sampler behavior. They should depend on the model boundary
-  and observation dataclasses, not on parquet or report-writing concerns.
+``fit.py``, ``mcmc.py``, and ``posterior_target.py``
+  Own optimizer and sampler behavior. ``mcmc.py`` keeps the public posterior
+  workflow contract, while ``posterior_target.py`` exposes the unconstrained
+  pure-JAX log-density used by BlackJAX MCLMC. They should depend on the model
+  boundary and observation dataclasses, not on parquet or report-writing
+  concerns.
 
 ``nebular.py``
   Reads line metadata already loaded by ``model.py`` and writes diagnostic

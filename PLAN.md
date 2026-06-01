@@ -2,6 +2,20 @@
 
 ## Current State
 
+2026-06-01 MCLMC implementation phase:
+
+- Branch `feature/mclmc-posterior` starts from committed MAP recovery fixes.
+- Target implementation: single-galaxy 16D posterior sampling for compressed
+  PopCosmos using experimental BlackJAX MCLMC while leaving NumPyro HMC/NUTS
+  untouched.
+- Implemented contract: `sample.sampler: mclmc` routes through a pure-JAX
+  bounded posterior target over an unconstrained vector, with log-Jacobian,
+  prior terms, existing Gaussian/Student-t distribution log-probs, and the
+  PopCosmos gas metallicity constraint.
+- Current limitation: first MCLMC backend is unadjusted MCLMC with configured
+  or automatic `L` and `step_size`; it is an engineering diagnostic sampler
+  until compared against HMC/NUTS on selected rows.
+
 2026-06-01 large MAP finalization fix:
 
 - Observed failure: a `configs/popcosmos_binned_compressed.yaml` MAP run with

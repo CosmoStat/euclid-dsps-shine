@@ -30,6 +30,9 @@ diffstar = [
     "diffstar",
     "diffmah",
 ]
+samplers = [
+    "blackjax",
+]
 dev = [
     "black>=24.0",
     "pytest>=8.0",

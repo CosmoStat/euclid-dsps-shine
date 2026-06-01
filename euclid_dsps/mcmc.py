@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Any
 
 from .jax_runtime import configure_jax_runtime
@@ -14,12 +15,7 @@ configure_jax_runtime()
 import jax
 import jax.numpy as jnp
 import numpy as np
-import numpyro
-import numpyro.distributions as dist
 from jax import random
-from numpyro.distributions import constraints
-from numpyro.infer import HMC, MCMC, NUTS
-from numpyro.infer.initialization import init_to_value
 
 from .fit import _initial_value, _photometric_likelihood, _student_t_dof
 from .io import GalaxyObservation
@@ -32,45 +28,10 @@ from .model import (
     predict_batch_mags,
 )
 from .photometry import abmag_to_fnu_cgs_jax, magerr_to_fluxerr_fnu_cgs
-
-
-class ScaledBetaDistribution(dist.Distribution):
-    """Beta distribution scaled to a finite interval."""
-
-    arg_constraints = {
-        "alpha": constraints.positive,
-        "beta": constraints.positive,
-        "low": constraints.real,
-        "high": constraints.real,
-    }
-    reparametrized_params = ["alpha", "beta"]
-
-    def __init__(
-        self,
-        alpha: float,
-        beta: float,
-        low: float,
-        high: float,
-        validate_args: bool | None = None,
-    ):
-        self.alpha = jnp.asarray(alpha)
-        self.beta = jnp.asarray(beta)
-        self.low = jnp.asarray(low)
-        self.high = jnp.asarray(high)
-        self._beta = dist.Beta(self.alpha, self.beta)
-        super().__init__(batch_shape=(), event_shape=(), validate_args=validate_args)
-
-    @constraints.dependent_property
-    def support(self):
-        return constraints.interval(self.low, self.high)
-
-    def sample(self, key, sample_shape=()):
-        unit = self._beta.sample(key, sample_shape)
-        return self.low + (self.high - self.low) * unit
-
-    def log_prob(self, value):
-        unit = (value - self.low) / (self.high - self.low)
-        return self._beta.log_prob(unit) - jnp.log(self.high - self.low)
+from .posterior_target import (
+    build_posterior_target,
+    initial_unconstrained_position,
+)
 
 
 @dataclass(frozen=True)
@@ -87,6 +48,65 @@ class MCMCResult:
     diagnostics: dict[str, Any]
 
 
+def _numpyro_modules():
+    try:
+        import numpyro
+        import numpyro.distributions as dist
+        from numpyro.infer import HMC, MCMC, NUTS
+        from numpyro.infer.initialization import init_to_value
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise ImportError(
+            "NumPyro posterior samplers require a NumPyro version compatible "
+            "with the active JAX installation. Use sample.sampler='mclmc' or "
+            "install a compatible NumPyro/JAX pair."
+        ) from exc
+    return numpyro, dist, HMC, MCMC, NUTS, init_to_value
+
+
+def _scaled_beta_distribution(dist, constraints):
+    class ScaledBetaDistribution(dist.Distribution):
+        """Beta distribution scaled to a finite interval."""
+
+        arg_constraints = {
+            "alpha": constraints.positive,
+            "beta": constraints.positive,
+            "low": constraints.real,
+            "high": constraints.real,
+        }
+        reparametrized_params = ["alpha", "beta"]
+
+        def __init__(
+            self,
+            alpha: float,
+            beta: float,
+            low: float,
+            high: float,
+            validate_args: bool | None = None,
+        ):
+            self.alpha = jnp.asarray(alpha)
+            self.beta = jnp.asarray(beta)
+            self.low = jnp.asarray(low)
+            self.high = jnp.asarray(high)
+            self._beta = dist.Beta(self.alpha, self.beta)
+            super().__init__(
+                batch_shape=(), event_shape=(), validate_args=validate_args
+            )
+
+        @constraints.dependent_property
+        def support(self):
+            return constraints.interval(self.low, self.high)
+
+        def sample(self, key, sample_shape=()):
+            unit = self._beta.sample(key, sample_shape)
+            return self.low + (self.high - self.low) * unit
+
+        def log_prob(self, value):
+            unit = (value - self.low) / (self.high - self.low)
+            return self._beta.log_prob(unit) - jnp.log(self.high - self.low)
+
+    return ScaledBetaDistribution
+
+
 def sample_one_galaxy(
     context: DspsContext,
     observation: GalaxyObservation,
@@ -95,7 +115,19 @@ def sample_one_galaxy(
     sample_config: dict[str, Any],
     initial_params: dict[str, float] | None = None,
 ) -> MCMCResult:
-    """Sample posterior over configured free parameters with NumPyro HMC/NUTS."""
+    """Sample posterior over configured free parameters."""
+    sampler = str(sample_config.get("sampler", "nuts")).lower()
+    if sampler == "mclmc":
+        return _sample_one_galaxy_mclmc(
+            context,
+            observation,
+            base_params,
+            fit_config,
+            sample_config,
+            initial_params=initial_params,
+        )
+
+    numpyro, dist, _HMC, MCMC, _NUTS, init_to_value = _numpyro_modules()
     observed_mag = jnp.asarray([band.mag_ab for band in observation.bands], dtype=float)
     sigma_mag = jnp.asarray([band.sigma_mag for band in observation.bands], dtype=float)
     observed_flux = jnp.asarray(
@@ -168,7 +200,6 @@ def sample_one_galaxy(
     kernel_kwargs = {}
     if init_params:
         kernel_kwargs["init_strategy"] = init_to_value(values=init_params)
-    sampler = str(sample_config.get("sampler", "nuts")).lower()
     kernel = _build_kernel(model, sampler, sample_config, kernel_kwargs)
     mcmc = MCMC(
         kernel,
@@ -215,12 +246,204 @@ def sample_one_galaxy(
     )
 
 
+def _sample_one_galaxy_mclmc(
+    context: DspsContext,
+    observation: GalaxyObservation,
+    base_params: dict[str, float],
+    fit_config: dict[str, Any],
+    sample_config: dict[str, Any],
+    initial_params: dict[str, float] | None = None,
+) -> MCMCResult:
+    """Sample one posterior with experimental BlackJAX MCLMC."""
+    try:
+        import blackjax
+    except ImportError as exc:  # pragma: no cover - depends on optional dependency
+        raise ImportError(
+            "sample.sampler='mclmc' requires BlackJAX. Install the optional "
+            "samplers extra or install blackjax in this environment."
+        ) from exc
+
+    observed_mag = np.asarray([band.mag_ab for band in observation.bands], dtype=float)
+    sigma_mag = np.asarray([band.sigma_mag for band in observation.bands], dtype=float)
+    observed_flux = np.asarray(
+        [band.flux_fnu_cgs for band in observation.bands], dtype=float
+    )
+    flux_error = np.asarray(
+        [
+            (
+                band.flux_error_fnu_cgs
+                if band.flux_error_fnu_cgs is not None
+                else magerr_to_fluxerr_fnu_cgs(band.flux_fnu_cgs, band.sigma_mag)
+            )
+            for band in observation.bands
+        ],
+        dtype=float,
+    )
+    model_args = dynamic_model_args(context)
+    target = build_posterior_target(
+        context=context,
+        model_args=model_args,
+        base_params=base_params,
+        fit_config=fit_config,
+        sample_config=sample_config,
+        observed_mag=observed_mag,
+        sigma_mag=sigma_mag,
+        observed_flux=observed_flux,
+        flux_error=flux_error,
+    )
+    y0 = initial_unconstrained_position(target, initial_params, fit_config)
+    num_warmup = int(sample_config.get("num_warmup", 100))
+    num_samples = int(sample_config.get("num_samples", 200))
+    seed = int(sample_config.get("seed", 42))
+    dim = int(y0.shape[0])
+    L = _resolve_mclmc_float(
+        sample_config.get("mclmc_l", sample_config.get("L")), np.sqrt(float(dim))
+    )
+    step_size = _resolve_mclmc_float(
+        sample_config.get("mclmc_step_size", sample_config.get("step_size")),
+        min(0.10, 1.0 / np.sqrt(float(dim))),
+    )
+    inverse_mass_matrix = _mclmc_inverse_mass_matrix(sample_config, dim)
+
+    algorithm = blackjax.mclmc(
+        logdensity_fn=target.logdensity,
+        L=L,
+        step_size=step_size,
+        inverse_mass_matrix=inverse_mass_matrix,
+        desired_energy_var_max_ratio=float(
+            sample_config.get("mclmc_desired_energy_var_max_ratio", np.inf)
+        ),
+    )
+    rng_key = random.PRNGKey(seed)
+    init_key, warmup_key, sample_key = random.split(rng_key, 3)
+    compile_start = time.perf_counter()
+    state = algorithm.init(y0, init_key)
+    step_fn = jax.jit(algorithm.step)
+    compiled_state, _ = step_fn(warmup_key, state)
+    jax.block_until_ready(compiled_state.position)
+    compile_time = time.perf_counter() - compile_start
+
+    warmup_start = time.perf_counter()
+    state, warmup_info = _scan_mclmc(step_fn, state, warmup_key, num_warmup)
+    jax.block_until_ready(state.position)
+    warmup_time = time.perf_counter() - warmup_start
+
+    sample_start = time.perf_counter()
+    state, sample_info = _scan_mclmc(step_fn, state, sample_key, num_samples)
+    positions = sample_info["position"]
+    jax.block_until_ready(positions)
+    sampling_time = time.perf_counter() - sample_start
+
+    theta = jax.vmap(target.theta_from_unconstrained)(positions)
+    theta_np = np.asarray(theta)
+    samples = {
+        name: theta_np[:, index]
+        for index, name in enumerate(target.free_names)
+    }
+    posterior_model_mags = _posterior_model_mags(
+        context, base_params, samples, fit_config
+    )
+    derived_samples = _posterior_derived(context, base_params, samples)
+    photometric_likelihood = _photometric_likelihood(fit_config)
+    return MCMCResult(
+        samples=samples,
+        derived_samples=derived_samples,
+        summary=_sample_summary(samples),
+        posterior_model_mags=posterior_model_mags,
+        observed_mag=np.asarray(observed_mag),
+        sigma_mag=np.asarray(sigma_mag),
+        observed_flux_fnu_cgs=np.asarray(observed_flux),
+        flux_error_fnu_cgs=np.asarray(flux_error),
+        band_names=[band.name for band in observation.bands],
+        diagnostics=_mclmc_diagnostics(
+            sample_config=sample_config,
+            initial_params=initial_params,
+            likelihood_space=target.likelihood_space,
+            photometric_likelihood=photometric_likelihood,
+            student_t_dof=_student_t_dof(fit_config),
+            num_warmup=num_warmup,
+            num_samples=num_samples,
+            L=L,
+            step_size=step_size,
+            compile_time=compile_time,
+            warmup_time=warmup_time,
+            sampling_time=sampling_time,
+            warmup_info=warmup_info,
+            sample_info=sample_info,
+        ),
+    )
+
+
+def _scan_mclmc(step_fn, state, rng_key, num_steps: int):
+    if num_steps <= 0:
+        empty = jnp.empty((0,) + state.position.shape, dtype=state.position.dtype)
+        return state, {
+            "position": empty,
+            "logdensity": jnp.empty((0,), dtype=state.logdensity.dtype),
+            "energy_change": jnp.empty((0,), dtype=state.logdensity.dtype),
+            "kinetic_change": jnp.empty((0,), dtype=state.logdensity.dtype),
+            "nonans": jnp.empty((0,), dtype=bool),
+        }
+    keys = random.split(rng_key, num_steps)
+
+    def one_step(carry, key):
+        new_state, info = step_fn(key, carry)
+        return new_state, (
+            new_state.position,
+            info.logdensity,
+            info.energy_change,
+            info.kinetic_change,
+            info.nonans,
+        )
+
+    final_state, values = jax.lax.scan(one_step, state, keys)
+    position, logdensity, energy_change, kinetic_change, nonans = values
+    return final_state, {
+        "position": position,
+        "logdensity": logdensity,
+        "energy_change": energy_change,
+        "kinetic_change": kinetic_change,
+        "nonans": nonans,
+    }
+
+
+def _resolve_mclmc_float(value: Any, default: float) -> float:
+    if value is None:
+        return float(default)
+    if isinstance(value, str):
+        if value.lower() == "auto":
+            return float(default)
+        return float(value)
+    return float(value)
+
+
+def _mclmc_inverse_mass_matrix(sample_config: dict[str, Any], dim: int):
+    raw = sample_config.get("mclmc_inverse_mass_matrix")
+    if raw is None:
+        return 1.0
+    if isinstance(raw, str):
+        if raw.lower() == "identity":
+            return 1.0
+        if raw.lower() == "ones":
+            return jnp.ones((dim,), dtype=jnp.float32)
+    arr = jnp.asarray(raw, dtype=jnp.float32)
+    if arr.shape == ():
+        return float(arr)
+    if arr.shape != (dim,):
+        raise ValueError(
+            "sample.mclmc_inverse_mass_matrix must be scalar or length "
+            f"{dim}, got shape {arr.shape}"
+        )
+    return arr
+
+
 def _build_kernel(
     model,
     sampler: str,
     sample_config: dict[str, Any],
     kernel_kwargs: dict[str, Any],
 ):
+    _numpyro, _dist, HMC, _MCMC, NUTS, _init_to_value = _numpyro_modules()
     common_kwargs = {
         "target_accept_prob": float(sample_config.get("target_accept_prob", 0.85)),
         "dense_mass": bool(sample_config.get("dense_mass", False)),
@@ -249,7 +472,9 @@ def _build_kernel(
             hmc_kwargs["num_steps"] = 8
             hmc_kwargs["trajectory_length"] = None
         return HMC(model, **hmc_kwargs)
-    raise ValueError(f"Unsupported MCMC sampler: {sampler}. Use 'nuts' or 'hmc'.")
+    raise ValueError(
+        f"Unsupported MCMC sampler: {sampler}. Use 'nuts', 'hmc', or 'mclmc'."
+    )
 
 
 def _initial_params(
@@ -277,6 +502,7 @@ def _prior_distribution(
     prior_spec: dict[str, Any],
     base_params: dict[str, float],
 ):
+    _numpyro, dist, _HMC, _MCMC, _NUTS, _init_to_value = _numpyro_modules()
     low, high = [float(value) for value in fit_spec["bounds"]]
     loc = _prior_location(name, fit_spec, prior_spec, base_params)
     scale = _prior_scale(name, prior_spec, base_params, max((high - low) / 4.0, 1.0e-3))
@@ -288,9 +514,12 @@ def _prior_distribution(
     if prior_type == "truncated_normal":
         return dist.TruncatedNormal(loc=loc, scale=scale, low=low, high=high)
     if prior_type == "scaled_beta":
+        from numpyro.distributions import constraints
+
+        scaled_beta = _scaled_beta_distribution(dist, constraints)
         alpha = float(prior_spec.get("alpha", 1.0))
         beta = float(prior_spec.get("beta", 1.0))
-        return ScaledBetaDistribution(alpha=alpha, beta=beta, low=low, high=high)
+        return scaled_beta(alpha=alpha, beta=beta, low=low, high=high)
     raise ValueError(f"Unsupported prior type for {name}: {prior_type}")
 
 
@@ -374,7 +603,7 @@ def _sample_summary(samples: dict[str, np.ndarray]) -> list[dict[str, float | st
 
 
 def _diagnostics(
-    mcmc: MCMC,
+    mcmc,
     sample_config: dict[str, Any],
     sampler: str,
     initial_params: dict[str, jnp.ndarray] | None = None,
@@ -407,6 +636,75 @@ def _diagnostics(
         diagnostics["num_steps"] = int(sample_config.get("num_steps", 8))
     diagnostics["device"] = f"{jax.devices()[0].platform}:{jax.devices()[0].id}"
     diagnostics["initialized_from_map"] = bool(initial_params)
+    if initial_params:
+        diagnostics["initial_parameters"] = {
+            name: float(value) for name, value in initial_params.items()
+        }
+    return diagnostics
+
+
+def _mclmc_diagnostics(
+    *,
+    sample_config: dict[str, Any],
+    initial_params: dict[str, float] | None,
+    likelihood_space: str,
+    photometric_likelihood: str,
+    student_t_dof: float,
+    num_warmup: int,
+    num_samples: int,
+    L: float,
+    step_size: float,
+    compile_time: float,
+    warmup_time: float,
+    sampling_time: float,
+    warmup_info: dict[str, jnp.ndarray],
+    sample_info: dict[str, jnp.ndarray],
+) -> dict[str, Any]:
+    energy = np.asarray(sample_info["energy_change"])
+    kinetic = np.asarray(sample_info["kinetic_change"])
+    nonans = np.asarray(sample_info["nonans"])
+    warmup_nonans = np.asarray(warmup_info["nonans"])
+    diagnostics: dict[str, Any] = {
+        "backend": "blackjax_mclmc",
+        "sampler": "mclmc",
+        "likelihood_space": likelihood_space,
+        "photometric_likelihood": photometric_likelihood,
+        "student_t_dof": float(student_t_dof),
+        "num_warmup": int(num_warmup),
+        "num_samples": int(num_samples),
+        "num_chains": 1,
+        "chain_method": "single",
+        "mclmc_l": float(L),
+        "mclmc_step_size": float(step_size),
+        "compile_time_s": float(compile_time),
+        "warmup_time_s": float(warmup_time),
+        "sampling_time_s": float(sampling_time),
+        "samples_per_second": float(num_samples / sampling_time)
+        if sampling_time > 0.0
+        else float("inf"),
+        "device": f"{jax.devices()[0].platform}:{jax.devices()[0].id}",
+        "initialized_from_map": bool(initial_params),
+        "experimental_warning": (
+            "BlackJAX unadjusted MCLMC is experimental here and must be "
+            "benchmarked against HMC/NUTS before science use."
+        ),
+    }
+    if energy.size:
+        abs_energy = np.abs(energy[np.isfinite(energy)])
+        if abs_energy.size:
+            diagnostics["mean_abs_energy_change"] = float(abs_energy.mean())
+            diagnostics["p95_abs_energy_change"] = float(np.quantile(abs_energy, 0.95))
+    if kinetic.size:
+        abs_kinetic = np.abs(kinetic[np.isfinite(kinetic)])
+        if abs_kinetic.size:
+            diagnostics["mean_abs_kinetic_change"] = float(abs_kinetic.mean())
+            diagnostics["p95_abs_kinetic_change"] = float(
+                np.quantile(abs_kinetic, 0.95)
+            )
+    if nonans.size:
+        diagnostics["fraction_nonans"] = float(nonans.mean())
+    if warmup_nonans.size:
+        diagnostics["warmup_fraction_nonans"] = float(warmup_nonans.mean())
     if initial_params:
         diagnostics["initial_parameters"] = {
             name: float(value) for name, value in initial_params.items()

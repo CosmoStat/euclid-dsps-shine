@@ -176,6 +176,8 @@ Run the model and reporting path without optimization:
 Posterior Smoke
 ---------------
 
+NumPyro HMC/NUTS remains the reference posterior path:
+
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
@@ -184,6 +186,22 @@ Posterior Smoke
      --num-warmup 10 \
      --num-samples 10 \
      --out outputs/runs/dev_popcosmos_compressed_fullagn_posterior_one
+
+Experimental BlackJAX MCLMC can be used for one 16D full-AGN galaxy:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/popcosmos_binned_compressed.yaml \
+     posterior --index 0 \
+     --sampler mclmc \
+     --num-warmup 64 \
+     --num-samples 128 \
+     --mclmc-step-size 0.05 \
+     --out outputs/runs/dev_popcosmos_compressed_mclmc_one
+
+MCLMC is currently an engineering posterior backend. Compare it against HMC/NUTS
+on selected rows before using it for science decisions.
 
 Benchmark Against FSPS/Prospector
 ---------------------------------

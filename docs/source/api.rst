@@ -64,6 +64,10 @@ Sampling
    :members:
    :undoc-members:
 
+.. automodule:: euclid_dsps.posterior_target
+   :members:
+   :undoc-members:
+
 Workflows
 ---------
 

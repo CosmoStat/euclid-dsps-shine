@@ -19,14 +19,16 @@ production path remains:
 
 - The runtime model path is now fast enough for large MAP batches through
   `configs/popcosmos_binned_compressed.yaml`.
-- `euclid_dsps.mcmc` currently supports NumPyro `nuts` and fixed-step `hmc`.
-- The MCMC path already passes large DSPS arrays through
-  `dynamic_model_args(context)`, which is the right contract before adding
-  non-NumPyro samplers.
-- Local `shine` previously had NumPyro but did not have BlackJAX installed.
-- A tiny compressed full-model NumPyro HMC smoke compiled too slowly to be
-  useful. Posterior speed needs a sampler/backend slice, not another small
-  NumPyro flag tweak.
+- `euclid_dsps.mcmc` now keeps NumPyro `nuts` and fixed-step `hmc`, and adds an
+  experimental BlackJAX `mclmc` path for one-galaxy posterior diagnostics.
+- Local `shine` has BlackJAX 1.5, with `blackjax.mclmc`,
+  `blackjax.adjusted_mclmc`, and `blackjax.adjusted_mclmc_dynamic` available.
+- `euclid_dsps.posterior_target` provides the pure-JAX bounded log-density used
+  by MCLMC.
+- Current limitation: the first implemented backend is unadjusted MCLMC with
+  static configured/automatic `L` and `step_size`. It is not yet adapted or
+  Metropolis-corrected, so it must be benchmarked against HMC/NUTS before
+  science use.
 
 ## Naming
 

@@ -75,7 +75,7 @@ SUPPORTED_LIKELIHOOD_SPACES = {"flux", "mag"}
 SUPPORTED_PHOTOMETRIC_LIKELIHOODS = {"gaussian", "student_t"}
 SUPPORTED_FIT_TRACE_MODES = {"full", "optimizer", "none"}
 SUPPORTED_FIT_BATCH_GRAD_MODES = {"per_galaxy", "sum"}
-SUPPORTED_SAMPLERS = {"nuts", "hmc"}
+SUPPORTED_SAMPLERS = {"nuts", "hmc", "mclmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
 SUPPORTED_PRIOR_TYPES = {
@@ -667,6 +667,9 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["sample"].setdefault("init_from_map", True)
     config["sample"].setdefault("save_samples", True)
     config["sample"].setdefault("priors", {})
+    config["sample"].setdefault("mclmc_l", "auto")
+    config["sample"].setdefault("mclmc_step_size", "auto")
+    config["sample"].setdefault("mclmc_inverse_mass_matrix", "identity")
     _apply_prior_set(config)
     _apply_redshift_prior(config)
 
