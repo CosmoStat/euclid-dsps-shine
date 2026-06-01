@@ -18,6 +18,10 @@
 - Debug/progress update: the MCLMC path now reports JAX backend/devices,
   compile/warmup/sample phase timings, optional per-chunk diagnostics, and
   chunked progress bars controlled by `sample.mclmc_progress_chunk_size`.
+- Stability update: the BlackJAX target now reuses the existing chi-based
+  Student-t objective up to an additive constant, uses a triangular transform
+  for the free `log10_stellar_metallicity`/`log10_gas_metallicity` pair, and
+  avoids nesting a separately jitted MCLMC step inside `lax.scan`.
 
 2026-06-01 large MAP finalization fix:
 

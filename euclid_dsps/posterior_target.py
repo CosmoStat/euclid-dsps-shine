@@ -21,6 +21,7 @@ from .fit import (
     _initial_value,
     _likelihood_space,
     _photometric_likelihood,
+    _photometric_objective_from_chi,
     _student_t_dof,
 )
 from .model import (
@@ -38,20 +39,76 @@ class BoundedParameterTransform:
     names: tuple[str, ...]
     lower: jnp.ndarray
     upper: jnp.ndarray
+    gas_metallicity_constraint: tuple[int, int] | None = None
 
     def to_bounded(self, y: jnp.ndarray) -> jnp.ndarray:
-        return self.lower + (self.upper - self.lower) * jax.nn.sigmoid(y)
+        theta = self.lower + (self.upper - self.lower) * jax.nn.sigmoid(y)
+        if self.gas_metallicity_constraint is None:
+            return theta
+        stellar_index, gas_index = self.gas_metallicity_constraint
+        stellar_low = self.lower[stellar_index]
+        stellar_high = jnp.minimum(self.upper[stellar_index], self.upper[gas_index])
+        stellar = stellar_low + (stellar_high - stellar_low) * jax.nn.sigmoid(
+            y[stellar_index]
+        )
+        gas_low = jnp.maximum(self.lower[gas_index], stellar)
+        gas_high = self.upper[gas_index]
+        gas = gas_low + (gas_high - gas_low) * jax.nn.sigmoid(y[gas_index])
+        return theta.at[stellar_index].set(stellar).at[gas_index].set(gas)
 
     def to_unconstrained(self, theta: jnp.ndarray) -> jnp.ndarray:
         span = self.upper - self.lower
         scaled = jnp.clip((theta - self.lower) / span, 1.0e-6, 1.0 - 1.0e-6)
-        return jnp.log(scaled) - jnp.log1p(-scaled)
+        y = jnp.log(scaled) - jnp.log1p(-scaled)
+        if self.gas_metallicity_constraint is None:
+            return y
+        stellar_index, gas_index = self.gas_metallicity_constraint
+        stellar_low = self.lower[stellar_index]
+        stellar_high = jnp.minimum(self.upper[stellar_index], self.upper[gas_index])
+        stellar_span = jnp.maximum(stellar_high - stellar_low, 1.0e-12)
+        stellar_scaled = jnp.clip(
+            (theta[stellar_index] - stellar_low) / stellar_span,
+            1.0e-6,
+            1.0 - 1.0e-6,
+        )
+        gas_low = jnp.maximum(self.lower[gas_index], theta[stellar_index])
+        gas_high = self.upper[gas_index]
+        gas_span = jnp.maximum(gas_high - gas_low, 1.0e-12)
+        gas_scaled = jnp.clip(
+            (theta[gas_index] - gas_low) / gas_span,
+            1.0e-6,
+            1.0 - 1.0e-6,
+        )
+        return (
+            y.at[stellar_index]
+            .set(jnp.log(stellar_scaled) - jnp.log1p(-stellar_scaled))
+            .at[gas_index]
+            .set(jnp.log(gas_scaled) - jnp.log1p(-gas_scaled))
+        )
 
     def log_abs_det_jacobian(self, y: jnp.ndarray) -> jnp.ndarray:
         span = self.upper - self.lower
-        return jnp.sum(
-            jnp.log(span) + jax.nn.log_sigmoid(y) + jax.nn.log_sigmoid(-y)
+        terms = jnp.log(span) + jax.nn.log_sigmoid(y) + jax.nn.log_sigmoid(-y)
+        if self.gas_metallicity_constraint is None:
+            return jnp.sum(terms)
+        stellar_index, gas_index = self.gas_metallicity_constraint
+        stellar_low = self.lower[stellar_index]
+        stellar_high = jnp.minimum(self.upper[stellar_index], self.upper[gas_index])
+        stellar_span = jnp.maximum(stellar_high - stellar_low, 1.0e-12)
+        stellar = stellar_low + stellar_span * jax.nn.sigmoid(y[stellar_index])
+        gas_low = jnp.maximum(self.lower[gas_index], stellar)
+        gas_span = jnp.maximum(self.upper[gas_index] - gas_low, 1.0e-12)
+        terms = terms.at[stellar_index].set(
+            jnp.log(stellar_span)
+            + jax.nn.log_sigmoid(y[stellar_index])
+            + jax.nn.log_sigmoid(-y[stellar_index])
         )
+        terms = terms.at[gas_index].set(
+            jnp.log(gas_span)
+            + jax.nn.log_sigmoid(y[gas_index])
+            + jax.nn.log_sigmoid(-y[gas_index])
+        )
+        return jnp.sum(terms)
 
 
 @dataclass(frozen=True)
@@ -115,9 +172,12 @@ class PosteriorTarget:
         )
         logprior = _bounded_log_prior(theta, self.prior_specs)
         logjac = self.transform.log_abs_det_jacobian(y)
-        gas_penalty = gas_metallicity_constraint_penalty_jax(
-            params, self.context.model_config, penalty=jnp.inf
-        )
+        if self.transform.gas_metallicity_constraint is None:
+            gas_penalty = gas_metallicity_constraint_penalty_jax(
+                params, self.context.model_config, penalty=jnp.inf
+            )
+        else:
+            gas_penalty = jnp.asarray(0.0, dtype=theta.dtype)
         return loglike + logprior + logjac - gas_penalty
 
 
@@ -143,7 +203,12 @@ def build_posterior_target(
         raise ValueError("fit.free_parameters bounds must be [low, high] pairs")
     lower = jnp.asarray(bounds[:, 0], dtype=jnp.float32)
     upper = jnp.asarray(bounds[:, 1], dtype=jnp.float32)
-    transform = BoundedParameterTransform(names=free_names, lower=lower, upper=upper)
+    transform = BoundedParameterTransform(
+        names=free_names,
+        lower=lower,
+        upper=upper,
+        gas_metallicity_constraint=_gas_metallicity_constraint_indices(free_names),
+    )
     likelihood_space = _likelihood_space(fit_config)
     if likelihood_space == "flux":
         floor_frac = float(fit_config.get("flux_error_floor_frac", 0.0))
@@ -210,6 +275,17 @@ def initial_unconstrained_position(
     return target.unconstrained_from_theta(theta)
 
 
+def _gas_metallicity_constraint_indices(
+    free_names: tuple[str, ...],
+) -> tuple[int, int] | None:
+    try:
+        stellar_index = free_names.index("log10_stellar_metallicity")
+        gas_index = free_names.index("log10_gas_metallicity")
+    except ValueError:
+        return None
+    return stellar_index, gas_index
+
+
 def _masked_observation_logprob(
     *,
     observed: jnp.ndarray,
@@ -219,15 +295,10 @@ def _masked_observation_logprob(
     photometric_likelihood: str,
     student_t_dof: float,
 ) -> jnp.ndarray:
-    if photometric_likelihood == "student_t":
-        logprob = jstats.t.logpdf(observed, df=student_t_dof, loc=model_obs, scale=sigma)
-    elif photometric_likelihood == "gaussian":
-        logprob = jstats.norm.logpdf(observed, loc=model_obs, scale=sigma)
-    else:
-        raise ValueError(
-            f"Unsupported fit.photometric_likelihood: {photometric_likelihood}"
-        )
-    return jnp.sum(jnp.where(finite_mask, logprob, 0.0))
+    chi = jnp.where(finite_mask, (observed - model_obs) / sigma, 0.0)
+    return -0.5 * _photometric_objective_from_chi(
+        chi, photometric_likelihood, student_t_dof
+    )
 
 
 def _resolved_prior_spec(

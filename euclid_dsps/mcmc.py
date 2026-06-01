@@ -321,7 +321,7 @@ def _sample_one_galaxy_mclmc(
         ),
     )
     rng_key = random.PRNGKey(seed)
-    init_key, warmup_key, sample_key = random.split(rng_key, 3)
+    init_key, compile_key, warmup_key, sample_key = random.split(rng_key, 4)
     _mclmc_log(
         progress_bar or debug,
         "backend="
@@ -333,8 +333,14 @@ def _sample_one_galaxy_mclmc(
     _mclmc_log(progress_bar or debug, "compiling BlackJAX MCLMC step")
     compile_start = time.perf_counter()
     state = algorithm.init(y0, init_key)
-    step_fn = jax.jit(algorithm.step)
-    compiled_state, _ = step_fn(warmup_key, state)
+    # Keep the raw BlackJAX step inside lax.scan. A separately jitted step nested
+    # in scan can trigger CUDA graph-capture failures with this forward model.
+    step_fn = algorithm.step
+    probe_steps = min(
+        progress_chunk_size,
+        max(num_warmup if num_warmup > 0 else 0, num_samples, 1),
+    )
+    compiled_state, _ = _scan_mclmc(step_fn, state, compile_key, probe_steps)
     jax.block_until_ready(compiled_state.position)
     compile_time = time.perf_counter() - compile_start
     _mclmc_log(progress_bar or debug, f"compile done in {compile_time:.3f}s")

@@ -63,7 +63,7 @@ def test_posterior_target_logdensity_has_finite_gradient(monkeypatch) -> None:
     assert np.all(np.isfinite(np.asarray(grad)))
 
 
-def test_posterior_target_gas_constraint_returns_negative_infinity(monkeypatch) -> None:
+def test_posterior_target_gas_transform_enforces_constraint(monkeypatch) -> None:
     from euclid_dsps import posterior_target as target_module
 
     monkeypatch.setattr(
@@ -104,5 +104,55 @@ def test_posterior_target_gas_constraint_returns_negative_infinity(monkeypatch) 
     )
     invalid_theta = jnp.asarray([0.5, 0.0])
     invalid_y = target.unconstrained_from_theta(invalid_theta)
+    roundtrip_theta = target.theta_from_unconstrained(invalid_y)
 
-    assert float(target.logdensity(invalid_y)) == -np.inf
+    assert float(roundtrip_theta[1]) >= float(roundtrip_theta[0])
+    assert np.isfinite(float(target.logdensity(invalid_y)))
+
+
+def test_posterior_target_gas_transform_moves_boundary_init_inside() -> None:
+    target = build_posterior_target(
+        context=DspsContext(
+            ssp=None,
+            filters={},
+            model_config={"sfh_model": "popcosmos_bins", "nebular_model": "gas_grid"},
+        ),
+        model_args=(),
+        base_params={
+            "log10_stellar_metallicity": 0.5,
+            "log10_gas_metallicity": 0.5,
+        },
+        fit_config={
+            "likelihood_space": "mag",
+            "photometric_likelihood": "gaussian",
+            "free_parameters": {
+                "log10_stellar_metallicity": {
+                    "initial": 0.5,
+                    "bounds": [-2.0, 0.5],
+                },
+                "log10_gas_metallicity": {
+                    "initial": 0.5,
+                    "bounds": [-2.0, 0.5],
+                },
+            },
+        },
+        sample_config={"priors": {}},
+        observed_mag=np.asarray([20.0]),
+        sigma_mag=np.asarray([0.1]),
+        observed_flux=np.asarray([1.0]),
+        flux_error=np.asarray([0.1]),
+    )
+
+    y0 = initial_unconstrained_position(
+        target,
+        {
+            "log10_stellar_metallicity": 0.5,
+            "log10_gas_metallicity": 0.5,
+        },
+        target.fit_config,
+    )
+    theta = target.theta_from_unconstrained(y0)
+
+    assert float(theta[1]) >= float(theta[0])
+    assert float(theta[1]) <= 0.5
+    assert float(theta[0]) < 0.5
