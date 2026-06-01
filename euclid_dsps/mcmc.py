@@ -297,7 +297,6 @@ def _sample_one_galaxy_mclmc(
         observed_flux=observed_flux,
         flux_error=flux_error,
     )
-    y0 = initial_unconstrained_position(target, initial_params, fit_config)
     num_warmup = int(sample_config.get("num_warmup", 100))
     num_samples = int(sample_config.get("num_samples", 200))
     num_chains = int(sample_config.get("num_chains", 1))
@@ -309,7 +308,7 @@ def _sample_one_galaxy_mclmc(
     progress_chunk_size = int(sample_config.get("mclmc_progress_chunk_size", 16))
     if progress_chunk_size <= 0:
         raise ValueError("sample.mclmc_progress_chunk_size must be positive")
-    dim = int(y0.shape[0])
+    dim = len(target.free_names)
     L = _resolve_mclmc_float(
         sample_config.get("mclmc_l", sample_config.get("L")), np.sqrt(float(dim))
     )
@@ -330,6 +329,17 @@ def _sample_one_galaxy_mclmc(
     )
     rng_key = random.PRNGKey(seed)
     chain_keys = random.split(rng_key, num_chains)
+    init_position_keys = random.split(random.fold_in(rng_key, 87231), num_chains)
+    init_strategy = _mclmc_init_strategy(sample_config, initial_params)
+    chain_y0s = _mclmc_initial_positions(
+        target,
+        initial_params,
+        fit_config,
+        sample_config,
+        init_position_keys,
+        init_strategy=init_strategy,
+    )
+    chain_initial_theta = np.asarray(jax.vmap(target.theta_from_unconstrained)(chain_y0s))
     _mclmc_log(
         progress_bar or debug,
         "backend="
@@ -337,7 +347,7 @@ def _sample_one_galaxy_mclmc(
         f"dim={dim} bands={len(observation.bands)} chains={num_chains} "
         f"warmup={num_warmup} samples={num_samples} "
         f"L={L:.6g} step_size={step_size:.6g} "
-        f"chunk={progress_chunk_size}",
+        f"chunk={progress_chunk_size} init={init_strategy}",
     )
     _mclmc_log(progress_bar or debug, "compiling BlackJAX MCLMC step")
     # Keep the raw BlackJAX step inside lax.scan. A separately jitted step nested
@@ -348,7 +358,7 @@ def _sample_one_galaxy_mclmc(
         max(num_warmup if num_warmup > 0 else 0, num_samples, 1),
     )
     first_init_key, first_compile_key = random.split(chain_keys[0])
-    first_state = algorithm.init(y0, first_init_key)
+    first_state = algorithm.init(chain_y0s[0], first_init_key)
     compile_start = time.perf_counter()
     compiled_state, _ = _scan_mclmc(
         step_fn, first_state, first_compile_key, probe_steps
@@ -365,7 +375,7 @@ def _sample_one_galaxy_mclmc(
     total_sampling_time = 0.0
     for chain_index, chain_key in enumerate(chain_keys):
         init_key, warmup_key, sample_key = random.split(chain_key, 3)
-        state = algorithm.init(y0, init_key)
+        state = algorithm.init(chain_y0s[chain_index], init_key)
         chain_label = f"chain {chain_index + 1}/{num_chains}"
         _mclmc_log(progress_bar or debug, f"{chain_label} warmup start")
         warmup_start = time.perf_counter()
@@ -468,9 +478,78 @@ def _sample_one_galaxy_mclmc(
             warmup_info=warmup_info,
             sample_info=sample_info,
             chain_summaries=chain_summaries,
+            init_strategy=init_strategy,
+            init_jitter_scale=float(sample_config.get("init_jitter_scale", 0.25)),
+            chain_initial_theta=chain_initial_theta,
+            free_names=target.free_names,
         ),
         chain_ids=chain_ids,
     )
+
+
+def _mclmc_init_strategy(
+    sample_config: dict[str, Any], initial_params: dict[str, float] | None
+) -> str:
+    fallback = "map" if initial_params else "config"
+    strategy = str(sample_config.get("init_strategy", fallback)).lower()
+    if strategy == "map" and not initial_params:
+        return "config"
+    return strategy
+
+
+def _mclmc_initial_positions(
+    target,
+    initial_params: dict[str, float] | None,
+    fit_config: dict[str, Any],
+    sample_config: dict[str, Any],
+    keys: jnp.ndarray,
+    *,
+    init_strategy: str,
+) -> jnp.ndarray:
+    n_chains = int(keys.shape[0])
+    if init_strategy == "random_uniform":
+        return jax.vmap(lambda key: _mclmc_random_uniform_position(target, key))(keys)
+    base_y0 = initial_unconstrained_position(target, initial_params, fit_config)
+    if init_strategy in {"map", "config"}:
+        return jnp.repeat(base_y0[None, :], n_chains, axis=0)
+    if init_strategy == "map_jitter":
+        scale = float(sample_config.get("init_jitter_scale", 0.25))
+        noise = random.normal(keys[0], (n_chains, base_y0.shape[0]), dtype=base_y0.dtype)
+        return base_y0[None, :] + scale * noise
+    raise ValueError(
+        "sample.init_strategy must be one of "
+        "['map', 'config', 'map_jitter', 'random_uniform']"
+    )
+
+
+def _mclmc_random_uniform_position(target, key: jnp.ndarray) -> jnp.ndarray:
+    lower = target.transform.lower
+    upper = target.transform.upper
+    eps = jnp.asarray(1.0e-4, dtype=lower.dtype)
+    unit = eps + (1.0 - 2.0 * eps) * random.uniform(
+        key, lower.shape, dtype=lower.dtype
+    )
+    theta = lower + (upper - lower) * unit
+    constraint = target.transform.gas_metallicity_constraint
+    if constraint is None:
+        return target.transform.to_unconstrained(theta)
+
+    stellar_index, gas_index = constraint
+    stellar_key, gas_key = random.split(random.fold_in(key, 4319))
+    stellar_low = lower[stellar_index]
+    stellar_high = jnp.minimum(upper[stellar_index], upper[gas_index])
+    stellar_unit = eps + (1.0 - 2.0 * eps) * random.uniform(
+        stellar_key, (), dtype=lower.dtype
+    )
+    stellar = stellar_low + (stellar_high - stellar_low) * stellar_unit
+    gas_low = jnp.maximum(lower[gas_index], stellar)
+    gas_span = jnp.maximum(upper[gas_index] - gas_low, 1.0e-6)
+    gas_unit = eps + (1.0 - 2.0 * eps) * random.uniform(
+        gas_key, (), dtype=lower.dtype
+    )
+    gas = gas_low + gas_span * gas_unit
+    theta = theta.at[stellar_index].set(stellar).at[gas_index].set(gas)
+    return target.transform.to_unconstrained(theta)
 
 
 def _scan_mclmc(step_fn, state, rng_key, num_steps: int):
@@ -904,6 +983,10 @@ def _mclmc_diagnostics(
     warmup_info: dict[str, jnp.ndarray],
     sample_info: dict[str, jnp.ndarray],
     chain_summaries: list[dict[str, Any]],
+    init_strategy: str,
+    init_jitter_scale: float,
+    chain_initial_theta: np.ndarray,
+    free_names: list[str],
 ) -> dict[str, Any]:
     energy = np.asarray(sample_info["energy_change"])
     kinetic = np.asarray(sample_info["kinetic_change"])
@@ -924,6 +1007,8 @@ def _mclmc_diagnostics(
         "mclmc_l": float(L),
         "mclmc_step_size": float(step_size),
         "mclmc_progress_chunk_size": int(progress_chunk_size),
+        "init_strategy": init_strategy,
+        "init_jitter_scale": float(init_jitter_scale),
         "compile_time_s": float(compile_time),
         "warmup_time_s": float(warmup_time),
         "sampling_time_s": float(sampling_time),
@@ -959,5 +1044,13 @@ def _mclmc_diagnostics(
         diagnostics["initial_parameters"] = {
             name: float(value) for name, value in initial_params.items()
         }
+    if chain_initial_theta.size:
+        diagnostics["chain_initial_parameters"] = [
+            {
+                name: float(theta[index])
+                for index, name in enumerate(free_names)
+            }
+            for theta in np.asarray(chain_initial_theta)
+        ]
     diagnostics["chains"] = chain_summaries
     return diagnostics

@@ -77,6 +77,12 @@ SUPPORTED_FIT_TRACE_MODES = {"full", "optimizer", "none"}
 SUPPORTED_FIT_BATCH_GRAD_MODES = {"per_galaxy", "sum"}
 SUPPORTED_SAMPLERS = {"nuts", "hmc", "mclmc"}
 SUPPORTED_CHAIN_METHODS = {"parallel", "sequential", "vectorized"}
+SUPPORTED_SAMPLE_INIT_STRATEGIES = {
+    "map",
+    "config",
+    "map_jitter",
+    "random_uniform",
+}
 SUPPORTED_TRUTH_TRANSFORMS = {None, "linear", "log10", "log_stellar_mass_h2_to_msun"}
 SUPPORTED_PRIOR_TYPES = {
     "uniform",
@@ -665,6 +671,15 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["sample"].setdefault("seed", 42)
     config["sample"].setdefault("progress_bar", True)
     config["sample"].setdefault("init_from_map", True)
+    if "init_strategy" not in config["sample"]:
+        config["sample"]["init_strategy"] = (
+            "map" if bool(config["sample"].get("init_from_map", True)) else "config"
+        )
+    if config["sample"]["init_strategy"] in {"config", "random_uniform"}:
+        config["sample"]["init_from_map"] = False
+    elif config["sample"]["init_strategy"] in {"map", "map_jitter"}:
+        config["sample"]["init_from_map"] = True
+    config["sample"].setdefault("init_jitter_scale", 0.25)
     config["sample"].setdefault("save_samples", True)
     config["sample"].setdefault("priors", {})
     config["sample"].setdefault("mclmc_l", "auto")
@@ -1614,6 +1629,12 @@ def _validate_sample(
     sampler = sample.get("sampler")
     if sampler not in SUPPORTED_SAMPLERS:
         errors.append(f"sample.sampler must be one of {sorted(SUPPORTED_SAMPLERS)}")
+    init_strategy = sample.get("init_strategy")
+    if init_strategy not in SUPPORTED_SAMPLE_INIT_STRATEGIES:
+        errors.append(
+            "sample.init_strategy must be one of "
+            f"{sorted(SUPPORTED_SAMPLE_INIT_STRATEGIES)}"
+        )
     chain_method = sample.get("chain_method")
     if chain_method not in SUPPORTED_CHAIN_METHODS:
         errors.append(
@@ -1636,6 +1657,11 @@ def _validate_sample(
     )
     if target is not None and not 0.0 < target < 1.0:
         errors.append("sample.target_accept_prob must be between 0 and 1")
+    jitter = _finite_float(
+        sample.get("init_jitter_scale"), "sample.init_jitter_scale", errors
+    )
+    if jitter is not None and jitter < 0.0:
+        errors.append("sample.init_jitter_scale must be >= 0")
     _finite_float(sample.get("seed"), "sample.seed", errors)
     free = fit.get("free_parameters", {})
     if isinstance(free, dict):

@@ -27,6 +27,13 @@
   configurable chunks, chain metadata is exported, trace plots mark chain
   boundaries, and posterior summaries/corner truth plots include catalog
   redshift truth as `truth_z_obs`.
+- Initialization update: MCLMC supports `sample.init_strategy` values `map`,
+  `map_jitter`, `config`, and `random_uniform`. `map_jitter` is the preferred
+  first diagnostic for multi-chain runs because it keeps chains near a good MAP
+  mode but gives each chain a distinct unconstrained starting point.
+- Guardrail update: MCLMC now raises a clear error if a warmup or sampling phase
+  returns zero valid transitions (`nonans=0` everywhere), preventing frozen MAP
+  repeats from being written as apparent posterior samples.
 
 2026-06-01 large MAP finalization fix:
 

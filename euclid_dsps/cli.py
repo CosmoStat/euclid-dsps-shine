@@ -268,6 +268,19 @@ def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
         help="Print MCLMC backend, phase, and per-chunk diagnostic messages.",
     )
     parser.add_argument(
+        "--mcmc-init-strategy",
+        choices=("map", "config", "map_jitter", "random_uniform"),
+        help=(
+            "Posterior initialization strategy. map/map_jitter run MAP first; "
+            "config/random_uniform skip MAP."
+        ),
+    )
+    parser.add_argument(
+        "--mcmc-init-jitter-scale",
+        type=float,
+        help="Unconstrained-space jitter scale for --mcmc-init-strategy map_jitter.",
+    )
+    parser.add_argument(
         "--posterior-predictive-batch-size",
         type=int,
         help="Chunk size for posterior predictive model magnitudes.",
@@ -440,8 +453,16 @@ def _apply_sample_overrides(config: dict, args) -> None:
         sample["dense_mass"] = True
     if getattr(args, "no_progress", False):
         sample["progress_bar"] = False
-    if getattr(args, "no_map_init", False):
+    init_strategy = getattr(args, "mcmc_init_strategy", None)
+    if init_strategy is not None:
+        sample["init_strategy"] = init_strategy
+        sample["init_from_map"] = init_strategy in {"map", "map_jitter"}
+    init_jitter_scale = getattr(args, "mcmc_init_jitter_scale", None)
+    if init_jitter_scale is not None:
+        sample["init_jitter_scale"] = init_jitter_scale
+    if getattr(args, "no_map_init", False) and init_strategy is None:
         sample["init_from_map"] = False
+        sample["init_strategy"] = "config"
     if getattr(args, "mclmc_debug", False):
         sample["mclmc_debug"] = True
 

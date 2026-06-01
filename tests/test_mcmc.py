@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import NamedTuple
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -9,6 +11,7 @@ from jax import random
 
 from euclid_dsps.io import BandObservation, GalaxyObservation
 from euclid_dsps.model import DspsContext
+from euclid_dsps.posterior_target import BoundedParameterTransform
 
 mcmc = pytest.importorskip("euclid_dsps.mcmc", exc_type=ImportError)
 _prior_distribution = mcmc._prior_distribution
@@ -237,3 +240,39 @@ def test_mclmc_all_invalid_transitions_fail_clearly() -> None:
 
     with pytest.raises(RuntimeError, match="zero valid transitions"):
         mcmc._raise_if_mclmc_all_invalid(info, phase="test sampling")
+
+
+def test_mclmc_random_uniform_initial_positions_respect_gas_constraint() -> None:
+    transform = BoundedParameterTransform(
+        names=("log10_stellar_metallicity", "log10_gas_metallicity", "x"),
+        lower=jnp.asarray([-1.0, -1.0, 0.0]),
+        upper=jnp.asarray([0.5, 0.5, 1.0]),
+        gas_metallicity_constraint=(0, 1),
+    )
+    target = SimpleNamespace(
+        transform=transform,
+        free_names=list(transform.names),
+    )
+    keys = random.split(random.PRNGKey(1), 4)
+
+    y0s = mcmc._mclmc_initial_positions(
+        target,
+        None,
+        {
+            "free_parameters": {
+                "log10_stellar_metallicity": {"initial": 0.0, "bounds": [-1.0, 0.5]},
+                "log10_gas_metallicity": {"initial": 0.0, "bounds": [-1.0, 0.5]},
+                "x": {"initial": 0.5, "bounds": [0.0, 1.0]},
+            }
+        },
+        {"init_strategy": "random_uniform"},
+        keys,
+        init_strategy="random_uniform",
+    )
+    theta = np.asarray(jax.vmap(transform.to_bounded)(y0s))
+
+    assert theta.shape == (4, 3)
+    assert np.all(theta[:, 1] >= theta[:, 0])
+    assert np.all(theta >= np.asarray([-1.0, -1.0, 0.0]))
+    assert np.all(theta <= np.asarray([0.5, 0.5, 1.0]))
+    assert np.any(np.std(theta, axis=0) > 0.0)
