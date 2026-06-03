@@ -601,9 +601,15 @@ def test_amortized_fs2_realnvp_config_extends_compressed_popcosmos() -> None:
     assert config["amortized"]["features"]["n_flux_bands"] == 10
     assert config["amortized"]["features"]["n_error_bands"] == 10
     assert config["amortized"]["features"]["flux_transform"] == "asinh"
+    assert config["amortized"]["data"]["selection_mode"] == "stratified_redshift"
+    assert config["amortized"]["data"]["stratified_strategy"] == "balanced"
+    assert config["amortized"]["data"]["validation_fraction"] == 0.1
     assert config["amortized"]["prior"]["type"] == "realnvp"
     assert config["amortized"]["prior"]["train_jointly"] is True
     assert config["amortized"]["likelihood"]["type"] == "student_t"
+    assert config["amortized"]["training"]["n_samples"] == 2
+    assert config["amortized"]["training"]["kl_annealing_epochs"] == 20
+    assert config["amortized"]["training"]["kl_weight_max"] == 0.5
     assert config["amortized"]["inference"]["prior_samples"] == 8192
     assert config["amortized"]["inference"]["decoder_sample_chunk_size"] == 1
 

@@ -134,6 +134,36 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--n-samples", type=int)
     train.add_argument("--seed", type=int)
     train.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+        help="Override amortized.data.selection_mode.",
+    )
+    train.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+        help="Override amortized.data.stratified_strategy.",
+    )
+    train.add_argument(
+        "--validation-fraction",
+        type=float,
+        help="Override amortized.data.validation_fraction.",
+    )
+    train.add_argument(
+        "--kl-annealing-epochs",
+        type=int,
+        help="Override amortized.training.kl_annealing_epochs.",
+    )
+    train.add_argument(
+        "--kl-weight-max",
+        type=float,
+        help="Override amortized.training.kl_weight_max.",
+    )
+    train.add_argument(
+        "--validation-every",
+        type=int,
+        help="Override amortized.training.validation_every.",
+    )
+    train.add_argument(
         "--quiet",
         action="store_true",
         help="Reduce amortized training console output.",
@@ -317,6 +347,7 @@ def _run_amortized_train(config: dict, args) -> None:
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
 
+    config = _apply_amortized_train_overrides(config, args)
     cfg = amortized_config(config)
     training = cfg["training"]
     train_amortized_fs2(
@@ -330,6 +361,29 @@ def _run_amortized_train(config: dict, args) -> None:
         verbose=not bool(getattr(args, "quiet", False)),
         progress=not bool(getattr(args, "no_progress", False)),
     )
+
+
+def _apply_amortized_train_overrides(config: dict, args) -> dict:
+    config = dict(config)
+    amortized = dict(config.get("amortized", {}) or {})
+    data = dict(amortized.get("data", {}) or {})
+    training = dict(amortized.get("training", {}) or {})
+    if args.selection_mode is not None:
+        data["selection_mode"] = args.selection_mode
+    if args.stratified_strategy is not None:
+        data["stratified_strategy"] = args.stratified_strategy
+    if args.validation_fraction is not None:
+        data["validation_fraction"] = float(args.validation_fraction)
+    if args.kl_annealing_epochs is not None:
+        training["kl_annealing_epochs"] = int(args.kl_annealing_epochs)
+    if args.kl_weight_max is not None:
+        training["kl_weight_max"] = float(args.kl_weight_max)
+    if args.validation_every is not None:
+        training["validation_every"] = int(args.validation_every)
+    amortized["data"] = data
+    amortized["training"] = training
+    config["amortized"] = amortized
+    return config
 
 
 def _run_amortized_infer(config: dict, args) -> None:

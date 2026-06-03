@@ -5,6 +5,13 @@ amortized:
 
     data:
         expected_n_bands: 10
+        selection_mode: stratified_redshift
+        stratified_strategy: balanced
+        stratify_column: z_true_gal
+        redshift_bins: [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 6.0]
+        validation_fraction: 0.1
+        epoch_shuffle: true
+        catalog_batch_size: 10000
 
     latent:
         schema: popcosmos_16
@@ -43,11 +50,13 @@ amortized:
     training:
         epochs: 10
         batch_size: 32
-        n_samples: 1
+        n_samples: 2
         learning_rate: 1.0e-4
         weight_decay: 1.0e-5
         gradient_clip_norm: 1.0
-        kl_annealing_epochs: 5
+        kl_annealing_epochs: 20
+        kl_weight_max: 0.5
+        validation_every: 1
         seed: 42
 
     inference:

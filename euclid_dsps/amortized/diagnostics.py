@@ -109,7 +109,17 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         if column not in frame:
             continue
         fig, ax = plt.subplots(figsize=(7, 4))
-        ax.plot(frame[column].to_numpy(), lw=1.5)
+        if "split" in frame:
+            for split, group in frame.groupby("split", sort=False):
+                ax.plot(
+                    np.arange(len(group)),
+                    group[column].to_numpy(),
+                    lw=1.5,
+                    label=str(split),
+                )
+            ax.legend(frameon=False)
+        else:
+            ax.plot(frame[column].to_numpy(), lw=1.5)
         ax.set_xlabel("step")
         ax.set_ylabel(column)
         ax.set_title(column)
@@ -118,6 +128,29 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         fig.savefig(path, dpi=150)
         plt.close(fig)
         written.append(path.name)
+    bin_path = out / "validation_redshift_bin_metrics.csv"
+    if bin_path.exists():
+        bins = pd.read_csv(bin_path)
+        if not bins.empty and {"epoch", "z_bin", "loss"} <= set(bins):
+            fig, ax = plt.subplots(figsize=(8, 4.5))
+            for z_bin, group in bins.groupby("z_bin", sort=False):
+                ax.plot(
+                    group["epoch"].to_numpy(),
+                    group["loss"].to_numpy(),
+                    marker="o",
+                    ms=3,
+                    lw=1.1,
+                    label=str(z_bin),
+                )
+            ax.set_xlabel("epoch")
+            ax.set_ylabel("validation loss")
+            ax.set_title("Validation loss by redshift bin")
+            ax.legend(frameon=False, fontsize=7, ncols=2)
+            fig.tight_layout()
+            path = out / "validation_loss_by_redshift_bin.png"
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            written.append(path.name)
     write_json(
         out / "training_diagnostics_summary.json",
         {"plots": written, "n_rows": int(len(frame))},

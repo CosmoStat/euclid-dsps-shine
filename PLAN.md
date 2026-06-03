@@ -118,6 +118,14 @@
     distribution, and proxy mass-SFR plane. These are deliberately labeled as
     catalog proxies; SFR is not overlaid against posterior samples until a
     model-derived `log10_sfr_at_obs` export is added.
+  - Added anti-collapse training controls for Jean Zay/H100 runs: reproducible
+    FS2 row selection with `sequential`, `random`, or `stratified_redshift`
+    modes; balanced/proportional redshift stratification; epoch-level training
+    shuffle; train/validation split artifacts; validation ELBO rows in
+    `training_log.csv`; `validation_redshift_bin_metrics.csv`; validation loss
+    plots by redshift bin; validation-based `best.eqx` checkpointing when a
+    validation split exists; and explicit `kl_weight_max` plus longer default
+    KL annealing.
   - Validation passed with `uv sync`, `uv sync --extra dev`,
     `uv sync --extra dev --extra amortized`,
     `uv run python -m compileall euclid_dsps scripts`, Black on the feature

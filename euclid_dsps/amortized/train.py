@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,18 +13,20 @@ import numpy as np
 import pandas as pd
 
 from euclid_dsps.filters import load_filters
-from euclid_dsps.io import ensure_dir, write_json
+from euclid_dsps.io import ensure_dir, truth_column_from_spec, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
 
 from .config import amortized_config, require_amortized_dependencies
 from .data import (
-    compute_fs2_feature_stats_from_config,
-    iter_fs2_photometry_batches_from_config,
+    PhotometryBatch,
+    iter_photometry_batches_from_arrays,
+    load_fs2_photometry_arrays_from_config,
 )
+from .decoder import model_flux_from_x
 from .diagnostics import write_training_diagnostics
 from .elbo import AmortizedModel, negative_elbo
 from .encoder import GaussianEncoder
-from .features import FeatureStats, write_feature_stats
+from .features import FeatureStats, compute_feature_stats, write_feature_stats
 from .flows import RealNVPPrior
 from .latent import (
     LatentSpec,
@@ -31,6 +34,7 @@ from .latent import (
     latent_spec_to_jsonable,
     theta_to_x,
 )
+from .likelihood import photometric_loglike
 
 eqx, optax = require_amortized_dependencies()
 
@@ -38,6 +42,21 @@ try:
     from tqdm.auto import tqdm
 except ImportError:  # pragma: no cover - tqdm is a core dependency today
     tqdm = None
+
+
+@dataclass(frozen=True)
+class TrainingSplit:
+    """Catalog-row split used by FS2 amortized training."""
+
+    train_indices: np.ndarray
+    validation_indices: np.ndarray
+    train_redshift: np.ndarray
+    validation_redshift: np.ndarray
+    redshift_column: str | None
+    redshift_bins: np.ndarray
+    selection_mode: str
+    stratified_strategy: str
+    validation_fraction: float
 
 
 def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
@@ -168,11 +187,39 @@ def train_amortized_fs2(
         "[amortized] JAX backend: " f"{jax.default_backend()} devices={jax.devices()}",
     )
     write_json(out / "normalized_config.json", config)
-    _log(verbose, "[amortized] computing feature stats from FS2 flux/errors...")
-    feature_stats = compute_fs2_feature_stats_from_config(
+    split = build_training_split(config, limit=limit, seed=seed)
+    write_training_split_artifacts(out, split)
+    _log(
+        verbose,
+        "[amortized] data split: "
+        f"mode={split.selection_mode} strategy={split.stratified_strategy} "
+        f"train={len(split.train_indices)} validation={len(split.validation_indices)} "
+        f"z_column={split.redshift_column}",
+    )
+    catalog_batch_size = int(
+        cfg["data"].get("catalog_batch_size", max(int(batch_size), 10_000))
+    )
+    _log(verbose, "[amortized] loading selected train photometry arrays...")
+    train_arrays = load_fs2_photometry_arrays_from_config(
         config,
-        limit=limit,
-        batch_size=max(int(batch_size), 1),
+        batch_size=catalog_batch_size,
+        row_indices=split.train_indices,
+    )
+    validation_arrays = None
+    if len(split.validation_indices):
+        _log(verbose, "[amortized] loading selected validation photometry arrays...")
+        validation_arrays = load_fs2_photometry_arrays_from_config(
+            config,
+            batch_size=catalog_batch_size,
+            row_indices=split.validation_indices,
+        )
+    _log(verbose, "[amortized] computing feature stats from train flux/errors...")
+    feature_stats = compute_feature_stats(
+        train_arrays.flux,
+        train_arrays.flux_err,
+        train_arrays.mask,
+        band_names=train_arrays.band_names,
+        flux_transform=str(cfg["features"].get("flux_transform", "asinh")),
     )
     write_feature_stats(out / "feature_stats.json", feature_stats)
     _log(
@@ -227,7 +274,17 @@ def train_amortized_fs2(
     checkpoint_every = int(cfg["output"].get("checkpoint_every", 1))
     diagnostics_every = int(cfg["output"].get("diagnostics_every", 1))
     save_training_curves = bool(cfg["output"].get("save_training_curves", True))
-    expected_batches = _expected_batch_count(limit, int(batch_size))
+    validation_every = int(cfg["training"].get("validation_every", 1))
+    epoch_shuffle = bool(cfg["data"].get("epoch_shuffle", True))
+    kl_weight_max = float(cfg["training"].get("kl_weight_max", 1.0))
+    expected_batches = _expected_batch_count(len(train_arrays.object_id), int(batch_size))
+    val_expected_batches = (
+        None
+        if validation_arrays is None
+        else _expected_batch_count(len(validation_arrays.object_id), int(batch_size))
+    )
+    validation_bin_rows: list[dict[str, float | int | str]] = []
+    train_rng = np.random.default_rng(int(seed) + 10_000)
     _log(
         verbose,
         "[amortized] training start: "
@@ -235,17 +292,22 @@ def train_amortized_fs2(
     )
     for epoch in range(1, int(epochs) + 1):
         kl_weight = _kl_weight(
-            epoch, int(cfg["training"].get("kl_annealing_epochs", 5))
+            epoch,
+            int(cfg["training"].get("kl_annealing_epochs", 5)),
+            max_weight=kl_weight_max,
         )
         epoch_rows = []
         _log(
             verbose, f"[amortized] epoch {epoch}/{int(epochs)} start kl={kl_weight:.3f}"
         )
-        batch_iter = iter_fs2_photometry_batches_from_config(
-            config,
+        train_order = np.arange(len(train_arrays.object_id))
+        if epoch_shuffle:
+            train_rng.shuffle(train_order)
+        batch_iter = iter_photometry_batches_from_arrays(
+            train_arrays,
             batch_size=int(batch_size),
-            limit=limit,
             feature_stats=feature_stats,
+            order=train_order,
         )
         with _progress_bar(
             enabled=bool(progress),
@@ -292,6 +354,7 @@ def train_amortized_fs2(
                     )
                 record.update(
                     {
+                        "split": "train",
                         "epoch": int(epoch),
                         "batch": int(batch_index),
                         "kl_weight": float(kl_weight),
@@ -303,7 +366,7 @@ def train_amortized_fs2(
                 )
                 epoch_rows.append(record)
                 rows.append(record)
-                if loss_finite and float(loss) < best_loss:
+                if validation_arrays is None and loss_finite and float(loss) < best_loss:
                     best_loss = float(loss)
                     save_checkpoint(
                         ckpt_dir / "best.eqx",
@@ -330,6 +393,57 @@ def train_amortized_fs2(
                     _log(verbose, _batch_progress_line(record))
         if not epoch_rows:
             raise ValueError("No FS2 batches were produced for amortized training")
+        validation_rows = []
+        epoch_bin_rows = []
+        if (
+            validation_arrays is not None
+            and validation_every > 0
+            and epoch % validation_every == 0
+        ):
+            _log(
+                verbose,
+                f"[amortized] epoch {epoch}/{int(epochs)} validation start",
+            )
+            key, val_key = jax.random.split(key)
+            validation_rows, epoch_bin_rows = evaluate_validation_epoch(
+                model,
+                validation_arrays,
+                split,
+                feature_stats,
+                latent_spec,
+                context,
+                model_args,
+                val_key,
+                batch_size=int(batch_size),
+                n_samples=int(n_samples),
+                kl_weight=float(kl_weight),
+                likelihood_config=cfg["likelihood"],
+                progress=bool(progress),
+                total=val_expected_batches,
+                desc=f"val {epoch}/{int(epochs)}",
+                epoch=epoch,
+            )
+            rows.extend(validation_rows)
+            validation_bin_rows.extend(epoch_bin_rows)
+            val_loss = _finite_mean([row["loss"] for row in validation_rows])
+            if np.isfinite(val_loss) and val_loss < best_loss:
+                best_loss = float(val_loss)
+                save_checkpoint(
+                    ckpt_dir / "best.eqx",
+                    model,
+                    config=config,
+                    latent_spec=latent_spec,
+                    feature_stats=feature_stats,
+                    epoch=epoch,
+                    metric=best_loss,
+                )
+            _log(
+                verbose,
+                "[amortized] epoch "
+                f"{epoch}/{int(epochs)} validation done: "
+                f"mean_loss={val_loss:.6g} "
+                f"binned_rows={len(epoch_bin_rows)}",
+            )
         save_checkpoint(
             ckpt_dir / "last.eqx",
             model,
@@ -350,6 +464,11 @@ def train_amortized_fs2(
                 metric=_finite_mean([row["loss"] for row in epoch_rows]),
             )
         pd.DataFrame(rows).to_csv(out / "training_log.csv", index=False)
+        if validation_bin_rows:
+            pd.DataFrame(validation_bin_rows).to_csv(
+                out / "validation_redshift_bin_metrics.csv",
+                index=False,
+            )
         write_training_progress(
             out,
             rows=rows,
@@ -378,20 +497,46 @@ def train_amortized_fs2(
             f"last_checkpoint={ckpt_dir / 'last.eqx'}",
         )
 
+    if not (ckpt_dir / "best.eqx").exists():
+        fallback_metric = _finite_mean([row["loss"] for row in rows if row.get("split") == "train"])
+        best_loss = fallback_metric
+        save_checkpoint(
+            ckpt_dir / "best.eqx",
+            model,
+            config=config,
+            latent_spec=latent_spec,
+            feature_stats=feature_stats,
+            epoch=int(epochs),
+            metric=fallback_metric,
+        )
+
     summary = {
         "epochs": int(epochs),
         "batch_size": int(batch_size),
         "n_samples": int(n_samples),
         "limit": limit,
+        "train_rows": int(len(split.train_indices)),
+        "validation_rows": int(len(split.validation_indices)),
+        "validation_fraction": float(split.validation_fraction),
+        "selection_mode": split.selection_mode,
+        "stratified_strategy": split.stratified_strategy,
+        "redshift_column": split.redshift_column,
+        "kl_annealing_epochs": int(cfg["training"].get("kl_annealing_epochs", 5)),
+        "kl_weight_max": float(kl_weight_max),
         "best_loss": float(best_loss),
+        "best_checkpoint_metric": (
+            "validation_loss" if validation_arrays is not None else "train_loss"
+        ),
         "elapsed_time_s": float(time.time() - start_time),
         "checkpoint_best": "checkpoints/best.eqx",
         "checkpoint_last": "checkpoints/last.eqx",
         "checkpoint_every": checkpoint_every,
         "diagnostics_every": diagnostics_every,
-        "updates_applied": int(sum(row.get("update_applied", 0.0) for row in rows)),
+        "updates_applied": int(
+            sum(row.get("update_applied", 0.0) for row in _training_rows(rows))
+        ),
         "updates_skipped": int(
-            sum(1.0 - row.get("update_applied", 0.0) for row in rows)
+            sum(1.0 - row.get("update_applied", 0.0) for row in _training_rows(rows))
         ),
         "joint_training": {
             "encoder": True,
@@ -444,6 +589,506 @@ def load_checkpoint(
     return eqx.tree_deserialise_leaves(path, template)
 
 
+def build_training_split(
+    config: dict[str, Any],
+    *,
+    limit: int | None,
+    seed: int,
+) -> TrainingSplit:
+    """Build a reproducible train/validation row split for FS2."""
+    cfg = amortized_config(config)
+    data_cfg = cfg["data"]
+    validation_fraction = float(data_cfg.get("validation_fraction", 0.1))
+    validation_fraction = min(max(validation_fraction, 0.0), 0.9)
+    selection_mode = str(data_cfg.get("selection_mode", "stratified_redshift"))
+    stratified_strategy = str(data_cfg.get("stratified_strategy", "balanced"))
+    rng = np.random.default_rng(int(data_cfg.get("selection_seed", seed)))
+    n_rows = _catalog_num_rows(config["catalog_path"])
+    redshift_column = _configured_redshift_column(config, data_cfg)
+    redshift = _read_redshift_column(config["catalog_path"], redshift_column)
+    if redshift is not None:
+        n_rows = len(redshift)
+    total = n_rows if limit is None else min(int(limit), n_rows)
+    redshift_bins = np.asarray(
+        data_cfg.get(
+            "redshift_bins",
+            [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 6.0],
+        ),
+        dtype=float,
+    )
+    if redshift_bins.ndim != 1 or redshift_bins.size < 2:
+        redshift_bins = np.asarray([0.0, 6.0], dtype=float)
+    redshift_bins = np.unique(redshift_bins)
+
+    if selection_mode == "sequential":
+        selected = np.arange(total, dtype=np.int64)
+    elif selection_mode == "random" or redshift is None:
+        selected = rng.choice(n_rows, size=total, replace=False).astype(np.int64)
+    elif selection_mode == "stratified_redshift":
+        selected = _select_stratified_indices(
+            redshift,
+            total=total,
+            bins=redshift_bins,
+            strategy=stratified_strategy,
+            rng=rng,
+        )
+    else:
+        raise ValueError(
+            "amortized.data.selection_mode must be one of "
+            "'sequential', 'random', or 'stratified_redshift'"
+        )
+
+    train_indices, validation_indices = _split_train_validation(
+        selected,
+        redshift,
+        redshift_bins,
+        validation_fraction,
+        rng,
+    )
+    return TrainingSplit(
+        train_indices=np.asarray(train_indices, dtype=np.int64),
+        validation_indices=np.asarray(validation_indices, dtype=np.int64),
+        train_redshift=_redshift_for_indices(redshift, train_indices),
+        validation_redshift=_redshift_for_indices(redshift, validation_indices),
+        redshift_column=redshift_column if redshift is not None else None,
+        redshift_bins=redshift_bins,
+        selection_mode=selection_mode if redshift is not None else "random",
+        stratified_strategy=stratified_strategy,
+        validation_fraction=validation_fraction,
+    )
+
+
+def write_training_split_artifacts(out: Path, split: TrainingSplit) -> None:
+    """Write reproducibility artifacts for a training split."""
+    np.save(out / "train_indices.npy", split.train_indices)
+    np.save(out / "validation_indices.npy", split.validation_indices)
+    if split.train_redshift.size:
+        np.save(out / "train_redshift_proxy.npy", split.train_redshift)
+    if split.validation_redshift.size:
+        np.save(out / "validation_redshift_proxy.npy", split.validation_redshift)
+    write_json(
+        out / "training_split.json",
+        {
+            "selection_mode": split.selection_mode,
+            "stratified_strategy": split.stratified_strategy,
+            "validation_fraction": split.validation_fraction,
+            "redshift_column": split.redshift_column,
+            "redshift_bins": split.redshift_bins.tolist(),
+            "train_rows": int(len(split.train_indices)),
+            "validation_rows": int(len(split.validation_indices)),
+            "train_redshift_finite": int(np.isfinite(split.train_redshift).sum()),
+            "validation_redshift_finite": int(
+                np.isfinite(split.validation_redshift).sum()
+            ),
+        },
+    )
+
+
+def evaluate_validation_epoch(
+    model: AmortizedModel,
+    arrays,
+    split: TrainingSplit,
+    feature_stats: FeatureStats,
+    latent_spec: LatentSpec,
+    context,
+    model_args,
+    key,
+    *,
+    batch_size: int,
+    n_samples: int,
+    kl_weight: float,
+    likelihood_config: dict[str, Any],
+    progress: bool,
+    total: int | None,
+    desc: str,
+    epoch: int,
+) -> tuple[list[dict[str, float | int | str]], list[dict[str, float | int | str]]]:
+    """Evaluate validation ELBO and redshift-bin metrics without updates."""
+    rows: list[dict[str, float | int | str]] = []
+    object_rows: list[dict[str, float | int | str]] = []
+    redshift_lookup = {
+        int(index): float(z)
+        for index, z in zip(
+            split.validation_indices,
+            split.validation_redshift,
+            strict=False,
+        )
+    }
+    with _progress_bar(
+        enabled=bool(progress),
+        total=total,
+        desc=desc,
+        unit="batch",
+    ) as pbar:
+        for batch_index, batch in enumerate(
+            iter_photometry_batches_from_arrays(
+                arrays,
+                batch_size=batch_size,
+                feature_stats=feature_stats,
+            )
+        ):
+            key, batch_key = jax.random.split(key)
+            metrics, object_metrics = _evaluation_metrics(
+                model,
+                batch,
+                latent_spec,
+                context,
+                model_args,
+                latent_spec.names,
+                batch_key,
+                int(n_samples),
+                float(kl_weight),
+                likelihood_config,
+            )
+            record = _metrics_record(metrics)
+            record.update(
+                {
+                    "split": "validation",
+                    "epoch": int(epoch),
+                    "batch": int(batch_index),
+                    "kl_weight": float(kl_weight),
+                    "n_objects": int(batch.flux.shape[0]),
+                    "loss_finite": float(np.isfinite(record["loss"])),
+                    "grads_finite": 1.0,
+                    "update_applied": 0.0,
+                    "encoder_grad_norm": 0.0,
+                    "prior_grad_norm": 0.0,
+                    "joint_grad_norm": 0.0,
+                    "encoder_grad_nonzero": 0.0,
+                    "prior_grad_nonzero": 0.0,
+                }
+            )
+            rows.append(record)
+            object_rows.extend(
+                _validation_object_rows(
+                    batch,
+                    object_metrics,
+                    redshift_lookup,
+                    split.redshift_bins,
+                )
+            )
+            pbar.update(1)
+            pbar.set_postfix(
+                {
+                    "loss": f"{record['loss']:.3g}",
+                    "nll": f"{record['negative_loglike']:.3g}",
+                    "kl": f"{record['kl_mc_mean']:.3g}",
+                },
+                refresh=False,
+            )
+    bin_rows = _redshift_bin_rows(
+        object_rows,
+        bins=split.redshift_bins,
+        epoch=int(epoch),
+    )
+    return rows, bin_rows
+
+
+def _evaluation_metrics(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    n_samples,
+    kl_weight,
+    likelihood_config,
+):
+    x_samples, logq = model.encoder.sample_and_log_prob(
+        key,
+        batch.features,
+        int(n_samples),
+    )
+    model_flux = model_flux_from_x(
+        x_samples,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+    )
+    loglike = photometric_loglike(
+        obs_flux=batch.flux,
+        model_flux=model_flux,
+        obs_err=batch.flux_err,
+        mask=batch.mask,
+        likelihood_type=str(likelihood_config.get("type", "student_t")),
+        student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+    )
+    logp = model.prior.log_prob(x_samples)
+    kl = logq - logp
+    objective = -loglike + float(kl_weight) * kl
+    chi = (model_flux - batch.flux[None, :, :]) / batch.flux_err[None, :, :]
+    chi = jnp.where(batch.mask[None, :, :], chi, 0.0)
+    object_loss = jnp.mean(objective, axis=0)
+    object_nll = jnp.mean(-loglike, axis=0)
+    object_kl = jnp.mean(kl, axis=0)
+    object_chi2 = jnp.mean(jnp.sum(chi**2, axis=-1), axis=0)
+    metrics = {
+        "loss": jnp.mean(objective),
+        "negative_loglike": jnp.mean(-loglike),
+        "loglike_mean": jnp.mean(loglike),
+        "logprior_mean": jnp.mean(logp),
+        "logq_mean": jnp.mean(logq),
+        "kl_mc_mean": jnp.mean(kl),
+        "model_flux_mean": jnp.mean(model_flux),
+        "residual_rms": jnp.sqrt(jnp.mean(chi**2)),
+        "finite_fraction": jnp.mean(jnp.isfinite(objective)),
+    }
+    object_metrics = {
+        "loss": object_loss,
+        "negative_loglike": object_nll,
+        "kl_mc_mean": object_kl,
+        "posterior_predictive_chi2": object_chi2,
+    }
+    return metrics, object_metrics
+
+
+def _validation_object_rows(
+    batch: PhotometryBatch,
+    object_metrics: dict[str, jnp.ndarray],
+    redshift_lookup: dict[int, float],
+    bins: np.ndarray,
+) -> list[dict[str, float | int | str]]:
+    object_ids = np.asarray(jax.device_get(batch.object_id), dtype=int)
+    losses = np.asarray(jax.device_get(object_metrics["loss"]), dtype=float)
+    nll = np.asarray(jax.device_get(object_metrics["negative_loglike"]), dtype=float)
+    kl = np.asarray(jax.device_get(object_metrics["kl_mc_mean"]), dtype=float)
+    chi2 = np.asarray(
+        jax.device_get(object_metrics["posterior_predictive_chi2"]), dtype=float
+    )
+    rows = []
+    for index, object_id in enumerate(object_ids):
+        z = redshift_lookup.get(int(object_id), float("nan"))
+        bin_index = _redshift_bin_index(z, bins)
+        rows.append(
+            {
+                "object_id": int(object_id),
+                "z_reference": float(z),
+                "z_bin_index": int(bin_index),
+                "loss": float(losses[index]),
+                "negative_loglike": float(nll[index]),
+                "kl_mc_mean": float(kl[index]),
+                "posterior_predictive_chi2": float(chi2[index]),
+            }
+        )
+    return rows
+
+
+def _redshift_bin_rows(
+    object_rows: list[dict[str, float | int | str]],
+    *,
+    bins: np.ndarray,
+    epoch: int,
+) -> list[dict[str, float | int | str]]:
+    if not object_rows:
+        return []
+    frame = pd.DataFrame(object_rows)
+    rows = []
+    for bin_index, group in frame.groupby("z_bin_index", sort=True):
+        bin_index = int(bin_index)
+        if bin_index < 0:
+            z_min = float("nan")
+            z_max = float("nan")
+            label = "missing"
+        else:
+            z_min = float(bins[bin_index])
+            z_max = float(bins[bin_index + 1])
+            label = f"{z_min:.3g}-{z_max:.3g}"
+        rows.append(
+            {
+                "epoch": int(epoch),
+                "split": "validation",
+                "z_bin_index": bin_index,
+                "z_bin": label,
+                "z_min": z_min,
+                "z_max": z_max,
+                "n_objects": int(len(group)),
+                "loss": float(np.nanmean(group["loss"])),
+                "negative_loglike": float(np.nanmean(group["negative_loglike"])),
+                "kl_mc_mean": float(np.nanmean(group["kl_mc_mean"])),
+                "posterior_predictive_chi2": float(
+                    np.nanmedian(group["posterior_predictive_chi2"])
+                ),
+                "z_reference_median": float(np.nanmedian(group["z_reference"])),
+            }
+        )
+    return rows
+
+
+def _catalog_num_rows(path: str | Path) -> int:
+    import pyarrow.parquet as pq
+
+    return int(pq.ParquetFile(path).metadata.num_rows)
+
+
+def _configured_redshift_column(
+    config: dict[str, Any],
+    data_cfg: dict[str, Any],
+) -> str | None:
+    explicit = data_cfg.get("stratify_column")
+    if explicit:
+        return str(explicit)
+    truth = config.get("truth", {}) or {}
+    column = truth_column_from_spec(truth.get("redshift_column"))
+    if column:
+        return column
+    redshift = config.get("redshift", {}) or {}
+    return truth_column_from_spec(redshift.get("truth_column"))
+
+
+def _read_redshift_column(
+    catalog_path: str | Path,
+    column: str | None,
+) -> np.ndarray | None:
+    if column is None:
+        return None
+    try:
+        frame = pd.read_parquet(catalog_path, columns=[column])
+    except Exception:
+        return None
+    if column not in frame:
+        return None
+    values = frame[column].to_numpy(dtype=float)
+    return values
+
+
+def _select_stratified_indices(
+    redshift: np.ndarray,
+    *,
+    total: int,
+    bins: np.ndarray,
+    strategy: str,
+    rng: np.random.Generator,
+) -> np.ndarray:
+    all_indices = np.arange(len(redshift), dtype=np.int64)
+    if total >= len(all_indices):
+        selected = all_indices.copy()
+        rng.shuffle(selected)
+        return selected
+    finite = np.isfinite(redshift)
+    if not finite.any():
+        return rng.choice(all_indices, size=total, replace=False).astype(np.int64)
+    if strategy == "proportional":
+        finite_indices = all_indices[finite]
+        if total <= len(finite_indices):
+            return rng.choice(finite_indices, size=total, replace=False).astype(np.int64)
+        selected = list(finite_indices)
+        remaining = np.setdiff1d(all_indices, finite_indices, assume_unique=False)
+        needed = total - len(selected)
+        selected.extend(rng.choice(remaining, size=needed, replace=False).tolist())
+        selected = np.asarray(selected, dtype=np.int64)
+        rng.shuffle(selected)
+        return selected
+    if strategy != "balanced":
+        raise ValueError("amortized.data.stratified_strategy must be balanced or proportional")
+    groups = _indices_by_redshift_bin(redshift, bins)
+    nonempty = [group for group in groups if len(group)]
+    if not nonempty:
+        return rng.choice(all_indices, size=total, replace=False).astype(np.int64)
+    per_bin = int(np.ceil(total / float(len(nonempty))))
+    selected: list[int] = []
+    for group in nonempty:
+        take = min(per_bin, len(group), total - len(selected))
+        if take <= 0:
+            break
+        selected.extend(rng.choice(group, size=take, replace=False).tolist())
+    if len(selected) < total:
+        remaining = np.setdiff1d(all_indices, np.asarray(selected), assume_unique=False)
+        selected.extend(
+            rng.choice(remaining, size=total - len(selected), replace=False).tolist()
+        )
+    selected = np.asarray(selected[:total], dtype=np.int64)
+    rng.shuffle(selected)
+    return selected
+
+
+def _split_train_validation(
+    selected: np.ndarray,
+    redshift: np.ndarray | None,
+    bins: np.ndarray,
+    validation_fraction: float,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    selected = np.asarray(selected, dtype=np.int64)
+    if validation_fraction <= 0.0 or len(selected) < 2:
+        return selected, np.asarray([], dtype=np.int64)
+    if redshift is None:
+        shuffled = selected.copy()
+        rng.shuffle(shuffled)
+        n_val = int(round(validation_fraction * len(shuffled)))
+        n_val = min(max(n_val, 1), len(shuffled) - 1)
+        return shuffled[n_val:], shuffled[:n_val]
+    val: list[int] = []
+    train: list[int] = []
+    for group in _indices_by_redshift_bin(redshift[selected], bins, base_indices=selected):
+        group = np.asarray(group, dtype=np.int64)
+        if len(group) == 0:
+            continue
+        rng.shuffle(group)
+        n_val = int(round(validation_fraction * len(group)))
+        if len(group) > 1 and validation_fraction > 0.0:
+            n_val = min(max(n_val, 1), len(group) - 1)
+        val.extend(group[:n_val].tolist())
+        train.extend(group[n_val:].tolist())
+    if not train:
+        shuffled = selected.copy()
+        rng.shuffle(shuffled)
+        return shuffled[1:], shuffled[:1]
+    train = np.asarray(train, dtype=np.int64)
+    val = np.asarray(val, dtype=np.int64)
+    rng.shuffle(train)
+    rng.shuffle(val)
+    return train, val
+
+
+def _indices_by_redshift_bin(
+    redshift: np.ndarray,
+    bins: np.ndarray,
+    *,
+    base_indices: np.ndarray | None = None,
+) -> list[np.ndarray]:
+    if base_indices is None:
+        base_indices = np.arange(len(redshift), dtype=np.int64)
+    redshift = np.asarray(redshift, dtype=float)
+    base_indices = np.asarray(base_indices, dtype=np.int64)
+    groups = []
+    for index in range(len(bins) - 1):
+        lo = bins[index]
+        hi = bins[index + 1]
+        if index == len(bins) - 2:
+            mask = (redshift >= lo) & (redshift <= hi)
+        else:
+            mask = (redshift >= lo) & (redshift < hi)
+        mask &= np.isfinite(redshift)
+        groups.append(base_indices[mask])
+    missing = base_indices[~np.isfinite(redshift)]
+    if len(missing):
+        groups.append(missing)
+    return groups
+
+
+def _redshift_for_indices(
+    redshift: np.ndarray | None,
+    indices: np.ndarray,
+) -> np.ndarray:
+    if redshift is None or len(indices) == 0:
+        return np.asarray([], dtype=float)
+    return np.asarray(redshift[np.asarray(indices, dtype=int)], dtype=float)
+
+
+def _redshift_bin_index(z: float, bins: np.ndarray) -> int:
+    if not np.isfinite(z):
+        return -1
+    index = int(np.searchsorted(bins, z, side="right") - 1)
+    if index < 0 or index >= len(bins) - 1:
+        return -1
+    return index
+
+
 def _loss_with_metrics(
     model,
     batch,
@@ -470,10 +1115,11 @@ def _loss_with_metrics(
     )
 
 
-def _kl_weight(epoch: int, annealing_epochs: int) -> float:
+def _kl_weight(epoch: int, annealing_epochs: int, *, max_weight: float = 1.0) -> float:
+    max_weight = min(max(float(max_weight), 0.0), 1.0)
     if annealing_epochs <= 0:
-        return 1.0
-    return min(1.0, max(0.0, float(epoch) / float(annealing_epochs)))
+        return max_weight
+    return max_weight * min(1.0, max(0.0, float(epoch) / float(annealing_epochs)))
 
 
 def _metrics_record(metrics: dict[str, jnp.ndarray]) -> dict[str, float]:
@@ -592,9 +1238,14 @@ def write_training_progress(
             "checkpoint_last": checkpoint_last,
             "latest_encoder_grad_norm": float(rows[-1].get("encoder_grad_norm", 0.0)),
             "latest_prior_grad_norm": float(rows[-1].get("prior_grad_norm", 0.0)),
-            "updates_applied": int(sum(row.get("update_applied", 0.0) for row in rows)),
+            "updates_applied": int(
+                sum(row.get("update_applied", 0.0) for row in _training_rows(rows))
+            ),
             "updates_skipped": int(
-                sum(1.0 - row.get("update_applied", 0.0) for row in rows)
+                sum(
+                    1.0 - row.get("update_applied", 0.0)
+                    for row in _training_rows(rows)
+                )
             ),
         },
     )
@@ -606,6 +1257,10 @@ def _expected_batch_count(limit: int | None, batch_size: int) -> int | None:
     if limit <= 0:
         return 0
     return int(np.ceil(float(limit) / float(max(batch_size, 1))))
+
+
+def _training_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in rows if row.get("split", "train") == "train"]
 
 
 def _log(enabled: bool, message: str) -> None:
