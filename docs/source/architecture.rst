@@ -22,9 +22,12 @@ assets:
      mcmc.py         NumPyro and experimental BlackJAX posterior sampling.
      model.py        Native DSPS boundary.
      nebular.py      Diagnostic-only SSP emission-line tables and crossings.
+     observation_arrays.py  Batch photometry arrays for training workflows.
+     parameter_vectors.py   Public theta-vector to DSPS JAX helper layer.
      performance.py  Runtime, throughput, and device-cost summaries.
      photometry.py   Central AB magnitude and Fnu flux conversions.
      posterior_target.py  Pure-JAX posterior target for BlackJAX samplers.
+     amortized/      FS2-only amortized posterior prototype.
      pipeline.py     Deprecated compatibility facade for workflow imports.
      reports.py      Deprecated compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
@@ -87,6 +90,20 @@ Layer Responsibilities
   DSPS directly. This is where SSP interpolation, SFH weighting, dust, gas,
   AGN, IGM, and filter integration are combined.
 
+``parameter_vectors.py``
+  Owns the public JAX contract for converting physical ``theta`` vectors into
+  DSPS parameter dictionaries and evaluating model magnitudes from arrays with
+  shape ``[D]``, ``[N,D]``, or ``[K,N,D]``. It calls the same fast
+  ``model_mags_jax_dynamic`` boundary used by MAP/MCMC code and preserves JAX
+  gradients. Training-oriented code should use this module instead of private
+  helpers in ``fit.py`` or NumPy report helpers such as ``predict_batch_mags``.
+
+``observation_arrays.py``
+  Provides array-based photometry extraction for training workflows. It keeps
+  FS2 fluxes, flux errors, masks, and object identifiers in batch arrays so
+  amortized training does not construct ``GalaxyObservation`` objects in the
+  hot path.
+
 ``cosmos.py``
   Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,
   ``ebv_cosmos_*``, ``ext_curve_cosmos_*``, and ``frac_cosmos_*``.
@@ -105,6 +122,23 @@ Layer Responsibilities
   pure-JAX log-density used by BlackJAX MCLMC. They should depend on the model
   boundary and observation dataclasses, not on parquet or report-writing
   concerns.
+
+``amortized/``
+  Owns the FS2-only amortized posterior prototype: latent transforms,
+  encoder features, Student-t flux likelihood, Equinox encoder, RealNVP prior,
+  negative ELBO, synthetic smoke, training, inference, catalog export, and
+  diagnostics. The encoder and RealNVP prior are optimized jointly by one
+  Optax update, while the DSPS decoder remains fixed behind
+  ``parameter_vectors.py``. Encoder features keep the 10 flux + 10 error
+  contract, using ``asinh(flux / flux_scale)`` for robust bright-object flux
+  normalization and log-normalized errors. Training writes progressive logs,
+  gradient-norm diagnostics, ``best``/``last`` checkpoints, and epoch
+  checkpoints controlled by ``amortized.output.checkpoint_every``. Inference
+  writes normalized posterior predictive residuals, top chi-square objects,
+  feature diagnostics, redshift proxy comparisons, redshift PIT diagnostics,
+  catalog-proxy mass/SFR comparisons, contour-style posterior corners, and
+  learned RealNVP prior samples/corners. It reuses the same DSPS model boundary
+  and does not replace the MAP or MCMC baselines.
 
 ``nebular.py``
   Reads line metadata already loaded by ``model.py`` and writes diagnostic

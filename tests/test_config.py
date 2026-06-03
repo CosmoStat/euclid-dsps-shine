@@ -329,7 +329,9 @@ def test_compressed_fsps_component_grid_requires_path() -> None:
         "agn_model": "compressed_fsps_component_grid",
     }
 
-    with pytest.raises(ConfigValidationError, match="compressed_agn_component_grid_path"):
+    with pytest.raises(
+        ConfigValidationError, match="compressed_agn_component_grid_path"
+    ):
         normalize_config(config)
 
 
@@ -529,7 +531,9 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert config["fit"]["student_t_dof"] == 2.0
     assert config["fit"]["flux_error_floor_frac"] == 0.02
     assert config["selection"]["nondetection_policy"] == "gaussian_flux"
-    assert config["bands"][0]["error_column"] == "lsst_u_el_model3_ext_odonnell_ext_error"
+    assert (
+        config["bands"][0]["error_column"] == "lsst_u_el_model3_ext_odonnell_ext_error"
+    )
     assert config["bands"][0]["filter"]["path"] == "filters/LSST_LSST.u.dat"
     assert config["bands"][6]["error_column"].endswith("_error")
     assert config["bands"][6]["filter"]["path"] == "filters/Euclid_VIS.vis.dat"
@@ -585,6 +589,23 @@ def test_popcosmos_binned_compressed_config_overrides_only_runtime_assets() -> N
         == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
     )
     assert compressed["fit"]["photometric_likelihood"] == "student_t"
+
+
+def test_amortized_fs2_realnvp_config_extends_compressed_popcosmos() -> None:
+    config = load_config("configs/amortized_fs2_realnvp.yaml")
+
+    assert tuple(config["fit"]["free_parameters"]) == POPCOSMOS_PARAMETER_NAMES
+    assert config["model"]["sfh_model"] == "popcosmos_bins"
+    assert len(config["bands"]) == 10
+    assert config["amortized"]["latent"]["schema"] == "popcosmos_16"
+    assert config["amortized"]["features"]["n_flux_bands"] == 10
+    assert config["amortized"]["features"]["n_error_bands"] == 10
+    assert config["amortized"]["features"]["flux_transform"] == "asinh"
+    assert config["amortized"]["prior"]["type"] == "realnvp"
+    assert config["amortized"]["prior"]["train_jointly"] is True
+    assert config["amortized"]["likelihood"]["type"] == "student_t"
+    assert config["amortized"]["inference"]["prior_samples"] == 8192
+    assert config["amortized"]["inference"]["decoder_sample_chunk_size"] == 1
 
 
 def test_popcosmos_diffstar_compressed_config_overrides_only_runtime_assets() -> None:

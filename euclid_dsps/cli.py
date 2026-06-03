@@ -22,7 +22,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(
         dest="command",
         required=True,
-        metavar="{download-assets,check,fit,posterior}",
+        metavar=(
+            "{download-assets,check,fit,posterior,"
+            "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2}"
+        ),
     )
 
     assets = sub.add_parser(
@@ -73,9 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     fit.add_argument(
         "--limit", type=int, default=25, help="Maximum catalog rows to fit."
     )
-    fit.add_argument(
-        "--batch-size", type=int, default=64, help="Parquet batch size."
-    )
+    fit.add_argument("--batch-size", type=int, default=64, help="Parquet batch size.")
     fit.add_argument("--all", action="store_true", help="Process the full catalog.")
     fit.add_argument(
         "--row-indices-file",
@@ -111,6 +112,63 @@ def build_parser() -> argparse.ArgumentParser:
     add_fit_overrides(posterior)
     add_sample_overrides(posterior)
 
+    synthetic = sub.add_parser(
+        "amortized-synthetic-smoke",
+        help="Run asset-free amortized inference smoke with a mock decoder.",
+    )
+    synthetic.add_argument("--out", default="outputs/runs/dev_amortized_synthetic")
+    synthetic.add_argument("--mock-decoder", action="store_true", default=True)
+    synthetic.add_argument("--n-objects", type=int, default=128)
+    synthetic.add_argument("--epochs", type=int)
+    synthetic.add_argument("--batch-size", type=int, default=32)
+    synthetic.add_argument("--seed", type=int)
+
+    train = sub.add_parser(
+        "amortized-train-fs2",
+        help="Train the FS2 amortized encoder and RealNVP prior.",
+    )
+    train.add_argument("--out", default="outputs/runs/dev_amortized_fs2")
+    train.add_argument("--limit", type=int)
+    train.add_argument("--batch-size", type=int)
+    train.add_argument("--epochs", type=int)
+    train.add_argument("--n-samples", type=int)
+    train.add_argument("--seed", type=int)
+    train.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Reduce amortized training console output.",
+    )
+    train.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable amortized training progress bars.",
+    )
+
+    infer = sub.add_parser(
+        "amortized-infer-fs2",
+        help="Run FS2 amortized posterior inference from a checkpoint.",
+    )
+    infer.add_argument("--out", default="outputs/runs/dev_amortized_fs2_infer")
+    infer.add_argument("--checkpoint", required=True)
+    infer.add_argument("--limit", type=int)
+    infer.add_argument("--batch-size", type=int)
+    infer.add_argument("--posterior-samples", type=int)
+    infer.add_argument(
+        "--prior-samples",
+        type=int,
+        help="Number of samples to draw from the learned RealNVP prior diagnostics.",
+    )
+    infer.add_argument(
+        "--decoder-sample-chunk-size",
+        type=int,
+        help=(
+            "Number of posterior samples decoded by DSPS at once. "
+            "Use 1 to minimize GPU memory."
+        ),
+    )
+    infer.add_argument("--seed", type=int)
+    infer.add_argument("--feature-stats")
+
     return parser
 
 
@@ -126,7 +184,25 @@ def main(argv: list[str] | None = None) -> None:
     from .jax_runtime import apply_jax_runtime_env
 
     config = load_config(args.config)
-    apply_jax_runtime_env(config.get("runtime", {}))
+    runtime_config = config.get("runtime", {})
+    if args.command == "amortized-synthetic-smoke":
+        runtime_config = {
+            **runtime_config,
+            "jax_platforms": "auto",
+            "require_gpu": False,
+        }
+    apply_jax_runtime_env(runtime_config)
+
+    if args.command == "amortized-synthetic-smoke":
+        _run_amortized_synthetic(config, args)
+        return
+    if args.command == "amortized-train-fs2":
+        _run_amortized_train(config, args)
+        return
+    if args.command == "amortized-infer-fs2":
+        _run_amortized_infer(config, args)
+        return
+
     from .workflows import (
         fit_batch,
         fit_one,
@@ -212,6 +288,84 @@ def main(argv: list[str] | None = None) -> None:
 
 def _limit_arg(args) -> int | None:
     return None if getattr(args, "all", False) else args.limit
+
+
+def _run_amortized_synthetic(config: dict, args) -> None:
+    try:
+        from .amortized.config import amortized_config
+        from .amortized.synthetic import run_synthetic_smoke
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = amortized_config(config)
+    training = cfg["training"]
+    run_synthetic_smoke(
+        config,
+        Path(args.out),
+        n_objects=int(args.n_objects),
+        epochs=int(args.epochs or training.get("epochs", 2)),
+        batch_size=int(args.batch_size or training.get("batch_size", 32)),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        mock_decoder=bool(args.mock_decoder),
+    )
+
+
+def _run_amortized_train(config: dict, args) -> None:
+    try:
+        from .amortized.config import amortized_config
+        from .amortized.train import train_amortized_fs2
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = amortized_config(config)
+    training = cfg["training"]
+    train_amortized_fs2(
+        config,
+        Path(args.out),
+        limit=args.limit,
+        batch_size=int(args.batch_size or training.get("batch_size", 32)),
+        epochs=int(args.epochs or training.get("epochs", 10)),
+        n_samples=int(args.n_samples or training.get("n_samples", 1)),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        verbose=not bool(getattr(args, "quiet", False)),
+        progress=not bool(getattr(args, "no_progress", False)),
+    )
+
+
+def _run_amortized_infer(config: dict, args) -> None:
+    try:
+        from .amortized.config import amortized_config
+        from .amortized.infer import infer_amortized_fs2
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = amortized_config(config)
+    training = cfg["training"]
+    inference = cfg["inference"]
+    infer_amortized_fs2(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        limit=args.limit,
+        batch_size=int(args.batch_size or training.get("batch_size", 32)),
+        posterior_samples=int(
+            args.posterior_samples
+            if args.posterior_samples is not None
+            else inference.get("posterior_samples", 32)
+        ),
+        prior_samples=int(
+            args.prior_samples
+            if args.prior_samples is not None
+            else inference.get("prior_samples", 8192)
+        ),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
+        decoder_sample_chunk_size=int(
+            args.decoder_sample_chunk_size
+            if args.decoder_sample_chunk_size is not None
+            else inference.get("decoder_sample_chunk_size", 1)
+        ),
+    )
 
 
 def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
@@ -322,7 +476,8 @@ def add_fit_overrides(
     parser.add_argument(
         "--learning-rate",
         type=float,
-        help=advanced_help or "Override fit.learning_rate for MAP and population steps.",
+        help=advanced_help
+        or "Override fit.learning_rate for MAP and population steps.",
     )
     parser.add_argument(
         "--fit-likelihood",

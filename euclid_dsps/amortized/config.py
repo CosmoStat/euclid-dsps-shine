@@ -1,0 +1,86 @@
+"""Configuration and optional-dependency helpers for amortized inference."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return the amortized config block with lightweight defaults."""
+    raw = dict(config.get("amortized", {}) or {})
+    raw.setdefault("enabled", True)
+    raw.setdefault("data", {})
+    raw.setdefault("latent", {})
+    raw.setdefault("features", {})
+    raw.setdefault("encoder", {})
+    raw.setdefault("prior", {})
+    raw.setdefault("likelihood", {})
+    raw.setdefault("training", {})
+    raw.setdefault("inference", {})
+    raw.setdefault("output", {})
+    raw["data"].setdefault("expected_n_bands", 10)
+    raw["latent"].setdefault("schema", "popcosmos_16")
+    raw["latent"].setdefault("include_redshift", True)
+    raw["latent"].setdefault("use_fit_bounds", True)
+    raw["features"].setdefault("type", "flux_and_errors")
+    raw["features"].setdefault("n_flux_bands", 10)
+    raw["features"].setdefault("n_error_bands", 10)
+    raw["features"].setdefault("normalize_per_band", True)
+    raw["features"].setdefault("flux_transform", "asinh")
+    raw["features"].setdefault("error_transform", "log")
+    raw["encoder"].setdefault("type", "gaussian_mlp")
+    raw["encoder"].setdefault("hidden_sizes", [256, 256, 256])
+    raw["encoder"].setdefault("activation", "gelu")
+    raw["encoder"].setdefault("log_std_min", -6.0)
+    raw["encoder"].setdefault("log_std_max", 2.0)
+    raw["encoder"].setdefault("initial_log_std", -1.0)
+    raw["prior"].setdefault("type", "realnvp")
+    raw["prior"].setdefault("n_layers", 8)
+    raw["prior"].setdefault("hidden_size", 128)
+    raw["prior"].setdefault("scale_clamp", 0.05)
+    raw["prior"].setdefault("train_jointly", True)
+    raw["likelihood"].setdefault("type", "student_t")
+    raw["likelihood"].setdefault("student_t_dof", 2.0)
+    raw["likelihood"].setdefault("error_floor_frac", 0.02)
+    raw["likelihood"].setdefault("error_jitter", 0.0)
+    raw["training"].setdefault("epochs", 10)
+    raw["training"].setdefault("batch_size", 32)
+    raw["training"].setdefault("n_samples", 1)
+    raw["training"].setdefault("learning_rate", 1.0e-4)
+    raw["training"].setdefault("weight_decay", 1.0e-5)
+    raw["training"].setdefault("gradient_clip_norm", 1.0)
+    raw["training"].setdefault("kl_annealing_epochs", 5)
+    raw["training"].setdefault("seed", 42)
+    raw["inference"].setdefault("posterior_samples", 32)
+    raw["inference"].setdefault("prior_samples", 8192)
+    raw["inference"].setdefault("decoder_sample_chunk_size", 1)
+    raw["output"].setdefault("checkpoint_every", 1)
+    raw["output"].setdefault("diagnostics_every", 1)
+    raw["output"].setdefault("save_training_curves", True)
+    raw["output"].setdefault("save_posterior_preview", True)
+    return raw
+
+
+def require_amortized_dependencies():
+    """Import optional amortized dependencies with an actionable error."""
+    try:
+        import equinox as eqx
+        import optax
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "Amortized inference requires optional dependencies. Install with "
+            "`python -m pip install -e .[amortized]` or `uv sync --extra amortized`."
+        ) from exc
+    return eqx, optax
+
+
+def require_equinox():
+    """Import Equinox with an actionable error."""
+    try:
+        import equinox as eqx
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "Amortized neural modules require Equinox. Install the "
+            "`amortized` optional dependency extra."
+        ) from exc
+    return eqx

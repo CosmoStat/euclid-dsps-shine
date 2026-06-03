@@ -25,6 +25,12 @@ Current coverage:
      - Photometry unit conversions, truth transforms, row-index parsing, observation building.
    * - ``tests/test_mcmc.py``
      - Row-centered priors and scaled beta prior support.
+   * - ``tests/test_parameter_vectors.py``
+     - Public JAX theta-vector helpers and array photometry extraction.
+   * - ``tests/test_amortized_*.py``
+     - FS2 amortized latent transforms, features, likelihood, optional
+       Equinox encoder/RealNVP modules, ELBO, synthetic smoke, and a small
+       true-DSPS decoder end-to-end path with a synthetic ten-filter context.
    * - ``tests/test_filters.py``
      - Wavelength unit conversion, effective wavelength, ASCII filter sorting/clipping.
    * - ``tests/test_imports.py``
@@ -78,6 +84,45 @@ Manual smoke commands should include:
    python -m euclid_dsps.cli --config configs/popcosmos_binned_noagn.yaml fit --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_popcosmos_noagn_batch
    python -m euclid_dsps.cli --config configs/popcosmos_diffstar_compressed.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short --sed-samples 1
    python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml check --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check
+
+Amortized FS2 smoke commands:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_fs2_realnvp.yaml \
+     amortized-synthetic-smoke \
+     --mock-decoder \
+     --n-objects 64 \
+     --epochs 2 \
+     --out outputs/runs/dev_amortized_synthetic
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_fs2_realnvp.yaml \
+     amortized-train-fs2 \
+     --limit 32 \
+     --batch-size 8 \
+     --epochs 2 \
+     --n-samples 1 \
+     --out outputs/runs/dev_amortized_fs2
+
+The amortized training outputs should include progressive checkpoints and
+diagnostics:
+
+.. code-block:: text
+
+   training_log.csv
+   training_progress.json
+   training_summary.json
+   checkpoints/best.eqx
+   checkpoints/last.eqx
+   checkpoints/epoch_0001.eqx
+   encoder_grad_norm.png
+   prior_grad_norm.png
+
+``training_log.csv`` should contain nonzero ``encoder_grad_norm`` and
+``prior_grad_norm`` once the KL term is active. That is the lightweight runtime
+check that the RealNVP prior is trained jointly with the encoder.
 
 Benchmark smoke:
 

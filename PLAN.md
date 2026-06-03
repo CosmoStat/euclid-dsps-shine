@@ -1,5 +1,233 @@
 # Plan
 
+## 2026-06-02 Andrew Hearin Discussion Preparation
+
+- Objective: prepare a didactic discussion package for a meeting with Andrew
+  Hearin about the current DSPS/PopCosmos-like Euclid+LSST forward-modeling
+  work.
+- Deliverables completed under
+  `outputs/report/andrew_hearin_discussion_2026-06-02/`: one explanatory
+  Markdown document with Mermaid architecture diagrams, a RevealJS slide deck,
+  a concise question list, and a metrics summary grounded in existing
+  run/benchmark artifacts.
+- Slide refresh completed: replaced the first pipeline diagram and SED
+  construction diagram with static HTML diagrams, added detailed slides on
+  model ingredients, `model.py`'s DSPS adapter role, active free parameters, and
+  all current free-parameter bounds.
+- Follow-up slide refresh completed after review: slide 4 now uses a vertical
+  detail stack for physical ingredients and code changes relative to base DSPS;
+  the dust slide now explains the old-star versus young-star attenuation model
+  with equations and code mapping; the `model.py` slide now has vertical
+  details for context loading, forward pass, mass normalization, and diagnostic
+  versus likelihood paths.
+- Added generated component figures from the real JAX model components and
+  slides explaining emission-line construction, AGN component construction,
+  AGN/IGM ordering, flux-space Student-t errors, and surviving-mass
+  normalization.
+- Second visual refresh completed: replaced the main component plot with
+  `sed_component_build_row471_detail.png` because row 471 has visible AGN/IGM
+  effects; added `emission_lines_before_after_row471.png`,
+  `agn_igm_detail_row471.png`, and `igm_before_after_transmission.png` to show
+  emission-line before/after, AGN ratios, and IGM transmission directly.
+- Updated the AGN optical-depth bound explanation: `ln_tauagn` bounds map to
+  tau 5.0 to 148.0, matching the PopCosmos/Prospector hard-limit convention and
+  the FSPS tabulated `agn_tau` range before extrapolation.
+- Rewrote the final Andrew questions to focus on decisions: minimal per-galaxy
+  model, gas/line corrections, AGN/dust/IGM conventions, likelihood/model
+  mismatch, and population-prior strategy.
+- Amortized learned-prior slide update completed: added a vertical RevealJS
+  stack for the FS2-only Gaussian encoder + RealNVP prior + fixed DSPS decoder
+  prototype, with Mermaid architecture/output diagrams, ELBO details, caveats,
+  and dedicated Andrew questions.
+- Source policy: use existing code, configs, `PLAN.md`, documentation, and
+  outputs as evidence; do not rerun expensive MAP/posterior jobs for this
+  communication package unless explicitly needed.
+- Main talk caveats to keep explicit: the current model is FSPS/Prospector-like
+  rather than an official PopCosmos reproduction; PopCosmos learned emission-line
+  corrections are not included; existing MAP SED diagnostics did not load the
+  COSMOS proxy columns even though the FS2 parquet contains them; full-AGN MAP
+  is under-constrained from 10 bands and shows redshift, gas, and AGN
+  degeneracies.
+
+## 2026-06-02 PopCosmos Learned Prior Preparation
+
+- Branch: `feature/popcosmos-prior-learning`, created from the current
+  `feature/mclmc-posterior` state.
+- Feature objective: prepare for learning a POP-COSMOS-style prior from the
+  existing PopCosmos/FSPS compressed workflow outputs and catalog-derived
+  parameter distributions.
+- Initial cleanup policy: keep scientific inputs in `Data/` and run products
+  in `outputs/` untouched. Only remove local Python/test/tool caches during
+  branch preparation.
+- Preparation completed: removed local `__pycache__`, `.pytest_cache`, and
+  `.ruff_cache` directories from source/test areas; deliberately did not run
+  broad `git clean` because it would remove local `Data/` assets and
+  `outputs/` products.
+- Detailed implementation planning moved into local running plan
+  `posterior_plan.md` after the updated prompt. This file is intentionally not
+  for commit; it tracks PR 0 through PR 5, API contracts, tests, docs, and open
+  implementation decisions for the FS2-only amortized posterior feature.
+- Implementation breakdown:
+  - PR 0: public `parameter_vectors.py`, array photometry bridge, and
+    architecture docs.
+  - PR 1: `amortized/latent.py`, `features.py`, and `likelihood.py`.
+  - PR 2: Equinox Gaussian encoder, RealNVP prior, and optional dependency
+    extra.
+  - PR 3: DSPS decoder wrapper, Monte Carlo ELBO, and asset-free synthetic
+    smoke.
+  - PR 4: FS2 dataloader, joint training loop, config, and
+    `amortized-train-fs2` CLI.
+  - PR 5: inference, catalog export, diagnostics, and
+    `amortized-infer-fs2` CLI.
+- Implementation completed in the working tree:
+  - Added public theta-vector helpers and array photometry extraction.
+  - Added `euclid_dsps.amortized` with latent transforms, features,
+    Student-t likelihood, Equinox encoder, RealNVP prior, decoder, ELBO,
+    synthetic smoke, FS2 training, inference, catalog export, and diagnostics.
+  - Added `configs/amortized_fs2_realnvp.yaml`, optional dependency extra
+    `amortized`, CLI commands, tests, README/Sphinx docs, and lockfile update.
+  - Runtime follow-up: a real DSPS inference run with
+    `posterior_samples=32` and `batch_size=8` exhausted GPU memory because all
+    posterior samples were decoded in one DSPS vmap. Inference now chunks the
+    posterior predictive decode over the sample axis, defaults
+    `decoder_sample_chunk_size` to 1, exposes
+    `--decoder-sample-chunk-size`, and records the chunk size in
+    `inference_summary.json`.
+  - Follow-up from the first chunked inference run: posterior predictive files
+    were finite, but bright low-redshift FS2 objects produced extreme linear
+    encoder features and poor flux predictions. New feature stats now default
+    to `flux_transform: asinh` while legacy stats without a transform remain
+    linear for checkpoint compatibility. Inference now writes normalized
+    posterior predictive residual tables, top chi-square objects, feature-scale
+    diagnostics, redshift proxy comparisons when available, and diagnostic
+    plots including a compact posterior corner plot.
+  - Next diagnostic addition requested: treat the RealNVP as a learned prior
+    product, not only a KL term. Inference should sample `p_beta(x)`, export
+    learned-prior samples in theta space, compare learned prior versus aggregate
+    amortized posterior with true corner contours, write redshift distribution
+    comparisons, and add a redshift PIT diagnostic when FS2 redshift proxy
+    columns are present.
+  - Implemented learned-prior inference diagnostics: `learned_prior_samples`
+    now stores both latent `x_00` ... `x_15` and physical `theta` samples with
+    exact `logprior`; diagnostics write learned-prior quantiles, a log-density
+    histogram, contour-style learned-prior and posterior-vs-prior corners,
+    redshift distribution comparison, and redshift PIT tables/plots.
+  - Added explicit FS2 catalog proxy diagnostics for the amortized outputs:
+    `catalog_proxy_comparison.parquet/csv`, stellar-mass posterior/prior/proxy
+    histograms, stellar-mass proxy residual histogram, catalog SFR proxy
+    distribution, and proxy mass-SFR plane. These are deliberately labeled as
+    catalog proxies; SFR is not overlaid against posterior samples until a
+    model-derived `log10_sfr_at_obs` export is added.
+  - Validation passed with `uv sync`, `uv sync --extra dev`,
+    `uv sync --extra dev --extra amortized`,
+    `uv run python -m compileall euclid_dsps scripts`, Black on the feature
+    Python files, targeted Ruff on the feature diff,
+    `uv run pytest tests -q` with amortized extras installed
+    (`226 passed, 5 skipped`), Sphinx `-W --keep-going`,
+    `uv run python -m euclid_dsps.cli --help`, and the mock-decoder
+    `amortized-synthetic-smoke` CLI.
+  - Equinox/Optax remain optional dependencies; CLI commands report the missing
+    dependency clearly if the `amortized` extra is not installed.
+- 2026-06-02 architecture and `conda shine` recheck:
+  - Static audit confirms the amortized implementation stays FS2-only, does not
+    import private `fit.py` helpers, does not call `predict_batch_mags`, does
+    not construct `GalaxyObservation` in the training path, and keeps Pandas
+    use to IO/reporting surfaces outside the hot JAX decoder/ELBO path.
+  - `conda run -n shine python -c "import jax, equinox, optax"` passed with
+    JAX `0.10.1`, Equinox `0.13.7`, and Optax `0.2.8`. In this shell, JAX
+    falls back to CPU because the installed CUDA plugin is incompatible with
+    the installed `jaxlib`; real FS2 DSPS training should be run after fixing
+    the `shine` CUDA/JAX stack if GPU is required.
+  - `conda run -n shine python -m euclid_dsps.cli --help` passed and shows the
+    three amortized commands without breaking the existing `check`, `fit`, and
+    `posterior` command registration.
+  - `conda run -n shine python -m compileall euclid_dsps scripts` passed.
+  - `conda run -n shine python -m pytest tests/test_amortized_encoder.py
+    tests/test_amortized_flows.py tests/test_amortized_elbo.py
+    tests/test_amortized_synthetic.py -q` passed: 6 passed.
+  - `conda run -n shine python -m pytest tests/test_amortized_synthetic.py -q`
+    passed after tightening the synthetic summary criterion.
+  - `conda run -n shine python -m euclid_dsps.cli --config
+    configs/amortized_fs2_realnvp.yaml amortized-synthetic-smoke
+    --mock-decoder --n-objects 64 --epochs 2 --batch-size 8 --out
+    outputs/runs/dev_amortized_synthetic_prompt_check_shine` passed and wrote
+    `training_log.csv`, `training_summary.json`, `feature_stats.json`, best/last
+    checkpoints, and diagnostics. The summary now reports
+    `loss_decreased: true` using the best observed loss while retaining
+    `last_loss_decreased` for the final-mini-batch comparison.
+- 2026-06-02 DSPS e2e and progressive training outputs:
+  - Added `tests/test_amortized_dsps_e2e.py`, which builds a tiny synthetic
+    ten-filter PopCosmos-like `DspsContext`, runs the non-mock
+    `model_flux_from_x` decoder through `model_mags_jax_dynamic`, evaluates the
+    ELBO, and verifies nonzero encoder and RealNVP prior gradients from the
+    same `eqx.filter_value_and_grad` call.
+  - Training and synthetic smoke now write `training_progress.json`, update
+    `checkpoints/last.eqx` during training, write epoch checkpoints such as
+    `checkpoints/epoch_0001.eqx`, and regenerate diagnostics every
+    `amortized.output.diagnostics_every` epochs.
+  - `training_log.csv` now includes `encoder_grad_norm`, `prior_grad_norm`, and
+    `joint_grad_norm`; the diagnostics writer plots those columns to make joint
+    encoder/RealNVP optimization visible.
+  - Checkpoint JSON sidecars now include an architecture summary covering the
+    Gaussian MLP encoder, RealNVP prior, fixed DSPS decoder, and Monte Carlo
+    `logq - logp` KL objective.
+  - Validation passed:
+    `uv run pytest tests/test_parameter_vectors.py tests/test_amortized_latent.py
+    tests/test_amortized_features.py tests/test_amortized_likelihood.py
+    tests/test_amortized_encoder.py tests/test_amortized_flows.py
+    tests/test_amortized_elbo.py tests/test_amortized_synthetic.py
+    tests/test_amortized_dsps_e2e.py -q` (`20 passed`),
+    `uv run python -m sphinx -W --keep-going -b html docs/source
+    /tmp/dsps_docs_amortized_arch_check`, and
+    `conda run -n shine python -m pytest tests/test_amortized_dsps_e2e.py -q`
+    (`1 passed`, with the known JAX CUDA plugin warning).
+  - `conda run -n shine python -m euclid_dsps.cli --config
+    configs/amortized_fs2_realnvp.yaml amortized-synthetic-smoke
+    --mock-decoder --n-objects 32 --epochs 2 --batch-size 8 --out
+    outputs/runs/dev_amortized_synthetic_progress_check_shine` passed and wrote
+    epoch checkpoints plus `encoder_grad_norm.png`, `prior_grad_norm.png`, and
+    `joint_grad_norm.png`.
+  - Full test suite passed after the follow-up:
+    `uv run pytest tests -q` (`227 passed, 5 skipped, 1 warning`).
+    `git diff --check` passed. Full-repo Ruff currently reports an unrelated
+    pre-existing `B007` unused loop variable in `tests/test_fsps_grid_scripts.py`;
+    targeted Ruff on the amortized files passed.
+  - Added default verbose console logging and per-epoch progress bars for
+    `amortized-train-fs2`. The command now reports setup stages, JAX
+    backend/devices, DSPS loading, architecture summary, epoch starts, and
+    epoch summaries. The progress bar displays live loss, NLL, MC KL, encoder
+    gradient norm, and RealNVP prior gradient norm. CLI flags `--quiet` and
+    `--no-progress` disable these outputs when needed.
+  - Validation for the verbose/progress follow-up passed:
+    `uv run ruff check euclid_dsps/amortized/train.py euclid_dsps/cli.py`,
+    `uv run python -m compileall euclid_dsps scripts`,
+    `uv run python -m sphinx -W --keep-going -b html docs/source
+    /tmp/dsps_docs_verbose_check`, `git diff --check`, and
+    `conda run -n shine python -m euclid_dsps.cli --config
+    configs/amortized_fs2_realnvp.yaml amortized-train-fs2 --help`.
+  - Fixed the first real FS2 amortized-training NaN failure:
+    flux-space likelihood now evaluates in stop-gradient normalized flux units
+    to avoid float32 underflow of cgs variances near `1e-30`; encoder features
+    now use scale-relative floors instead of an absolute `1e-8`; the FS2
+    encoder initializes near a stable PopCosmos theta point (`z_obs` around
+    0.8 rather than the midpoint of the broad redshift bound); and the training
+    loop skips non-finite updates instead of applying corrupt gradients.
+  - Added `loss_finite`, `grads_finite`, and `update_applied` columns to
+    `training_log.csv`, plus `updates_applied`/`updates_skipped` in progress
+    and summary JSON.
+  - NaN-fix validation passed:
+    first-batch inspection reports finite loglike and finite encoder/RealNVP
+    gradients; `UV_CACHE_DIR=/tmp/uv-cache uv run pytest
+    tests/test_amortized_features.py tests/test_amortized_likelihood.py
+    tests/test_amortized_dsps_e2e.py tests/test_amortized_synthetic.py -q`
+    passed (`8 passed`); `UV_CACHE_DIR=/tmp/uv-cache uv run python -m compileall
+    euclid_dsps scripts` passed; `git diff --check` passed; and a direct real
+    FS2 mini-run with `limit=16`, `batch_size=8`, `epochs=2` applied 4/4
+    finite updates with no NaNs.
+- Remaining before production use: run the real `amortized-train-fs2` smoke in
+  `shine` once the FS2/DSPS assets and desired CUDA-capable JAX stack are
+  active; this was not run during the architecture audit.
+
 ## Current State
 
 2026-06-01 MCLMC implementation phase:

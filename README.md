@@ -47,6 +47,84 @@ assets and evaluates the forward model in JAX:
 
 The details and glossary are documented in `docs/source/forward_model.rst`.
 
+## FS2 Amortized Posterior Prototype
+
+The optional amortized workflow trains a JAX encoder and RealNVP prior jointly
+on Euclid FS2 photometry while keeping DSPS fixed as the physical decoder:
+
+```text
+10 FS2 fluxes + 10 FS2 errors -> q_psi(x | flux, err) -> theta = h(x) -> DSPS
+```
+
+`x` is the unconstrained 16D latent and `theta` is the bounded PopCosmos-like
+16D parameter vector, including redshift. The encoder input dimension is 20 by
+default because the per-band errors are part of the posterior information.
+Flux features use robust per-band `asinh(flux / flux_scale)` normalization,
+while errors use a log transform. The KL term is estimated by Monte Carlo as
+`logq - logp`; the standard Gaussian/Gaussian closed-form VAE KL is not valid
+because the prior is a RealNVP.
+
+Asset-free smoke:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_fs2_realnvp.yaml \
+  amortized-synthetic-smoke \
+  --mock-decoder \
+  --n-objects 64 \
+  --epochs 2 \
+  --out outputs/runs/dev_amortized_synthetic
+```
+
+Small FS2 training run, if the compressed assets exist:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_fs2_realnvp.yaml \
+  amortized-train-fs2 \
+  --limit 32 \
+  --batch-size 8 \
+  --epochs 2 \
+  --n-samples 1 \
+  --out outputs/runs/dev_amortized_fs2
+```
+
+This command is verbose by default and shows a per-epoch progress bar. Add
+`--quiet` to reduce logs or `--no-progress` if your terminal does not render
+progress bars cleanly.
+
+Small FS2 inference run from the best checkpoint:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_fs2_realnvp.yaml \
+  amortized-infer-fs2 \
+  --checkpoint outputs/runs/dev_amortized_fs2/checkpoints/best.eqx \
+  --limit 32 \
+  --batch-size 8 \
+  --posterior-samples 32 \
+  --decoder-sample-chunk-size 1 \
+  --out outputs/runs/dev_amortized_fs2_infer
+```
+
+`--decoder-sample-chunk-size 1` keeps the fixed DSPS posterior predictive
+decode at the same peak-memory scale as training. Increase it only after a
+small GPU memory check. Inference also writes normalized posterior predictive
+diagnostics, including residuals by band, top chi-square objects, feature-scale
+histograms, redshift proxy comparison when catalog columns are available, a
+redshift PIT diagnostic, contour-style posterior corners, and learned RealNVP
+prior diagnostics. The prior diagnostics include `learned_prior_samples.parquet`,
+`learned_prior_summary.json`, `learned_prior_logprob_hist.png`,
+`learned_prior_corner.png`, and `posterior_vs_learned_prior_corner.png`.
+When FS2 catalog proxy columns are available, inference also writes
+`catalog_proxy_comparison.parquet` plus proxy plots for stellar mass and SFR.
+
+See `docs/source/amortized_inference.rst` for the ELBO, RealNVP KL rationale,
+architecture, progressive checkpoints, training diagnostics, and scientific
+limitations. During training, `training_log.csv` includes
+`encoder_grad_norm` and `prior_grad_norm`, which verifies that the MLP encoder
+and RealNVP prior are optimized jointly in the same ELBO step.
+
 ## Full AGN vs No-AGN
 
 `configs/popcosmos_binned_compressed.yaml` is the default production full
@@ -73,6 +151,12 @@ For Diffstar:
 
 ```bash
 python -m pip install -e '.[diffstar]'
+```
+
+For the optional FS2 amortized posterior prototype:
+
+```bash
+python -m pip install -e '.[amortized]'
 ```
 
 For documentation/tests in the `uv` environment:

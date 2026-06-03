@@ -24,6 +24,7 @@ The project keeps the scientific boundary narrow:
    data_download
    forward_model
    ssp_compression
+   amortized_inference
    catalog_columns
    cosmos_sed
    run_setup

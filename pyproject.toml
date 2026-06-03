@@ -33,6 +33,10 @@ diffstar = [
 samplers = [
     "blackjax",
 ]
+amortized = [
+    "equinox",
+    "optax",
+]
 dev = [
     "black>=24.0",
     "pytest>=8.0",
