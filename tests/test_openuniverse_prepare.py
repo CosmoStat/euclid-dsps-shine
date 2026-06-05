@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 import yaml
 
 from euclid_dsps.cli import main as cli_main
@@ -76,6 +77,17 @@ def test_openuniverse_prepare_cli_on_mock_hpix(tmp_path) -> None:
     assert len(frame) == 2
     assert manifest["hpix_ids"] == [9813]
     assert manifest["flux_unit"] == "photon_per_sec_cm2"
+
+
+def test_prepare_missing_raw_files_reports_expected_paths(tmp_path) -> None:
+    out = tmp_path / "processed" / "subset.parquet"
+
+    with pytest.raises(FileNotFoundError, match="does not download OpenUniverse data"):
+        prepare_openuniverse_lsst_roman_subset(
+            hpix_ids=[9812],
+            input_root=tmp_path / "raw",
+            output_path=out,
+        )
 
 
 def _write_mock_hpix(root, hpix: int, *, n_rows: int) -> None:

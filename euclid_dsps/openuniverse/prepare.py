@@ -56,6 +56,7 @@ def prepare_openuniverse_lsst_roman_subset(
     join_reports: list[dict[str, int | str]] = []
     remaining = None if limit is None else max(int(limit), 0)
     for hpix, group in zip(hpix_tuple, paths, strict=True):
+        _validate_required_input_paths(group, hpix=hpix)
         frame = read_openuniverse_hpix(group["main"], group["flux"])
         report = dict(frame.attrs.get(JOIN_ATTR_KEY, {}))
         report["hpix"] = int(hpix)
@@ -211,6 +212,26 @@ def _apply_noise_model(
 
         return add_depth_like_noise(flux_truth, seed=seed, **noise_model)
     raise ValueError(f"Unsupported OpenUniverse noise model type: {kind}")
+
+
+def _validate_required_input_paths(paths: dict[str, str], *, hpix: int) -> None:
+    missing = []
+    for kind in ("main", "flux"):
+        path = str(paths[kind])
+        if "://" in path:
+            continue
+        if not Path(path).exists():
+            missing.append(f"{kind}: {path}")
+    if missing:
+        detail = "\n".join(f"- {item}" for item in missing)
+        raise FileNotFoundError(
+            "OpenUniverse raw files are missing for hpix "
+            f"{int(hpix)}:\n{detail}\n"
+            "Expected files are galaxy_<hpix>.parquet and "
+            "galaxy_flux_<hpix>.parquet under --input-root, unless "
+            "--input-root is a format string using {hpix}, {kind}, or "
+            "{filename}. This command does not download OpenUniverse data."
+        )
 
 
 def _normalized_noise_model(noise_model: dict | None) -> dict:
