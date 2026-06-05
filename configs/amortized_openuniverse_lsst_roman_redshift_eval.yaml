@@ -1,0 +1,20 @@
+extends: amortized_openuniverse_lsst_roman_realnvp.yaml
+
+openuniverse_evaluation:
+    mode: redshift_only
+    redshift_parameter: z_obs
+    truth_column: redshift
+    metrics:
+        - median_delta_z
+        - sigma_mad
+        - outlier_fraction_015
+        - rmse_delta_z
+        - coverage_68
+        - coverage_95
+        - pit_ks_stat
+
+amortized:
+    inference:
+        posterior_samples: 128
+        prior_samples: 8192
+        decoder_sample_chunk_size: 1

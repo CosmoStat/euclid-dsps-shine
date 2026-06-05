@@ -69,7 +69,13 @@ DEFAULT_REDSHIFT_CONFIG = {
     "prior_z": {"mode": "none"},
 }
 
-SUPPORTED_PHOTOMETRY_UNITS = {"fnu_cgs", "abmag", "microjy", "ujy"}
+SUPPORTED_PHOTOMETRY_UNITS = {
+    "fnu_cgs",
+    "abmag",
+    "microjy",
+    "ujy",
+    "photon_per_sec_cm2",
+}
 SUPPORTED_FIT_METHODS = {"jax_adam", "jax_adam_vmap", "jax_bfgs"}
 SUPPORTED_LIKELIHOOD_SPACES = {"flux", "mag"}
 SUPPORTED_PHOTOMETRIC_LIKELIHOODS = {"gaussian", "student_t"}
@@ -377,6 +383,134 @@ BAND_PRESETS = {
                 "path": "filters/Euclid_NISP.H.dat",
                 "wave_unit": "angstrom",
             },
+        },
+    ],
+    "openuniverse_lsst_roman_14": [
+        {
+            "name": "lsst_u",
+            "column": "flux_lsst_u",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_lsst_u",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 3200.0, "wave_max": 4000.0},
+        },
+        {
+            "name": "lsst_g",
+            "column": "flux_lsst_g",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_lsst_g",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 4000.0, "wave_max": 5500.0},
+        },
+        {
+            "name": "lsst_r",
+            "column": "flux_lsst_r",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_lsst_r",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 5500.0, "wave_max": 7000.0},
+        },
+        {
+            "name": "lsst_i",
+            "column": "flux_lsst_i",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_lsst_i",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 6900.0, "wave_max": 8200.0},
+        },
+        {
+            "name": "lsst_z",
+            "column": "flux_lsst_z",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_lsst_z",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 8200.0, "wave_max": 9300.0},
+        },
+        {
+            "name": "lsst_y",
+            "column": "flux_lsst_y",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_lsst_y",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 9500.0, "wave_max": 10500.0},
+        },
+        {
+            "name": "roman_W146",
+            "column": "flux_roman_W146",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_W146",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 9300.0, "wave_max": 20000.0},
+        },
+        {
+            "name": "roman_R062",
+            "column": "flux_roman_R062",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_R062",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 4800.0, "wave_max": 7600.0},
+        },
+        {
+            "name": "roman_Z087",
+            "column": "flux_roman_Z087",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_Z087",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 7600.0, "wave_max": 9770.0},
+        },
+        {
+            "name": "roman_Y106",
+            "column": "flux_roman_Y106",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_Y106",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 9270.0, "wave_max": 11920.0},
+        },
+        {
+            "name": "roman_J129",
+            "column": "flux_roman_J129",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_J129",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 11310.0, "wave_max": 14540.0},
+        },
+        {
+            "name": "roman_H158",
+            "column": "flux_roman_H158",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_H158",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 13800.0, "wave_max": 17740.0},
+        },
+        {
+            "name": "roman_F184",
+            "column": "flux_roman_F184",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_F184",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 16800.0, "wave_max": 20000.0},
+        },
+        {
+            "name": "roman_K213",
+            "column": "flux_roman_K213",
+            "units": "photon_per_sec_cm2",
+            "error_column": "fluxerr_roman_K213",
+            "error_units": "photon_per_sec_cm2",
+            "sigma_mag": 0.05,
+            "filter": {"kind": "tophat", "wave_min": 19500.0, "wave_max": 23000.0},
         },
     ],
 }
@@ -695,7 +829,11 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["selection"].setdefault("require_positive_flux", True)
     config["selection"].setdefault(
         "nondetection_policy",
-        "drop" if config["selection"].get("require_positive_flux", True) else "gaussian_flux",
+        (
+            "drop"
+            if config["selection"].get("require_positive_flux", True)
+            else "gaussian_flux"
+        ),
     )
     config["selection"].setdefault("sort_by_flux", None)
 
@@ -759,11 +897,7 @@ def _load_config_tree(path: Path, seen: set[Path]) -> dict[str, Any]:
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
             merged[key] = value
@@ -829,7 +963,9 @@ def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
     expanded_columns: list[str] = []
     for item in [*groups, *extra_columns]:
         if not isinstance(item, str) or not item:
-            raise ConfigValidationError("column groups and extra columns must be strings")
+            raise ConfigValidationError(
+                "column groups and extra columns must be strings"
+            )
         if item in COLUMN_GROUPS:
             expanded_columns.extend(COLUMN_GROUPS[item])
         else:
@@ -900,7 +1036,10 @@ def _apply_redshift_prior(config: dict[str, Any]) -> None:
     }
     config["fit"].setdefault("priors", {})
     config["sample"].setdefault("priors", {})
-    config["fit"]["priors"]["z_obs"] = {**config["fit"]["priors"].get("z_obs", {}), **z_prior}
+    config["fit"]["priors"]["z_obs"] = {
+        **config["fit"]["priors"].get("z_obs", {}),
+        **z_prior,
+    }
     config["sample"]["priors"]["z_obs"] = {
         **config["sample"]["priors"].get("z_obs", {}),
         **z_prior,
@@ -938,7 +1077,9 @@ def _named_preset(presets: dict[str, Any], name: str, label: str) -> Any:
     if isinstance(value, dict):
         return _deep_merge({}, value)
     if isinstance(value, list):
-        return [_deep_merge({}, item) if isinstance(item, dict) else item for item in value]
+        return [
+            _deep_merge({}, item) if isinstance(item, dict) else item for item in value
+        ]
     return value
 
 
@@ -1146,7 +1287,9 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
         errors.append(f"model.igm_model must be one of {sorted(SUPPORTED_IGM_MODELS)}")
     sfh_time_grid = str(model.get("sfh_time_grid", "linear"))
     if sfh_time_grid not in {"linear", "prospector_step"}:
-        errors.append("model.sfh_time_grid must be one of ['linear', 'prospector_step']")
+        errors.append(
+            "model.sfh_time_grid must be one of ['linear', 'prospector_step']"
+        )
     nebular_model = str(model.get("nebular_model", "fixed_ssp"))
     if nebular_model not in SUPPORTED_NEBULAR_MODELS:
         errors.append(
@@ -1185,8 +1328,7 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     agn_igm_order = str(model.get("agn_igm_order", "pre_igm"))
     if agn_igm_order not in SUPPORTED_AGN_IGM_ORDERS:
         errors.append(
-            "model.agn_igm_order must be one of "
-            f"{sorted(SUPPORTED_AGN_IGM_ORDERS)}"
+            "model.agn_igm_order must be one of " f"{sorted(SUPPORTED_AGN_IGM_ORDERS)}"
         )
     agn_baked_attenuation = str(model.get("agn_baked_attenuation", "none"))
     if agn_baked_attenuation not in SUPPORTED_AGN_BAKED_ATTENUATION_MODES:
@@ -1356,12 +1498,14 @@ def _validate_popcosmos_free_parameters(
     if agn_model == "none":
         allowed -= agn_names
         for name in sorted(free_names & agn_names):
-            errors.append(
-                f"fit.free_parameters.{name} requires an active AGN model"
-            )
+            errors.append(f"fit.free_parameters.{name} requires an active AGN model")
     unknown = sorted(free_names - allowed)
     for name in unknown:
-        if name not in legacy_forbidden and name not in gas_names and name not in agn_names:
+        if (
+            name not in legacy_forbidden
+            and name not in gas_names
+            and name not in agn_names
+        ):
             errors.append(
                 f"fit.free_parameters.{name} is not used by "
                 "model.sfh_model='popcosmos_bins'"
@@ -1419,12 +1563,14 @@ def _validate_diffstar_free_parameters(
     if agn_model == "none":
         allowed -= agn_names
         for name in sorted(free_names & agn_names):
-            errors.append(
-                f"fit.free_parameters.{name} requires an active AGN model"
-            )
+            errors.append(f"fit.free_parameters.{name} requires an active AGN model")
     unknown = sorted(free_names - allowed)
     for name in unknown:
-        if name not in legacy_forbidden and name not in gas_names and name not in agn_names:
+        if (
+            name not in legacy_forbidden
+            and name not in gas_names
+            and name not in agn_names
+        ):
             errors.append(
                 f"fit.free_parameters.{name} is not used by "
                 "model.sfh_model='diffstar_reduced6'"
@@ -1763,9 +1909,7 @@ def _validate_output(output: dict[str, Any], errors: list[str]) -> None:
         errors.append("output.verbose_benchmark must be a boolean")
 
 
-def _validate_band_calibration(
-    calibration: dict[str, Any], errors: list[str]
-) -> None:
+def _validate_band_calibration(calibration: dict[str, Any], errors: list[str]) -> None:
     if not isinstance(calibration, dict):
         errors.append("band_calibration must be a mapping")
         return

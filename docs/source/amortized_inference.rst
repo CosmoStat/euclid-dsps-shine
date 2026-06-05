@@ -1,27 +1,30 @@
-FS2 Amortized Inference
-=======================
+Amortized Inference
+===================
 
-This feature adds an amortized posterior prototype for the Euclid FS2 catalog
-only. It does not add COSMOS2020, external downloaders, or a multi-survey data
-layer. The existing MAP and posterior workflows remain the baseline tools for
-per-object checks.
+This feature started as an amortized posterior prototype for the Euclid FS2
+catalog. The project is now pivoting to OpenUniverse/Diffsky as the main
+validation dataset while FS2 remains available for comparison and domain-shift
+diagnostics. The existing MAP and posterior workflows remain the baseline tools
+for per-object checks.
 
 Model Contract
 --------------
 
-The amortized model consumes the configured ten FS2 bands:
+The amortized feature builder consumes the configured band set. The FS2 command
+uses ten bands:
 
 .. code-block:: text
 
    LSST u,g,r,i,z,y + Euclid VIS,Y,J,H
 
-The encoder input is always:
+The encoder input is:
 
 .. code-block:: text
 
-   [flux_1, ..., flux_10, err_1, ..., err_10]
+   [flux_1, ..., flux_B, err_1, ..., err_B]
 
-after per-band normalization. The default feature dimension is therefore 20.
+after per-band normalization. FS2 uses ``B=10`` and feature dimension 20.
+OpenUniverse LSST+Roman uses ``B=14`` and feature dimension 28.
 Fluxes are normalized with a robust signed transform,
 ``asinh(flux / flux_scale)``, so bright FS2 objects do not produce MLP inputs of
 hundreds of scale units. Errors are normalized with

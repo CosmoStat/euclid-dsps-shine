@@ -47,12 +47,13 @@ def run_synthetic_smoke(
     cfg = amortized_config(config)
     key = jax.random.PRNGKey(int(seed))
     key, data_key, decoder_key, model_key = jax.random.split(key, 4)
-    data = _make_synthetic_data(data_key, decoder_key, int(n_objects))
+    n_bands = int(cfg["data"].get("expected_n_bands", 10))
+    data = _make_synthetic_data(data_key, decoder_key, int(n_objects), n_bands)
     stats = compute_feature_stats(
         np.asarray(data["flux"]),
         np.asarray(data["flux_err"]),
         np.asarray(data["mask"]),
-        band_names=tuple(f"mock_band_{index}" for index in range(10)),
+        band_names=tuple(f"mock_band_{index}" for index in range(n_bands)),
     )
     write_feature_stats(out / "feature_stats.json", stats)
     model = build_amortized_model(config, model_key)
@@ -218,11 +219,16 @@ def run_synthetic_smoke(
         write_training_diagnostics(out / "training_log.csv", out)
 
 
-def _make_synthetic_data(data_key, decoder_key, n_objects: int) -> dict[str, Any]:
+def _make_synthetic_data(
+    data_key,
+    decoder_key,
+    n_objects: int,
+    n_bands: int = 10,
+) -> dict[str, Any]:
     x_true = jax.random.normal(data_key, (n_objects, 16), dtype=jnp.float32)
     k_w, k_b, k_noise = jax.random.split(decoder_key, 3)
-    weights = 0.08 * jax.random.normal(k_w, (16, 10), dtype=jnp.float32)
-    bias = -25.0 + 0.2 * jax.random.normal(k_b, (10,), dtype=jnp.float32)
+    weights = 0.08 * jax.random.normal(k_w, (16, int(n_bands)), dtype=jnp.float32)
+    bias = -25.0 + 0.2 * jax.random.normal(k_b, (int(n_bands),), dtype=jnp.float32)
     clean_flux = jnp.exp(jnp.clip(x_true @ weights + bias, -30.0, 30.0))
     flux_err = 0.08 * jnp.maximum(clean_flux, jnp.median(clean_flux)) + 1.0e-13
     noisy_flux = clean_flux + flux_err * jax.random.normal(k_noise, clean_flux.shape)

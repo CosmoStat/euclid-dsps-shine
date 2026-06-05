@@ -1,0 +1,71 @@
+extends: openuniverse_lsst_roman_14.yaml
+
+amortized:
+    enabled: true
+
+    data:
+        expected_n_bands: 14
+        selection_mode: random
+        stratify_column: redshift
+        validation_fraction: 0.1
+        epoch_shuffle: true
+        catalog_batch_size: 10000
+
+    latent:
+        schema: popcosmos_16
+        include_redshift: true
+        use_fit_bounds: true
+
+    features:
+        type: flux_and_errors
+        n_flux_bands: 14
+        n_error_bands: 14
+        normalize_per_band: true
+        flux_transform: asinh
+        error_transform: log
+
+    encoder:
+        type: gaussian_mlp
+        input_dim: 28
+        latent_dim: 16
+        hidden_sizes: [256, 256, 256]
+        activation: gelu
+        log_std_min: -6.0
+        log_std_max: 2.0
+        initial_log_std: -1.0
+
+    prior:
+        type: realnvp
+        n_layers: 8
+        hidden_size: 128
+        scale_clamp: 0.05
+        train_jointly: true
+
+    likelihood:
+        type: student_t
+        student_t_dof: 2.0
+        error_floor_frac: 0.02
+        error_jitter: 0.0
+
+    training:
+        epochs: 10
+        batch_size: 64
+        n_samples: 2
+        learning_rate: 1.0e-4
+        weight_decay: 1.0e-5
+        gradient_clip_norm: 1.0
+        kl_annealing_epochs: 20
+        kl_weight_max: 0.5
+        validation_every: 1
+        seed: 42
+
+    inference:
+        posterior_samples: 64
+        prior_samples: 8192
+        decoder_sample_chunk_size: 1
+
+    output:
+        checkpoint_every: 1
+        diagnostics_every: 1
+        save_training_curves: true
+        save_posterior_preview: true

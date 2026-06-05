@@ -65,10 +65,12 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     k_encoder, k_prior = jax.random.split(key)
     encoder_cfg = cfg["encoder"]
     prior_cfg = cfg["prior"]
+    input_dim = int(encoder_cfg.get("input_dim", 20))
+    latent_dim = int(encoder_cfg.get("latent_dim", 16))
     encoder = GaussianEncoder(
         k_encoder,
-        input_dim=20,
-        latent_dim=16,
+        input_dim=input_dim,
+        latent_dim=latent_dim,
         hidden_sizes=tuple(
             int(v) for v in encoder_cfg.get("hidden_sizes", [256, 256, 256])
         ),
@@ -80,7 +82,7 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     encoder = _initialize_encoder_mean_if_possible(config, encoder)
     prior = RealNVPPrior(
         k_prior,
-        latent_dim=16,
+        latent_dim=latent_dim,
         n_layers=int(prior_cfg.get("n_layers", 8)),
         hidden_size=int(prior_cfg.get("hidden_size", 128)),
         scale_clamp=float(prior_cfg.get("scale_clamp", 0.05)),
@@ -225,7 +227,8 @@ def train_amortized_fs2(
     _log(
         verbose,
         "[amortized] feature stats ready: "
-        f"{len(feature_stats.band_names)} bands, feature_dim=20 "
+        f"{len(feature_stats.band_names)} bands, "
+        f"feature_dim={2 * len(feature_stats.band_names)} "
         f"flux_transform={feature_stats.flux_transform}",
     )
 
@@ -277,7 +280,9 @@ def train_amortized_fs2(
     validation_every = int(cfg["training"].get("validation_every", 1))
     epoch_shuffle = bool(cfg["data"].get("epoch_shuffle", True))
     kl_weight_max = float(cfg["training"].get("kl_weight_max", 1.0))
-    expected_batches = _expected_batch_count(len(train_arrays.object_id), int(batch_size))
+    expected_batches = _expected_batch_count(
+        len(train_arrays.object_id), int(batch_size)
+    )
     val_expected_batches = (
         None
         if validation_arrays is None
@@ -366,7 +371,11 @@ def train_amortized_fs2(
                 )
                 epoch_rows.append(record)
                 rows.append(record)
-                if validation_arrays is None and loss_finite and float(loss) < best_loss:
+                if (
+                    validation_arrays is None
+                    and loss_finite
+                    and float(loss) < best_loss
+                ):
                     best_loss = float(loss)
                     save_checkpoint(
                         ckpt_dir / "best.eqx",
@@ -498,7 +507,9 @@ def train_amortized_fs2(
         )
 
     if not (ckpt_dir / "best.eqx").exists():
-        fallback_metric = _finite_mean([row["loss"] for row in rows if row.get("split") == "train"])
+        fallback_metric = _finite_mean(
+            [row["loss"] for row in rows if row.get("split") == "train"]
+        )
         best_loss = fallback_metric
         save_checkpoint(
             ckpt_dir / "best.eqx",
@@ -975,7 +986,9 @@ def _select_stratified_indices(
     if strategy == "proportional":
         finite_indices = all_indices[finite]
         if total <= len(finite_indices):
-            return rng.choice(finite_indices, size=total, replace=False).astype(np.int64)
+            return rng.choice(finite_indices, size=total, replace=False).astype(
+                np.int64
+            )
         selected = list(finite_indices)
         remaining = np.setdiff1d(all_indices, finite_indices, assume_unique=False)
         needed = total - len(selected)
@@ -984,7 +997,9 @@ def _select_stratified_indices(
         rng.shuffle(selected)
         return selected
     if strategy != "balanced":
-        raise ValueError("amortized.data.stratified_strategy must be balanced or proportional")
+        raise ValueError(
+            "amortized.data.stratified_strategy must be balanced or proportional"
+        )
     groups = _indices_by_redshift_bin(redshift, bins)
     nonempty = [group for group in groups if len(group)]
     if not nonempty:
@@ -1024,7 +1039,9 @@ def _split_train_validation(
         return shuffled[n_val:], shuffled[:n_val]
     val: list[int] = []
     train: list[int] = []
-    for group in _indices_by_redshift_bin(redshift[selected], bins, base_indices=selected):
+    for group in _indices_by_redshift_bin(
+        redshift[selected], bins, base_indices=selected
+    ):
         group = np.asarray(group, dtype=np.int64)
         if len(group) == 0:
             continue
@@ -1159,9 +1176,12 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
     return {
         "encoder": {
             "type": cfg["encoder"].get("type", "gaussian_mlp"),
-            "input_dim": 20,
-            "latent_dim": 16,
-            "input_contract": "flux_10_then_err_10",
+            "input_dim": int(cfg["encoder"].get("input_dim", 20)),
+            "latent_dim": int(cfg["encoder"].get("latent_dim", 16)),
+            "input_contract": (
+                f"flux_{int(cfg['features'].get('n_flux_bands', 10))}"
+                f"_then_err_{int(cfg['features'].get('n_error_bands', 10))}"
+            ),
             "flux_transform": cfg["features"].get("flux_transform", "asinh"),
             "error_transform": cfg["features"].get("error_transform", "log"),
             "hidden_sizes": list(cfg["encoder"].get("hidden_sizes", [])),
@@ -1170,7 +1190,7 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
         },
         "prior": {
             "type": cfg["prior"].get("type", "realnvp"),
-            "latent_dim": 16,
+            "latent_dim": int(cfg["encoder"].get("latent_dim", 16)),
             "n_layers": int(cfg["prior"].get("n_layers", 8)),
             "hidden_size": int(cfg["prior"].get("hidden_size", 128)),
             "scale_clamp": float(cfg["prior"].get("scale_clamp", 0.05)),
@@ -1180,7 +1200,7 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "type": "fixed_dsps",
             "trainable": False,
             "input": "theta_popcosmos_16",
-            "output": "flux_10",
+            "output": f"flux_{int(cfg['features'].get('n_flux_bands', 10))}",
         },
         "objective": {
             "loss": "negative_elbo",
@@ -1243,8 +1263,7 @@ def write_training_progress(
             ),
             "updates_skipped": int(
                 sum(
-                    1.0 - row.get("update_applied", 0.0)
-                    for row in _training_rows(rows)
+                    1.0 - row.get("update_applied", 0.0) for row in _training_rows(rows)
                 )
             ),
         },

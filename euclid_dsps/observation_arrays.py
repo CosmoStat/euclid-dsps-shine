@@ -19,6 +19,7 @@ class PhotometryArrays:
     flux_err: np.ndarray
     mask: np.ndarray
     band_names: tuple[str, ...]
+    truth: dict[str, np.ndarray] | None = None
 
 
 def photometry_arrays_from_dataframe(

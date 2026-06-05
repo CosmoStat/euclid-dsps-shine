@@ -24,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar=(
             "{download-assets,check,fit,posterior,"
+            "openuniverse-prepare,"
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2}"
         ),
     )
@@ -111,6 +112,41 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_fit_overrides(posterior)
     add_sample_overrides(posterior)
+
+    ou_prepare = sub.add_parser(
+        "openuniverse-prepare",
+        help="Prepare a small OpenUniverse LSST+Roman 14-band parquet subset.",
+    )
+    ou_prepare.add_argument(
+        "--input-root",
+        help="Directory or URI containing galaxy_<hpix> and galaxy_flux_<hpix> files.",
+    )
+    ou_prepare.add_argument(
+        "--hpix",
+        nargs="+",
+        type=int,
+        help="One or more nside=32 HEALPix ids to process.",
+    )
+    ou_prepare.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum joined rows to write across the selected HEALPix ids.",
+    )
+    ou_prepare.add_argument(
+        "--min-flux-valid-bands",
+        type=int,
+        help="Minimum finite positive truth-flux bands required per object.",
+    )
+    ou_prepare.add_argument(
+        "--noise-snr",
+        type=float,
+        help="Override fractional SNR for the default noise model.",
+    )
+    ou_prepare.add_argument("--seed", type=int, help="Noise RNG seed.")
+    ou_prepare.add_argument(
+        "--out",
+        help="Output normalized parquet path.",
+    )
 
     synthetic = sub.add_parser(
         "amortized-synthetic-smoke",
@@ -226,6 +262,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "amortized-synthetic-smoke":
         _run_amortized_synthetic(config, args)
         return
+    if args.command == "openuniverse-prepare":
+        _run_openuniverse_prepare(config, args)
+        return
     if args.command == "amortized-train-fs2":
         _run_amortized_train(config, args)
         return
@@ -337,6 +376,53 @@ def _run_amortized_synthetic(config: dict, args) -> None:
         batch_size=int(args.batch_size or training.get("batch_size", 32)),
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
         mock_decoder=bool(args.mock_decoder),
+    )
+
+
+def _run_openuniverse_prepare(config: dict, args) -> None:
+    from .openuniverse.prepare import prepare_openuniverse_lsst_roman_subset
+
+    ou_cfg = dict(config.get("openuniverse", {}) or {})
+    hpix_ids = args.hpix if args.hpix is not None else ou_cfg.get("hpix_ids")
+    if not hpix_ids:
+        raise SystemExit(
+            "openuniverse-prepare requires --hpix or openuniverse.hpix_ids. "
+            "Refusing to process an implicit large dataset."
+        )
+    input_root = args.input_root or ou_cfg.get("input_root")
+    if not input_root:
+        raise SystemExit(
+            "openuniverse-prepare requires --input-root or config input_root"
+        )
+    output_path = args.out or ou_cfg.get(
+        "output_path",
+        "Data/openuniverse/processed/ou_lsst_roman_14.parquet",
+    )
+    noise_model = dict(ou_cfg.get("noise_model", {}) or {})
+    if args.noise_snr is not None:
+        noise_model = {"type": "fractional_snr", "snr": float(args.noise_snr)}
+    if not noise_model:
+        noise_model = None
+    manifest = prepare_openuniverse_lsst_roman_subset(
+        hpix_ids=hpix_ids,
+        input_root=input_root,
+        output_path=output_path,
+        limit=args.limit if args.limit is not None else ou_cfg.get("limit"),
+        min_flux_valid_bands=int(
+            args.min_flux_valid_bands
+            if args.min_flux_valid_bands is not None
+            else ou_cfg.get("min_flux_valid_bands", 8)
+        ),
+        noise_model=noise_model,
+        seed=int(args.seed if args.seed is not None else ou_cfg.get("seed", 42)),
+    )
+    print(
+        "[openuniverse] prepared "
+        f"{manifest['number_of_rows']} rows -> {manifest['output_path']}"
+    )
+    print(
+        "[openuniverse] manifest -> "
+        f"{Path(manifest['output_path']).with_suffix('.manifest.yaml')}"
     )
 
 

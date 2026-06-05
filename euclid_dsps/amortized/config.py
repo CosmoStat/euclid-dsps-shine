@@ -38,6 +38,12 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["features"].setdefault("flux_transform", "asinh")
     raw["features"].setdefault("error_transform", "log")
     raw["encoder"].setdefault("type", "gaussian_mlp")
+    raw["encoder"].setdefault(
+        "input_dim",
+        int(raw["features"].get("n_flux_bands", 10))
+        + int(raw["features"].get("n_error_bands", 10)),
+    )
+    raw["encoder"].setdefault("latent_dim", 16)
     raw["encoder"].setdefault("hidden_sizes", [256, 256, 256])
     raw["encoder"].setdefault("activation", "gelu")
     raw["encoder"].setdefault("log_std_min", -6.0)

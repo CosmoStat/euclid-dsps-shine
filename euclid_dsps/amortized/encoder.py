@@ -50,7 +50,7 @@ class GaussianEncoder(eqx.Module):
         self.initial_log_std = float(initial_log_std)
 
     def __call__(self, features):
-        """Return ``mean`` and ``log_std`` for features shaped ``[N,20]``."""
+        """Return ``mean`` and ``log_std`` for features shaped ``[N,input_dim]``."""
         features = jnp.asarray(features, dtype=jnp.float32)
         if features.ndim == 1:
             return self._single(features)

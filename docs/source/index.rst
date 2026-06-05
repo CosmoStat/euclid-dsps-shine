@@ -22,6 +22,7 @@ The project keeps the scientific boundary narrow:
    installation
    architecture
    data_download
+   openuniverse
    forward_model
    ssp_compression
    amortized_inference

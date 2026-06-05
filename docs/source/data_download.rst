@@ -4,7 +4,41 @@ Data And FSPS Assets
 Catalog
 -------
 
-The active configs expect the Euclid FS2 PHZ parquet at:
+The current validation priority is OpenUniverse/Diffsky. FS2 remains supported
+as a comparison and domain-shift diagnostic dataset.
+
+OpenUniverse SkyCatalogs
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+OpenUniverse SkyCatalog data is organized by nside=32 HEALPix. For a small
+validation subset, provide only the HEALPix ids you want to process:
+
+.. code-block:: text
+
+   Data/openuniverse/raw/galaxy_<hpix>.parquet
+   Data/openuniverse/raw/galaxy_flux_<hpix>.parquet
+   Data/openuniverse/raw/galaxy_sed_<hpix>.hdf5  # optional
+
+Prepare a compact LSST+Roman 14-band parquet with:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/openuniverse_lsst_roman_14.yaml \
+     openuniverse-prepare \
+     --input-root Data/openuniverse/raw \
+     --hpix 9812 9813 \
+     --limit 10000 \
+     --out Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet
+
+The command refuses to run without explicit HEALPix ids from ``--hpix`` or
+``openuniverse.hpix_ids``. It does not download or scan a full OpenUniverse
+release by default.
+
+Euclid FS2
+~~~~~~~~~~
+
+The FS2 comparison configs expect the Euclid FS2 PHZ parquet at:
 
 .. code-block:: text
 

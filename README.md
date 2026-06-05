@@ -1,8 +1,12 @@
 # DSPS PopCosmos Forward Model
 
 This repository contains a DSPS/JAX forward-model and fitting workflow for
-Euclid + LSST photometry. The default production path is now the compressed
-full PopCosmos-like model with gas and AGN enabled:
+multi-band photometry. The validation priority is now OpenUniverse/Diffsky:
+use LSST+Roman OpenUniverse subsets as the main generative-truth validation
+surface, and keep Euclid FS2 as a comparison/domain-shift diagnostic dataset.
+
+The default PopCosmos-like DSPS model path remains the compressed full model
+with gas and AGN enabled:
 
 ```text
 configs/popcosmos_binned_compressed.yaml
@@ -47,10 +51,45 @@ assets and evaluates the forward model in JAX:
 
 The details and glossary are documented in `docs/source/forward_model.rst`.
 
+## OpenUniverse / Diffsky Validation
+
+The first OpenUniverse target is a compact 14-band LSST+Roman table:
+
+```text
+LSST u,g,r,i,z,y + Roman W146,R062,Z087,Y106,J129,H158,F184,K213
+```
+
+OpenUniverse SkyCatalog files are read per nside=32 HEALPix from
+`galaxy_<hpix>.parquet` and `galaxy_flux_<hpix>.parquet`, joined on
+`galaxy_id`, then normalized into a small parquet with truth fluxes, noisy
+observed fluxes, flux errors, and masks:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/openuniverse_lsst_roman_14.yaml \
+  openuniverse-prepare \
+  --input-root Data/openuniverse/raw \
+  --hpix 9812 9813 \
+  --limit 10000 \
+  --out Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet
+```
+
+OpenUniverse fluxes are currently kept in their native
+`photon_per_sec_cm2` unit. The code deliberately does not fake a photon-rate
+to `fnu_cgs` conversion; a filter-aware DSPS photon-rate decoder or validated
+conversion remains a tracked TODO. Direct public columns such as `redshift`,
+`redshiftHubble`, and `um_source_galaxy_obs_sm` are treated as truth when
+present. Diffsky/Diffstar SFH, dust, metallicity, and halo latents are only
+`generated_truth` after an actual Diffsky export exists.
+
+See `docs/source/openuniverse.rst` for the dataset contract, truth policy,
+unit caveats, and next CLI phases.
+
 ## FS2 Amortized Posterior Prototype
 
-The optional amortized workflow trains a JAX encoder and RealNVP prior jointly
-on Euclid FS2 photometry while keeping DSPS fixed as the physical decoder:
+The optional FS2 amortized workflow trains a JAX encoder and RealNVP prior
+jointly on Euclid FS2 photometry while keeping DSPS fixed as the physical
+decoder:
 
 ```text
 10 FS2 fluxes + 10 FS2 errors -> q_psi(x | flux, err) -> theta = h(x) -> DSPS
@@ -60,7 +99,9 @@ on Euclid FS2 photometry while keeping DSPS fixed as the physical decoder:
 16D parameter vector, including redshift. The encoder input dimension is 20 by
 default because the per-band errors are part of the posterior information.
 Flux features use robust per-band `asinh(flux / flux_scale)` normalization,
-while errors use a log transform. The KL term is estimated by Monte Carlo as
+while errors use a log transform. The feature builder is generic in band count:
+OpenUniverse LSST+Roman uses 14 fluxes + 14 errors = 28 encoder features.
+The KL term is estimated by Monte Carlo as
 `logq - logp`; the standard Gaussian/Gaussian closed-form VAE KL is not valid
 because the prior is a RealNVP.
 
