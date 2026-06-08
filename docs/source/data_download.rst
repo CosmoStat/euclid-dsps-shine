@@ -19,6 +19,23 @@ validation subset, provide only the HEALPix ids you want to process:
    Data/openuniverse/raw/galaxy_flux_<hpix>.parquet
    Data/openuniverse/raw/galaxy_sed_<hpix>.hdf5  # optional
 
+For the public preview S3 layout used in local smoke checks, a single HEALPix
+can be downloaded without credentials:
+
+.. code-block:: bash
+
+   aws s3 cp --no-sign-request \
+     s3://nasa-irsa-simulations/openuniverse2024/roman/preview/roman_rubin_cats_v1.1.2_faint/galaxy_10307.parquet \
+     Data/openuniverse/raw/
+
+   aws s3 cp --no-sign-request \
+     s3://nasa-irsa-simulations/openuniverse2024/roman/preview/roman_rubin_cats_v1.1.2_faint/galaxy_flux_10307.parquet \
+     Data/openuniverse/raw/
+
+   aws s3 cp --no-sign-request \
+     s3://nasa-irsa-simulations/openuniverse2024/roman/preview/roman_rubin_cats_v1.1.2_faint/galaxy_sed_10307.hdf5 \
+     Data/openuniverse/raw/
+
 Prepare a compact LSST+Roman 14-band parquet with:
 
 .. code-block:: bash
@@ -34,6 +51,18 @@ Prepare a compact LSST+Roman 14-band parquet with:
 The command refuses to run without explicit HEALPix ids from ``--hpix`` or
 ``openuniverse.hpix_ids``. It does not download or scan a full OpenUniverse
 release by default.
+
+After preparation, inventory the truth-like fields and optional SED HDF5:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli inventory-truth \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --input-root Data/openuniverse/raw \
+     --hpix 10307 \
+     --sed \
+     --sed-sample-limit 3 \
+     --out outputs/reports/openuniverse_truth_inventory_10307
 
 Euclid FS2
 ~~~~~~~~~~

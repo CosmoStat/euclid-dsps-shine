@@ -40,7 +40,7 @@ HEALPix, the preparation command expects:
 
    galaxy_<hpix>.parquet
    galaxy_flux_<hpix>.parquet
-   galaxy_sed_<hpix>.hdf5  # optional, not read by the PR 1 preparer
+   galaxy_sed_<hpix>.hdf5  # optional low-resolution generated SED product
 
 The main and flux parquet files are joined on ``galaxy_id``. ``galaxy_id`` must
 exist in both files and be unique in each table.
@@ -116,13 +116,73 @@ The command writes a sibling manifest:
 The manifest records HEALPix ids, input root, row counts, band names, flux unit,
 noise model, creation time, and truth/unit caveats.
 
+Truth and SED Inventory
+-----------------------
+
+After downloading the optional SED HDF5 for the same HEALPix, inventory the
+public truth fields and SED layout without scanning the full payload:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli inventory-truth \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --input-root Data/openuniverse/raw \
+     --hpix 10307 \
+     --sed \
+     --sed-sample-limit 3 \
+     --out outputs/reports/openuniverse_truth_inventory_10307
+
+This writes:
+
+.. code-block:: text
+
+   openuniverse_truth_inventory.md
+   openuniverse_truth_inventory.json
+   truth_schema.json
+
+For the preview ``10307`` files inspected locally, the SED HDF5 contains
+``meta/wave_list`` with 312 wavelengths and per-galaxy datasets shaped
+``(3, 312)``. The component rows are exposed as ``disk``, ``bulge``, and
+``knot`` when that 3-component shape is present.
+
+Basic Truth Export
+------------------
+
+Direct public OpenUniverse truths can be exported from the prepared parquet:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli extract-truth \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --out Data/openuniverse/processed/ou_truth_basic.parquet \
+     --schema-out Data/openuniverse/processed/truth_schema.json
+
+The basic export includes only quantities directly present in the table, such
+as ``galaxy_id``, ``redshift_truth``, ``redshift_hubble_truth``, and
+``stellar_mass_truth``. Missing SFH, Diffstar, internal dust, metallicity, and
+halo latent parameters remain ``unavailable``.
+
+OpenUniverse Feature Stats
+--------------------------
+
+The prepared table can be loaded into generic ``PhotometryArrays`` and used to
+compute amortized encoder feature statistics:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli feature-stats \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --limit 10000 \
+     --out outputs/runs/openuniverse_feature_stats_10307/feature_stats.json
+
+For LSST+Roman this validates ``n_bands=14`` and ``feature_dim=28`` before any
+physical DSPS decoder is connected.
+
 Next Phases
 -----------
 
 Planned follow-up commands and reports:
 
-* ``openuniverse-extract-truth`` for basic and optional Diffsky truth exports;
-* ``openuniverse-inventory-truth`` for field inventory reports;
 * ``amortized-train-openuniverse`` and ``amortized-infer-openuniverse``;
 * standard-normal versus RealNVP redshift ablation;
 * ``openuniverse-prior-overlap`` for truth versus posterior aggregate versus

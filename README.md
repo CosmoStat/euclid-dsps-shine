@@ -82,6 +82,33 @@ conversion remains a tracked TODO. Direct public columns such as `redshift`,
 present. Diffsky/Diffstar SFH, dust, metallicity, and halo latents are only
 `generated_truth` after an actual Diffsky export exists.
 
+Inventory downloaded truth fields and the optional low-resolution SED HDF5:
+
+```bash
+python -m euclid_dsps.openuniverse.cli inventory-truth \
+  --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+  --input-root Data/openuniverse/raw \
+  --hpix 10307 \
+  --sed \
+  --sed-sample-limit 3 \
+  --out outputs/reports/openuniverse_truth_inventory_10307
+```
+
+Export the directly available basic truth table and compute B=14 encoder
+feature stats:
+
+```bash
+python -m euclid_dsps.openuniverse.cli extract-truth \
+  --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+  --out Data/openuniverse/processed/ou_truth_basic.parquet \
+  --schema-out Data/openuniverse/processed/truth_schema.json
+
+python -m euclid_dsps.openuniverse.cli feature-stats \
+  --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+  --limit 10000 \
+  --out outputs/runs/openuniverse_feature_stats_10307/feature_stats.json
+```
+
 See `docs/source/openuniverse.rst` for the dataset contract, truth policy,
 unit caveats, and next CLI phases.
 
