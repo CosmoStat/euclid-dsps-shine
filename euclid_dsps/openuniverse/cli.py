@@ -18,11 +18,14 @@ from euclid_dsps.io import ensure_dir
 
 from .arrays import load_openuniverse_photometry_arrays
 from .diagnostics import compute_photoz_metrics, compute_prior_overlap_metrics
+from .filter_curves import parse_filter_path_overrides
+from .flux_closure import run_sed_flux_closure, write_sed_flux_closure_outputs
 from .inventory import (
     inventory_openuniverse_truth_fields,
     write_basic_truth_artifacts,
 )
 from .schema import OU_LSST_ROMAN_14_BANDS
+from .truth_merge import merge_external_truth_table
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -42,6 +45,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "feature-stats":
         _run_feature_stats(args)
+        return
+    if args.command == "sed-flux-closure":
+        _run_sed_flux_closure(args)
+        return
+    if args.command == "merge-external-truth":
+        _run_merge_external_truth(args)
         return
     parser.error("No OpenUniverse subcommand was provided")
 
@@ -117,6 +126,63 @@ def _build_parser() -> argparse.ArgumentParser:
     features.add_argument("--out", type=Path, required=True)
     features.add_argument("--limit", type=int)
     features.add_argument("--flux-transform", default="asinh")
+
+    closure = sub.add_parser(
+        "sed-flux-closure",
+        help="Compare OU SED-integrated photon rates to prepared truth fluxes.",
+    )
+    closure.add_argument("--catalog", type=Path, required=True)
+    closure.add_argument("--sed", type=Path, required=True)
+    closure.add_argument("--out", type=Path, required=True)
+    closure.add_argument("--bands", nargs="*", default=list(OU_LSST_ROMAN_14_BANDS))
+    closure.add_argument("--filter-root", type=Path, default=Path("filters"))
+    closure.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact filter override of the form band=/path/to/filter.dat",
+    )
+    closure.add_argument(
+        "--allow-approx-filters",
+        action="store_true",
+        help="Allow coarse top-hat Roman filters for smoke tests only.",
+    )
+    closure.add_argument("--limit", type=int)
+    closure.add_argument(
+        "--sed-fnu-unit",
+        default="native",
+        choices=["native", "fnu_cgs", "jy", "microjy", "nanojy"],
+    )
+    closure.add_argument("--sed-fnu-scale", type=float, default=1.0)
+    closure.add_argument(
+        "--sed-wavelength-frame",
+        default="rest",
+        choices=["rest", "observer"],
+        help="Interpret HDF5 wave_list as rest-frame or observer-frame wavelengths.",
+    )
+    closure.add_argument("--no-calibrate", action="store_true")
+
+    merge_truth = sub.add_parser(
+        "merge-external-truth",
+        help="Merge a real externally exported Diffsky/Diffstar truth table.",
+    )
+    merge_truth.add_argument("--input", type=Path, required=True)
+    merge_truth.add_argument("--truth", type=Path, required=True)
+    merge_truth.add_argument("--out", type=Path, required=True)
+    merge_truth.add_argument("--schema-out", type=Path)
+    merge_truth.add_argument("--id-column", default="galaxy_id")
+    merge_truth.add_argument(
+        "--truth-column",
+        action="append",
+        default=[],
+        help="Column to merge; repeatable. Defaults to all non-id columns.",
+    )
+    merge_truth.add_argument("--prefix", default="generated_truth_")
+    merge_truth.add_argument(
+        "--truth-level",
+        default="generated_truth",
+        choices=["truth", "generated_truth", "proxy"],
+    )
     return parser
 
 
@@ -245,6 +311,54 @@ def _run_feature_stats(args: argparse.Namespace) -> None:
         "[openuniverse] feature stats -> "
         f"{out} (n_bands={summary['n_bands']}, feature_dim={summary['feature_dim']})"
     )
+
+
+def _run_sed_flux_closure(args: argparse.Namespace) -> None:
+    filter_paths = parse_filter_path_overrides(args.filter)
+    result = run_sed_flux_closure(
+        catalog_path=args.catalog,
+        sed_path=args.sed,
+        band_names=tuple(args.bands),
+        filter_root=args.filter_root,
+        filter_paths=filter_paths,
+        allow_approx_filters=bool(args.allow_approx_filters),
+        limit=args.limit,
+        sed_fnu_unit=args.sed_fnu_unit,
+        sed_fnu_scale=float(args.sed_fnu_scale),
+        sed_wavelength_frame=args.sed_wavelength_frame,
+        calibrate=not bool(args.no_calibrate),
+    )
+    paths = write_sed_flux_closure_outputs(result, args.out)
+    print(
+        "[openuniverse] SED flux closure -> "
+        f"{paths['metrics']} ({result.summary['n_objects']} objects, "
+        f"{len(result.summary['bands'])} bands)"
+    )
+    if result.summary["uses_approximate_filters"]:
+        print(
+            "[openuniverse] warning: approximate top-hat filters were used; "
+            "do not treat Roman closure metrics as science-grade."
+        )
+
+
+def _run_merge_external_truth(args: argparse.Namespace) -> None:
+    payload = merge_external_truth_table(
+        input_path=args.input,
+        truth_path=args.truth,
+        output_path=args.out,
+        schema_path=args.schema_out,
+        id_column=str(args.id_column),
+        truth_columns=tuple(args.truth_column) if args.truth_column else None,
+        prefix=str(args.prefix),
+        truth_level=args.truth_level,
+    )
+    print(
+        "[openuniverse] merged external truth -> "
+        f"{args.out} ({payload['n_output_rows']} rows, "
+        f"{len(payload['exported_columns'])} truth columns)"
+    )
+    if args.schema_out is not None:
+        print(f"[openuniverse] external truth schema -> {args.schema_out}")
 
 
 def _wide_samples_to_array(frame: pd.DataFrame, prefix: str) -> np.ndarray:

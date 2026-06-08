@@ -109,6 +109,21 @@ python -m euclid_dsps.openuniverse.cli feature-stats \
   --out outputs/runs/openuniverse_feature_stats_10307/feature_stats.json
 ```
 
+Run a data-side LSST SED-to-flux closure without touching the DSPS decoder:
+
+```bash
+python -m euclid_dsps.openuniverse.cli sed-flux-closure \
+  --catalog Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+  --sed Data/openuniverse/raw/galaxy_sed_10307.hdf5 \
+  --bands lsst_u lsst_g lsst_r lsst_i lsst_z lsst_y \
+  --limit 200 \
+  --out outputs/reports/openuniverse_sed_flux_closure_10307_lsst200
+```
+
+If a real Diffsky latent export becomes available, merge it explicitly with
+`python -m euclid_dsps.openuniverse.cli merge-external-truth`; missing latents
+are not inferred from the public files.
+
 See `docs/source/openuniverse.rst` for the dataset contract, truth policy,
 unit caveats, and next CLI phases.
 

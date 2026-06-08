@@ -178,6 +178,60 @@ compute amortized encoder feature statistics:
 For LSST+Roman this validates ``n_bands=14`` and ``feature_dim=28`` before any
 physical DSPS decoder is connected.
 
+SED-to-Flux Closure
+-------------------
+
+The data-side closure path projects the generated SED HDF5 through filter
+curves and compares the resulting photon rates to the public OpenUniverse flux
+table. This does not touch the DSPS decoder.
+
+For LSST, exact repository filter files are available:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli sed-flux-closure \
+     --catalog Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --sed Data/openuniverse/raw/galaxy_sed_10307.hdf5 \
+     --bands lsst_u lsst_g lsst_r lsst_i lsst_z lsst_y \
+     --limit 200 \
+     --out outputs/reports/openuniverse_sed_flux_closure_10307_lsst200
+
+Outputs:
+
+.. code-block:: text
+
+   sed_flux_closure_rows.parquet
+   sed_flux_closure_metrics.csv
+   sed_flux_closure_calibration.csv
+   sed_flux_closure_summary.json
+
+Roman bands require exact Roman filter curves supplied with repeated
+``--filter band=/path/to/filter.dat`` options. The command has
+``--allow-approx-filters`` for smoke tests only; those Roman metrics are not
+science-grade.
+
+External Diffsky Truth Merge
+----------------------------
+
+Full Diffsky/Diffstar latents are not present in the public main/flux/SED files
+inspected so far. If a separate generation/export table becomes available, merge
+it explicitly:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli merge-external-truth \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --truth Data/openuniverse/processed/diffsky_latents_export.parquet \
+     --out Data/openuniverse/processed/ou_with_diffsky_latents.parquet \
+     --schema-out Data/openuniverse/processed/diffsky_latents_schema.json \
+     --truth-level generated_truth \
+     --truth-column diffstar_u_param \
+     --truth-column halo_mass
+
+This command only labels columns according to the caller-provided
+``--truth-level``. It does not reconstruct missing latents and does not promote
+proxy columns to truth.
+
 Next Phases
 -----------
 
