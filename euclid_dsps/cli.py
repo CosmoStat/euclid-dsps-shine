@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=100, help="Maximum catalog rows to process."
     )
     check.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="First catalog row_index for contiguous batch processing.",
+    )
+    check.add_argument(
         "--batch-size", type=int, default=1000, help="Parquet batch size."
     )
     check.add_argument("--all", action="store_true", help="Process the full catalog.")
@@ -76,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
     fit.add_argument("--index", type=int, help="Catalog row index to fit.")
     fit.add_argument(
         "--limit", type=int, default=25, help="Maximum catalog rows to fit."
+    )
+    fit.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="First catalog row_index for contiguous batch processing.",
     )
     fit.add_argument("--batch-size", type=int, default=64, help="Parquet batch size.")
     fit.add_argument("--all", action="store_true", help="Process the full catalog.")
@@ -102,6 +114,12 @@ def build_parser() -> argparse.ArgumentParser:
     posterior.add_argument("--index", type=int, help="Catalog row index to sample.")
     posterior.add_argument(
         "--limit", type=int, default=5, help="Maximum catalog rows to sample."
+    )
+    posterior.add_argument(
+        "--start-index",
+        type=int,
+        default=0,
+        help="First catalog row_index for contiguous batch processing.",
     )
     posterior.add_argument(
         "--batch-size", type=int, default=1, help="Parquet batch size."
@@ -310,6 +328,7 @@ def main(argv: list[str] | None = None) -> None:
                 limit=_limit_arg(args),
                 batch_size=args.batch_size,
                 row_indices_file=getattr(args, "row_indices_file", None),
+                start_index=getattr(args, "start_index", 0),
             )
     elif args.command == "fit":
         _apply_selection_overrides(config, args)
@@ -328,6 +347,7 @@ def main(argv: list[str] | None = None) -> None:
                 limit=_limit_arg(args),
                 batch_size=args.batch_size,
                 row_indices_file=getattr(args, "row_indices_file", None),
+                start_index=getattr(args, "start_index", 0),
             )
         else:
             fit_batch(
@@ -336,6 +356,7 @@ def main(argv: list[str] | None = None) -> None:
                 limit=_limit_arg(args),
                 batch_size=args.batch_size,
                 row_indices_file=getattr(args, "row_indices_file", None),
+                start_index=getattr(args, "start_index", 0),
             )
     elif args.command == "posterior":
         _apply_selection_overrides(config, args)
@@ -350,6 +371,7 @@ def main(argv: list[str] | None = None) -> None:
                 limit=getattr(args, "limit", 5),
                 batch_size=args.batch_size,
                 row_indices_file=getattr(args, "row_indices_file", None),
+                start_index=getattr(args, "start_index", 0),
             )
     else:
         raise ValueError(f"Unsupported command: {args.command}")

@@ -204,6 +204,7 @@ def sample_batch(
     limit: int | None = 5,
     batch_size: int = 1,
     row_indices_file: str | None = None,
+    start_index: int = 0,
 ) -> None:
     """Sample independent galaxy posteriors with NumPyro NUTS.
 
@@ -219,6 +220,8 @@ def sample_batch(
 
     out = ensure_dir(out_dir)
     row_indices = _load_row_indices_set(row_indices_file)
+    if row_indices is not None and int(start_index) > 0:
+        raise ValueError("--start-index cannot be combined with --row-indices-file")
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
     context = load_context(
@@ -246,6 +249,7 @@ def sample_batch(
             batch_size=batch_size,
             limit=limit,
             row_indices=row_indices,
+            start_index=start_index,
         ):
             for row_index, row in batch.iterrows():
                 observation = build_observation(int(row_index), row, config["bands"])
@@ -481,6 +485,7 @@ def run_batch(
     limit: int | None = None,
     batch_size: int = 10_000,
     row_indices_file: str | None = None,
+    start_index: int = 0,
 ) -> None:
     """Run the same configured DSPS model over many catalog rows.
 
@@ -491,6 +496,8 @@ def run_batch(
     perf = PerformanceRecorder(_verbose_benchmark(config))
     reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
+    if row_indices is not None and int(start_index) > 0:
+        raise ValueError("--start-index cannot be combined with --row-indices-file")
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
     context = load_context(
@@ -516,6 +523,7 @@ def run_batch(
             batch_size=batch_size,
             limit=limit,
             row_indices=row_indices,
+            start_index=start_index,
         ):
             perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
             rows.extend(_forward_dataframe_batch(context, batch, config))
@@ -571,6 +579,7 @@ def run_batch(
             "limit": limit,
             "batch_size": batch_size,
             "row_indices_file": row_indices_file,
+            "start_index": int(start_index),
         },
     )
     write_performance_outputs(perf.rows, out, "batch")
@@ -582,6 +591,7 @@ def fit_batch(
     limit: int | None = 25,
     batch_size: int = 1000,
     row_indices_file: str | None = None,
+    start_index: int = 0,
 ) -> None:
     """Fit the configured free parameters for many rows.
 
@@ -591,6 +601,8 @@ def fit_batch(
     perf = PerformanceRecorder(_verbose_benchmark(config))
     reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
+    if row_indices is not None and int(start_index) > 0:
+        raise ValueError("--start-index cannot be combined with --row-indices-file")
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
     context = load_context(
@@ -616,6 +628,7 @@ def fit_batch(
             batch_size=batch_size,
             limit=limit,
             row_indices=row_indices,
+            start_index=start_index,
         ):
             perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
             fit_batch_frame, real_row_indices = _pad_fit_batch_to_static_size(
@@ -698,6 +711,7 @@ def fit_batch(
             "limit": limit,
             "batch_size": batch_size,
             "row_indices_file": row_indices_file,
+            "start_index": int(start_index),
         },
     )
     write_performance_outputs(perf.rows, out, "batch_fit")

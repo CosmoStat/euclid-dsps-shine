@@ -174,12 +174,14 @@ def iter_catalog_batches(
     batch_size: int = 10_000,
     limit: int | None = None,
     row_indices: set[int] | None = None,
+    start_index: int = 0,
 ) -> Iterable[pd.DataFrame]:
     """Yield catalog batches without loading the full parquet into memory."""
     import pyarrow.parquet as pq
 
     yielded = 0
     seen = 0
+    start_index = max(int(start_index), 0)
     max_row_index = max(row_indices) if row_indices else None
     parquet = pq.ParquetFile(path)
 
@@ -197,8 +199,14 @@ def iter_catalog_batches(
         ):
             df["log10_metallicity_true"] = df["metallicity_true"] - 10.61
         raw_len = len(df)
-        df.index = range(seen, seen + raw_len)
-        seen += raw_len
+        batch_start = seen
+        batch_end = seen + raw_len
+        seen = batch_end
+        if batch_end <= start_index:
+            continue
+        df.index = range(batch_start, batch_end)
+        if start_index > batch_start:
+            df = df.loc[df.index >= start_index]
         if row_indices is not None:
             df = df.loc[df.index.isin(row_indices)]
         if limit is not None:
