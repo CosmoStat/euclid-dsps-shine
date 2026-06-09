@@ -25,7 +25,10 @@ def build_parser() -> argparse.ArgumentParser:
         metavar=(
             "{download-assets,check,fit,posterior,"
             "openuniverse-prepare,"
-            "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2}"
+            "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
+            "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
+            "diffsky-inventory-local,diffsky-prepare-dataset,"
+            "diffsky-dataset-diagnostics,diffsky-validate-dataset}"
         ),
     )
 
@@ -253,6 +256,10 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--seed", type=int)
     infer.add_argument("--feature-stats")
 
+    from .diffsky_data.cli import add_diffsky_subcommands
+
+    add_diffsky_subcommands(sub)
+
     return parser
 
 
@@ -262,6 +269,11 @@ def main(argv: list[str] | None = None) -> None:
         from .assets import download_assets
 
         download_assets(Path(args.out), overwrite=bool(args.overwrite))
+        return
+    if args.command.startswith("diffsky-"):
+        from .diffsky_data.cli import run_diffsky_command
+
+        run_diffsky_command(args)
         return
 
     from .config import load_config

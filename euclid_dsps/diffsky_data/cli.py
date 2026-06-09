@@ -1,0 +1,100 @@
+"""CLI helpers for Diffsky/OpenCosmo dataset investigation."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+from .diagnostics import write_dataset_diagnostics
+from .download import download_candidate_subset
+from .inventory import inventory_local_hdf5, inventory_remote_listing
+from .prepare import build_diffsky_photometric_dataset
+from .remote_listing import crawl_remote_tree, write_remote_listing
+from .urls import HLTDS_COSMOS_20260414
+from .validation import validate_for_prior_learning, write_validation_report
+
+
+def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
+    listing = sub.add_parser("diffsky-list-remote", help="List remote Diffsky/OpenCosmo files.")
+    listing.add_argument("--url", default=HLTDS_COSMOS_20260414)
+    listing.add_argument("--max-depth", type=int, default=0)
+    listing.add_argument("--out", default="outputs/diffsky_remote_listing.json")
+
+    remote_inv = sub.add_parser("diffsky-inventory-remote", help="Rank remote Diffsky candidate files.")
+    remote_inv.add_argument("--listing", required=True)
+    remote_inv.add_argument("--out", default="outputs/diffsky_candidate_files.csv")
+
+    download = sub.add_parser("diffsky-download-subset", help="Download a bounded Diffsky subset.")
+    download.add_argument("--listing", required=True)
+    download.add_argument("--out-dir", required=True)
+    download.add_argument("--max-files", type=int, default=5)
+    download.add_argument("--max-total-gb", type=float, default=5.0)
+    download.add_argument("--include", action="append", default=[])
+    download.add_argument("--overwrite", action="store_true")
+    download.add_argument("--yes", action="store_true")
+
+    local_inv = sub.add_parser("diffsky-inventory-local", help="Inspect local Diffsky HDF5 files.")
+    local_inv.add_argument("--root", required=True)
+    local_inv.add_argument("--out", default="outputs/diffsky_local_inventory.json")
+
+    prepare = sub.add_parser("diffsky-prepare-dataset", help="Build normalized Diffsky photometry+truth parquet.")
+    prepare.add_argument("--raw-root", required=True)
+    prepare.add_argument("--inventory")
+    prepare.add_argument("--out", required=True)
+    prepare.add_argument("--max-objects", type=int)
+    prepare.add_argument("--snr", type=float, default=50.0)
+
+    diagnostics = sub.add_parser("diffsky-dataset-diagnostics", help="Write diagnostics for a prepared Diffsky parquet.")
+    diagnostics.add_argument("--dataset", required=True)
+    diagnostics.add_argument("--manifest")
+    diagnostics.add_argument("--out", default="outputs/reports/diffsky_dataset")
+
+    validate = sub.add_parser("diffsky-validate-dataset", help="Validate prepared Diffsky dataset for prior learning.")
+    validate.add_argument("--dataset", required=True)
+    validate.add_argument("--manifest")
+    validate.add_argument("--out", default="outputs/reports/diffsky_dataset/prior_learning_validation_report.md")
+
+
+def run_diffsky_command(args: argparse.Namespace) -> None:
+    if args.command == "diffsky-list-remote":
+        files = crawl_remote_tree(args.url, max_depth=int(args.max_depth))
+        path = write_remote_listing(files, args.out)
+        print(f"[diffsky] listed {len(files)} files -> {path}")
+    elif args.command == "diffsky-inventory-remote":
+        frame = inventory_remote_listing(args.listing, args.out)
+        print(f"[diffsky] ranked {len(frame)} files -> {args.out}")
+    elif args.command == "diffsky-download-subset":
+        if not args.yes:
+            raise SystemExit("Pass --yes to download files.")
+        patterns = tuple(args.include or ["diffsky_gals", "param", "transmission", "yaml"])
+        paths = download_candidate_subset(
+            Path(args.listing),
+            Path(args.out_dir),
+            max_files=int(args.max_files),
+            max_total_gb=float(args.max_total_gb),
+            include_patterns=patterns,
+            overwrite=bool(args.overwrite),
+        )
+        print(f"[diffsky] downloaded {len(paths)} files -> {args.out_dir}")
+    elif args.command == "diffsky-inventory-local":
+        inventory_local_hdf5(args.root, args.out)
+        print(f"[diffsky] local inventory -> {args.out}")
+    elif args.command == "diffsky-prepare-dataset":
+        report = build_diffsky_photometric_dataset(
+            raw_root=Path(args.raw_root),
+            inventory_path=Path(args.inventory) if args.inventory else None,
+            output_path=Path(args.out),
+            max_objects=args.max_objects,
+            snr=float(args.snr),
+        )
+        print(f"[diffsky] dataset -> {report.output_path}")
+        print(f"[diffsky] readiness -> {report.readiness}")
+    elif args.command == "diffsky-dataset-diagnostics":
+        outputs = write_dataset_diagnostics(args.dataset, args.out)
+        print(f"[diffsky] diagnostics -> {args.out} ({len(outputs)} files)")
+    elif args.command == "diffsky-validate-dataset":
+        report = validate_for_prior_learning(args.dataset, args.manifest)
+        path = write_validation_report(report, args.out)
+        print(f"[diffsky] validation {report['readiness']} -> {path}")
+    else:
+        raise ValueError(f"Unsupported Diffsky command: {args.command}")
