@@ -31,6 +31,17 @@ DEFAULT_LSST_FILTER_FILENAMES = {
     "lsst_y": "LSST_LSST.y.dat",
 }
 
+DEFAULT_ROMAN_FILTER_FILENAMES = {
+    "roman_R062": "Roman_WFI.F062.dat",
+    "roman_Z087": "Roman_WFI.F087.dat",
+    "roman_Y106": "Roman_WFI.F106.dat",
+    "roman_J129": "Roman_WFI.F129.dat",
+    "roman_H158": "Roman_WFI.F158.dat",
+    "roman_F184": "Roman_WFI.F184.dat",
+    "roman_K213": "Roman_WFI.F213.dat",
+    "roman_W146": "Roman_WFI.F146.dat",
+}
+
 # Coarse top-hat smoke-test ranges only. These are not science-grade Roman WFI
 # response curves and are disabled unless the caller opts in.
 APPROX_ROMAN_FILTERS_ANGSTROM = {
@@ -84,6 +95,11 @@ def load_openuniverse_filter_curve(
 
     if band_name in DEFAULT_LSST_FILTER_FILENAMES:
         path = Path(filter_root) / DEFAULT_LSST_FILTER_FILENAMES[band_name]
+        if path.exists():
+            return _load_ascii_filter(band_name, path)
+
+    if band_name in DEFAULT_ROMAN_FILTER_FILENAMES:
+        path = Path(filter_root) / DEFAULT_ROMAN_FILTER_FILENAMES[band_name]
         if path.exists():
             return _load_ascii_filter(band_name, path)
 

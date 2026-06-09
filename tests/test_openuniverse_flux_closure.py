@@ -51,6 +51,15 @@ def test_filter_loader_requires_roman_exact_unless_approx_enabled(tmp_path) -> N
     assert filters["roman_W146"].approximate
 
 
+def test_filter_loader_finds_default_roman_filename(tmp_path) -> None:
+    _write_filter(tmp_path / "Roman_WFI.F146.dat")
+
+    filters = load_openuniverse_filter_curves(["roman_W146"], filter_root=tmp_path)
+
+    assert not filters["roman_W146"].approximate
+    assert filters["roman_W146"].source.endswith("Roman_WFI.F146.dat")
+
+
 def test_parse_filter_path_overrides(tmp_path) -> None:
     path = tmp_path / "filter.dat"
     parsed = parse_filter_path_overrides([f"lsst_u={path}"])
