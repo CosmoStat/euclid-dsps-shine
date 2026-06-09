@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -64,3 +65,19 @@ def test_openuniverse_amortized_config_declares_b14_and_input_dim_28() -> None:
     assert config["amortized"]["features"]["n_flux_bands"] == 14
     assert config["amortized"]["features"]["n_error_bands"] == 14
     assert config["amortized"]["encoder"]["input_dim"] == 28
+
+
+def test_openuniverse_fit_ready_config_uses_fnu_cgs_and_exact_filters() -> None:
+    config = load_config(
+        "configs/amortized_openuniverse_lsst_roman_fit_ready_realnvp.yaml"
+    )
+
+    assert len(config["bands"]) == 14
+    assert Path(config["catalog_path"]).name == "ou_lsst_roman_14_subset_fit_ready.parquet"
+    assert {band["units"] for band in config["bands"]} == {"fnu_cgs"}
+    assert {band["error_units"] for band in config["bands"]} == {"fnu_cgs"}
+    assert {band["filter"]["kind"] for band in config["bands"]} == {"ascii"}
+    assert config["openuniverse"]["lensing_mode"] == "unlensed"
+    assert config["amortized"]["encoder"]["input_dim"] == 28
+    assert config["truth"]["parameter_columns"]["dust_av"]["column"] is None
+    assert config["truth"]["parameter_columns"]["log10_sfr_at_obs"]["column"] is None

@@ -67,15 +67,34 @@ Units
 -----
 
 OpenUniverse fluxes are photon rates in ``photon_per_sec_cm2``. The current
-OpenUniverse subset keeps this native unit internally. The code raises a clear
-``NotImplementedError`` rather than silently converting to ``fnu_cgs`` or AB
-magnitudes.
+OpenUniverse preparation step keeps this native unit internally and preserves
+the public truth fluxes as ``flux_truth_<band>``.
+
+For DSPS fit and amortized smoke tests, build a second derived parquet in
+``fnu_cgs`` with explicit lensing and filter-response conventions. The derived
+table preserves the original public photon columns as
+``flux_truth_lensed_photon_<band>``, ``flux_lensed_photon_<band>``, and
+``fluxerr_lensed_photon_<band>``. It also writes
+``flux_truth_unlensed_photon_<band>`` and related columns by dividing by
+``mu_lensing``:
+
+.. code-block:: text
+
+   mu_lensing = 1 / ((1 - convergence)^2 - shear1^2 - shear2^2)
+
+The standard ``flux_*`` and ``fluxerr_*`` columns in the fit-ready table are
+then converted to AB-equivalent ``fnu_cgs`` using the per-band photon rate of a
+flat 0 AB source. By default this conversion clips filter responses to
+``[0, 1]`` before computing the zero point, matching
+``euclid_dsps.filters.load_ascii_filter``. This matters for Roman WFI files
+whose second column is an effective-area-like response with values above one.
 
 Tracked unit TODOs:
 
 * choose the definitive internal unit for OpenUniverse training;
-* implement DSPS photon-rate photometry or a validated filter-aware conversion;
-* verify LSST/Roman filter curves and response conventions.
+* continue validating Roman WFI zeropoints and response conventions;
+* decide whether production should use DSPS ``fnu_cgs`` photometry, a
+  photon-rate decoder, or an explicitly calibrated band conversion.
 
 Truth Policy
 ------------
@@ -177,6 +196,49 @@ compute amortized encoder feature statistics:
 
 For LSST+Roman this validates ``n_bands=14`` and ``feature_dim=28`` before any
 physical DSPS decoder is connected.
+
+Fit-Ready DSPS Parquet
+----------------------
+
+After preparing the photon-rate table and downloading the main parquet for the
+same HEALPix, create the DSPS-compatible table:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli make-fit-ready \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --main Data/openuniverse/raw/galaxy_10307.parquet \
+     --out Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet
+
+The command writes a sibling manifest containing the band list, AB0 photon-rate
+zero points, lensing summary, filter sources, and
+``filter_response_mode: dsps_clipped``. Use
+``configs/openuniverse_lsst_roman_14_fit_ready.yaml`` for per-object MAP smoke
+tests and
+``configs/amortized_openuniverse_lsst_roman_fit_ready_realnvp.yaml`` for the
+14-band amortized path.
+
+Minimal checks:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli feature-stats \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet \
+     --limit 10000 \
+     --out outputs/runs/openuniverse_fit_ready_feature_stats_10307/feature_stats.json
+
+   python -m euclid_dsps.cli \
+     --config configs/openuniverse_lsst_roman_14_fit_ready.yaml \
+     fit \
+     --index 0 \
+     --fit-maxiter 30 \
+     --out outputs/runs/dev_openuniverse_fit_ready_one \
+     --sed-samples 1
+
+The current fit-ready path is good enough for smoke tests and data-contract
+validation. Roman bands still need zeropoint/response validation before the
+resulting MAP parameters should be interpreted as science-grade physical
+inference.
 
 SED-to-Flux Closure
 -------------------

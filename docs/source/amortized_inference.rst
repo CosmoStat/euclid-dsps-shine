@@ -25,6 +25,14 @@ The encoder input is:
 
 after per-band normalization. FS2 uses ``B=10`` and feature dimension 20.
 OpenUniverse LSST+Roman uses ``B=14`` and feature dimension 28.
+For OpenUniverse runs that connect to the current DSPS decoder, use the
+fit-ready parquet and config:
+
+.. code-block:: text
+
+   Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet
+   configs/amortized_openuniverse_lsst_roman_fit_ready_realnvp.yaml
+
 Fluxes are normalized with a robust signed transform,
 ``asinh(flux / flux_scale)``, so bright FS2 objects do not produce MLP inputs of
 hundreds of scale units. Errors are normalized with

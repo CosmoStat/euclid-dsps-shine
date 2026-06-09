@@ -36,6 +36,16 @@ redshift:
 truth:
     redshift_column: redshift
     parameter_columns:
+        log10_formed_mass_msun:
+            column:
+            transform:
+        log10_metallicity:
+            column:
+            transform:
+        log10_sfr_at_obs:
+            column:
+        dust_av:
+            column:
         redshift_hubble:
             column: redshiftHubble
         stellar_mass:

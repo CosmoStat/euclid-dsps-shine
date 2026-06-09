@@ -6,6 +6,8 @@ from typing import Literal
 
 import numpy as np
 
+from euclid_dsps.photometry import AB_ZEROPOINT_FNU_CGS
+
 from .filter_curves import OpenUniverseFilterCurve
 
 PLANCK_ERG_S = 6.62607015e-27
@@ -82,6 +84,38 @@ def photon_rates_from_fnu_sed(
         )
         for band, curve in filter_curves.items()
     }
+
+
+def ab0_photon_rate(
+    filter_curve: OpenUniverseFilterCurve,
+    *,
+    n_wave: int = 2048,
+) -> float:
+    """Return the photon rate of a flat 0 AB source through one filter."""
+    wave = np.linspace(
+        float(np.nanmin(filter_curve.wave_angstrom)),
+        float(np.nanmax(filter_curve.wave_angstrom)),
+        int(n_wave),
+    )
+    fnu = np.full_like(wave, AB_ZEROPOINT_FNU_CGS, dtype=float)
+    return photon_rate_from_fnu_sed(
+        wave,
+        fnu,
+        filter_curve,
+        fnu_unit="fnu_cgs",
+    )
+
+
+def photon_rate_to_fnu_cgs(
+    photon_rate: np.ndarray,
+    photon_rate_ab0: float,
+) -> np.ndarray:
+    """Convert integrated photon rate to equivalent AB ``Fnu`` cgs."""
+    rate = np.asarray(photon_rate, dtype=float)
+    reference = float(photon_rate_ab0)
+    if not np.isfinite(reference) or reference <= 0.0:
+        raise ValueError("photon_rate_ab0 must be finite and positive")
+    return rate / reference * AB_ZEROPOINT_FNU_CGS
 
 
 def _fnu_unit_scale(unit: str) -> float:

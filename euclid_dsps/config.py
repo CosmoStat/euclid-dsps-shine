@@ -515,6 +515,37 @@ BAND_PRESETS = {
     ],
 }
 
+OPENUNIVERSE_LSST_ROMAN_FILTER_PATHS = {
+    "lsst_u": "filters/LSST_LSST.u.dat",
+    "lsst_g": "filters/LSST_LSST.g.dat",
+    "lsst_r": "filters/LSST_LSST.r.dat",
+    "lsst_i": "filters/LSST_LSST.i.dat",
+    "lsst_z": "filters/LSST_LSST.z.dat",
+    "lsst_y": "filters/LSST_LSST.y.dat",
+    "roman_W146": "filters/Roman_WFI.F146.dat",
+    "roman_R062": "filters/Roman_WFI.F062.dat",
+    "roman_Z087": "filters/Roman_WFI.F087.dat",
+    "roman_Y106": "filters/Roman_WFI.F106.dat",
+    "roman_J129": "filters/Roman_WFI.F129.dat",
+    "roman_H158": "filters/Roman_WFI.F158.dat",
+    "roman_F184": "filters/Roman_WFI.F184.dat",
+    "roman_K213": "filters/Roman_WFI.F213.dat",
+}
+
+BAND_PRESETS["openuniverse_lsst_roman_14_fnu_cgs"] = [
+    {
+        **band,
+        "units": "fnu_cgs",
+        "error_units": "fnu_cgs",
+        "filter": {
+            "kind": "ascii",
+            "path": OPENUNIVERSE_LSST_ROMAN_FILTER_PATHS[band["name"]],
+            "wave_unit": "angstrom",
+        },
+    }
+    for band in BAND_PRESETS["openuniverse_lsst_roman_14"]
+]
+
 COLUMN_GROUPS = {
     "truth_basic": [
         "z_true_gal",

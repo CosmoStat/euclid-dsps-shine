@@ -64,6 +64,20 @@ After preparation, inventory the truth-like fields and optional SED HDF5:
      --sed-sample-limit 3 \
      --out outputs/reports/openuniverse_truth_inventory_10307
 
+For DSPS fit smoke tests, derive the explicit ``fnu_cgs`` fit-ready parquet:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli make-fit-ready \
+     --input Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet \
+     --main Data/openuniverse/raw/galaxy_10307.parquet \
+     --out Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet
+
+This derived file keeps the public photon fluxes in audit columns, computes
+``mu_lensing`` from convergence/shear, divides by magnification in the default
+``unlensed`` mode, and writes standard ``flux_*``/``fluxerr_*`` columns in
+``fnu_cgs``.
+
 Euclid FS2
 ~~~~~~~~~~
 

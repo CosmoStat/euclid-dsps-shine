@@ -19,6 +19,7 @@ from euclid_dsps.io import ensure_dir
 from .arrays import load_openuniverse_photometry_arrays
 from .diagnostics import compute_photoz_metrics, compute_prior_overlap_metrics
 from .filter_curves import parse_filter_path_overrides
+from .fit_ready import make_openuniverse_fit_ready_table
 from .flux_closure import run_sed_flux_closure, write_sed_flux_closure_outputs
 from .inventory import (
     inventory_openuniverse_truth_fields,
@@ -51,6 +52,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "merge-external-truth":
         _run_merge_external_truth(args)
+        return
+    if args.command == "make-fit-ready":
+        _run_make_fit_ready(args)
         return
     parser.error("No OpenUniverse subcommand was provided")
 
@@ -182,6 +186,32 @@ def _build_parser() -> argparse.ArgumentParser:
         "--truth-level",
         default="generated_truth",
         choices=["truth", "generated_truth", "proxy"],
+    )
+
+    fit_ready = sub.add_parser(
+        "make-fit-ready",
+        help="Build DSPS-compatible fnu_cgs OpenUniverse photometry.",
+    )
+    fit_ready.add_argument("--input", type=Path, required=True)
+    fit_ready.add_argument("--main", type=Path, required=True)
+    fit_ready.add_argument("--out", type=Path, required=True)
+    fit_ready.add_argument("--filter-root", type=Path, default=Path("filters"))
+    fit_ready.add_argument(
+        "--filter",
+        action="append",
+        default=[],
+        help="Exact filter override of the form band=/path/to/filter.dat",
+    )
+    fit_ready.add_argument(
+        "--lensing-mode",
+        default="unlensed",
+        choices=["unlensed", "lensed"],
+    )
+    fit_ready.add_argument(
+        "--filter-response-mode",
+        default="dsps_clipped",
+        choices=["dsps_clipped", "native"],
+        help="Use DSPS-clipped [0,1] filter responses or native filter values.",
     )
     return parser
 
@@ -359,6 +389,25 @@ def _run_merge_external_truth(args: argparse.Namespace) -> None:
     )
     if args.schema_out is not None:
         print(f"[openuniverse] external truth schema -> {args.schema_out}")
+
+
+def _run_make_fit_ready(args: argparse.Namespace) -> None:
+    filter_paths = parse_filter_path_overrides(args.filter)
+    manifest = make_openuniverse_fit_ready_table(
+        input_path=args.input,
+        main_path=args.main,
+        output_path=args.out,
+        filter_root=args.filter_root,
+        filter_paths=filter_paths,
+        lensing_mode=args.lensing_mode,
+        filter_response_mode=args.filter_response_mode,
+    )
+    print(
+        "[openuniverse] fit-ready parquet -> "
+        f"{args.out} ({manifest['number_of_rows']} rows, "
+        f"unit={manifest['photometry_unit']}, lensing={manifest['lensing_mode']})"
+    )
+    print(f"[openuniverse] manifest -> {Path(args.out).with_suffix('.manifest.yaml')}")
 
 
 def _wide_samples_to_array(frame: pd.DataFrame, prefix: str) -> np.ndarray:
