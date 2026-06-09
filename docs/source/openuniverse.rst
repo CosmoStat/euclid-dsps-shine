@@ -240,6 +240,38 @@ validation. Roman bands still need zeropoint/response validation before the
 resulting MAP parameters should be interpreted as science-grade physical
 inference.
 
+Post-Hoc MAP Fit Report
+-----------------------
+
+Batch MAP runs write enough parquet/CSV state to regenerate diagnostics without
+rerunning the optimizer. Use this when an older run was launched with
+``reporting.level: light`` or when the truth mapping has been improved:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.openuniverse.cli fit-report \
+     --run outputs/runs/openuniverse_fit_ready_batch200 \
+     --config configs/openuniverse_lsst_roman_14_fit_ready.yaml \
+     --reporting-level full
+
+This rewrites the aggregate report tables and generates:
+
+.. code-block:: text
+
+   batch_fit_report.md
+   batch_fit_truth_metrics.csv
+   batch_fit_parameter_truth.png
+   batch_fit_trace_truth.png
+   batch_fit_redshift_truth.png
+   batch_fit_redshift_attractors.png
+   batch_fit_residuals_by_band.png
+   batch_fit_observed_vs_model.png
+
+For OpenUniverse fit-ready runs, the report also adds a post-hoc comparable
+truth alias ``truth_log10_stellar_mass = log10(truth_stellar_mass)`` when the
+run already contains public stellar-mass truth and inferred
+``fit_log10_stellar_mass``.
+
 SED-to-Flux Closure
 -------------------
 

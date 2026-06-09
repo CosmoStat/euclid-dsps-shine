@@ -20,6 +20,9 @@ truth:
             column: redshiftHubble
         stellar_mass:
             column: stellar_mass
+        log10_stellar_mass:
+            column: stellar_mass
+            transform: log10
         mu_lensing:
             column: mu_lensing
 
@@ -29,3 +32,6 @@ fit:
     patience: 30
     trace_mode: optimizer
     trace_interval: 5
+
+reporting:
+    level: full

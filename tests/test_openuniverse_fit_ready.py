@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -126,6 +128,93 @@ def test_make_fit_ready_cli(tmp_path) -> None:
     assert output_path.exists()
     frame = pd.read_parquet(output_path)
     assert frame["photometry_unit"].tolist() == ["fnu_cgs", "fnu_cgs"]
+
+
+def test_fit_report_cli_adds_log_mass_truth_alias(tmp_path) -> None:
+    run = tmp_path / "run"
+    run.mkdir()
+    config = {
+        "bands": [],
+        "model": {"fixed_parameters": {}, "parameter_columns": {}},
+        "fit": {
+            "free_parameters": {
+                "z_obs": {"initial": 1.0, "bounds": [0.0, 2.0]},
+                "log10_stellar_mass": {"initial": 10.0, "bounds": [6.0, 13.0]},
+            },
+            "photometric_likelihood": "student_t",
+            "priors": {},
+        },
+        "truth": {
+            "redshift_column": "redshift",
+            "parameter_columns": {
+                "log10_stellar_mass": {
+                    "column": "stellar_mass",
+                    "transform": "log10",
+                }
+            },
+        },
+    }
+    (run / "normalized_config.json").write_text(json.dumps(config), encoding="utf-8")
+    fits = pd.DataFrame(
+        {
+            "row_index": [0, 1],
+            "fit_z_obs": [1.0, 1.1],
+            "z_obs": [1.0, 1.1],
+            "redshift_truth": [0.95, 1.05],
+            "fit_log10_stellar_mass": [9.0, 10.0],
+            "truth_stellar_mass": [1.0e9, 1.0e10],
+            "chi2": [1.0, 2.0],
+            "photometric_objective": [1.0, 2.0],
+            "photometric_likelihood": ["student_t", "student_t"],
+        }
+    )
+    comparison = pd.DataFrame(
+        {
+            "row_index": [0, 1],
+            "band": ["lsst_u", "lsst_u"],
+            "effective_wavelength_angstrom": [3700.0, 3700.0],
+            "residual_mag_model_minus_observed": [0.1, -0.2],
+            "flux_ratio_model_over_observed": [1.1, 0.9],
+            "chi": [1.0, -2.0],
+            "chi_likelihood": [1.0, -2.0],
+            "photometric_objective_contribution": [1.0, 2.0],
+            "z_obs": [1.0, 1.1],
+            "redshift_truth": [0.95, 1.05],
+            "delta_z_obs_minus_truth": [0.05, 0.05],
+            "fit_log10_stellar_mass": [9.0, 10.0],
+            "truth_stellar_mass": [1.0e9, 1.0e10],
+            "n_valid_bands": [1, 1],
+            "n_free_effective": [2, 2],
+            "dof": [1, 1],
+            "photometric_likelihood": ["student_t", "student_t"],
+        }
+    )
+    trace = pd.DataFrame(
+        {
+            "chunk_index": [0, 0],
+            "iteration": [1, 2],
+            "truth_mse": [0.2, 0.1],
+            "truth_rmse": [0.45, 0.32],
+            "truth_mse_z_obs": [0.01, 0.005],
+        }
+    )
+    fits.to_parquet(run / "batch_fit_results.parquet", index=False)
+    comparison.to_parquet(run / "batch_fit_photometry_comparison.parquet", index=False)
+    trace.to_parquet(run / "batch_fit_trace.parquet", index=False)
+
+    ou_cli_main(
+        [
+            "fit-report",
+            "--run",
+            str(run),
+            "--reporting-level",
+            "light",
+        ]
+    )
+
+    truth = pd.read_csv(run / "batch_fit_truth_metrics.csv")
+    assert "log10_stellar_mass" in truth["parameter"].tolist()
+    assert (run / "batch_fit_report.md").exists()
 
 
 def _write_filters(root, transmission_scale: float = 1.0) -> None:

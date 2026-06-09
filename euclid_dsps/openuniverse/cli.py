@@ -56,6 +56,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "make-fit-ready":
         _run_make_fit_ready(args)
         return
+    if args.command == "fit-report":
+        _run_fit_report(args)
+        return
     parser.error("No OpenUniverse subcommand was provided")
 
 
@@ -212,6 +215,23 @@ def _build_parser() -> argparse.ArgumentParser:
         default="dsps_clipped",
         choices=["dsps_clipped", "native"],
         help="Use DSPS-clipped [0,1] filter responses or native filter values.",
+    )
+
+    fit_report = sub.add_parser(
+        "fit-report",
+        help="Regenerate full MAP fit diagnostics from an existing batch run.",
+    )
+    fit_report.add_argument("--run", type=Path, required=True)
+    fit_report.add_argument(
+        "--config",
+        type=Path,
+        help="YAML config to use for truth mappings. Defaults to run config JSON.",
+    )
+    fit_report.add_argument("--label", default="batch_fit")
+    fit_report.add_argument(
+        "--reporting-level",
+        default="full",
+        choices=["light", "full"],
     )
     return parser
 
@@ -408,6 +428,169 @@ def _run_make_fit_ready(args: argparse.Namespace) -> None:
         f"unit={manifest['photometry_unit']}, lensing={manifest['lensing_mode']})"
     )
     print(f"[openuniverse] manifest -> {Path(args.out).with_suffix('.manifest.yaml')}")
+
+
+def _run_fit_report(args: argparse.Namespace) -> None:
+    from euclid_dsps.config import load_config
+    from euclid_dsps.reporting import (
+        write_batch_outputs,
+        write_fit_diagnostic_outputs,
+        write_trace_truth_outputs,
+    )
+
+    run_dir = Path(args.run)
+    label = str(args.label)
+    config = (
+        load_config(args.config)
+        if args.config is not None
+        else _load_fit_report_config(run_dir)
+    )
+    fits = _augment_fit_report_truth_columns(_read_run_table(run_dir, f"{label}_results"))
+    comparison = _augment_fit_report_truth_columns(
+        _read_run_table(run_dir, f"{label}_photometry_comparison")
+    )
+    write_batch_outputs(
+        comparison,
+        run_dir,
+        label=label,
+        reporting_level=str(args.reporting_level),
+        config=config,
+    )
+    write_fit_diagnostic_outputs(fits, comparison, config, run_dir, label=label)
+    trace_path = _existing_run_table_path(run_dir, f"{label}_trace")
+    if trace_path is not None:
+        trace = _read_table_path(trace_path)
+        write_trace_truth_outputs(
+            trace,
+            run_dir,
+            label=label,
+            make_plots=str(args.reporting_level) == "full",
+        )
+    report_path = run_dir / f"{label}_report.md"
+    _write_fit_report_markdown(run_dir, label, report_path)
+    print(f"[openuniverse] fit report -> {report_path}")
+
+
+def _load_fit_report_config(run_dir: Path) -> dict:
+    normalized = run_dir / "normalized_config.json"
+    if normalized.exists():
+        return json.loads(normalized.read_text(encoding="utf-8"))
+    run_config = run_dir / "batch_fit_run_config.json"
+    if run_config.exists():
+        return json.loads(run_config.read_text(encoding="utf-8"))
+    raise FileNotFoundError(
+        "No config was provided and neither normalized_config.json nor "
+        "batch_fit_run_config.json was found in the run directory."
+    )
+
+
+def _read_run_table(run_dir: Path, stem: str) -> pd.DataFrame:
+    path = _existing_run_table_path(run_dir, stem)
+    if path is None:
+        raise FileNotFoundError(f"Could not find {stem}.parquet or {stem}.csv in {run_dir}")
+    return _read_table_path(path)
+
+
+def _existing_run_table_path(run_dir: Path, stem: str) -> Path | None:
+    for suffix in (".parquet", ".csv"):
+        path = run_dir / f"{stem}{suffix}"
+        if path.exists():
+            return path
+    return None
+
+
+def _read_table_path(path: Path) -> pd.DataFrame:
+    if path.suffix.lower() == ".parquet":
+        return pd.read_parquet(path)
+    return pd.read_csv(path)
+
+
+def _augment_fit_report_truth_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add comparable OU truth aliases that older runs did not write."""
+    if (
+        "truth_stellar_mass" not in frame
+        or "truth_log10_stellar_mass" in frame
+        or "fit_log10_stellar_mass" not in frame
+    ):
+        return frame
+    out = frame.copy()
+    mass = pd.to_numeric(out["truth_stellar_mass"], errors="coerce")
+    out["truth_log10_stellar_mass"] = np.where(mass > 0.0, np.log10(mass), np.nan)
+    if "truth_source_stellar_mass" in out:
+        out["truth_source_log10_stellar_mass"] = out["truth_source_stellar_mass"]
+    if "truth_kind_stellar_mass" in out:
+        out["truth_kind_log10_stellar_mass"] = out["truth_kind_stellar_mass"]
+    return out
+
+
+def _write_fit_report_markdown(run_dir: Path, label: str, path: Path) -> None:
+    summary_path = run_dir / f"{label}_summary.json"
+    truth_path = run_dir / f"{label}_truth_metrics.csv"
+    band_path = run_dir / f"{label}_summary_by_band.csv"
+    galaxy_path = run_dir / f"{label}_summary_by_galaxy.csv"
+    lines = [f"# OpenUniverse MAP Fit Report: `{run_dir.name}`", ""]
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        lines.extend(["## Summary", ""])
+        for key in sorted(summary):
+            lines.append(f"- `{key}`: {summary[key]}")
+        lines.append("")
+    if truth_path.exists():
+        truth = pd.read_csv(truth_path)
+        lines.extend(["## Truth Recovery", "", _frame_to_markdown(truth), ""])
+    if band_path.exists():
+        by_band = pd.read_csv(band_path)
+        cols = [
+            col
+            for col in (
+                "band",
+                "n",
+                "median_residual_mag",
+                "mean_residual_mag",
+                "rms_residual_mag",
+                "median_flux_ratio",
+                "mean_photometric_objective_contribution",
+            )
+            if col in by_band
+        ]
+        lines.extend(["## Band Residuals", "", _frame_to_markdown(by_band[cols]), ""])
+    if galaxy_path.exists():
+        by_galaxy = pd.read_csv(galaxy_path)
+        lines.extend(["## Redshift Collapse Check", ""])
+        if {"redshift_truth", "z_obs"}.issubset(by_galaxy):
+            lines.append(f"- `std(redshift_truth)`: {float(by_galaxy['redshift_truth'].std()):.6g}")
+            lines.append(f"- `std(z_obs)`: {float(by_galaxy['z_obs'].std()):.6g}")
+            lines.append(f"- `n_unique_z_obs_rounded_6`: {int(by_galaxy['z_obs'].round(6).nunique())}")
+        if "z_obs" in by_galaxy:
+            top = by_galaxy["z_obs"].round(6).value_counts().head(10).rename_axis("z_obs").reset_index(name="n")
+            lines.extend(["", "Top fitted redshift attractors:", "", _frame_to_markdown(top)])
+        lines.append("")
+    plot_names = sorted(path.name for path in run_dir.glob(f"{label}_*.png"))
+    if plot_names:
+        lines.extend(["## Plots", ""])
+        lines.extend(f"- `{name}`" for name in plot_names)
+        lines.append("")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _frame_to_markdown(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return "_No rows._"
+    columns = [str(column) for column in frame.columns]
+    rows = ["| " + " | ".join(columns) + " |"]
+    rows.append("| " + " | ".join("---" for _ in columns) + " |")
+    for _, row in frame.iterrows():
+        values = [_markdown_value(row[column]) for column in frame.columns]
+        rows.append("| " + " | ".join(values) + " |")
+    return "\n".join(rows)
+
+
+def _markdown_value(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value).replace("|", "\\|")
 
 
 def _wide_samples_to_array(frame: pd.DataFrame, prefix: str) -> np.ndarray:
