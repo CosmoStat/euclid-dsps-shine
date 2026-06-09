@@ -545,6 +545,11 @@ BAND_PRESETS["openuniverse_lsst_roman_14_fnu_cgs"] = [
     }
     for band in BAND_PRESETS["openuniverse_lsst_roman_14"]
 ]
+BAND_PRESETS["openuniverse_lsst_6_fnu_cgs"] = [
+    dict(band)
+    for band in BAND_PRESETS["openuniverse_lsst_roman_14_fnu_cgs"]
+    if str(band["name"]).startswith("lsst_")
+]
 
 COLUMN_GROUPS = {
     "truth_basic": [

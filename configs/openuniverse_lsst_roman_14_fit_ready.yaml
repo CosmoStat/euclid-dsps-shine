@@ -3,6 +3,17 @@ extends: openuniverse_lsst_roman_14.yaml
 catalog_path: Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet
 bands: openuniverse_lsst_roman_14_fnu_cgs
 
+redshift:
+    initial: random_uniform
+    column: redshift
+    truth_column: redshift
+    fixed_value: 0.5
+    min: 0.001
+    max: 2.5
+    seed: 42
+    prior_z:
+        mode: none
+
 openuniverse:
     input_root: Data/openuniverse/raw
     output_path: Data/openuniverse/processed/ou_lsst_roman_14_subset.parquet
@@ -32,6 +43,13 @@ fit:
     patience: 30
     trace_mode: optimizer
     trace_interval: 5
+    free_parameters:
+        z_obs:
+            initial: from_base
+            bounds: [0.001, 2.5]
+        log10_stellar_mass:
+            initial: 8.0
+            bounds: [5.0, 13.0]
 
 reporting:
     level: full

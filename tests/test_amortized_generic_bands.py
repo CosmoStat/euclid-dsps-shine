@@ -81,3 +81,26 @@ def test_openuniverse_fit_ready_config_uses_fnu_cgs_and_exact_filters() -> None:
     assert config["amortized"]["encoder"]["input_dim"] == 28
     assert config["truth"]["parameter_columns"]["dust_av"]["column"] is None
     assert config["truth"]["parameter_columns"]["log10_sfr_at_obs"]["column"] is None
+
+
+def test_openuniverse_fit_ready_uses_blind_redshift_initialization() -> None:
+    config = load_config("configs/openuniverse_lsst_roman_14_fit_ready.yaml")
+
+    assert config["redshift"]["initial"] == "random_uniform"
+    assert config["redshift"]["column"] == "redshift"
+    assert config["truth"]["redshift_column"] == "redshift"
+    assert config["fit"]["free_parameters"]["z_obs"]["initial"] == "from_base"
+    assert config["fit"]["free_parameters"]["z_obs"]["bounds"] == [0.001, 2.5]
+    assert config["fit"]["free_parameters"]["log10_stellar_mass"]["initial"] == 8.0
+
+
+def test_openuniverse_lsst_only_fit_ready_config_uses_six_lsst_bands() -> None:
+    config = load_config("configs/openuniverse_lsst_6_fit_ready.yaml")
+
+    band_names = tuple(band["name"] for band in config["bands"])
+    assert band_names == ("lsst_u", "lsst_g", "lsst_r", "lsst_i", "lsst_z", "lsst_y")
+    assert {band["units"] for band in config["bands"]} == {"fnu_cgs"}
+    assert config["amortized"]["data"]["expected_n_bands"] == 6
+    assert config["amortized"]["features"]["n_flux_bands"] == 6
+    assert config["amortized"]["features"]["n_error_bands"] == 6
+    assert config["amortized"]["encoder"]["input_dim"] == 12

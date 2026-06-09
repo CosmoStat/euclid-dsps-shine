@@ -1725,6 +1725,41 @@ def test_parameters_for_row_adds_redshift_prior_sigma() -> None:
     assert params["z_obs_prior_sigma"] == pytest.approx(0.5)
 
 
+def test_random_uniform_redshift_uses_identifier_not_truth_redshift() -> None:
+    redshift_config = {
+        "initial": "random_uniform",
+        "column": "redshift",
+        "truth_column": "redshift",
+        "fixed_value": 0.5,
+        "min": 0.001,
+        "max": 2.5,
+        "seed": 42,
+        "prior_z": {"mode": "none"},
+    }
+
+    params_a = parameters_for_row(
+        {"z_obs": 0.5, "log10_stellar_mass": 8.0},
+        {},
+        {"galaxy_id": 123, "redshift": 0.2, "redshiftHubble": 0.21},
+        redshift_config,
+    )
+    params_b = parameters_for_row(
+        {"z_obs": 0.5, "log10_stellar_mass": 8.0},
+        {},
+        {"galaxy_id": 123, "redshift": 1.8, "redshiftHubble": 1.82},
+        redshift_config,
+    )
+    params_c = parameters_for_row(
+        {"z_obs": 0.5, "log10_stellar_mass": 8.0},
+        {},
+        {"galaxy_id": 456, "redshift": 0.2, "redshiftHubble": 0.21},
+        redshift_config,
+    )
+
+    assert params_a["z_obs"] == pytest.approx(params_b["z_obs"])
+    assert params_a["z_obs"] != pytest.approx(params_c["z_obs"])
+
+
 def test_comparison_rows_include_flux_error_and_chi_flux() -> None:
     observation = GalaxyObservation(
         row_index=0,

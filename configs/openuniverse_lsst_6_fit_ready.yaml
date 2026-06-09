@@ -1,0 +1,12 @@
+extends: openuniverse_lsst_roman_14_fit_ready.yaml
+
+bands: openuniverse_lsst_6_fnu_cgs
+
+amortized:
+    data:
+        expected_n_bands: 6
+    features:
+        n_flux_bands: 6
+        n_error_bands: 6
+    encoder:
+        input_dim: 12

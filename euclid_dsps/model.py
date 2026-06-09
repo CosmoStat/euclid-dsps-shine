@@ -1619,9 +1619,30 @@ def _random_uniform_redshift(
     row: dict[str, Any], redshift_config: dict[str, Any], z_min: float, z_max: float
 ) -> float:
     seed = int(float(redshift_config.get("seed", 42)))
-    payload = "|".join(
-        f"{key}={row[key]}" for key in sorted(row) if np.isscalar(row[key])
-    )
+    excluded = {
+        "redshift",
+        "redshiftHubble",
+        "redshift_truth",
+        "redshift_hubble_truth",
+        str(redshift_config.get("column") or ""),
+        str(redshift_config.get("truth_column") or ""),
+    }
+    id_keys = ("galaxy_id", "object_id", "source_id", "id", "row_index")
+    id_payload = [
+        f"{key}={row[key]}"
+        for key in id_keys
+        if key in row and np.isscalar(row[key]) and key not in excluded
+    ]
+    if id_payload:
+        payload = "|".join(id_payload)
+    else:
+        payload = "|".join(
+            f"{key}={row[key]}"
+            for key in sorted(row)
+            if key not in excluded and np.isscalar(row[key])
+        )
+    if not payload:
+        payload = "no-stable-row-id"
     digest = hashlib.blake2b(f"{seed}|{payload}".encode(), digest_size=8).digest()
     unit = int.from_bytes(digest, "big") / float(2**64 - 1)
     return z_min + unit * (z_max - z_min)
