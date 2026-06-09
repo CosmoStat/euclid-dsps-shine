@@ -17,6 +17,7 @@ Data/*
 !Data/.gitkeep
 !tests/data/*.parquet
 *.Zone.Identifier
+*:Zone.Identifier
 filters/converted/
 
 # Local tool config and cloned helper repositories are not project source.
