@@ -1,0 +1,3 @@
+extends: diffsky_hltds_04_14_fit_basic.yaml
+
+runtime: gpu

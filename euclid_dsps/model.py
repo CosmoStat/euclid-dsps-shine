@@ -1120,6 +1120,7 @@ def _is_popcosmos_like_model_config(model_config: dict[str, Any] | None) -> bool
     return str(config.get("sfh_model", "lognormal")) in {
         "popcosmos_bins",
         "diffstar_reduced6",
+        "diffsky_basic",
     }
 
 
@@ -1182,7 +1183,7 @@ def _imf_metadata(attrs: dict[str, Any]) -> tuple[float | None, str | None]:
 def _validate_popcosmos_ssp_metadata(
     ssp_path: str | Path, model_config: dict[str, Any]
 ) -> None:
-    if not _is_popcosmos_like_model_config(model_config):
+    if not _requires_popcosmos_asset_metadata(model_config):
         return
     path = Path(ssp_path).expanduser()
     try:
@@ -1200,7 +1201,7 @@ def _validate_popcosmos_ssp_metadata(
 def _validate_popcosmos_gas_metadata(
     path: Path, attrs: dict[str, Any], model_config: dict[str, Any] | None
 ) -> None:
-    if not _is_popcosmos_like_model_config(model_config):
+    if not _requires_popcosmos_asset_metadata(model_config):
         return
     _validate_popcosmos_asset_name(path, "gas SSP grid")
     _validate_popcosmos_imf(path, attrs, "gas SSP grid")
@@ -1227,7 +1228,7 @@ def _validate_popcosmos_gas_metadata(
 def _validate_popcosmos_agn_metadata(
     path: Path, attrs: dict[str, Any], model_config: dict[str, Any] | None
 ) -> None:
-    if not _is_popcosmos_like_model_config(model_config):
+    if not _requires_popcosmos_asset_metadata(model_config):
         return
     _validate_popcosmos_asset_name(path, "AGN template grid")
     _validate_popcosmos_imf(path, attrs, "AGN template grid")
@@ -1239,6 +1240,14 @@ def _validate_popcosmos_asset_name(path: Path, label: str) -> None:
         raise ValueError(
             f"PopCosmos-like {label} path must not contain 'kroupa': {path}"
         )
+
+
+def _requires_popcosmos_asset_metadata(model_config: dict[str, Any] | None) -> bool:
+    config = model_config or {}
+    return str(config.get("sfh_model", "lognormal")) in {
+        "popcosmos_bins",
+        "diffstar_reduced6",
+    }
 
 
 def _validate_popcosmos_imf(path: Path, attrs: dict[str, Any], label: str) -> None:
@@ -1698,6 +1707,8 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
         return run_popcosmos_binned_model_jax(context, params)
     if str(model_config.get("sfh_model", "lognormal")) == "diffstar_reduced6":
         return run_diffstar_reduced6_model_jax(context, params)
+    if str(model_config.get("sfh_model", "lognormal")) == "diffsky_basic":
+        return run_diffsky_basic_model_jax(context, params)
     return run_lognormal_model_jax(context, params)
 
 
@@ -1709,6 +1720,8 @@ def run_dsps_model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp
         return run_popcosmos_binned_model_mags_jax(context, params)
     if sfh_model == "diffstar_reduced6":
         return run_diffstar_reduced6_model_mags_jax(context, params)
+    if sfh_model == "diffsky_basic":
+        return run_diffsky_basic_model_mags_jax(context, params)
     return run_lognormal_model_jax(context, params).model_mags
 
 
@@ -2237,6 +2250,156 @@ def run_diffstar_reduced6_model_mags_jax(
     return predict_mags_jax(context, wave, post_igm_sed, z_obs)
 
 
+def run_diffsky_basic_model_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> JaxModelResult:
+    """Diffsky-aligned forward model using Diffstar + Diffmah object parameters.
+
+    This path is intentionally narrower than the PopCosmos-like full model:
+    HLTDS exposes Diffstar, Diffmah, and dust latents, but not object-level gas
+    metallicity/ionization or AGN latents. The first fitting target therefore
+    keeps nebular gas and AGN out of the free parameterization instead of
+    pretending those quantities are recoverable truths.
+    """
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    model_config = _normalized_model_config(context.model_config)
+    if str(model_config.get("stellar_metallicity_model")) != "single":
+        raise ValueError(
+            "sfh_model='diffsky_basic' requires "
+            "model.stellar_metallicity_model='single'."
+        )
+
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
+    raw_sfr_table = build_diffsky_basic_sfh_table_jax(gal_t_table, t_obs, params)
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
+        gal_t_table,
+        raw_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+        params["log10_stellar_mass"],
+        frac_surviving_by_age,
+    )
+    age_weights = calc_age_weights_from_sfh_table(
+        gal_t_table,
+        gal_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+    )
+    ssp_flux_z = interpolate_context_ssp_stellar_metallicity_jax(context, lgmet_abs)
+    sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    intrinsic_sed = jnp.nan_to_num(
+        sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    tau2, dust_index_n, tau1_over_tau2 = diffsky_basic_dust_params_jax(params)
+    wave = _context_ssp_wave(context)
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        wave,
+        ssp_lg_age_gyr,
+        sed_by_age,
+        tau2,
+        dust_index_n,
+        tau1_over_tau2,
+        model_config,
+    )
+    dusted_sed = jnp.nan_to_num(
+        dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    pre_igm_sed, post_igm_sed = combine_agn_and_igm_jax(
+        wave,
+        dusted_sed,
+        jnp.zeros_like(dusted_sed),
+        z_obs,
+        model_config,
+    )
+    model_mags = predict_mags_jax(context, wave, post_igm_sed, z_obs)
+    return JaxModelResult(
+        wave=wave,
+        rest_sed=intrinsic_sed,
+        dusted_rest_sed=post_igm_sed,
+        model_mags=model_mags,
+        t_obs_gyr=t_obs,
+        formed_mass_msun=formed_mass,
+        surviving_stellar_mass_msun=surviving_mass,
+        sfr_at_obs_msun_per_yr=gal_sfr_table[-1],
+        sfr_bins_msun_per_yr=project_sfh_to_popcosmos_sfr_bins_jax(
+            gal_t_table, gal_sfr_table, t_obs
+        ),
+        lookback_bin_edges_gyr=build_popcosmos_lookback_bin_edges_jax(t_obs),
+        stellar_intrinsic_sed=intrinsic_sed,
+        stellar_dusted_sed=dusted_sed,
+        gas_sed=jnp.zeros_like(dusted_sed),
+        agn_sed=jnp.zeros_like(dusted_sed),
+        pre_igm_sed=pre_igm_sed,
+        post_igm_sed=post_igm_sed,
+    )
+
+
+def run_diffsky_basic_model_mags_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> jnp.ndarray:
+    """Likelihood-only Diffsky basic forward path."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    model_config = _normalized_model_config(context.model_config)
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
+    raw_sfr_table = build_diffsky_basic_sfh_table_jax(gal_t_table, t_obs, params)
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    gal_sfr_table, formed_mass, _ = normalize_sfh_to_stellar_mass_jax(
+        gal_t_table,
+        raw_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+        params["log10_stellar_mass"],
+        frac_surviving_by_age,
+    )
+    age_weights = calc_age_weights_from_sfh_table(
+        gal_t_table,
+        gal_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+    )
+    ssp_flux_z = interpolate_context_ssp_stellar_metallicity_jax(context, lgmet_abs)
+    sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    tau2, dust_index_n, tau1_over_tau2 = diffsky_basic_dust_params_jax(params)
+    wave = _context_ssp_wave(context)
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        wave,
+        ssp_lg_age_gyr,
+        sed_by_age,
+        tau2,
+        dust_index_n,
+        tau1_over_tau2,
+        model_config,
+    )
+    dusted_sed = jnp.nan_to_num(
+        dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    _, post_igm_sed = combine_agn_and_igm_jax(
+        wave,
+        dusted_sed,
+        jnp.zeros_like(dusted_sed),
+        z_obs,
+        model_config,
+    )
+    return predict_mags_jax(context, wave, post_igm_sed, z_obs)
+
+
 def build_popcosmos_lookback_bin_edges_jax(t_obs: jnp.ndarray) -> jnp.ndarray:
     """Return PopCosmos-like seven-bin lookback edges in Gyr.
 
@@ -2437,6 +2600,73 @@ def build_diffstar_sfh_table_jax(
         fb=fb,
     )
     return jnp.nan_to_num(jnp.clip(sfh, 1.0e-14, jnp.inf), nan=1.0e-14)
+
+
+def build_diffsky_basic_sfh_table_jax(
+    gal_t_table: jnp.ndarray,
+    t_obs: jnp.ndarray,
+    params: dict[str, Any],
+) -> jnp.ndarray:
+    """Evaluate Diffstar using per-object Diffstar and Diffmah parameters."""
+    (
+        calc_sfh_singlegal,
+        default_diffstar_params,
+        diffstar_params_cls,
+        default_mah_params,
+        fb,
+    ) = _import_diffstar_api()
+    diffstar_params = diffstar_params_cls(
+        _jax_param(params, "diffstar_lgmcrit", default_diffstar_params.lgmcrit),
+        _jax_param(
+            params, "diffstar_lgy_at_mcrit", default_diffstar_params.lgy_at_mcrit
+        ),
+        _jax_param(params, "diffstar_indx_lo", default_diffstar_params.indx_lo),
+        _jax_param(params, "diffstar_indx_hi", default_diffstar_params.indx_hi),
+        _jax_param(params, "diffstar_lg_qt", default_diffstar_params.lg_qt),
+        _jax_param(params, "diffstar_qlglgdt", default_diffstar_params.qlglgdt),
+        _jax_param(params, "diffstar_lg_drop", default_diffstar_params.lg_drop),
+        _jax_param(params, "diffstar_lg_rejuv", default_diffstar_params.lg_rejuv),
+    )
+    mah_params = type(default_mah_params)(
+        _jax_param(params, "diffmah_logm0", default_mah_params.logm0),
+        _jax_param(params, "diffmah_logtc", default_mah_params.logtc),
+        _jax_param(params, "diffmah_early_index", default_mah_params.early_index),
+        _jax_param(params, "diffmah_late_index", default_mah_params.late_index),
+        _jax_param(params, "diffmah_t_peak", default_mah_params.t_peak),
+    )
+    sfh = calc_sfh_singlegal(
+        diffstar_params,
+        mah_params,
+        jnp.asarray(gal_t_table, dtype=jnp.float32),
+        lgt0=jnp.log10(jnp.maximum(t_obs, 1.0e-6)),
+        fb=fb,
+    )
+    return jnp.nan_to_num(jnp.clip(sfh, 1.0e-14, jnp.inf), nan=1.0e-14)
+
+
+def diffsky_basic_dust_params_jax(
+    params: dict[str, Any],
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Map HLTDS dust latents to the existing DSPS attenuation kernel.
+
+    HLTDS exposes ``av`` and ``delta``. The current DSPS path expects optical
+    depth at V band, a slope-like dust index, and a birth-cloud ratio. We use
+    A_V = 1.086 * tau_V and set the birth-cloud component to zero by default,
+    because no object-level birth-cloud latent is present in the prepared HLTDS
+    table.
+    """
+    tau2 = jnp.asarray(params.get("dust_av", 0.0), dtype=jnp.float32) / jnp.asarray(
+        1.086, dtype=jnp.float32
+    )
+    dust_index_n = jnp.asarray(params.get("dust_delta", 0.0), dtype=jnp.float32)
+    tau1_over_tau2 = jnp.asarray(
+        params.get("tau1_over_tau2", 0.0), dtype=jnp.float32
+    )
+    return (
+        jnp.maximum(tau2, 0.0),
+        dust_index_n,
+        jnp.maximum(tau1_over_tau2, 0.0),
+    )
 
 
 def _import_diffstar_api():

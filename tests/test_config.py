@@ -10,9 +10,11 @@ from euclid_dsps.config import (
 )
 from euclid_dsps.io import required_catalog_columns
 from euclid_dsps.parameters import (
+    DIFFSKY_BASIC_PARAMETER_NAMES,
     DIFFSTAR_REDUCED6_PARAMETER_NAMES,
     POPCOSMOS_PARAMETER_NAMES,
 )
+from euclid_dsps.semantics import is_comparable_fit_parameter
 
 
 def minimal_config() -> dict:
@@ -409,6 +411,35 @@ def test_diffstar_forbids_binned_sfh_free_parameters() -> None:
         normalize_config(config)
 
 
+def test_diffsky_basic_accepts_generated_truth_dust() -> None:
+    config = minimal_config()
+    config["model"] = {
+        "sfh_model": "diffsky_basic",
+        "stellar_metallicity_model": "single",
+        "dust_model": "prospector_fsps",
+        "nebular_model": "fixed_ssp",
+        "agn_model": "none",
+    }
+    config["truth"] = {
+        "redshift_column": "redshift_true",
+        "parameter_columns": {
+            "dust_av": {"column": "dust_av", "kind": "generated_truth"},
+        },
+    }
+    config["fit"] = {
+        "free_parameters": {
+            "dust_av": {"initial": 0.5, "bounds": [0.0, 4.0]},
+            "diffmah_logm0": {"initial": 12.0, "bounds": [11.0, 15.0]},
+        }
+    }
+
+    normalized = normalize_config(config)
+
+    assert "dust_av" in DIFFSKY_BASIC_PARAMETER_NAMES
+    assert normalized["model"]["sfh_model"] == "diffsky_basic"
+    assert is_comparable_fit_parameter(normalized, "dust_av") is True
+
+
 def test_fixed_band_calibration_expands_to_fit_offsets() -> None:
     config = minimal_config()
     config["band_calibration"] = {
@@ -743,6 +774,31 @@ def test_popcosmos_diffstar_noagn_config_is_fallback_comparison() -> None:
         config["model"]["stellar_only_ssp_path"]
         == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
     )
+
+
+def test_diffsky_hltds_basic_and_extended_configs() -> None:
+    basic = load_config("configs/diffsky_hltds_04_14_fit_basic.yaml")
+    extended = load_config("configs/diffsky_hltds_04_14_fit_extended.yaml")
+
+    assert basic["model"]["sfh_model"] == "diffsky_basic"
+    assert basic["model"]["nebular_model"] == "fixed_ssp"
+    assert basic["model"]["agn_model"] == "none"
+    assert len(basic["bands"]) == 14
+    assert basic["bands"][0]["filter"]["kind"] == "hdf5_group"
+    assert tuple(basic["fit"]["free_parameters"]) == (
+        "z_obs",
+        "log10_stellar_mass",
+        "diffstar_lgmcrit",
+        "diffstar_lgy_at_mcrit",
+        "diffstar_indx_lo",
+        "diffstar_lg_qt",
+        "diffstar_lg_drop",
+        "diffstar_lg_rejuv",
+        "dust_av",
+        "dust_delta",
+    )
+    assert "diffmah_logm0" in extended["fit"]["free_parameters"]
+    assert "diffstar_indx_hi" in extended["fit"]["free_parameters"]
 
 
 def test_cosmos_sed_defaults_are_normalized() -> None:

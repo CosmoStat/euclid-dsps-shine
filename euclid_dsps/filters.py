@@ -54,6 +54,9 @@ def load_filters(band_configs: list[dict[str, Any]]) -> dict[str, FilterCurve]:
 def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
     """Load an exact HDF5/FITS/DAT curve or build an approximate top-hat."""
     kind = filter_config.get("kind", "auto")
+    if kind == "hdf5_group":
+        return load_hdf5_group_filter(name, Path(filter_config["path"]), filter_config)
+
     if kind == "hdf5" or (
         "path" in filter_config
         and str(filter_config["path"]).endswith((".h5", ".hdf5"))
@@ -109,6 +112,47 @@ def load_filter(name: str, filter_config: dict[str, Any]) -> FilterCurve:
         )
 
     raise ValueError(f"Unsupported filter kind for {name}: {kind}")
+
+
+def load_hdf5_group_filter(
+    name: str, path: Path, filter_config: dict[str, Any]
+) -> FilterCurve:
+    """Load grouped HDF5 filter curves with ``<group>/wave`` datasets."""
+    if not path.exists():
+        raise FileNotFoundError(f"Filter file not found for {name}: {path}")
+    try:
+        import h5py
+    except ImportError as exc:  # pragma: no cover - pyproject requires h5py
+        raise RuntimeError("h5py is required to load grouped HDF5 filters") from exc
+    group_name = str(filter_config.get("group", name))
+    wave_dataset = str(filter_config.get("wave_dataset", "wave"))
+    transmission_dataset = str(
+        filter_config.get("transmission_dataset", "transmission")
+    )
+    with h5py.File(path, "r") as handle:
+        if group_name not in handle:
+            raise ValueError(f"Filter group {group_name!r} not found in {path}")
+        group = handle[group_name]
+        if wave_dataset not in group or transmission_dataset not in group:
+            raise ValueError(
+                f"Filter group {group_name!r} in {path} must contain "
+                f"{wave_dataset!r} and {transmission_dataset!r}"
+            )
+        wave = np.asarray(group[wave_dataset], dtype=float)
+        transmission = np.asarray(group[transmission_dataset], dtype=float)
+    wave = wave * _wave_unit_to_angstrom_factor(
+        str(filter_config.get("wave_unit", "angstrom"))
+    )
+    order = np.argsort(wave)
+    wave = wave[order]
+    transmission = np.clip(transmission[order], 0.0, np.inf)
+    mask = np.isfinite(wave) & np.isfinite(transmission)
+    return FilterCurve(
+        name=name,
+        wave=wave[mask],
+        transmission=transmission[mask],
+        source=f"{path}:{group_name}",
+    )
 
 
 def load_ascii_filter(

@@ -9,7 +9,11 @@ from typing import Any
 
 import yaml
 
-from .parameters import DIFFSTAR_REDUCED6_PARAMETER_NAMES, POPCOSMOS_PARAMETER_NAMES
+from .parameters import (
+    DIFFSKY_BASIC_PARAMETER_NAMES,
+    DIFFSTAR_REDUCED6_PARAMETER_NAMES,
+    POPCOSMOS_PARAMETER_NAMES,
+)
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,12 @@ DEFAULT_MODEL_PARAMETERS = {
     "diffstar_qlglgdt": -0.50725,
     "diffstar_lg_drop": -1.01773,
     "diffstar_lg_rejuv": -0.212307,
+    "diffmah_logm0": 12.0,
+    "diffmah_logtc": 0.05,
+    "diffmah_early_index": 2.6137643,
+    "diffmah_late_index": 0.12692805,
+    "diffmah_t_peak": 14.0,
+    "dust_delta": 0.0,
 }
 
 DEFAULT_REDSHIFT_CONFIG = {
@@ -109,7 +119,12 @@ SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
 SUPPORTED_NONDETECTION_POLICIES = {"drop", "gaussian_flux", "upper_limit"}
 SUPPORTED_BAND_CALIBRATION_MODES = {"none", "fixed_offsets"}
 SUPPORTED_NEBULAR_EMISSION_MODES = {"none", "ssp_flux", "emline_table"}
-SUPPORTED_SFH_MODELS = {"lognormal", "popcosmos_bins", "diffstar_reduced6"}
+SUPPORTED_SFH_MODELS = {
+    "lognormal",
+    "popcosmos_bins",
+    "diffstar_reduced6",
+    "diffsky_basic",
+}
 SUPPORTED_SSP_MODELS = {"dense", "compressed_basis"}
 SUPPORTED_STELLAR_METALLICITY_MODELS = {"mdf", "single"}
 SUPPORTED_MODEL_DUST_MODELS = {
@@ -174,6 +189,26 @@ PRIOR_SETS = {
         "log10_gas_ionization": {"type": "uniform"},
         "ln_fagn": {"type": "uniform"},
         "ln_tauagn": {"type": "uniform"},
+    },
+    "flat_diffsky_basic": {
+        "z_obs": {"type": "uniform"},
+        "log10_stellar_mass": {"type": "uniform"},
+        "diffstar_lgmcrit": {"type": "uniform"},
+        "diffstar_lgy_at_mcrit": {"type": "uniform"},
+        "diffstar_indx_lo": {"type": "uniform"},
+        "diffstar_indx_hi": {"type": "uniform"},
+        "diffstar_lg_qt": {"type": "uniform"},
+        "diffstar_qlglgdt": {"type": "uniform"},
+        "diffstar_lg_drop": {"type": "uniform"},
+        "diffstar_lg_rejuv": {"type": "uniform"},
+        "diffmah_logm0": {"type": "uniform"},
+        "diffmah_logtc": {"type": "uniform"},
+        "diffmah_early_index": {"type": "uniform"},
+        "diffmah_late_index": {"type": "uniform"},
+        "diffmah_t_peak": {"type": "uniform"},
+        "log10_stellar_metallicity": {"type": "uniform"},
+        "dust_av": {"type": "uniform"},
+        "dust_delta": {"type": "uniform"},
     },
 }
 
@@ -549,6 +584,48 @@ BAND_PRESETS["openuniverse_lsst_6_fnu_cgs"] = [
     dict(band)
     for band in BAND_PRESETS["openuniverse_lsst_roman_14_fnu_cgs"]
     if str(band["name"]).startswith("lsst_")
+]
+
+DIFFSKY_HLTDS_FILTER_PATH = (
+    "Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/"
+    "diffsky_hltds_cosmos_260215_04_14_2026_transmission_curves.hdf5"
+)
+DIFFSKY_HLTDS_LSST_ROMAN_BANDS = (
+    "lsst_u",
+    "lsst_g",
+    "lsst_r",
+    "lsst_i",
+    "lsst_z",
+    "lsst_y",
+    "roman_F062",
+    "roman_F087",
+    "roman_F106",
+    "roman_F129",
+    "roman_F146",
+    "roman_F158",
+    "roman_F184",
+    "roman_F213",
+)
+BAND_PRESETS["diffsky_hltds_lsst_roman_14_fnu_cgs"] = [
+    {
+        "name": band_name,
+        "column": f"flux_{band_name}",
+        "units": "fnu_cgs",
+        "error_column": f"fluxerr_{band_name}",
+        "error_units": "fnu_cgs",
+        "sigma_mag": 0.05,
+        "sigma_mag_floor": 0.005,
+        "sigma_mag_ceiling": 0.5,
+        "filter": {
+            "kind": "hdf5_group",
+            "path": DIFFSKY_HLTDS_FILTER_PATH,
+            "group": band_name,
+            "wave_dataset": "wave",
+            "transmission_dataset": "transmission",
+            "wave_unit": "angstrom",
+        },
+    }
+    for band_name in DIFFSKY_HLTDS_LSST_ROMAN_BANDS
 ]
 
 COLUMN_GROUPS = {
@@ -962,7 +1039,7 @@ def _normalize_model_dust_model(value: Any) -> str:
 
 
 def _is_popcosmos_like_sfh(sfh_model: Any) -> bool:
-    return str(sfh_model) in {"popcosmos_bins", "diffstar_reduced6"}
+    return str(sfh_model) in {"popcosmos_bins", "diffstar_reduced6", "diffsky_basic"}
 
 
 def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
@@ -1487,6 +1564,8 @@ def _validate_model_fit_contract(
         _validate_popcosmos_free_parameters(model, free_names, errors)
     elif sfh_model == "diffstar_reduced6":
         _validate_diffstar_free_parameters(model, free_names, errors)
+    elif sfh_model == "diffsky_basic":
+        _validate_diffsky_basic_free_parameters(model, free_names, errors)
     elif sfh_model == "lognormal":
         _validate_lognormal_free_parameters(free_names, errors)
 
@@ -1610,6 +1689,69 @@ def _validate_diffstar_free_parameters(
             errors.append(
                 f"fit.free_parameters.{name} is not used by "
                 "model.sfh_model='diffstar_reduced6'"
+            )
+
+
+def _validate_diffsky_basic_free_parameters(
+    model: dict[str, Any], free_names: set[str], errors: list[str]
+) -> None:
+    legacy_forbidden = {
+        "sfh_t_peak",
+        "sfh_tau",
+        "log10_sfr",
+        "dlog10_sfr_1",
+        "dlog10_sfr_2",
+        "dlog10_sfr_3",
+        "dlog10_sfr_4",
+        "dlog10_sfr_5",
+        "dlog10_sfr_6",
+        "log10_metallicity",
+        "metallicity_scatter",
+        "tau2",
+        "dust_index_n",
+        "tau1_over_tau2",
+        "log10_gas_metallicity",
+        "log10_gas_ionization",
+        "ln_fagn",
+        "ln_tauagn",
+    }
+    for name in sorted(free_names & legacy_forbidden):
+        errors.append(
+            f"fit.free_parameters.{name} is not used by "
+            "model.sfh_model='diffsky_basic'"
+        )
+
+    if str(model.get("stellar_metallicity_model", "single")) != "single":
+        errors.append(
+            "model.sfh_model='diffsky_basic' requires "
+            "model.stellar_metallicity_model='single'"
+        )
+    if _normalize_model_dust_model(
+        model.get("dust_model", "prospector_fsps")
+    ) not in {"charlot_fall_powerlaw", "prospector_fsps"}:
+        errors.append(
+            "model.sfh_model='diffsky_basic' requires "
+            "model.dust_model='charlot_fall_powerlaw' or 'prospector_fsps'"
+        )
+    if str(model.get("nebular_model", "fixed_ssp")) != "fixed_ssp":
+        errors.append(
+            "model.sfh_model='diffsky_basic' currently requires "
+            "model.nebular_model='fixed_ssp'; HLTDS does not expose gas "
+            "metallicity/ionization latents in the prepared dataset"
+        )
+    if str(model.get("agn_model", "none")) != "none":
+        errors.append(
+            "model.sfh_model='diffsky_basic' currently requires "
+            "model.agn_model='none'; AGN latents are not fit in this schema"
+        )
+
+    allowed = set(DIFFSKY_BASIC_PARAMETER_NAMES)
+    unknown = sorted(free_names - allowed)
+    for name in unknown:
+        if name not in legacy_forbidden:
+            errors.append(
+                f"fit.free_parameters.{name} is not used by "
+                "model.sfh_model='diffsky_basic'"
             )
 
 

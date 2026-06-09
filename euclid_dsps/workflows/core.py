@@ -1469,11 +1469,16 @@ def _row_context(
                 )
     for column in config.get("extra_columns", []):
         if column in row and pd.notna(row[column]):
-            values[f"catalog_{column}"] = float(row[column])
+            try:
+                values[f"catalog_{column}"] = float(row[column])
+            except (TypeError, ValueError):
+                values[f"catalog_{column}"] = str(row[column])
     return values
 
 
 def _truth_kind(truth_name: str, spec: Any) -> str:
+    if isinstance(spec, dict) and spec.get("kind"):
+        return str(spec["kind"])
     if truth_name in {"dust_av", "log10_metallicity"}:
         return "proxy"
     if isinstance(spec, dict) and (
