@@ -36,9 +36,11 @@ assets:
        eda.py        EDA report exports.
        fit.py        MAP/population report exports.
        forward.py    Forward-model report exports.
-       posterior.py  Posterior report exports.
-       workflow.py   Composite workflow report exports.
-       core.py       Report tables and plots.
+     posterior.py  Posterior report exports.
+     workflow.py   Composite workflow report exports.
+     core.py       Report tables and plots.
+     diffsky_data/  Remote listing, bounded download, inventory, preparation,
+                    validation, and reports for Diffsky/OpenCosmo HLTDS data.
      workflows/
        bayesian.py   Bayesian workflow exports.
        cosmos.py     COSMOS SED reconstruction workflow.
@@ -49,12 +51,11 @@ assets:
        workflow.py   Composite workflow exports.
        core.py       End-to-end CLI workflows.
    configs/
-     popcosmos_binned_compressed.yaml    Production full AGN setup with binned SFH.
-     popcosmos_diffstar_compressed.yaml  Compressed full AGN Diffstar comparison.
-     popcosmos_binned.yaml               Dense full AGN reference setup.
-     popcosmos_diffstar.yaml             Dense full AGN Diffstar reference.
-     popcosmos_binned_noagn.yaml         No-AGN binned fallback.
-     popcosmos_diffstar_noagn.yaml       No-AGN Diffstar fallback.
+     fs2_gpu.yaml                              Euclid FS2 GPU baseline.
+     diffsky_hltds_04_14_simple_gpu.yaml      Main Diffsky HLTDS simple fit.
+     diffsky_hltds_04_14_fixedz_closure_gpu.yaml
+                                               Diffsky fixed-redshift closure.
+     amortized_fs2_realnvp.yaml               FS2 amortized RealNVP prior.
    scripts/
      generate_fsps_ssp_grid.py
      generate_fsps_gas_grid.py
@@ -63,10 +64,10 @@ assets:
    Data/             Local data and DSPS assets, not source.
    outputs/          Generated run outputs, not source.
 
-The active runtime path is intentionally narrow: compressed full AGN configs
-for production MAP batches, dense full AGN configs for reference/benchmark
-closure, no-AGN configs for ablation/fallback, generated FSPS assets in
-``Data/``, and CLI workflows under ``fit``, ``posterior``, and ``check``.
+The active runtime path is intentionally narrow: Euclid FS2 MAP/posterior,
+Diffsky HLTDS simple MAP recovery, and FS2 amortized RealNVP prior learning.
+Generated data and spectral assets stay in ``Data/``; generated reports and
+run outputs stay in ``outputs/``.
 
 Layer Responsibilities
 ----------------------
@@ -110,6 +111,13 @@ Layer Responsibilities
   It owns SciPIC value-added or LePhare template/extinction loading,
   attenuation, synthetic photometry, rest-frame absolute-flux normalization,
   population validation, and COSMOS-vs-DSPS metrics.
+
+``diffsky_data/``
+  Owns the HLTDS dataset workflow: remote NERSC directory listing, bounded
+  downloads, HDF5/parquet inventory, truth/photometry detection, normalized
+  parquet preparation, validation for prior learning, dataset diagnostics, and
+  Diffsky MAP fit reports. It must not silently invent unavailable truth
+  columns or native photometric errors.
 
 ``jax_runtime.py``
   Applies config/env JAX runtime choices before JAX-heavy modules are imported.

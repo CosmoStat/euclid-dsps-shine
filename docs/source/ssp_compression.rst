@@ -19,37 +19,25 @@ directly:
    coeff[physical_axes..., k]
    scale[physical_axes...]
 
-The dense configs are still useful as a reference for closure tests. The
-compressed configs are the recommended production path for high-throughput MAP
-fits.
+The public FS2 config loads compact arrays directly and is the recommended
+path for high-throughput FS2 MAP fits.
 
 Recommended Configs
 -------------------
 
-Use the compressed binned full-AGN config for production batches:
+Use the FS2 GPU config for production FS2 batches:
 
 .. code-block:: text
 
-   configs/popcosmos_binned_compressed.yaml
+   configs/fs2_gpu.yaml
 
-Use the compressed Diffstar config for comparison runs:
-
-.. code-block:: text
-
-   configs/popcosmos_diffstar_compressed.yaml
-
-Keep the dense configs for dense-vs-compressed audits and FSPS/Prospector
-closure checks:
-
-.. code-block:: text
-
-   configs/popcosmos_binned.yaml
-   configs/popcosmos_diffstar.yaml
+The Diffsky HLTDS simple configs use the HLTDS SSP file directly and do not use
+these compressed FS2 gas/AGN runtime assets.
 
 Compressed Assets
 -----------------
 
-The active compressed binned config uses:
+The active FS2 config uses:
 
 .. code-block:: yaml
 
@@ -249,19 +237,19 @@ Validate compressed assets:
 Production Fit Command
 ----------------------
 
-Use the compressed binned config for large MAP batches:
+Use the FS2 GPU config for large MAP batches:
 
 .. code-block:: bash
 
    conda activate shine
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
+     --config configs/fs2_gpu.yaml \
      fit \
      --limit 1000 \
      --batch-size 128 \
      --fit-maxiter 200 \
-     --out outputs/runs/popcosmos_binned_compressed_map_n1000_bs128 \
+     --out outputs/runs/fs2_gpu_map_n1000_bs128 \
      --sed-samples 0 \
      --reporting-level light
 

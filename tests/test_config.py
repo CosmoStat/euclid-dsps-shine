@@ -11,7 +11,6 @@ from euclid_dsps.config import (
 from euclid_dsps.io import required_catalog_columns
 from euclid_dsps.parameters import (
     DIFFSKY_BASIC_PARAMETER_NAMES,
-    DIFFSTAR_REDUCED6_PARAMETER_NAMES,
     POPCOSMOS_PARAMETER_NAMES,
 )
 from euclid_dsps.semantics import is_comparable_fit_parameter
@@ -529,8 +528,8 @@ def test_validate_catalog_columns_reports_missing_columns() -> None:
         validate_catalog_columns(config, {"euclid_vis", "z_phz", "z_true", "ra_gal"})
 
 
-def test_popcosmos_binned_config_is_main_binned_setup() -> None:
-    config = load_config("configs/popcosmos_binned.yaml")
+def test_fs2_gpu_config_is_public_fs2_setup() -> None:
+    config = load_config("configs/fs2_gpu.yaml")
 
     band_names = [band["name"] for band in config["bands"]]
     assert len(band_names) == 10
@@ -540,17 +539,28 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert config["model"]["sfh_time_grid"] == "prospector_step"
     assert config["model"]["dust_model"] == "prospector_fsps"
     assert config["model"]["igm_model"] == "fsps_madau95"
-    assert config["model"]["nebular_model"] == "gas_grid"
-    assert config["model"]["gas_grid_path"] == "Data/popcosmos_chabrier_gas_ssp_grid.h5"
+    assert config["runtime"]["jax_platforms"] == "cuda"
+    assert config["runtime"]["require_gpu"] is True
+    assert config["runtime"]["tf_gpu_allocator"] == "cuda_malloc_async"
+    assert config["model"]["ssp_model"] == "compressed_basis"
+    assert (
+        config["model"]["compressed_ssp_path"]
+        == "Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5"
+    )
+    assert config["model"]["nebular_model"] == "compressed_gas_grid"
+    assert (
+        config["model"]["compressed_gas_grid_path"]
+        == "Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5"
+    )
     assert (
         config["model"]["stellar_only_ssp_path"]
         == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
     )
     assert config["model"]["emission_line_corrections"] == "none"
-    assert config["model"]["agn_model"] == "fsps_component_grid"
+    assert config["model"]["agn_model"] == "compressed_fsps_component_grid"
     assert (
-        config["model"]["agn_component_grid_path"]
-        == "Data/popcosmos_chabrier_agn_component_ssp_grid.h5"
+        config["model"]["compressed_agn_component_grid_path"]
+        == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
     )
     assert config["model"]["agn_igm_order"] == "fsps_after_igm"
     assert config["model"]["agn_baked_attenuation"] == "fsps_powerlaw_unit_tau"
@@ -574,9 +584,6 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert not any(
         column.startswith("phz") for column in required_catalog_columns(config)
     )
-    assert config["runtime"]["jax_platforms"] == "auto"
-    assert config["runtime"]["disable_jax_plugin_autoload"] is False
-    assert config["runtime"]["require_gpu"] is False
     assert "lsst_u_el_model3_ext_odonnell_ext_error" in config["extra_columns"]
     assert config["fit"]["free_parameters"]["ln_tauagn"]["initial"] == 2.302585
     assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
@@ -587,46 +594,12 @@ def test_popcosmos_binned_config_is_main_binned_setup() -> None:
     assert config["fit"]["student_t_dof"] == 2.0
 
 
-def test_popcosmos_binned_compressed_config_overrides_only_runtime_assets() -> None:
-    dense = load_config("configs/popcosmos_binned.yaml")
-    compressed = load_config("configs/popcosmos_binned_compressed.yaml")
-
-    assert tuple(compressed["fit"]["free_parameters"]) == POPCOSMOS_PARAMETER_NAMES
-    assert compressed["model"]["sfh_model"] == dense["model"]["sfh_model"]
-    assert compressed["model"]["dust_model"] == dense["model"]["dust_model"]
-    assert compressed["model"]["igm_model"] == dense["model"]["igm_model"]
-    assert compressed["runtime"]["jax_platforms"] == "cuda"
-    assert compressed["runtime"]["require_gpu"] is True
-    assert compressed["runtime"]["tf_gpu_allocator"] == "cuda_malloc_async"
-    assert compressed["fit"]["trace_mode"] == "optimizer"
-    assert compressed["fit"]["trace_interval"] == 20
-    assert compressed["fit"]["scan_unroll"] == 1
-    assert compressed["fit"]["donate_optimizer_inputs"] is False
-    assert compressed["fit"]["remat_model_mags"] is False
-    assert compressed["fit"]["batch_grad_mode"] == "per_galaxy"
-    assert compressed["model"]["ssp_model"] == "compressed_basis"
-    assert (
-        compressed["model"]["compressed_ssp_path"]
-        == "Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5"
-    )
-    assert compressed["model"]["nebular_model"] == "compressed_gas_grid"
-    assert (
-        compressed["model"]["compressed_gas_grid_path"]
-        == "Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5"
-    )
-    assert compressed["model"]["agn_model"] == "compressed_fsps_component_grid"
-    assert (
-        compressed["model"]["compressed_agn_component_grid_path"]
-        == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
-    )
-    assert compressed["fit"]["photometric_likelihood"] == "student_t"
-
-
-def test_amortized_fs2_realnvp_config_extends_compressed_popcosmos() -> None:
+def test_amortized_fs2_realnvp_config_extends_fs2_gpu() -> None:
     config = load_config("configs/amortized_fs2_realnvp.yaml")
 
     assert tuple(config["fit"]["free_parameters"]) == POPCOSMOS_PARAMETER_NAMES
     assert config["model"]["sfh_model"] == "popcosmos_bins"
+    assert config["runtime"]["require_gpu"] is True
     assert len(config["bands"]) == 10
     assert config["amortized"]["latent"]["schema"] == "popcosmos_16"
     assert config["amortized"]["features"]["n_flux_bands"] == 10
@@ -643,38 +616,6 @@ def test_amortized_fs2_realnvp_config_extends_compressed_popcosmos() -> None:
     assert config["amortized"]["training"]["kl_weight_max"] == 0.5
     assert config["amortized"]["inference"]["prior_samples"] == 8192
     assert config["amortized"]["inference"]["decoder_sample_chunk_size"] == 1
-
-
-def test_popcosmos_diffstar_compressed_config_overrides_only_runtime_assets() -> None:
-    dense = load_config("configs/popcosmos_diffstar.yaml")
-    compressed = load_config("configs/popcosmos_diffstar_compressed.yaml")
-
-    assert compressed["model"]["sfh_model"] == "diffstar_reduced6"
-    assert compressed["model"]["sfh_model"] == dense["model"]["sfh_model"]
-    assert compressed["model"]["dust_model"] == dense["model"]["dust_model"]
-    assert compressed["model"]["igm_model"] == dense["model"]["igm_model"]
-    assert compressed["runtime"]["jax_platforms"] == "cuda"
-    assert compressed["runtime"]["require_gpu"] is True
-    assert compressed["runtime"]["tf_gpu_allocator"] == "cuda_malloc_async"
-    assert compressed["fit"]["trace_mode"] == "optimizer"
-    assert compressed["fit"]["trace_interval"] == 20
-    assert compressed["fit"]["batch_grad_mode"] == "per_galaxy"
-    assert compressed["model"]["ssp_model"] == "compressed_basis"
-    assert (
-        compressed["model"]["compressed_ssp_path"]
-        == "Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5"
-    )
-    assert compressed["model"]["nebular_model"] == "compressed_gas_grid"
-    assert (
-        compressed["model"]["compressed_gas_grid_path"]
-        == "Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5"
-    )
-    assert compressed["model"]["agn_model"] == "compressed_fsps_component_grid"
-    assert (
-        compressed["model"]["compressed_agn_component_grid_path"]
-        == "Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5"
-    )
-    assert compressed["fit"]["photometric_likelihood"] == "student_t"
 
 
 def test_fit_trace_mode_validation() -> None:
@@ -708,97 +649,40 @@ def test_fit_jax_optimizer_options_validation() -> None:
     assert "batch_grad_mode" in message
 
 
-def test_popcosmos_diffstar_config_combines_diffstar_with_gas_and_agn() -> None:
-    config = load_config("configs/popcosmos_diffstar.yaml")
+def test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit() -> None:
+    config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
+    closure = load_config("configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml")
 
-    assert tuple(config["fit"]["free_parameters"]) == DIFFSTAR_REDUCED6_PARAMETER_NAMES
-    assert config["model"]["sfh_model"] == "diffstar_reduced6"
-    assert config["model"]["stellar_metallicity_model"] == "single"
-    assert config["model"]["dust_model"] == "prospector_fsps"
-    assert config["model"]["igm_model"] == "fsps_madau95"
-    assert config["model"]["nebular_model"] == "gas_grid"
-    assert config["model"]["gas_grid_path"] == "Data/popcosmos_chabrier_gas_ssp_grid.h5"
-    assert (
-        config["model"]["stellar_only_ssp_path"]
-        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
-    )
-    assert config["model"]["emission_line_corrections"] == "none"
-    assert config["model"]["agn_model"] == "fsps_component_grid"
-    assert (
-        config["model"]["agn_component_grid_path"]
-        == "Data/popcosmos_chabrier_agn_component_ssp_grid.h5"
-    )
-    assert config["model"]["agn_igm_order"] == "fsps_after_igm"
-    assert config["model"]["agn_baked_attenuation"] == "fsps_powerlaw_unit_tau"
-    assert config["model"]["agn_baked_dust_index"] == -0.7
-    assert "kroupa" not in config["ssp_path"]
-    assert config["model"]["z_sun"] == 0.0142
-    assert config["model"]["fixed_parameters"]["diffstar_indx_hi"] == -1.0
-    assert config["model"]["fixed_parameters"]["diffstar_qlglgdt"] == -0.50725
-    assert config["fit"]["free_parameters"]["ln_tauagn"]["bounds"] == [
-        1.609438,
-        5.010635,
-    ]
-
-
-def test_popcosmos_binned_noagn_config_is_fallback_setup() -> None:
-    config = load_config("configs/popcosmos_binned_noagn.yaml")
-    free_names = tuple(config["fit"]["free_parameters"])
-
-    assert free_names == POPCOSMOS_PARAMETER_NAMES[:-2]
-    assert "ln_fagn" not in free_names
-    assert "ln_tauagn" not in free_names
+    assert config["model"]["sfh_model"] == "popcosmos_bins"
+    assert config["model"]["nebular_model"] == "fixed_ssp"
     assert config["model"]["agn_model"] == "none"
-    assert config["fit"]["photometric_likelihood"] == "student_t"
-    assert config["model"]["z_sun"] == 0.0142
-    assert config["model"]["sfh_time_grid"] == "prospector_step"
-    assert config["model"]["igm_model"] == "fsps_madau95"
-    assert (
-        config["model"]["stellar_only_ssp_path"]
-        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
-    )
-
-
-def test_popcosmos_diffstar_noagn_config_is_fallback_comparison() -> None:
-    config = load_config("configs/popcosmos_diffstar_noagn.yaml")
-    free_names = tuple(config["fit"]["free_parameters"])
-
-    assert free_names == DIFFSTAR_REDUCED6_PARAMETER_NAMES[:-2]
-    assert "ln_fagn" not in free_names
-    assert "ln_tauagn" not in free_names
-    assert config["model"]["agn_model"] == "none"
-    assert config["fit"]["photometric_likelihood"] == "student_t"
-    assert config["model"]["z_sun"] == 0.0142
-    assert config["model"]["igm_model"] == "fsps_madau95"
-    assert (
-        config["model"]["stellar_only_ssp_path"]
-        == "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
-    )
-
-
-def test_diffsky_hltds_basic_and_extended_configs() -> None:
-    basic = load_config("configs/diffsky_hltds_04_14_fit_basic.yaml")
-    extended = load_config("configs/diffsky_hltds_04_14_fit_extended.yaml")
-
-    assert basic["model"]["sfh_model"] == "diffsky_basic"
-    assert basic["model"]["nebular_model"] == "fixed_ssp"
-    assert basic["model"]["agn_model"] == "none"
-    assert len(basic["bands"]) == 14
-    assert basic["bands"][0]["filter"]["kind"] == "hdf5_group"
-    assert tuple(basic["fit"]["free_parameters"]) == (
+    assert config["model"]["asset_metadata_policy"] == "permissive"
+    assert config["runtime"]["require_gpu"] is True
+    assert config["fit"]["likelihood_space"] == "mag"
+    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert len(config["bands"]) == 14
+    assert {band["units"] for band in config["bands"]} == {"abmag"}
+    assert all("error_column" not in band for band in config["bands"])
+    assert {band["sigma_mag"] for band in config["bands"]} == {0.10}
+    assert tuple(config["fit"]["free_parameters"]) == (
         "z_obs",
         "log10_stellar_mass",
-        "diffstar_lgmcrit",
-        "diffstar_lgy_at_mcrit",
-        "diffstar_indx_lo",
-        "diffstar_lg_qt",
-        "diffstar_lg_drop",
-        "diffstar_lg_rejuv",
-        "dust_av",
-        "dust_delta",
+        "dlog10_sfr_1",
+        "tau2",
+        "dust_index_n",
     )
-    assert "diffmah_logm0" in extended["fit"]["free_parameters"]
-    assert "diffstar_indx_hi" in extended["fit"]["free_parameters"]
+    assert not any(
+        name.startswith(("diffstar_", "diffmah_"))
+        for name in config["fit"]["free_parameters"]
+    )
+    assert set(config["truth"]["parameter_columns"]) == {
+        "log10_stellar_mass",
+        "log10_sfr_at_obs",
+    }
+    assert "z_obs" not in closure["fit"]["free_parameters"]
+    assert closure["runtime"]["require_gpu"] is True
+    assert closure["redshift"]["initial"] == "catalog_column"
+    assert closure["redshift"]["column"] == "redshift_true"
 
 
 def test_cosmos_sed_defaults_are_normalized() -> None:

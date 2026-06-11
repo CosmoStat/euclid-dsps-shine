@@ -73,17 +73,26 @@ Run the same checks as CI:
 Runtime Notes
 -------------
 
-Native DSPS/JAX workflows are still heavier than unit tests, so CI focuses on
-fast deterministic tests.
-Manual smoke commands should include:
+Native DSPS/JAX workflows are heavier than unit tests, so CI focuses on fast
+deterministic tests. Manual smoke commands should use the public GPU configs:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_compressed_fullagn_one_short --sed-samples 1
-   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml fit --limit 20 --batch-size 8 --sed-samples 0 --reporting-level light --out outputs/runs/dev_popcosmos_compressed_fullagn_batch
-   python -m euclid_dsps.cli --config configs/popcosmos_binned_noagn.yaml fit --limit 20 --batch-size 5 --sed-samples 4 --out outputs/runs/dev_popcosmos_noagn_batch
-   python -m euclid_dsps.cli --config configs/popcosmos_diffstar_compressed.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short --sed-samples 1
-   python -m euclid_dsps.cli --config configs/popcosmos_binned_compressed.yaml check --kind cosmos --limit 10 --out outputs/runs/dev_cosmos_check
+   export JAX_PLATFORMS=cuda
+   export XLA_PYTHON_CLIENT_PREALLOCATE=false
+   export TF_GPU_ALLOCATOR=cuda_malloc_async
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml \
+     fit --limit 8 --batch-size 8 --fit-maxiter 40 \
+     --sed-samples 0 --reporting-level light \
+     --out outputs/runs/dev_diffsky_fixedz_smoke
+
+   python -m euclid_dsps.cli \
+     --config configs/fs2_gpu.yaml \
+     fit --index 0 --fit-maxiter 20 \
+     --sed-samples 1 \
+     --out outputs/runs/dev_fs2_gpu_one_short
 
 Amortized FS2 smoke commands:
 
@@ -130,7 +139,7 @@ Benchmark smoke:
 
    MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
      --runtime cpu \
-     --config configs/popcosmos_binned.yaml \
+     --config configs/fs2_gpu.yaml \
      --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
      --agn-host-attenuation fsps_diffuse_unit_tau \
      --agn-igm-order fsps_after_igm \

@@ -1,3 +1,0 @@
-extends: openuniverse_lsst_6_fit_ready.yaml
-
-runtime: gpu

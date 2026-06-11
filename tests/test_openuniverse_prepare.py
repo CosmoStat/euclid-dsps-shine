@@ -59,7 +59,7 @@ def test_openuniverse_prepare_cli_on_mock_hpix(tmp_path) -> None:
     cli_main(
         [
             "--config",
-            "configs/openuniverse_lsst_roman_14.yaml",
+            "configs/fs2_gpu.yaml",
             "openuniverse-prepare",
             "--input-root",
             str(tmp_path),

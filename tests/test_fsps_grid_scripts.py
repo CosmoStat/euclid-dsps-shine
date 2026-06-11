@@ -610,7 +610,7 @@ def test_compressed_gas_builder_round_trips_low_rank_grid(tmp_path) -> None:
 def test_compressed_ssp_builder_round_trips_low_rank_grid(tmp_path) -> None:
     dense_path = tmp_path / "dense_ssp.h5"
     compressed_path = tmp_path / "compressed_ssp.h5"
-    wave = np.asarray([1000.0, 2000.0, 3000.0, 4000.0], dtype=np.float32)
+    wave = np.asarray([1000.0, 2000.0, 3000.0, 99_514_021.2543], dtype=np.float64)
     age = np.asarray([-3.0, -2.0], dtype=np.float32)
     lgmet = np.asarray([-2.0, -1.0], dtype=np.float32)
     basis0 = 1.0 + wave / wave.max()
@@ -647,9 +647,11 @@ def test_compressed_ssp_builder_round_trips_low_rank_grid(tmp_path) -> None:
 
     assert summary["k_basis"] == 2
     with h5py.File(output, "r") as handle:
+        assert handle["ssp_wave"].dtype == wave.dtype
         coeff = np.asarray(handle["ssp_coeff"])
         basis = np.asarray(handle["ssp_basis"])
         scale = np.asarray(handle["ssp_scale"])
+        np.testing.assert_array_equal(np.asarray(handle["ssp_wave"]), wave)
     reconstructed = (coeff @ basis) * scale[..., None]
     np.testing.assert_allclose(reconstructed, dense, rtol=2.0e-5, atol=1.0e-7)
 

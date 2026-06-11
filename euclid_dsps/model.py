@@ -235,13 +235,16 @@ def load_context(
             else jnp.asarray(ssp.ssp_flux, dtype=jnp.float32)
         ),
         compressed_ssp_basis_jax=_jax_optional_array_preserve_float(
-            compressed_ssp_basis
+            compressed_ssp_basis,
+            runtime_dtype=model_config.get("compressed_ssp_runtime_dtype"),
         ),
         compressed_ssp_coeff_jax=_jax_optional_array_preserve_float(
-            compressed_ssp_coeff
+            compressed_ssp_coeff,
+            runtime_dtype=model_config.get("compressed_ssp_runtime_dtype"),
         ),
         compressed_ssp_scale_jax=_jax_optional_array_preserve_float(
-            compressed_ssp_scale
+            compressed_ssp_scale,
+            runtime_dtype=model_config.get("compressed_ssp_runtime_dtype"),
         ),
         ssp_surviving_mstar_jax=(
             None
@@ -390,18 +393,34 @@ def _normalized_model_config(model_config: dict[str, Any] | None) -> dict[str, A
     return config
 
 
-def _jax_array_preserve_float(value: np.ndarray) -> jnp.ndarray:
+def _jax_array_preserve_float(
+    value: np.ndarray,
+    *,
+    runtime_dtype: str | None = None,
+) -> jnp.ndarray:
     """Copy float16/float32 compressed payloads without upcasting resident arrays."""
     array = np.asarray(value)
+    if runtime_dtype:
+        dtype = np.dtype(runtime_dtype)
+        if dtype not in {np.dtype(np.float16), np.dtype(np.float32)}:
+            raise ValueError(
+                "Compressed runtime dtype must be 'float16' or 'float32', "
+                f"got {runtime_dtype!r}"
+            )
+        return jnp.asarray(array, dtype=dtype)
     if array.dtype == np.float16:
         return jnp.asarray(array, dtype=jnp.float16)
     return jnp.asarray(array, dtype=jnp.float32)
 
 
-def _jax_optional_array_preserve_float(value: np.ndarray | None) -> jnp.ndarray | None:
+def _jax_optional_array_preserve_float(
+    value: np.ndarray | None,
+    *,
+    runtime_dtype: str | None = None,
+) -> jnp.ndarray | None:
     if value is None:
         return None
-    return _jax_array_preserve_float(value)
+    return _jax_array_preserve_float(value, runtime_dtype=runtime_dtype)
 
 
 def _load_optional_compressed_ssp_grid(
@@ -1244,6 +1263,9 @@ def _validate_popcosmos_asset_name(path: Path, label: str) -> None:
 
 def _requires_popcosmos_asset_metadata(model_config: dict[str, Any] | None) -> bool:
     config = model_config or {}
+    metadata_policy = str(config.get("asset_metadata_policy", "strict")).lower()
+    if metadata_policy in {"permissive", "skip", "none"}:
+        return False
     return str(config.get("sfh_model", "lognormal")) in {
         "popcosmos_bins",
         "diffstar_reduced6",

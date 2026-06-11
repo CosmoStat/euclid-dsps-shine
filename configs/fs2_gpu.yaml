@@ -1,7 +1,7 @@
 catalog_path: "Data/Euclid FS2 LC galaxy catalog_phz1.parquet"
 ssp_path: "Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5"
 
-runtime: auto
+runtime: gpu
 bands: lsst_euclid_10
 nebular_emission: ssp_flux
 
@@ -45,15 +45,17 @@ model:
     n_sfh_bins: 96
     sfh_model: popcosmos_bins
     sfh_time_grid: prospector_step
+    ssp_model: compressed_basis
+    compressed_ssp_path: Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
     stellar_metallicity_model: single
     dust_model: prospector_fsps
     igm_model: fsps_madau95
-    nebular_model: gas_grid
-    gas_grid_path: Data/popcosmos_chabrier_gas_ssp_grid.h5
+    nebular_model: compressed_gas_grid
+    compressed_gas_grid_path: Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
     stellar_only_ssp_path: Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
     emission_line_corrections: none
-    agn_model: fsps_component_grid
-    agn_component_grid_path: Data/popcosmos_chabrier_agn_component_ssp_grid.h5
+    agn_model: compressed_fsps_component_grid
+    compressed_agn_component_grid_path: Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
     agn_host_attenuation: fsps_diffuse_unit_tau
     agn_igm_order: fsps_after_igm
     agn_baked_attenuation: fsps_powerlaw_unit_tau
@@ -74,6 +76,10 @@ fit:
     tolerance: 1.0e-5
     patience: 24
     prior_weight: 1.0
+    trace_mode: optimizer
+    trace_interval: 20
+    scan_unroll: 1
+    batch_grad_mode: per_galaxy
     free_parameters:
         z_obs:
             initial: 1.0
@@ -138,6 +144,7 @@ sample:
     progress_bar: true
     init_from_map: true
     save_samples: true
+    priors: {}
 
 reporting:
     level: full

@@ -57,6 +57,31 @@ def theta_vector_to_param_dict(
     return {name: theta[index] for index, name in enumerate(parameter_names)}
 
 
+def theta_vector_to_model_param_dict(
+    theta: jnp.ndarray,
+    parameter_names: tuple[str, ...],
+    model_config: dict[str, Any] | None,
+) -> dict[str, jnp.ndarray]:
+    """Convert free parameters to a full model-parameter dictionary.
+
+    Amortized configs often expose only a compact latent subset while the DSPS
+    forward model still expects additional nuisance/SFH parameters. Those values
+    come from ``model.fixed_parameters`` and are overwritten by the free latent
+    parameters when names overlap.
+    """
+    fixed = {}
+    if isinstance(model_config, dict):
+        raw_fixed = model_config.get("fixed_parameters", {})
+        if isinstance(raw_fixed, dict):
+            fixed = {
+                str(name): jnp.asarray(value, dtype=jnp.float32)
+                for name, value in raw_fixed.items()
+                if np.isscalar(value)
+            }
+    fixed.update(theta_vector_to_param_dict(theta, parameter_names))
+    return fixed
+
+
 def theta_matrix_to_param_dicts_or_pytree(
     theta: jnp.ndarray,
     parameter_names: tuple[str, ...],
@@ -91,7 +116,11 @@ def model_mags_from_theta_matrix_jax(
         )
 
     def single(theta_row):
-        params = theta_vector_to_param_dict(theta_row, parameter_names)
+        params = theta_vector_to_model_param_dict(
+            theta_row,
+            parameter_names,
+            getattr(context, "model_config", None),
+        )
         return model_mags_jax_dynamic(context, model_args, params)
 
     if theta.ndim == 1:

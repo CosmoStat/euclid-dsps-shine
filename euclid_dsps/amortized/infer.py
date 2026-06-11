@@ -21,7 +21,7 @@ from .catalog import (
     posterior_summary_frame,
 )
 from .config import amortized_config
-from .data import iter_fs2_photometry_batches_from_config
+from .data import iter_photometry_batches_from_config
 from .decoder import model_flux_from_x
 from .diagnostics import (
     feature_diagnostics_frame,
@@ -31,7 +31,7 @@ from .diagnostics import (
 from .features import read_feature_stats
 from .latent import latent_spec_from_config, x_to_theta
 from .likelihood import photometric_loglike
-from .train import load_checkpoint
+from .train import _effective_jax_batch_size, load_checkpoint
 
 
 def infer_amortized_fs2(
@@ -47,8 +47,9 @@ def infer_amortized_fs2(
     feature_stats_path: Path | None = None,
     decoder_sample_chunk_size: int = 1,
     verbose: bool = True,
+    dataset_label: str = "FS2",
 ) -> None:
-    """Run amortized posterior inference for FS2 rows."""
+    """Run amortized posterior inference for configured catalog rows."""
     if int(batch_size) <= 0:
         raise ValueError("batch_size must be positive")
     if int(posterior_samples) <= 0:
@@ -58,11 +59,16 @@ def infer_amortized_fs2(
     if int(decoder_sample_chunk_size) <= 0:
         raise ValueError("decoder_sample_chunk_size must be positive")
     out = ensure_dir(out_dir)
+    cfg = amortized_config(config)
+    jax_batch_size = _effective_jax_batch_size(
+        cfg.get("inference", {}),
+        int(batch_size),
+    )
     checkpoint = Path(checkpoint)
     if feature_stats_path is None:
         feature_stats_path = checkpoint.parent.parent / "feature_stats.json"
     if verbose:
-        print("[amortized] FS2 amortized inference")
+        print(f"[amortized] {dataset_label} amortized inference")
         print(f"[amortized] checkpoint: {checkpoint}")
         print(f"[amortized] output directory: {out}")
         print(
@@ -72,6 +78,12 @@ def infer_amortized_fs2(
             f"prior_samples={int(prior_samples)} "
             f"decoder_sample_chunk_size={int(decoder_sample_chunk_size)}"
         )
+        if jax_batch_size != int(batch_size):
+            print(
+                "[amortized] capping JAX/DSPS inference batch size: "
+                f"requested_batch_size={int(batch_size)} "
+                f"jax_batch_size={jax_batch_size}"
+            )
         print(f"[amortized] JAX backend: {jax.default_backend()} devices={jax.devices()}")
         print(f"[amortized] feature stats: {feature_stats_path}")
     feature_stats = read_feature_stats(feature_stats_path)
@@ -93,7 +105,7 @@ def infer_amortized_fs2(
     if verbose:
         print(f"[amortized] DSPS context ready: {len(filters)} filters")
     latent_spec = latent_spec_from_config(config)
-    likelihood_cfg = amortized_config(config)["likelihood"]
+    likelihood_cfg = cfg["likelihood"]
     key = jax.random.PRNGKey(int(seed))
 
     sample_frames = []
@@ -104,9 +116,9 @@ def infer_amortized_fs2(
     n_objects_total = 0
     band_names = tuple(str(band["name"]) for band in config["bands"])
     for batch_index, batch in enumerate(
-        iter_fs2_photometry_batches_from_config(
+        iter_photometry_batches_from_config(
             config,
-            batch_size=int(batch_size),
+            batch_size=int(jax_batch_size),
             limit=limit,
             feature_stats=feature_stats,
         ),
@@ -241,6 +253,7 @@ def infer_amortized_fs2(
             "feature_stats_path": str(feature_stats_path),
             "limit": limit,
             "batch_size": int(batch_size),
+            "jax_batch_size": int(jax_batch_size),
             "posterior_samples": int(posterior_samples),
             "prior_samples": int(prior_samples),
             "decoder_sample_chunk_size": int(decoder_sample_chunk_size),

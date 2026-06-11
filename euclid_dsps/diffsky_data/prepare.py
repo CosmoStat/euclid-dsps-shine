@@ -46,7 +46,7 @@ def build_diffsky_photometric_dataset(
     snr: float = 50.0,
     seed: int = 42,
 ) -> DatasetBuildReport:
-    del inventory_path, selected_photometry, require_truths, add_synthetic_errors, seed
+    del inventory_path, selected_photometry, require_truths, seed
     shards = sorted(Path(raw_root).glob("*.diffsky_gals.hdf5"))
     if not shards:
         raise FileNotFoundError(f"No *.diffsky_gals.hdf5 files found under {raw_root}")
@@ -55,7 +55,12 @@ def build_diffsky_photometric_dataset(
     for shard in shards:
         if remaining is not None and remaining <= 0:
             break
-        frame = _read_hltds_shard(shard, limit=remaining, snr=snr)
+        frame = _read_hltds_shard(
+            shard,
+            limit=remaining,
+            snr=snr,
+            add_synthetic_errors=add_synthetic_errors,
+        )
         if remaining is not None:
             remaining -= len(frame)
         frames.append(frame)
@@ -73,7 +78,14 @@ def build_diffsky_photometric_dataset(
         "band_names": list(band_names),
         "photometry_unit": describe_photometry_unit("magnitude", "mag(AB)"),
         "prepared_flux_unit": "fnu_cgs",
-        "error_model": {"type": "synthetic_fractional_snr", "snr": float(snr)},
+        "error_model": (
+            {"type": "synthetic_fractional_snr", "snr": float(snr)}
+            if add_synthetic_errors
+            else {
+                "type": "none",
+                "note": "No native HLTDS photometric errors were found; fit configs should use explicit model-tolerance magnitudes.",
+            }
+        ),
         "truth_columns": [column for column in dataset.columns if column.endswith("_true")],
         "generated_truth_columns": [
             column
@@ -101,7 +113,12 @@ def build_diffsky_photometric_dataset(
     )
 
 
-def _read_hltds_shard(path: Path, limit: int | None, snr: float) -> pd.DataFrame:
+def _read_hltds_shard(
+    path: Path,
+    limit: int | None,
+    snr: float,
+    add_synthetic_errors: bool,
+) -> pd.DataFrame:
     with h5py.File(path, "r") as handle:
         if "data" not in handle:
             raise ValueError(f"{path} is not an HLTDS diffsky_gals file: missing /data")
@@ -132,7 +149,12 @@ def _read_hltds_shard(path: Path, limit: int | None, snr: float) -> pd.DataFrame
         for column in HLTDS_BURST_COLUMNS:
             if column in group:
                 frame[f"burst_{column}"] = group[column][:n]
-        phot = standardize_magnitude_photometry(data, phot_report, snr=snr)
+        phot = standardize_magnitude_photometry(
+            data,
+            phot_report,
+            snr=snr,
+            add_synthetic_errors=add_synthetic_errors,
+        )
         return pd.concat([frame, phot], axis=1)
 
 

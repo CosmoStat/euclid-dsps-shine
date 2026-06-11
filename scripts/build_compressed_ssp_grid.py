@@ -132,7 +132,10 @@ def build_compressed_grid(args: argparse.Namespace) -> Path:
             output.unlink()
         with h5py.File(output, "w") as dst:
             for key in ("ssp_wave", "ssp_lg_age_gyr", "ssp_lgmet"):
-                dst[key] = np.asarray(src[key], dtype=np.float32)
+                # Axes are tiny compared with the SSP payload. Preserve their
+                # source precision so compressed assets validate exactly against
+                # the dense grid, including very long wavelength tails.
+                dst[key] = np.asarray(src[key])
             dst.create_dataset(
                 "ssp_basis",
                 data=basis.astype(basis_dtype),

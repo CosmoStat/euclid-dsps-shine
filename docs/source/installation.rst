@@ -19,26 +19,12 @@ The codebase should still import under ``uv`` for tests and packaging checks:
    uv run python -m compileall euclid_dsps scripts
    uv run euclid-dsps --help
 
-Diffstar SFH Optional Extra
----------------------------
-
-``configs/popcosmos_diffstar.yaml``,
-``configs/popcosmos_diffstar_compressed.yaml``, and
-``configs/popcosmos_diffstar_noagn.yaml`` require ``diffstar`` and ``diffmah``.
-In the runtime environment:
-
-.. code-block:: bash
-
-   python -m pip install -e '.[diffstar]'
-
-The standard binned-SFH configs do not require this optional extra.
-
 FSPS And python-FSPS
 --------------------
 
-The PopCosmos-like configs require generated FSPS SSP, gas, AGN component, and
-compressed runtime grids. Install FSPS and python-FSPS in the runtime
-environment used for generation:
+The FS2 config requires generated FSPS SSP, gas, AGN component, and compressed
+runtime grids. Install FSPS and python-FSPS only in the environment used for
+asset generation:
 
 .. code-block:: bash
 
@@ -72,17 +58,23 @@ Quality Checks
 GPU Note
 --------
 
-The default documented commands use CPU-safe JAX settings because the local
-``shine`` environment may not have CUDA-enabled ``jaxlib``. For GPU production,
-install the project GPU extra, which follows the official JAX pip CUDA wheel
-path and brings the CUDA 12 runtime libraries into the ``uv`` environment:
+The public fit configs are GPU configs. For production, use a CUDA-enabled JAX
+installation and verify the backend before launching fits:
 
 .. code-block:: bash
 
    uv sync --extra gpu
    uv run --extra gpu python -c "import jax; print(jax.devices())"
 
-If ``nvidia-smi`` works but JAX still reports only ``CpuDevice``, check that the
-command is running through ``uv run --extra gpu`` and that no stale CPU-only
-``jaxlib`` install is shadowing the project environment. Keep large FSPS grids
-out of JAX closures so XLA does not compile them as constants.
+In the ``shine`` conda environment the equivalent check is:
+
+.. code-block:: bash
+
+   conda activate shine
+   export JAX_PLATFORMS=cuda
+   export XLA_PYTHON_CLIENT_PREALLOCATE=false
+   export TF_GPU_ALLOCATOR=cuda_malloc_async
+   python -c "import jax; print(jax.default_backend()); print(jax.devices())"
+
+If ``nvidia-smi`` works but JAX still reports only ``CpuDevice``, check that no
+stale CPU-only ``jaxlib`` install is shadowing the active environment.

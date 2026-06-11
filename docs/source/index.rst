@@ -2,9 +2,9 @@ Euclid DSPS SHINE
 ==================
 
 Euclid DSPS SHINE is a standalone workflow around native ``dsps`` for Euclid
-FS2 catalog experiments. It loads catalog photometry, prepares DSPS inputs,
-runs forward photometry, fits small parameter sets, and writes diagnostic
-tables and plots.
+FS2 and Diffsky HLTDS photometric experiments. It loads catalog photometry,
+prepares DSPS inputs, runs forward photometry, fits small parameter sets, and
+writes diagnostic tables and plots.
 
 The project keeps the scientific boundary narrow:
 
@@ -22,7 +22,7 @@ The project keeps the scientific boundary narrow:
    installation
    architecture
    data_download
-   openuniverse
+   diffsky_dataset
    forward_model
    ssp_compression
    amortized_inference

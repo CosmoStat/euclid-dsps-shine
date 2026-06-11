@@ -9,7 +9,7 @@ from euclid_dsps.parameters import POPCOSMOS_PARAMETER_NAMES
 
 
 def test_latent_spec_uses_popcosmos_order() -> None:
-    spec = latent_spec_from_config(load_config("configs/popcosmos_binned.yaml"))
+    spec = latent_spec_from_config(load_config("configs/fs2_gpu.yaml"))
 
     assert spec.names == POPCOSMOS_PARAMETER_NAMES
     assert spec.lower.shape == (16,)
@@ -17,7 +17,7 @@ def test_latent_spec_uses_popcosmos_order() -> None:
 
 
 def test_x_theta_roundtrip_and_bounds() -> None:
-    spec = latent_spec_from_config(load_config("configs/popcosmos_binned.yaml"))
+    spec = latent_spec_from_config(load_config("configs/fs2_gpu.yaml"))
     x = jnp.linspace(-2.0, 2.0, 16)
 
     theta = x_to_theta(x, spec)
@@ -30,14 +30,35 @@ def test_x_theta_roundtrip_and_bounds() -> None:
 
 
 def test_latent_transform_supports_rank_two_and_three() -> None:
-    spec = latent_spec_from_config(load_config("configs/popcosmos_binned.yaml"))
+    spec = latent_spec_from_config(load_config("configs/fs2_gpu.yaml"))
 
     assert x_to_theta(jnp.zeros((4, 16)), spec).shape == (4, 16)
     assert x_to_theta(jnp.zeros((2, 4, 16)), spec).shape == (2, 4, 16)
 
 
+def test_diffsky_hltds_latent_schema_uses_configured_free_parameters() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+    spec = latent_spec_from_config(config)
+
+    assert config["amortized"]["latent"]["schema"] == "diffsky_hltds_prior_v1"
+    assert spec.names == tuple(config["fit"]["free_parameters"])
+    assert spec.names == (
+        "z_obs",
+        "log10_stellar_mass",
+        "dlog10_sfr_1",
+        "dlog10_sfr_2",
+        "dlog10_sfr_3",
+        "log10_stellar_metallicity",
+        "tau2",
+        "dust_index_n",
+        "tau1_over_tau2",
+    )
+    assert spec.lower.shape == (9,)
+    assert spec.upper.shape == (9,)
+
+
 def test_gas_metallicity_constraint_is_satisfied() -> None:
-    spec = latent_spec_from_config(load_config("configs/popcosmos_binned.yaml"))
+    spec = latent_spec_from_config(load_config("configs/fs2_gpu.yaml"))
     x = jnp.zeros((5, 16)).at[:, 12].set(-10.0)
 
     theta = x_to_theta(x, spec)

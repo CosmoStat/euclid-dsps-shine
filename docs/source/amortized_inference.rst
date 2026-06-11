@@ -1,17 +1,26 @@
 Amortized Inference
 ===================
 
-This feature started as an amortized posterior prototype for the Euclid FS2
-catalog. The project is now pivoting to OpenUniverse/Diffsky as the main
-validation dataset while FS2 remains available for comparison and domain-shift
-diagnostics. The existing MAP and posterior workflows remain the baseline tools
-for per-object checks.
+This feature is the prior-learning path for fixed-DSPS photometric inference.
+It trains an amortized encoder and a learned RealNVP prior against the fixed
+DSPS decoder.
+
+There are two public configs:
+
+.. code-block:: text
+
+   configs/amortized_fs2_realnvp.yaml
+   configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
+
+FS2 remains the Euclid comparison path. Diffsky HLTDS 04/14 is the main
+science-validation path for learned population priors because it has direct
+truth columns for at least redshift and stellar mass.
 
 Model Contract
 --------------
 
-The amortized feature builder consumes the configured band set. The FS2 command
-uses ten bands:
+The amortized feature builder consumes the configured band set. FS2 uses ten
+bands:
 
 .. code-block:: text
 
@@ -24,14 +33,15 @@ The encoder input is:
    [flux_1, ..., flux_B, err_1, ..., err_B]
 
 after per-band normalization. FS2 uses ``B=10`` and feature dimension 20.
-OpenUniverse LSST+Roman uses ``B=14`` and feature dimension 28.
-For OpenUniverse runs that connect to the current DSPS decoder, use the
-fit-ready parquet and config:
+Diffsky HLTDS uses fourteen bands:
 
 .. code-block:: text
 
-   Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet
-   configs/amortized_openuniverse_lsst_roman_fit_ready_realnvp.yaml
+   LSST u,g,r,i,z,y + Roman F062,F087,F106,F129,F146,F158,F184,F213
+
+so its encoder feature dimension is 28. The feature code is generic in the
+number of bands; the config controls ``encoder.input_dim`` and the expected
+band count.
 
 Fluxes are normalized with a robust signed transform,
 ``asinh(flux / flux_scale)``, so bright FS2 objects do not produce MLP inputs of
@@ -44,16 +54,31 @@ The posterior model is:
 
 .. code-block:: text
 
-   flux_10 + err_10
+   flux_B + err_B
        -> q_psi(x | flux, err)
        -> theta = h(x)
        -> DSPS(theta)
-       -> flux_model_10
+       -> flux_model_B
 
-``x`` is the unconstrained latent vector in ``R^16``. ``theta`` is the bounded
-physical PopCosmos-like parameter vector, also length 16, including redshift.
-``psi`` denotes the encoder parameters. ``beta`` denotes the RealNVP prior
-parameters.
+``x`` is the unconstrained latent vector. ``theta`` is the bounded physical
+parameter vector, including redshift. FS2 uses the 16-parameter PopCosmos-like
+schema. Diffsky HLTDS uses a compact 9-parameter schema:
+
+.. code-block:: text
+
+   z_obs
+   log10_stellar_mass
+   dlog10_sfr_1
+   dlog10_sfr_2
+   dlog10_sfr_3
+   log10_stellar_metallicity
+   tau2
+   dust_index_n
+   tau1_over_tau2
+
+The other PopCosmos-bin nuisance and SFH parameters are supplied from
+``model.fixed_parameters`` when the decoder is called. ``psi`` denotes the
+encoder parameters. ``beta`` denotes the RealNVP prior parameters.
 
 Implementation Architecture
 ---------------------------
@@ -67,10 +92,10 @@ on private MAP helpers:
        theta vectors -> DSPS parameter pytrees -> model_mags_jax_dynamic
 
    euclid_dsps/observation_arrays.py
-       FS2 rows -> object_id, flux[10], err[10], mask[10]
+       catalog rows -> object_id, flux[B], err[B], mask[B]
 
    euclid_dsps/amortized/features.py
-       flux[10], err[10] -> normalized features[20]
+       flux[B], err[B] -> normalized features[2B]
 
    euclid_dsps/amortized/encoder.py
        GaussianEncoder q_psi(x | flux, err)
@@ -79,7 +104,7 @@ on private MAP helpers:
        RealNVPPrior p_beta(x)
 
    euclid_dsps/amortized/decoder.py
-       x -> theta -> fixed DSPS -> model_flux[10]
+       x -> theta -> fixed DSPS -> model_flux[B]
 
    euclid_dsps/amortized/elbo.py
        Student-t log likelihood + Monte Carlo KL
@@ -247,12 +272,32 @@ When ``save_training_curves`` is enabled, diagnostics are regenerated every
 The gradient plots are part of the joint-training contract: they make it
 visible whether the RealNVP prior is receiving gradients alongside the encoder.
 
-The ``amortized-train-fs2`` CLI is verbose by default. It prints the output
-directory, feature-stat computation, filter/DSPS loading, JAX backend/devices,
-model architecture, epoch starts, and epoch summaries. Each epoch also shows a
-progress bar with live ``loss``, negative log likelihood, Monte Carlo KL,
-encoder gradient norm, and RealNVP prior gradient norm. Use ``--quiet`` to
-reduce console logs and ``--no-progress`` to disable progress bars.
+The ``amortized-train-fs2`` and ``amortized-train-diffsky`` CLIs are verbose by
+default. They print the output directory, feature-stat computation,
+filter/DSPS loading, JAX backend/devices, model architecture, epoch starts, and
+epoch summaries. Each epoch also shows a progress bar with live ``loss``,
+negative log likelihood, Monte Carlo KL, encoder gradient norm, and RealNVP
+prior gradient norm. Use ``--quiet`` to reduce console logs and
+``--no-progress`` to disable progress bars.
+
+Diffsky HLTDS training example:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     amortized-train-diffsky \
+     --limit 10000 \
+     --batch-size 64 \
+     --epochs 10 \
+     --n-samples 2 \
+     --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000
+
+For Diffsky, ``--batch-size`` is the requested catalog/training batch size. The
+public config also sets ``amortized.training.jax_batch_size: 4`` to cap the
+actual DSPS/JAX compiled object batch. This avoids very large CUDA compilations
+and half-precision SSP coefficient paths that were observed to segfault before
+the first batch on some JAX/CUDA installs.
 
 Inference Outputs
 -----------------
@@ -298,6 +343,24 @@ sequentially. The CLI override is:
      --decoder-sample-chunk-size 1 \
      --out outputs/runs/dev_amortized_fs2_infer
 
+Diffsky HLTDS inference example:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     amortized-infer-diffsky \
+     --checkpoint outputs/runs/amortized_diffsky_hltds_realnvp_n10000/checkpoints/best.eqx \
+     --limit 10000 \
+     --batch-size 64 \
+     --posterior-samples 64 \
+     --prior-samples 8192 \
+     --decoder-sample-chunk-size 1 \
+     --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer
+
+The same conservative cap is applied during inference through
+``amortized.inference.jax_batch_size: 4``.
+
 Inference diagnostics include normalized residuals
 ``(model_flux - obs_flux) / obs_err`` for each object, sample, and band. The
 summary tables and figures report median residuals by band, the objects with
@@ -310,7 +373,7 @@ prior diagnostics.
 The learned prior diagnostics sample ``x ~ p_beta(x)`` directly from the trained
 RealNVP, transform the samples to physical ``theta``, and write:
 
-* ``learned_prior_samples.parquet`` with ``x_00`` ... ``x_15``, physical
+* ``learned_prior_samples.parquet`` with ``x_00`` ... ``x_{D-1}``, physical
   parameters, and exact pointwise ``logprior``;
 * ``learned_prior_summary.json`` with prior marginal quantiles;
 * ``learned_prior_logprob_hist.png`` for the learned density values;
@@ -319,8 +382,25 @@ RealNVP, transform the samples to physical ``theta``, and write:
 * ``posterior_vs_learned_prior_corner.png`` to compare the aggregate amortized
   posterior samples with the learned population prior.
 
+For Diffsky HLTDS, run the explicit truth/prior overlap report after inference:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     amortized-prior-overlap-diffsky \
+     --run outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer/prior_overlap \
+     --max-objects 10000
+
+This writes ``prior_overlap_metrics.csv`` and plots comparing truth,
+aggregate posterior, and learned prior for directly comparable parameters.
+Currently those are ``z_obs`` versus ``redshift_true`` and
+``log10_stellar_mass`` versus ``logsm_true``.
+
 There is no exact published POP-COSMOS prior distribution implemented in this
-repository. The comparison plots therefore compare the learned RealNVP prior
+repository. FS2 comparison plots therefore compare the learned RealNVP prior
 against amortized posterior samples and available FS2 catalog redshift proxies,
 rather than claiming an external POP-COSMOS prior baseline.
 

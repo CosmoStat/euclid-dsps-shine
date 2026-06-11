@@ -1,4 +1,4 @@
-"""Latent-space transforms for FS2 amortized inference."""
+"""Latent-space transforms for amortized inference."""
 
 from __future__ import annotations
 
@@ -21,23 +21,31 @@ class LatentSpec:
 
 
 def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
-    """Build the PopCosmos 16D latent transform spec from fit bounds."""
+    """Build the latent transform spec from configured fit bounds."""
     amortized = config.get("amortized", {}) or {}
     latent = amortized.get("latent", {}) or {}
     schema = str(latent.get("schema", "popcosmos_16"))
-    if schema != "popcosmos_16":
-        raise ValueError("Amortized FS2 currently supports only schema='popcosmos_16'")
     if not bool(latent.get("include_redshift", True)):
-        raise ValueError("Amortized FS2 requires redshift in the 16D latent")
+        raise ValueError("Amortized inference requires redshift in the latent")
     configured_names = tuple(config.get("fit", {}).get("free_parameters", {}))
-    if configured_names == POPCOSMOS_PARAMETER_NAMES:
+    if schema == "popcosmos_16" and configured_names == POPCOSMOS_PARAMETER_NAMES:
         names = configured_names
-    elif set(configured_names) == set(POPCOSMOS_PARAMETER_NAMES):
+    elif schema == "popcosmos_16" and set(configured_names) == set(
+        POPCOSMOS_PARAMETER_NAMES
+    ):
         names = POPCOSMOS_PARAMETER_NAMES
+    elif schema in {"config_free_parameters", "diffsky_hltds_prior_v1"}:
+        names = configured_names
+        if not names:
+            raise ValueError("config.fit.free_parameters must be non-empty")
+        if "z_obs" not in names:
+            raise ValueError(
+                f"Amortized schema {schema!r} requires z_obs in free_parameters"
+            )
     else:
         raise ValueError(
-            "Amortized FS2 theta order must match POPCOSMOS_PARAMETER_NAMES; "
-            f"got {configured_names}"
+            "Unsupported amortized latent schema. Use 'popcosmos_16', "
+            "'config_free_parameters', or 'diffsky_hltds_prior_v1'."
         )
     lower, upper = free_parameter_bounds_from_config(config, names)
     return LatentSpec(

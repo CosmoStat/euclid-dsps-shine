@@ -1,281 +1,218 @@
-Run And Fit
-===========
+Run The Pipeline
+================
 
-Recommended Configs
--------------------
+Public Configs
+--------------
 
-Use compressed full AGN for production MAP batches:
+The public config surface is intentionally small:
 
-.. code-block:: text
+.. list-table::
+   :header-rows: 1
 
-   configs/popcosmos_binned_compressed.yaml
-   configs/popcosmos_diffstar_compressed.yaml
+   * - Config
+     - Use
+   * - ``configs/fs2_gpu.yaml``
+     - Euclid FS2 MAP/posterior baseline on GPU.
+   * - ``configs/diffsky_hltds_04_14_simple_gpu.yaml``
+     - Main Diffsky HLTDS 04/14/2026 simple DSPS MAP fit on GPU.
+   * - ``configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml``
+     - Diffsky closure/debug fit with redshift fixed to ``redshift_true``.
+   * - ``configs/amortized_fs2_realnvp.yaml``
+     - FS2 amortized encoder plus learned RealNVP prior.
 
-Use dense full AGN for reference runs and dense-vs-compressed checks:
+Old Diffstar, OpenUniverse fit-ready, non-GPU, and experimental ablation configs
+were removed from the public ``configs/`` directory. The first-pass science
+path is either Euclid FS2, the Diffsky HLTDS sample dataset, or FS2 prior
+learning.
 
-.. code-block:: text
-
-   configs/popcosmos_binned.yaml
-   configs/popcosmos_diffstar.yaml
-
-Use no-AGN only for fallback/debug or controlled ablations:
-
-.. code-block:: text
-
-   configs/popcosmos_binned_noagn.yaml
-   configs/popcosmos_diffstar_noagn.yaml
-
-The compressed binned full-AGN config uses:
-
-* LSST ``ugrizy`` plus Euclid VIS/Y/J/H;
-* PopCosmos-like step SFH bins;
-* Chabrier FSPS SSPs with ``z_sun=0.0142``;
-* Prospector/FSPS-like dust;
-* compressed SVD stellar SSP basis;
-* compressed SVD raw FSPS/CLOUDY gas grid;
-* compressed fagn-factored FSPS-native AGN component grid;
-* FSPS-like AGN host attenuation and AGN/IGM ordering;
-* flux-space Student-t likelihood with ``student_t_dof=2``.
-
-Terminology
+GPU Runtime
 -----------
 
-``full AGN`` means the galaxy SED includes stars, dust, gas, IGM, and an active
-galactic nucleus component. The fit includes ``ln_fagn`` and ``ln_tauagn``.
-``no-AGN`` means the AGN component is disabled and those two parameters are not
-present. No-AGN is useful when checking the stellar+dust+gas model or reducing
-memory pressure, but it is no longer the default science path.
-
-Runtime
--------
-
-CPU-safe local runtime:
+All public fit configs request CUDA. In the ``shine`` environment, set the
+runtime explicitly before launching long jobs:
 
 .. code-block:: bash
 
-   export JAX_PLATFORMS=cpu
-   export XLA_PYTHON_CLIENT_PREALLOCATE=false
-
-GPU runtime, only with CUDA-enabled JAX:
-
-.. code-block:: bash
-
-   uv sync --extra gpu
+   conda activate shine
    export JAX_PLATFORMS=cuda
    export XLA_PYTHON_CLIENT_PREALLOCATE=false
    export TF_GPU_ALLOCATOR=cuda_malloc_async
 
-The dense full AGN component grid is about 3.9 GiB and the dense gas grid is
-about 2.7 GiB. Production fitting should use the compressed config, which keeps
-``basis``, ``coeff``, and ``scale`` arrays resident in JAX instead of those
-multi-GiB dense tensors. Start with a conservative batch size and increase only
-after checking memory on the target GPU.
-
-One-Row Compressed Full AGN
----------------------------
+Check the visible devices:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
-     fit --index 0 \
-     --fit-maxiter 20 \
-     --out outputs/runs/dev_popcosmos_compressed_fullagn_one_short \
-     --sed-samples 1
+   python -c "import jax; print(jax.default_backend()); print(jax.devices())"
 
-Production-style one-row run:
+If this prints only CPU devices, fix the JAX/CUDA environment before launching
+fits. The configs use ``runtime.require_gpu: true`` so production commands fail
+fast instead of silently falling back to CPU.
 
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
-     fit --index 0 \
-     --out outputs/runs/dev_popcosmos_compressed_fullagn_one \
-     --sed-samples 4
-
-Production Batch Compressed Full AGN
-------------------------------------
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
-     fit --limit 1000 \
-     --batch-size 128 \
-     --fit-maxiter 200 \
-     --out outputs/runs/popcosmos_binned_compressed_map_n1000_bs128 \
-     --sed-samples 0 \
-     --reporting-level light
-
-Increase ``--batch-size`` only after the memory footprint is known on the target
-machine.
-
-Dense Reference Full AGN
+Diffsky HLTDS Simple Fit
 ------------------------
 
-Use the dense config only for small reference/audit runs:
+This is the recommended dataset for the current physical-recovery tests. It
+uses the prepared file:
+
+.. code-block:: text
+
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+
+and the HLTDS SSP asset:
+
+.. code-block:: text
+
+   Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
+
+Small smoke fit:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned.yaml \
-     fit --limit 20 \
-     --batch-size 2 \
-     --out outputs/runs/dev_popcosmos_dense_fullagn_batch20 \
-     --sed-samples 4
+     --config configs/diffsky_hltds_04_14_simple_gpu.yaml \
+     fit \
+     --limit 16 \
+     --batch-size 16 \
+     --fit-maxiter 80 \
+     --sed-samples 0 \
+     --reporting-level light \
+     --out outputs/runs/diffsky_hltds_simple_smoke_n16
 
-No-AGN Fallback
----------------
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_noagn.yaml \
-     fit --limit 20 \
-     --batch-size 5 \
-     --out outputs/runs/dev_popcosmos_noagn_batch20 \
-     --sed-samples 4
-
-The no-AGN config keeps the same SSP, dust, gas, filters, redshift, and
-likelihood surface but removes ``ln_fagn`` and ``ln_tauagn``.
-
-Diffstar
---------
-
-Install the optional dependencies:
-
-.. code-block:: bash
-
-   python -m pip install -e '.[diffstar]'
-
-Run a short Diffstar full-AGN smoke:
+Larger batch:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/popcosmos_diffstar_compressed.yaml \
-     fit --index 0 \
-     --fit-maxiter 20 \
-     --out outputs/runs/dev_popcosmos_diffstar_compressed_fullagn_one_short \
-     --sed-samples 1
+     --config configs/diffsky_hltds_04_14_simple_gpu.yaml \
+     fit \
+     --limit 1000 \
+     --batch-size 128 \
+     --fit-maxiter 220 \
+     --sed-samples 0 \
+     --reporting-level light \
+     --out outputs/runs/diffsky_hltds_simple_n1000
 
-Forward Check
--------------
-
-Run the model and reporting path without optimization:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
-     fit --index 0 \
-     --no-optimize \
-     --out outputs/runs/dev_popcosmos_compressed_fullagn_forward \
-     --sed-samples 1
-
-Posterior Smoke
----------------
-
-NumPyro HMC/NUTS remains the reference posterior path:
+Regenerate the Diffsky recovery report after a run:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
-     posterior --index 0 \
-     --num-warmup 10 \
-     --num-samples 10 \
-     --out outputs/runs/dev_popcosmos_compressed_fullagn_posterior_one
+   python -m euclid_dsps.cli diffsky-fit-report \
+     --run outputs/runs/diffsky_hltds_simple_n1000 \
+     --config configs/diffsky_hltds_04_14_simple_gpu.yaml \
+     --label batch_fit \
+     --reporting-level light
 
-Experimental BlackJAX MCLMC can be used for one 16D full-AGN galaxy:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/popcosmos_binned_compressed.yaml \
-     posterior --index 0 \
-     --sampler mclmc \
-     --num-chains 4 \
-     --num-warmup 256 \
-     --num-samples 512 \
-     --mclmc-step-size 0.001 \
-     --mclmc-progress-chunk-size 16 \
-     --posterior-predictive-batch-size 256 \
-     --mclmc-debug \
-     --out outputs/runs/dev_popcosmos_compressed_mclmc_one
-
-MCLMC is currently an engineering posterior backend. Compare it against HMC/NUTS
-on selected rows before using it for science decisions.
-The MCLMC CLI reports the active JAX backend/devices, compilation time,
-warmup/sampling progress, and per-chunk debug summaries when
-``--mclmc-debug`` is enabled. Increase ``--mclmc-progress-chunk-size`` for
-less host synchronization once a run is stable. MCLMC chains are run
-sequentially to keep GPU memory bounded; posterior predictive magnitudes are
-also chunked before writing reports.
-
-Benchmark Against FSPS/Prospector
----------------------------------
-
-Small smoke:
-
-.. code-block:: bash
-
-   MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
-     --runtime cpu \
-     --config configs/popcosmos_binned.yaml \
-     --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
-     --agn-host-attenuation fsps_diffuse_unit_tau \
-     --agn-igm-order fsps_after_igm \
-     --agn-baked-attenuation fsps_powerlaw_unit_tau \
-     --agn-baked-dust-index -0.7 \
-     --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn stellar_plus_agn stellar_plus_dust_plus_agn stellar_plus_gas_plus_agn full_agn \
-     --n 50 \
-     --seed 0 \
-     --out outputs/benchmarks/popcosmos_binned_full_forward_fsps_closure_n50
-
-Regression-size benchmark:
-
-.. code-block:: bash
-
-   MPLCONFIGDIR=outputs/matplotlib_cache python scripts/benchmark_against_fsps_prospector.py \
-     --runtime cpu \
-     --config configs/popcosmos_binned.yaml \
-     --agn-component-grid Data/popcosmos_chabrier_agn_component_ssp_grid.h5 \
-     --agn-host-attenuation fsps_diffuse_unit_tau \
-     --agn-igm-order fsps_after_igm \
-     --agn-baked-attenuation fsps_powerlaw_unit_tau \
-     --agn-baked-dust-index -0.7 \
-     --levels stellar_only stellar_plus_dust stellar_plus_gas full_noagn stellar_plus_agn stellar_plus_dust_plus_agn stellar_plus_gas_plus_agn full_agn \
-     --n 500 \
-     --seed 1 \
-     --out outputs/benchmarks/popcosmos_binned_full_forward_fsps_closure_seed1_n500
-
-Parameter Vector
-----------------
-
-Full AGN binned config:
+The simple config fits only parameters that have direct/basic truth columns in
+the prepared dataset and are plausible for a broad-band DSPS fit:
 
 .. code-block:: text
 
    z_obs
    log10_stellar_mass
-   dlog10_sfr_1 ... dlog10_sfr_6
-   log10_stellar_metallicity
+   dlog10_sfr_1
    tau2
    dust_index_n
-   tau1_over_tau2
-   log10_gas_metallicity
-   log10_gas_ionization
-   ln_fagn
-   ln_tauagn
 
-No-AGN configs remove ``ln_fagn`` and ``ln_tauagn``. Diffstar configs replace
-the six ``dlog10_sfr`` terms with the configured Diffstar parameters.
+It does not fit Diffstar/Diffmah latents, AGN parameters, gas ionization, or
+full SFH latent extensions.
+
+Diffsky Fixed-Redshift Closure
+------------------------------
+
+Use this when redshift collapse or degeneracy dominates a free-redshift run:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml \
+     fit \
+     --limit 128 \
+     --batch-size 128 \
+     --fit-maxiter 180 \
+     --sed-samples 0 \
+     --reporting-level light \
+     --out outputs/runs/diffsky_hltds_fixedz_closure_n128
+
+This config reads ``redshift_true`` as the fixed catalog redshift and fits:
+
+.. code-block:: text
+
+   log10_stellar_mass
+   dlog10_sfr_1
+   tau2
+   dust_index_n
+
+It is a model/photometry closure diagnostic, not a blind photo-z experiment.
+
+Euclid FS2 Fit
+--------------
+
+FS2 remains supported as the Euclid comparison and domain-shift dataset:
+
+.. code-block:: text
+
+   Data/Euclid FS2 LC galaxy catalog_phz1.parquet
+
+One-row smoke:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/fs2_gpu.yaml \
+     fit \
+     --index 0 \
+     --fit-maxiter 20 \
+     --sed-samples 1 \
+     --out outputs/runs/fs2_gpu_one_short
+
+Small batch:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/fs2_gpu.yaml \
+     fit \
+     --limit 64 \
+     --batch-size 64 \
+     --fit-maxiter 200 \
+     --sed-samples 0 \
+     --reporting-level light \
+     --out outputs/runs/fs2_gpu_n64
+
+Amortized FS2 Prior Learning
+----------------------------
+
+Train the FS2 amortized model with a learned RealNVP prior:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_fs2_realnvp.yaml \
+     amortized-train-fs2 \
+     --limit 10000 \
+     --batch-size 64 \
+     --epochs 5 \
+     --n-samples 2 \
+     --out outputs/runs/amortized_fs2_realnvp_debug
+
+Run amortized inference:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_fs2_realnvp.yaml \
+     amortized-infer-fs2 \
+     --checkpoint outputs/runs/amortized_fs2_realnvp_debug/checkpoints/best.eqx \
+     --limit 10000 \
+     --batch-size 64 \
+     --posterior-samples 64 \
+     --out outputs/runs/amortized_fs2_realnvp_infer
 
 Outputs
 -------
 
-MAP runs write the normalized config, fit results, model/observed photometry,
-optimizer diagnostics, performance summaries, and optional SED diagnostics
-under the requested output directory. ``fit_quality`` follows the configured
-photometric likelihood. ``chi2`` remains a Gaussian comparison diagnostic.
+MAP runs write ``normalized_config.json``, fit result tables, photometry
+comparison tables, optimizer traces, objective summaries, truth metrics when
+truth columns exist, and optional plots under the requested output directory.
+Diffsky reports add a compact Markdown summary with truth-recovery tables and
+band residuals.

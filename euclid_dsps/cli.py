@@ -16,7 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default="configs/popcosmos_binned.yaml",
+        default="configs/fs2_gpu.yaml",
         help="YAML configuration file.",
     )
     sub = parser.add_subparsers(
@@ -24,11 +24,13 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar=(
             "{download-assets,check,fit,posterior,"
-            "openuniverse-prepare,"
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
+            "amortized-train-diffsky,amortized-infer-diffsky,"
+            "amortized-prior-overlap-diffsky,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
-            "diffsky-dataset-diagnostics,diffsky-validate-dataset}"
+            "diffsky-dataset-diagnostics,diffsky-validate-dataset,"
+            "diffsky-fit-report}"
         ),
     )
 
@@ -136,8 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     ou_prepare = sub.add_parser(
         "openuniverse-prepare",
-        help="Prepare a small OpenUniverse LSST+Roman 14-band parquet subset.",
+        help=argparse.SUPPRESS,
     )
+    _hide_subparser_from_help(sub, "openuniverse-prepare")
     ou_prepare.add_argument(
         "--input-root",
         help="Directory or URI containing galaxy_<hpix> and galaxy_flux_<hpix> files.",
@@ -231,6 +234,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable amortized training progress bars.",
     )
 
+    train_diffsky = sub.add_parser(
+        "amortized-train-diffsky",
+        help="Train the Diffsky HLTDS amortized encoder and RealNVP prior.",
+    )
+    _add_amortized_train_arguments(
+        train_diffsky,
+        default_out="outputs/runs/dev_amortized_diffsky",
+    )
+
     infer = sub.add_parser(
         "amortized-infer-fs2",
         help="Run FS2 amortized posterior inference from a checkpoint.",
@@ -256,11 +268,223 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--seed", type=int)
     infer.add_argument("--feature-stats")
 
+    infer_diffsky = sub.add_parser(
+        "amortized-infer-diffsky",
+        help="Run Diffsky HLTDS amortized posterior inference from a checkpoint.",
+    )
+    _add_amortized_infer_arguments(
+        infer_diffsky,
+        default_out="outputs/runs/dev_amortized_diffsky_infer",
+    )
+
+    overlap = sub.add_parser(
+        "amortized-prior-overlap-diffsky",
+        help="Compare Diffsky truth, posterior aggregate, and learned RealNVP prior.",
+    )
+    overlap.add_argument("--run", required=True, help="Inference output directory.")
+    overlap.add_argument("--dataset", help="Prepared Diffsky parquet override.")
+    overlap.add_argument("--out", help="Output report directory.")
+    overlap.add_argument("--max-objects", type=int)
+
+    inr_train = sub.add_parser(
+        "experimental-ssp-inr-train",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_from_help(sub, "experimental-ssp-inr-train")
+    add_experimental_ssp_inr_common(inr_train)
+    inr_train.add_argument(
+        "--model",
+        choices=(
+            "direct_fourier_mlp",
+            "direct_siren",
+            "latent_basis_mlp",
+            "compressed_coeff_mlp",
+        ),
+        required=True,
+        help="Experimental compression model to train.",
+    )
+    inr_train.add_argument("--steps", type=int)
+    inr_train.add_argument("--batch-size", type=int, default=4096)
+    inr_train.add_argument("--learning-rate", type=float, default=1.0e-3)
+    inr_train.add_argument("--hidden-width", type=int, default=64)
+    inr_train.add_argument("--hidden-layers", type=int, default=3)
+    inr_train.add_argument("--fourier-features", type=int, default=6)
+    inr_train.add_argument("--basis-k", type=int, default=32)
+    inr_train.add_argument(
+        "--latent-loss",
+        choices=("log_flux", "coeff"),
+        default="log_flux",
+        help="Latent model objective. log_flux trains reconstruction end-to-end.",
+    )
+    inr_train.add_argument(
+        "--loss-kind",
+        choices=("huber", "mse"),
+        default="huber",
+        help="Pointwise loss for --latent-loss log_flux.",
+    )
+    inr_train.add_argument("--huber-delta", type=float, default=0.05)
+    inr_train.add_argument(
+        "--flux-weight-floor-frac",
+        type=float,
+        default=1.0e-4,
+        help="Train/evaluate emphasis mask: flux must exceed this fraction of each curve peak.",
+    )
+    inr_train.add_argument(
+        "--residual-baseline",
+        help="Existing compressed asset; latent model learns log residual over it.",
+    )
+    inr_train.add_argument(
+        "--coeff-baseline",
+        help=(
+            "Existing compressed asset whose basis is kept and whose coefficient "
+            "table is replaced by compressed_coeff_mlp."
+        ),
+    )
+    inr_train.add_argument(
+        "--coeff-loss",
+        choices=("coeff", "log_flux", "mixed"),
+        default="mixed",
+        help="Objective for compressed_coeff_mlp.",
+    )
+    inr_train.add_argument(
+        "--coeff-log-weight",
+        type=float,
+        default=0.1,
+        help="Log-flux loss weight when --coeff-loss=mixed.",
+    )
+    inr_train.add_argument(
+        "--factor-agn-fagn",
+        action="store_true",
+        help="For agn_lnu_per_mformed, learn the fagn-factored component.",
+    )
+    inr_train.add_argument("--val-size", type=int, default=8192)
+    inr_train.add_argument("--no-progress", action="store_true")
+
+    inr_eval = sub.add_parser(
+        "experimental-ssp-inr-eval",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_from_help(sub, "experimental-ssp-inr-eval")
+    add_experimental_ssp_inr_common(inr_eval)
+    inr_eval.add_argument(
+        "--checkpoint",
+        action="append",
+        default=[],
+        help="Path to an experimental SSP INR model.npz. Repeat for multiple models.",
+    )
+    inr_eval.add_argument(
+        "--compressed-baseline",
+        action="append",
+        default=[],
+        help="Existing compressed SSP/gas/AGN HDF5 asset to compare. Repeatable.",
+    )
+    inr_eval.add_argument("--chunk-size", type=int, default=65536)
+    inr_eval.add_argument("--timing-repeats", type=int, default=10)
+    inr_eval.add_argument("--relative-flux-floor", type=float, default=1.0e-30)
+    inr_eval.add_argument(
+        "--peak-floor-frac",
+        action="append",
+        type=float,
+        default=[],
+        help="Add per-curve significant-flux mask threshold. Repeatable.",
+    )
+    inr_eval.add_argument(
+        "--log-svd-k",
+        action="append",
+        type=int,
+        default=[],
+        help="Add an oracle explicit log-SVD baseline rank. Repeatable.",
+    )
+
+    inr_report = sub.add_parser(
+        "experimental-ssp-inr-report",
+        help=argparse.SUPPRESS,
+    )
+    _hide_subparser_from_help(sub, "experimental-ssp-inr-report")
+    inr_report.add_argument(
+        "--metrics",
+        required=True,
+        help="metrics.json or metrics_summary.csv from experimental-ssp-inr-eval.",
+    )
+    inr_report.add_argument(
+        "--out",
+        default="outputs/ssp_inr/report.md",
+        help="Markdown report path.",
+    )
+
     from .diffsky_data.cli import add_diffsky_subcommands
 
     add_diffsky_subcommands(sub)
-
     return parser
+
+
+def _hide_subparser_from_help(sub: argparse._SubParsersAction, name: str) -> None:
+    sub._choices_actions = [  # type: ignore[attr-defined]
+        action
+        for action in sub._choices_actions  # type: ignore[attr-defined]
+        if getattr(action, "dest", None) != name
+    ]
+
+
+def _add_amortized_train_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    default_out: str,
+) -> None:
+    parser.add_argument("--out", default=default_out)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--n-samples", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+        help="Override amortized.data.selection_mode.",
+    )
+    parser.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+        help="Override amortized.data.stratified_strategy.",
+    )
+    parser.add_argument(
+        "--validation-fraction",
+        type=float,
+        help="Override amortized.data.validation_fraction.",
+    )
+    parser.add_argument(
+        "--kl-annealing-epochs",
+        type=int,
+        help="Override amortized.training.kl_annealing_epochs.",
+    )
+    parser.add_argument(
+        "--kl-weight-max",
+        type=float,
+        help="Override amortized.training.kl_weight_max.",
+    )
+    parser.add_argument(
+        "--validation-every",
+        type=int,
+        help="Override amortized.training.validation_every.",
+    )
+    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--no-progress", action="store_true")
+
+
+def _add_amortized_infer_arguments(
+    parser: argparse.ArgumentParser,
+    *,
+    default_out: str,
+) -> None:
+    parser.add_argument("--out", default=default_out)
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--posterior-samples", type=int)
+    parser.add_argument("--prior-samples", type=int)
+    parser.add_argument("--decoder-sample-chunk-size", type=int)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--feature-stats")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -276,7 +500,7 @@ def main(argv: list[str] | None = None) -> None:
         run_diffsky_command(args)
         return
 
-    from .config import load_config
+    from .config import RUNTIME_PRESETS, load_config
     from .jax_runtime import apply_jax_runtime_env
 
     config = load_config(args.config)
@@ -286,6 +510,11 @@ def main(argv: list[str] | None = None) -> None:
             **runtime_config,
             "jax_platforms": "auto",
             "require_gpu": False,
+        }
+    if args.command.startswith("experimental-ssp-inr") and getattr(args, "runtime", "config") != "config":
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
         }
     apply_jax_runtime_env(runtime_config)
 
@@ -300,6 +529,24 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "amortized-infer-fs2":
         _run_amortized_infer(config, args)
+        return
+    if args.command == "amortized-train-diffsky":
+        _run_amortized_train(config, args, dataset_label="Diffsky HLTDS")
+        return
+    if args.command == "amortized-infer-diffsky":
+        _run_amortized_infer(config, args, dataset_label="Diffsky HLTDS")
+        return
+    if args.command == "amortized-prior-overlap-diffsky":
+        _run_amortized_prior_overlap_diffsky(config, args)
+        return
+    if args.command == "experimental-ssp-inr-train":
+        _run_experimental_ssp_inr_train(args)
+        return
+    if args.command == "experimental-ssp-inr-eval":
+        _run_experimental_ssp_inr_eval(args)
+        return
+    if args.command == "experimental-ssp-inr-report":
+        _run_experimental_ssp_inr_report(args)
         return
 
     from .workflows import (
@@ -460,7 +707,12 @@ def _run_openuniverse_prepare(config: dict, args) -> None:
     )
 
 
-def _run_amortized_train(config: dict, args) -> None:
+def _run_amortized_train(
+    config: dict,
+    args,
+    *,
+    dataset_label: str = "FS2",
+) -> None:
     try:
         from .amortized.config import amortized_config
         from .amortized.train import train_amortized_fs2
@@ -480,6 +732,7 @@ def _run_amortized_train(config: dict, args) -> None:
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
         verbose=not bool(getattr(args, "quiet", False)),
         progress=not bool(getattr(args, "no_progress", False)),
+        dataset_label=dataset_label,
     )
 
 
@@ -506,7 +759,12 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     return config
 
 
-def _run_amortized_infer(config: dict, args) -> None:
+def _run_amortized_infer(
+    config: dict,
+    args,
+    *,
+    dataset_label: str = "FS2",
+) -> None:
     try:
         from .amortized.config import amortized_config
         from .amortized.infer import infer_amortized_fs2
@@ -539,6 +797,178 @@ def _run_amortized_infer(config: dict, args) -> None:
             if args.decoder_sample_chunk_size is not None
             else inference.get("decoder_sample_chunk_size", 1)
         ),
+        dataset_label=dataset_label,
+    )
+
+
+def _run_amortized_prior_overlap_diffsky(config: dict, args) -> None:
+    from .amortized.prior_overlap import write_diffsky_prior_overlap_report
+
+    run_dir = Path(args.run)
+    dataset_path = Path(args.dataset) if args.dataset else Path(config["catalog_path"])
+    out_dir = Path(args.out) if args.out else run_dir / "prior_overlap"
+    report = write_diffsky_prior_overlap_report(
+        dataset_path=dataset_path,
+        run_dir=run_dir,
+        out_dir=out_dir,
+        config=config,
+        max_objects=args.max_objects,
+    )
+    print(f"[amortized] prior overlap -> {report}")
+
+
+def _run_experimental_ssp_inr_train(args) -> None:
+    try:
+        from .experimental.ssp_inr.train import train_experiment
+
+        result = train_experiment(
+            asset=args.asset,
+            dataset=args.dataset,
+            model=args.model,
+            out=args.out,
+            quick=bool(args.quick),
+            max_curves=args.max_curves,
+            max_wave=args.max_wave,
+            max_elements=int(args.max_elements),
+            allow_large_load=bool(args.allow_large_load),
+            seed=int(args.seed),
+            steps=args.steps,
+            batch_size=int(args.batch_size),
+            learning_rate=float(args.learning_rate),
+            hidden_width=int(args.hidden_width),
+            hidden_layers=int(args.hidden_layers),
+            fourier_features=int(args.fourier_features),
+            basis_k=int(args.basis_k),
+            eps=float(args.eps),
+            val_size=int(args.val_size),
+            plot_examples=int(args.plot_examples),
+            progress=not bool(args.no_progress),
+            latent_loss=str(args.latent_loss),
+            loss_kind=str(args.loss_kind),
+            huber_delta=float(args.huber_delta),
+            wave_min=float(args.wave_min),
+            wave_max=float(args.wave_max),
+            flux_weight_floor_frac=float(args.flux_weight_floor_frac),
+            residual_baseline=args.residual_baseline,
+            coeff_baseline=args.coeff_baseline,
+            coeff_loss=str(args.coeff_loss),
+            coeff_log_weight=float(args.coeff_log_weight),
+            factor_agn_fagn=bool(args.factor_agn_fagn),
+        )
+    except RuntimeError as exc:
+        if "JAX could not initialize the requested GPU backend" in str(exc):
+            raise SystemExit(str(exc)) from exc
+        raise
+    print(f"[ssp-inr] wrote checkpoint -> {result['checkpoint']}")
+    for plot in result.get("plots", []):
+        print(f"[ssp-inr] wrote plot -> {plot}")
+
+
+def _run_experimental_ssp_inr_eval(args) -> None:
+    try:
+        from .experimental.ssp_inr.evaluate import evaluate_experiment
+
+        result = evaluate_experiment(
+            asset=args.asset,
+            dataset=args.dataset,
+            out=args.out,
+            checkpoints=list(args.checkpoint or []),
+            compressed_baselines=list(args.compressed_baseline or []),
+            quick=bool(args.quick),
+            max_curves=args.max_curves,
+            max_wave=args.max_wave,
+            max_elements=int(args.max_elements),
+            allow_large_load=bool(args.allow_large_load),
+            seed=int(args.seed),
+            eps=float(args.eps),
+            relative_flux_floor=float(args.relative_flux_floor),
+            chunk_size=int(args.chunk_size),
+            timing_repeats=int(args.timing_repeats),
+            plot_examples=int(args.plot_examples),
+            wave_min=float(args.wave_min),
+            wave_max=float(args.wave_max),
+            peak_floor_fracs=tuple(args.peak_floor_frac or [1.0e-4, 1.0e-6]),
+            log_svd_k=list(args.log_svd_k or []),
+        )
+    except RuntimeError as exc:
+        if "JAX could not initialize the requested GPU backend" in str(exc):
+            raise SystemExit(str(exc)) from exc
+        raise
+    outputs = result["outputs"]
+    print(f"[ssp-inr] wrote metrics -> {outputs['metrics_json']}")
+    print(f"[ssp-inr] wrote summary -> {outputs['metrics_csv']}")
+    print(f"[ssp-inr] wrote report -> {outputs['report']}")
+
+
+def _run_experimental_ssp_inr_report(args) -> None:
+    from .experimental.ssp_inr.report import write_report
+
+    path = write_report(metrics_path=args.metrics, out=args.out)
+    print(f"[ssp-inr] wrote report -> {path}")
+
+
+def add_experimental_ssp_inr_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--asset",
+        default="Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5",
+        help="Dense HDF5 spectral asset.",
+    )
+    parser.add_argument(
+        "--dataset",
+        default="ssp_flux",
+        help="Dense spectral dataset inside --asset.",
+    )
+    parser.add_argument(
+        "--out",
+        default="outputs/ssp_inr/run",
+        help="Output directory.",
+    )
+    parser.add_argument(
+        "--quick",
+        action="store_true",
+        help="Use a small curve/wavelength subset and shorter default training.",
+    )
+    parser.add_argument(
+        "--max-curves",
+        type=int,
+        help="Maximum number of curve-axis samples to load.",
+    )
+    parser.add_argument(
+        "--max-wave",
+        type=int,
+        help="Maximum number of wavelength samples to load.",
+    )
+    parser.add_argument(
+        "--max-elements",
+        type=int,
+        default=20_000_000,
+        help="Safety cap for loaded curve*wavelength elements.",
+    )
+    parser.add_argument(
+        "--allow-large-load",
+        action="store_true",
+        help="Allow loading more than --max-elements values.",
+    )
+    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--eps", type=float, default=1.0e-30)
+    parser.add_argument("--plot-examples", type=int, default=4)
+    parser.add_argument(
+        "--wave-min",
+        type=float,
+        default=900.0,
+        help="Lower Angstrom bound for useful-wave metrics and zoom plots.",
+    )
+    parser.add_argument(
+        "--wave-max",
+        type=float,
+        default=50000.0,
+        help="Upper Angstrom bound for useful-wave metrics and zoom plots.",
+    )
+    parser.add_argument(
+        "--runtime",
+        choices=("config", "auto", "cpu", "gpu"),
+        default="cpu",
+        help="Runtime override for this experimental JAX command.",
     )
 
 

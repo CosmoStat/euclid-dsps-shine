@@ -1,4 +1,4 @@
-extends: popcosmos_binned_compressed.yaml
+extends: fs2_gpu.yaml
 
 amortized:
     enabled: true

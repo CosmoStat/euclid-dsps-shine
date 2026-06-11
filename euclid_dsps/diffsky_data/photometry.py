@@ -60,16 +60,18 @@ def standardize_magnitude_photometry(
     data: dict[str, np.ndarray],
     report: PhotometryColumnReport,
     snr: float,
+    add_synthetic_errors: bool = True,
 ) -> pd.DataFrame:
     frame = pd.DataFrame()
     for band, column in zip(report.band_names, report.native_columns, strict=True):
         mag = np.asarray(data[column], dtype=float)
         flux = np.asarray(abmag_to_fnu_cgs(mag), dtype=float)
         valid = np.isfinite(mag) & np.isfinite(flux) & (flux > 0.0) & (mag < 90.0)
-        err = np.maximum(np.abs(flux) / max(float(snr), 1.0e-12), 1.0e-40)
         frame[f"mag_{band}"] = mag
         frame[f"flux_{band}"] = flux
-        frame[f"fluxerr_{band}"] = err
+        if add_synthetic_errors:
+            err = np.maximum(np.abs(flux) / max(float(snr), 1.0e-12), 1.0e-40)
+            frame[f"fluxerr_{band}"] = err
         frame[f"mask_{band}"] = valid
     return frame
 

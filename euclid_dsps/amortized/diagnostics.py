@@ -75,7 +75,7 @@ _CATALOG_PROXY_SPECS = {
 
 
 def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> list[str]:
-    """Write simple training diagnostic plots from ``training_log.csv``."""
+    """Write epoch-level training diagnostic plots from ``training_log.csv``."""
     log_path = Path(log_path)
     out = Path(out_dir)
     if not log_path.exists():
@@ -94,6 +94,7 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         )
         return []
 
+    epoch_summary = _write_training_epoch_summary(frame, out)
     for column in [
         "loss",
         "negative_loglike",
@@ -106,56 +107,277 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         "prior_grad_norm",
         "joint_grad_norm",
     ]:
-        if column not in frame:
+        if column not in epoch_summary:
             continue
-        fig, ax = plt.subplots(figsize=(7, 4))
-        if "split" in frame:
-            for split, group in frame.groupby("split", sort=False):
-                ax.plot(
-                    np.arange(len(group)),
-                    group[column].to_numpy(),
-                    lw=1.5,
-                    label=str(split),
-                )
-            ax.legend(frameon=False)
-        else:
-            ax.plot(frame[column].to_numpy(), lw=1.5)
-        ax.set_xlabel("step")
-        ax.set_ylabel(column)
-        ax.set_title(column)
-        fig.tight_layout()
-        path = out / f"{column}.png"
-        fig.savefig(path, dpi=150)
-        plt.close(fig)
+        path = _write_epoch_metric_plot(epoch_summary, column, out, plt)
+        if path is None:
+            continue
+        written.append(path.name)
+    path = _write_training_overview_plot(epoch_summary, out, plt)
+    if path is not None:
         written.append(path.name)
     bin_path = out / "validation_redshift_bin_metrics.csv"
     if bin_path.exists():
         bins = pd.read_csv(bin_path)
-        if not bins.empty and {"epoch", "z_bin", "loss"} <= set(bins):
-            fig, ax = plt.subplots(figsize=(8, 4.5))
-            for z_bin, group in bins.groupby("z_bin", sort=False):
-                ax.plot(
-                    group["epoch"].to_numpy(),
-                    group["loss"].to_numpy(),
-                    marker="o",
-                    ms=3,
-                    lw=1.1,
-                    label=str(z_bin),
-                )
-            ax.set_xlabel("epoch")
-            ax.set_ylabel("validation loss")
-            ax.set_title("Validation loss by redshift bin")
-            ax.legend(frameon=False, fontsize=7, ncols=2)
-            fig.tight_layout()
-            path = out / "validation_loss_by_redshift_bin.png"
-            fig.savefig(path, dpi=150)
-            plt.close(fig)
-            written.append(path.name)
+        written.extend(path.name for path in _write_redshift_bin_plots(bins, out, plt))
     write_json(
         out / "training_diagnostics_summary.json",
-        {"plots": written, "n_rows": int(len(frame))},
+        {
+            "plots": written,
+            "n_rows": int(len(frame)),
+            "epoch_summary_rows": int(len(epoch_summary)),
+            "x_axis": "epoch",
+        },
     )
     return written
+
+
+def _write_training_epoch_summary(frame: pd.DataFrame, out: Path) -> pd.DataFrame:
+    metrics = [
+        "loss",
+        "negative_loglike",
+        "kl_mc_mean",
+        "logprior_mean",
+        "logq_mean",
+        "residual_rms",
+        "finite_fraction",
+        "encoder_grad_norm",
+        "prior_grad_norm",
+        "joint_grad_norm",
+    ]
+    metrics = [metric for metric in metrics if metric in frame]
+    if "split" not in frame:
+        frame = frame.copy()
+        frame["split"] = "train"
+    rows = []
+    for (split, epoch), group in frame.groupby(["split", "epoch"], sort=True):
+        row: dict[str, float | int | str] = {
+            "split": str(split),
+            "epoch": int(epoch),
+            "n_rows": int(len(group)),
+            "n_objects": int(group["n_objects"].sum()) if "n_objects" in group else 0,
+            "kl_weight": (
+                float(np.nanmean(group["kl_weight"])) if "kl_weight" in group else np.nan
+            ),
+        }
+        for metric in metrics:
+            values = group[metric].to_numpy(dtype=float)
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                row[metric] = np.nan
+                row[f"{metric}_median"] = np.nan
+                row[f"{metric}_q16"] = np.nan
+                row[f"{metric}_q84"] = np.nan
+                continue
+            row[metric] = float(np.mean(values))
+            row[f"{metric}_median"] = float(np.nanmedian(values))
+            row[f"{metric}_q16"] = float(np.nanquantile(values, 0.16))
+            row[f"{metric}_q84"] = float(np.nanquantile(values, 0.84))
+        rows.append(row)
+    summary = pd.DataFrame(rows)
+    summary.to_csv(out / "training_epoch_summary.csv", index=False)
+    return summary
+
+
+def _write_epoch_metric_plot(
+    summary: pd.DataFrame,
+    metric: str,
+    out: Path,
+    plt,
+) -> Path | None:
+    if summary.empty or metric not in summary:
+        return None
+    fig, ax = plt.subplots(figsize=(7.5, 4.4))
+    colors = {"train": "#2a9fd6", "validation": "#ef476f"}
+    for split, group in summary.groupby("split", sort=False):
+        if _is_gradient_metric(metric) and str(split) != "train":
+            continue
+        group = group.sort_values("epoch")
+        x = group["epoch"].to_numpy(dtype=float)
+        y = group[metric].to_numpy(dtype=float)
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not finite.any():
+            continue
+        color = colors.get(str(split), None)
+        label = str(split)
+        ax.plot(
+            x[finite],
+            y[finite],
+            marker="o",
+            ms=3.2,
+            lw=1.8,
+            color=color,
+            label=label,
+        )
+        q16_col = f"{metric}_q16"
+        q84_col = f"{metric}_q84"
+        if q16_col in group and q84_col in group and len(group) > 1:
+            q16 = group[q16_col].to_numpy(dtype=float)
+            q84 = group[q84_col].to_numpy(dtype=float)
+            band_finite = finite & np.isfinite(q16) & np.isfinite(q84)
+            if band_finite.any():
+                ax.fill_between(
+                    x[band_finite],
+                    q16[band_finite],
+                    q84[band_finite],
+                    color=color,
+                    alpha=0.12,
+                    linewidth=0.0,
+                )
+    if not ax.has_data():
+        plt.close(fig)
+        return None
+    if _use_log_y(metric, summary):
+        ax.set_yscale("log")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel(_metric_label(metric))
+    ax.set_title(f"{_metric_label(metric)} by epoch")
+    ax.grid(alpha=0.22, linewidth=0.7)
+    ax.legend(frameon=False)
+    fig.tight_layout()
+    path = out / f"{metric}.png"
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+    return path
+
+
+def _write_training_overview_plot(
+    summary: pd.DataFrame,
+    out: Path,
+    plt,
+) -> Path | None:
+    metrics = ["loss", "negative_loglike", "kl_mc_mean", "logprior_mean"]
+    metrics = [metric for metric in metrics if metric in summary]
+    if not metrics:
+        return None
+    fig, axes = plt.subplots(2, 2, figsize=(11, 7), squeeze=False)
+    for ax, metric in zip(axes.ravel(), metrics, strict=False):
+        for split, group in summary.groupby("split", sort=False):
+            group = group.sort_values("epoch")
+            color = "#2a9fd6" if str(split) == "train" else "#ef476f"
+            ax.plot(
+                group["epoch"].to_numpy(dtype=float),
+                group[metric].to_numpy(dtype=float),
+                marker="o",
+                ms=3,
+                lw=1.6,
+                color=color,
+                label=str(split),
+            )
+        ax.set_title(_metric_label(metric))
+        ax.set_xlabel("epoch")
+        ax.grid(alpha=0.22, linewidth=0.7)
+    for ax in axes.ravel()[len(metrics) :]:
+        ax.axis("off")
+    axes[0, 0].legend(frameon=False)
+    fig.suptitle("Training history by epoch", y=0.995)
+    fig.tight_layout()
+    path = out / "training_history_overview.png"
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+    return path
+
+
+def _write_redshift_bin_plots(
+    bins: pd.DataFrame,
+    out: Path,
+    plt,
+) -> list[Path]:
+    if bins.empty or not {"epoch", "z_bin"} <= set(bins):
+        return []
+    written = []
+    for metric, filename, label, log10_values in [
+        ("loss", "validation_loss_by_redshift_bin.png", "validation loss", False),
+        (
+            "negative_loglike",
+            "validation_negative_loglike_by_redshift_bin.png",
+            "validation negative loglike",
+            False,
+        ),
+        (
+            "posterior_predictive_chi2",
+            "validation_chi2_by_redshift_bin.png",
+            "log10 median posterior predictive chi2",
+            True,
+        ),
+        ("kl_mc_mean", "validation_kl_by_redshift_bin.png", "validation KL MC", False),
+    ]:
+        if metric not in bins:
+            continue
+        path = _write_redshift_bin_heatmap(
+            bins,
+            metric,
+            out / filename,
+            plt,
+            label=label,
+            log10_values=log10_values,
+        )
+        if path is not None:
+            written.append(path)
+    return written
+
+
+def _write_redshift_bin_heatmap(
+    bins: pd.DataFrame,
+    metric: str,
+    path: Path,
+    plt,
+    *,
+    label: str,
+    log10_values: bool,
+) -> Path | None:
+    pivot = bins.pivot(index="z_bin", columns="epoch", values=metric)
+    if pivot.empty:
+        return None
+    values = pivot.to_numpy(dtype=float)
+    if log10_values:
+        values = np.log10(np.maximum(values, 1.0e-12))
+    if not np.isfinite(values).any():
+        return None
+    fig, ax = plt.subplots(figsize=(9, 4.8))
+    image = ax.imshow(values, aspect="auto", origin="lower", cmap="viridis")
+    ax.set_yticks(np.arange(len(pivot.index)))
+    ax.set_yticklabels([str(value) for value in pivot.index], fontsize=8)
+    epochs = pivot.columns.to_numpy(dtype=int)
+    tick_count = min(8, len(epochs))
+    tick_positions = np.linspace(0, len(epochs) - 1, tick_count, dtype=int)
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([str(epochs[index]) for index in tick_positions])
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("z_true_gal bin")
+    ax.set_title(label)
+    fig.colorbar(image, ax=ax, label=label)
+    fig.tight_layout()
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
+    return path
+
+
+def _metric_label(metric: str) -> str:
+    return {
+        "loss": "negative ELBO",
+        "negative_loglike": "negative log likelihood",
+        "kl_mc_mean": "KL MC mean",
+        "logprior_mean": "mean log p_beta(x)",
+        "logq_mean": "mean log q_psi(x|f,err)",
+        "residual_rms": "RMS residual",
+        "finite_fraction": "finite fraction",
+        "encoder_grad_norm": "encoder grad norm",
+        "prior_grad_norm": "RealNVP prior grad norm",
+        "joint_grad_norm": "joint grad norm",
+    }.get(metric, metric)
+
+
+def _is_gradient_metric(metric: str) -> bool:
+    return metric in {"encoder_grad_norm", "prior_grad_norm", "joint_grad_norm"}
+
+
+def _use_log_y(metric: str, summary: pd.DataFrame) -> bool:
+    if metric not in {"encoder_grad_norm", "prior_grad_norm", "joint_grad_norm"}:
+        return False
+    values = summary[metric].to_numpy(dtype=float)
+    values = values[np.isfinite(values) & (values > 0.0)]
+    return values.size > 0
 
 
 def posterior_predictive_residual_frame(

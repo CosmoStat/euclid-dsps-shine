@@ -627,6 +627,25 @@ BAND_PRESETS["diffsky_hltds_lsst_roman_14_fnu_cgs"] = [
     }
     for band_name in DIFFSKY_HLTDS_LSST_ROMAN_BANDS
 ]
+BAND_PRESETS["diffsky_hltds_lsst_roman_14_abmag_modelerr"] = [
+    {
+        "name": band_name,
+        "column": f"mag_{band_name}",
+        "units": "abmag",
+        # HLTDS public shards expose generated magnitudes, not native survey
+        # errors. Treat this as a model-mismatch tolerance for closure tests.
+        "sigma_mag": 0.10,
+        "filter": {
+            "kind": "hdf5_group",
+            "path": DIFFSKY_HLTDS_FILTER_PATH,
+            "group": band_name,
+            "wave_dataset": "wave",
+            "transmission_dataset": "transmission",
+            "wave_unit": "angstrom",
+        },
+    }
+    for band_name in DIFFSKY_HLTDS_LSST_ROMAN_BANDS
+]
 
 COLUMN_GROUPS = {
     "truth_basic": [

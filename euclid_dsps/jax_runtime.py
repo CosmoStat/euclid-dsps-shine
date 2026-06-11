@@ -96,7 +96,17 @@ def require_jax_gpu(expected_name: str | None = None) -> list[str]:
     """Raise if JAX did not expose an NVIDIA/CUDA-capable GPU device."""
     import jax
 
-    devices = jax.devices()
+    try:
+        devices = jax.devices()
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "JAX could not initialize the requested GPU backend. "
+            f"JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS')!r}. "
+            "This usually means the installed jax/jaxlib package is CPU-only, "
+            "or the installed CUDA plugin version is incompatible with jaxlib. "
+            "Use --runtime cpu/auto for CPU runs, or reinstall matching CUDA "
+            "JAX packages in the active environment."
+        ) from exc
     gpu_devices = [
         device
         for device in devices

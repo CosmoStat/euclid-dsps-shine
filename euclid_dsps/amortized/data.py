@@ -29,20 +29,20 @@ class PhotometryBatch:
     features: jnp.ndarray
 
 
-def compute_fs2_feature_stats_from_config(
+def compute_feature_stats_from_config(
     config: dict[str, Any],
     *,
     limit: int | None = None,
     batch_size: int = 10_000,
     row_indices: np.ndarray | None = None,
 ) -> FeatureStats:
-    """Compute feature stats from configured FS2 photometry."""
-    band_names = validate_fs2_band_contract(config["bands"])
+    """Compute feature stats from configured catalog photometry."""
+    band_names = tuple(str(band["name"]) for band in config["bands"])
     features_cfg = amortized_config(config)["features"]
     flux_chunks = []
     err_chunks = []
     mask_chunks = []
-    for arrays in iter_fs2_photometry_arrays_from_config(
+    for arrays in iter_photometry_arrays_from_config(
         config,
         batch_size=batch_size,
         limit=limit,
@@ -62,16 +62,35 @@ def compute_fs2_feature_stats_from_config(
     )
 
 
-def iter_fs2_photometry_arrays_from_config(
+def compute_fs2_feature_stats_from_config(
+    config: dict[str, Any],
+    *,
+    limit: int | None = None,
+    batch_size: int = 10_000,
+    row_indices: np.ndarray | None = None,
+) -> FeatureStats:
+    """Compute feature stats from configured FS2 photometry."""
+    validate_fs2_band_contract(config["bands"])
+    return compute_feature_stats_from_config(
+        config,
+        limit=limit,
+        batch_size=batch_size,
+        row_indices=row_indices,
+    )
+
+
+def iter_photometry_arrays_from_config(
     config: dict[str, Any],
     *,
     batch_size: int,
     limit: int | None,
     row_indices: np.ndarray | None = None,
-) -> Iterator:
-    """Yield raw NumPy FS2 photometry arrays from a config."""
-    validate_fs2_band_contract(config["bands"])
+) -> Iterator[PhotometryArrays]:
+    """Yield raw NumPy photometry arrays from a generic configured catalog."""
     columns = required_catalog_columns(config)
+    id_column = _object_id_column_from_config(config)
+    if id_column and id_column not in columns:
+        columns.append(id_column)
     row_index_set = (
         None if row_indices is None else set(np.asarray(row_indices, dtype=int))
     )
@@ -82,7 +101,28 @@ def iter_fs2_photometry_arrays_from_config(
         limit=limit,
         row_indices=row_index_set,
     ):
-        yield photometry_arrays_from_dataframe(frame, config["bands"])
+        yield photometry_arrays_from_dataframe(
+            frame,
+            config["bands"],
+            object_id_column=id_column,
+        )
+
+
+def iter_fs2_photometry_arrays_from_config(
+    config: dict[str, Any],
+    *,
+    batch_size: int,
+    limit: int | None,
+    row_indices: np.ndarray | None = None,
+) -> Iterator:
+    """Yield raw NumPy FS2 photometry arrays from a config."""
+    validate_fs2_band_contract(config["bands"])
+    yield from iter_photometry_arrays_from_config(
+        config,
+        batch_size=batch_size,
+        limit=limit,
+        row_indices=row_indices,
+    )
 
 
 def load_fs2_photometry_arrays_from_config(
@@ -93,8 +133,25 @@ def load_fs2_photometry_arrays_from_config(
     row_indices: np.ndarray | None = None,
 ) -> PhotometryArrays:
     """Load selected FS2 photometry into one compact array block."""
+    validate_fs2_band_contract(config["bands"])
+    return load_photometry_arrays_from_config(
+        config,
+        batch_size=batch_size,
+        limit=limit,
+        row_indices=row_indices,
+    )
+
+
+def load_photometry_arrays_from_config(
+    config: dict[str, Any],
+    *,
+    batch_size: int,
+    limit: int | None = None,
+    row_indices: np.ndarray | None = None,
+) -> PhotometryArrays:
+    """Load selected generic photometry into one compact array block."""
     chunks = list(
-        iter_fs2_photometry_arrays_from_config(
+        iter_photometry_arrays_from_config(
             config,
             batch_size=batch_size,
             limit=limit,
@@ -122,15 +179,33 @@ def iter_fs2_photometry_batches_from_config(
     row_indices: np.ndarray | None = None,
 ) -> Iterator[PhotometryBatch]:
     """Yield JAX-ready FS2 photometry batches."""
+    validate_fs2_band_contract(config["bands"])
+    yield from iter_photometry_batches_from_config(
+        config,
+        batch_size=batch_size,
+        limit=limit,
+        feature_stats=feature_stats,
+        row_indices=row_indices,
+    )
+
+
+def iter_photometry_batches_from_config(
+    config: dict[str, Any],
+    batch_size: int,
+    limit: int | None,
+    feature_stats: FeatureStats | None,
+    row_indices: np.ndarray | None = None,
+) -> Iterator[PhotometryBatch]:
+    """Yield JAX-ready generic photometry batches."""
     stats = feature_stats
     if stats is None:
-        stats = compute_fs2_feature_stats_from_config(
+        stats = compute_feature_stats_from_config(
             config,
             limit=limit,
             batch_size=batch_size,
             row_indices=row_indices,
         )
-    for arrays in iter_fs2_photometry_arrays_from_config(
+    for arrays in iter_photometry_arrays_from_config(
         config,
         batch_size=batch_size,
         limit=limit,
@@ -164,9 +239,19 @@ def iter_photometry_batches_from_arrays(
             feature_stats,
         )
         yield PhotometryBatch(
-            object_id=jnp.asarray(arrays.object_id[idx], dtype=jnp.int32),
+            object_id=np.asarray(arrays.object_id[idx], dtype=np.int64),
             flux=jnp.asarray(arrays.flux[idx], dtype=jnp.float32),
             flux_err=jnp.asarray(arrays.flux_err[idx], dtype=jnp.float32),
             mask=jnp.asarray(arrays.mask[idx]),
             features=features,
         )
+
+
+def _object_id_column_from_config(config: dict[str, Any]) -> str | None:
+    dataset = config.get("dataset", {}) or {}
+    for key in ("id_column", "object_id_column"):
+        value = dataset.get(key)
+        if value:
+            return str(value)
+    value = config.get("object_id_column")
+    return str(value) if value else None

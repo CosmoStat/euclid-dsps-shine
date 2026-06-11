@@ -989,6 +989,33 @@ def test_compressed_ssp_loads_without_resident_dense_ssp_flux(tmp_path) -> None:
     assert np.all(np.isfinite(np.asarray(result.model_mags)))
 
 
+def test_compressed_ssp_runtime_dtype_can_upcast_coefficients(tmp_path) -> None:
+    ssp_path = tmp_path / "ssp_chabrier.h5"
+    compressed_path = tmp_path / "compressed_ssp_chabrier.h5"
+    wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
+    _write_synthetic_compressed_ssp_hdf5(compressed_path, wave, lg_age, lgmet)
+
+    context = load_context(
+        str(ssp_path),
+        {"wide": _wide_filter()},
+        model_config={
+            "sfh_model": "popcosmos_bins",
+            "stellar_metallicity_model": "single",
+            "ssp_model": "compressed_basis",
+            "compressed_ssp_path": str(compressed_path),
+            "compressed_ssp_runtime_dtype": "float32",
+            "nebular_model": "fixed_ssp",
+            "agn_model": "none",
+            "z_sun": 0.0142,
+        },
+    )
+
+    assert context.ssp_flux_jax is None
+    assert context.compressed_ssp_basis_jax.dtype == jnp.float32
+    assert context.compressed_ssp_coeff_jax.dtype == jnp.float32
+    assert context.compressed_ssp_scale_jax.dtype == jnp.float32
+
+
 def test_popcosmos_gas_grid_axis_mismatch_fails(tmp_path) -> None:
     ssp_path = tmp_path / "ssp_chabrier.h5"
     gas_path = tmp_path / "gas_chabrier.h5"
@@ -1212,14 +1239,11 @@ def test_diffstar_mags_only_matches_full_forward() -> None:
     np.testing.assert_allclose(np.asarray(mags_only), np.asarray(full), rtol=1.0e-6)
 
 
-def test_popcosmos_binned_noagn_config_loads_without_agn_grid(tmp_path) -> None:
-    config = load_config("configs/popcosmos_binned_noagn.yaml")
+def test_diffsky_simple_config_loads_without_agn_or_gas_grid(tmp_path) -> None:
+    config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
     ssp_path = tmp_path / "ssp_chabrier.h5"
-    gas_path = tmp_path / "gas_chabrier.h5"
     wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
-    _write_synthetic_gas_hdf5(gas_path, wave, lg_age, lgmet)
     config["ssp_path"] = str(ssp_path)
-    config["model"]["gas_grid_path"] = str(gas_path)
     filters = {"wide": _wide_filter()}
 
     context = load_context(
@@ -1304,32 +1328,6 @@ def test_diffstar_complete_jax_grad_model_mags_when_installed() -> None:
     assert result.lookback_bin_edges_gyr.shape == (8,)
     assert np.all(np.isfinite(np.asarray(result.model_mags)))
     assert np.all(np.isfinite(np.asarray(grad)))
-
-
-def test_popcosmos_diffstar_noagn_config_loads_without_agn_grid_when_installed(
-    tmp_path,
-) -> None:
-    pytest.importorskip("diffstar")
-    pytest.importorskip("diffmah")
-    config = load_config("configs/popcosmos_diffstar_noagn.yaml")
-    ssp_path = tmp_path / "ssp_chabrier.h5"
-    gas_path = tmp_path / "gas_chabrier.h5"
-    wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
-    _write_synthetic_gas_hdf5(gas_path, wave, lg_age, lgmet)
-    config["ssp_path"] = str(ssp_path)
-    config["model"]["gas_grid_path"] = str(gas_path)
-    filters = {"wide": _wide_filter()}
-
-    context = load_context(
-        config["ssp_path"],
-        filters,
-        n_sfh_bins=int(config["model"]["n_sfh_bins"]),
-        model_config=config["model"],
-    )
-    result = run_dsps_model_jax(context, _noagn_params(_diffstar_params()))
-
-    assert context.agn_template_grid_jax is None
-    assert np.all(np.isfinite(np.asarray(result.model_mags)))
 
 
 def test_popcosmos_agn_component_outputs_are_separated() -> None:

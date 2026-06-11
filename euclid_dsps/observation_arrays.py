@@ -8,8 +8,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .io import abmag_to_flux_fnu_cgs, microjy_to_flux_fnu_cgs
-from .photometry import magerr_to_fluxerr_fnu_cgs
+from .io import microjy_to_flux_fnu_cgs
+from .photometry import abmag_to_fnu_cgs, magerr_to_fluxerr_fnu_cgs
 
 
 @dataclass(frozen=True)
@@ -94,7 +94,7 @@ def _convert_flux_to_fnu_cgs(values: np.ndarray, units: str) -> np.ndarray:
     if units == "fnu_cgs":
         return np.asarray(values, dtype=float)
     if units == "abmag":
-        return np.asarray(abmag_to_flux_fnu_cgs(values), dtype=float)
+        return np.asarray(abmag_to_fnu_cgs(values), dtype=float)
     if units in {"microjy", "ujy"}:
         return np.asarray(microjy_to_flux_fnu_cgs(values), dtype=float)
     raise ValueError(f"Unsupported photometry units: {units}")

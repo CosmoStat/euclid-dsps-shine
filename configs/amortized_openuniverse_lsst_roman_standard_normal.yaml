@@ -1,9 +1,0 @@
-extends: amortized_openuniverse_lsst_roman_realnvp.yaml
-
-amortized:
-    prior:
-        type: standard_normal
-        train_jointly: false
-        n_layers: 0
-        hidden_size: 0
-        scale_clamp: 0.0

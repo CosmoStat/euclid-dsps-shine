@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
 from euclid_dsps.amortized.features import compute_feature_stats, make_encoder_features
+from euclid_dsps.amortized.data import iter_photometry_batches_from_arrays
 from euclid_dsps.config import load_config
+from euclid_dsps.observation_arrays import PhotometryArrays
 
 
 def test_encoder_features_are_two_times_band_count_for_b14() -> None:
@@ -57,50 +57,74 @@ def test_amortized_model_reads_b14_encoder_input_dim_from_config() -> None:
     assert log_std.shape == (2, 16)
 
 
-def test_openuniverse_amortized_config_declares_b14_and_input_dim_28() -> None:
-    config = load_config("configs/amortized_openuniverse_lsst_roman_realnvp.yaml")
-
-    assert len(config["bands"]) == 14
-    assert config["amortized"]["data"]["expected_n_bands"] == 14
-    assert config["amortized"]["features"]["n_flux_bands"] == 14
-    assert config["amortized"]["features"]["n_error_bands"] == 14
-    assert config["amortized"]["encoder"]["input_dim"] == 28
-
-
-def test_openuniverse_fit_ready_config_uses_fnu_cgs_and_exact_filters() -> None:
-    config = load_config(
-        "configs/amortized_openuniverse_lsst_roman_fit_ready_realnvp.yaml"
-    )
-
-    assert len(config["bands"]) == 14
-    assert Path(config["catalog_path"]).name == "ou_lsst_roman_14_subset_fit_ready.parquet"
-    assert {band["units"] for band in config["bands"]} == {"fnu_cgs"}
-    assert {band["error_units"] for band in config["bands"]} == {"fnu_cgs"}
-    assert {band["filter"]["kind"] for band in config["bands"]} == {"ascii"}
-    assert config["openuniverse"]["lensing_mode"] == "unlensed"
-    assert config["amortized"]["encoder"]["input_dim"] == 28
-    assert config["truth"]["parameter_columns"]["dust_av"]["column"] is None
-    assert config["truth"]["parameter_columns"]["log10_sfr_at_obs"]["column"] is None
-
-
-def test_openuniverse_fit_ready_uses_blind_redshift_initialization() -> None:
-    config = load_config("configs/openuniverse_lsst_roman_14_fit_ready.yaml")
-
-    assert config["redshift"]["initial"] == "random_uniform"
-    assert config["redshift"]["column"] == "redshift"
-    assert config["truth"]["redshift_column"] == "redshift"
-    assert config["fit"]["free_parameters"]["z_obs"]["initial"] == "from_base"
-    assert config["fit"]["free_parameters"]["z_obs"]["bounds"] == [0.001, 2.5]
-    assert config["fit"]["free_parameters"]["log10_stellar_mass"]["initial"] == 8.0
-
-
-def test_openuniverse_lsst_only_fit_ready_config_uses_six_lsst_bands() -> None:
-    config = load_config("configs/openuniverse_lsst_6_fit_ready.yaml")
+def test_diffsky_simple_gpu_config_uses_fourteen_native_mag_bands() -> None:
+    config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
 
     band_names = tuple(band["name"] for band in config["bands"])
-    assert band_names == ("lsst_u", "lsst_g", "lsst_r", "lsst_i", "lsst_z", "lsst_y")
-    assert {band["units"] for band in config["bands"]} == {"fnu_cgs"}
-    assert config["amortized"]["data"]["expected_n_bands"] == 6
-    assert config["amortized"]["features"]["n_flux_bands"] == 6
-    assert config["amortized"]["features"]["n_error_bands"] == 6
-    assert config["amortized"]["encoder"]["input_dim"] == 12
+    assert len(band_names) == 14
+    assert band_names[:6] == (
+        "lsst_u",
+        "lsst_g",
+        "lsst_r",
+        "lsst_i",
+        "lsst_z",
+        "lsst_y",
+    )
+    assert band_names[6:] == (
+        "roman_F062",
+        "roman_F087",
+        "roman_F106",
+        "roman_F129",
+        "roman_F146",
+        "roman_F158",
+        "roman_F184",
+        "roman_F213",
+    )
+    assert {band["units"] for band in config["bands"]} == {"abmag"}
+    assert all("error_column" not in band for band in config["bands"])
+    assert {band["sigma_mag"] for band in config["bands"]} == {0.10}
+    assert config["runtime"]["require_gpu"] is True
+
+
+def test_diffsky_amortized_gpu_config_is_b14_latent9_realnvp() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+
+    assert len(config["bands"]) == 14
+    assert config["amortized"]["encoder"]["input_dim"] == 28
+    assert config["amortized"]["encoder"]["latent_dim"] == 9
+    assert config["amortized"]["latent"]["schema"] == "diffsky_hltds_prior_v1"
+    assert config["amortized"]["prior"]["type"] == "realnvp"
+    assert config["runtime"]["require_gpu"] is True
+    assert config["model"]["ssp_model"] == "compressed_basis"
+    assert config["model"]["compressed_ssp_runtime_dtype"] == "float32"
+    assert "04_14_2026_ssp_basis_k64_coeff16" in config["model"]["compressed_ssp_path"]
+    assert config["amortized"]["training"]["jax_batch_size"] == 4
+    assert config["amortized"]["inference"]["jax_batch_size"] == 4
+
+
+def test_generic_batches_preserve_large_object_ids_as_int64() -> None:
+    flux = np.ones((2, 3), dtype=np.float32)
+    flux_err = np.full((2, 3), 0.1, dtype=np.float32)
+    mask = np.ones((2, 3), dtype=bool)
+    object_id = np.asarray([734086782211090368, 1319559050211399780], dtype=np.int64)
+    stats = compute_feature_stats(
+        flux,
+        flux_err,
+        mask,
+        band_names=("a", "b", "c"),
+    )
+    arrays = PhotometryArrays(
+        object_id=object_id,
+        flux=flux,
+        flux_err=flux_err,
+        mask=mask,
+        band_names=("a", "b", "c"),
+    )
+
+    batch = next(
+        iter_photometry_batches_from_arrays(arrays, batch_size=2, feature_stats=stats)
+    )
+
+    assert isinstance(batch.object_id, np.ndarray)
+    assert batch.object_id.dtype == np.int64
+    np.testing.assert_array_equal(batch.object_id, object_id)

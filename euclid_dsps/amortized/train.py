@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -20,7 +20,7 @@ from .config import amortized_config, require_amortized_dependencies
 from .data import (
     PhotometryBatch,
     iter_photometry_batches_from_arrays,
-    load_fs2_photometry_arrays_from_config,
+    load_photometry_arrays_from_config,
 )
 from .decoder import model_flux_from_x
 from .diagnostics import write_training_diagnostics
@@ -57,6 +57,41 @@ class TrainingSplit:
     selection_mode: str
     stratified_strategy: str
     validation_fraction: float
+
+
+class LossBatch(NamedTuple):
+    """JAX-friendly batch payload used by the compiled training step."""
+
+    flux: jnp.ndarray
+    flux_err: jnp.ndarray
+    mask: jnp.ndarray
+    features: jnp.ndarray
+
+
+class JitLatentSpec(NamedTuple):
+    """JAX-friendly latent transform spec used by compiled training."""
+
+    names: tuple[str, ...]
+    lower: jnp.ndarray
+    upper: jnp.ndarray
+
+
+class _StaticArg:
+    """Hash static JIT payloads by identity instead of recursive contents."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: Any):
+        self.value = value
+
+    def __hash__(self) -> int:
+        return id(self)
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    def __repr__(self) -> str:
+        return f"_StaticArg({type(self.value).__name__})"
 
 
 def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
@@ -171,11 +206,12 @@ def train_amortized_fs2(
     seed: int,
     verbose: bool = True,
     progress: bool = True,
+    dataset_label: str = "FS2",
 ) -> None:
-    """Train encoder and RealNVP prior jointly on FS2 photometry."""
+    """Train encoder and RealNVP prior jointly on configured photometry."""
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
-    _log(verbose, "[amortized] FS2 joint encoder/RealNVP training")
+    _log(verbose, f"[amortized] {dataset_label} joint encoder/RealNVP training")
     _log(verbose, f"[amortized] output directory: {out}")
     _log(
         verbose,
@@ -201,8 +237,15 @@ def train_amortized_fs2(
     catalog_batch_size = int(
         cfg["data"].get("catalog_batch_size", max(int(batch_size), 10_000))
     )
+    jax_batch_size = _effective_jax_batch_size(cfg["training"], int(batch_size))
+    if jax_batch_size != int(batch_size):
+        _log(
+            verbose,
+            "[amortized] capping JAX/DSPS batch size: "
+            f"requested_batch_size={int(batch_size)} jax_batch_size={jax_batch_size}",
+        )
     _log(verbose, "[amortized] loading selected train photometry arrays...")
-    train_arrays = load_fs2_photometry_arrays_from_config(
+    train_arrays = load_photometry_arrays_from_config(
         config,
         batch_size=catalog_batch_size,
         row_indices=split.train_indices,
@@ -210,7 +253,7 @@ def train_amortized_fs2(
     validation_arrays = None
     if len(split.validation_indices):
         _log(verbose, "[amortized] loading selected validation photometry arrays...")
-        validation_arrays = load_fs2_photometry_arrays_from_config(
+        validation_arrays = load_photometry_arrays_from_config(
             config,
             batch_size=catalog_batch_size,
             row_indices=split.validation_indices,
@@ -244,6 +287,7 @@ def train_amortized_fs2(
         model_config=config.get("model"),
     )
     model_args = dynamic_model_args(context)
+    jit_context = _StaticArg(context)
     _log(
         verbose,
         "[amortized] DSPS context ready: "
@@ -251,6 +295,11 @@ def train_amortized_fs2(
         f"model={context.model_config}",
     )
     latent_spec = latent_spec_from_config(config)
+    jit_latent_spec = JitLatentSpec(
+        names=latent_spec.names,
+        lower=latent_spec.lower,
+        upper=latent_spec.upper,
+    )
     _log(
         verbose,
         "[amortized] latent spec ready: "
@@ -281,12 +330,12 @@ def train_amortized_fs2(
     epoch_shuffle = bool(cfg["data"].get("epoch_shuffle", True))
     kl_weight_max = float(cfg["training"].get("kl_weight_max", 1.0))
     expected_batches = _expected_batch_count(
-        len(train_arrays.object_id), int(batch_size)
+        len(train_arrays.object_id), int(jax_batch_size)
     )
     val_expected_batches = (
         None
         if validation_arrays is None
-        else _expected_batch_count(len(validation_arrays.object_id), int(batch_size))
+        else _expected_batch_count(len(validation_arrays.object_id), int(jax_batch_size))
     )
     validation_bin_rows: list[dict[str, float | int | str]] = []
     train_rng = np.random.default_rng(int(seed) + 10_000)
@@ -310,7 +359,7 @@ def train_amortized_fs2(
             train_rng.shuffle(train_order)
         batch_iter = iter_photometry_batches_from_arrays(
             train_arrays,
-            batch_size=int(batch_size),
+            batch_size=int(jax_batch_size),
             feature_stats=feature_stats,
             order=train_order,
         )
@@ -322,14 +371,11 @@ def train_amortized_fs2(
         ) as pbar:
             for batch_index, batch in enumerate(batch_iter):
                 key, step_key = jax.random.split(key)
-                (loss, metrics), grads = eqx.filter_value_and_grad(
-                    _loss_with_metrics,
-                    has_aux=True,
-                )(
+                (loss, metrics), grads = _loss_and_grads_jit(
                     model,
-                    batch,
-                    latent_spec,
-                    context,
+                    _loss_batch(batch),
+                    jit_latent_spec,
+                    jit_context,
                     model_args,
                     latent_spec.names,
                     step_key,
@@ -423,7 +469,7 @@ def train_amortized_fs2(
                 context,
                 model_args,
                 val_key,
-                batch_size=int(batch_size),
+                batch_size=int(jax_batch_size),
                 n_samples=int(n_samples),
                 kl_weight=float(kl_weight),
                 likelihood_config=cfg["likelihood"],
@@ -524,6 +570,7 @@ def train_amortized_fs2(
     summary = {
         "epochs": int(epochs),
         "batch_size": int(batch_size),
+        "jax_batch_size": int(jax_batch_size),
         "n_samples": int(n_samples),
         "limit": limit,
         "train_rows": int(len(split.train_indices)),
@@ -718,13 +765,23 @@ def evaluate_validation_epoch(
     rows: list[dict[str, float | int | str]] = []
     object_rows: list[dict[str, float | int | str]] = []
     redshift_lookup = {
-        int(index): float(z)
-        for index, z in zip(
-            split.validation_indices,
+        int(object_id): float(z)
+        for object_id, z in zip(
+            np.asarray(arrays.object_id),
             split.validation_redshift,
             strict=False,
         )
     }
+    jit_context = context if isinstance(context, _StaticArg) else _StaticArg(context)
+    jit_latent_spec = (
+        latent_spec
+        if isinstance(latent_spec, JitLatentSpec)
+        else JitLatentSpec(
+            names=latent_spec.names,
+            lower=latent_spec.lower,
+            upper=latent_spec.upper,
+        )
+    )
     with _progress_bar(
         enabled=bool(progress),
         total=total,
@@ -739,13 +796,13 @@ def evaluate_validation_epoch(
             )
         ):
             key, batch_key = jax.random.split(key)
-            metrics, object_metrics = _evaluation_metrics(
+            metrics, object_metrics = _evaluation_metrics_jit(
                 model,
-                batch,
-                latent_spec,
-                context,
+                _loss_batch(batch),
+                jit_latent_spec,
+                jit_context,
                 model_args,
-                latent_spec.names,
+                jit_latent_spec.names,
                 batch_key,
                 int(n_samples),
                 float(kl_weight),
@@ -1132,6 +1189,71 @@ def _loss_with_metrics(
     )
 
 
+def _loss_batch(batch: PhotometryBatch) -> LossBatch:
+    return LossBatch(
+        flux=batch.flux,
+        flux_err=batch.flux_err,
+        mask=batch.mask,
+        features=batch.features,
+    )
+
+
+@eqx.filter_jit
+def _loss_and_grads_jit(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    n_samples,
+    kl_weight,
+    likelihood_config,
+):
+    actual_context = context.value if isinstance(context, _StaticArg) else context
+    return eqx.filter_value_and_grad(_loss_with_metrics, has_aux=True)(
+        model,
+        batch,
+        latent_spec,
+        actual_context,
+        model_args,
+        parameter_names,
+        key,
+        n_samples,
+        kl_weight,
+        likelihood_config,
+    )
+
+
+@eqx.filter_jit
+def _evaluation_metrics_jit(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    n_samples,
+    kl_weight,
+    likelihood_config,
+):
+    actual_context = context.value if isinstance(context, _StaticArg) else context
+    return _evaluation_metrics(
+        model,
+        batch,
+        latent_spec,
+        actual_context,
+        model_args,
+        parameter_names,
+        key,
+        n_samples,
+        kl_weight,
+        likelihood_config,
+    )
+
+
 def _kl_weight(epoch: int, annealing_epochs: int, *, max_weight: float = 1.0) -> float:
     max_weight = min(max(float(max_weight), 0.0), 1.0)
     if annealing_epochs <= 0:
@@ -1276,6 +1398,17 @@ def _expected_batch_count(limit: int | None, batch_size: int) -> int | None:
     if limit <= 0:
         return 0
     return int(np.ceil(float(limit) / float(max(batch_size, 1))))
+
+
+def _effective_jax_batch_size(training_config: dict[str, Any], batch_size: int) -> int:
+    requested = max(int(batch_size), 1)
+    configured = training_config.get("jax_batch_size")
+    if configured is None:
+        return requested
+    value = int(configured)
+    if value <= 0:
+        raise ValueError("amortized.training.jax_batch_size must be positive")
+    return min(requested, value)
 
 
 def _training_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

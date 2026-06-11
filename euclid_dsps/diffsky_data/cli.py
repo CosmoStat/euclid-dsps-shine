@@ -46,6 +46,11 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     prepare.add_argument("--out", required=True)
     prepare.add_argument("--max-objects", type=int)
     prepare.add_argument("--snr", type=float, default=50.0)
+    prepare.add_argument(
+        "--no-synthetic-errors",
+        action="store_true",
+        help="Do not write fluxerr_* columns when native photometric errors are absent.",
+    )
 
     diagnostics = sub.add_parser("diffsky-dataset-diagnostics", help="Write diagnostics for a prepared Diffsky parquet.")
     diagnostics.add_argument("--dataset", required=True)
@@ -95,6 +100,7 @@ def run_diffsky_command(args: argparse.Namespace) -> None:
             output_path=Path(args.out),
             max_objects=args.max_objects,
             snr=float(args.snr),
+            add_synthetic_errors=not bool(args.no_synthetic_errors),
         )
         print(f"[diffsky] dataset -> {report.output_path}")
         print(f"[diffsky] readiness -> {report.readiness}")
@@ -226,8 +232,9 @@ def _write_fit_report_markdown(run_dir: Path, label: str, path: Path) -> None:
             "## Interpretation Notes",
             "",
             "- `truth_kind=generated_truth` means the column is a Diffsky/Diffstar latent exported by the HLTDS mock.",
-            "- `log10_stellar_metallicity` is fitted as a nuisance parameter in the forward model only when present in the config; no HLTDS metallicity truth was found in these shards.",
-            "- Basic config fixes Diffmah and two Diffstar shape parameters to reduce degeneracy; use the extended config only as a stress test.",
+            "- The recommended simple HLTDS configs compare only direct/basic truths that broad-band DSPS can plausibly recover: redshift, stellar mass, and recent SFR proxy.",
+            "- Diffstar/Diffmah latent recovery from broad-band photometry is deprecated for first-pass MAP tests; retain those columns for later population diagnostics.",
+            "- No native HLTDS photometric errors were found. Simple configs use AB magnitudes with an explicit model-tolerance `sigma_mag`.",
             "",
         ]
     )
@@ -237,4 +244,24 @@ def _write_fit_report_markdown(run_dir: Path, label: str, path: Path) -> None:
 def _frame_to_markdown(frame: pd.DataFrame, max_rows: int = 40) -> str:
     if frame.empty:
         return "_No rows._"
-    return frame.head(max_rows).to_markdown(index=False)
+    sample = frame.head(max_rows)
+    try:
+        return sample.to_markdown(index=False)
+    except ImportError:
+        columns = [str(column) for column in sample.columns]
+        lines = [
+            "| " + " | ".join(columns) + " |",
+            "| " + " | ".join("---" for _ in columns) + " |",
+        ]
+        for _, row in sample.iterrows():
+            values = [_markdown_cell(row[column]) for column in sample.columns]
+            lines.append("| " + " | ".join(values) + " |")
+        return "\n".join(lines)
+
+
+def _markdown_cell(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    if isinstance(value, float):
+        return f"{value:.6g}"
+    return str(value).replace("|", "\\|")
