@@ -1,5 +1,325 @@
 # Plan
 
+## 2026-06-11 Diffsky Physical Validation PR 3-7
+
+- Implemented the remaining Diffsky physical-validation scaffold from
+  `PR3_PR7_TODO.md` while keeping the three scientific objectives separate:
+  supervised truth-prior learning, same-parameter forward closure, and
+  photometric amortized inference.
+- PR 3 completed in the working tree: added
+  `euclid_dsps.diffsky_forward_closure`, CLI command
+  `diffsky-forward-closure`, config
+  `configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml`, and tests for
+  truth-column mapping, missing Diffstar/Diffmah failures, fixed nuisance
+  metallicity recording, and mock zero-residual closure.
+- PR 4 completed in the working tree: amortized inference now supports
+  `standard_normal`, `supervised_checkpoint`, and `joint_realnvp` prior
+  sources; frozen supervised priors have their gradients zeroed before the
+  optimizer update; loaded supervised checkpoints validate latent names and
+  bounds against the active amortized schema; new public configs cover the
+  three Diffsky prior modes.
+- PR 5 completed in the working tree: added
+  `euclid_dsps.diffsky_redshift_ablation`, CLI command
+  `diffsky-redshift-ablation`, per-run `photoz_metrics.csv` and
+  `posterior_vs_truth_metrics.csv` outputs during inference, and ablation
+  reports with bias, sigma MAD, RMSE, outlier fraction, PIT, coverage, and
+  posterior-width metrics.
+- PR 6 completed in the working tree: extended Diffsky population-realism
+  diagnostics to include logSFR/logSSFR derived quantities when exported, dust
+  terms when fitted, Diffstar/Diffmah/burst generated-truth marginals for
+  supervised-prior diagnostics, q_agg/prior/truth plots, and
+  `population_realism_report.md`. Raw `dlog10_sfr_i` ratios are intentionally
+  not compared directly to `logsfr_true`.
+- PR 7 completed in the working tree: added public configs and docs for the
+  dataset, supervised priors, true-param closure, amortized prior-source modes,
+  redshift ablation, and scientific validation plan. Older simple/fixed-z
+  Diffsky configs remain documented as legacy/debug paths rather than the main
+  physical-validation path.
+- Validation completed in `conda run -n shine`: targeted Ruff on modified
+  files, targeted PR3-PR7 pytest, `compileall euclid_dsps scripts`, CLI help,
+  config-load smoke for seven public configs, Sphinx `-W --keep-going`, and
+  full pytest (`318 passed, 4 skipped, 1 warning`). The skipped MCMC tests are
+  due to an installed NumPyro/JAX incompatibility and now use the module's
+  existing compatibility check.
+
+## 2026-06-11 Diffsky Physical Validation PR 1/2
+
+- Current implementation slice: split the new Diffsky/HLDTS validation path
+  into PR 1 dataset-integrity/truth-semantics work and PR 2 supervised
+  truth-prior learning. Keep both separate from photometric amortized
+  inference and from true-parameter forward closure.
+- PR 1 targets in progress: make prepared object ids globally unique while
+  preserving `core_tag`, classify columns into truth/generated/derived/
+  diagnostic/proxy/unavailable semantics, record the exact error model, and
+  write a first-class dataset integrity report.
+- PR 2 targets in progress: add an independent `prior_learning` package and
+  CLI commands for supervised RealNVP density learning on truth parameters,
+  with its own schema reduction/missing-column policy, logs, samples, summary,
+  and truth-vs-prior diagnostics.
+- PR 1 dataset-integrity slice completed in the working tree: prepared HLTDS
+  parquet files now preserve `core_tag`, guarantee unique `object_id` values,
+  add `global_object_id/source_file/source_row` when source ids are duplicated,
+  classify columns by truth semantics in manifest/schema/reports, write
+  explicit `error_model` provenance, and generate
+  `diffsky_dataset_integrity_report.md`.
+- PR 2 supervised-prior slice completed in the working tree: added
+  `euclid_dsps.prior_learning`, configs for basic/extended supervised RealNVP
+  priors, CLI commands `diffsky-train-supervised-prior`,
+  `diffsky-sample-supervised-prior`, and `diffsky-supervised-prior-report`,
+  plus toy/schema/output tests and documentation. This path uses truth columns
+  directly and remains separate from photometric amortized inference.
+- Validation completed in `conda run -n shine`: targeted Ruff, targeted
+  pytest, full `compileall euclid_dsps scripts`, CLI help, config-load smoke
+  for the two new prior configs, and Sphinx `-W --keep-going`.
+- Added `PR3_PR7_TODO.md` as the remaining implementation checklist. Next
+  priority is PR 3 same-parameter Diffsky forward closure; PR 4 should only
+  start after PR 3 establishes whether truth parameters reproduce HLTDS
+  photometry well enough for physical recovery claims.
+- Updated `PR3_PR7_TODO.md` to align explicitly with the full prompt:
+  A/B/C objective separation, PR dependency gates, command/config examples,
+  expected test files, and global acceptance criteria.
+
+## 2026-06-10 Prior-Learning Physical Audit
+
+- Current audit: answer which parameters are actually fitted by the learned
+  prior workflows, whether the compact Diffsky/PopCosmos setup is coherent
+  with the DSPS forward model, which dataset columns are treated as truth, and
+  which physical caveats remain before interpreting redshift inference under
+  the learned degenerate prior.
+- Audit outcome: Diffsky amortized prior learning fits a compact 9D
+  PopCosmos-bin DSPS latent (`z_obs`, stellar mass, three SFR-ratio
+  parameters, stellar metallicity, and three dust parameters) with
+  `dlog10_sfr_4..6` fixed. FS2 keeps the full 16D PopCosmos-like latent. The
+  learned RealNVP is a variational population prior in unconstrained latent
+  space and inference currently samples the trained encoder approximation,
+  not an exact reweighted/sampled posterior under a frozen learned prior. HLTDS
+  truth columns are redshift, stellar mass, sSFR/SFR, halo/central/size fields;
+  Diffstar/Diffmah/dust/burst columns are generated-truth diagnostics. Main
+  caveats are decoder/data-model mismatch, no native HLTDS photometric errors,
+  small truth tails outside configured bounds, and duplicated object IDs at
+  shard boundaries.
+
+## 2026-06-10 Diffsky HLTDS Amortized Prior Learning
+
+- Objective validated: learn a joint degenerate population prior over redshift
+  and compact DSPS physical parameters from HLTDS photometry, compare learned
+  prior and aggregate posterior to direct/generative dataset distributions,
+  then evaluate redshift recovery under that learned prior.
+- Implemented public config
+  `configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml`.
+  It uses HLTDS 04/14 LSST+Roman 14-band AB magnitudes, feature dimension 28,
+  a 9D latent (`z_obs`, stellar mass, three SFH-ratio parameters, metallicity,
+  and dust parameters), Gaussian encoder, RealNVP prior, fixed DSPS decoder,
+  and the HLTDS SSP compressed basis asset.
+- Compressed HLTDS SSP support validated. The builder now preserves physical
+  axes at source precision while compressing the large basis/coefficient
+  payload, avoiding wavelength-axis mismatch for the long HLTDS wavelength
+  tail.
+- The amortized data path is now generic in `B` and preserves large Diffsky
+  `object_id` values as `int64` outside JAX, avoiding silent int32 truncation
+  in posterior and validation outputs.
+- The amortized decoder now merges compact latent free parameters with
+  `model.fixed_parameters` before calling DSPS, so compact schemas can use the
+  existing PopCosmos-bin forward model without exposing every nuisance
+  parameter in the encoder.
+- Added CLI paths `amortized-train-diffsky`,
+  `amortized-infer-diffsky`, and `amortized-prior-overlap-diffsky`.
+  The overlap report writes CSV/JSON/Markdown plus plots comparing direct truth
+  to `q_agg` and the learned RealNVP prior for `z_obs` and
+  `log10_stellar_mass`.
+- Smoke validation completed on CPU with 8-object training, 4-object
+  inference, and prior-overlap report. This validates code execution only; it
+  is not a scientific-quality run.
+- CUDA stability fix after first user GPU smoke: the Diffsky amortized config
+  now upcasts compressed SSP arrays to resident `float32` and caps actual
+  compiled DSPS/JAX batches with `amortized.training.jax_batch_size: 4` and
+  `amortized.inference.jax_batch_size: 4`. User-facing `--batch-size` can stay
+  larger; the command logs the internal cap.
+- Scientific limit kept explicit: `logsfr_true` is not yet directly comparable
+  to fitted `dlog10_sfr_*` ratios. A derived DSPS SFR diagnostic is still
+  required before claiming SFR recovery.
+
+## 2026-06-10 Public Pipeline Cleanup
+
+- Public config surface reduced to:
+  `configs/fs2_gpu.yaml`,
+  `configs/diffsky_hltds_04_14_simple_gpu.yaml`,
+  `configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml`, and
+  `configs/amortized_fs2_realnvp.yaml`. The public surface now also includes
+  `configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml` for HLTDS learned
+  prior experiments.
+- Deprecated public configs removed from `configs/`: old Diffstar variants,
+  old OpenUniverse fit-ready experiments, old non-GPU Diffsky variants, and
+  broad ablation configs.
+- Main documented dataset is now
+  `hltds_cosmos_260215_04_14_2026`, prepared as
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet`
+  with `--no-synthetic-errors`.
+- Main Diffsky fit model is deliberately simple: PopCosmos-bin DSPS, no AGN,
+  fixed nebular SSP treatment, no Diffstar/Diffmah latent recovery, and direct
+  comparison only to available basic truth columns (`redshift_true`,
+  `logsm_true`, `logsfr_true`).
+- Documentation reset completed for the public path: downloader, local data
+  locations, Diffsky dataset contract, FS2 commands, GPU runtime, and
+  amortized FS2 prior learning.
+
+## 2026-06-08 Experimental SSP INR Compression
+
+- Objective: investigate NeRF/implicit-neural-representation style compression
+  for SSP HDF5 cubes as an experimental path, separate from the production
+  dense and low-rank DSPS model paths.
+- Scope for first implementation: add isolated training/evaluation/report CLI
+  commands for direct coordinate MLPs and latent spectral-basis MLPs; compare
+  against dense HDF5 payloads and existing low-rank compressed assets; write
+  loss curves, reconstruction plots, metrics JSON/CSV, and Markdown reports.
+- Integration policy: do not add a new `model.ssp_model` runtime mode until the
+  asset-level benchmarks show a useful error/runtime/memory tradeoff.
+- First implementation completed in the working tree:
+  `euclid_dsps.experimental.ssp_inr` now provides HDF5 subset loading, direct
+  Fourier/SIREN-style coordinate MLPs, latent spectral-basis MLPs, checkpoint
+  serialization, evaluation against existing compressed assets, plots, CSV/JSON
+  metrics, and Markdown reports.
+- CLI commands added: `experimental-ssp-inr-train`,
+  `experimental-ssp-inr-eval`, and `experimental-ssp-inr-report`.
+- Validation completed with targeted smoke runs on the real Chabrier stellar
+  SSP, `uv run pytest tests/test_experimental_ssp_inr.py -q`,
+  `uv run ruff check euclid_dsps/experimental/ssp_inr euclid_dsps/cli.py
+  tests/test_experimental_ssp_inr.py`, `uv run python -m compileall
+  euclid_dsps scripts`, and `uv run python -m euclid_dsps.cli --help`.
+- First benchmark review completed after running the quick/full SSP, gas, and
+  AGN experiments. Direct coordinate MLPs are slower and less accurate than the
+  latent path. The latent path is promising for stellar SSP in all-wavelength
+  log metrics, but the existing low-rank assets remain much better on
+  physically relevant wavelength/flux masks and are especially dominant for
+  AGN. Next improvement should be metric design and a stronger latent residual
+  architecture before any runtime integration.
+- Second implementation pass in progress: add physically masked metrics,
+  log-SVD baselines, end-to-end latent log-flux training, residual latent
+  models over existing compressed assets, AGN `fagn` factorization, and zoomed
+  reconstruction plots.
+- Second implementation pass completed: `experimental-ssp-inr-eval` now writes
+  `useful_wave`, `peak1em04`, `peak1em06`, and combined useful/significant
+  metrics; supports repeatable `--log-svd-k`; and writes full, useful-wave, and
+  UV/optical reconstruction plots plus masked error histograms. Latent training
+  defaults to end-to-end Huber loss on weighted log-flux reconstruction, with
+  optional coefficient loss, residual training over a compressed baseline, and
+  AGN `fagn` factorization. Validation passed with targeted Ruff, targeted
+  pytest, full `compileall`, CLI help checks, and a real-asset smoke run.
+- Runtime follow-up: experimental SSP INR modules now apply the repository JAX
+  runtime configuration before importing JAX and report a concise GPU backend
+  installation error when `--runtime gpu` is requested but CUDA JAX is missing
+  or version-mismatched.
+- GPU run blocker diagnosed after the first full residual latent command:
+  WSL sees an RTX 4060 Laptop GPU with driver 581.80 / CUDA 13.0, but the
+  active `shine` environment reported an incompatible `jax_cuda13_plugin`
+  version relative to `jaxlib`. The next full benchmark should only be rerun
+  after reinstalling matching CUDA 13 JAX wheels in `shine`; CPU/auto commands
+  remain usable for smoke/debug runs.
+- Current phase: review the newly generated full SSP INR benchmark outputs,
+  compare direct INR, latent residual, explicit log-SVD, and existing compressed
+  baselines, then identify the next implementation improvements.
+- Benchmark review outcome: for stellar SSP, `v2_stellar_residual_k32_full`
+  is much better than the direct Fourier coordinate MLP and gives useful-wave
+  p95 errors around a few percent, but it is still slower and less accurate
+  than the existing low-rank compressed asset on useful/significant wavelengths.
+  `v2_stellar_latent_k128_full` has lower training loss but worse useful-mask
+  reconstruction, showing that the current loss is not aligned enough with the
+  science metric. The direct coordinate model is currently disadvantaged by
+  linear wavelength normalization over 100--9.95e7 Angstrom and should be
+  retested with log-wavelength encoding plus masked/weighted sampling.
+- Next priorities from the review: make evaluation plots/metrics mask-aware by
+  default, add log-wavelength and useful-wave weighting for direct INR, add
+  coefficient-table replacement experiments over existing low-rank bases,
+  rerun high-dimensional gas/AGN with v2 objectives and factorization, and use
+  actual photometry/filter wavelength coverage to define the reconstruction
+  domain.
+- Current implementation phase: add an experimental coefficient-MLP model that
+  keeps an existing compressed spectral basis but replaces the coefficient table
+  with a neural map from curve coordinates to coefficients; make comparison
+  plots science-mask-first; add ECDF, per-wavelength, age/metal heatmap, and
+  worst-spectrum plots for stronger benchmark diagnosis; prepare serious
+  stellar/gas/AGN benchmark commands.
+- Implementation completed: `compressed_coeff_mlp` is available through
+  `experimental-ssp-inr-train`, using `--coeff-baseline`,
+  `--coeff-loss={coeff,log_flux,mixed}`, `--coeff-log-weight`, and optional
+  `--factor-agn-fagn`. Checkpoints store the kept basis plus coefficient
+  standardization statistics and reconstruct spectra by predicting coefficients
+  from curve coordinates. Evaluation now supports these checkpoints, uses
+  useful/significant-wave error in the runtime-size plot, and writes ECDF,
+  wavelength-profile, age/metal heatmap, and worst-case reconstruction plots.
+  Validation passed with compileall, Ruff, targeted pytest, real stellar
+  coefficient-MLP smoke train/eval, and real AGN factorized smoke train.
+
+## 2026-06-05 OpenUniverse / Diffsky Validation Pivot
+
+- Objective: change the validation priority from FS2-first to
+  OpenUniverse/Diffsky-first, using LSST+Roman 14-band photometry as the first
+  OpenUniverse target while keeping FS2 only as a domain-shift comparison and
+  diagnostic dataset.
+- Truth policy: label directly available OpenUniverse quantities as `truth`,
+  future Diffsky/Diffstar exports as `generated_truth`, derived stand-ins as
+  `proxy`, and absent quantities as `unavailable`. Do not describe FS2 catalog
+  proxies as physical ground truth.
+- First implementation slice (PR 1) in progress: add
+  `euclid_dsps.openuniverse` schema, parquet IO/join, local/S3 path resolution,
+  photon-rate unit contract, toy noise models, LSST+Roman subset preparation,
+  `openuniverse-prepare` CLI, configs, docs, and synthetic unit tests. No bulk
+  OpenUniverse download should be triggered by default.
+- PR 1 completed in the working tree: mini OpenUniverse parquets can be joined
+  and normalized into 14 truth fluxes, 14 noisy fluxes, 14 errors, and 14 masks;
+  the CLI refuses implicit full-dataset processing; OpenUniverse units remain
+  native photon-rate with explicit conversion TODOs; Diffsky extended truth
+  extraction is a clear optional-dependency placeholder; toy photo-z and
+  prior-overlap metrics are available for later reports; the amortized encoder
+  now reads `input_dim` from config so B=14 feature tensors have shape `[N, 28]`.
+- PR 1 validation completed with `uv run python -m compileall euclid_dsps scripts`,
+  targeted Ruff, Sphinx `-W --keep-going`, targeted pytest (`75 passed`), and
+  full pytest (`255 passed, 5 skipped`). Remaining warning: extended Diffsky
+  truths are unavailable unless an optional Diffsky export path is provided.
+- 2026-06-08 EDA completed for downloaded OpenUniverse preview hpix 10307:
+  raw main/flux files each have 3,561,877 unique galaxy ids and join exactly;
+  prepared subset has 10,000 rows, 65 columns, all 14 LSST+Roman masks valid,
+  median subset redshift 0.983, and median log10 stellar mass 7.999. Report
+  written under `outputs/reports/openuniverse_eda_10307/` with schema catalog,
+  physical/flux stats, QA tables, and first diagnostic plots. Caveat: the
+  10,000-row subset is a head/limit preview sample and not representative.
+- 2026-06-08 PR 2/3 slice implemented on
+  `feature/openuniverse-truth-sed-validation`: standalone
+  `python -m euclid_dsps.openuniverse.cli` commands for truth inventory, basic
+  truth export, photo-z metrics, prior-overlap metrics, and OpenUniverse
+  B=14 feature stats; bounded SED HDF5 inventory/reader for
+  `/meta/wave_list` plus `/galaxy/<prefix>/<galaxy_id>` datasets; prepared
+  parquet loader into generic `PhotometryArrays`; and synthetic tests. Real
+  hpix 10307 inventory found 312 wavelength bins, 3,561,877 SED datasets shaped
+  `(3, 312)`, direct truth for redshift/redshiftHubble/stellar_mass/fluxes,
+  generated-truth low-resolution SED, proxy MW/lensing columns, and unavailable
+  SFH/Diffstar/dust-internal/metallicity/halo latents.
+- 2026-06-08 data-first photon closure slice implemented without touching the
+  DSPS decoder: OpenUniverse filter loading, SED Fnu to integrated photon-rate
+  helpers, `sed-flux-closure` CLI, per-band robust calibration factors, and
+  `merge-external-truth` for explicit future Diffsky latent tables. Real
+  hpix 10307 LSST-only closure over 200 galaxies used exact repository LSST
+  filters and found calibrated median residuals near zero, sigma_MAD about
+  2.4--3.0%, and p95 absolute calibrated residuals about 6--8%. Roman closure
+  remains blocked on exact Roman filter curves unless top-hat smoke filters are
+  explicitly enabled.
+- 2026-06-09 fit-ready OpenUniverse slice implemented data-side, without
+  changing the DSPS decoder: `make-fit-ready` computes `mu_lensing` from
+  convergence/shear, preserves public photon-rate fluxes in explicit lensed
+  audit columns, writes unlensed photon columns, and converts the standard
+  `flux_*`/`fluxerr_*` columns to DSPS-compatible `fnu_cgs`. The conversion
+  uses per-band AB0 photon rates and defaults to `filter_response_mode:
+  dsps_clipped` so Roman effective-area-like filters match
+  `euclid_dsps.filters.load_ascii_filter`. Local hpix 10307 validation wrote
+  `Data/openuniverse/processed/ou_lsst_roman_14_subset_fit_ready.parquet`,
+  confirmed B=14 feature stats with feature_dim=28, and ran a one-object MAP
+  smoke fit. Caveat: Roman zeropoints/response conventions still need deeper
+  validation before MAP parameters should be interpreted scientifically.
+- Follow-up slices: optional full Diffsky latent export, physical
+  OpenUniverse train/infer commands after photon-rate decoder/conversion,
+  redshift ablation on real posteriors, prior-overlap plots from model outputs,
+  and FS2-vs-OpenUniverse comparison plots.
+
 ## 2026-06-02 Andrew Hearin Discussion Preparation
 
 - Objective: prepare a didactic discussion package for a meeting with Andrew
@@ -126,6 +446,11 @@
     plots by redshift bin; validation-based `best.eqx` checkpointing when a
     validation split exists; and explicit `kl_weight_max` plus longer default
     KL annealing.
+  - Cleaned training history diagnostics after the first H100 run: raw
+    `training_log.csv` remains batch-level, but plots are now recomputed from
+    `training_epoch_summary.csv` using `epoch` on the x-axis, train/validation
+    means with p16/p84 bands, a compact overview figure, and redshift-bin
+    validation heatmaps for loss, negative loglike, chi-square, and KL.
   - Validation passed with `uv sync`, `uv sync --extra dev`,
     `uv sync --extra dev --extra amortized`,
     `uv run python -m compileall euclid_dsps scripts`, Black on the feature
@@ -1568,6 +1893,37 @@ Phase 6 - Later AGN and production scaling:
   degradations for Student-t relative to Gaussian chi2.
 - `uv run python -m compileall scripts/compare_likelihood_runs.py` passed.
 - `uv run --extra dev ruff check scripts/compare_likelihood_runs.py` passed.
+
+2026-06-10 Diffsky simple recovery reset:
+
+- Decision: stop using the Diffsky/Diffstar generated latents as first-order
+  MAP recovery targets from broad-band photometry. They remain useful
+  generated truths for later population diagnostics, but not for the first
+  differentiable DSPS closure.
+- Added a recommended simple HLTDS 04/14 path based on `popcosmos_bins`, HLTDS
+  SSP/filter assets, native AB magnitudes, and explicit model-tolerance
+  magnitudes rather than synthetic flux errors.
+- New configs:
+  `configs/diffsky_hltds_04_14_simple.yaml`,
+  `configs/diffsky_hltds_04_14_simple_gpu.yaml`,
+  `configs/diffsky_hltds_04_14_fixedz_closure.yaml`, and
+  `configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml`.
+- `diffsky-prepare-dataset` now supports `--no-synthetic-errors`; the simple
+  fit configs do not consume `fluxerr_*` and instead use explicit
+  `sigma_mag` model tolerance.
+- Fit targets are restricted to basic direct truths that DSPS can plausibly
+  recover: redshift, stellar mass, and recent SFR proxy. Halo mass, centrality,
+  and sizes are retained as context columns but are not DSPS photometric fit
+  targets.
+- Remote/data investigation: HLTDS 04/14 is still the best current science
+  target; HLTDS 03/31 is a high-z slice with the same schema; `sparse_cosmos`
+  is useful for fast debugging but has a very coarse SSP grid; `smdpl` is too
+  small locally; `lsstdesc_diffsky_data` is testdata, not a population dataset.
+- Smoke diagnostics: fixed-z simple fit on 8 HLTDS objects gives median
+  residual 0.073 mag and reduced chi2 ~1.25 with 0.10 mag model tolerance.
+  The same setup with free redshift still has poor z recovery, so the next
+  blocker is redshift initialization/multi-start/photo-z strategy, not
+  Diffstar latent fitting.
 
 2026-05-27 Student-t likelihood switch:
 

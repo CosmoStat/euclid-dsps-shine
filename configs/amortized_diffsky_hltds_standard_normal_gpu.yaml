@@ -1,0 +1,7 @@
+extends: amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
+
+amortized:
+    prior:
+        type: standard_normal
+        source: standard_normal
+        train_jointly: false

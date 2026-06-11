@@ -27,6 +27,9 @@ def build_parser() -> argparse.ArgumentParser:
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
             "amortized-train-diffsky,amortized-infer-diffsky,"
             "amortized-prior-overlap-diffsky,"
+            "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
+            "diffsky-supervised-prior-report,"
+            "diffsky-forward-closure,diffsky-redshift-ablation,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
             "diffsky-dataset-diagnostics,diffsky-validate-dataset,"
@@ -286,6 +289,73 @@ def build_parser() -> argparse.ArgumentParser:
     overlap.add_argument("--out", help="Output report directory.")
     overlap.add_argument("--max-objects", type=int)
 
+    train_prior = sub.add_parser(
+        "diffsky-train-supervised-prior",
+        help="Train a supervised RealNVP prior directly on Diffsky truth parameters.",
+    )
+    train_prior.add_argument("--dataset", help="Prepared Diffsky parquet override.")
+    train_prior.add_argument("--schema", help="Truth schema override.")
+    train_prior.add_argument("--out", default="outputs/runs/diffsky_supervised_prior")
+    train_prior.add_argument("--limit", type=int)
+    train_prior.add_argument("--batch-size", type=int)
+    train_prior.add_argument("--epochs", type=int)
+    train_prior.add_argument("--seed", type=int)
+    train_prior.add_argument("--validation-fraction", type=float)
+    train_prior.add_argument(
+        "--missing-policy",
+        choices=("reduce", "fail"),
+        help="Reduce schema when optional truth columns are missing, or fail explicitly.",
+    )
+    train_prior.add_argument("--quiet", action="store_true")
+    train_prior.add_argument("--no-progress", action="store_true")
+
+    sample_prior = sub.add_parser(
+        "diffsky-sample-supervised-prior",
+        help="Sample theta values from a supervised prior checkpoint.",
+    )
+    sample_prior.add_argument("--checkpoint", required=True)
+    sample_prior.add_argument("--out", default="outputs/runs/diffsky_supervised_prior_samples")
+    sample_prior.add_argument("--n-samples", type=int)
+    sample_prior.add_argument("--seed", type=int)
+
+    report_prior = sub.add_parser(
+        "diffsky-supervised-prior-report",
+        help="Regenerate supervised prior truth-vs-prior diagnostics.",
+    )
+    report_prior.add_argument("--run", required=True)
+    report_prior.add_argument("--dataset")
+    report_prior.add_argument("--schema")
+    report_prior.add_argument("--out")
+    report_prior.add_argument("--max-truth", type=int)
+
+    forward_closure = sub.add_parser(
+        "diffsky-forward-closure",
+        help="Run true-parameter Diffsky forward closure against prepared photometry.",
+    )
+    forward_closure.add_argument("--dataset", required=True)
+    forward_closure.add_argument("--limit", type=int)
+    forward_closure.add_argument("--batch-size", type=int, default=64)
+    forward_closure.add_argument(
+        "--out",
+        default="outputs/runs/diffsky_trueparam_forward_closure",
+    )
+
+    redshift_ablation = sub.add_parser(
+        "diffsky-redshift-ablation",
+        help="Compare redshift posterior metrics across Diffsky inference runs.",
+    )
+    redshift_ablation.add_argument("--dataset", required=True)
+    redshift_ablation.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        help="Run directory, optionally as label=path. Repeat for each method.",
+    )
+    redshift_ablation.add_argument(
+        "--out",
+        default="outputs/reports/diffsky_redshift_ablation",
+    )
+
     inr_train = sub.add_parser(
         "experimental-ssp-inr-train",
         help=argparse.SUPPRESS,
@@ -489,12 +559,19 @@ def _add_amortized_infer_arguments(
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
+    supervised_prior_commands = {
+        "diffsky-train-supervised-prior",
+        "diffsky-sample-supervised-prior",
+        "diffsky-supervised-prior-report",
+        "diffsky-forward-closure",
+        "diffsky-redshift-ablation",
+    }
     if args.command == "download-assets":
         from .assets import download_assets
 
         download_assets(Path(args.out), overwrite=bool(args.overwrite))
         return
-    if args.command.startswith("diffsky-"):
+    if args.command.startswith("diffsky-") and args.command not in supervised_prior_commands:
         from .diffsky_data.cli import run_diffsky_command
 
         run_diffsky_command(args)
@@ -538,6 +615,21 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "amortized-prior-overlap-diffsky":
         _run_amortized_prior_overlap_diffsky(config, args)
+        return
+    if args.command == "diffsky-train-supervised-prior":
+        _run_diffsky_train_supervised_prior(config, args)
+        return
+    if args.command == "diffsky-sample-supervised-prior":
+        _run_diffsky_sample_supervised_prior(config, args)
+        return
+    if args.command == "diffsky-supervised-prior-report":
+        _run_diffsky_supervised_prior_report(config, args)
+        return
+    if args.command == "diffsky-forward-closure":
+        _run_diffsky_forward_closure(config, args)
+        return
+    if args.command == "diffsky-redshift-ablation":
+        _run_diffsky_redshift_ablation(config, args)
         return
     if args.command == "experimental-ssp-inr-train":
         _run_experimental_ssp_inr_train(args)
@@ -734,6 +826,93 @@ def _run_amortized_train(
         progress=not bool(getattr(args, "no_progress", False)),
         dataset_label=dataset_label,
     )
+
+
+def _run_diffsky_train_supervised_prior(config: dict, args) -> None:
+    try:
+        from .prior_learning.train import prior_learning_config, train_supervised_prior
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = prior_learning_config(config)
+    training = cfg["training"]
+    train_supervised_prior(
+        config,
+        Path(args.out),
+        dataset_path=args.dataset,
+        schema_name=args.schema,
+        limit=args.limit,
+        batch_size=int(args.batch_size or training.get("batch_size", 256)),
+        epochs=int(args.epochs or training.get("epochs", 20)),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        validation_fraction=args.validation_fraction,
+        missing_policy=args.missing_policy,
+        verbose=not bool(getattr(args, "quiet", False)),
+        progress=not bool(getattr(args, "no_progress", False)),
+    )
+
+
+def _run_diffsky_sample_supervised_prior(config: dict, args) -> None:
+    try:
+        from .prior_learning.infer import sample_supervised_prior
+        from .prior_learning.train import prior_learning_config
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = prior_learning_config(config)
+    output = cfg["output"]
+    training = cfg["training"]
+    sample_supervised_prior(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        n_samples=int(args.n_samples or output.get("prior_samples", 8192)),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+    )
+
+
+def _run_diffsky_supervised_prior_report(config: dict, args) -> None:
+    try:
+        from .prior_learning.infer import write_supervised_prior_run_report
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    outputs = write_supervised_prior_run_report(
+        config,
+        run_dir=Path(args.run),
+        out_dir=Path(args.out) if args.out else None,
+        dataset_path=Path(args.dataset) if args.dataset else None,
+        schema_name=args.schema,
+        max_truth=args.max_truth,
+    )
+    print(f"[prior] report -> {outputs['report']}")
+
+
+def _run_diffsky_forward_closure(config: dict, args) -> None:
+    from .diffsky_forward_closure import run_diffsky_forward_closure
+
+    report = run_diffsky_forward_closure(
+        config,
+        dataset_path=Path(args.dataset),
+        out_dir=Path(args.out),
+        limit=args.limit,
+        batch_size=int(args.batch_size),
+    )
+    print(f"[diffsky] forward closure report -> {report}")
+
+
+def _run_diffsky_redshift_ablation(config: dict, args) -> None:
+    del config
+    from .diffsky_redshift_ablation import parse_run_specs, run_redshift_ablation
+
+    if not args.run:
+        raise SystemExit("diffsky-redshift-ablation requires at least one --run")
+    report = run_redshift_ablation(
+        dataset_path=Path(args.dataset),
+        runs=parse_run_specs(args.run),
+        out_dir=Path(args.out),
+    )
+    print(f"[diffsky] redshift ablation report -> {report}")
 
 
 def _apply_amortized_train_overrides(config: dict, args) -> dict:

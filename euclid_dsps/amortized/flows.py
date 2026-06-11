@@ -123,6 +123,32 @@ class RealNVPPrior(eqx.Module):
         return x
 
 
+class StandardNormalPrior(eqx.Module):
+    """Non-trainable standard normal prior over unconstrained latent ``x``."""
+
+    latent_dim: int = eqx.field(static=True)
+
+    def __init__(self, *, latent_dim: int) -> None:
+        self.latent_dim = int(latent_dim)
+
+    def log_prob(self, x):
+        x = jnp.asarray(x, dtype=jnp.float32)
+        if x.shape[-1] != self.latent_dim:
+            raise ValueError(
+                f"Expected latent dim {self.latent_dim}, got {x.shape[-1]}"
+            )
+        return -0.5 * jnp.sum(x**2 + jnp.log(2.0 * jnp.pi), axis=-1)
+
+    def sample(self, key, shape=()):
+        if isinstance(shape, int):
+            shape = (shape,)
+        return jax.random.normal(
+            key,
+            tuple(shape) + (self.latent_dim,),
+            dtype=jnp.float32,
+        )
+
+
 def _apply_net(net, value):
     if value.ndim == 1:
         return net(value)

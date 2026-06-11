@@ -50,6 +50,8 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["encoder"].setdefault("log_std_max", 2.0)
     raw["encoder"].setdefault("initial_log_std", -1.0)
     raw["prior"].setdefault("type", "realnvp")
+    raw["prior"].setdefault("source", "joint_realnvp")
+    raw["prior"].setdefault("checkpoint", None)
     raw["prior"].setdefault("n_layers", 8)
     raw["prior"].setdefault("hidden_size", 128)
     raw["prior"].setdefault("scale_clamp", 0.05)

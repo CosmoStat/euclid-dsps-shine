@@ -19,6 +19,13 @@ _prior_location = mcmc._prior_location
 sample_one_galaxy = mcmc.sample_one_galaxy
 
 
+def _require_numpyro_compatible() -> None:
+    try:
+        mcmc._numpyro_modules()
+    except ImportError as exc:
+        pytest.skip(str(exc))
+
+
 class _ToyMclmcState(NamedTuple):
     position: jnp.ndarray
     logdensity: jnp.ndarray
@@ -43,7 +50,7 @@ def test_prior_location_can_use_row_resolved_base_value() -> None:
 
 
 def test_scaled_beta_prior_uses_fit_bounds() -> None:
-    pytest.importorskip("numpyro", exc_type=ImportError)
+    _require_numpyro_compatible()
     prior = _prior_distribution(
         "dust_av",
         {"initial": 0.2, "bounds": [0.0, 3.0]},
@@ -57,7 +64,7 @@ def test_scaled_beta_prior_uses_fit_bounds() -> None:
 
 
 def test_uniform_redshift_prior_samples_within_fit_bounds() -> None:
-    pytest.importorskip("numpyro", exc_type=ImportError)
+    _require_numpyro_compatible()
     prior = _prior_distribution(
         "z_obs",
         {"initial": "from_base", "bounds": [0.001, 6.0]},
@@ -71,7 +78,7 @@ def test_uniform_redshift_prior_samples_within_fit_bounds() -> None:
 
 
 def test_sample_one_galaxy_passes_dynamic_model_args(monkeypatch) -> None:
-    pytest.importorskip("numpyro", exc_type=ImportError)
+    _require_numpyro_compatible()
 
     def fake_dynamic_model_args(context):
         del context

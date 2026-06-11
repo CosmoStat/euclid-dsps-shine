@@ -27,7 +27,7 @@ from .diagnostics import write_training_diagnostics
 from .elbo import AmortizedModel, negative_elbo
 from .encoder import GaussianEncoder
 from .features import FeatureStats, compute_feature_stats, write_feature_stats
-from .flows import RealNVPPrior
+from .flows import RealNVPPrior, StandardNormalPrior
 from .latent import (
     LatentSpec,
     latent_spec_from_config,
@@ -99,7 +99,6 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     cfg = amortized_config(config)
     k_encoder, k_prior = jax.random.split(key)
     encoder_cfg = cfg["encoder"]
-    prior_cfg = cfg["prior"]
     input_dim = int(encoder_cfg.get("input_dim", 20))
     latent_dim = int(encoder_cfg.get("latent_dim", 16))
     encoder = GaussianEncoder(
@@ -115,14 +114,64 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
         initial_log_std=float(encoder_cfg.get("initial_log_std", -1.0)),
     )
     encoder = _initialize_encoder_mean_if_possible(config, encoder)
-    prior = RealNVPPrior(
-        k_prior,
-        latent_dim=latent_dim,
-        n_layers=int(prior_cfg.get("n_layers", 8)),
-        hidden_size=int(prior_cfg.get("hidden_size", 128)),
-        scale_clamp=float(prior_cfg.get("scale_clamp", 0.05)),
-    )
+    prior = build_prior_from_config(config, k_prior, latent_dim=latent_dim)
     return AmortizedModel(encoder=encoder, prior=prior)
+
+
+def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
+    """Build or load the configured amortized prior source."""
+    cfg = amortized_config(config)
+    prior_cfg = cfg["prior"]
+    source = str(prior_cfg.get("source", "joint_realnvp"))
+    if source == "standard_normal":
+        return StandardNormalPrior(latent_dim=int(latent_dim))
+    if source in {"joint_realnvp", "realnvp"}:
+        return RealNVPPrior(
+            key,
+            latent_dim=int(latent_dim),
+            n_layers=int(prior_cfg.get("n_layers", 8)),
+            hidden_size=int(prior_cfg.get("hidden_size", 128)),
+            scale_clamp=float(prior_cfg.get("scale_clamp", 0.05)),
+        )
+    if source == "supervised_checkpoint":
+        checkpoint = prior_cfg.get("checkpoint")
+        if not checkpoint:
+            raise ValueError(
+                "amortized.prior.source='supervised_checkpoint' requires "
+                "amortized.prior.checkpoint"
+            )
+        from euclid_dsps.prior_learning.train import load_prior_checkpoint
+
+        prior, _sidecar, prior_spec, _schema = load_prior_checkpoint(checkpoint)
+        active_spec = latent_spec_from_config(config)
+        _validate_loaded_prior_spec(active_spec, prior_spec)
+        return prior
+    raise ValueError(
+        "amortized.prior.source must be one of "
+        "'standard_normal', 'supervised_checkpoint', or 'joint_realnvp'"
+    )
+
+
+def _validate_loaded_prior_spec(active: LatentSpec, loaded: LatentSpec) -> None:
+    if active.names != loaded.names:
+        raise ValueError(
+            "Supervised prior latent names do not match amortized config: "
+            f"checkpoint={loaded.names}, config={active.names}"
+        )
+    if not np.allclose(
+        np.asarray(active.lower),
+        np.asarray(loaded.lower),
+        rtol=0.0,
+        atol=1.0e-6,
+    ):
+        raise ValueError("Supervised prior lower bounds do not match amortized config")
+    if not np.allclose(
+        np.asarray(active.upper),
+        np.asarray(loaded.upper),
+        rtol=0.0,
+        atol=1.0e-6,
+    ):
+        raise ValueError("Supervised prior upper bounds do not match amortized config")
 
 
 def _initialize_encoder_mean_if_possible(
@@ -309,12 +358,15 @@ def train_amortized_fs2(
     key = jax.random.PRNGKey(int(seed))
     key, model_key = jax.random.split(key)
     model = build_amortized_model(config, model_key)
+    train_prior = _train_prior_jointly(cfg["prior"])
     _log(
         verbose,
         "[amortized] model built: "
         f"encoder_hidden={cfg['encoder'].get('hidden_sizes')} "
         f"realnvp_layers={cfg['prior'].get('n_layers')} "
-        f"realnvp_hidden={cfg['prior'].get('hidden_size')}",
+        f"realnvp_hidden={cfg['prior'].get('hidden_size')} "
+        f"prior_source={cfg['prior'].get('source')} "
+        f"train_prior={train_prior}",
     )
     optimizer = make_optimizer(config)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
@@ -383,6 +435,8 @@ def train_amortized_fs2(
                     float(kl_weight),
                     cfg["likelihood"],
                 )
+                if not train_prior:
+                    grads = zero_prior_grads(grads)
                 record = _metrics_record(metrics)
                 record.update(component_grad_norms(grads))
                 loss_finite = bool(np.isfinite(float(np.asarray(jax.device_get(loss)))))
@@ -598,7 +652,8 @@ def train_amortized_fs2(
         ),
         "joint_training": {
             "encoder": True,
-            "realnvp_prior": True,
+            "realnvp_prior": bool(train_prior),
+            "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
             "decoder": False,
             "kl_estimator": "monte_carlo_logq_minus_logp",
         },
@@ -1281,6 +1336,31 @@ def component_grad_norms(grads: AmortizedModel) -> dict[str, float]:
     }
 
 
+def zero_prior_grads(grads: AmortizedModel) -> AmortizedModel:
+    """Return gradients with all trainable prior leaves set to zero."""
+    prior_grads = getattr(grads, "prior", None)
+    if prior_grads is None:
+        return grads
+
+    def zero_leaf(leaf):
+        if eqx.is_inexact_array(leaf):
+            return jnp.zeros_like(leaf)
+        return leaf
+
+    return eqx.tree_at(
+        lambda tree: tree.prior,
+        grads,
+        jax.tree_util.tree_map(zero_leaf, prior_grads),
+    )
+
+
+def _train_prior_jointly(prior_cfg: dict[str, Any]) -> bool:
+    source = str(prior_cfg.get("source", "joint_realnvp"))
+    if source == "standard_normal":
+        return False
+    return bool(prior_cfg.get("train_jointly", source == "joint_realnvp"))
+
+
 def tree_all_finite(tree) -> bool:
     """Return whether every inexact array leaf in ``tree`` is finite."""
     leaves = [
@@ -1312,6 +1392,9 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
         },
         "prior": {
             "type": cfg["prior"].get("type", "realnvp"),
+            "source": cfg["prior"].get("source", "joint_realnvp"),
+            "train_jointly": _train_prior_jointly(cfg["prior"]),
+            "checkpoint": cfg["prior"].get("checkpoint"),
             "latent_dim": int(cfg["encoder"].get("latent_dim", 16)),
             "n_layers": int(cfg["prior"].get("n_layers", 8)),
             "hidden_size": int(cfg["prior"].get("hidden_size", 128)),

@@ -1,20 +1,25 @@
 Amortized Inference
 ===================
 
-This feature is the prior-learning path for fixed-DSPS photometric inference.
-It trains an amortized encoder and a learned RealNVP prior against the fixed
-DSPS decoder.
+This feature is the photometric posterior-inference path. It trains an
+amortized encoder against the fixed DSPS decoder and can use either a standard
+normal prior, a supervised truth-trained RealNVP prior, or a RealNVP prior
+trained jointly with the encoder.
 
-There are two public configs:
+The public configs are:
 
 .. code-block:: text
 
    configs/amortized_fs2_realnvp.yaml
-   configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
+   configs/amortized_diffsky_hltds_standard_normal_gpu.yaml
+   configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml
+   configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
 
 FS2 remains the Euclid comparison path. Diffsky HLTDS 04/14 is the main
-science-validation path for learned population priors because it has direct
-truth columns for at least redshift and stellar mass.
+science-validation path because it has photometry plus physical truth columns.
+Do not treat a good photometric fit as physical recovery: physical claims also
+require same-parameter forward closure, supervised prior-vs-truth diagnostics,
+posterior calibration, and comparison of derived quantities.
 
 Model Contract
 --------------
@@ -62,7 +67,8 @@ The posterior model is:
 
 ``x`` is the unconstrained latent vector. ``theta`` is the bounded physical
 parameter vector, including redshift. FS2 uses the 16-parameter PopCosmos-like
-schema. Diffsky HLTDS uses a compact 9-parameter schema:
+schema. The legacy compact Diffsky amortized path uses a 9-parameter
+PopCosmos-bin schema:
 
 .. code-block:: text
 
@@ -77,8 +83,11 @@ schema. Diffsky HLTDS uses a compact 9-parameter schema:
    tau1_over_tau2
 
 The other PopCosmos-bin nuisance and SFH parameters are supplied from
-``model.fixed_parameters`` when the decoder is called. ``psi`` denotes the
-encoder parameters. ``beta`` denotes the RealNVP prior parameters.
+``model.fixed_parameters`` when the decoder is called. This compact latent is
+not directly comparable to Diffstar/Diffmah generated truths; the true-param
+closure and supervised-prior paths are the same-parameter tests. ``psi``
+denotes the encoder parameters. ``beta`` denotes RealNVP prior parameters when
+a RealNVP prior is used.
 
 Implementation Architecture
 ---------------------------
@@ -101,7 +110,7 @@ on private MAP helpers:
        GaussianEncoder q_psi(x | flux, err)
 
    euclid_dsps/amortized/flows.py
-       RealNVPPrior p_beta(x)
+       StandardNormalPrior or RealNVPPrior p_beta(x)
 
    euclid_dsps/amortized/decoder.py
        x -> theta -> fixed DSPS -> model_flux[B]
@@ -110,7 +119,7 @@ on private MAP helpers:
        Student-t log likelihood + Monte Carlo KL
 
    euclid_dsps/amortized/train.py
-       one Optax optimizer over encoder and RealNVP parameters
+       Optax training with frozen or jointly trained prior modes
 
 The DSPS decoder is fixed. It is evaluated through
 ``model_mags_jax_dynamic`` and ``parameter_vectors.py`` so JAX gradients flow
@@ -136,6 +145,20 @@ The encoder posterior is diagonal Gaussian:
 
    q_psi(x | flux, err) = N(mu_psi, diag(sigma_psi^2))
 
+The prior source is configured by:
+
+.. code-block:: yaml
+
+   amortized:
+     prior:
+       source: standard_normal | supervised_checkpoint | joint_realnvp
+       train_jointly: false | true
+
+``standard_normal`` uses a fixed isotropic Gaussian in ``x``. ``supervised_checkpoint``
+loads a RealNVP prior trained on truth parameters by the supervised prior
+workflow and normally sets ``train_jointly: false``. ``joint_realnvp`` builds a
+RealNVP prior and trains it with the encoder, matching the original behavior.
+
 ``RealNVPPrior`` is an exact-density normalizing flow in the same
 unconstrained latent space ``x``:
 
@@ -147,10 +170,12 @@ unconstrained latent space ``x``:
    hidden_size = 128
    alternating affine coupling masks
 
-The encoder and RealNVP prior are optimized together in the same
-``eqx.filter_value_and_grad`` call and the same Optax update. The training log
-records ``encoder_grad_norm`` and ``prior_grad_norm`` at every step; both should
-be nonzero when ``kl_weight > 0``.
+When ``train_jointly`` is true, the encoder and RealNVP prior are optimized
+together in the same ``eqx.filter_value_and_grad`` call and the same Optax
+update. When it is false, prior gradients are zeroed before the optimizer
+update. The training log records ``encoder_grad_norm`` and ``prior_grad_norm``
+at every step; ``prior_grad_norm`` should be nonzero only for the joint-prior
+mode when ``kl_weight > 0``.
 
 ELBO
 ----
@@ -222,14 +247,21 @@ and estimates ``E_q[logq - logp]`` by Monte Carlo.
 
 Do not replace this with the closed-form Gaussian/Gaussian VAE KL.
 
-Joint RealNVP Prior
--------------------
+Prior Sources
+-------------
 
-The RealNVP prior is trained jointly with the encoder. It is not pretrained in
-the first implementation. This lets ``p_beta(x)`` learn a flexible latent
-population structure while the encoder learns object-level posterior
-approximations. RealNVP is used because it provides exact pointwise density
-evaluation and a cheap triangular Jacobian.
+The Diffsky HLTDS configs separate the three prior experiments:
+
+.. code-block:: text
+
+   configs/amortized_diffsky_hltds_standard_normal_gpu.yaml
+   configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml
+   configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
+
+The supervised checkpoint mode validates the checkpoint latent schema and
+bounds against the active amortized schema before training starts. If they do
+not match, the run fails explicitly instead of silently reinterpreting a truth
+prior in an incompatible photometric latent space.
 
 Training Outputs
 ----------------
@@ -269,8 +301,9 @@ When ``save_training_curves`` is enabled, diagnostics are regenerated every
    prior_grad_norm.png
    joint_grad_norm.png
 
-The gradient plots are part of the joint-training contract: they make it
-visible whether the RealNVP prior is receiving gradients alongside the encoder.
+The gradient plots are part of the prior-source contract: they make it visible
+whether a joint RealNVP prior is receiving gradients, and whether a frozen
+supervised prior remains frozen.
 
 The ``amortized-train-fs2`` and ``amortized-train-diffsky`` CLIs are verbose by
 default. They print the output directory, feature-stat computation,
@@ -280,18 +313,36 @@ negative log likelihood, Monte Carlo KL, encoder gradient norm, and RealNVP
 prior gradient norm. Use ``--quiet`` to reduce console logs and
 ``--no-progress`` to disable progress bars.
 
-Diffsky HLTDS training example:
+Diffsky HLTDS training examples:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_standard_normal_gpu.yaml \
      amortized-train-diffsky \
      --limit 10000 \
      --batch-size 64 \
      --epochs 10 \
      --n-samples 2 \
-     --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000
+     --out outputs/runs/amortized_diffsky_hltds_standard_normal_n10000
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml \
+     amortized-train-diffsky \
+     --limit 10000 \
+     --batch-size 64 \
+     --epochs 10 \
+     --n-samples 2 \
+     --out outputs/runs/amortized_diffsky_hltds_supervised_prior_n10000
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
+     amortized-train-diffsky \
+     --limit 10000 \
+     --batch-size 64 \
+     --epochs 10 \
+     --n-samples 2 \
+     --out outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000
 
 For Diffsky, ``--batch-size`` is the requested catalog/training batch size. The
 public config also sets ``amortized.training.jax_batch_size: 4`` to cap the
@@ -320,6 +371,9 @@ saved ``feature_stats.json``, samples ``x`` from ``q_psi``, converts samples to
    catalog_proxy_comparison.parquet
    redshift_pit.parquet
    learned_prior_samples.parquet
+   learned_or_loaded_prior_samples.parquet
+   photoz_metrics.csv
+   posterior_vs_truth_metrics.csv
    learned_prior_summary.json
    inference_summary.json
 
@@ -348,15 +402,15 @@ Diffsky HLTDS inference example:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-infer-diffsky \
-     --checkpoint outputs/runs/amortized_diffsky_hltds_realnvp_n10000/checkpoints/best.eqx \
+     --checkpoint outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000/checkpoints/best.eqx \
      --limit 10000 \
      --batch-size 64 \
      --posterior-samples 64 \
      --prior-samples 8192 \
      --decoder-sample-chunk-size 1 \
-     --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer
+     --out outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer
 
 The same conservative cap is applied during inference through
 ``amortized.inference.jax_batch_size: 4``.
@@ -370,11 +424,12 @@ when columns such as ``z_true_gal`` are available, a redshift PIT histogram
 ``P(z < z_ref)``, contour-style posterior corner plots, and learned RealNVP
 prior diagnostics.
 
-The learned prior diagnostics sample ``x ~ p_beta(x)`` directly from the trained
-RealNVP, transform the samples to physical ``theta``, and write:
+The prior diagnostics sample ``x ~ p_beta(x)`` directly from the configured
+prior, transform the samples to physical ``theta``, and write:
 
-* ``learned_prior_samples.parquet`` with ``x_00`` ... ``x_{D-1}``, physical
-  parameters, and exact pointwise ``logprior``;
+* ``learned_prior_samples.parquet`` and
+  ``learned_or_loaded_prior_samples.parquet`` with ``x_00`` ... ``x_{D-1}``,
+  physical parameters, and exact pointwise ``logprior``;
 * ``learned_prior_summary.json`` with prior marginal quantiles;
 * ``learned_prior_logprob_hist.png`` for the learned density values;
 * ``learned_prior_corner.png`` for the learned prior in physical parameter
@@ -387,17 +442,20 @@ For Diffsky HLTDS, run the explicit truth/prior overlap report after inference:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-prior-overlap-diffsky \
-     --run outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
+     --run outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer \
      --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer/prior_overlap \
+     --out outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer/prior_overlap \
      --max-objects 10000
 
-This writes ``prior_overlap_metrics.csv`` and plots comparing truth,
-aggregate posterior, and learned prior for directly comparable parameters.
-Currently those are ``z_obs`` versus ``redshift_true`` and
-``log10_stellar_mass`` versus ``logsm_true``.
+This writes ``prior_overlap_metrics.csv``, ``population_realism_report.md``,
+and plots comparing truth, aggregate posterior, and learned or loaded prior for
+directly comparable parameters. It includes redshift, stellar mass, derived
+``log10_sfr_at_obs``/``log10_ssfr_at_obs`` when exported, dust terms when
+fitted, and Diffstar/Diffmah generated-truth marginals for supervised-prior
+diagnostics. It does not compare raw ``dlog10_sfr_i`` ratios directly to
+``logsfr_true``.
 
 There is no exact published POP-COSMOS prior distribution implemented in this
 repository. FS2 comparison plots therefore compare the learned RealNVP prior
@@ -421,10 +479,9 @@ path.
 Scientific Limitations
 ----------------------
 
-This is an FS2-only prototype. The amortized posterior is approximate and must
-be checked against MAP/MCMC diagnostics on selected rows. The learned prior is
-selection-dependent because it is trained on FS2 photometry. Redshift can be
-compared to ``z_true_gal`` when available, but mass, SFR, dust, and metallicity
-columns should be described as catalog proxies, not truth. The Student-t
-likelihood is robust to outliers and can hide model defects, so band-by-band
-posterior predictive residual diagnostics are required.
+The amortized posterior is approximate and must be checked against MAP/MCMC
+diagnostics on selected rows. The Student-t likelihood is robust to outliers
+and can hide model defects, so band-by-band posterior predictive residual
+diagnostics are required. Physical recovery claims on Diffsky HLTDS additionally
+require a successful same-parameter forward closure and a supervised
+truth-prior comparison before interpreting posterior aggregates.

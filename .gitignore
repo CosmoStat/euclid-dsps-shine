@@ -10,6 +10,7 @@ htmlcov/
 build/
 dist/
 docs/build/
+docs/_build/
 outputs/
 
 # Local data and generated asset manifests.

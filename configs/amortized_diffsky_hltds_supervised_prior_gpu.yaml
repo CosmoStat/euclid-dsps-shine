@@ -1,0 +1,8 @@
+extends: amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
+
+amortized:
+    prior:
+        type: realnvp
+        source: supervised_checkpoint
+        checkpoint: outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx
+        train_jointly: false

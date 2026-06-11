@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.diffsky_redshift_ablation import write_redshift_metrics_for_run
 from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
@@ -246,6 +247,22 @@ def infer_amortized_fs2(
     residuals.to_parquet(out / "posterior_predictive_residuals.parquet", index=False)
     feature_diagnostics.to_parquet(out / "feature_diagnostics.parquet", index=False)
     learned_prior.to_parquet(out / "learned_prior_samples.parquet", index=False)
+    learned_prior.to_parquet(
+        out / "learned_or_loaded_prior_samples.parquet",
+        index=False,
+    )
+    try:
+        metric_outputs = {
+            key: str(value)
+            for key, value in write_redshift_metrics_for_run(
+                dataset_path=config["catalog_path"],
+                run_dir=out,
+                out_dir=out,
+                label=dataset_label,
+            ).items()
+        }
+    except Exception as exc:
+        metric_outputs = {"warning": str(exc)}
     write_json(
         out / "inference_summary.json",
         {
@@ -264,6 +281,9 @@ def infer_amortized_fs2(
             "residual_rows": int(len(residuals)),
             "feature_diagnostics_rows": int(len(feature_diagnostics)),
             "learned_prior_rows": int(len(learned_prior)),
+            "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
+            "prior_train_jointly": bool(cfg["prior"].get("train_jointly", True)),
+            "metric_outputs": metric_outputs,
         },
     )
     write_json(out / "normalized_config.json", config)

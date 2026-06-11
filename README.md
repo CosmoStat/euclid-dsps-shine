@@ -5,10 +5,16 @@ Standalone DSPS/JAX workflow for photometric inference experiments.
 The public end-to-end paths are intentionally narrow:
 
 - `configs/fs2_gpu.yaml`: Euclid FS2 MAP/posterior baseline.
+- `configs/diffsky_dataset_hltds_04_14.yaml`: Diffsky HLTDS dataset contract.
 - `configs/diffsky_hltds_04_14_simple_gpu.yaml`: main Diffsky HLTDS simple MAP fit.
 - `configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml`: Diffsky fixed-redshift closure diagnostic.
+- `configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml`: same-parameter Diffsky truth forward closure.
+- `configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml`: supervised RealNVP prior on basic HLTDS truth parameters.
+- `configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml`: supervised RealNVP prior on available extended HLTDS generated truths.
 - `configs/amortized_fs2_realnvp.yaml`: FS2 amortized encoder plus learned RealNVP prior.
-- `configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml`: main Diffsky HLTDS amortized prior-learning run.
+- `configs/amortized_diffsky_hltds_standard_normal_gpu.yaml`: Diffsky amortized standard-normal prior baseline.
+- `configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml`: Diffsky amortized encoder with frozen supervised prior checkpoint.
+- `configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml`: Diffsky joint encoder plus RealNVP prior run.
 
 Old Diffstar, OpenUniverse fit-ready, non-GPU, and broad ablation configs are not part of the public config surface.
 
@@ -73,8 +79,13 @@ python -m euclid_dsps.cli diffsky-prepare-dataset \
 
 python -m euclid_dsps.cli diffsky-validate-dataset \
   --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-  --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_manifest.yaml
+  --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.manifest.yaml
 ```
+
+The prepared manifest records global object-id strategy, column semantics, and
+the error model. The no-error HLTDS dataset uses `error_model.type: none`; do
+not treat missing or synthetic `fluxerr_*` columns as native observational
+errors.
 
 ## Run Fits
 
@@ -98,6 +109,17 @@ python -m euclid_dsps.cli \
   --out outputs/runs/diffsky_hltds_fixedz_closure_n128
 ```
 
+Diffsky true-parameter forward closure:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml \
+  diffsky-forward-closure \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --limit 1024 \
+  --out outputs/runs/diffsky_trueparam_forward_closure
+```
+
 Euclid FS2 smoke:
 
 ```bash
@@ -119,29 +141,58 @@ python -m euclid_dsps.cli diffsky-fit-report \
 
 ## Prior Learning
 
-Diffsky HLTDS joint prior-learning smoke/debug run:
+Supervised Diffsky HLTDS prior learning uses truth parameters directly, without
+the photometric encoder or DSPS decoder:
 
 ```bash
 python -m euclid_dsps.cli \
-  --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+  --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
+  diffsky-train-supervised-prior \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --schema diffsky_truth_basic \
+  --out outputs/runs/diffsky_supervised_prior_basic
+
+python -m euclid_dsps.cli \
+  --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
+  diffsky-sample-supervised-prior \
+  --checkpoint outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx \
+  --out outputs/runs/diffsky_supervised_prior_basic_samples
+```
+
+Diffsky HLTDS joint amortized encoder/prior smoke/debug run:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
   amortized-train-diffsky \
   --limit 10000 --batch-size 64 --epochs 10 --n-samples 2 \
   --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000
 
 python -m euclid_dsps.cli \
-  --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+  --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
   amortized-infer-diffsky \
   --checkpoint outputs/runs/amortized_diffsky_hltds_realnvp_n10000/checkpoints/best.eqx \
   --limit 10000 --batch-size 64 --posterior-samples 64 --prior-samples 8192 \
   --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer
 
 python -m euclid_dsps.cli \
-  --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+  --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
   amortized-prior-overlap-diffsky \
   --run outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
   --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
   --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer/prior_overlap \
   --max-objects 10000
+```
+
+Compare redshift calibration across runs:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
+  diffsky-redshift-ablation \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --run joint=outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
+  --out outputs/reports/diffsky_redshift_ablation
 ```
 
 The Diffsky amortized path learns a joint degenerate prior over redshift and a
@@ -162,4 +213,11 @@ python -m euclid_dsps.cli \
   --out outputs/runs/amortized_fs2_realnvp_debug
 ```
 
-See `docs/source/data_download.rst`, `docs/source/diffsky_dataset.rst`, and `docs/source/run_setup.rst` for the full documented workflow.
+A good photometric fit is not evidence of physical recovery. Physical claims
+require same-parameter forward closure, supervised prior-vs-truth diagnostics,
+posterior calibration, and comparison of derived quantities rather than only
+raw latent parameters.
+
+See `docs/source/data_download.rst`, `docs/source/diffsky_dataset.rst`,
+`docs/source/prior_learning.rst`, and `docs/source/run_setup.rst` for the full
+documented workflow.

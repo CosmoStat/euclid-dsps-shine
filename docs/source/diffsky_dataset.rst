@@ -45,9 +45,46 @@ The companion files are:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_manifest.yaml
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_schema.json
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_truth_report.md
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.manifest.yaml
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.schema.json
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.truth_report.md
+   Data/diffsky/processed/diffsky_dataset_integrity_report.md
+
+Integrity Contract
+------------------
+
+Prepared datasets preserve the native ``core_tag`` column when it is present.
+``object_id`` is guaranteed unique in the prepared parquet. If ``core_tag`` is
+globally unique across all processed shards, ``object_id`` equals
+``core_tag``. If duplicate ``core_tag`` values are detected across shards, the
+preparer adds:
+
+.. code-block:: text
+
+   global_object_id
+   source_file
+   source_row
+
+and sets ``object_id`` to ``global_object_id``. The manifest records
+``object_id.strategy``, ``core_tag_unique_global``, and ``object_id_unique`` so
+downstream reports do not silently treat duplicated source ids as unique
+objects.
+
+The schema JSON and manifest classify every prepared column into:
+
+.. code-block:: text
+
+   truth
+   generated_truth
+   derived_truth
+   diagnostic
+   proxy
+   unavailable
+
+This classification is also written to the truth report and the integrity
+report. Diffstar, Diffmah, dust, and burst latent exports are
+``generated_truth``: they are simulator parameters, not recovered quantities
+from a photometric fit.
 
 Photometry Contract
 -------------------
@@ -85,6 +122,25 @@ fit configs use a magnitude-space tolerance:
 
 Each band has ``sigma_mag: 0.10``. This is a model-tolerance assumption for
 MAP debugging, not a native survey error model.
+
+The dataset manifest uses explicit error model labels:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Label
+     - Meaning
+   * - ``native_error``
+     - Error columns came from the source dataset.
+   * - ``synthetic_snr_error``
+     - ``fluxerr_*`` columns were synthesized as ``abs(flux) / snr``.
+   * - ``model_tolerance_mag``
+     - Fit configuration uses a magnitude tolerance such as ``sigma_mag``.
+   * - ``none``
+     - No observation-error columns were written.
+
+The HLTDS no-error prepared dataset uses ``error_model.type: none`` and must
+not be described as having native observational errors.
 
 Truth Policy
 ------------
@@ -126,6 +182,26 @@ If they are present, they can be inventoried and kept for later population
 diagnostics, but broad-band DSPS MAP recovery should not label them as
 recovered physical truths unless the forward model and parameterization are
 explicitly matched.
+
+Readiness
+---------
+
+``diffsky-validate-dataset`` and the integrity report summarize readiness:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Status
+     - Contract
+   * - ``READY_BASIC``
+     - Photometry plus direct redshift and stellar-mass truth are present.
+   * - ``READY_EXTENDED``
+     - Basic readiness plus Diffstar and Diffmah generated-truth exports.
+   * - ``NOT_READY``
+     - Missing photometry or required basic truth columns.
+
+This readiness is for dataset integrity only. Physical recovery claims require
+the later same-parameter forward closure and posterior calibration checks.
 
 Public Fit Configs
 ------------------

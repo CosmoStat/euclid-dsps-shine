@@ -23,9 +23,12 @@ The project keeps the scientific boundary narrow:
    architecture
    data_download
    diffsky_dataset
+   diffsky_forward_closure
    forward_model
    ssp_compression
+   prior_learning
    amortized_inference
+   scientific_validation_plan
    catalog_columns
    cosmos_sed
    run_setup

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +10,13 @@ import pandas as pd
 
 from euclid_dsps.io import ensure_dir, write_json
 
-
 _COMPARISONS = (
     ("z_obs", "redshift_true", "redshift"),
     ("log10_stellar_mass", "logsm_true", "stellar_mass"),
+    ("log10_sfr_at_obs", "logsfr_true", "log_sfr_at_obs"),
+    ("log10_ssfr_at_obs", "logssfr_true", "log_ssfr_at_obs"),
+    ("dust_av", "dust_av", "dust_av"),
+    ("dust_delta", "dust_delta", "dust_delta"),
 )
 
 
@@ -33,9 +35,11 @@ def write_diffsky_prior_overlap_report(
     truth = _read_truth(dataset_path, max_objects=max_objects)
     posterior_samples = _read_optional_table(run_dir / "posterior_samples.parquet")
     posterior_summary = _read_optional_table(run_dir / "posterior_summary.parquet")
-    prior = _read_optional_table(run_dir / "learned_prior_samples.parquet")
+    prior = _read_optional_table(run_dir / "learned_or_loaded_prior_samples.parquet")
+    if prior.empty:
+        prior = _read_optional_table(run_dir / "learned_prior_samples.parquet")
     rows = []
-    for param, truth_col, label in _COMPARISONS:
+    for param, truth_col, label in _available_comparisons(truth, posterior_samples, prior):
         rows.extend(
             _comparison_rows(
                 label=label,
@@ -58,24 +62,47 @@ def write_diffsky_prior_overlap_report(
         "n_prior_rows": int(len(prior)),
         "comparisons": [dict(row) for row in rows],
         "notes": [
-            "Only directly comparable parameters are scored here.",
-            "logsfr_true is not compared to dlog10_sfr_* directly; use a derived DSPS SFR diagnostic before making SFR recovery claims.",
+            "Only directly comparable or derived-compatible parameters are scored here.",
+            "logsfr_true is never compared to raw dlog10_sfr_* parameters.",
+            "Generated Diffstar/Diffmah truth columns are population diagnostics, not photometric recoveries by themselves.",
         ],
     }
     write_json(out / "prior_overlap_summary.json", summary)
     report_path = out / "prior_overlap_report.md"
     _write_markdown(report_path, metrics, summary)
+    population_report = out / "population_realism_report.md"
+    _write_markdown(population_report, metrics, summary)
     return report_path
 
 
 def _read_truth(dataset_path: Path, *, max_objects: int | None) -> pd.DataFrame:
-    columns = ["object_id", "redshift_true", "logsm_true", "logsfr_true"]
-    available = pd.read_parquet(dataset_path, columns=None).columns
-    selected = [column for column in columns if column in available]
-    frame = pd.read_parquet(dataset_path, columns=selected)
+    frame = pd.read_parquet(dataset_path)
     if max_objects is not None:
         frame = frame.head(int(max_objects))
     return frame
+
+
+def _available_comparisons(
+    truth: pd.DataFrame,
+    posterior_samples: pd.DataFrame,
+    prior: pd.DataFrame,
+) -> tuple[tuple[str, str, str], ...]:
+    comparisons = list(_COMPARISONS)
+    for prefix in ("diffstar_", "diffmah_", "burst_"):
+        for column in truth.columns:
+            if column.startswith(prefix):
+                comparisons.append((column, column, column))
+    available = []
+    for parameter, truth_col, label in comparisons:
+        if truth_col not in truth:
+            continue
+        if parameter.startswith("dlog10_sfr_"):
+            continue
+        if parameter in posterior_samples or parameter in prior:
+            available.append((parameter, truth_col, label))
+        elif parameter in {"z_obs", "log10_stellar_mass"}:
+            available.append((parameter, truth_col, label))
+    return tuple(dict.fromkeys(available))
 
 
 def _read_optional_table(path: Path) -> pd.DataFrame:
@@ -234,7 +261,8 @@ def _write_overlap_plots(
         import matplotlib.pyplot as plt
     except ImportError:
         return
-    for parameter, truth_col, label in _COMPARISONS:
+    comparisons = _available_comparisons(truth, posterior_samples, prior)
+    for parameter, truth_col, label in comparisons:
         if truth_col not in truth:
             continue
         fig, ax = plt.subplots(figsize=(7.5, 4.5))
@@ -250,6 +278,63 @@ def _write_overlap_plots(
         fig.tight_layout()
         fig.savefig(out / f"{label}_distribution_overlap.png", dpi=170)
         plt.close(fig)
+    _write_z_logm_logsfr_plot(out, truth, prior, plt)
+    _write_corner_plot(out / "truth_vs_prior_corner.png", truth, prior)
+    _write_corner_plot(out / "truth_vs_qagg_corner.png", truth, posterior_samples)
+
+
+def _write_z_logm_logsfr_plot(out: Path, truth: pd.DataFrame, prior: pd.DataFrame, plt) -> None:
+    pairs = [
+        ("redshift_true", "z_obs", "z"),
+        ("logsm_true", "log10_stellar_mass", "logM"),
+        ("logsfr_true", "log10_sfr_at_obs", "logSFR"),
+    ]
+    available = [(t, p, label) for t, p, label in pairs if t in truth and p in prior]
+    if len(available) < 2:
+        return
+    x_truth, x_prior, xlabel = available[0]
+    fig, axes = plt.subplots(1, len(available) - 1, figsize=(5 * (len(available) - 1), 4))
+    axes_arr = np.asarray(axes).reshape(-1)
+    for ax, (y_truth, y_prior, ylabel) in zip(axes_arr, available[1:], strict=True):
+        ax.scatter(truth[x_truth], truth[y_truth], s=6, alpha=0.35, label="truth")
+        ax.scatter(prior[x_prior], prior[y_prior], s=6, alpha=0.35, label="prior")
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+    axes_arr[0].legend(frameon=False)
+    fig.tight_layout()
+    fig.savefig(out / "truth_vs_prior_z_logm_logsfr.png", dpi=170)
+    plt.close(fig)
+
+
+def _write_corner_plot(path: Path, truth: pd.DataFrame, other: pd.DataFrame) -> None:
+    try:
+        import corner
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    pairs = [
+        ("redshift_true", "z_obs", "z"),
+        ("logsm_true", "log10_stellar_mass", "logM"),
+        ("logsfr_true", "log10_sfr_at_obs", "logSFR"),
+        ("dust_av", "dust_av", "dust_av"),
+        ("dust_delta", "dust_delta", "dust_delta"),
+    ]
+    truth_cols = [truth_col for truth_col, other_col, _ in pairs if truth_col in truth and other_col in other]
+    other_cols = [other_col for truth_col, other_col, _ in pairs if truth_col in truth and other_col in other]
+    labels = [label for truth_col, other_col, label in pairs if truth_col in truth and other_col in other]
+    if len(truth_cols) < 2:
+        return
+    truth_values = truth[truth_cols].dropna().to_numpy(dtype=float)
+    other_values = other[other_cols].dropna().to_numpy(dtype=float)
+    if truth_values.shape[0] <= truth_values.shape[1] or other_values.shape[0] <= other_values.shape[1]:
+        return
+    try:
+        fig = corner.corner(truth_values, labels=labels, color="C0")
+        corner.corner(other_values, fig=fig, labels=labels, color="C1")
+    except Exception:
+        return
+    fig.savefig(path, dpi=170)
+    plt.close(fig)
 
 
 def _hist(ax, values, label: str, color: str) -> None:

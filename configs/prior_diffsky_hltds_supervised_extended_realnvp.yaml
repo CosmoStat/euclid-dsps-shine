@@ -1,0 +1,16 @@
+extends: prior_diffsky_hltds_supervised_basic_realnvp.yaml
+
+prior_learning:
+    schema: diffsky_truth_extended
+    missing_policy: reduce
+    flow:
+        type: realnvp
+        n_layers: 10
+        hidden_size: 192
+        scale_clamp: 0.05
+    training:
+        epochs: 40
+        batch_size: 512
+        learning_rate: 8.0e-4
+        validation_fraction: 0.1
+        seed: 43
