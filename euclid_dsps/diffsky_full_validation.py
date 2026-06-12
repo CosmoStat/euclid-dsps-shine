@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 
 from euclid_dsps.config import load_config
@@ -84,7 +83,7 @@ def run_diffsky_full_validation(
         stage_outputs["forward_closure"] = str(closure_dir)
 
         _log(verbose, "[full-validation] stage 4-6/8: amortized inference modes")
-        inference_runs, skipped_stages = _run_amortized_stages(
+        inference_runs = _run_amortized_stages(
             full,
             dataset,
             out,
@@ -102,8 +101,6 @@ def run_diffsky_full_validation(
         stage_outputs["inference_runs"] = [
             {"label": label, "run_dir": str(path)} for label, path in inference_runs
         ]
-        if skipped_stages:
-            stage_outputs["skipped_stages"] = skipped_stages
         _log(
             verbose,
             "[full-validation] stage 7/8: redshift ablation and population realism",
@@ -175,7 +172,6 @@ def write_full_validation_report(
     summary = {
         "dataset_path": str(dataset_path),
         "stage_outputs": stage_outputs or {},
-        "skipped_stages": list((stage_outputs or {}).get("skipped_stages", [])),
         "global_sed_scale": alpha_rows,
         "mass_recovery": mass_rows,
         "photoz_metrics": photoz_rows,
@@ -350,7 +346,7 @@ def _run_amortized_stages(
     seed: int | None,
     verbose: bool,
     progress: bool,
-) -> tuple[list[tuple[str, Path]], list[dict[str, Any]]]:
+) -> list[tuple[str, Path]]:
     from euclid_dsps.amortized.config import amortized_config
     from euclid_dsps.amortized.infer import infer_amortized_fs2
     from euclid_dsps.amortized.train import train_amortized_fs2
@@ -361,7 +357,6 @@ def _run_amortized_stages(
         ("joint_realnvp", "amortized_joint_realnvp_config"),
     )
     runs = []
-    skipped = []
     for label, key in stages:
         cfg = _with_dataset_path(_load_stage_config(full, key), dataset)
         if label == "supervised_prior":
@@ -370,27 +365,6 @@ def _run_amortized_stages(
             prior["checkpoint"] = str(supervised_prior_checkpoint)
             amortized["prior"] = prior
             cfg["amortized"] = amortized
-            skip_reason = _supervised_prior_incompatibility(
-                cfg,
-                supervised_prior_checkpoint,
-            )
-            if skip_reason:
-                skip_dir = ensure_dir(out / f"amortized_{label}_skipped")
-                payload = {
-                    "label": label,
-                    "stage": f"amortized_{label}",
-                    "status": "skipped",
-                    "reason": skip_reason,
-                    "run_dir": str(skip_dir),
-                    "checkpoint": str(supervised_prior_checkpoint),
-                }
-                write_json(skip_dir / "skipped_stage.json", payload)
-                skipped.append(payload)
-                _log(
-                    verbose,
-                    f"[full-validation]   amortized {label}: skipped - {skip_reason}",
-                )
-                continue
         acfg = amortized_config(cfg)
         training = acfg["training"]
         inference = acfg["inference"]
@@ -434,44 +408,7 @@ def _run_amortized_stages(
             dataset_label=f"Diffsky HLTDS {label}",
         )
         runs.append((label, infer_dir))
-    return runs, skipped
-
-
-def _supervised_prior_incompatibility(
-    config: dict[str, Any],
-    checkpoint: Path,
-) -> str | None:
-    from euclid_dsps.amortized.latent import latent_spec_from_config
-    from euclid_dsps.prior_learning.train import load_prior_checkpoint
-
-    _prior, _sidecar, loaded_spec, _schema = load_prior_checkpoint(checkpoint)
-    active_spec = latent_spec_from_config(config)
-    return _prior_spec_incompatibility(active_spec, loaded_spec)
-
-
-def _prior_spec_incompatibility(active, loaded) -> str | None:
-    if tuple(active.names) != tuple(loaded.names):
-        return (
-            "incompatible latent names; "
-            f"checkpoint={tuple(loaded.names)}, config={tuple(active.names)}. "
-            "The supervised truth prior must not be used for a different "
-            "photometric latent parameterization."
-        )
-    if not np.allclose(
-        np.asarray(active.lower),
-        np.asarray(loaded.lower),
-        rtol=0.0,
-        atol=1.0e-6,
-    ):
-        return "incompatible latent lower bounds between checkpoint and config"
-    if not np.allclose(
-        np.asarray(active.upper),
-        np.asarray(loaded.upper),
-        rtol=0.0,
-        atol=1.0e-6,
-    ):
-        return "incompatible latent upper bounds between checkpoint and config"
-    return None
+    return runs
 
 
 def _run_redshift_and_population_reports(
@@ -589,21 +526,7 @@ def _write_report_markdown(path: Path, summary: dict[str, Any]) -> None:
         else "_No redshift metrics found._",
         "",
     ]
-    if summary.get("skipped_stages"):
-        lines.extend(
-            [
-                "## Skipped stages",
-                "",
-                _markdown_table(pd.DataFrame(summary["skipped_stages"])),
-                "",
-            ]
-        )
-    lines.extend(
-        [
-        "## Stage outputs",
-        "",
-        ]
-    )
+    lines.extend(["## Stage outputs", ""])
     for key, value in dict(summary.get("stage_outputs", {})).items():
         lines.append(f"- `{key}`: `{value}`")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

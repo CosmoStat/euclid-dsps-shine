@@ -79,7 +79,65 @@ def theta_vector_to_model_param_dict(
                 if np.isscalar(value)
             }
     fixed.update(theta_vector_to_param_dict(theta, parameter_names))
-    return fixed
+    return _adapt_truth_basic_to_popcosmos_params(
+        fixed,
+        parameter_names=parameter_names,
+        model_config=model_config,
+    )
+
+
+def _adapt_truth_basic_to_popcosmos_params(
+    params: dict[str, jnp.ndarray],
+    *,
+    parameter_names: tuple[str, ...],
+    model_config: dict[str, Any] | None,
+) -> dict[str, jnp.ndarray]:
+    """Map Diffsky truth-basic nuisance names onto the PopCosmos DSPS decoder.
+
+    ``diffsky_truth_basic`` is the supervised-prior schema.  The current
+    compact Diffsky amortized decoder is still ``popcosmos_bins``, so the
+    basic truth quantities must be projected into the parameters actually used
+    by that decoder.  This keeps the prior and posterior in the same latent
+    space while making the decoder dependency explicit.
+    """
+    if not isinstance(model_config, dict):
+        return params
+    if str(model_config.get("sfh_model", "lognormal")) != "popcosmos_bins":
+        return params
+    free = set(parameter_names)
+    adapted = dict(params)
+    if _has_truth_basic_sfr(adapted) and not any(
+        f"dlog10_sfr_{index}" in free for index in range(1, 7)
+    ):
+        target_logssfr = _truth_basic_logssfr(adapted)
+        reference = jnp.asarray(
+            float(model_config.get("truth_basic_ssfr_reference", -10.0)),
+            dtype=jnp.float32,
+        )
+        slope = jnp.clip((target_logssfr - reference) / 6.0, -3.0, 3.0)
+        for index in range(1, 7):
+            adapted[f"dlog10_sfr_{index}"] = slope
+    if "dust_av" in adapted and "tau2" not in free:
+        adapted["tau2"] = jnp.clip(
+            jnp.asarray(adapted["dust_av"], dtype=jnp.float32) / 1.086,
+            0.0,
+            jnp.inf,
+        )
+    if "dust_delta" in adapted and "dust_index_n" not in free:
+        adapted["dust_index_n"] = jnp.asarray(adapted["dust_delta"], dtype=jnp.float32)
+    return adapted
+
+
+def _has_truth_basic_sfr(params: dict[str, jnp.ndarray]) -> bool:
+    return "log10_ssfr_at_obs" in params or "log10_sfr_at_obs" in params
+
+
+def _truth_basic_logssfr(params: dict[str, jnp.ndarray]) -> jnp.ndarray:
+    if "log10_ssfr_at_obs" in params:
+        return jnp.asarray(params["log10_ssfr_at_obs"], dtype=jnp.float32)
+    log_sfr = jnp.asarray(params["log10_sfr_at_obs"], dtype=jnp.float32)
+    log_mass = jnp.asarray(params["log10_stellar_mass"], dtype=jnp.float32)
+    return log_sfr - log_mass
 
 
 def theta_matrix_to_param_dicts_or_pytree(

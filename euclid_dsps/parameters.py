@@ -64,6 +64,15 @@ DIFFSKY_BASIC_PARAMETER_NAMES = (
 )
 
 
+DIFFSKY_TRUTH_BASIC_PARAMETER_NAMES = (
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_ssfr_at_obs",
+    "dust_av",
+    "dust_delta",
+)
+
+
 DIFFSTAR_FIXED_PARAMETER_DEFAULTS = {
     "diffstar_indx_hi": -1.0,
     "diffstar_qlglgdt": -0.50725,

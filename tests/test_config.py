@@ -686,6 +686,19 @@ def test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit() -> None:
     assert closure["redshift"]["column"] == "redshift_true"
 
 
+def test_config_deep_merge_replace_removes_inherited_free_parameters() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml")
+
+    assert tuple(config["fit"]["free_parameters"]) == (
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_ssfr_at_obs",
+        "dust_av",
+        "dust_delta",
+    )
+    assert "dlog10_sfr_1" not in config["fit"]["free_parameters"]
+
+
 def test_cosmos_sed_defaults_are_normalized() -> None:
     config = normalize_config(minimal_config())
 

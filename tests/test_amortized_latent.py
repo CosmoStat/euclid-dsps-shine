@@ -57,6 +57,29 @@ def test_diffsky_hltds_latent_schema_uses_configured_free_parameters() -> None:
     assert spec.upper.shape == (9,)
 
 
+def test_diffsky_supervised_prior_config_matches_truth_basic_schema() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml")
+    spec = latent_spec_from_config(config)
+
+    assert config["amortized"]["latent"]["schema"] == "diffsky_truth_basic"
+    assert config["amortized"]["encoder"]["latent_dim"] == 5
+    assert spec.names == (
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_ssfr_at_obs",
+        "dust_av",
+        "dust_delta",
+    )
+    np.testing.assert_allclose(
+        np.asarray(spec.lower),
+        np.asarray([0.0, 6.0, -14.5, 0.0, -2.5], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        np.asarray(spec.upper),
+        np.asarray([1.5, 13.5, -7.0, 5.0, 1.0], dtype=np.float32),
+    )
+
+
 def test_gas_metallicity_constraint_is_satisfied() -> None:
     spec = latent_spec_from_config(load_config("configs/fs2_gpu.yaml"))
     x = jnp.zeros((5, 16)).at[:, 12].set(-10.0)

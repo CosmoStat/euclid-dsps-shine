@@ -103,6 +103,24 @@ def test_diffsky_amortized_gpu_config_is_b14_latent9_realnvp() -> None:
     assert config["amortized"]["inference"]["jax_batch_size"] == 4
 
 
+def test_diffsky_supervised_prior_config_is_b14_latent5_checkpoint() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml")
+
+    assert len(config["bands"]) == 14
+    assert config["amortized"]["encoder"]["input_dim"] == 28
+    assert config["amortized"]["encoder"]["latent_dim"] == 5
+    assert config["amortized"]["latent"]["schema"] == "diffsky_truth_basic"
+    assert config["amortized"]["prior"]["source"] == "supervised_checkpoint"
+    assert config["amortized"]["prior"]["train_jointly"] is False
+    assert tuple(config["fit"]["free_parameters"]) == (
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_ssfr_at_obs",
+        "dust_av",
+        "dust_delta",
+    )
+
+
 def test_generic_batches_preserve_large_object_ids_as_int64() -> None:
     flux = np.ones((2, 3), dtype=np.float32)
     flux_err = np.full((2, 3), 0.1, dtype=np.float32)

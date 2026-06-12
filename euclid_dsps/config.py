@@ -11,6 +11,7 @@ import yaml
 
 from .parameters import (
     DIFFSKY_BASIC_PARAMETER_NAMES,
+    DIFFSKY_TRUTH_BASIC_PARAMETER_NAMES,
     DIFFSTAR_REDUCED6_PARAMETER_NAMES,
     POPCOSMOS_PARAMETER_NAMES,
 )
@@ -1050,6 +1051,11 @@ def _load_config_tree(path: Path, seen: set[Path]) -> dict[str, Any]:
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in override.items():
+        if isinstance(value, dict) and value.get("__replace__") is True:
+            replacement = dict(value)
+            replacement.pop("__replace__", None)
+            merged[key] = replacement
+            continue
         if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
@@ -1639,7 +1645,7 @@ def _validate_popcosmos_free_parameters(
             "model.dust_model='charlot_fall_powerlaw' or 'prospector_fsps'"
         )
 
-    allowed = set(POPCOSMOS_PARAMETER_NAMES)
+    allowed = set(POPCOSMOS_PARAMETER_NAMES) | set(DIFFSKY_TRUTH_BASIC_PARAMETER_NAMES)
     nebular_model = str(model.get("nebular_model", "fixed_ssp"))
     agn_model = str(model.get("agn_model", "none"))
     gas_names = {"log10_gas_metallicity", "log10_gas_ionization"}

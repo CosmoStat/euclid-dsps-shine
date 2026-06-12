@@ -81,6 +81,38 @@ def test_theta_vector_to_model_param_dict_merges_fixed_parameters() -> None:
     np.testing.assert_allclose(np.asarray(params["shared"]), 2.5)
 
 
+def test_truth_basic_parameters_map_to_popcosmos_decoder_inputs() -> None:
+    params = theta_vector_to_model_param_dict(
+        jnp.asarray([0.7, 10.0, -9.4, 0.543, -0.2], dtype=jnp.float32),
+        (
+            "z_obs",
+            "log10_stellar_mass",
+            "log10_ssfr_at_obs",
+            "dust_av",
+            "dust_delta",
+        ),
+        {
+            "sfh_model": "popcosmos_bins",
+            "truth_basic_ssfr_reference": -10.0,
+            "fixed_parameters": {
+                "dlog10_sfr_1": 0.0,
+                "tau2": 0.3,
+                "dust_index_n": -0.7,
+            },
+        },
+    )
+
+    expected_sfr_slope = (-9.4 - -10.0) / 6.0
+    for index in range(1, 7):
+        np.testing.assert_allclose(
+            np.asarray(params[f"dlog10_sfr_{index}"]),
+            expected_sfr_slope,
+            rtol=1.0e-5,
+        )
+    np.testing.assert_allclose(np.asarray(params["tau2"]), 0.5, rtol=1.0e-5)
+    np.testing.assert_allclose(np.asarray(params["dust_index_n"]), -0.2, rtol=1.0e-5)
+
+
 def test_model_mags_from_theta_matrix_supplies_fixed_parameters(monkeypatch) -> None:
     import euclid_dsps.parameter_vectors as vectors
 
