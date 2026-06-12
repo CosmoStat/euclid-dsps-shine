@@ -1,0 +1,159 @@
+#!/bin/bash
+#SBATCH --job-name=diffsky_full_h100
+#SBATCH --account=jrx@h100
+#SBATCH --partition=gpu_p6
+#SBATCH --constraint=h100
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=24
+#SBATCH --time=10:00:00
+#SBATCH --hint=nomultithread
+#SBATCH --output=slurm-%x-%j.out
+#SBATCH --error=slurm-%x-%j.err
+
+set -Eeuo pipefail
+
+# Budgeted H100 science-validation run.
+#
+# Submit from any directory with:
+#
+#   sbatch scripts/diffsky_full_validation_h100.slurm
+#
+# Useful overrides:
+#
+#   sbatch --export=ALL,RUN_NAME=diffsky_full_h100_v1,EPOCHS=8,BATCH_SIZE=64 \
+#     scripts/diffsky_full_validation_h100.slurm
+#
+#   sbatch --export=ALL,LIMIT=2048,EPOCHS=2,POSTERIOR_SAMPLES=8 \
+#     scripts/diffsky_full_validation_h100.slurm
+#
+# Leave LIMIT empty for the real full-dataset run.
+
+REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
+MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
+CONDA_ENV="${CONDA_ENV:-shine}"
+
+RUN_NAME="${RUN_NAME:-diffsky_full_h100_$(date +%Y%m%d_%H%M%S)}"
+OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
+LOG_DIR="${LOG_DIR:-outputs/logs}"
+LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
+
+CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_full_h100.yaml}"
+DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
+RAW_ROOT="${RAW_ROOT:-Data/diffsky/raw/hltds_cosmos_260215_04_14_2026}"
+
+# These defaults are meant to fit a roughly 10h walltime budget on one H100.
+# Increase EPOCHS for a deeper science run after checking the first report.
+BATCH_SIZE="${BATCH_SIZE:-64}"
+EPOCHS="${EPOCHS:-5}"
+N_SAMPLES="${N_SAMPLES:-1}"
+POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-32}"
+PRIOR_SAMPLES="${PRIOR_SAMPLES:-8192}"
+SEED="${SEED:-42}"
+LIMIT="${LIMIT:-}"
+
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
+export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
+export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+
+cd "$REPO_DIR"
+mkdir -p "$LOG_DIR" "$(dirname "$OUT_DIR")"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "[job] start: $(date --iso-8601=seconds)"
+echo "[job] host: $(hostname)"
+echo "[job] repo: $REPO_DIR"
+echo "[job] run_name: $RUN_NAME"
+echo "[job] out_dir: $OUT_DIR"
+echo "[job] log_file: $LOG_FILE"
+echo "[job] slurm_job_id: ${SLURM_JOB_ID:-manual}"
+echo "[job] slurm_cpus_per_task: ${SLURM_CPUS_PER_TASK:-unset}"
+echo "[job] config: $CONFIG"
+echo "[job] dataset: $DATASET"
+echo "[job] limit: ${LIMIT:-<full dataset>}"
+echo "[job] batch_size: $BATCH_SIZE"
+echo "[job] epochs: $EPOCHS"
+echo "[job] n_samples: $N_SAMPLES"
+echo "[job] posterior_samples: $POSTERIOR_SAMPLES"
+echo "[job] prior_samples: $PRIOR_SAMPLES"
+echo "[job] seed: $SEED"
+
+source "$MINICONDA_PATH/etc/profile.d/conda.sh"
+conda activate "$CONDA_ENV"
+python -m pip install -e .
+
+echo "[job] python: $(which python)"
+python - <<'PY'
+import jax
+print("[job] jax_backend:", jax.default_backend())
+print("[job] jax_devices:", jax.devices())
+PY
+nvidia-smi || true
+git rev-parse --show-toplevel
+git status --short --branch
+git rev-parse HEAD
+
+required_files=(
+  "$DATASET"
+  "$RAW_ROOT/diffsky_hltds_cosmos_260215_04_14_2026_transmission_curves.hdf5"
+  "$RAW_ROOT/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5"
+  "$RAW_ROOT/diffsky_hltds_cosmos_260215_04_14_2026_ssp_basis_k64_coeff16.hdf5"
+  "$RAW_ROOT/diffsky_hltds_cosmos_260215_04_14_2026_t_table.hdf5"
+)
+
+missing=0
+echo "[job] preflight assets"
+for path in "${required_files[@]}"; do
+  if [[ -s "$path" ]]; then
+    ls -lh "$path"
+  else
+    echo "[job][missing] $path"
+    missing=1
+  fi
+done
+if [[ "$missing" -ne 0 ]]; then
+  cat <<'MSG'
+[job][error] Missing required Diffsky assets.
+If the compressed SSP basis is missing, build it once with:
+
+python scripts/build_compressed_ssp_grid.py \
+  --input Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5 \
+  --output Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_basis_k64_coeff16.hdf5 \
+  --k 64 \
+  --basis-dtype float32 \
+  --coeff-dtype float16 \
+  --overwrite
+MSG
+  exit 2
+fi
+
+cmd=(
+  python -m euclid_dsps.cli
+  --config "$CONFIG"
+  diffsky-run-full-validation
+  --dataset "$DATASET"
+  --out "$OUT_DIR"
+  --batch-size "$BATCH_SIZE"
+  --epochs "$EPOCHS"
+  --n-samples "$N_SAMPLES"
+  --posterior-samples "$POSTERIOR_SAMPLES"
+  --prior-samples "$PRIOR_SAMPLES"
+  --seed "$SEED"
+)
+
+if [[ -n "$LIMIT" ]]; then
+  cmd+=(--limit "$LIMIT")
+fi
+
+echo "[job] command:"
+printf ' %q' "${cmd[@]}"
+echo
+
+"${cmd[@]}"
+
+echo "[job] final report: $OUT_DIR/full_validation_report.md"
+echo "[job] final summary: $OUT_DIR/full_validation_summary.json"
+echo "[job] end: $(date --iso-8601=seconds)"
