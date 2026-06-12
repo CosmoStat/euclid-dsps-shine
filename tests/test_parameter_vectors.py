@@ -11,12 +11,12 @@ from euclid_dsps.observation_arrays import (
     photometry_arrays_from_dataframe,
     validate_fs2_band_contract,
 )
-from euclid_dsps.photometry import abmag_to_fnu_cgs
 from euclid_dsps.parameter_vectors import (
     model_mags_from_theta_matrix_jax,
-    theta_vector_to_param_dict,
     theta_vector_to_model_param_dict,
+    theta_vector_to_param_dict,
 )
+from euclid_dsps.photometry import abmag_to_fnu_cgs
 
 
 def test_theta_vector_to_param_dict_preserves_order() -> None:

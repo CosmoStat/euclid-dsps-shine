@@ -6,3 +6,14 @@ amortized:
         source: supervised_checkpoint
         checkpoint: outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx
         train_jointly: false
+
+calibration:
+    global_sed_scale:
+        enabled: true
+        mode: learn_global
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: true
+    per_band_zero_points:
+        enabled: false

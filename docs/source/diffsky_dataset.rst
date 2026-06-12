@@ -4,6 +4,131 @@ Diffsky HLTDS Dataset
 Dataset Choice
 --------------
 
+Two local HLTDS Diffsky samples are useful for the current validation program.
+They should not be treated as interchangeable because they cover very
+different redshift ranges.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Dataset
+     - Local processed parquet
+     - Objects / shards
+     - Redshift range
+     - Recommended role
+   * - ``hltds_cosmos_260215_04_14_2026``
+     - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet``
+     - about 369k objects across 16 source files
+     - ``z = 0.007 -- 1.006``; median ``z = 0.693``
+     - Current public development dataset for the PR1--PR7 pipeline.
+   * - ``hltds_cosmos_260215_03_31_2026``
+     - ``Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet``
+     - about 494k objects across 6 source files
+     - ``z = 1.055 -- 3.032``; median ``z = 2.429``
+     - Better high-redshift candidate for photo-z calibration and population
+       prior tests, after it is regenerated with the current no-error
+       preparation/integrity contract.
+
+The ``04_14`` sample is the current public config target because it has the
+newer no-error preparation path, current compressed-SSP assets, and the
+shortest route through the full validation pipeline. The ``03_31`` sample has
+a much more useful high-redshift distribution for redshift calibration and
+population-prior stress tests. If ``03_31`` passes same-parameter forward
+closure after regeneration, it should become the preferred science dataset for
+high-z validation.
+
+.. image:: _static/diffsky_hltds_redshift_distributions.png
+   :alt: Redshift distributions for the two Diffsky HLTDS dataset versions.
+   :width: 95%
+
+.. image:: _static/diffsky_hltds_parameter_distributions.png
+   :alt: Redshift, stellar mass, sSFR, SFR, and dust distributions for the two Diffsky HLTDS dataset versions.
+   :width: 95%
+
+Truth/parameter ranges for the two samples:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Dataset
+     - Quantity
+     - 5%
+     - Median
+     - 95%
+   * - ``03_31``
+     - ``redshift_true``
+     - ``1.062``
+     - ``2.429``
+     - ``3.017``
+   * - ``04_14``
+     - ``redshift_true``
+     - ``0.201``
+     - ``0.693``
+     - ``0.997``
+   * - ``03_31``
+     - ``logsm_true``
+     - ``8.992``
+     - ``9.917``
+     - ``10.881``
+   * - ``04_14``
+     - ``logsm_true``
+     - ``9.115``
+     - ``10.069``
+     - ``10.998``
+   * - ``03_31``
+     - ``logssfr_true``
+     - ``-12.025``
+     - ``-9.386``
+     - ``-8.693``
+   * - ``04_14``
+     - ``logssfr_true``
+     - ``-12.969``
+     - ``-10.232``
+     - ``-9.312``
+   * - ``03_31``
+     - ``logsfr_true``
+     - ``-1.925``
+     - ``0.490``
+     - ``1.540``
+   * - ``04_14``
+     - ``logsfr_true``
+     - ``-3.198``
+     - ``-0.293``
+     - ``1.046``
+   * - ``03_31``
+     - ``dust_av``
+     - ``0.148``
+     - ``0.590``
+     - ``1.978``
+   * - ``04_14``
+     - ``dust_av``
+     - ``0.134``
+     - ``0.570``
+     - ``1.858``
+   * - ``03_31``
+     - ``dust_delta``
+     - ``-0.305``
+     - ``-0.172``
+     - ``0.337``
+   * - ``04_14``
+     - ``dust_delta``
+     - ``-0.306``
+     - ``0.052``
+     - ``0.344``
+
+Both HLTDS versions expose the core truth columns used by the pipeline
+(``redshift_true``, ``logsm_true``, ``logssfr_true``, ``logsfr_true``) and the
+same generated-truth families used by the extended prior and true-parameter
+closure diagnostics: ``diffstar_*``, ``diffmah_*``, ``dust_*``, and
+``burst_*``.
+
+Important caveat: the locally existing ``03_31`` parquet was prepared with
+synthetic fractional-SNR ``fluxerr_*`` columns. Those errors are not native
+observational errors. Before promoting ``03_31`` to the main science path,
+regenerate it with ``--no-synthetic-errors`` using the current
+``diffsky-prepare-dataset`` command so its manifest, object-id policy, and
+error semantics match the PR1 dataset integrity contract.
+
 The current validation dataset is:
 
 .. code-block:: text
@@ -118,7 +243,8 @@ fit configs use a magnitude-space tolerance:
    bands: diffsky_hltds_lsst_roman_14_abmag_modelerr
    fit:
      likelihood_space: mag
-     photometric_likelihood: gaussian
+     photometric_likelihood: student_t
+     student_t_dof: 2.0
 
 Each band has ``sigma_mag: 0.10``. This is a model-tolerance assumption for
 MAP debugging, not a native survey error model.

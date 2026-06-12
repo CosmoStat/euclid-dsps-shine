@@ -1,7 +1,7 @@
 Installation
 ============
 
-Python Environment
+Python environment
 ------------------
 
 Use the existing ``shine`` environment:
@@ -19,7 +19,7 @@ The codebase should still import under ``uv`` for tests and packaging checks:
    uv run python -m compileall euclid_dsps scripts
    uv run euclid-dsps --help
 
-FSPS And python-FSPS
+FSPS and python-FSPS
 --------------------
 
 The FS2 config requires generated FSPS SSP, gas, AGN component, and compressed
@@ -46,7 +46,7 @@ Expected local output for the current assets is ``11149`` wavelength samples
 with ``mist`` and ``c3k_a``. See :doc:`data_download` for the exact generation
 commands.
 
-Quality Checks
+Quality checks
 --------------
 
 .. code-block:: bash
@@ -55,8 +55,8 @@ Quality Checks
    uv run pytest tests
    uv run python -m sphinx -W --keep-going -b html docs/source docs/build/html
 
-GPU Note
---------
+GPU runtime
+-----------
 
 The public fit configs are GPU configs. For production, use a CUDA-enabled JAX
 installation and verify the backend before launching fits:

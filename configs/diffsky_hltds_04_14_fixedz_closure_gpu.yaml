@@ -67,7 +67,7 @@ model:
 fit:
     method: jax_adam
     likelihood_space: mag
-    photometric_likelihood: gaussian
+    photometric_likelihood: student_t
     student_t_dof: 2.0
     flux_error_floor_frac: 0.0
     flux_error_jitter: 0.0

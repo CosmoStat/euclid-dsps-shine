@@ -1,5 +1,67 @@
 # Plan
 
+## 2026-06-11 Documentation Style Refresh
+
+- Current implementation slice: improve the public-facing documentation style
+  without changing runtime behavior or scientific assumptions.
+- Focus on the first surfaces a reader sees: top-level `README.md`, the
+  Sphinx landing page, and lightweight HTML styling/configuration.
+- Keep the existing Sphinx/RTD dependency set; avoid introducing new
+  documentation tooling for a cosmetic pass.
+- Completed in the working tree: rewrote the README entry point with workflow
+  tables and clearer sectioning; rebuilt the Sphinx landing page around
+  reader goals, workflow stages, boundaries, and guardrails; grouped the
+  toctree into Getting Started, Science Workflows, and Reference; added a
+  local RTD-theme CSS override; and normalized visible heading style in the
+  installation/run setup pages.
+- Validation completed with `uv run sphinx-build -W --keep-going docs/source
+  docs/_build/html`.
+
+## 2026-06-11 Diffsky Student-t and Global SED Scale Calibration
+
+- Follow-up implementation slice: close the remaining review gaps by adding a
+  real `diffsky-run-full-validation` entrypoint/report, prior-predictive
+  photometry with raw/scaled fluxes, alpha/likelihood metadata in redshift
+  metric outputs, conditional architecture metadata, and a stronger frozen
+  alpha update test.
+- Follow-up completed in the working tree: added
+  `euclid_dsps.diffsky_full_validation`, CLI command
+  `diffsky-run-full-validation`, report-only aggregation for existing stage
+  outputs, prior-predictive DSPS photometry output
+  `prior_predictive_flux.parquet`, likelihood/alpha metadata in
+  `photoz_metrics.csv`, conditional architecture component reporting, and
+  stronger tests for frozen alpha and full-validation report contents.
+- Follow-up validation completed with `uv run ruff check euclid_dsps tests`,
+  `uv run python -m compileall euclid_dsps tests`, `uv run sphinx-build -W
+  --keep-going docs/source docs/_build/html`, CLI help smoke for
+  `diffsky-run-full-validation`, and `uv run pytest` (`332 passed, 5 skipped,
+  2 warnings`).
+- Current implementation slice: make the Diffsky science path use a robust
+  Student-t photometric likelihood by default and add a single global
+  `alpha_sed` nuisance parameter for SED/flux normalization mismatch.
+- Keep `alpha_sed` outside supervised truth-prior learning. It is a global
+  decoder/likelihood calibration parameter, not a per-galaxy physical
+  component of `theta`.
+- Apply the global scale exactly once on model photometry paths, expose
+  raw/scaled flux diagnostics, and report the stellar-mass degeneracy through
+  raw and alpha-corrected mass summaries.
+- Update forward closure with disabled/fixed/fit-global alpha modes and
+  before/after residual outputs. Update amortized training/inference so
+  `log_alpha_sed` can be trainable or frozen independently of the prior.
+- Update public configs, tests, and docs so the new default is explicit and
+  Gaussian remains available only as an explicit ablation choice.
+- Implementation completed in the working tree: added
+  `euclid_dsps.calibration`, Student-t defaults for Diffsky science configs,
+  amortized trainable/frozen global `log_alpha_sed`, raw/scaled flux outputs,
+  alpha-corrected mass summaries, forward-closure alpha modes and reports,
+  H100 experiment config metadata, and documentation of the calibration
+  nuisance parameter.
+- Validation completed with `uv run ruff check euclid_dsps tests`,
+  `uv run pytest` (`328 passed, 5 skipped, 2 warnings`),
+  `uv run python -m compileall euclid_dsps tests`, config-load smoke for all
+  public YAML files, and `uv run sphinx-build -W --keep-going docs/source
+  docs/_build/html`.
+
 ## 2026-06-11 Diffsky Physical Validation PR 3-7
 
 - Implemented the remaining Diffsky physical-validation scaffold from

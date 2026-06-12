@@ -5,6 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.calibration import delta_mag_from_alpha, log10_mass_alpha_corrected
+
 
 def posterior_samples_frame(
     object_id,
@@ -13,6 +15,9 @@ def posterior_samples_frame(
     logq,
     logprior,
     loglike,
+    *,
+    log_alpha_sed: float = 0.0,
+    alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return long-form posterior sample rows."""
     object_id = np.asarray(object_id)
@@ -32,9 +37,13 @@ def posterior_samples_frame(
                 "logq": float(logq[sample_id, object_index]),
                 "logprior": float(logprior[sample_id, object_index]),
                 "loglike": float(loglike[sample_id, object_index]),
+                "log_alpha_sed": float(log_alpha_sed),
+                "alpha_sed": float(alpha_sed),
+                "delta_mag_global": float(delta_mag_from_alpha(alpha_sed)),
             }
             for param_index, name in enumerate(parameter_names):
                 row[name] = float(theta[sample_id, object_index, param_index])
+            _add_alpha_corrected_mass(row, alpha_sed)
             rows.append(row)
     return pd.DataFrame(rows)
 
@@ -46,6 +55,9 @@ def posterior_summary_frame(
     loglike,
     chi2,
     mask,
+    *,
+    log_alpha_sed: float = 0.0,
+    alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return one posterior summary row per object."""
     object_id = np.asarray(object_id)
@@ -65,12 +77,21 @@ def posterior_summary_frame(
             "flag_nonfinite_loglike": bool(
                 not np.all(np.isfinite(loglike[:, object_index]))
             ),
+            "log_alpha_sed": float(log_alpha_sed),
+            "alpha_sed": float(alpha_sed),
+            "delta_mag_global": float(delta_mag_from_alpha(alpha_sed)),
         }
         for param_index, name in enumerate(parameter_names):
             values = theta[:, object_index, param_index]
             row[f"{name}_q16"] = float(np.nanquantile(values, 0.16))
             row[f"{name}_median"] = float(np.nanquantile(values, 0.50))
             row[f"{name}_q84"] = float(np.nanquantile(values, 0.84))
+        if "log10_stellar_mass" in parameter_names:
+            raw = row.get("log10_stellar_mass_median")
+            row["log10_stellar_mass_raw"] = float(raw)
+            row["log10_stellar_mass_alpha_corrected"] = float(
+                log10_mass_alpha_corrected(raw, alpha_sed)
+            )
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -79,10 +100,19 @@ def posterior_predictive_flux_frame(
     object_id,
     model_flux,
     band_names: tuple[str, ...],
+    *,
+    model_flux_raw=None,
+    log_alpha_sed: float = 0.0,
+    alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return long-form posterior predictive model flux rows."""
     object_id = np.asarray(object_id)
     model_flux = np.asarray(model_flux, dtype=float)
+    model_flux_raw = (
+        np.asarray(model_flux_raw, dtype=float)
+        if model_flux_raw is not None
+        else model_flux
+    )
     if model_flux.ndim != 3:
         raise ValueError(f"model_flux must be [K,N,B], got {model_flux.shape}")
     rows = []
@@ -98,6 +128,14 @@ def posterior_predictive_flux_frame(
                         "model_flux_fnu_cgs": float(
                             model_flux[sample_id, object_index, band_index]
                         ),
+                        "model_flux_scaled_fnu_cgs": float(
+                            model_flux[sample_id, object_index, band_index]
+                        ),
+                        "model_flux_raw_fnu_cgs": float(
+                            model_flux_raw[sample_id, object_index, band_index]
+                        ),
+                        "log_alpha_sed": float(log_alpha_sed),
+                        "alpha_sed": float(alpha_sed),
                     }
                 )
     return pd.DataFrame(rows)
@@ -108,6 +146,9 @@ def learned_prior_samples_frame(
     theta,
     parameter_names: tuple[str, ...],
     logprior,
+    *,
+    log_alpha_sed: float = 0.0,
+    alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return learned RealNVP prior samples in latent ``x`` and physical ``theta``."""
     x = np.asarray(x, dtype=float)
@@ -124,10 +165,24 @@ def learned_prior_samples_frame(
         row = {
             "sample_id": int(sample_id),
             "logprior": float(logprior[sample_id]),
+            "log_alpha_sed": float(log_alpha_sed),
+            "alpha_sed": float(alpha_sed),
+            "delta_mag_global": float(delta_mag_from_alpha(alpha_sed)),
         }
         for x_index in range(x.shape[1]):
             row[f"x_{x_index:02d}"] = float(x[sample_id, x_index])
         for param_index, name in enumerate(parameter_names):
             row[name] = float(theta[sample_id, param_index])
+        _add_alpha_corrected_mass(row, alpha_sed)
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def _add_alpha_corrected_mass(row: dict, alpha_sed: float) -> None:
+    if "log10_stellar_mass" not in row:
+        return
+    raw = float(row["log10_stellar_mass"])
+    row["log10_stellar_mass_raw"] = raw
+    row["log10_stellar_mass_alpha_corrected"] = float(
+        log10_mass_alpha_corrected(raw, alpha_sed)
+    )

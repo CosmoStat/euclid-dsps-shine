@@ -21,7 +21,8 @@ if HAS_DEPS:
 
     from euclid_dsps.amortized.elbo import AmortizedModel
     from euclid_dsps.amortized.flows import RealNVPPrior, StandardNormalPrior
-    from euclid_dsps.amortized.train import zero_prior_grads
+    from euclid_dsps.amortized.train import architecture_summary, zero_prior_grads
+    from euclid_dsps.calibration import make_global_sed_scale_state
 
 
 def _tree_leaves(tree):
@@ -47,7 +48,11 @@ def test_frozen_prior_gradients_do_not_update_prior() -> None:
         n_layers=2,
         hidden_size=8,
     )
-    model = AmortizedModel(encoder=prior, prior=prior)
+    model = AmortizedModel(
+        encoder=prior,
+        prior=prior,
+        sed_scale=make_global_sed_scale_state({}),
+    )
 
     def loss_fn(model):
         x = jnp.ones((4, 2), dtype=jnp.float32) * 0.2
@@ -80,3 +85,26 @@ def test_joint_realnvp_prior_gradients_are_nonzero() -> None:
     norm = sum(jnp.sum(leaf**2) for leaf in _tree_leaves(grads))
 
     assert norm > 0.0
+
+
+def test_architecture_summary_lists_only_trainable_joint_components() -> None:
+    config = {
+        "amortized": {
+            "encoder": {"latent_dim": 2},
+            "features": {"n_flux_bands": 1, "n_error_bands": 1},
+            "prior": {"source": "standard_normal", "train_jointly": False},
+        },
+        "calibration": {
+            "global_sed_scale": {
+                "enabled": True,
+                "mode": "learn_global",
+                "trainable": False,
+            }
+        },
+    }
+
+    components = architecture_summary(config)["objective"][
+        "jointly_optimized_components"
+    ]
+
+    assert components == ["encoder"]

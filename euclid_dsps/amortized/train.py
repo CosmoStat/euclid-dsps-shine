@@ -12,6 +12,14 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.calibration import (
+    alpha_from_log_alpha,
+    alpha_metadata,
+    apply_global_sed_scale_to_flux,
+    global_sed_scale_config,
+    global_sed_scale_prior_penalty,
+    make_global_sed_scale_state,
+)
 from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, truth_column_from_spec, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
@@ -115,7 +123,8 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     )
     encoder = _initialize_encoder_mean_if_possible(config, encoder)
     prior = build_prior_from_config(config, k_prior, latent_dim=latent_dim)
-    return AmortizedModel(encoder=encoder, prior=prior)
+    sed_scale = make_global_sed_scale_state(config)
+    return AmortizedModel(encoder=encoder, prior=prior, sed_scale=sed_scale)
 
 
 def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
@@ -359,6 +368,9 @@ def train_amortized_fs2(
     key, model_key = jax.random.split(key)
     model = build_amortized_model(config, model_key)
     train_prior = _train_prior_jointly(cfg["prior"])
+    calibration_runtime_config = {"calibration": config.get("calibration", {}) or {}}
+    sed_scale_cfg = global_sed_scale_config(calibration_runtime_config)
+    train_alpha = bool(sed_scale_cfg.enabled and sed_scale_cfg.trainable)
     _log(
         verbose,
         "[amortized] model built: "
@@ -366,7 +378,9 @@ def train_amortized_fs2(
         f"realnvp_layers={cfg['prior'].get('n_layers')} "
         f"realnvp_hidden={cfg['prior'].get('hidden_size')} "
         f"prior_source={cfg['prior'].get('source')} "
-        f"train_prior={train_prior}",
+        f"train_prior={train_prior} "
+        f"alpha_sed_enabled={sed_scale_cfg.enabled} "
+        f"train_alpha={train_alpha}",
     )
     optimizer = make_optimizer(config)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
@@ -434,9 +448,12 @@ def train_amortized_fs2(
                     int(n_samples),
                     float(kl_weight),
                     cfg["likelihood"],
+                    calibration_runtime_config,
                 )
                 if not train_prior:
                     grads = zero_prior_grads(grads)
+                if not train_alpha:
+                    grads = zero_sed_scale_grads(grads)
                 record = _metrics_record(metrics)
                 record.update(component_grad_norms(grads))
                 loss_finite = bool(np.isfinite(float(np.asarray(jax.device_get(loss)))))
@@ -527,6 +544,7 @@ def train_amortized_fs2(
                 n_samples=int(n_samples),
                 kl_weight=float(kl_weight),
                 likelihood_config=cfg["likelihood"],
+                calibration_config=calibration_runtime_config,
                 progress=bool(progress),
                 total=val_expected_batches,
                 desc=f"val {epoch}/{int(epochs)}",
@@ -654,8 +672,18 @@ def train_amortized_fs2(
             "encoder": True,
             "realnvp_prior": bool(train_prior),
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
+            "global_sed_scale": bool(train_alpha),
             "decoder": False,
             "kl_estimator": "monte_carlo_logq_minus_logp",
+        },
+        "global_sed_scale": alpha_metadata(
+            float(np.asarray(jax.device_get(model.sed_scale.log_alpha_sed))),
+            sed_scale_cfg.prior_sigma_log_alpha,
+        )
+        | {
+            "enabled": bool(sed_scale_cfg.enabled),
+            "trainable": bool(train_alpha),
+            "mode": sed_scale_cfg.mode,
         },
     }
     write_json(out / "training_summary.json", summary)
@@ -815,6 +843,7 @@ def evaluate_validation_epoch(
     total: int | None,
     desc: str,
     epoch: int,
+    calibration_config: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, float | int | str]], list[dict[str, float | int | str]]]:
     """Evaluate validation ELBO and redshift-bin metrics without updates."""
     rows: list[dict[str, float | int | str]] = []
@@ -862,6 +891,7 @@ def evaluate_validation_epoch(
                 int(n_samples),
                 float(kl_weight),
                 likelihood_config,
+                calibration_config,
             )
             record = _metrics_record(metrics)
             record.update(
@@ -876,9 +906,11 @@ def evaluate_validation_epoch(
                     "update_applied": 0.0,
                     "encoder_grad_norm": 0.0,
                     "prior_grad_norm": 0.0,
+                    "alpha_grad_norm": 0.0,
                     "joint_grad_norm": 0.0,
                     "encoder_grad_nonzero": 0.0,
                     "prior_grad_nonzero": 0.0,
+                    "alpha_grad_nonzero": 0.0,
                 }
             )
             rows.append(record)
@@ -918,18 +950,34 @@ def _evaluation_metrics(
     n_samples,
     kl_weight,
     likelihood_config,
+    calibration_config,
 ):
     x_samples, logq = model.encoder.sample_and_log_prob(
         key,
         batch.features,
         int(n_samples),
     )
-    model_flux = model_flux_from_x(
+    model_flux_raw = model_flux_from_x(
         x_samples,
         latent_spec,
         context,
         model_args,
         parameter_names,
+    )
+    scale_cfg = global_sed_scale_config(calibration_config)
+    log_alpha_sed = model.sed_scale.log_alpha_sed
+    model_flux = (
+        apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
+        if scale_cfg.enabled
+        else model_flux_raw
+    )
+    alpha_prior_penalty = (
+        global_sed_scale_prior_penalty(
+            log_alpha_sed,
+            scale_cfg.prior_sigma_log_alpha,
+        )
+        if scale_cfg.enabled
+        else jnp.asarray(0.0, dtype=model_flux.dtype)
     )
     loglike = photometric_loglike(
         obs_flux=batch.flux,
@@ -951,13 +999,18 @@ def _evaluation_metrics(
     object_kl = jnp.mean(kl, axis=0)
     object_chi2 = jnp.mean(jnp.sum(chi**2, axis=-1), axis=0)
     metrics = {
-        "loss": jnp.mean(objective),
+        "loss": jnp.mean(objective) + alpha_prior_penalty,
         "negative_loglike": jnp.mean(-loglike),
         "loglike_mean": jnp.mean(loglike),
         "logprior_mean": jnp.mean(logp),
         "logq_mean": jnp.mean(logq),
         "kl_mc_mean": jnp.mean(kl),
         "model_flux_mean": jnp.mean(model_flux),
+        "mean_model_flux_raw": jnp.mean(model_flux_raw),
+        "mean_model_flux_scaled": jnp.mean(model_flux),
+        "log_alpha_sed": log_alpha_sed,
+        "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
+        "alpha_prior_penalty": alpha_prior_penalty,
         "residual_rms": jnp.sqrt(jnp.mean(chi**2)),
         "finite_fraction": jnp.mean(jnp.isfinite(objective)),
     }
@@ -1229,6 +1282,7 @@ def _loss_with_metrics(
     n_samples,
     kl_weight,
     likelihood_config,
+    calibration_config,
 ):
     return negative_elbo(
         model,
@@ -1241,6 +1295,7 @@ def _loss_with_metrics(
         n_samples,
         kl_weight,
         likelihood_config,
+        calibration_config,
     )
 
 
@@ -1265,6 +1320,7 @@ def _loss_and_grads_jit(
     n_samples,
     kl_weight,
     likelihood_config,
+    calibration_config,
 ):
     actual_context = context.value if isinstance(context, _StaticArg) else context
     return eqx.filter_value_and_grad(_loss_with_metrics, has_aux=True)(
@@ -1278,6 +1334,7 @@ def _loss_and_grads_jit(
         n_samples,
         kl_weight,
         likelihood_config,
+        calibration_config,
     )
 
 
@@ -1293,6 +1350,7 @@ def _evaluation_metrics_jit(
     n_samples,
     kl_weight,
     likelihood_config,
+    calibration_config,
 ):
     actual_context = context.value if isinstance(context, _StaticArg) else context
     return _evaluation_metrics(
@@ -1306,6 +1364,7 @@ def _evaluation_metrics_jit(
         n_samples,
         kl_weight,
         likelihood_config,
+        calibration_config,
     )
 
 
@@ -1327,12 +1386,15 @@ def component_grad_norms(grads: AmortizedModel) -> dict[str, float]:
     """Return L2 gradient norms for the jointly trained neural components."""
     encoder_norm = _tree_l2_norm(getattr(grads, "encoder", None))
     prior_norm = _tree_l2_norm(getattr(grads, "prior", None))
+    alpha_norm = _tree_l2_norm(getattr(grads, "sed_scale", None))
     return {
         "encoder_grad_norm": encoder_norm,
         "prior_grad_norm": prior_norm,
+        "alpha_grad_norm": alpha_norm,
         "joint_grad_norm": _tree_l2_norm(grads),
         "encoder_grad_nonzero": float(encoder_norm > 0.0),
         "prior_grad_nonzero": float(prior_norm > 0.0),
+        "alpha_grad_nonzero": float(alpha_norm > 0.0),
     }
 
 
@@ -1351,6 +1413,24 @@ def zero_prior_grads(grads: AmortizedModel) -> AmortizedModel:
         lambda tree: tree.prior,
         grads,
         jax.tree_util.tree_map(zero_leaf, prior_grads),
+    )
+
+
+def zero_sed_scale_grads(grads: AmortizedModel) -> AmortizedModel:
+    """Return gradients with global SED-scale leaves set to zero."""
+    sed_scale_grads = getattr(grads, "sed_scale", None)
+    if sed_scale_grads is None:
+        return grads
+
+    def zero_leaf(leaf):
+        if eqx.is_inexact_array(leaf):
+            return jnp.zeros_like(leaf)
+        return leaf
+
+    return eqx.tree_at(
+        lambda tree: tree.sed_scale,
+        grads,
+        jax.tree_util.tree_map(zero_leaf, sed_scale_grads),
     )
 
 
@@ -1375,6 +1455,13 @@ def tree_all_finite(tree) -> bool:
 def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
     """Return a compact JSON architecture summary for checkpoint sidecars."""
     cfg = amortized_config(config)
+    train_prior = _train_prior_jointly(cfg["prior"])
+    scale_cfg = global_sed_scale_config(config)
+    optimized = ["encoder"]
+    if train_prior:
+        optimized.append("realnvp_prior")
+    if scale_cfg.enabled and scale_cfg.trainable:
+        optimized.append("global_log_alpha_sed")
     return {
         "encoder": {
             "type": cfg["encoder"].get("type", "gaussian_mlp"),
@@ -1401,6 +1488,13 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "scale_clamp": float(cfg["prior"].get("scale_clamp", 0.05)),
             "density": "exact_change_of_variables",
         },
+        "global_sed_scale": {
+            "enabled": scale_cfg.enabled,
+            "mode": scale_cfg.mode,
+            "trainable": scale_cfg.trainable,
+            "parameterization": "log_alpha",
+            "prior_sigma_log_alpha": scale_cfg.prior_sigma_log_alpha,
+        },
         "decoder": {
             "type": "fixed_dsps",
             "trainable": False,
@@ -1411,7 +1505,7 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "loss": "negative_elbo",
             "kl_estimator": "monte_carlo_logq_minus_logp",
             "likelihood": cfg["likelihood"].get("type", "student_t"),
-            "jointly_optimized_components": ["encoder", "realnvp_prior"],
+            "jointly_optimized_components": optimized,
         },
     }
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -122,10 +123,18 @@ def posterior_truth_metrics(
         if not finite.any():
             continue
         residual = y_pred[finite] - y_true[finite]
+        metric_name = (
+            "mass_bias_alpha_corrected"
+            if parameter == "log10_stellar_mass_alpha_corrected"
+            else "mass_bias_raw"
+            if parameter == "log10_stellar_mass"
+            else f"{parameter}_bias"
+        )
         rows.append(
             {
                 "parameter": parameter,
                 "truth_column": truth_column,
+                "metric_name": metric_name,
                 "n_objects": int(finite.sum()),
                 "bias": float(np.mean(residual)),
                 "median_bias": float(np.median(residual)),
@@ -154,12 +163,22 @@ def write_redshift_metrics_for_run(
     object_metrics, summary = redshift_metrics_from_samples(samples, truth)
     object_path = out / "photoz_object_metrics.csv"
     object_metrics.to_csv(object_path, index=False)
-    summary_frame = pd.DataFrame([{**summary, "label": label}])
+    summary_frame = pd.DataFrame(
+        [
+            {
+                **summary,
+                "label": label,
+                **_read_alpha_summary(run),
+                **_read_likelihood_summary(run),
+            }
+        ]
+    )
     photoz_path = out / "photoz_metrics.csv"
     summary_frame.to_csv(photoz_path, index=False)
     pairs = (
         ("z_obs", "redshift_true"),
         ("log10_stellar_mass", "logsm_true"),
+        ("log10_stellar_mass_alpha_corrected", "logsm_true"),
         ("log10_sfr_at_obs", "logsfr_true"),
         ("log10_ssfr_at_obs", "logssfr_true"),
     )
@@ -190,7 +209,15 @@ def run_redshift_ablation(
             continue
         samples = _read_table(samples_path)
         object_metrics, summary = redshift_metrics_from_samples(samples, truth)
-        rows.append({"label": label, "run_dir": str(run_dir), **summary})
+        rows.append(
+            {
+                "label": label,
+                "run_dir": str(run_dir),
+                **summary,
+                **_read_alpha_summary(run_dir),
+                **_read_likelihood_summary(run_dir),
+            }
+        )
         if not object_metrics.empty:
             object_metrics.insert(0, "label", label)
             object_frames.append(object_metrics)
@@ -230,6 +257,58 @@ def _read_table(path: Path) -> pd.DataFrame:
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
     return pd.read_csv(path)
+
+
+def _read_alpha_summary(run_dir: Path) -> dict[str, float | bool | str]:
+    path = run_dir / "inference_summary.json"
+    if not path.exists():
+        path = run_dir / "forward_closure_summary.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    alpha = payload.get("global_sed_scale", {})
+    if not isinstance(alpha, dict):
+        return {}
+    keep = (
+        "alpha_sed",
+        "log_alpha_sed",
+        "delta_mag_global",
+        "alpha_prior_penalty",
+        "large_scale_warning",
+    )
+    return {key: alpha[key] for key in keep if key in alpha}
+
+
+def _read_likelihood_summary(run_dir: Path) -> dict[str, float | str]:
+    path = run_dir / "normalized_config.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    amortized = payload.get("amortized", {})
+    if isinstance(amortized, dict):
+        likelihood = amortized.get("likelihood", {})
+        if isinstance(likelihood, dict) and likelihood:
+            return {
+                "likelihood_type": str(likelihood.get("type", "student_t")),
+                "student_t_dof": float(likelihood.get("student_t_dof", 2.0)),
+                "error_floor_frac": float(likelihood.get("error_floor_frac", 0.02)),
+                "error_jitter": float(likelihood.get("error_jitter", 0.0)),
+            }
+    fit = payload.get("fit", {})
+    if isinstance(fit, dict):
+        return {
+            "likelihood_type": str(fit.get("photometric_likelihood", "student_t")),
+            "student_t_dof": float(fit.get("student_t_dof", 2.0)),
+            "error_floor_frac": float(fit.get("flux_error_floor_frac", 0.0)),
+            "error_jitter": float(fit.get("flux_error_jitter", 0.0)),
+        }
+    return {}
 
 
 def _write_redshift_plots(frame: pd.DataFrame, out: Path) -> None:

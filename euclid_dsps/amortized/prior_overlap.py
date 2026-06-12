@@ -13,6 +13,11 @@ from euclid_dsps.io import ensure_dir, write_json
 _COMPARISONS = (
     ("z_obs", "redshift_true", "redshift"),
     ("log10_stellar_mass", "logsm_true", "stellar_mass"),
+    (
+        "log10_stellar_mass_alpha_corrected",
+        "logsm_true",
+        "stellar_mass_alpha_corrected",
+    ),
     ("log10_sfr_at_obs", "logsfr_true", "log_sfr_at_obs"),
     ("log10_ssfr_at_obs", "logssfr_true", "log_ssfr_at_obs"),
     ("dust_av", "dust_av", "dust_av"),
@@ -65,6 +70,8 @@ def write_diffsky_prior_overlap_report(
             "Only directly comparable or derived-compatible parameters are scored here.",
             "logsfr_true is never compared to raw dlog10_sfr_* parameters.",
             "Generated Diffstar/Diffmah truth columns are population diagnostics, not photometric recoveries by themselves.",
+            "alpha_sed is global decoder calibration; it is not part of p_beta(theta), but alpha-corrected masses are reported because alpha_sed is degenerate with stellar mass.",
+            "Prior physical distributions should be interpreted without alpha_sed; prior predictive photometry uses scaled model flux when alpha_sed is enabled.",
         ],
     }
     write_json(out / "prior_overlap_summary.json", summary)

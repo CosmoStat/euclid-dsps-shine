@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from euclid_dsps.amortized.features import compute_feature_stats, make_encoder_features
 from euclid_dsps.amortized.data import iter_photometry_batches_from_arrays
+from euclid_dsps.amortized.features import compute_feature_stats, make_encoder_features
 from euclid_dsps.config import load_config
 from euclid_dsps.observation_arrays import PhotometryArrays
 

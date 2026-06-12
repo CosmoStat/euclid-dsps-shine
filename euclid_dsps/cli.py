@@ -30,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-supervised-prior-report,"
             "diffsky-forward-closure,diffsky-redshift-ablation,"
+            "diffsky-run-full-validation,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
             "diffsky-dataset-diagnostics,diffsky-validate-dataset,"
@@ -356,6 +357,37 @@ def build_parser() -> argparse.ArgumentParser:
         default="outputs/reports/diffsky_redshift_ablation",
     )
 
+    full_validation = sub.add_parser(
+        "diffsky-run-full-validation",
+        help="Run or aggregate the full Diffsky physical-validation workflow.",
+    )
+    full_validation.add_argument("--dataset")
+    full_validation.add_argument(
+        "--out",
+        default="outputs/runs/diffsky_full_validation",
+    )
+    full_validation.add_argument("--limit", type=int)
+    full_validation.add_argument("--batch-size", type=int)
+    full_validation.add_argument("--epochs", type=int)
+    full_validation.add_argument("--n-samples", type=int)
+    full_validation.add_argument("--posterior-samples", type=int)
+    full_validation.add_argument("--prior-samples", type=int)
+    full_validation.add_argument("--seed", type=int)
+    full_validation.add_argument(
+        "--report-only",
+        action="store_true",
+        help="Only aggregate existing stage outputs and write the final report.",
+    )
+    full_validation.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        help="Existing inference run, optionally as label=path. Repeatable.",
+    )
+    full_validation.add_argument("--closure-run")
+    full_validation.add_argument("--quiet", action="store_true")
+    full_validation.add_argument("--no-progress", action="store_true")
+
     inr_train = sub.add_parser(
         "experimental-ssp-inr-train",
         help=argparse.SUPPRESS,
@@ -565,6 +597,7 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-supervised-prior-report",
         "diffsky-forward-closure",
         "diffsky-redshift-ablation",
+        "diffsky-run-full-validation",
     }
     if args.command == "download-assets":
         from .assets import download_assets
@@ -630,6 +663,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "diffsky-redshift-ablation":
         _run_diffsky_redshift_ablation(config, args)
+        return
+    if args.command == "diffsky-run-full-validation":
+        _run_diffsky_full_validation(config, args)
         return
     if args.command == "experimental-ssp-inr-train":
         _run_experimental_ssp_inr_train(args)
@@ -913,6 +949,30 @@ def _run_diffsky_redshift_ablation(config: dict, args) -> None:
         out_dir=Path(args.out),
     )
     print(f"[diffsky] redshift ablation report -> {report}")
+
+
+def _run_diffsky_full_validation(config: dict, args) -> None:
+    from .diffsky_full_validation import run_diffsky_full_validation
+    from .diffsky_redshift_ablation import parse_run_specs
+
+    report = run_diffsky_full_validation(
+        config,
+        out_dir=Path(args.out),
+        dataset_path=Path(args.dataset) if args.dataset else None,
+        limit=args.limit,
+        batch_size=args.batch_size,
+        epochs=args.epochs,
+        n_samples=args.n_samples,
+        posterior_samples=args.posterior_samples,
+        prior_samples=args.prior_samples,
+        seed=args.seed,
+        report_only=bool(args.report_only),
+        runs=parse_run_specs(args.run),
+        closure_run=Path(args.closure_run) if args.closure_run else None,
+        verbose=not bool(args.quiet),
+        progress=not bool(args.no_progress),
+    )
+    print(f"[diffsky] full validation report -> {report}")
 
 
 def _apply_amortized_train_overrides(config: dict, args) -> dict:

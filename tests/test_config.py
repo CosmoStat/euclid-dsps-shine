@@ -659,7 +659,8 @@ def test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit() -> None:
     assert config["model"]["asset_metadata_policy"] == "permissive"
     assert config["runtime"]["require_gpu"] is True
     assert config["fit"]["likelihood_space"] == "mag"
-    assert config["fit"]["photometric_likelihood"] == "gaussian"
+    assert config["fit"]["photometric_likelihood"] == "student_t"
+    assert config["fit"]["student_t_dof"] == 2.0
     assert len(config["bands"]) == 14
     assert {band["units"] for band in config["bands"]} == {"abmag"}
     assert all("error_column" not in band for band in config["bands"])

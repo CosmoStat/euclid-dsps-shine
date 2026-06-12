@@ -832,6 +832,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config.setdefault("extra_columns", [])
     config.setdefault("cosmos_sed", {})
     config.setdefault("band_calibration", {})
+    config.setdefault("calibration", {})
     config.setdefault("nebular_emission", "ssp_flux")
 
     raw_redshift = dict(config["redshift"] or {})
@@ -917,6 +918,26 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["band_calibration"].setdefault("offsets_mag", {})
     config["band_calibration"].setdefault("flux_multipliers", {})
     _apply_band_calibration(config)
+    config["calibration"] = dict(config["calibration"] or {})
+    config["calibration"].setdefault("global_sed_scale", {})
+    config["calibration"]["global_sed_scale"] = dict(
+        config["calibration"]["global_sed_scale"] or {}
+    )
+    config["calibration"]["global_sed_scale"].setdefault("enabled", False)
+    config["calibration"]["global_sed_scale"].setdefault("mode", "disabled")
+    config["calibration"]["global_sed_scale"].setdefault(
+        "parameterization", "log_alpha"
+    )
+    config["calibration"]["global_sed_scale"].setdefault("initial_log_alpha", 0.0)
+    config["calibration"]["global_sed_scale"].setdefault(
+        "prior_sigma_log_alpha", 0.10
+    )
+    config["calibration"]["global_sed_scale"].setdefault("trainable", False)
+    config["calibration"].setdefault("per_band_zero_points", {})
+    config["calibration"]["per_band_zero_points"] = dict(
+        config["calibration"]["per_band_zero_points"] or {}
+    )
+    config["calibration"]["per_band_zero_points"].setdefault("enabled", False)
     config["fit"]["population"] = dict(config["fit"].get("population") or {})
     config["fit"]["population"].setdefault("prior_weight", 1.0)
     config["fit"]["population"].setdefault("sigma_floor", 0.03)
@@ -1238,6 +1259,7 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_reporting(config.get("reporting", {}), errors)
     _validate_output(config.get("output", {}), errors)
     _validate_band_calibration(config.get("band_calibration", {}), errors)
+    _validate_calibration(config.get("calibration", {}), errors)
     _validate_cosmos_sed(config.get("cosmos_sed", {}), errors)
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
@@ -2129,6 +2151,46 @@ def _validate_band_calibration(calibration: dict[str, Any], errors: list[str]) -
             _finite_float(value, f"band_calibration.{key}.{band_name}", errors)
             if key == "flux_multipliers":
                 _positive_float(value, f"band_calibration.{key}.{band_name}", errors)
+
+
+def _validate_calibration(calibration: dict[str, Any], errors: list[str]) -> None:
+    if not isinstance(calibration, dict):
+        errors.append("calibration must be a mapping")
+        return
+    global_scale = calibration.get("global_sed_scale", {})
+    if not isinstance(global_scale, dict):
+        errors.append("calibration.global_sed_scale must be a mapping")
+        return
+    for key in ("enabled", "trainable"):
+        if not isinstance(global_scale.get(key, False), bool):
+            errors.append(f"calibration.global_sed_scale.{key} must be a boolean")
+    mode = str(global_scale.get("mode", "disabled"))
+    allowed_modes = {"disabled", "fixed", "fit_global", "learn_global"}
+    if mode not in allowed_modes:
+        errors.append(
+            "calibration.global_sed_scale.mode must be one of "
+            f"{sorted(allowed_modes)}"
+        )
+    if str(global_scale.get("parameterization", "log_alpha")) != "log_alpha":
+        errors.append(
+            "calibration.global_sed_scale.parameterization must be 'log_alpha'"
+        )
+    _finite_float(
+        global_scale.get("initial_log_alpha", 0.0),
+        "calibration.global_sed_scale.initial_log_alpha",
+        errors,
+    )
+    _positive_float(
+        global_scale.get("prior_sigma_log_alpha", 0.10),
+        "calibration.global_sed_scale.prior_sigma_log_alpha",
+        errors,
+    )
+    per_band = calibration.get("per_band_zero_points", {})
+    if not isinstance(per_band, dict):
+        errors.append("calibration.per_band_zero_points must be a mapping")
+        return
+    if not isinstance(per_band.get("enabled", False), bool):
+        errors.append("calibration.per_band_zero_points.enabled must be a boolean")
 
 
 def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:

@@ -447,7 +447,7 @@ def test_compressed_agn_builder_round_trips_low_rank_grid(tmp_path) -> None:
     dense = np.zeros((len(fagn), len(tau), len(lgmet), len(age), len(wave)), dtype=np.float32)
     for i, fagn_value in enumerate(fagn):
         for j, tau_value in enumerate(tau):
-            for m, met_value in enumerate(lgmet):
+            for m, _met_value in enumerate(lgmet):
                 for a, age_value in enumerate(age):
                     dense[i, j, m, a] = (
                         fagn_value * tau_value * (1.0 + m) * basis0

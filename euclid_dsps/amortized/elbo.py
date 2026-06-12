@@ -6,6 +6,14 @@ from dataclasses import dataclass
 
 import jax.numpy as jnp
 
+from euclid_dsps.calibration import (
+    GlobalSedScaleState,
+    alpha_from_log_alpha,
+    apply_global_sed_scale_to_flux,
+    global_sed_scale_config,
+    global_sed_scale_prior_penalty,
+)
+
 from .config import require_equinox
 from .decoder import mock_model_flux_from_x, model_flux_from_x
 from .latent import LatentSpec
@@ -18,6 +26,7 @@ eqx = require_equinox()
 class AmortizedModel(eqx.Module):
     encoder: object
     prior: object
+    sed_scale: GlobalSedScaleState
 
 
 def negative_elbo(
@@ -31,6 +40,7 @@ def negative_elbo(
     n_samples: int,
     kl_weight: float,
     likelihood_config: dict,
+    calibration_config: dict | None = None,
     use_mock_decoder: bool = False,
     mock_decoder_params=None,
 ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
@@ -50,19 +60,34 @@ def negative_elbo(
             raise ValueError(
                 "mock_decoder_params is required with use_mock_decoder=True"
             )
-        model_flux = mock_model_flux_from_x(
+        model_flux_raw = mock_model_flux_from_x(
             x_samples,
             mock_decoder_params["weights"],
             mock_decoder_params["bias"],
         )
     else:
-        model_flux = model_flux_from_x(
+        model_flux_raw = model_flux_from_x(
             x_samples,
             latent_spec,
             context,
             model_args,
             parameter_names,
         )
+    scale_cfg = global_sed_scale_config(calibration_config)
+    log_alpha_sed = model.sed_scale.log_alpha_sed
+    model_flux = (
+        apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
+        if scale_cfg.enabled
+        else model_flux_raw
+    )
+    alpha_prior_penalty = (
+        global_sed_scale_prior_penalty(
+            log_alpha_sed,
+            scale_cfg.prior_sigma_log_alpha,
+        )
+        if scale_cfg.enabled
+        else jnp.asarray(0.0, dtype=model_flux.dtype)
+    )
     loglike = photometric_loglike(
         obs_flux=batch.flux,
         model_flux=model_flux,
@@ -76,7 +101,7 @@ def negative_elbo(
     logp = model.prior.log_prob(x_samples)
     kl_mc = logq - logp
     loss_terms = -loglike + float(kl_weight) * kl_mc
-    loss = jnp.mean(loss_terms)
+    loss = jnp.mean(loss_terms) + alpha_prior_penalty
     obs = batch.flux[None, :, :]
     mask = batch.mask[None, :, :]
     residual = jnp.where(mask, model_flux - obs, 0.0)
@@ -89,6 +114,11 @@ def negative_elbo(
         "logq_mean": jnp.mean(logq),
         "kl_mc_mean": jnp.mean(kl_mc),
         "model_flux_mean": jnp.mean(model_flux),
+        "mean_model_flux_raw": jnp.mean(model_flux_raw),
+        "mean_model_flux_scaled": jnp.mean(model_flux),
+        "log_alpha_sed": log_alpha_sed,
+        "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
+        "alpha_prior_penalty": alpha_prior_penalty,
         "residual_rms": jnp.sqrt(jnp.sum(residual**2) / n_valid),
         "finite_fraction": jnp.mean(jnp.isfinite(loss_terms).astype(jnp.float32)),
     }

@@ -10,6 +10,11 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.calibration import (
+    alpha_metadata,
+    apply_global_sed_scale_to_flux,
+    global_sed_scale_config,
+)
 from euclid_dsps.diffsky_redshift_ablation import write_redshift_metrics_for_run
 from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, write_json
@@ -89,6 +94,14 @@ def infer_amortized_fs2(
         print(f"[amortized] feature stats: {feature_stats_path}")
     feature_stats = read_feature_stats(feature_stats_path)
     model = load_checkpoint(checkpoint, config)
+    calibration_runtime_config = {"calibration": config.get("calibration", {}) or {}}
+    scale_cfg = global_sed_scale_config(calibration_runtime_config)
+    log_alpha_sed = (
+        float(np.asarray(jax.device_get(model.sed_scale.log_alpha_sed)))
+        if scale_cfg.enabled
+        else 0.0
+    )
+    alpha_sed = float(np.exp(log_alpha_sed))
     if verbose:
         print("[amortized] loading configured filters...")
     filters = load_filters(config["bands"])
@@ -105,6 +118,11 @@ def infer_amortized_fs2(
     model_args = dynamic_model_args(context)
     if verbose:
         print(f"[amortized] DSPS context ready: {len(filters)} filters")
+        print(
+            "[amortized] global SED scale: "
+            f"enabled={scale_cfg.enabled} mode={scale_cfg.mode} "
+            f"alpha_sed={alpha_sed:.6g}"
+        )
     latent_spec = latent_spec_from_config(config)
     likelihood_cfg = cfg["likelihood"]
     key = jax.random.PRNGKey(int(seed))
@@ -137,13 +155,21 @@ def infer_amortized_fs2(
             int(posterior_samples),
         )
         theta = x_to_theta(x_samples, latent_spec)
-        model_flux = _model_flux_from_x_sample_chunks(
+        model_flux_raw = _model_flux_from_x_sample_chunks(
             x_samples,
             latent_spec,
             context,
             model_args,
             latent_spec.names,
             sample_chunk_size=int(decoder_sample_chunk_size),
+        )
+        model_flux = (
+            apply_global_sed_scale_to_flux(
+                model_flux_raw,
+                jnp.asarray(log_alpha_sed, dtype=model_flux_raw.dtype),
+            )
+            if scale_cfg.enabled
+            else model_flux_raw
         )
         logprior = model.prior.log_prob(x_samples)
         loglike = photometric_loglike(
@@ -162,6 +188,7 @@ def infer_amortized_fs2(
         logq_np = jax.device_get(logq)
         logprior_np = jax.device_get(logprior)
         loglike_np = jax.device_get(loglike)
+        model_flux_raw_np = jax.device_get(model_flux_raw)
         model_flux_np = jax.device_get(model_flux)
         mask_np = jax.device_get(batch.mask)
         sample_frames.append(
@@ -172,6 +199,8 @@ def infer_amortized_fs2(
                 logq_np,
                 logprior_np,
                 loglike_np,
+                log_alpha_sed=log_alpha_sed,
+                alpha_sed=alpha_sed,
             )
         )
         summary_frames.append(
@@ -182,6 +211,8 @@ def infer_amortized_fs2(
                 loglike_np,
                 jax.device_get(chi2),
                 mask_np,
+                log_alpha_sed=log_alpha_sed,
+                alpha_sed=alpha_sed,
             )
         )
         predictive_frames.append(
@@ -189,6 +220,9 @@ def infer_amortized_fs2(
                 object_id,
                 model_flux_np,
                 band_names,
+                model_flux_raw=model_flux_raw_np,
+                log_alpha_sed=log_alpha_sed,
+                alpha_sed=alpha_sed,
             )
         )
         residual_frames.append(
@@ -235,21 +269,61 @@ def infer_amortized_fs2(
     prior_x = model.prior.sample(prior_key, int(prior_samples))
     prior_theta = x_to_theta(prior_x, latent_spec)
     prior_logprob = model.prior.log_prob(prior_x)
+    prior_flux_raw = _model_flux_from_x_sample_chunks(
+        prior_x[:, None, :],
+        latent_spec,
+        context,
+        model_args,
+        latent_spec.names,
+        sample_chunk_size=int(decoder_sample_chunk_size),
+    )
+    prior_flux = (
+        apply_global_sed_scale_to_flux(
+            prior_flux_raw,
+            jnp.asarray(log_alpha_sed, dtype=prior_flux_raw.dtype),
+        )
+        if scale_cfg.enabled
+        else prior_flux_raw
+    )
     learned_prior = learned_prior_samples_frame(
         jax.device_get(prior_x),
         jax.device_get(prior_theta),
         latent_spec.names,
         jax.device_get(prior_logprob),
+        log_alpha_sed=log_alpha_sed,
+        alpha_sed=alpha_sed,
     )
+    prior_predictive = posterior_predictive_flux_frame(
+        np.asarray(["prior"], dtype=object),
+        jax.device_get(prior_flux),
+        band_names,
+        model_flux_raw=jax.device_get(prior_flux_raw),
+        log_alpha_sed=log_alpha_sed,
+        alpha_sed=alpha_sed,
+    ).rename(columns={"sample_id": "prior_sample_id"})
     samples.to_parquet(out / "posterior_samples.parquet", index=False)
     summary.to_parquet(out / "posterior_summary.parquet", index=False)
     predictive.to_parquet(out / "posterior_predictive_flux.parquet", index=False)
+    prior_predictive.to_parquet(out / "prior_predictive_flux.parquet", index=False)
     residuals.to_parquet(out / "posterior_predictive_residuals.parquet", index=False)
     feature_diagnostics.to_parquet(out / "feature_diagnostics.parquet", index=False)
     learned_prior.to_parquet(out / "learned_prior_samples.parquet", index=False)
     learned_prior.to_parquet(
         out / "learned_or_loaded_prior_samples.parquet",
         index=False,
+    )
+    write_json(out / "normalized_config.json", config)
+    global_sed_scale_payload = alpha_metadata(
+        log_alpha_sed,
+        scale_cfg.prior_sigma_log_alpha,
+    ) | {
+        "enabled": bool(scale_cfg.enabled),
+        "trainable": bool(scale_cfg.trainable),
+        "mode": scale_cfg.mode,
+    }
+    write_json(
+        out / "inference_summary.json",
+        {"global_sed_scale": global_sed_scale_payload},
     )
     try:
         metric_outputs = {
@@ -278,15 +352,16 @@ def infer_amortized_fs2(
             "samples_rows": int(len(samples)),
             "summary_rows": int(len(summary)),
             "predictive_rows": int(len(predictive)),
+            "prior_predictive_rows": int(len(prior_predictive)),
             "residual_rows": int(len(residuals)),
             "feature_diagnostics_rows": int(len(feature_diagnostics)),
             "learned_prior_rows": int(len(learned_prior)),
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
             "prior_train_jointly": bool(cfg["prior"].get("train_jointly", True)),
+            "global_sed_scale": global_sed_scale_payload,
             "metric_outputs": metric_outputs,
         },
     )
-    write_json(out / "normalized_config.json", config)
     if verbose:
         print("[amortized] writing posterior predictive diagnostics...")
     summarize_inference_outputs(

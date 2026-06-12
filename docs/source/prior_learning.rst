@@ -15,6 +15,12 @@ where ``theta_true`` is mapped to unconstrained ``x_true`` with the same
 bounded logistic transforms used by amortized latent variables. This workflow
 does not use photometry, an encoder, or the DSPS decoder.
 
+``alpha_sed`` is not part of this workflow. It is a global decoder calibration
+nuisance parameter used by photometric likelihood paths, not a galaxy physical
+parameter. The supervised prior therefore does not add ``alpha_sed`` to
+``theta_true``, does not sample it per galaxy, and does not compare it to
+object-level ground truth.
+
 It is separate from:
 
 * same-parameter forward closure, which tests whether ``theta_true`` can

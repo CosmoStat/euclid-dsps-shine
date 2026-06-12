@@ -1,7 +1,7 @@
-Run The Pipeline
+Run the Pipeline
 ================
 
-Public Configs
+Public configs
 --------------
 
 The public config surface is intentionally small:
@@ -38,7 +38,7 @@ Old Diffstar, OpenUniverse fit-ready, non-GPU, and experimental ablation configs
 are not the main public path. The first-pass science path is Diffsky HLTDS for
 physical validation, with Euclid FS2 retained as the comparison dataset.
 
-GPU Runtime
+GPU runtime
 -----------
 
 All public fit configs request CUDA. In the ``shine`` environment, set the
@@ -61,7 +61,7 @@ If this prints only CPU devices, fix the JAX/CUDA environment before launching
 fits. The configs use ``runtime.require_gpu: true`` so production commands fail
 fast instead of silently falling back to CPU.
 
-Diffsky HLTDS Dataset
+Diffsky HLTDS dataset
 ---------------------
 
 This is the recommended dataset for the current physical-recovery tests. It
@@ -93,7 +93,7 @@ config:
 The integrity report records object-id uniqueness, source shards, truth and
 generated-truth availability, photometry units, and the exact error model.
 
-Supervised Prior Learning
+Supervised prior learning
 -------------------------
 
 Train the basic supervised prior directly on truth parameters:
@@ -117,7 +117,7 @@ Then sample and report:
      --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
      --out outputs/runs/diffsky_supervised_prior_basic
 
-Same-Parameter Forward Closure
+Same-parameter forward closure
 ------------------------------
 
 Run the gatekeeper closure before interpreting photometric posteriors as
@@ -138,7 +138,7 @@ Diffstar/Diffmah columns fail clearly unless the config explicitly allows
 partial truth. Fixed nuisance metallicity is reported as fixed nuisance, not as
 truth.
 
-Diffsky HLTDS Simple Fit
+Diffsky HLTDS simple fit
 ------------------------
 
 This legacy fit remains useful as a MAP smoke/debug path.
@@ -195,7 +195,7 @@ the prepared dataset and are plausible for a broad-band DSPS fit:
 It does not fit Diffstar/Diffmah latents, AGN parameters, gas ionization, or
 full SFH latent extensions.
 
-Diffsky Fixed-Redshift Closure
+Diffsky fixed-redshift closure
 ------------------------------
 
 Use this when redshift collapse or degeneracy dominates a free-redshift run:

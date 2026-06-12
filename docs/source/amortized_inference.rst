@@ -204,6 +204,66 @@ The implementation estimates the expectation by Monte Carlo:
 The default likelihood is a robust flux-space Student-t likelihood with
 ``nu = 2``. Gaussian likelihood is kept only for ablation.
 
+Global SED Scale Nuisance Parameter
+-----------------------------------
+
+Diffsky science configs include one global decoder-calibration nuisance
+parameter:
+
+.. code-block:: yaml
+
+   calibration:
+     global_sed_scale:
+       enabled: true
+       mode: learn_global
+       parameterization: log_alpha
+       initial_log_alpha: 0.0
+       prior_sigma_log_alpha: 0.10
+       trainable: true
+     per_band_zero_points:
+       enabled: false
+
+The trainable value is ``log_alpha_sed`` and ``alpha_sed = exp(log_alpha_sed)``.
+It multiplies the model SED before filter integration. In code paths that only
+expose integrated model photometry, the same factor is applied once to the
+model flux; this is equivalent for a single wavelength-independent scale.
+
+``alpha_sed`` is global to the run or dataset. It is not per galaxy, not per
+band, not per filter, and not per posterior sample. It is intentionally not a
+Pop-COSMOS zero-point correction and ``per_band_zero_points.enabled`` remains
+false by default.
+
+The amortized trainable components are:
+
+.. code-block:: text
+
+   standard_normal prior:      psi + log_alpha_sed
+   supervised frozen prior:    psi + log_alpha_sed
+   joint RealNVP prior:        psi + beta + log_alpha_sed
+
+The ELBO adds the Gaussian prior penalty
+``0.5 * (log_alpha_sed / prior_sigma_log_alpha)^2``. Training and inference
+logs report ``log_alpha_sed``, ``alpha_sed``, ``delta_mag_global``,
+``alpha_prior_penalty``, ``mean_model_flux_raw``, and
+``mean_model_flux_scaled``.
+
+``alpha_sed improves flexibility against global SED normalization mismatch,
+but it does not correct color-dependent residuals. Since it is degenerate with
+stellar mass, mass recovery must be reported both before and after alpha
+correction.``
+
+For mass diagnostics, posterior samples and summaries include:
+
+.. code-block:: text
+
+   log10_stellar_mass_raw
+   log10_stellar_mass_alpha_corrected
+
+with
+``log10_stellar_mass_alpha_corrected = log10_stellar_mass_raw + log10(alpha_sed)``.
+The raw mass remains the direct latent value; the corrected mass is the
+photometrically constrained ``alpha_sed * Mstar`` combination.
+
 Why The KL Is Monte Carlo
 -------------------------
 
@@ -372,10 +432,17 @@ saved ``feature_stats.json``, samples ``x`` from ``q_psi``, converts samples to
    redshift_pit.parquet
    learned_prior_samples.parquet
    learned_or_loaded_prior_samples.parquet
+   prior_predictive_flux.parquet
    photoz_metrics.csv
    posterior_vs_truth_metrics.csv
    learned_prior_summary.json
    inference_summary.json
+
+``prior_predictive_flux.parquet`` decodes ``theta ~ p_beta(theta)`` through the
+fixed DSPS decoder and applies the configured global ``alpha_sed`` once. It
+contains ``model_flux_raw_fnu_cgs`` and ``model_flux_scaled_fnu_cgs`` so the
+prior physical distribution remains separate from the scaled prior-predictive
+photometry.
 
 The posterior predictive DSPS decode is chunked over the posterior-sample axis.
 This is important on GPU: ``posterior_samples * batch_size`` physical forward
@@ -453,9 +520,11 @@ This writes ``prior_overlap_metrics.csv``, ``population_realism_report.md``,
 and plots comparing truth, aggregate posterior, and learned or loaded prior for
 directly comparable parameters. It includes redshift, stellar mass, derived
 ``log10_sfr_at_obs``/``log10_ssfr_at_obs`` when exported, dust terms when
-fitted, and Diffstar/Diffmah generated-truth marginals for supervised-prior
-diagnostics. It does not compare raw ``dlog10_sfr_i`` ratios directly to
-``logsfr_true``.
+fitted, raw and alpha-corrected stellar mass when available, and
+Diffstar/Diffmah generated-truth marginals for supervised-prior diagnostics. It
+does not compare raw ``dlog10_sfr_i`` ratios directly to ``logsfr_true``.
+Physical prior distributions do not include ``alpha_sed``; prior predictive
+photometry can depend on the selected global scale.
 
 There is no exact published POP-COSMOS prior distribution implemented in this
 repository. FS2 comparison plots therefore compare the learned RealNVP prior

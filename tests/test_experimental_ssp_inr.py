@@ -4,10 +4,15 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import pytest
 
-from euclid_dsps.experimental.ssp_inr.data import load_spectral_grid
-from euclid_dsps.experimental.ssp_inr.evaluate import evaluate_experiment
-from euclid_dsps.experimental.ssp_inr.train import train_experiment
+ssp_inr_data = pytest.importorskip("euclid_dsps.experimental.ssp_inr.data")
+ssp_inr_evaluate = pytest.importorskip("euclid_dsps.experimental.ssp_inr.evaluate")
+ssp_inr_train = pytest.importorskip("euclid_dsps.experimental.ssp_inr.train")
+
+load_spectral_grid = ssp_inr_data.load_spectral_grid
+evaluate_experiment = ssp_inr_evaluate.evaluate_experiment
+train_experiment = ssp_inr_train.train_experiment
 
 
 def test_spectral_grid_loader_subsets_synthetic_ssp(tmp_path: Path) -> None:

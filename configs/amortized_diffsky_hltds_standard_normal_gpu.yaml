@@ -5,3 +5,14 @@ amortized:
         type: standard_normal
         source: standard_normal
         train_jointly: false
+
+calibration:
+    global_sed_scale:
+        enabled: true
+        mode: learn_global
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: true
+    per_band_zero_points:
+        enabled: false
