@@ -224,6 +224,7 @@ def fit_realnvp_to_x(
         hidden_size=int(flow_config.get("hidden_size", 128)),
         scale_clamp=float(flow_config.get("scale_clamp", 0.05)),
     )
+    prior = _cast_inexact_arrays(prior, jnp.float32)
     optimizer = _make_optimizer(training_config)
     opt_state = optimizer.init(eqx.filter(prior, eqx.is_inexact_array))
     batch_size = max(int(training_config.get("batch_size", 256)), 1)
@@ -315,6 +316,7 @@ def save_prior_checkpoint(
     """Serialize a supervised RealNVP prior and its truth schema."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    prior = _cast_inexact_arrays(prior, jnp.float32)
     eqx.tree_serialise_leaves(path, prior)
     sidecar = {
         "epoch": int(epoch),
@@ -325,6 +327,7 @@ def save_prior_checkpoint(
             "n_layers": int(flow_config.get("n_layers", 8)),
             "hidden_size": int(flow_config.get("hidden_size", 128)),
             "scale_clamp": float(flow_config.get("scale_clamp", 0.05)),
+            "parameter_dtype": "float32",
         },
         "latent_spec": latent_spec_to_jsonable(truth.latent_spec),
         "schema": truth.schema.to_dict(),
@@ -346,6 +349,10 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         n_layers=int(arch["n_layers"]),
         hidden_size=int(arch["hidden_size"]),
         scale_clamp=float(arch["scale_clamp"]),
+    )
+    template = _cast_inexact_arrays(
+        template,
+        _jax_dtype_from_name(str(arch.get("parameter_dtype", "float32"))),
     )
     prior = eqx.tree_deserialise_leaves(path, template)
     latent = sidecar["latent_spec"]
@@ -371,6 +378,26 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         reduced=bool(schema_payload.get("reduced", False)),
     )
     return prior, sidecar, latent_spec, schema
+
+
+def _cast_inexact_arrays(tree, dtype):
+    return jax.tree_util.tree_map(
+        lambda leaf: leaf.astype(dtype) if eqx.is_inexact_array(leaf) else leaf,
+        tree,
+    )
+
+
+def _jax_dtype_from_name(name: str):
+    normalized = str(name).strip().lower()
+    if normalized in {"float32", "f32"}:
+        return jnp.float32
+    if normalized in {"float64", "f64"}:
+        return jnp.float64
+    if normalized in {"float16", "f16"}:
+        return jnp.float16
+    if normalized in {"bfloat16", "bf16"}:
+        return jnp.bfloat16
+    raise ValueError(f"Unsupported prior checkpoint parameter_dtype: {name}")
 
 
 def _make_optimizer(training_config: dict[str, Any]):

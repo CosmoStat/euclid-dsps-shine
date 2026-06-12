@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import numpy as np
@@ -119,7 +120,10 @@ def test_realnvp_supervised_prior_learns_toy_distribution() -> None:
     reason="Equinox optional dependency is not installed",
 )
 def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
-    from euclid_dsps.prior_learning.train import train_supervised_prior
+    from euclid_dsps.prior_learning.train import (
+        load_prior_checkpoint,
+        train_supervised_prior,
+    )
 
     dataset = tmp_path / "truth.parquet"
     pd.DataFrame(
@@ -165,3 +169,12 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     assert (out / "supervised_prior_summary.json").exists()
     assert (out / "supervised_prior_vs_truth_report.md").exists()
     assert (out / "checkpoints" / "best.eqx").exists()
+
+    sidecar_path = out / "checkpoints" / "best.eqx.json"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert sidecar["architecture"]["parameter_dtype"] == "float32"
+    load_prior_checkpoint(out / "checkpoints" / "best.eqx")
+
+    sidecar["architecture"].pop("parameter_dtype")
+    sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+    load_prior_checkpoint(out / "checkpoints" / "best.eqx")
