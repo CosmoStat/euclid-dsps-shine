@@ -15,6 +15,9 @@
 set -Eeuo pipefail
 
 # Budgeted H100 science-validation run.
+# This job is intentionally offline: it does not run pip/uv/git network
+# commands and assumes the repository, conda environment, and Diffsky assets
+# are already present on Jean-Zay.
 #
 # Submit from any directory with:
 #
@@ -33,6 +36,7 @@ set -Eeuo pipefail
 REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
+OFFLINE="${OFFLINE:-1}"
 
 RUN_NAME="${RUN_NAME:-diffsky_full_h100_$(date +%Y%m%d_%H%M%S)}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
@@ -58,6 +62,10 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
+export REPO_DIR
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+export PIP_NO_INDEX=1
+export PIP_DISABLE_PIP_VERSION_CHECK=1
 
 cd "$REPO_DIR"
 mkdir -p "$LOG_DIR" "$(dirname "$OUT_DIR")"
@@ -73,6 +81,7 @@ echo "[job] slurm_job_id: ${SLURM_JOB_ID:-manual}"
 echo "[job] slurm_cpus_per_task: ${SLURM_CPUS_PER_TASK:-unset}"
 echo "[job] config: $CONFIG"
 echo "[job] dataset: $DATASET"
+echo "[job] offline: $OFFLINE"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
 echo "[job] batch_size: $BATCH_SIZE"
 echo "[job] epochs: $EPOCHS"
@@ -83,11 +92,24 @@ echo "[job] seed: $SEED"
 
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
-python -m pip install -e .
 
 echo "[job] python: $(which python)"
 python - <<'PY'
+import os
+from pathlib import Path
+
+import euclid_dsps
 import jax
+
+repo = Path(os.environ["REPO_DIR"]).resolve()
+pkg = Path(euclid_dsps.__file__).resolve()
+if repo not in pkg.parents:
+    raise SystemExit(
+        f"[job][error] euclid_dsps imported from {pkg}, not from repo {repo}. "
+        "Check PYTHONPATH or the conda environment."
+    )
+
+print("[job] euclid_dsps:", pkg)
 print("[job] jax_backend:", jax.default_backend())
 print("[job] jax_devices:", jax.devices())
 PY
