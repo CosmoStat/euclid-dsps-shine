@@ -3,10 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import jax.numpy as jnp
 import pandas as pd
 
+from euclid_dsps.amortized.latent import LatentSpec
 from euclid_dsps.config import load_config
-from euclid_dsps.diffsky_full_validation import write_full_validation_report
+from euclid_dsps.diffsky_full_validation import (
+    _prior_spec_incompatibility,
+    write_full_validation_report,
+)
 
 
 def test_full_validation_h100_config_declares_alpha_report_section() -> None:
@@ -73,12 +78,42 @@ def test_full_validation_report_collects_alpha_and_mass_metrics(tmp_path) -> Non
         dataset_path="mock.parquet",
         inference_runs=[("joint", run)],
         closure_run=closure,
+        stage_outputs={
+            "skipped_stages": [
+                {
+                    "stage": "amortized_supervised_prior",
+                    "status": "skipped",
+                    "reason": "incompatible latent names",
+                }
+            ]
+        },
     )
     summary = json.loads((tmp_path / "report" / "full_validation_summary.json").read_text())
     text = report.read_text(encoding="utf-8")
 
     assert "Global SED scale calibration" in text
+    assert "Skipped stages" in text
+    assert summary["skipped_stages"][0]["stage"] == "amortized_supervised_prior"
     assert summary["global_sed_scale"][0]["alpha_sed"] == 1.2
     assert {
         row["metric_name"] for row in summary["mass_recovery"]
     } == {"mass_bias_raw", "mass_bias_alpha_corrected"}
+
+
+def test_full_validation_detects_supervised_prior_latent_mismatch() -> None:
+    active = LatentSpec(
+        names=("z_obs", "log10_stellar_mass", "dlog10_sfr_1"),
+        lower=jnp.zeros(3, dtype=jnp.float32),
+        upper=jnp.ones(3, dtype=jnp.float32),
+    )
+    loaded = LatentSpec(
+        names=("z_obs", "log10_stellar_mass", "log10_ssfr_at_obs"),
+        lower=jnp.zeros(3, dtype=jnp.float32),
+        upper=jnp.ones(3, dtype=jnp.float32),
+    )
+
+    reason = _prior_spec_incompatibility(active, loaded)
+
+    assert reason is not None
+    assert "incompatible latent names" in reason
+    assert _prior_spec_incompatibility(active, active) is None
