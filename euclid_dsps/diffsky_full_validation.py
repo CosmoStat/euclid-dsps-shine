@@ -23,6 +23,7 @@ def run_diffsky_full_validation(
     n_samples: int | None = None,
     jax_batch_size: int | None = None,
     decoder_sample_chunk_size: int | None = None,
+    prior_predictive_batch_size: int | None = None,
     posterior_samples: int | None = None,
     prior_samples: int | None = None,
     seed: int | None = None,
@@ -53,6 +54,7 @@ def run_diffsky_full_validation(
         f"epochs={epochs} n_samples={n_samples} "
         f"jax_batch_size={jax_batch_size} "
         f"decoder_sample_chunk_size={decoder_sample_chunk_size} "
+        f"prior_predictive_batch_size={prior_predictive_batch_size} "
         f"posterior_samples={posterior_samples} prior_samples={prior_samples} "
         f"seed={seed}",
     )
@@ -98,6 +100,7 @@ def run_diffsky_full_validation(
             n_samples=n_samples,
             jax_batch_size=jax_batch_size,
             decoder_sample_chunk_size=decoder_sample_chunk_size,
+            prior_predictive_batch_size=prior_predictive_batch_size,
             posterior_samples=posterior_samples,
             prior_samples=prior_samples,
             seed=seed,
@@ -349,6 +352,7 @@ def _run_amortized_stages(
     n_samples: int | None,
     jax_batch_size: int | None,
     decoder_sample_chunk_size: int | None,
+    prior_predictive_batch_size: int | None,
     posterior_samples: int | None,
     prior_samples: int | None,
     seed: int | None,
@@ -373,6 +377,7 @@ def _run_amortized_stages(
             label=label,
             jax_batch_size=jax_batch_size,
             decoder_sample_chunk_size=decoder_sample_chunk_size,
+            prior_predictive_batch_size=prior_predictive_batch_size,
             verbose=verbose,
         )
         if label == "supervised_prior":
@@ -421,6 +426,9 @@ def _run_amortized_stages(
             decoder_sample_chunk_size=int(
                 inference.get("decoder_sample_chunk_size", 1)
             ),
+            prior_predictive_batch_size=int(
+                inference.get("prior_predictive_batch_size", 256)
+            ),
             dataset_label=f"Diffsky HLTDS {label}",
         )
         runs.append((label, infer_dir))
@@ -434,6 +442,7 @@ def _apply_amortized_runtime_overrides(
     label: str,
     jax_batch_size: int | None,
     decoder_sample_chunk_size: int | None,
+    prior_predictive_batch_size: int | None,
     verbose: bool,
 ) -> dict[str, Any]:
     """Apply full-validation H100 runtime caps to stage configs."""
@@ -442,6 +451,7 @@ def _apply_amortized_runtime_overrides(
     configured_train_jax = runtime.get("training_jax_batch_size", configured_jax)
     configured_infer_jax = runtime.get("inference_jax_batch_size", configured_jax)
     configured_chunk = runtime.get("decoder_sample_chunk_size")
+    configured_prior_batch = runtime.get("prior_predictive_batch_size")
 
     train_jax = jax_batch_size if jax_batch_size is not None else configured_train_jax
     infer_jax = jax_batch_size if jax_batch_size is not None else configured_infer_jax
@@ -450,7 +460,12 @@ def _apply_amortized_runtime_overrides(
         if decoder_sample_chunk_size is not None
         else configured_chunk
     )
-    if train_jax is None and infer_jax is None and chunk is None:
+    prior_batch = (
+        prior_predictive_batch_size
+        if prior_predictive_batch_size is not None
+        else configured_prior_batch
+    )
+    if train_jax is None and infer_jax is None and chunk is None and prior_batch is None:
         return config
 
     updated = dict(config)
@@ -473,6 +488,11 @@ def _apply_amortized_runtime_overrides(
         if chunk <= 0:
             raise ValueError("full_validation.amortized_runtime.decoder_sample_chunk_size must be positive")
         inference["decoder_sample_chunk_size"] = chunk
+    if prior_batch is not None:
+        prior_batch = int(prior_batch)
+        if prior_batch <= 0:
+            raise ValueError("full_validation.amortized_runtime.prior_predictive_batch_size must be positive")
+        inference["prior_predictive_batch_size"] = prior_batch
 
     amortized["training"] = training
     amortized["inference"] = inference
@@ -483,7 +503,8 @@ def _apply_amortized_runtime_overrides(
         f"{label}: runtime overrides training_jax_batch_size="
         f"{training.get('jax_batch_size')} inference_jax_batch_size="
         f"{inference.get('jax_batch_size')} decoder_sample_chunk_size="
-        f"{inference.get('decoder_sample_chunk_size')}",
+        f"{inference.get('decoder_sample_chunk_size')} prior_predictive_batch_size="
+        f"{inference.get('prior_predictive_batch_size')}",
     )
     return updated
 

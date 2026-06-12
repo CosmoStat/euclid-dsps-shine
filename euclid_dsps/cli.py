@@ -269,6 +269,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Use 1 to minimize GPU memory."
         ),
     )
+    infer.add_argument(
+        "--prior-predictive-batch-size",
+        type=int,
+        help="Number of learned-prior samples decoded by DSPS at once.",
+    )
     infer.add_argument("--seed", type=int)
     infer.add_argument("--feature-stats")
 
@@ -379,6 +384,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--decoder-sample-chunk-size",
         type=int,
         help="Override posterior/prior decoder sample chunk size for amortized inference.",
+    )
+    full_validation.add_argument(
+        "--prior-predictive-batch-size",
+        type=int,
+        help="Override learned-prior predictive DSPS batch size.",
     )
     full_validation.add_argument("--posterior-samples", type=int)
     full_validation.add_argument("--prior-samples", type=int)
@@ -595,6 +605,7 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--posterior-samples", type=int)
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--decoder-sample-chunk-size", type=int)
+    parser.add_argument("--prior-predictive-batch-size", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--feature-stats")
 
@@ -975,6 +986,7 @@ def _run_diffsky_full_validation(config: dict, args) -> None:
         n_samples=args.n_samples,
         jax_batch_size=args.jax_batch_size,
         decoder_sample_chunk_size=args.decoder_sample_chunk_size,
+        prior_predictive_batch_size=args.prior_predictive_batch_size,
         posterior_samples=args.posterior_samples,
         prior_samples=args.prior_samples,
         seed=args.seed,
@@ -1047,6 +1059,11 @@ def _run_amortized_infer(
             args.decoder_sample_chunk_size
             if args.decoder_sample_chunk_size is not None
             else inference.get("decoder_sample_chunk_size", 1)
+        ),
+        prior_predictive_batch_size=int(
+            args.prior_predictive_batch_size
+            if args.prior_predictive_batch_size is not None
+            else inference.get("prior_predictive_batch_size", 256)
         ),
         dataset_label=dataset_label,
     )

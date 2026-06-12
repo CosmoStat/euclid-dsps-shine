@@ -73,6 +73,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["inference"].setdefault("posterior_samples", 32)
     raw["inference"].setdefault("prior_samples", 8192)
     raw["inference"].setdefault("decoder_sample_chunk_size", 1)
+    raw["inference"].setdefault("prior_predictive_batch_size", 256)
     raw["output"].setdefault("checkpoint_every", 1)
     raw["output"].setdefault("diagnostics_every", 1)
     raw["output"].setdefault("save_training_curves", True)

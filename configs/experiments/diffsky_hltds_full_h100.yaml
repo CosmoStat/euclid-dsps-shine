@@ -36,6 +36,7 @@ full_validation:
         # --decoder-sample-chunk-size.
         jax_batch_size: 64
         decoder_sample_chunk_size: 4
+        prior_predictive_batch_size: 1024
 
 calibration:
     global_sed_scale:

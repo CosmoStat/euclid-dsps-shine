@@ -52,6 +52,7 @@ def infer_amortized_fs2(
     seed: int,
     feature_stats_path: Path | None = None,
     decoder_sample_chunk_size: int = 1,
+    prior_predictive_batch_size: int | None = None,
     verbose: bool = True,
     dataset_label: str = "FS2",
 ) -> None:
@@ -70,6 +71,13 @@ def infer_amortized_fs2(
         cfg.get("inference", {}),
         int(batch_size),
     )
+    if prior_predictive_batch_size is None:
+        prior_predictive_batch_size = int(
+            cfg.get("inference", {}).get("prior_predictive_batch_size", 256)
+        )
+    prior_predictive_batch_size = int(prior_predictive_batch_size)
+    if prior_predictive_batch_size <= 0:
+        raise ValueError("prior_predictive_batch_size must be positive")
     checkpoint = Path(checkpoint)
     if feature_stats_path is None:
         feature_stats_path = checkpoint.parent.parent / "feature_stats.json"
@@ -82,7 +90,8 @@ def infer_amortized_fs2(
             f"limit={limit} batch_size={int(batch_size)} "
             f"posterior_samples={int(posterior_samples)} "
             f"prior_samples={int(prior_samples)} "
-            f"decoder_sample_chunk_size={int(decoder_sample_chunk_size)}"
+            f"decoder_sample_chunk_size={int(decoder_sample_chunk_size)} "
+            f"prior_predictive_batch_size={int(prior_predictive_batch_size)}"
         )
         if jax_batch_size != int(batch_size):
             print(
@@ -244,6 +253,8 @@ def infer_amortized_fs2(
         )
         n_objects_total += int(batch.flux.shape[0])
 
+    if verbose:
+        print("[amortized] combining posterior inference frames...")
     samples = (
         pd.concat(sample_frames, ignore_index=True) if sample_frames else pd.DataFrame()
     )
@@ -266,17 +277,24 @@ def infer_amortized_fs2(
         pd.concat(feature_frames, ignore_index=True) if feature_frames else pd.DataFrame()
     )
     key, prior_key = jax.random.split(key)
+    if verbose:
+        print(
+            "[amortized] prior predictive start: "
+            f"prior_samples={int(prior_samples)} "
+            f"prior_predictive_batch_size={int(prior_predictive_batch_size)}"
+        )
     prior_x = model.prior.sample(prior_key, int(prior_samples))
     prior_theta = x_to_theta(prior_x, latent_spec)
     prior_logprob = model.prior.log_prob(prior_x)
-    prior_flux_raw = _model_flux_from_x_sample_chunks(
-        prior_x[:, None, :],
+    prior_flux_raw_2d = _model_flux_from_x_2d_chunks(
+        prior_x,
         latent_spec,
         context,
         model_args,
         latent_spec.names,
-        sample_chunk_size=int(decoder_sample_chunk_size),
+        batch_size=int(prior_predictive_batch_size),
     )
+    prior_flux_raw = prior_flux_raw_2d[:, None, :]
     prior_flux = (
         apply_global_sed_scale_to_flux(
             prior_flux_raw,
@@ -301,6 +319,8 @@ def infer_amortized_fs2(
         log_alpha_sed=log_alpha_sed,
         alpha_sed=alpha_sed,
     ).rename(columns={"sample_id": "prior_sample_id"})
+    if verbose:
+        print("[amortized] writing inference parquet outputs...")
     samples.to_parquet(out / "posterior_samples.parquet", index=False)
     summary.to_parquet(out / "posterior_summary.parquet", index=False)
     predictive.to_parquet(out / "posterior_predictive_flux.parquet", index=False)
@@ -348,6 +368,7 @@ def infer_amortized_fs2(
             "posterior_samples": int(posterior_samples),
             "prior_samples": int(prior_samples),
             "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
+            "prior_predictive_batch_size": int(prior_predictive_batch_size),
             "n_objects": int(n_objects_total),
             "samples_rows": int(len(samples)),
             "summary_rows": int(len(summary)),
@@ -399,6 +420,35 @@ def _model_flux_from_x_sample_chunks(
     chunks = []
     for start in range(0, int(x_samples.shape[0]), int(sample_chunk_size)):
         x_chunk = x_samples[start : start + int(sample_chunk_size)]
+        flux_chunk = model_flux_from_x(
+            x_chunk,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+        )
+        chunks.append(jax.block_until_ready(flux_chunk))
+    return jnp.concatenate(chunks, axis=0)
+
+
+def _model_flux_from_x_2d_chunks(
+    x: jnp.ndarray,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names: tuple[str, ...],
+    *,
+    batch_size: int,
+) -> jnp.ndarray:
+    """Decode a 2D latent matrix in object/prior-sample batches."""
+    x = jnp.asarray(x)
+    if int(batch_size) <= 0:
+        raise ValueError("batch_size must be positive")
+    if x.ndim != 2:
+        raise ValueError(f"x must be [N,D], got {x.shape}")
+    chunks = []
+    for start in range(0, int(x.shape[0]), int(batch_size)):
+        x_chunk = x[start : start + int(batch_size)]
         flux_chunk = model_flux_from_x(
             x_chunk,
             latent_spec,
