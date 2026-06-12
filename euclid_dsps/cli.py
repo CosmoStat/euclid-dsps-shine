@@ -370,6 +370,16 @@ def build_parser() -> argparse.ArgumentParser:
     full_validation.add_argument("--batch-size", type=int)
     full_validation.add_argument("--epochs", type=int)
     full_validation.add_argument("--n-samples", type=int)
+    full_validation.add_argument(
+        "--jax-batch-size",
+        type=int,
+        help="Override amortized JAX/DSPS compiled batch cap for full validation stages.",
+    )
+    full_validation.add_argument(
+        "--decoder-sample-chunk-size",
+        type=int,
+        help="Override posterior/prior decoder sample chunk size for amortized inference.",
+    )
     full_validation.add_argument("--posterior-samples", type=int)
     full_validation.add_argument("--prior-samples", type=int)
     full_validation.add_argument("--seed", type=int)
@@ -963,6 +973,8 @@ def _run_diffsky_full_validation(config: dict, args) -> None:
         batch_size=args.batch_size,
         epochs=args.epochs,
         n_samples=args.n_samples,
+        jax_batch_size=args.jax_batch_size,
+        decoder_sample_chunk_size=args.decoder_sample_chunk_size,
         posterior_samples=args.posterior_samples,
         prior_samples=args.prior_samples,
         seed=args.seed,

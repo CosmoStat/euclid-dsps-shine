@@ -21,6 +21,8 @@ def run_diffsky_full_validation(
     batch_size: int | None = None,
     epochs: int | None = None,
     n_samples: int | None = None,
+    jax_batch_size: int | None = None,
+    decoder_sample_chunk_size: int | None = None,
     posterior_samples: int | None = None,
     prior_samples: int | None = None,
     seed: int | None = None,
@@ -49,6 +51,8 @@ def run_diffsky_full_validation(
         "[full-validation] "
         f"report_only={report_only} limit={limit} batch_size={batch_size} "
         f"epochs={epochs} n_samples={n_samples} "
+        f"jax_batch_size={jax_batch_size} "
+        f"decoder_sample_chunk_size={decoder_sample_chunk_size} "
         f"posterior_samples={posterior_samples} prior_samples={prior_samples} "
         f"seed={seed}",
     )
@@ -92,6 +96,8 @@ def run_diffsky_full_validation(
             batch_size=batch_size,
             epochs=epochs,
             n_samples=n_samples,
+            jax_batch_size=jax_batch_size,
+            decoder_sample_chunk_size=decoder_sample_chunk_size,
             posterior_samples=posterior_samples,
             prior_samples=prior_samples,
             seed=seed,
@@ -341,6 +347,8 @@ def _run_amortized_stages(
     batch_size: int | None,
     epochs: int | None,
     n_samples: int | None,
+    jax_batch_size: int | None,
+    decoder_sample_chunk_size: int | None,
     posterior_samples: int | None,
     prior_samples: int | None,
     seed: int | None,
@@ -359,6 +367,14 @@ def _run_amortized_stages(
     runs = []
     for label, key in stages:
         cfg = _with_dataset_path(_load_stage_config(full, key), dataset)
+        cfg = _apply_amortized_runtime_overrides(
+            cfg,
+            full,
+            label=label,
+            jax_batch_size=jax_batch_size,
+            decoder_sample_chunk_size=decoder_sample_chunk_size,
+            verbose=verbose,
+        )
         if label == "supervised_prior":
             amortized = dict(cfg.get("amortized", {}) or {})
             prior = dict(amortized.get("prior", {}) or {})
@@ -409,6 +425,67 @@ def _run_amortized_stages(
         )
         runs.append((label, infer_dir))
     return runs
+
+
+def _apply_amortized_runtime_overrides(
+    config: dict[str, Any],
+    full: dict[str, Any],
+    *,
+    label: str,
+    jax_batch_size: int | None,
+    decoder_sample_chunk_size: int | None,
+    verbose: bool,
+) -> dict[str, Any]:
+    """Apply full-validation H100 runtime caps to stage configs."""
+    runtime = dict(full.get("amortized_runtime", {}) or {})
+    configured_jax = runtime.get("jax_batch_size")
+    configured_train_jax = runtime.get("training_jax_batch_size", configured_jax)
+    configured_infer_jax = runtime.get("inference_jax_batch_size", configured_jax)
+    configured_chunk = runtime.get("decoder_sample_chunk_size")
+
+    train_jax = jax_batch_size if jax_batch_size is not None else configured_train_jax
+    infer_jax = jax_batch_size if jax_batch_size is not None else configured_infer_jax
+    chunk = (
+        decoder_sample_chunk_size
+        if decoder_sample_chunk_size is not None
+        else configured_chunk
+    )
+    if train_jax is None and infer_jax is None and chunk is None:
+        return config
+
+    updated = dict(config)
+    amortized = dict(updated.get("amortized", {}) or {})
+    training = dict(amortized.get("training", {}) or {})
+    inference = dict(amortized.get("inference", {}) or {})
+
+    if train_jax is not None:
+        train_jax = int(train_jax)
+        if train_jax <= 0:
+            raise ValueError("full_validation.amortized_runtime.training_jax_batch_size must be positive")
+        training["jax_batch_size"] = train_jax
+    if infer_jax is not None:
+        infer_jax = int(infer_jax)
+        if infer_jax <= 0:
+            raise ValueError("full_validation.amortized_runtime.inference_jax_batch_size must be positive")
+        inference["jax_batch_size"] = infer_jax
+    if chunk is not None:
+        chunk = int(chunk)
+        if chunk <= 0:
+            raise ValueError("full_validation.amortized_runtime.decoder_sample_chunk_size must be positive")
+        inference["decoder_sample_chunk_size"] = chunk
+
+    amortized["training"] = training
+    amortized["inference"] = inference
+    updated["amortized"] = amortized
+    _log(
+        verbose,
+        "[full-validation]   amortized "
+        f"{label}: runtime overrides training_jax_batch_size="
+        f"{training.get('jax_batch_size')} inference_jax_batch_size="
+        f"{inference.get('jax_batch_size')} decoder_sample_chunk_size="
+        f"{inference.get('decoder_sample_chunk_size')}",
+    )
+    return updated
 
 
 def _run_redshift_and_population_reports(

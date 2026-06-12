@@ -29,6 +29,13 @@ full_validation:
             - large_scale_warning
             - mass_bias_raw
             - mass_bias_alpha_corrected
+    amortized_runtime:
+        # H100 validation should not inherit the conservative CUDA safety cap
+        # used by the generic Diffsky GPU configs. These values can still be
+        # overridden from the CLI with --jax-batch-size and
+        # --decoder-sample-chunk-size.
+        jax_batch_size: 64
+        decoder_sample_chunk_size: 4
 
 calibration:
     global_sed_scale:

@@ -28,6 +28,9 @@ set -Eeuo pipefail
 #   sbatch --export=ALL,RUN_NAME=diffsky_full_h100_v1,EPOCHS=8,BATCH_SIZE=64 \
 #     scripts/diffsky_full_validation_h100.slurm
 #
+#   sbatch --export=ALL,RUN_NAME=diffsky_full_h100_v2,BATCH_SIZE=128,JAX_BATCH_SIZE=128 \
+#     scripts/diffsky_full_validation_h100.slurm
+#
 #   sbatch --export=ALL,LIMIT=2048,EPOCHS=2,POSTERIOR_SAMPLES=8 \
 #     scripts/diffsky_full_validation_h100.slurm
 #
@@ -50,6 +53,8 @@ RAW_ROOT="${RAW_ROOT:-Data/diffsky/raw/hltds_cosmos_260215_04_14_2026}"
 # These defaults are meant to fit a roughly 10h walltime budget on one H100.
 # Increase EPOCHS for a deeper science run after checking the first report.
 BATCH_SIZE="${BATCH_SIZE:-64}"
+JAX_BATCH_SIZE="${JAX_BATCH_SIZE:-64}"
+DECODER_SAMPLE_CHUNK_SIZE="${DECODER_SAMPLE_CHUNK_SIZE:-4}"
 EPOCHS="${EPOCHS:-5}"
 N_SAMPLES="${N_SAMPLES:-1}"
 POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-32}"
@@ -84,6 +89,8 @@ echo "[job] dataset: $DATASET"
 echo "[job] offline: $OFFLINE"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
 echo "[job] batch_size: $BATCH_SIZE"
+echo "[job] jax_batch_size: $JAX_BATCH_SIZE"
+echo "[job] decoder_sample_chunk_size: $DECODER_SAMPLE_CHUNK_SIZE"
 echo "[job] epochs: $EPOCHS"
 echo "[job] n_samples: $N_SAMPLES"
 echo "[job] posterior_samples: $POSTERIOR_SAMPLES"
@@ -159,6 +166,8 @@ cmd=(
   --dataset "$DATASET"
   --out "$OUT_DIR"
   --batch-size "$BATCH_SIZE"
+  --jax-batch-size "$JAX_BATCH_SIZE"
+  --decoder-sample-chunk-size "$DECODER_SAMPLE_CHUNK_SIZE"
   --epochs "$EPOCHS"
   --n-samples "$N_SAMPLES"
   --posterior-samples "$POSTERIOR_SAMPLES"
