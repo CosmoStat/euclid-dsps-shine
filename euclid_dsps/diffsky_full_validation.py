@@ -41,7 +41,20 @@ def run_diffsky_full_validation(
     inference_runs = list(runs or [])
     closure_dir = Path(closure_run) if closure_run else None
 
+    _log(verbose, "[full-validation] Diffsky HLTDS full validation")
+    _log(verbose, f"[full-validation] dataset: {dataset}")
+    _log(verbose, f"[full-validation] output directory: {out}")
+    _log(
+        verbose,
+        "[full-validation] "
+        f"report_only={report_only} limit={limit} batch_size={batch_size} "
+        f"epochs={epochs} n_samples={n_samples} "
+        f"posterior_samples={posterior_samples} prior_samples={prior_samples} "
+        f"seed={seed}",
+    )
+
     if not report_only:
+        _log(verbose, "[full-validation] stage 1-2/8: supervised prior learning")
         prior_basic_dir, prior_extended_dir = _run_supervised_prior_stages(
             full,
             dataset,
@@ -56,6 +69,7 @@ def run_diffsky_full_validation(
         stage_outputs["supervised_prior_basic"] = str(prior_basic_dir)
         stage_outputs["supervised_prior_extended"] = str(prior_extended_dir)
 
+        _log(verbose, "[full-validation] stage 3/8: true-parameter forward closure")
         closure_dir = out / "trueparam_forward_closure"
         _run_forward_closure_stage(
             full,
@@ -63,9 +77,11 @@ def run_diffsky_full_validation(
             closure_dir,
             limit=limit,
             batch_size=batch_size,
+            verbose=verbose,
         )
         stage_outputs["forward_closure"] = str(closure_dir)
 
+        _log(verbose, "[full-validation] stage 4-6/8: amortized inference modes")
         inference_runs = _run_amortized_stages(
             full,
             dataset,
@@ -84,14 +100,24 @@ def run_diffsky_full_validation(
         stage_outputs["inference_runs"] = [
             {"label": label, "run_dir": str(path)} for label, path in inference_runs
         ]
+        _log(
+            verbose,
+            "[full-validation] stage 7/8: redshift ablation and population realism",
+        )
         _run_redshift_and_population_reports(
             full,
             dataset,
             out,
             inference_runs,
+            verbose=verbose,
         )
         stage_outputs["redshift_ablation"] = str(out / "redshift_ablation")
         stage_outputs["population_realism"] = str(out / "population_realism")
+    else:
+        _log(
+            verbose,
+            "[full-validation] report-only mode: aggregating existing stage outputs",
+        )
     stage_outputs.setdefault(
         "inference_runs",
         [{"label": label, "run_dir": str(path)} for label, path in inference_runs],
@@ -99,6 +125,7 @@ def run_diffsky_full_validation(
     if closure_dir is not None:
         stage_outputs.setdefault("forward_closure", str(closure_dir))
 
+    _log(verbose, "[full-validation] stage 8/8: final report")
     report = write_full_validation_report(
         out,
         dataset_path=dataset,
@@ -106,6 +133,7 @@ def run_diffsky_full_validation(
         closure_run=closure_dir,
         stage_outputs=stage_outputs,
     )
+    _log(verbose, f"[full-validation] report -> {report}")
     return report
 
 
@@ -174,7 +202,11 @@ def _run_supervised_prior_stages(
     extended_cfg = _load_stage_config(full, "supervised_prior_extended_config")
     basic_dir = out / "supervised_prior_basic"
     extended_dir = out / "supervised_prior_extended"
-    for cfg, target in ((basic_cfg, basic_dir), (extended_cfg, extended_dir)):
+    for label, cfg, target in (
+        ("basic", basic_cfg, basic_dir),
+        ("extended", extended_cfg, extended_dir),
+    ):
+        _log(verbose, f"[full-validation]   supervised prior {label}: {target}")
         prior_cfg = prior_learning_config(cfg)
         train_supervised_prior(
             cfg,
@@ -198,6 +230,7 @@ def _run_forward_closure_stage(
     *,
     limit: int | None,
     batch_size: int | None,
+    verbose: bool,
 ) -> None:
     from euclid_dsps.diffsky_forward_closure import run_diffsky_forward_closure
 
@@ -205,6 +238,7 @@ def _run_forward_closure_stage(
         _load_stage_config(full, "forward_closure_config"),
         dataset,
     )
+    _log(verbose, f"[full-validation]   forward closure: {out}")
     run_diffsky_forward_closure(
         closure_cfg,
         dataset_path=dataset,
@@ -253,6 +287,7 @@ def _run_amortized_stages(
         inference = acfg["inference"]
         train_dir = out / f"amortized_{label}"
         infer_dir = out / f"amortized_{label}_infer"
+        _log(verbose, f"[full-validation]   amortized {label}: train -> {train_dir}")
         train_amortized_fs2(
             cfg,
             train_dir,
@@ -265,6 +300,7 @@ def _run_amortized_stages(
             progress=progress,
             dataset_label=f"Diffsky HLTDS {label}",
         )
+        _log(verbose, f"[full-validation]   amortized {label}: infer -> {infer_dir}")
         infer_amortized_fs2(
             cfg,
             infer_dir,
@@ -297,10 +333,13 @@ def _run_redshift_and_population_reports(
     dataset: Path,
     out: Path,
     runs: list[tuple[str, Path]],
+    *,
+    verbose: bool,
 ) -> None:
     from euclid_dsps.amortized.prior_overlap import write_diffsky_prior_overlap_report
     from euclid_dsps.diffsky_redshift_ablation import run_redshift_ablation
 
+    _log(verbose, f"[full-validation]   redshift ablation: {out / 'redshift_ablation'}")
     run_redshift_ablation(
         dataset_path=dataset,
         runs=runs,
@@ -314,6 +353,10 @@ def _run_redshift_and_population_reports(
             "joint_realnvp": "amortized_joint_realnvp_config",
         }[label]
         cfg = _with_dataset_path(_load_stage_config(full, cfg_key), dataset)
+        _log(
+            verbose,
+            f"[full-validation]   population realism {label}: {population_root / label}",
+        )
         write_diffsky_prior_overlap_report(
             dataset_path=dataset,
             run_dir=run_dir,
@@ -473,3 +516,8 @@ def _float_or_none(value) -> float | None:
         return float(value)
     except Exception:
         return None
+
+
+def _log(verbose: bool, message: str) -> None:
+    if verbose:
+        print(message, flush=True)
