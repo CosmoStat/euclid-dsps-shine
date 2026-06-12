@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from euclid_dsps.prior_learning.data import load_truth_dataset
+from euclid_dsps.prior_learning.diagnostics import write_supervised_prior_diagnostics
 from euclid_dsps.prior_learning.schema import build_truth_schema
 
 HAS_EQUINOX = importlib.util.find_spec("equinox") is not None
@@ -82,6 +83,39 @@ def test_load_truth_dataset_uses_bounded_transform(tmp_path: Path) -> None:
     )
     assert truth.theta.shape == (2, 3)
     assert np.all(np.isfinite(truth.x))
+
+
+def test_supervised_prior_diagnostics_skip_constant_corner_columns(tmp_path: Path) -> None:
+    truth = pd.DataFrame(
+        {
+            "z_obs": np.linspace(0.1, 0.5, 32),
+            "log10_stellar_mass": np.linspace(9.0, 10.0, 32),
+            "constant_truth": np.ones(32),
+        }
+    )
+    prior = pd.DataFrame(
+        {
+            "z_obs": np.linspace(0.12, 0.52, 32),
+            "log10_stellar_mass": np.linspace(8.9, 10.1, 32),
+            "constant_truth": np.ones(32),
+        }
+    )
+
+    outputs = write_supervised_prior_diagnostics(
+        truth=truth,
+        prior=prior,
+        parameter_names=("z_obs", "log10_stellar_mass", "constant_truth"),
+        out_dir=tmp_path,
+        summary={"schema": "toy"},
+    )
+
+    assert (tmp_path / "prior_vs_truth_metrics.csv").exists()
+    assert (tmp_path / "supervised_prior_vs_truth_report.md").exists()
+    assert "plot_skipped_parameters" in outputs
+    skipped = json.loads(
+        Path(outputs["plot_skipped_parameters"]).read_text(encoding="utf-8")
+    )
+    assert skipped["parameters"] == ["constant_truth"]
 
 
 @pytest.mark.skipif(

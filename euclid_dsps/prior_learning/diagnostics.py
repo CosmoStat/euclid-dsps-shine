@@ -165,6 +165,17 @@ def _write_plots(
         return {}
     outputs = {}
     names = [name for name in parameter_names if name in truth and name in prior]
+    skipped_plot_parameters = _constant_or_invalid_plot_names(names, truth, prior)
+    if skipped_plot_parameters:
+        skipped_path = out_dir / "plot_skipped_parameters.json"
+        write_json(
+            skipped_path,
+            {
+                "reason": "constant_or_nonfinite_distribution",
+                "parameters": skipped_plot_parameters,
+            },
+        )
+        outputs["plot_skipped_parameters"] = str(skipped_path)
     if names:
         ncols = min(3, len(names))
         nrows = int(np.ceil(len(names) / ncols))
@@ -202,12 +213,27 @@ def _write_plots(
         import corner
     except Exception:
         return outputs
-    corner_names = names[: min(len(names), 8)]
+    corner_names = [
+        name
+        for name in names
+        if _has_dynamic_range(truth[name]) and _has_dynamic_range(prior[name])
+    ][: min(len(names), 8)]
     if len(corner_names) >= 2:
         truth_values = truth[corner_names].to_numpy(dtype=float)
         prior_values = prior[corner_names].to_numpy(dtype=float)
-        fig = corner.corner(truth_values, labels=corner_names, color="C0", hist_kwargs={"density": True})
-        corner.corner(prior_values, fig=fig, labels=corner_names, color="C1", hist_kwargs={"density": True})
+        fig = corner.corner(
+            truth_values,
+            labels=corner_names,
+            color="C0",
+            hist_kwargs={"density": True},
+        )
+        corner.corner(
+            prior_values,
+            fig=fig,
+            labels=corner_names,
+            color="C1",
+            hist_kwargs={"density": True},
+        )
         path = out_dir / "truth_vs_prior_corner.png"
         fig.savefig(path, dpi=150)
         plt.close(fig)
@@ -223,6 +249,25 @@ def _pair_plot_names(names: list[str]) -> list[str]:
 def _finite_array(values) -> np.ndarray:
     arr = np.asarray(values, dtype=float)
     return arr[np.isfinite(arr)]
+
+
+def _has_dynamic_range(values) -> bool:
+    arr = _finite_array(values)
+    if arr.size < 2:
+        return False
+    return bool(np.nanmax(arr) > np.nanmin(arr))
+
+
+def _constant_or_invalid_plot_names(
+    names: list[str],
+    truth: pd.DataFrame,
+    prior: pd.DataFrame,
+) -> list[str]:
+    skipped = []
+    for name in names:
+        if not _has_dynamic_range(truth[name]) or not _has_dynamic_range(prior[name]):
+            skipped.append(name)
+    return skipped
 
 
 def _safe_median(values) -> float | None:
