@@ -54,6 +54,7 @@ def run_diffsky_full_validation(
     )
 
     if not report_only:
+        _preflight_full_validation_assets(full, dataset, verbose=verbose)
         _log(verbose, "[full-validation] stage 1-2/8: supervised prior learning")
         prior_basic_dir, prior_extended_dir = _run_supervised_prior_stages(
             full,
@@ -221,6 +222,88 @@ def _run_supervised_prior_stages(
             progress=progress,
         )
     return basic_dir, extended_dir
+
+
+def _preflight_full_validation_assets(
+    full: dict[str, Any],
+    dataset: Path,
+    *,
+    verbose: bool,
+) -> None:
+    required: dict[Path, set[str]] = {}
+    required.setdefault(dataset, set()).add("dataset")
+
+    for key in (
+        "forward_closure_config",
+        "amortized_standard_normal_config",
+        "amortized_supervised_prior_config",
+        "amortized_joint_realnvp_config",
+    ):
+        cfg = _load_stage_config(full, key)
+        _collect_config_asset_paths(cfg, label=key, required=required)
+
+    missing = [(path, labels) for path, labels in required.items() if not path.exists()]
+    if missing:
+        lines = [
+            "Full Diffsky validation is missing required local data/assets:",
+            "",
+        ]
+        for path, labels in sorted(missing, key=lambda item: str(item[0])):
+            lines.append(f"- {path} ({', '.join(sorted(labels))})")
+        lines.extend(
+            [
+                "",
+                "The processed parquet alone is not enough for PR3+ stages.",
+                "Synchronize or download the HLTDS raw assets under:",
+                "  Data/diffsky/raw/hltds_cosmos_260215_04_14_2026",
+                "At minimum the full validation needs the transmission curves and SSP assets.",
+            ]
+        )
+        raise FileNotFoundError("\n".join(lines))
+    _log(verbose, f"[full-validation] preflight: {len(required)} data/assets found")
+
+
+def _collect_config_asset_paths(
+    config: dict[str, Any],
+    *,
+    label: str,
+    required: dict[Path, set[str]],
+) -> None:
+    _add_required_path(config.get("ssp_path"), f"{label}:ssp_path", required)
+    model = dict(config.get("model", {}) or {})
+    for key in (
+        "compressed_ssp_path",
+        "gas_grid_path",
+        "compressed_gas_grid_path",
+        "agn_template_path",
+        "agn_component_grid_path",
+        "compressed_agn_component_grid_path",
+    ):
+        _add_required_path(model.get(key), f"{label}:model.{key}", required)
+    for index, band in enumerate(config.get("bands", []) or []):
+        if not isinstance(band, dict):
+            continue
+        filter_cfg = band.get("filter", {})
+        if isinstance(filter_cfg, dict):
+            band_name = band.get("name", index)
+            _add_required_path(
+                filter_cfg.get("path"),
+                f"{label}:bands.{band_name}.filter.path",
+                required,
+            )
+
+
+def _add_required_path(
+    value: Any,
+    label: str,
+    required: dict[Path, set[str]],
+) -> None:
+    if value is None:
+        return
+    path = Path(str(value))
+    if not str(path):
+        return
+    required.setdefault(path, set()).add(label)
 
 
 def _run_forward_closure_stage(
