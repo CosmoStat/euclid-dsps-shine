@@ -387,7 +387,19 @@ def train_amortized_fs2(
 
     ckpt_dir = ensure_dir(out / "checkpoints")
     rows = []
-    best_loss = np.inf
+    configured_best_metric = str(
+        cfg["training"].get("best_checkpoint_metric", "validation_negative_loglike")
+    )
+    best_checkpoint_metric = _effective_best_checkpoint_metric(
+        configured_best_metric,
+        has_validation=validation_arrays is not None,
+    )
+    best_checkpoint_min_epoch = _best_checkpoint_min_epoch(
+        cfg["training"],
+        has_validation=validation_arrays is not None,
+    )
+    best_metric_value = np.inf
+    best_checkpoint_epoch: int | None = None
     start_time = time.time()
     checkpoint_every = int(cfg["output"].get("checkpoint_every", 1))
     diagnostics_every = int(cfg["output"].get("diagnostics_every", 1))
@@ -488,21 +500,29 @@ def train_amortized_fs2(
                 )
                 epoch_rows.append(record)
                 rows.append(record)
-                if (
-                    validation_arrays is None
-                    and loss_finite
-                    and float(loss) < best_loss
-                ):
-                    best_loss = float(loss)
-                    save_checkpoint(
-                        ckpt_dir / "best.eqx",
-                        model,
-                        config=config,
-                        latent_spec=latent_spec,
-                        feature_stats=feature_stats,
-                        epoch=epoch,
-                        metric=best_loss,
+                if validation_arrays is None and loss_finite:
+                    checkpoint_metric_value = _checkpoint_metric_from_rows(
+                        [record],
+                        best_checkpoint_metric,
                     )
+                    if _should_update_best_checkpoint(
+                        epoch=epoch,
+                        value=checkpoint_metric_value,
+                        best_value=best_metric_value,
+                        min_epoch=best_checkpoint_min_epoch,
+                    ):
+                        best_metric_value = float(checkpoint_metric_value)
+                        best_checkpoint_epoch = int(epoch)
+                        save_checkpoint(
+                            ckpt_dir / "best.eqx",
+                            model,
+                            config=config,
+                            latent_spec=latent_spec,
+                            feature_stats=feature_stats,
+                            epoch=epoch,
+                            metric=best_metric_value,
+                            metric_name=best_checkpoint_metric,
+                        )
                 pbar.update(1)
                 pbar.set_postfix(
                     {
@@ -553,8 +573,21 @@ def train_amortized_fs2(
             rows.extend(validation_rows)
             validation_bin_rows.extend(epoch_bin_rows)
             val_loss = _finite_mean([row["loss"] for row in validation_rows])
-            if np.isfinite(val_loss) and val_loss < best_loss:
-                best_loss = float(val_loss)
+            val_nll = _finite_mean(
+                [row["negative_loglike"] for row in validation_rows]
+            )
+            checkpoint_metric_value = _checkpoint_metric_from_rows(
+                validation_rows,
+                best_checkpoint_metric,
+            )
+            if _should_update_best_checkpoint(
+                epoch=epoch,
+                value=checkpoint_metric_value,
+                best_value=best_metric_value,
+                min_epoch=best_checkpoint_min_epoch,
+            ):
+                best_metric_value = float(checkpoint_metric_value)
+                best_checkpoint_epoch = int(epoch)
                 save_checkpoint(
                     ckpt_dir / "best.eqx",
                     model,
@@ -562,13 +595,15 @@ def train_amortized_fs2(
                     latent_spec=latent_spec,
                     feature_stats=feature_stats,
                     epoch=epoch,
-                    metric=best_loss,
+                    metric=best_metric_value,
+                    metric_name=best_checkpoint_metric,
                 )
             _log(
                 verbose,
                 "[amortized] epoch "
                 f"{epoch}/{int(epochs)} validation done: "
-                f"mean_loss={val_loss:.6g} "
+                f"mean_loss={val_loss:.6g} mean_nll={val_nll:.6g} "
+                f"{best_checkpoint_metric}={checkpoint_metric_value:.6g} "
                 f"binned_rows={len(epoch_bin_rows)}",
             )
         save_checkpoint(
@@ -579,6 +614,7 @@ def train_amortized_fs2(
             feature_stats=feature_stats,
             epoch=epoch,
             metric=_finite_mean([row["loss"] for row in epoch_rows]),
+            metric_name="train_loss",
         )
         if checkpoint_every > 0 and epoch % checkpoint_every == 0:
             save_checkpoint(
@@ -589,6 +625,7 @@ def train_amortized_fs2(
                 feature_stats=feature_stats,
                 epoch=epoch,
                 metric=_finite_mean([row["loss"] for row in epoch_rows]),
+                metric_name="train_loss",
             )
         pd.DataFrame(rows).to_csv(out / "training_log.csv", index=False)
         if validation_bin_rows:
@@ -600,9 +637,11 @@ def train_amortized_fs2(
             out,
             rows=rows,
             epoch=epoch,
-            best_loss=best_loss,
+            best_loss=best_metric_value,
             start_time=start_time,
             checkpoint_last="checkpoints/last.eqx",
+            best_checkpoint_metric=best_checkpoint_metric,
+            best_checkpoint_epoch=best_checkpoint_epoch,
         )
         if (
             save_training_curves
@@ -620,7 +659,7 @@ def train_amortized_fs2(
             f"{epoch}/{int(epochs)} done: mean_loss={epoch_loss:.6g} "
             f"mean_nll={epoch_nll:.6g} mean_kl={epoch_kl:.6g} "
             f"updates={epoch_updates}/{len(epoch_rows)} "
-            f"best_loss={best_loss:.6g} "
+            f"best_{best_checkpoint_metric}={best_metric_value:.6g} "
             f"last_checkpoint={ckpt_dir / 'last.eqx'}",
         )
 
@@ -628,7 +667,8 @@ def train_amortized_fs2(
         fallback_metric = _finite_mean(
             [row["loss"] for row in rows if row.get("split") == "train"]
         )
-        best_loss = fallback_metric
+        best_metric_value = fallback_metric
+        best_checkpoint_epoch = int(epochs)
         save_checkpoint(
             ckpt_dir / "best.eqx",
             model,
@@ -637,6 +677,7 @@ def train_amortized_fs2(
             feature_stats=feature_stats,
             epoch=int(epochs),
             metric=fallback_metric,
+            metric_name=f"{best_checkpoint_metric}_fallback_train_loss",
         )
 
     summary = {
@@ -653,9 +694,14 @@ def train_amortized_fs2(
         "redshift_column": split.redshift_column,
         "kl_annealing_epochs": int(cfg["training"].get("kl_annealing_epochs", 5)),
         "kl_weight_max": float(kl_weight_max),
-        "best_loss": float(best_loss),
-        "best_checkpoint_metric": (
-            "validation_loss" if validation_arrays is not None else "train_loss"
+        "best_loss": float(best_metric_value),
+        "best_checkpoint_metric": best_checkpoint_metric,
+        "best_checkpoint_metric_requested": configured_best_metric,
+        "best_checkpoint_min_epoch": int(best_checkpoint_min_epoch),
+        "best_checkpoint_epoch": (
+            int(best_checkpoint_epoch)
+            if best_checkpoint_epoch is not None
+            else None
         ),
         "elapsed_time_s": float(time.time() - start_time),
         "checkpoint_best": "checkpoints/best.eqx",
@@ -693,6 +739,7 @@ def train_amortized_fs2(
     _log(verbose, f"[amortized] summary: {out / 'training_summary.json'}")
     _log(verbose, f"[amortized] progress: {out / 'training_progress.json'}")
     _log(verbose, f"[amortized] best checkpoint: {out / 'checkpoints' / 'best.eqx'}")
+    return
 
 
 def save_checkpoint(
@@ -704,6 +751,7 @@ def save_checkpoint(
     feature_stats: FeatureStats,
     epoch: int,
     metric: float,
+    metric_name: str | None = None,
 ) -> None:
     """Write an Equinox checkpoint plus a JSON sidecar."""
     path = Path(path)
@@ -712,6 +760,7 @@ def save_checkpoint(
     sidecar = {
         "epoch": int(epoch),
         "metric": float(metric),
+        "metric_name": metric_name,
         "latent_spec": latent_spec_to_jsonable(latent_spec),
         "feature_stats_path": "../feature_stats.json",
         "amortized": amortized_config(config),
@@ -1527,6 +1576,62 @@ def _finite_mean(values: list[float]) -> float:
     return float(np.mean(finite))
 
 
+def _effective_best_checkpoint_metric(
+    configured: str,
+    *,
+    has_validation: bool,
+) -> str:
+    metric = str(configured or "").strip() or "validation_negative_loglike"
+    if has_validation:
+        return metric
+    if metric.startswith("validation_"):
+        return "train_loss"
+    return metric
+
+
+def _best_checkpoint_min_epoch(
+    training_cfg: dict[str, Any],
+    *,
+    has_validation: bool,
+) -> int:
+    configured = training_cfg.get("best_checkpoint_min_epoch")
+    if configured is None:
+        configured = training_cfg.get("kl_annealing_epochs", 1) if has_validation else 1
+    return max(1, int(configured))
+
+
+def _checkpoint_metric_from_rows(
+    rows: list[dict[str, Any]],
+    metric_name: str,
+) -> float:
+    column = _checkpoint_metric_column(metric_name)
+    return _finite_mean([float(row.get(column, float("nan"))) for row in rows])
+
+
+def _checkpoint_metric_column(metric_name: str) -> str:
+    metric = str(metric_name)
+    for prefix in ("validation_", "train_"):
+        if metric.startswith(prefix):
+            metric = metric[len(prefix) :]
+            break
+    aliases = {
+        "nll": "negative_loglike",
+        "negative_log_likelihood": "negative_loglike",
+        "posterior_predictive_chi2": "posterior_predictive_chi2",
+    }
+    return aliases.get(metric, metric)
+
+
+def _should_update_best_checkpoint(
+    *,
+    epoch: int,
+    value: float,
+    best_value: float,
+    min_epoch: int,
+) -> bool:
+    return int(epoch) >= int(min_epoch) and np.isfinite(value) and value < best_value
+
+
 def write_training_progress(
     out: Path,
     *,
@@ -1535,6 +1640,8 @@ def write_training_progress(
     best_loss: float,
     start_time: float,
     checkpoint_last: str,
+    best_checkpoint_metric: str | None = None,
+    best_checkpoint_epoch: int | None = None,
 ) -> None:
     if not rows:
         return
@@ -1548,6 +1655,12 @@ def write_training_progress(
             "first_loss": first_loss,
             "last_loss": last_loss,
             "best_loss": float(best_loss),
+            "best_checkpoint_metric": best_checkpoint_metric,
+            "best_checkpoint_epoch": (
+                int(best_checkpoint_epoch)
+                if best_checkpoint_epoch is not None
+                else None
+            ),
             "loss_improved_from_first": bool(
                 np.isfinite(first_loss)
                 and np.isfinite(best_loss)

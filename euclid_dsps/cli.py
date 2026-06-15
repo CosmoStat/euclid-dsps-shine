@@ -255,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--checkpoint", required=True)
     infer.add_argument("--limit", type=int)
     infer.add_argument("--batch-size", type=int)
+    infer.add_argument("--jax-batch-size", type=int)
     infer.add_argument("--posterior-samples", type=int)
     infer.add_argument(
         "--prior-samples",
@@ -274,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Number of learned-prior samples decoded by DSPS at once.",
     )
+    _add_amortized_infer_shard_arguments(infer)
     infer.add_argument("--seed", type=int)
     infer.add_argument("--feature-stats")
 
@@ -602,12 +604,57 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--jax-batch-size", type=int)
     parser.add_argument("--posterior-samples", type=int)
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--decoder-sample-chunk-size", type=int)
     parser.add_argument("--prior-predictive-batch-size", type=int)
+    _add_amortized_infer_shard_arguments(parser)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--feature-stats")
+
+
+def _add_amortized_infer_shard_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--shard-outputs",
+        action="store_true",
+        default=None,
+        help="Write posterior inference outputs as resumable per-batch shards.",
+    )
+    parser.add_argument(
+        "--no-resume-shards",
+        dest="resume_shards",
+        action="store_false",
+        default=None,
+        help="Recompute existing inference shards instead of skipping complete ones.",
+    )
+    parser.add_argument(
+        "--no-posterior-predictive",
+        dest="write_posterior_predictive",
+        action="store_false",
+        default=None,
+        help="Skip large posterior_predictive_flux outputs.",
+    )
+    parser.add_argument(
+        "--no-residual-samples",
+        dest="write_residual_samples",
+        action="store_false",
+        default=None,
+        help="Skip large per-sample residual outputs; compact residual summaries remain.",
+    )
+    parser.add_argument(
+        "--combine-sample-shards",
+        action="store_true",
+        default=None,
+        help="Also write monolithic posterior_samples.parquet after sharded inference.",
+    )
+    parser.add_argument(
+        "--no-combine-summary-shards",
+        dest="combine_summary_shards",
+        action="store_false",
+        default=None,
+        help="Do not write monolithic summary/feature/residual-summary tables.",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -796,6 +843,13 @@ def _run_amortized_synthetic(config: dict, args) -> None:
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
 
+    if getattr(args, "jax_batch_size", None) is not None:
+        config = dict(config)
+        amortized = dict(config.get("amortized", {}) or {})
+        inference_override = dict(amortized.get("inference", {}) or {})
+        inference_override["jax_batch_size"] = int(args.jax_batch_size)
+        amortized["inference"] = inference_override
+        config["amortized"] = amortized
     cfg = amortized_config(config)
     training = cfg["training"]
     run_synthetic_smoke(
@@ -1034,6 +1088,13 @@ def _run_amortized_infer(
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
 
+    if getattr(args, "jax_batch_size", None) is not None:
+        config = dict(config)
+        amortized = dict(config.get("amortized", {}) or {})
+        inference = dict(amortized.get("inference", {}) or {})
+        inference["jax_batch_size"] = int(args.jax_batch_size)
+        amortized["inference"] = inference
+        config["amortized"] = amortized
     cfg = amortized_config(config)
     training = cfg["training"]
     inference = cfg["inference"]
@@ -1065,6 +1126,12 @@ def _run_amortized_infer(
             if args.prior_predictive_batch_size is not None
             else inference.get("prior_predictive_batch_size", 256)
         ),
+        shard_outputs=getattr(args, "shard_outputs", None),
+        resume_shards=getattr(args, "resume_shards", None),
+        write_posterior_predictive=getattr(args, "write_posterior_predictive", None),
+        write_residual_samples=getattr(args, "write_residual_samples", None),
+        combine_sample_shards=getattr(args, "combine_sample_shards", None),
+        combine_summary_shards=getattr(args, "combine_summary_shards", None),
         dataset_label=dataset_label,
     )
 

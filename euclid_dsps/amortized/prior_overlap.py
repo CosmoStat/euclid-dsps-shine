@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +39,11 @@ def write_diffsky_prior_overlap_report(
     run_dir = Path(run_dir)
     out = ensure_dir(out_dir)
     truth = _read_truth(dataset_path, max_objects=max_objects)
-    posterior_samples = _read_optional_table(run_dir / "posterior_samples.parquet")
+    posterior_samples = _read_optional_table(
+        run_dir / "posterior_samples.parquet",
+        shard_dir=run_dir / "posterior_samples",
+        max_rows=200_000,
+    )
     posterior_summary = _read_optional_table(run_dir / "posterior_summary.parquet")
     prior = _read_optional_table(run_dir / "learned_or_loaded_prior_samples.parquet")
     if prior.empty:
@@ -112,12 +117,63 @@ def _available_comparisons(
     return tuple(dict.fromkeys(available))
 
 
-def _read_optional_table(path: Path) -> pd.DataFrame:
+def _read_optional_table(
+    path: Path,
+    *,
+    shard_dir: Path | None = None,
+    max_rows: int | None = None,
+) -> pd.DataFrame:
     if not path.exists():
-        return pd.DataFrame()
+        if shard_dir is None or not shard_dir.exists():
+            return pd.DataFrame()
+        frames = []
+        remaining = int(max_rows) if max_rows is not None else None
+        shards = _posterior_sample_paths_from_manifest(shard_dir.parent)
+        if not shards:
+            shards = sorted(shard_dir.glob("*.parquet"))
+        for shard in shards:
+            frame = pd.read_parquet(shard)
+            if remaining is not None:
+                if remaining <= 0:
+                    break
+                frame = frame.head(remaining)
+                remaining -= int(len(frame))
+            if not frame.empty:
+                frames.append(frame)
+        return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if path.suffix == ".parquet":
-        return pd.read_parquet(path)
-    return pd.read_csv(path)
+        frame = pd.read_parquet(path)
+    else:
+        frame = pd.read_csv(path)
+    if max_rows is not None and len(frame) > int(max_rows):
+        return frame.head(int(max_rows))
+    return frame
+
+
+def _posterior_sample_paths_from_manifest(run_dir: Path) -> list[Path]:
+    manifest = run_dir / "posterior_shards_manifest.json"
+    if not manifest.exists():
+        return []
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    records = []
+    for key in ("shards_written", "shards_skipped"):
+        value = payload.get(key, [])
+        if isinstance(value, list):
+            records.extend(item for item in value if isinstance(item, dict))
+    paths = []
+    for record in sorted(records, key=lambda item: int(item.get("batch", 0))):
+        raw = record.get("samples_path")
+        if not raw:
+            continue
+        path = Path(str(raw))
+        if path.is_absolute() or path.exists():
+            paths.append(path)
+        else:
+            paths.append(run_dir / "posterior_samples" / path.name)
+    return paths
 
 
 def _comparison_rows(

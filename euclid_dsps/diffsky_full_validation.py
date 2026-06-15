@@ -11,6 +11,12 @@ import pandas as pd
 from euclid_dsps.config import load_config
 from euclid_dsps.io import ensure_dir, write_json
 
+_AMORTIZED_STAGE_CONFIGS = {
+    "standard_normal": "amortized_standard_normal_config",
+    "supervised_prior": "amortized_supervised_prior_config",
+    "joint_realnvp": "amortized_joint_realnvp_config",
+}
+
 
 def run_diffsky_full_validation(
     config: dict[str, Any],
@@ -61,22 +67,25 @@ def run_diffsky_full_validation(
 
     if not report_only:
         _preflight_full_validation_assets(full, dataset, verbose=verbose)
-        _log(verbose, "[full-validation] stage 1-2/8: supervised prior learning")
-        prior_basic_dir, prior_extended_dir = _run_supervised_prior_stages(
-            full,
-            dataset,
-            out,
-            limit=limit,
-            batch_size=batch_size,
-            epochs=epochs,
-            seed=seed,
-            verbose=verbose,
-            progress=progress,
-        )
-        stage_outputs["supervised_prior_basic"] = str(prior_basic_dir)
-        stage_outputs["supervised_prior_extended"] = str(prior_extended_dir)
+        supervised_prior_checkpoint = None
+        if bool(full.get("run_supervised_priors", False)):
+            _log(verbose, "[full-validation] optional stage: supervised prior learning")
+            prior_basic_dir, prior_extended_dir = _run_supervised_prior_stages(
+                full,
+                dataset,
+                out,
+                limit=limit,
+                batch_size=batch_size,
+                epochs=epochs,
+                seed=seed,
+                verbose=verbose,
+                progress=progress,
+            )
+            stage_outputs["supervised_prior_basic"] = str(prior_basic_dir)
+            stage_outputs["supervised_prior_extended"] = str(prior_extended_dir)
+            supervised_prior_checkpoint = prior_basic_dir / "checkpoints" / "best.eqx"
 
-        _log(verbose, "[full-validation] stage 3/8: true-parameter forward closure")
+        _log(verbose, "[full-validation] stage 1/5: true-parameter forward closure")
         closure_dir = out / "trueparam_forward_closure"
         _run_forward_closure_stage(
             full,
@@ -88,12 +97,12 @@ def run_diffsky_full_validation(
         )
         stage_outputs["forward_closure"] = str(closure_dir)
 
-        _log(verbose, "[full-validation] stage 4-6/8: amortized inference modes")
+        _log(verbose, "[full-validation] stage 2/5: amortized inference modes")
         inference_runs = _run_amortized_stages(
             full,
             dataset,
             out,
-            supervised_prior_checkpoint=prior_basic_dir / "checkpoints" / "best.eqx",
+            supervised_prior_checkpoint=supervised_prior_checkpoint,
             limit=limit,
             batch_size=batch_size,
             epochs=epochs,
@@ -112,7 +121,7 @@ def run_diffsky_full_validation(
         ]
         _log(
             verbose,
-            "[full-validation] stage 7/8: redshift ablation and population realism",
+            "[full-validation] stage 3-4/5: redshift ablation and population realism",
         )
         _run_redshift_and_population_reports(
             full,
@@ -135,7 +144,7 @@ def run_diffsky_full_validation(
     if closure_dir is not None:
         stage_outputs.setdefault("forward_closure", str(closure_dir))
 
-    _log(verbose, "[full-validation] stage 8/8: final report")
+    _log(verbose, "[full-validation] stage 5/5: final report")
     report = write_full_validation_report(
         out,
         dataset_path=dataset,
@@ -244,10 +253,10 @@ def _preflight_full_validation_assets(
 
     for key in (
         "forward_closure_config",
-        "amortized_standard_normal_config",
-        "amortized_supervised_prior_config",
-        "amortized_joint_realnvp_config",
     ):
+        cfg = _load_stage_config(full, key)
+        _collect_config_asset_paths(cfg, label=key, required=required)
+    for _label, key in _amortized_stage_specs(full):
         cfg = _load_stage_config(full, key)
         _collect_config_asset_paths(cfg, label=key, required=required)
 
@@ -345,7 +354,7 @@ def _run_amortized_stages(
     dataset: Path,
     out: Path,
     *,
-    supervised_prior_checkpoint: Path,
+    supervised_prior_checkpoint: Path | None,
     limit: int | None,
     batch_size: int | None,
     epochs: int | None,
@@ -363,13 +372,8 @@ def _run_amortized_stages(
     from euclid_dsps.amortized.infer import infer_amortized_fs2
     from euclid_dsps.amortized.train import train_amortized_fs2
 
-    stages = (
-        ("standard_normal", "amortized_standard_normal_config"),
-        ("supervised_prior", "amortized_supervised_prior_config"),
-        ("joint_realnvp", "amortized_joint_realnvp_config"),
-    )
     runs = []
-    for label, key in stages:
+    for label, key in _amortized_stage_specs(full):
         cfg = _with_dataset_path(_load_stage_config(full, key), dataset)
         cfg = _apply_amortized_runtime_overrides(
             cfg,
@@ -381,6 +385,12 @@ def _run_amortized_stages(
             verbose=verbose,
         )
         if label == "supervised_prior":
+            if supervised_prior_checkpoint is None:
+                raise ValueError(
+                    "full_validation.amortized_modes includes supervised_prior, "
+                    "but run_supervised_priors is false and no supervised prior "
+                    "checkpoint is available."
+                )
             amortized = dict(cfg.get("amortized", {}) or {})
             prior = dict(amortized.get("prior", {}) or {})
             prior["checkpoint"] = str(supervised_prior_checkpoint)
@@ -452,6 +462,14 @@ def _apply_amortized_runtime_overrides(
     configured_infer_jax = runtime.get("inference_jax_batch_size", configured_jax)
     configured_chunk = runtime.get("decoder_sample_chunk_size")
     configured_prior_batch = runtime.get("prior_predictive_batch_size")
+    optional_runtime_keys = (
+        "shard_outputs",
+        "resume_shards",
+        "write_posterior_predictive",
+        "write_residual_samples",
+        "combine_sample_shards",
+        "combine_summary_shards",
+    )
 
     train_jax = jax_batch_size if jax_batch_size is not None else configured_train_jax
     infer_jax = jax_batch_size if jax_batch_size is not None else configured_infer_jax
@@ -465,7 +483,14 @@ def _apply_amortized_runtime_overrides(
         if prior_predictive_batch_size is not None
         else configured_prior_batch
     )
-    if train_jax is None and infer_jax is None and chunk is None and prior_batch is None:
+    has_optional = any(key in runtime for key in optional_runtime_keys)
+    if (
+        train_jax is None
+        and infer_jax is None
+        and chunk is None
+        and prior_batch is None
+        and not has_optional
+    ):
         return config
 
     updated = dict(config)
@@ -493,6 +518,9 @@ def _apply_amortized_runtime_overrides(
         if prior_batch <= 0:
             raise ValueError("full_validation.amortized_runtime.prior_predictive_batch_size must be positive")
         inference["prior_predictive_batch_size"] = prior_batch
+    for key in optional_runtime_keys:
+        if key in runtime:
+            inference[key] = bool(runtime[key])
 
     amortized["training"] = training
     amortized["inference"] = inference
@@ -504,7 +532,11 @@ def _apply_amortized_runtime_overrides(
         f"{training.get('jax_batch_size')} inference_jax_batch_size="
         f"{inference.get('jax_batch_size')} decoder_sample_chunk_size="
         f"{inference.get('decoder_sample_chunk_size')} prior_predictive_batch_size="
-        f"{inference.get('prior_predictive_batch_size')}",
+        f"{inference.get('prior_predictive_batch_size')} shard_outputs="
+        f"{inference.get('shard_outputs')} write_posterior_predictive="
+        f"{inference.get('write_posterior_predictive')} write_residual_samples="
+        f"{inference.get('write_residual_samples')} combine_sample_shards="
+        f"{inference.get('combine_sample_shards')}",
     )
     return updated
 
@@ -528,11 +560,7 @@ def _run_redshift_and_population_reports(
     )
     population_root = ensure_dir(out / "population_realism")
     for label, run_dir in runs:
-        cfg_key = {
-            "standard_normal": "amortized_standard_normal_config",
-            "supervised_prior": "amortized_supervised_prior_config",
-            "joint_realnvp": "amortized_joint_realnvp_config",
-        }[label]
+        cfg_key = _AMORTIZED_STAGE_CONFIGS[label]
         cfg = _with_dataset_path(_load_stage_config(full, cfg_key), dataset)
         _log(
             verbose,
@@ -652,6 +680,25 @@ def _markdown_table(frame: pd.DataFrame) -> str:
 
 def _load_stage_config(full: dict[str, Any], key: str) -> dict[str, Any]:
     return load_config(_required(full, key))
+
+
+def _amortized_stage_specs(full: dict[str, Any]) -> list[tuple[str, str]]:
+    modes = full.get("amortized_modes")
+    if modes is None:
+        modes = ["standard_normal", "joint_realnvp"]
+    if isinstance(modes, str):
+        modes = [modes]
+    specs = []
+    for mode in modes:
+        label = str(mode)
+        if label not in _AMORTIZED_STAGE_CONFIGS:
+            valid = ", ".join(sorted(_AMORTIZED_STAGE_CONFIGS))
+            raise ValueError(
+                f"Unsupported full_validation.amortized_modes entry {label!r}; "
+                f"expected one of: {valid}"
+            )
+        specs.append((label, _AMORTIZED_STAGE_CONFIGS[label]))
+    return specs
 
 
 def _with_dataset_path(config: dict[str, Any], dataset: Path) -> dict[str, Any]:

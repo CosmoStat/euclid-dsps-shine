@@ -100,6 +100,15 @@ def posterior_truth_metrics(
     parameter_pairs: tuple[tuple[str, str], ...],
 ) -> pd.DataFrame:
     """Summarize posterior median recovery for configured parameter/truth pairs."""
+    residuals = _posterior_truth_residuals(posterior_samples, truth, parameter_pairs)
+    return _summarize_posterior_truth_residuals(residuals)
+
+
+def _posterior_truth_residuals(
+    posterior_samples: pd.DataFrame,
+    truth: pd.DataFrame,
+    parameter_pairs: tuple[tuple[str, str], ...],
+) -> pd.DataFrame:
     rows = []
     for parameter, truth_column in parameter_pairs:
         if parameter not in posterior_samples or truth_column not in truth:
@@ -123,28 +132,57 @@ def posterior_truth_metrics(
         if not finite.any():
             continue
         residual = y_pred[finite] - y_true[finite]
-        metric_name = (
-            "mass_bias_alpha_corrected"
-            if parameter == "log10_stellar_mass_alpha_corrected"
-            else "mass_bias_raw"
-            if parameter == "log10_stellar_mass"
-            else f"{parameter}_bias"
-        )
+        for object_id, value in zip(
+            joined.loc[finite, "object_id"].to_numpy(),
+            residual,
+            strict=True,
+        ):
+            rows.append(
+                {
+                    "object_id": object_id,
+                    "parameter": parameter,
+                    "truth_column": truth_column,
+                    "metric_name": _posterior_metric_name(parameter),
+                    "residual": float(value),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _summarize_posterior_truth_residuals(residuals: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    if residuals.empty:
+        return pd.DataFrame(rows)
+    for (parameter, truth_column, metric_name), group in residuals.groupby(
+        ["parameter", "truth_column", "metric_name"],
+        sort=False,
+    ):
+        values = group["residual"].to_numpy(dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            continue
+        med = float(np.median(values))
         rows.append(
             {
                 "parameter": parameter,
                 "truth_column": truth_column,
                 "metric_name": metric_name,
-                "n_objects": int(finite.sum()),
-                "bias": float(np.mean(residual)),
-                "median_bias": float(np.median(residual)),
-                "rmse": float(np.sqrt(np.mean(residual**2))),
-                "sigma_mad": float(
-                    1.4826 * np.median(np.abs(residual - np.median(residual)))
-                ),
+                "n_objects": int(values.size),
+                "bias": float(np.mean(values)),
+                "median_bias": med,
+                "rmse": float(np.sqrt(np.mean(values**2))),
+                "sigma_mad": float(1.4826 * np.median(np.abs(values - med))),
             }
         )
     return pd.DataFrame(rows)
+
+
+def _posterior_metric_name(parameter: str) -> str:
+    if parameter == "log10_stellar_mass_alpha_corrected":
+        return "mass_bias_alpha_corrected"
+    if parameter == "log10_stellar_mass":
+        return "mass_bias_raw"
+    return f"{parameter}_bias"
 
 
 def write_redshift_metrics_for_run(
@@ -157,10 +195,34 @@ def write_redshift_metrics_for_run(
     """Compute redshift and posterior-vs-truth metrics for one inference run."""
     run = Path(run_dir)
     out = ensure_dir(out_dir or run)
-    samples = _read_table(run / "posterior_samples.parquet")
     truth_cols = ["object_id", "redshift_true", "logsm_true", "logsfr_true", "logssfr_true"]
     truth = _read_existing_columns(dataset_path, truth_cols)
-    object_metrics, summary = redshift_metrics_from_samples(samples, truth)
+    object_frames = []
+    residual_frames = []
+    pairs = (
+        ("z_obs", "redshift_true"),
+        ("log10_stellar_mass", "logsm_true"),
+        ("log10_stellar_mass_alpha_corrected", "logsm_true"),
+        ("log10_sfr_at_obs", "logsfr_true"),
+        ("log10_ssfr_at_obs", "logssfr_true"),
+    )
+    found_samples = False
+    for samples in _iter_posterior_sample_tables(run):
+        found_samples = True
+        object_frame, _summary = redshift_metrics_from_samples(samples, truth)
+        if not object_frame.empty:
+            object_frames.append(object_frame)
+        residual_frame = _posterior_truth_residuals(samples, truth, pairs)
+        if not residual_frame.empty:
+            residual_frames.append(residual_frame)
+    if not found_samples:
+        raise FileNotFoundError(f"Missing posterior sample outputs under {run}")
+    object_metrics = (
+        pd.concat(object_frames, ignore_index=True)
+        if object_frames
+        else pd.DataFrame()
+    )
+    summary = summarize_redshift_metrics(object_metrics)
     object_path = out / "photoz_object_metrics.csv"
     object_metrics.to_csv(object_path, index=False)
     summary_frame = pd.DataFrame(
@@ -175,14 +237,12 @@ def write_redshift_metrics_for_run(
     )
     photoz_path = out / "photoz_metrics.csv"
     summary_frame.to_csv(photoz_path, index=False)
-    pairs = (
-        ("z_obs", "redshift_true"),
-        ("log10_stellar_mass", "logsm_true"),
-        ("log10_stellar_mass_alpha_corrected", "logsm_true"),
-        ("log10_sfr_at_obs", "logsfr_true"),
-        ("log10_ssfr_at_obs", "logssfr_true"),
+    residuals = (
+        pd.concat(residual_frames, ignore_index=True)
+        if residual_frames
+        else pd.DataFrame()
     )
-    posterior_metrics = posterior_truth_metrics(samples, truth, pairs)
+    posterior_metrics = _summarize_posterior_truth_residuals(residuals)
     posterior_path = out / "posterior_vs_truth_metrics.csv"
     posterior_metrics.to_csv(posterior_path, index=False)
     return {
@@ -204,11 +264,19 @@ def run_redshift_ablation(
     object_frames = []
     truth = _read_existing_columns(dataset_path, ["object_id", "redshift_true"])
     for label, run_dir in runs:
-        samples_path = run_dir / "posterior_samples.parquet"
-        if not samples_path.exists():
+        frames = []
+        found_samples = False
+        for samples in _iter_posterior_sample_tables(run_dir):
+            found_samples = True
+            object_metrics, _summary = redshift_metrics_from_samples(samples, truth)
+            if not object_metrics.empty:
+                frames.append(object_metrics)
+        if not found_samples:
             continue
-        samples = _read_table(samples_path)
-        object_metrics, summary = redshift_metrics_from_samples(samples, truth)
+        object_metrics = (
+            pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+        )
+        summary = summarize_redshift_metrics(object_metrics)
         rows.append(
             {
                 "label": label,
@@ -257,6 +325,50 @@ def _read_table(path: Path) -> pd.DataFrame:
     if path.suffix == ".parquet":
         return pd.read_parquet(path)
     return pd.read_csv(path)
+
+
+def _iter_posterior_sample_tables(run: Path):
+    monolithic = run / "posterior_samples.parquet"
+    if monolithic.exists():
+        yield _read_table(monolithic)
+        return
+    manifest_paths = _posterior_sample_paths_from_manifest(run)
+    if manifest_paths:
+        for path in manifest_paths:
+            if path.exists():
+                yield pd.read_parquet(path)
+        return
+    shard_dir = run / "posterior_samples"
+    if not shard_dir.exists():
+        return
+    for path in sorted(shard_dir.glob("*.parquet")):
+        yield pd.read_parquet(path)
+
+
+def _posterior_sample_paths_from_manifest(run: Path) -> list[Path]:
+    manifest = run / "posterior_shards_manifest.json"
+    if not manifest.exists():
+        return []
+    try:
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    records = []
+    for key in ("shards_written", "shards_skipped"):
+        value = payload.get(key, [])
+        if isinstance(value, list):
+            records.extend(item for item in value if isinstance(item, dict))
+    paths = []
+    for record in sorted(records, key=lambda item: int(item.get("batch", 0))):
+        raw = record.get("samples_path")
+        if not raw:
+            continue
+        path = Path(str(raw))
+        if path.is_absolute() or path.exists():
+            paths.append(path)
+        else:
+            paths.append(run / "posterior_samples" / path.name)
+    return paths
 
 
 def _read_alpha_summary(run_dir: Path) -> dict[str, float | bool | str]:

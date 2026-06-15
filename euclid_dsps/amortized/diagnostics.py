@@ -425,6 +425,64 @@ def posterior_predictive_residual_frame(
     return pd.DataFrame(rows)
 
 
+def posterior_predictive_residual_summary_frame(
+    object_id,
+    obs_flux,
+    obs_err,
+    mask,
+    model_flux,
+    band_names: tuple[str, ...],
+) -> pd.DataFrame:
+    """Return one posterior predictive residual summary row per object-band."""
+    object_id = np.asarray(object_id)
+    obs_flux = np.asarray(obs_flux, dtype=float)
+    obs_err = np.asarray(obs_err, dtype=float)
+    mask = np.asarray(mask, dtype=bool)
+    model_flux = np.asarray(model_flux, dtype=float)
+    if model_flux.ndim != 3:
+        raise ValueError(f"model_flux must be [K,N,B], got {model_flux.shape}")
+    rows = []
+    _n_samples, n_objects, n_bands = model_flux.shape
+    residual = np.full_like(model_flux, np.nan, dtype=float)
+    valid_err = np.isfinite(obs_err) & (obs_err > 0.0) & mask
+    residual[:, valid_err] = (
+        model_flux[:, valid_err] - obs_flux[None, :, :][:, valid_err]
+    ) / obs_err[None, :, :][:, valid_err]
+    for object_index in range(n_objects):
+        for band_index in range(n_bands):
+            rows.append(
+                {
+                    "object_id": object_id[object_index],
+                    "band": band_names[band_index],
+                    "obs_flux_fnu_cgs": float(obs_flux[object_index, band_index]),
+                    "obs_err_fnu_cgs": float(obs_err[object_index, band_index]),
+                    "model_flux_q16": float(
+                        _nanquantile_or_nan(model_flux[:, object_index, band_index], 0.16)
+                    ),
+                    "model_flux_median": float(
+                        np.nanmedian(model_flux[:, object_index, band_index])
+                    ),
+                    "model_flux_q84": float(
+                        _nanquantile_or_nan(model_flux[:, object_index, band_index], 0.84)
+                    ),
+                    "residual_sigma_q16": float(
+                        _nanquantile_or_nan(residual[:, object_index, band_index], 0.16)
+                    ),
+                    "residual_sigma_median": float(
+                        np.nanmedian(residual[:, object_index, band_index])
+                    ),
+                    "residual_sigma_q84": float(
+                        _nanquantile_or_nan(residual[:, object_index, band_index], 0.84)
+                    ),
+                    "valid": bool(mask[object_index, band_index]),
+                }
+            )
+    frame = pd.DataFrame(rows)
+    if not frame.empty:
+        frame["abs_residual_sigma_median"] = frame["residual_sigma_median"].abs()
+    return frame
+
+
 def feature_diagnostics_frame(
     object_id,
     features,
@@ -514,6 +572,9 @@ def summarize_inference_outputs(
 
 
 def _write_residual_summary(out: Path) -> pd.DataFrame:
+    summary_path = out / "posterior_predictive_residual_summary.parquet"
+    if summary_path.exists():
+        return pd.read_parquet(summary_path)
     residual_path = out / "posterior_predictive_residuals.parquet"
     if not residual_path.exists():
         return pd.DataFrame()

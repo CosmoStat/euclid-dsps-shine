@@ -1,5 +1,50 @@
 # Plan
 
+## 2026-06-15 Diffsky H100 Pipeline Cleanup
+
+- Current implementation slice: clean up the H100 Diffsky science pipeline after
+  the partial Jean-Zay run showed supervised-prior collapse, bad
+  `best.eqx` selection under KL annealing, and non-resumable monolithic
+  inference writes.
+- Remove supervised-prior stages from the default full-validation science path.
+  Keep the supervised-prior code available as an explicit diagnostic/dev tool,
+  but do not feed collapsed supervised priors into amortized science stages.
+- Make the default science sequence: true-parameter forward closure,
+  `standard_normal` amortized baseline, `joint_realnvp` amortized target,
+  sharded inference, redshift diagnostics, population realism, and final report.
+- Select amortized `best.eqx` on a stable post-annealing metric
+  (`validation_negative_loglike` by default) instead of the annealed
+  `validation_loss`.
+- Add sharded, resumable amortized inference outputs so long runs write useful
+  partial products batch by batch and avoid concatenating large posterior
+  samples/flux tables in memory.
+- Add Slurm entry points for cleaned full validation and checkpoint-only
+  sharded inference from an existing `last.eqx`/epoch checkpoint.
+- Completed in the working tree: H100 full validation defaults now skip
+  supervised-prior stages and run `standard_normal` plus `joint_realnvp`;
+  amortized `best.eqx` selection uses post-annealing
+  `validation_negative_loglike`; inference can write resumable shards with
+  compact combined summaries and optional large predictive/residual outputs;
+  redshift and population reports can consume posterior sample shards; and
+  `scripts/diffsky_amortized_infer_h100.slurm` launches checkpoint-only
+  sharded inference from an existing training run.
+- Validation completed with `uv run python -m compileall euclid_dsps scripts`,
+  `uv run ruff check euclid_dsps tests`, targeted `pytest` for
+  redshift/diagnostics/full-validation
+  reporting, CLI help smokes for `diffsky-run-full-validation` and
+  `amortized-infer-diffsky`, H100 config-load smoke, and `bash -n` on the H100
+  Slurm scripts.
+- Review follow-up completed in the working tree: standalone
+  `amortized-infer-diffsky --jax-batch-size` now overrides
+  `amortized.inference.jax_batch_size`, and shard resume metadata now includes
+  run/batch partition details plus an object-id digest. Redshift and population
+  diagnostics prefer `posterior_shards_manifest.json` so stale shards in the
+  same output directory are ignored after a completed run.
+- Review follow-up validation completed with `uv run python -m compileall
+  euclid_dsps scripts`, `uv run ruff check euclid_dsps tests`, targeted
+  `pytest` (`11 passed`), CLI help smokes, `bash -n` on the H100 Slurm scripts,
+  and `git diff --check`.
+
 ## 2026-06-11 Documentation Style Refresh
 
 - Current implementation slice: improve the public-facing documentation style

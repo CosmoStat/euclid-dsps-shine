@@ -117,3 +117,93 @@ def test_write_redshift_metrics_includes_alpha_and_likelihood_metadata(tmp_path)
         "mass_bias_raw",
         "mass_bias_alpha_corrected",
     }
+
+
+def test_write_redshift_metrics_reads_posterior_sample_shards(tmp_path) -> None:
+    dataset = tmp_path / "truth.parquet"
+    pd.DataFrame(
+        {
+            "object_id": [1, 2],
+            "redshift_true": [0.5, 1.0],
+            "logsm_true": [10.0, 11.0],
+        }
+    ).to_parquet(dataset, index=False)
+    run = tmp_path / "run"
+    shard_dir = run / "posterior_samples"
+    shard_dir.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "object_id": [1, 1],
+            "z_obs": [0.45, 0.55],
+            "log10_stellar_mass": [9.9, 10.1],
+        }
+    ).to_parquet(shard_dir / "batch_000001.parquet", index=False)
+    pd.DataFrame(
+        {
+            "object_id": [2, 2],
+            "z_obs": [0.95, 1.05],
+            "log10_stellar_mass": [10.8, 11.2],
+        }
+    ).to_parquet(shard_dir / "batch_000002.parquet", index=False)
+
+    write_redshift_metrics_for_run(
+        dataset_path=dataset,
+        run_dir=run,
+        label="sharded",
+    )
+
+    photoz = pd.read_csv(run / "photoz_metrics.csv")
+    posterior = pd.read_csv(run / "posterior_vs_truth_metrics.csv")
+    assert int(photoz.loc[0, "n_objects"]) == 2
+    assert "mass_bias_raw" in set(posterior["metric_name"])
+
+
+def test_write_redshift_metrics_uses_manifest_to_ignore_stale_shards(tmp_path) -> None:
+    dataset = tmp_path / "truth.parquet"
+    pd.DataFrame(
+        {
+            "object_id": [1, 2, 99],
+            "redshift_true": [0.5, 1.0, 3.0],
+        }
+    ).to_parquet(dataset, index=False)
+    run = tmp_path / "run"
+    shard_dir = run / "posterior_samples"
+    shard_dir.mkdir(parents=True)
+    shard_1 = shard_dir / "batch_000001.parquet"
+    shard_2 = shard_dir / "batch_000002.parquet"
+    stale = shard_dir / "batch_999999.parquet"
+    pd.DataFrame({"object_id": [1, 1], "z_obs": [0.45, 0.55]}).to_parquet(
+        shard_1,
+        index=False,
+    )
+    pd.DataFrame({"object_id": [2, 2], "z_obs": [0.95, 1.05]}).to_parquet(
+        shard_2,
+        index=False,
+    )
+    pd.DataFrame({"object_id": [99, 99], "z_obs": [2.8, 3.2]}).to_parquet(
+        stale,
+        index=False,
+    )
+    (run / "posterior_shards_manifest.json").write_text(
+        json.dumps(
+            {
+                "shards_written": [
+                    {"batch": 1, "samples_path": str(shard_1)},
+                    {"batch": 2, "samples_path": str(shard_2)},
+                ],
+                "shards_skipped": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    write_redshift_metrics_for_run(
+        dataset_path=dataset,
+        run_dir=run,
+        label="manifest",
+    )
+
+    photoz = pd.read_csv(run / "photoz_metrics.csv")
+    objects = pd.read_csv(run / "photoz_object_metrics.csv")
+    assert int(photoz.loc[0, "n_objects"]) == 2
+    assert set(objects["object_id"]) == {1, 2}

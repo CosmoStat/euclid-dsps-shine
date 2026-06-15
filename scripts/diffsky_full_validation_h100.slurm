@@ -15,6 +15,9 @@
 set -Eeuo pipefail
 
 # Budgeted H100 science-validation run.
+# The default pipeline now runs forward closure, standard-normal baseline,
+# joint-RealNVP target, sharded inference, and reports. Supervised-prior stages
+# are kept as explicit dev diagnostics and are not run by this script.
 # This job is intentionally offline: it does not run pip/uv/git network
 # commands and assumes the repository, conda environment, and Diffsky assets
 # are already present on Jean-Zay.
@@ -58,7 +61,7 @@ DECODER_SAMPLE_CHUNK_SIZE="${DECODER_SAMPLE_CHUNK_SIZE:-4}"
 PRIOR_PREDICTIVE_BATCH_SIZE="${PRIOR_PREDICTIVE_BATCH_SIZE:-1024}"
 EPOCHS="${EPOCHS:-5}"
 N_SAMPLES="${N_SAMPLES:-1}"
-POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-32}"
+POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-128}"
 PRIOR_SAMPLES="${PRIOR_SAMPLES:-8192}"
 SEED="${SEED:-42}"
 LIMIT="${LIMIT:-}"
@@ -93,6 +96,7 @@ echo "[job] batch_size: $BATCH_SIZE"
 echo "[job] jax_batch_size: $JAX_BATCH_SIZE"
 echo "[job] decoder_sample_chunk_size: $DECODER_SAMPLE_CHUNK_SIZE"
 echo "[job] prior_predictive_batch_size: $PRIOR_PREDICTIVE_BATCH_SIZE"
+echo "[job] inference outputs: sharded by config; posterior predictive flux/residual samples disabled by config"
 echo "[job] epochs: $EPOCHS"
 echo "[job] n_samples: $N_SAMPLES"
 echo "[job] posterior_samples: $POSTERIOR_SAMPLES"

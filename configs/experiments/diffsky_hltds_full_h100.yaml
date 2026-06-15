@@ -6,6 +6,10 @@ experiment:
 
 full_validation:
     dataset_config: configs/diffsky_dataset_hltds_04_14.yaml
+    run_supervised_priors: false
+    amortized_modes:
+        - standard_normal
+        - joint_realnvp
     supervised_prior_basic_config: configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml
     supervised_prior_extended_config: configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml
     forward_closure_config: configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml
@@ -14,7 +18,6 @@ full_validation:
     amortized_joint_realnvp_config: configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
     report_sections:
         - Dataset integrity
-        - Supervised prior versus truth
         - Same-parameter forward closure
         - Global SED scale calibration
         - Photometric posterior inference
@@ -37,6 +40,12 @@ full_validation:
         jax_batch_size: 64
         decoder_sample_chunk_size: 4
         prior_predictive_batch_size: 1024
+        shard_outputs: true
+        resume_shards: true
+        write_posterior_predictive: false
+        write_residual_samples: false
+        combine_sample_shards: false
+        combine_summary_shards: true
 
 calibration:
     global_sed_scale:
