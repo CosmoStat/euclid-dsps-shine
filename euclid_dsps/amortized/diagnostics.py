@@ -407,9 +407,12 @@ def posterior_predictive_residual_frame(
     mask,
     model_flux,
     band_names: tuple[str, ...],
+    *,
+    row_index=None,
 ) -> pd.DataFrame:
     """Return long-form normalized posterior predictive residual rows."""
     object_id = np.asarray(object_id)
+    row_index = _optional_row_index(row_index, object_id)
     obs_flux = np.asarray(obs_flux, dtype=float)
     obs_err = np.asarray(obs_err, dtype=float)
     mask = np.asarray(mask, dtype=bool)
@@ -431,6 +434,7 @@ def posterior_predictive_residual_frame(
                 rows.append(
                     {
                         "object_id": object_id[object_index],
+                        **_row_index_value(row_index, object_index),
                         "sample_id": int(sample_id),
                         "band": band_names[band_index],
                         "obs_flux_fnu_cgs": float(obs_flux[object_index, band_index]),
@@ -452,9 +456,12 @@ def posterior_predictive_residual_summary_frame(
     mask,
     model_flux,
     band_names: tuple[str, ...],
+    *,
+    row_index=None,
 ) -> pd.DataFrame:
     """Return one posterior predictive residual summary row per object-band."""
     object_id = np.asarray(object_id)
+    row_index = _optional_row_index(row_index, object_id)
     obs_flux = np.asarray(obs_flux, dtype=float)
     obs_err = np.asarray(obs_err, dtype=float)
     mask = np.asarray(mask, dtype=bool)
@@ -473,6 +480,7 @@ def posterior_predictive_residual_summary_frame(
             rows.append(
                 {
                     "object_id": object_id[object_index],
+                    **_row_index_value(row_index, object_index),
                     "band": band_names[band_index],
                     "obs_flux_fnu_cgs": float(obs_flux[object_index, band_index]),
                     "obs_err_fnu_cgs": float(obs_err[object_index, band_index]),
@@ -507,21 +515,42 @@ def feature_diagnostics_frame(
     object_id,
     features,
     *,
+    row_index=None,
     n_flux_bands: int = 10,
 ) -> pd.DataFrame:
     """Return per-object feature magnitude diagnostics."""
     object_id = np.asarray(object_id)
+    row_index = _optional_row_index(row_index, object_id)
     features = np.asarray(features, dtype=float)
     flux_features = features[:, :n_flux_bands]
     err_features = features[:, n_flux_bands:]
-    return pd.DataFrame(
-        {
-            "object_id": object_id,
-            "feature_max_abs": np.nanmax(np.abs(features), axis=1),
-            "flux_feature_max_abs": np.nanmax(np.abs(flux_features), axis=1),
-            "err_feature_max_abs": np.nanmax(np.abs(err_features), axis=1),
-        }
-    )
+    data = {
+        "object_id": object_id,
+        "feature_max_abs": np.nanmax(np.abs(features), axis=1),
+        "flux_feature_max_abs": np.nanmax(np.abs(flux_features), axis=1),
+        "err_feature_max_abs": np.nanmax(np.abs(err_features), axis=1),
+    }
+    if row_index is not None:
+        data["row_index"] = row_index
+    return pd.DataFrame(data)
+
+
+def _optional_row_index(row_index, object_id: np.ndarray) -> np.ndarray | None:
+    if row_index is None:
+        return None
+    values = np.asarray(row_index, dtype=np.int64)
+    if values.shape[0] != np.asarray(object_id).shape[0]:
+        raise ValueError(
+            "row_index length must match object_id length: "
+            f"{values.shape[0]} vs {np.asarray(object_id).shape[0]}"
+        )
+    return values
+
+
+def _row_index_value(row_index: np.ndarray | None, object_index: int) -> dict[str, int]:
+    if row_index is None:
+        return {}
+    return {"row_index": int(row_index[object_index])}
 
 
 def summarize_inference_outputs(
@@ -530,6 +559,7 @@ def summarize_inference_outputs(
     *,
     config: dict[str, Any] | None = None,
     limit: int | None = None,
+    row_indices: np.ndarray | None = None,
 ) -> None:
     """Write posterior predictive diagnostics from inference parquet outputs."""
     summary_path = Path(summary_path)
@@ -539,12 +569,19 @@ def summarize_inference_outputs(
     frame = pd.read_parquet(summary_path)
     residual_summary = _write_residual_summary(out)
     top_chi2 = _write_top_chi2(frame, residual_summary, out)
-    redshift = _write_redshift_comparison(frame, out, config=config, limit=limit)
+    redshift = _write_redshift_comparison(
+        frame,
+        out,
+        config=config,
+        limit=limit,
+        row_indices=row_indices,
+    )
     catalog_proxy = _write_catalog_proxy_comparison(
         frame,
         out,
         config=config,
         limit=limit,
+        row_indices=row_indices,
     )
     prior_summary = _write_learned_prior_summary(out)
     pit_summary = _write_redshift_pit(redshift, out)
@@ -688,6 +725,7 @@ def _write_redshift_comparison(
     *,
     config: dict[str, Any] | None,
     limit: int | None,
+    row_indices: np.ndarray | None,
 ) -> pd.DataFrame:
     if config is None or summary.empty or "z_obs_median" not in summary:
         return pd.DataFrame()
@@ -707,14 +745,21 @@ def _write_redshift_comparison(
         columns=columns,
         batch_size=10_000,
         limit=limit,
+        row_indices=(
+            None
+            if row_indices is None
+            else set(np.asarray(row_indices, dtype=np.int64).tolist())
+        ),
     ):
         work = batch.copy()
+        work["row_index"] = work.index.to_numpy()
         work["object_id"] = work.index.to_numpy()
         frames.append(work)
     if not frames:
         return pd.DataFrame()
     proxies = pd.concat(frames, axis=0, ignore_index=True)
-    comparison = summary.merge(proxies, on="object_id", how="left")
+    identity = _summary_identity_column(summary, proxies)
+    comparison = summary.merge(proxies, on=identity, how="left")
     for column in columns:
         comparison[f"delta_z_obs_median_minus_{column}"] = (
             comparison["z_obs_median"] - comparison[column]
@@ -729,6 +774,7 @@ def _write_catalog_proxy_comparison(
     *,
     config: dict[str, Any] | None,
     limit: int | None,
+    row_indices: np.ndarray | None,
 ) -> pd.DataFrame:
     if config is None or summary.empty:
         return pd.DataFrame()
@@ -762,11 +808,16 @@ def _write_catalog_proxy_comparison(
         columns=columns,
         batch_size=10_000,
         limit=limit,
+        row_indices=(
+            None
+            if row_indices is None
+            else set(np.asarray(row_indices, dtype=np.int64).tolist())
+        ),
     ):
         rows = []
         for row_index, row in batch.iterrows():
             row_dict = row.to_dict()
-            out_row = {"object_id": row_index}
+            out_row = {"row_index": row_index, "object_id": row_index}
             for output_name, spec in specs.items():
                 out_row[output_name] = truth_value_from_spec(row_dict, spec)
             rows.append(out_row)
@@ -775,7 +826,8 @@ def _write_catalog_proxy_comparison(
     if not frames:
         return pd.DataFrame()
     proxies = pd.concat(frames, axis=0, ignore_index=True)
-    comparison = summary.merge(proxies, on="object_id", how="left")
+    identity = _summary_identity_column(summary, proxies)
+    comparison = summary.merge(proxies, on=identity, how="left")
     if (
         "log10_stellar_mass_median" in comparison
         and "catalog_log10_stellar_mass_proxy" in comparison
@@ -787,6 +839,12 @@ def _write_catalog_proxy_comparison(
     comparison.to_parquet(out / "catalog_proxy_comparison.parquet", index=False)
     comparison.to_csv(out / "catalog_proxy_comparison.csv", index=False)
     return comparison
+
+
+def _summary_identity_column(summary: pd.DataFrame, proxies: pd.DataFrame) -> str:
+    if "row_index" in summary and "row_index" in proxies:
+        return "row_index"
+    return "object_id"
 
 
 def _write_learned_prior_summary(out: Path) -> dict[str, Any]:

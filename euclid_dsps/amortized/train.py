@@ -29,6 +29,7 @@ from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, truth_column_from_spec, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
 
+from .catalog_identity import write_catalog_fingerprint
 from .config import amortized_config, require_amortized_dependencies
 from .data import (
     PhotometryBatch,
@@ -281,6 +282,17 @@ def train_amortized_fs2(
     """Train encoder and RealNVP prior jointly on configured photometry."""
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
+    redshift_bins_for_fingerprint = (
+        ((config.get("amortized", {}) or {}).get("data", {}) or {}).get(
+            "redshift_bins",
+            None,
+        )
+    )
+    catalog_identity = write_catalog_fingerprint(
+        out,
+        config,
+        redshift_bins=redshift_bins_for_fingerprint,
+    )
     _log(verbose, f"[amortized] {dataset_label} joint encoder/RealNVP training")
     _log(verbose, f"[amortized] output directory: {out}")
     _log(
@@ -714,6 +726,7 @@ def train_amortized_fs2(
         "selection_mode": split.selection_mode,
         "stratified_strategy": split.stratified_strategy,
         "redshift_column": split.redshift_column,
+        "catalog_fingerprint": catalog_identity,
         "kl_annealing_epochs": int(cfg["training"].get("kl_annealing_epochs", 5)),
         "kl_weight_max": float(kl_weight_max),
         "best_loss": float(best_metric_value),

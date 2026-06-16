@@ -16,11 +16,13 @@ def posterior_samples_frame(
     logprior,
     loglike,
     *,
+    row_index=None,
     log_alpha_sed: float = 0.0,
     alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return long-form posterior sample rows."""
     object_id = np.asarray(object_id)
+    row_index = _optional_row_index(row_index, object_id)
     theta = np.asarray(theta, dtype=float)
     logq = np.asarray(logq, dtype=float)
     logprior = np.asarray(logprior, dtype=float)
@@ -33,6 +35,7 @@ def posterior_samples_frame(
         for object_index in range(n_objects):
             row = {
                 "object_id": object_id[object_index],
+                **_row_index_value(row_index, object_index),
                 "sample_id": int(sample_id),
                 "logq": float(logq[sample_id, object_index]),
                 "logprior": float(logprior[sample_id, object_index]),
@@ -56,11 +59,13 @@ def posterior_summary_frame(
     chi2,
     mask,
     *,
+    row_index=None,
     log_alpha_sed: float = 0.0,
     alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return one posterior summary row per object."""
     object_id = np.asarray(object_id)
+    row_index = _optional_row_index(row_index, object_id)
     theta = np.asarray(theta, dtype=float)
     loglike = np.asarray(loglike, dtype=float)
     chi2 = np.asarray(chi2, dtype=float)
@@ -69,6 +74,7 @@ def posterior_summary_frame(
     for object_index, oid in enumerate(object_id):
         row = {
             "object_id": oid,
+            **_row_index_value(row_index, object_index),
             "n_valid_bands": int(mask[object_index].sum()),
             "photometric_loglike_mean": float(np.nanmean(loglike[:, object_index])),
             "posterior_predictive_chi2_median": float(
@@ -101,12 +107,14 @@ def posterior_predictive_flux_frame(
     model_flux,
     band_names: tuple[str, ...],
     *,
+    row_index=None,
     model_flux_raw=None,
     log_alpha_sed: float = 0.0,
     alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
     """Return long-form posterior predictive model flux rows."""
     object_id = np.asarray(object_id)
+    row_index = _optional_row_index(row_index, object_id)
     model_flux = np.asarray(model_flux, dtype=float)
     model_flux_raw = (
         np.asarray(model_flux_raw, dtype=float)
@@ -123,6 +131,7 @@ def posterior_predictive_flux_frame(
                 rows.append(
                     {
                         "object_id": object_id[object_index],
+                        **_row_index_value(row_index, object_index),
                         "sample_id": int(sample_id),
                         "band": band_names[band_index],
                         "model_flux_fnu_cgs": float(
@@ -186,3 +195,21 @@ def _add_alpha_corrected_mass(row: dict, alpha_sed: float) -> None:
     row["log10_stellar_mass_alpha_corrected"] = float(
         log10_mass_alpha_corrected(raw, alpha_sed)
     )
+
+
+def _optional_row_index(row_index, object_id: np.ndarray) -> np.ndarray | None:
+    if row_index is None:
+        return None
+    values = np.asarray(row_index, dtype=np.int64)
+    if values.shape[0] != np.asarray(object_id).shape[0]:
+        raise ValueError(
+            "row_index length must match object_id length: "
+            f"{values.shape[0]} vs {np.asarray(object_id).shape[0]}"
+        )
+    return values
+
+
+def _row_index_value(row_index: np.ndarray | None, object_index: int) -> dict[str, int]:
+    if row_index is None:
+        return {}
+    return {"row_index": int(row_index[object_index])}

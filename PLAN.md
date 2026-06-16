@@ -1,5 +1,40 @@
 # Plan
 
+## 2026-06-16 Diffsky Photo-z RealNVP Calibration
+
+- Current implementation slice: refocus the next Diffsky H100 run on
+  recovering redshift from photometry and comparing against true redshift,
+  with `joint_realnvp` as the main prior path rather than treating
+  `standard_normal` as a science target.
+- Drop fixed-z closure from the main decision gate. The gate is now
+  free-redshift inference on a diagnostic subset: photo-z bias, RMSE,
+  outlier fraction, PIT/coverage, residuals by band, chi2 outliers, and
+  redshift bias by truth-redshift bin. Stellar mass remains a degeneracy
+  symptom, not the primary pass/fail metric.
+- Add trainable per-band flux calibration in the amortized path so the model
+  can absorb small zero-point/color mismatches without forcing redshift or mass
+  to compensate. The calibration is saved to JSON/CSV/PNG and included in
+  training/inference summaries.
+- Add a train-only H100 Slurm entry point for amortized Diffsky runs, and add
+  a dedicated `joint_realnvp` photo-z H100 experiment config with per-band
+  calibration enabled, post-annealing best-checkpoint selection, sharded
+  inference defaults, and resumable outputs.
+- Add `photoz_metrics_by_redshift_bin.csv` to the standard inference photo-z
+  metrics so the diagnostic gate has an explicit redshift-bin bias/coverage
+  table, not only per-object samples.
+- Follow-up after the failed 10k/5k smoke: inference and metric outputs now
+  preserve `row_index`, write `inference_truth.parquet`, prefer row-index
+  truth joins, fail on duplicate legacy object-id joins, save catalog
+  fingerprints, and support balanced/random/stratified inference selection
+  through CLI and H100 Slurm exports. The photo-z H100 config now defaults to
+  balanced redshift selection and a conservative first RealNVP
+  `kl_weight_max=0.05`.
+- Validation completed with `python -m compileall euclid_dsps scripts`,
+  `uv run ruff check euclid_dsps tests`, targeted amortized pytest
+  (`19 passed`), CLI help smokes for `amortized-train-diffsky` and
+  `amortized-infer-diffsky`, and `bash -n`
+  on the H100 train/infer/full-validation Slurm scripts.
+
 ## 2026-06-15 Diffsky H100 Pipeline Cleanup
 
 - Current implementation slice: clean up the H100 Diffsky science pipeline after

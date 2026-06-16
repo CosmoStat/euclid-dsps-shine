@@ -19,28 +19,46 @@ def redshift_metrics_from_samples(
     truth_column: str = "redshift_true",
 ) -> tuple[pd.DataFrame, dict[str, float | int]]:
     """Compute per-object and aggregate redshift posterior metrics."""
-    required = {"object_id", z_parameter}
+    identity_column = _identity_column(posterior_samples, truth)
+    required = {identity_column, z_parameter}
     if not required <= set(posterior_samples.columns):
         missing = ", ".join(sorted(required - set(posterior_samples.columns)))
         raise ValueError(f"posterior_samples missing required columns: {missing}")
-    if "object_id" not in truth or truth_column not in truth:
-        raise ValueError(f"truth must contain object_id and {truth_column}")
+    if identity_column not in truth or truth_column not in truth:
+        raise ValueError(f"truth must contain {identity_column} and {truth_column}")
     rows = []
-    truth_lookup = truth.set_index("object_id")[truth_column]
-    for object_id, group in posterior_samples.groupby("object_id", sort=False):
-        if object_id not in truth_lookup:
+    _require_unique_truth_identity(truth, identity_column)
+    truth_indexed = truth.set_index(identity_column, drop=False)
+    truth_lookup = truth_indexed[truth_column]
+    for identity_value, group in posterior_samples.groupby(identity_column, sort=False):
+        if identity_value not in truth_lookup:
             continue
-        z_true = float(truth_lookup.loc[object_id])
+        truth_row = truth_indexed.loc[identity_value]
+        z_true = float(truth_lookup.loc[identity_value])
         samples = pd.to_numeric(group[z_parameter], errors="coerce").to_numpy(dtype=float)
         samples = samples[np.isfinite(samples)]
         if samples.size == 0 or not np.isfinite(z_true):
             continue
+        object_id = (
+            truth_row["object_id"]
+            if identity_column == "row_index" and "object_id" in truth_row
+            else (
+                group["object_id"].iloc[0]
+                if "object_id" in group
+                else truth_row.get("object_id", identity_value)
+            )
+        )
         q16, q50, q84 = np.quantile(samples, [0.16, 0.5, 0.84])
         q025, q975 = np.quantile(samples, [0.025, 0.975])
         delta = (q50 - z_true) / (1.0 + z_true)
         rows.append(
             {
                 "object_id": object_id,
+                **(
+                    {"row_index": int(identity_value)}
+                    if identity_column == "row_index"
+                    else {}
+                ),
                 "z_true": z_true,
                 "z_pred_median": float(q50),
                 "z_q16": float(q16),
@@ -172,18 +190,28 @@ def _posterior_truth_residuals(
     parameter_pairs: tuple[tuple[str, str], ...],
 ) -> pd.DataFrame:
     rows = []
+    identity_column = _identity_column(posterior_samples, truth)
+    _require_unique_truth_identity(truth, identity_column)
     for parameter, truth_column in parameter_pairs:
-        if parameter not in posterior_samples or truth_column not in truth:
+        if (
+            parameter not in posterior_samples
+            or truth_column not in truth
+            or identity_column not in posterior_samples
+            or identity_column not in truth
+        ):
             continue
         med = (
-            posterior_samples.groupby("object_id", sort=False)[parameter]
+            posterior_samples.groupby(identity_column, sort=False)[parameter]
             .median()
             .rename("posterior_median")
             .reset_index()
         )
+        truth_columns = [identity_column, truth_column]
+        if "object_id" in truth and "object_id" not in truth_columns:
+            truth_columns.append("object_id")
         joined = med.merge(
-            truth[["object_id", truth_column]],
-            on="object_id",
+            truth[truth_columns],
+            on=identity_column,
             how="inner",
         )
         if joined.empty:
@@ -194,14 +222,20 @@ def _posterior_truth_residuals(
         if not finite.any():
             continue
         residual = y_pred[finite] - y_true[finite]
-        for object_id, value in zip(
-            joined.loc[finite, "object_id"].to_numpy(),
+        for (_, joined_row), value in zip(
+            joined.loc[finite].iterrows(),
             residual,
             strict=True,
         ):
+            identity_value = joined_row[identity_column]
             rows.append(
                 {
-                    "object_id": object_id,
+                    "object_id": joined_row.get("object_id", identity_value),
+                    **(
+                        {"row_index": int(identity_value)}
+                        if identity_column == "row_index"
+                        else {}
+                    ),
                     "parameter": parameter,
                     "truth_column": truth_column,
                     "metric_name": _posterior_metric_name(parameter),
@@ -258,7 +292,7 @@ def write_redshift_metrics_for_run(
     run = Path(run_dir)
     out = ensure_dir(out_dir or run)
     truth_cols = ["object_id", "redshift_true", "logsm_true", "logsfr_true", "logssfr_true"]
-    truth = _read_existing_columns(dataset_path, truth_cols)
+    truth = _truth_for_run(run, dataset_path, truth_cols)
     object_frames = []
     residual_frames = []
     pairs = (
@@ -378,10 +412,40 @@ def parse_run_specs(specs: list[str]) -> list[tuple[str, Path]]:
     return runs
 
 
+def _identity_column(posterior_samples: pd.DataFrame, truth: pd.DataFrame) -> str:
+    if "row_index" in posterior_samples and "row_index" in truth:
+        return "row_index"
+    return "object_id"
+
+
+def _require_unique_truth_identity(truth: pd.DataFrame, identity_column: str) -> None:
+    if identity_column not in truth:
+        raise ValueError(f"truth missing identity column {identity_column}")
+    if not truth[identity_column].is_unique:
+        duplicate_count = int(len(truth) - truth[identity_column].nunique(dropna=False))
+        raise ValueError(
+            "truth identity column is not unique: "
+            f"{identity_column} has {duplicate_count} duplicate rows"
+        )
+
+
+def _truth_for_run(
+    run: Path,
+    dataset_path: str | Path,
+    columns: list[str],
+) -> pd.DataFrame:
+    snapshot = run / "inference_truth.parquet"
+    if snapshot.exists():
+        return pd.read_parquet(snapshot)
+    return _read_existing_columns(dataset_path, columns)
+
+
 def _read_existing_columns(path: str | Path, columns: list[str]) -> pd.DataFrame:
     available = pd.read_parquet(path, columns=None).columns
     selected = [column for column in columns if column in available]
-    return pd.read_parquet(path, columns=selected)
+    frame = pd.read_parquet(path, columns=selected)
+    frame.insert(0, "row_index", np.arange(len(frame), dtype=np.int64))
+    return frame
 
 
 def _read_table(path: Path) -> pd.DataFrame:

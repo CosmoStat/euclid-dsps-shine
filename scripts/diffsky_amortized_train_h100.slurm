@@ -37,6 +37,9 @@ LIMIT="${LIMIT:-}"
 KL_ANNEALING_EPOCHS="${KL_ANNEALING_EPOCHS:-10}"
 KL_WEIGHT_MAX="${KL_WEIGHT_MAX:-0.5}"
 VALIDATION_EVERY="${VALIDATION_EVERY:-1}"
+BEST_CHECKPOINT_MIN_EPOCH="${BEST_CHECKPOINT_MIN_EPOCH:-}"
+SELECTION_MODE="${SELECTION_MODE:-}"
+STRATIFIED_STRATEGY="${STRATIFIED_STRATEGY:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -66,6 +69,9 @@ echo "[job] epochs: $EPOCHS"
 echo "[job] n_samples: $N_SAMPLES"
 echo "[job] kl_annealing_epochs: $KL_ANNEALING_EPOCHS"
 echo "[job] kl_weight_max: $KL_WEIGHT_MAX"
+echo "[job] best_checkpoint_min_epoch: ${BEST_CHECKPOINT_MIN_EPOCH:-<config>}"
+echo "[job] selection_mode: ${SELECTION_MODE:-<config>}"
+echo "[job] stratified_strategy: ${STRATIFIED_STRATEGY:-<config>}"
 echo "[job] seed: $SEED"
 
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
@@ -112,6 +118,15 @@ cmd=(
 
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
+fi
+if [[ -n "$BEST_CHECKPOINT_MIN_EPOCH" ]]; then
+  cmd+=(--best-checkpoint-min-epoch "$BEST_CHECKPOINT_MIN_EPOCH")
+fi
+if [[ -n "$SELECTION_MODE" ]]; then
+  cmd+=(--selection-mode "$SELECTION_MODE")
+fi
+if [[ -n "$STRATIFIED_STRATEGY" ]]; then
+  cmd+=(--stratified-strategy "$STRATIFIED_STRATEGY")
 fi
 
 echo "[job] command:"

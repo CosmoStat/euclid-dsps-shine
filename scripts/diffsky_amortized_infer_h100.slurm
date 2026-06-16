@@ -57,6 +57,9 @@ POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-128}"
 PRIOR_SAMPLES="${PRIOR_SAMPLES:-8192}"
 SEED="${SEED:-42}"
 LIMIT="${LIMIT:-5000}"
+SELECTION_MODE="${SELECTION_MODE:-sequential}"
+STRATIFIED_STRATEGY="${STRATIFIED_STRATEGY:-balanced}"
+SELECTION_SEED="${SELECTION_SEED:-$SEED}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -90,6 +93,9 @@ echo "[job] prior_predictive_batch_size: $PRIOR_PREDICTIVE_BATCH_SIZE"
 echo "[job] posterior_samples: $POSTERIOR_SAMPLES"
 echo "[job] prior_samples: $PRIOR_SAMPLES"
 echo "[job] seed: $SEED"
+echo "[job] selection_mode: $SELECTION_MODE"
+echo "[job] stratified_strategy: $STRATIFIED_STRATEGY"
+echo "[job] selection_seed: $SELECTION_SEED"
 echo "[job] outputs: sharded, resumable; posterior predictive flux and residual samples disabled"
 
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
@@ -138,6 +144,9 @@ cmd=(
   --decoder-sample-chunk-size "$DECODER_SAMPLE_CHUNK_SIZE"
   --prior-predictive-batch-size "$PRIOR_PREDICTIVE_BATCH_SIZE"
   --seed "$SEED"
+  --selection-mode "$SELECTION_MODE"
+  --stratified-strategy "$STRATIFIED_STRATEGY"
+  --selection-seed "$SELECTION_SEED"
   --shard-outputs
   --no-posterior-predictive
   --no-residual-samples

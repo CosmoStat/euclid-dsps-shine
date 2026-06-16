@@ -592,6 +592,11 @@ def _add_amortized_train_arguments(
         type=int,
         help="Override amortized.training.validation_every.",
     )
+    parser.add_argument(
+        "--best-checkpoint-min-epoch",
+        type=int,
+        help="Override amortized.training.best_checkpoint_min_epoch.",
+    )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
 
@@ -610,6 +615,21 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--decoder-sample-chunk-size", type=int)
     parser.add_argument("--prior-predictive-batch-size", type=int)
+    parser.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+        help="Select inference rows sequentially, randomly, or by redshift strata.",
+    )
+    parser.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+        help="Inference strategy for stratified_redshift selection.",
+    )
+    parser.add_argument(
+        "--selection-seed",
+        type=int,
+        help="Seed for random or stratified inference row selection.",
+    )
     _add_amortized_infer_shard_arguments(parser)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--feature-stats")
@@ -1071,6 +1091,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         training["kl_weight_max"] = float(args.kl_weight_max)
     if args.validation_every is not None:
         training["validation_every"] = int(args.validation_every)
+    if getattr(args, "best_checkpoint_min_epoch", None) is not None:
+        training["best_checkpoint_min_epoch"] = int(args.best_checkpoint_min_epoch)
     amortized["data"] = data
     amortized["training"] = training
     config["amortized"] = amortized
@@ -1133,6 +1155,9 @@ def _run_amortized_infer(
         write_residual_samples=getattr(args, "write_residual_samples", None),
         combine_sample_shards=getattr(args, "combine_sample_shards", None),
         combine_summary_shards=getattr(args, "combine_summary_shards", None),
+        selection_mode=getattr(args, "selection_mode", None),
+        stratified_strategy=getattr(args, "stratified_strategy", None),
+        selection_seed=getattr(args, "selection_seed", None),
         dataset_label=dataset_label,
     )
 

@@ -27,6 +27,7 @@ class PhotometryBatch:
     flux_err: jnp.ndarray
     mask: jnp.ndarray
     features: jnp.ndarray
+    row_index: np.ndarray | None = None
 
 
 def compute_feature_stats_from_config(
@@ -164,6 +165,7 @@ def load_photometry_arrays_from_config(
         return chunks[0]
     return PhotometryArrays(
         object_id=np.concatenate([chunk.object_id for chunk in chunks], axis=0),
+        row_index=_concat_row_indices(chunks),
         flux=np.concatenate([chunk.flux for chunk in chunks], axis=0),
         flux_err=np.concatenate([chunk.flux_err for chunk in chunks], axis=0),
         mask=np.concatenate([chunk.mask for chunk in chunks], axis=0),
@@ -244,6 +246,7 @@ def iter_photometry_batches_from_arrays(
             flux_err=jnp.asarray(arrays.flux_err[idx], dtype=jnp.float32),
             mask=jnp.asarray(arrays.mask[idx]),
             features=features,
+            row_index=np.asarray(_row_index_array(arrays)[idx], dtype=np.int64),
         )
 
 
@@ -255,3 +258,15 @@ def _object_id_column_from_config(config: dict[str, Any]) -> str | None:
             return str(value)
     value = config.get("object_id_column")
     return str(value) if value else None
+
+
+def _row_index_array(arrays: PhotometryArrays) -> np.ndarray:
+    if arrays.row_index is not None:
+        return np.asarray(arrays.row_index, dtype=np.int64)
+    return np.arange(int(arrays.flux.shape[0]), dtype=np.int64)
+
+
+def _concat_row_indices(chunks: list[PhotometryArrays]) -> np.ndarray | None:
+    if not chunks:
+        return None
+    return np.concatenate([_row_index_array(chunk) for chunk in chunks], axis=0)

@@ -29,6 +29,11 @@ from .catalog import (
     posterior_samples_frame,
     posterior_summary_frame,
 )
+from .catalog_identity import (
+    select_catalog_row_indices,
+    write_catalog_fingerprint,
+    write_truth_snapshot,
+)
 from .config import amortized_config
 from .data import iter_photometry_batches_from_config
 from .decoder import model_flux_from_x
@@ -68,6 +73,9 @@ def infer_amortized_fs2(
     write_residual_samples: bool | None = None,
     combine_sample_shards: bool | None = None,
     combine_summary_shards: bool | None = None,
+    selection_mode: str | None = None,
+    stratified_strategy: str | None = None,
+    selection_seed: int | None = None,
     verbose: bool = True,
     dataset_label: str = "FS2",
 ) -> None:
@@ -83,6 +91,52 @@ def infer_amortized_fs2(
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
     inference_cfg = cfg.get("inference", {})
+    selection_mode = str(
+        selection_mode
+        if selection_mode is not None
+        else inference_cfg.get("selection_mode", "sequential")
+    )
+    stratified_strategy = str(
+        stratified_strategy
+        if stratified_strategy is not None
+        else inference_cfg.get("stratified_strategy", "balanced")
+    )
+    selection_seed = int(
+        selection_seed
+        if selection_seed is not None
+        else inference_cfg.get("selection_seed", seed)
+    )
+    redshift_bins_for_selection = inference_cfg.get(
+        "redshift_bins",
+        ((config.get("amortized", {}) or {}).get("data", {}) or {}).get(
+            "redshift_bins",
+            None,
+        ),
+    )
+    catalog_identity = write_catalog_fingerprint(
+        out,
+        config,
+        redshift_bins=redshift_bins_for_selection,
+    )
+    row_indices, selection_summary = select_catalog_row_indices(
+        config,
+        limit=limit,
+        selection_mode=selection_mode,
+        stratified_strategy=stratified_strategy,
+        seed=selection_seed,
+        redshift_bins=redshift_bins_for_selection,
+    )
+    if row_indices is not None:
+        np.save(out / "inference_indices.npy", row_indices)
+        selection_summary["row_indices_path"] = "inference_indices.npy"
+    write_json(out / "inference_selection.json", selection_summary)
+    truth_snapshot = write_truth_snapshot(
+        out,
+        config,
+        row_indices=row_indices,
+        limit=limit,
+        batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
+    )
     jax_batch_size = _effective_jax_batch_size(
         inference_cfg,
         int(batch_size),
@@ -140,7 +194,15 @@ def infer_amortized_fs2(
             f"prior_predictive_batch_size={int(prior_predictive_batch_size)} "
             f"shard_outputs={shard_outputs} resume_shards={resume_shards} "
             f"write_posterior_predictive={write_posterior_predictive} "
-            f"write_residual_samples={write_residual_samples}"
+            f"write_residual_samples={write_residual_samples} "
+            f"selection_mode={selection_mode} "
+            f"stratified_strategy={stratified_strategy}"
+        )
+        print(
+            "[amortized] inference selection: "
+            f"rows={selection_summary.get('selected_rows')} "
+            f"truth_rows={len(truth_snapshot)} "
+            f"row_indices={selection_summary.get('row_indices_path')}"
         )
         if jax_batch_size != int(batch_size):
             print(
@@ -227,6 +289,9 @@ def infer_amortized_fs2(
         "batch_size": int(batch_size),
         "jax_batch_size": int(jax_batch_size),
         "limit": int(limit) if limit is not None else None,
+        "selection_mode": selection_mode,
+        "stratified_strategy": stratified_strategy,
+        "selection_seed": int(selection_seed),
         "posterior_samples": int(posterior_samples),
         "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
         "write_posterior_predictive": bool(write_posterior_predictive),
@@ -241,6 +306,7 @@ def infer_amortized_fs2(
             batch_size=int(jax_batch_size),
             limit=limit,
             feature_stats=feature_stats,
+            row_indices=row_indices,
         ),
         start=1,
     ):
@@ -255,6 +321,7 @@ def infer_amortized_fs2(
             run_signature,
             batch_index=batch_index,
             object_id=batch.object_id,
+            row_index=batch.row_index,
         )
         if (
             shard_outputs
@@ -345,6 +412,7 @@ def infer_amortized_fs2(
             logq_np,
             logprior_np,
             loglike_np,
+            row_index=batch.row_index,
             log_alpha_sed=log_alpha_sed,
             alpha_sed=alpha_sed,
         )
@@ -355,6 +423,7 @@ def infer_amortized_fs2(
             loglike_np,
             jax.device_get(chi2),
             mask_np,
+            row_index=batch.row_index,
             log_alpha_sed=log_alpha_sed,
             alpha_sed=alpha_sed,
         )
@@ -363,6 +432,7 @@ def infer_amortized_fs2(
                 object_id,
                 model_flux_np,
                 band_names,
+                row_index=batch.row_index,
                 model_flux_raw=model_flux_raw_np,
                 log_alpha_sed=log_alpha_sed,
                 alpha_sed=alpha_sed,
@@ -378,6 +448,7 @@ def infer_amortized_fs2(
                 mask_np,
                 model_flux_np,
                 band_names,
+                row_index=batch.row_index,
             )
             if write_residual_samples
             else pd.DataFrame()
@@ -389,10 +460,12 @@ def infer_amortized_fs2(
             mask_np,
             model_flux_np,
             band_names,
+            row_index=batch.row_index,
         )
         feature_frame = feature_diagnostics_frame(
             object_id,
             jax.device_get(batch.features),
+            row_index=batch.row_index,
             n_flux_bands=len(band_names),
         )
         if shard_outputs:
@@ -627,6 +700,9 @@ def infer_amortized_fs2(
             "checkpoint": str(checkpoint),
             "feature_stats_path": str(feature_stats_path),
             "limit": limit,
+            "selection": selection_summary,
+            "catalog_fingerprint": catalog_identity,
+            "truth_snapshot_rows": int(len(truth_snapshot)),
             "batch_size": int(batch_size),
             "jax_batch_size": int(jax_batch_size),
             "posterior_samples": int(posterior_samples),
@@ -664,6 +740,7 @@ def infer_amortized_fs2(
         out,
         config=config,
         limit=limit,
+        row_indices=row_indices,
     )
     if verbose:
         print("[amortized] inference complete")
@@ -713,8 +790,10 @@ def _inference_shard_signature(
     *,
     batch_index: int,
     object_id,
+    row_index=None,
 ) -> dict[str, Any]:
     object_id = np.asarray(object_id)
+    row_index = np.asarray(row_index, dtype=np.int64) if row_index is not None else None
     return {
         **run_signature,
         "batch_index": int(batch_index),
@@ -726,6 +805,15 @@ def _inference_shard_signature(
         if object_id.size
         else None,
         "batch_object_id_digest": _object_id_digest(object_id),
+        "batch_first_row_index": int(row_index[0])
+        if row_index is not None and row_index.size
+        else None,
+        "batch_last_row_index": int(row_index[-1])
+        if row_index is not None and row_index.size
+        else None,
+        "batch_row_index_digest": _row_index_digest(row_index)
+        if row_index is not None
+        else None,
     }
 
 
@@ -750,6 +838,15 @@ def _object_id_digest(object_id) -> str:
         for value in values.reshape(-1):
             digest.update(repr(_jsonable_object_id(value)).encode("utf-8"))
             digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _row_index_digest(row_index) -> str:
+    values = np.asarray(row_index, dtype=np.int64)
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(str(values.dtype).encode("utf-8"))
+    digest.update(str(values.shape).encode("utf-8"))
+    digest.update(np.ascontiguousarray(values).view(np.uint8))
     return digest.hexdigest()
 
 

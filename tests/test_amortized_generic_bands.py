@@ -138,6 +138,7 @@ def test_generic_batches_preserve_large_object_ids_as_int64() -> None:
         flux_err=flux_err,
         mask=mask,
         band_names=("a", "b", "c"),
+        row_index=np.asarray([42, 99], dtype=np.int64),
     )
 
     batch = next(
@@ -147,3 +148,4 @@ def test_generic_batches_preserve_large_object_ids_as_int64() -> None:
     assert isinstance(batch.object_id, np.ndarray)
     assert batch.object_id.dtype == np.int64
     np.testing.assert_array_equal(batch.object_id, object_id)
+    np.testing.assert_array_equal(batch.row_index, np.asarray([42, 99], dtype=np.int64))

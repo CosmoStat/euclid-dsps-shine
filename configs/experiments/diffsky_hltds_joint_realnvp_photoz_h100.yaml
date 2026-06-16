@@ -8,7 +8,7 @@ amortized:
     data:
         expected_n_bands: 14
         selection_mode: stratified_redshift
-        stratified_strategy: proportional
+        stratified_strategy: balanced
         stratify_column: redshift_true
         redshift_bins: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
         validation_fraction: 0.1
@@ -30,7 +30,7 @@ amortized:
         weight_decay: 1.0e-5
         gradient_clip_norm: 1.0
         kl_annealing_epochs: 10
-        kl_weight_max: 0.5
+        kl_weight_max: 0.05
         validation_every: 1
         best_checkpoint_metric: validation_negative_loglike
         best_checkpoint_min_epoch: 10
@@ -38,6 +38,10 @@ amortized:
     inference:
         posterior_samples: 128
         prior_samples: 8192
+        selection_mode: stratified_redshift
+        stratified_strategy: balanced
+        selection_seed: 4242
+        redshift_bins: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
         jax_batch_size: 256
         decoder_sample_chunk_size: 4
         prior_predictive_batch_size: 1024

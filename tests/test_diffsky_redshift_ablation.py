@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from euclid_dsps.diffsky_redshift_ablation import (
     redshift_metrics_by_truth_bin,
@@ -138,6 +139,70 @@ def test_write_redshift_metrics_includes_alpha_and_likelihood_metadata(tmp_path)
         "mass_bias_raw",
         "mass_bias_alpha_corrected",
     }
+
+
+def test_write_redshift_metrics_prefers_inference_truth_row_index(tmp_path) -> None:
+    dataset = tmp_path / "truth.parquet"
+    pd.DataFrame(
+        {
+            "object_id": [999],
+            "redshift_true": [9.0],
+        }
+    ).to_parquet(dataset, index=False)
+    run = tmp_path / "run"
+    run.mkdir()
+    pd.DataFrame(
+        {
+            "row_index": [7, 7],
+            "object_id": [1, 1],
+            "z_obs": [0.45, 0.55],
+        }
+    ).to_parquet(run / "posterior_samples.parquet", index=False)
+    pd.DataFrame(
+        {
+            "row_index": [7],
+            "object_id": [123456789],
+            "redshift_true": [0.5],
+        }
+    ).to_parquet(run / "inference_truth.parquet", index=False)
+
+    write_redshift_metrics_for_run(
+        dataset_path=dataset,
+        run_dir=run,
+        label="row-index",
+    )
+
+    photoz = pd.read_csv(run / "photoz_metrics.csv")
+    objects = pd.read_csv(run / "photoz_object_metrics.csv")
+    assert int(photoz.loc[0, "n_objects"]) == 1
+    assert objects.loc[0, "row_index"] == 7
+    assert objects.loc[0, "object_id"] == 123456789
+    assert objects.loc[0, "z_true"] == 0.5
+
+
+def test_write_redshift_metrics_rejects_duplicate_object_id_without_row_index(
+    tmp_path,
+) -> None:
+    dataset = tmp_path / "truth.parquet"
+    pd.DataFrame(
+        {
+            "object_id": [1, 1],
+            "redshift_true": [0.5, 0.6],
+        }
+    ).to_parquet(dataset, index=False)
+    run = tmp_path / "run"
+    run.mkdir()
+    pd.DataFrame({"object_id": [1, 1], "z_obs": [0.45, 0.55]}).to_parquet(
+        run / "posterior_samples.parquet",
+        index=False,
+    )
+
+    with pytest.raises(ValueError, match="truth identity column is not unique"):
+        write_redshift_metrics_for_run(
+            dataset_path=dataset,
+            run_dir=run,
+            label="duplicate",
+        )
 
 
 def test_write_redshift_metrics_reads_posterior_sample_shards(tmp_path) -> None:

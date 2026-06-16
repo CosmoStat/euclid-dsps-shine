@@ -19,6 +19,7 @@ class PhotometryArrays:
     flux_err: np.ndarray
     mask: np.ndarray
     band_names: tuple[str, ...]
+    row_index: np.ndarray | None = None
     truth: dict[str, np.ndarray] | None = None
 
 
@@ -54,6 +55,7 @@ def photometry_arrays_from_dataframe(
 
     return PhotometryArrays(
         object_id=object_id,
+        row_index=np.asarray(frame.index.to_numpy(), dtype=np.int64),
         flux=np.stack(flux_columns, axis=1).astype(np.float32),
         flux_err=np.stack(err_columns, axis=1).astype(np.float32),
         mask=np.stack(mask_columns, axis=1).astype(bool),
