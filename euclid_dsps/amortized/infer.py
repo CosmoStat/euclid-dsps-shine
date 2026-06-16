@@ -14,7 +14,9 @@ import pandas as pd
 from euclid_dsps.calibration import (
     alpha_metadata,
     apply_global_sed_scale_to_flux,
+    apply_per_band_flux_calibration_to_flux,
     global_sed_scale_config,
+    per_band_flux_calibration_config,
 )
 from euclid_dsps.diffsky_redshift_ablation import write_redshift_metrics_for_run
 from euclid_dsps.filters import load_filters
@@ -39,7 +41,12 @@ from .diagnostics import (
 from .features import read_feature_stats
 from .latent import latent_spec_from_config, x_to_theta
 from .likelihood import photometric_loglike
-from .train import _effective_jax_batch_size, load_checkpoint
+from .train import (
+    _effective_jax_batch_size,
+    _per_band_flux_calibration_summary,
+    load_checkpoint,
+    write_per_band_flux_calibration_artifacts,
+)
 
 
 def infer_amortized_fs2(
@@ -153,6 +160,13 @@ def infer_amortized_fs2(
         else 0.0
     )
     alpha_sed = float(np.exp(log_alpha_sed))
+    band_calibration_cfg = per_band_flux_calibration_config(calibration_runtime_config)
+    band_names = tuple(str(band["name"]) for band in config["bands"])
+    log_alpha_band = (
+        jax.device_get(model.band_calibration.log_alpha_band)
+        if band_calibration_cfg.enabled and model.band_calibration is not None
+        else np.zeros((len(band_names),), dtype=np.float32)
+    )
     if verbose:
         print("[amortized] loading configured filters...")
     filters = load_filters(config["bands"])
@@ -173,6 +187,12 @@ def infer_amortized_fs2(
             "[amortized] global SED scale: "
             f"enabled={scale_cfg.enabled} mode={scale_cfg.mode} "
             f"alpha_sed={alpha_sed:.6g}"
+        )
+        print(
+            "[amortized] per-band flux calibration: "
+            f"enabled={band_calibration_cfg.enabled} "
+            f"mode={band_calibration_cfg.mode} "
+            f"trainable={band_calibration_cfg.trainable}"
         )
     latent_spec = latent_spec_from_config(config)
     likelihood_cfg = cfg["likelihood"]
@@ -212,9 +232,9 @@ def infer_amortized_fs2(
         "write_posterior_predictive": bool(write_posterior_predictive),
         "write_residual_samples": bool(write_residual_samples),
         "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
+        "per_band_calibration_enabled": bool(band_calibration_cfg.enabled),
     }
     n_objects_total = 0
-    band_names = tuple(str(band["name"]) for band in config["bands"])
     for batch_index, batch in enumerate(
         iter_photometry_batches_from_config(
             config,
@@ -289,6 +309,14 @@ def infer_amortized_fs2(
             )
             if scale_cfg.enabled
             else model_flux_raw
+        )
+        model_flux = (
+            apply_per_band_flux_calibration_to_flux(
+                model_flux,
+                jnp.asarray(log_alpha_band, dtype=model_flux.dtype),
+            )
+            if band_calibration_cfg.enabled
+            else model_flux
         )
         logprior = model.prior.log_prob(x_samples)
         loglike = photometric_loglike(
@@ -476,6 +504,14 @@ def infer_amortized_fs2(
         if scale_cfg.enabled
         else prior_flux_raw
     )
+    prior_flux = (
+        apply_per_band_flux_calibration_to_flux(
+            prior_flux,
+            jnp.asarray(log_alpha_band, dtype=prior_flux.dtype),
+        )
+        if band_calibration_cfg.enabled
+        else prior_flux
+    )
     learned_prior = learned_prior_samples_frame(
         jax.device_get(prior_x),
         jax.device_get(prior_theta),
@@ -551,9 +587,27 @@ def infer_amortized_fs2(
         "trainable": bool(scale_cfg.trainable),
         "mode": scale_cfg.mode,
     }
+    per_band_payload = _per_band_flux_calibration_summary(
+        model,
+        config,
+        band_names=band_names,
+        config_block=band_calibration_cfg,
+        trainable=band_calibration_cfg.trainable,
+    )
+    write_per_band_flux_calibration_artifacts(
+        out,
+        model,
+        config,
+        band_names=band_names,
+        config_block=band_calibration_cfg,
+        trainable=band_calibration_cfg.trainable,
+    )
     write_json(
         out / "inference_summary.json",
-        {"global_sed_scale": global_sed_scale_payload},
+        {
+            "global_sed_scale": global_sed_scale_payload,
+            "per_band_flux_calibration": per_band_payload,
+        },
     )
     try:
         metric_outputs = {
@@ -599,6 +653,7 @@ def infer_amortized_fs2(
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
             "prior_train_jointly": bool(cfg["prior"].get("train_jointly", True)),
             "global_sed_scale": global_sed_scale_payload,
+            "per_band_flux_calibration": per_band_payload,
             "metric_outputs": metric_outputs,
         },
     )

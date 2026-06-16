@@ -105,7 +105,10 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         "finite_fraction",
         "encoder_grad_norm",
         "prior_grad_norm",
+        "band_alpha_grad_norm",
         "joint_grad_norm",
+        "band_alpha_prior_penalty",
+        "max_abs_band_delta_mag",
     ]:
         if column not in epoch_summary:
             continue
@@ -143,7 +146,10 @@ def _write_training_epoch_summary(frame: pd.DataFrame, out: Path) -> pd.DataFram
         "finite_fraction",
         "encoder_grad_norm",
         "prior_grad_norm",
+        "band_alpha_grad_norm",
         "joint_grad_norm",
+        "band_alpha_prior_penalty",
+        "max_abs_band_delta_mag",
     ]
     metrics = [metric for metric in metrics if metric in frame]
     if "split" not in frame:
@@ -364,16 +370,30 @@ def _metric_label(metric: str) -> str:
         "finite_fraction": "finite fraction",
         "encoder_grad_norm": "encoder grad norm",
         "prior_grad_norm": "RealNVP prior grad norm",
+        "band_alpha_grad_norm": "per-band calibration grad norm",
         "joint_grad_norm": "joint grad norm",
+        "band_alpha_prior_penalty": "per-band calibration prior penalty",
+        "max_abs_band_delta_mag": "max |band offset| (mag)",
     }.get(metric, metric)
 
 
 def _is_gradient_metric(metric: str) -> bool:
-    return metric in {"encoder_grad_norm", "prior_grad_norm", "joint_grad_norm"}
+    return metric in {
+        "encoder_grad_norm",
+        "prior_grad_norm",
+        "band_alpha_grad_norm",
+        "joint_grad_norm",
+    }
 
 
 def _use_log_y(metric: str, summary: pd.DataFrame) -> bool:
-    if metric not in {"encoder_grad_norm", "prior_grad_norm", "joint_grad_norm"}:
+    if metric not in {
+        "encoder_grad_norm",
+        "prior_grad_norm",
+        "band_alpha_grad_norm",
+        "joint_grad_norm",
+        "band_alpha_prior_penalty",
+    }:
         return False
     values = summary[metric].to_numpy(dtype=float)
     values = values[np.isfinite(values) & (values > 0.0)]

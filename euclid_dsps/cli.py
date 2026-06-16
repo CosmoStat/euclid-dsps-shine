@@ -558,6 +558,7 @@ def _add_amortized_train_arguments(
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--jax-batch-size", type=int)
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--n-samples", type=int)
     parser.add_argument("--seed", type=int)

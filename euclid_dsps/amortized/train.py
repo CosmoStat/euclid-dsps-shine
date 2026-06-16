@@ -16,9 +16,14 @@ from euclid_dsps.calibration import (
     alpha_from_log_alpha,
     alpha_metadata,
     apply_global_sed_scale_to_flux,
+    apply_per_band_flux_calibration_to_flux,
     global_sed_scale_config,
     global_sed_scale_prior_penalty,
     make_global_sed_scale_state,
+    make_per_band_flux_calibration_state,
+    per_band_flux_calibration_config,
+    per_band_flux_calibration_metadata,
+    per_band_flux_calibration_prior_penalty,
 )
 from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, truth_column_from_spec, write_json
@@ -124,7 +129,14 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     encoder = _initialize_encoder_mean_if_possible(config, encoder)
     prior = build_prior_from_config(config, k_prior, latent_dim=latent_dim)
     sed_scale = make_global_sed_scale_state(config)
-    return AmortizedModel(encoder=encoder, prior=prior, sed_scale=sed_scale)
+    band_names = tuple(str(band["name"]) for band in config.get("bands", []))
+    band_calibration = make_per_band_flux_calibration_state(config, band_names)
+    return AmortizedModel(
+        encoder=encoder,
+        prior=prior,
+        sed_scale=sed_scale,
+        band_calibration=band_calibration,
+    )
 
 
 def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
@@ -371,6 +383,12 @@ def train_amortized_fs2(
     calibration_runtime_config = {"calibration": config.get("calibration", {}) or {}}
     sed_scale_cfg = global_sed_scale_config(calibration_runtime_config)
     train_alpha = bool(sed_scale_cfg.enabled and sed_scale_cfg.trainable)
+    band_calibration_cfg = per_band_flux_calibration_config(calibration_runtime_config)
+    train_band_calibration = bool(
+        band_calibration_cfg.enabled
+        and band_calibration_cfg.trainable
+        and model.band_calibration is not None
+    )
     _log(
         verbose,
         "[amortized] model built: "
@@ -380,7 +398,9 @@ def train_amortized_fs2(
         f"prior_source={cfg['prior'].get('source')} "
         f"train_prior={train_prior} "
         f"alpha_sed_enabled={sed_scale_cfg.enabled} "
-        f"train_alpha={train_alpha}",
+        f"train_alpha={train_alpha} "
+        f"per_band_calibration_enabled={band_calibration_cfg.enabled} "
+        f"train_per_band_calibration={train_band_calibration}",
     )
     optimizer = make_optimizer(config)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
@@ -466,6 +486,8 @@ def train_amortized_fs2(
                     grads = zero_prior_grads(grads)
                 if not train_alpha:
                     grads = zero_sed_scale_grads(grads)
+                if not train_band_calibration:
+                    grads = zero_band_calibration_grads(grads)
                 record = _metrics_record(metrics)
                 record.update(component_grad_norms(grads))
                 loss_finite = bool(np.isfinite(float(np.asarray(jax.device_get(loss)))))
@@ -719,6 +741,7 @@ def train_amortized_fs2(
             "realnvp_prior": bool(train_prior),
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
             "global_sed_scale": bool(train_alpha),
+            "per_band_flux_calibration": bool(train_band_calibration),
             "decoder": False,
             "kl_estimator": "monte_carlo_logq_minus_logp",
         },
@@ -731,8 +754,23 @@ def train_amortized_fs2(
             "trainable": bool(train_alpha),
             "mode": sed_scale_cfg.mode,
         },
+        "per_band_flux_calibration": _per_band_flux_calibration_summary(
+            model,
+            config,
+            band_names=train_arrays.band_names,
+            config_block=band_calibration_cfg,
+            trainable=train_band_calibration,
+        ),
     }
     write_json(out / "training_summary.json", summary)
+    write_per_band_flux_calibration_artifacts(
+        out,
+        model,
+        config,
+        band_names=train_arrays.band_names,
+        config_block=band_calibration_cfg,
+        trainable=train_band_calibration,
+    )
     if save_training_curves:
         write_training_diagnostics(out / "training_log.csv", out)
     _log(verbose, "[amortized] training complete")
@@ -777,6 +815,97 @@ def load_checkpoint(
     key = jax.random.PRNGKey(int(amortized_config(config)["training"].get("seed", 42)))
     template = build_amortized_model(config, key)
     return eqx.tree_deserialise_leaves(path, template)
+
+
+def _per_band_flux_calibration_summary(
+    model: AmortizedModel,
+    config: dict[str, Any],
+    *,
+    band_names: tuple[str, ...],
+    config_block=None,
+    trainable: bool | None = None,
+) -> dict[str, Any]:
+    """Return JSON-friendly per-band calibration metadata."""
+    cfg = (
+        config_block
+        if config_block is not None
+        else per_band_flux_calibration_config(config)
+    )
+    enabled = bool(cfg.enabled and model.band_calibration is not None)
+    payload: dict[str, Any] = {
+        "enabled": bool(cfg.enabled),
+        "active": enabled,
+        "trainable": bool(cfg.trainable if trainable is None else trainable),
+        "mode": cfg.mode,
+        "prior_sigma_log_alpha": float(cfg.prior_sigma_log_alpha),
+        "prior_sigma_mag": float(cfg.prior_sigma_mag),
+    }
+    if not enabled:
+        return payload | {
+            "bands": {},
+            "max_abs_delta_mag": 0.0,
+            "mean_abs_delta_mag": 0.0,
+            "total_prior_penalty": 0.0,
+            "large_scale_warning": False,
+        }
+    logs = np.asarray(
+        jax.device_get(model.band_calibration.log_alpha_band),
+        dtype=float,
+    )
+    return payload | per_band_flux_calibration_metadata(
+        logs,
+        tuple(band_names),
+        cfg.prior_sigma_log_alpha,
+    )
+
+
+def write_per_band_flux_calibration_artifacts(
+    out: Path,
+    model: AmortizedModel,
+    config: dict[str, Any],
+    *,
+    band_names: tuple[str, ...],
+    config_block=None,
+    trainable: bool | None = None,
+) -> None:
+    """Write per-band calibration JSON, CSV, and a compact bar plot."""
+    payload = _per_band_flux_calibration_summary(
+        model,
+        config,
+        band_names=band_names,
+        config_block=config_block,
+        trainable=trainable,
+    )
+    write_json(out / "per_band_flux_calibration.json", payload)
+    bands = payload.get("bands", {})
+    if not bands:
+        return
+    rows = [
+        {"band": band, **values}
+        for band, values in bands.items()
+        if isinstance(values, dict)
+    ]
+    frame = pd.DataFrame(rows)
+    frame.to_csv(out / "per_band_flux_calibration.csv", index=False)
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    fig, ax = plt.subplots(figsize=(9.0, 4.2))
+    ax.axhline(0.0, color="#444444", linewidth=0.8)
+    ax.bar(
+        frame["band"].astype(str),
+        frame["delta_mag_band"].to_numpy(dtype=float),
+        color="#3b82f6",
+    )
+    ax.set_ylabel("model offset (mag)")
+    ax.set_xlabel("band")
+    ax.set_title("Per-band flux calibration")
+    ax.tick_params(axis="x", rotation=45)
+    ax.grid(axis="y", alpha=0.22, linewidth=0.7)
+    fig.tight_layout()
+    fig.savefig(out / "per_band_flux_calibration.png", dpi=170)
+    plt.close(fig)
 
 
 def build_training_split(
@@ -956,10 +1085,12 @@ def evaluate_validation_epoch(
                     "encoder_grad_norm": 0.0,
                     "prior_grad_norm": 0.0,
                     "alpha_grad_norm": 0.0,
+                    "band_alpha_grad_norm": 0.0,
                     "joint_grad_norm": 0.0,
                     "encoder_grad_nonzero": 0.0,
                     "prior_grad_nonzero": 0.0,
                     "alpha_grad_nonzero": 0.0,
+                    "band_alpha_grad_nonzero": 0.0,
                 }
             )
             rows.append(record)
@@ -1014,11 +1145,22 @@ def _evaluation_metrics(
         parameter_names,
     )
     scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
     log_alpha_sed = model.sed_scale.log_alpha_sed
     model_flux = (
         apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
         if scale_cfg.enabled
         else model_flux_raw
+    )
+    log_alpha_band = (
+        model.band_calibration.log_alpha_band
+        if band_cfg.enabled and model.band_calibration is not None
+        else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
+    )
+    model_flux = (
+        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+        if band_cfg.enabled
+        else model_flux
     )
     alpha_prior_penalty = (
         global_sed_scale_prior_penalty(
@@ -1026,6 +1168,14 @@ def _evaluation_metrics(
             scale_cfg.prior_sigma_log_alpha,
         )
         if scale_cfg.enabled
+        else jnp.asarray(0.0, dtype=model_flux.dtype)
+    )
+    band_prior_penalty = (
+        per_band_flux_calibration_prior_penalty(
+            log_alpha_band,
+            band_cfg.prior_sigma_log_alpha,
+        )
+        if band_cfg.enabled
         else jnp.asarray(0.0, dtype=model_flux.dtype)
     )
     loglike = photometric_loglike(
@@ -1048,7 +1198,7 @@ def _evaluation_metrics(
     object_kl = jnp.mean(kl, axis=0)
     object_chi2 = jnp.mean(jnp.sum(chi**2, axis=-1), axis=0)
     metrics = {
-        "loss": jnp.mean(objective) + alpha_prior_penalty,
+        "loss": jnp.mean(objective) + alpha_prior_penalty + band_prior_penalty,
         "negative_loglike": jnp.mean(-loglike),
         "loglike_mean": jnp.mean(loglike),
         "logprior_mean": jnp.mean(logp),
@@ -1060,6 +1210,10 @@ def _evaluation_metrics(
         "log_alpha_sed": log_alpha_sed,
         "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
         "alpha_prior_penalty": alpha_prior_penalty,
+        "band_alpha_prior_penalty": band_prior_penalty,
+        "max_abs_band_delta_mag": jnp.max(
+            jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
+        ),
         "residual_rms": jnp.sqrt(jnp.mean(chi**2)),
         "finite_fraction": jnp.mean(jnp.isfinite(objective)),
     }
@@ -1436,14 +1590,17 @@ def component_grad_norms(grads: AmortizedModel) -> dict[str, float]:
     encoder_norm = _tree_l2_norm(getattr(grads, "encoder", None))
     prior_norm = _tree_l2_norm(getattr(grads, "prior", None))
     alpha_norm = _tree_l2_norm(getattr(grads, "sed_scale", None))
+    band_alpha_norm = _tree_l2_norm(getattr(grads, "band_calibration", None))
     return {
         "encoder_grad_norm": encoder_norm,
         "prior_grad_norm": prior_norm,
         "alpha_grad_norm": alpha_norm,
+        "band_alpha_grad_norm": band_alpha_norm,
         "joint_grad_norm": _tree_l2_norm(grads),
         "encoder_grad_nonzero": float(encoder_norm > 0.0),
         "prior_grad_nonzero": float(prior_norm > 0.0),
         "alpha_grad_nonzero": float(alpha_norm > 0.0),
+        "band_alpha_grad_nonzero": float(band_alpha_norm > 0.0),
     }
 
 
@@ -1483,6 +1640,24 @@ def zero_sed_scale_grads(grads: AmortizedModel) -> AmortizedModel:
     )
 
 
+def zero_band_calibration_grads(grads: AmortizedModel) -> AmortizedModel:
+    """Return gradients with per-band calibration leaves set to zero."""
+    band_grads = getattr(grads, "band_calibration", None)
+    if band_grads is None:
+        return grads
+
+    def zero_leaf(leaf):
+        if eqx.is_inexact_array(leaf):
+            return jnp.zeros_like(leaf)
+        return leaf
+
+    return eqx.tree_at(
+        lambda tree: tree.band_calibration,
+        grads,
+        jax.tree_util.tree_map(zero_leaf, band_grads),
+    )
+
+
 def _train_prior_jointly(prior_cfg: dict[str, Any]) -> bool:
     source = str(prior_cfg.get("source", "joint_realnvp"))
     if source == "standard_normal":
@@ -1506,11 +1681,14 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
     cfg = amortized_config(config)
     train_prior = _train_prior_jointly(cfg["prior"])
     scale_cfg = global_sed_scale_config(config)
+    band_cfg = per_band_flux_calibration_config(config)
     optimized = ["encoder"]
     if train_prior:
         optimized.append("realnvp_prior")
     if scale_cfg.enabled and scale_cfg.trainable:
         optimized.append("global_log_alpha_sed")
+    if band_cfg.enabled and band_cfg.trainable:
+        optimized.append("per_band_log_alpha")
     return {
         "encoder": {
             "type": cfg["encoder"].get("type", "gaussian_mlp"),
@@ -1543,6 +1721,14 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "trainable": scale_cfg.trainable,
             "parameterization": "log_alpha",
             "prior_sigma_log_alpha": scale_cfg.prior_sigma_log_alpha,
+        },
+        "per_band_flux_calibration": {
+            "enabled": band_cfg.enabled,
+            "mode": band_cfg.mode,
+            "trainable": band_cfg.trainable,
+            "parameterization": "log_alpha_per_band",
+            "prior_sigma_log_alpha": band_cfg.prior_sigma_log_alpha,
+            "prior_sigma_mag": band_cfg.prior_sigma_mag,
         },
         "decoder": {
             "type": "fixed_dsps",

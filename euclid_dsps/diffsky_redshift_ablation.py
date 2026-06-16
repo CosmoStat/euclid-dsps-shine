@@ -94,6 +94,68 @@ def summarize_redshift_metrics(frame: pd.DataFrame) -> dict[str, float | int]:
     }
 
 
+def redshift_metrics_by_truth_bin(
+    frame: pd.DataFrame,
+    *,
+    bins: tuple[float, ...] = (
+        0.0,
+        0.2,
+        0.4,
+        0.6,
+        0.8,
+        1.0,
+        1.2,
+        1.5,
+        2.0,
+        3.0,
+        6.0,
+    ),
+) -> pd.DataFrame:
+    """Summarize photo-z metrics in fixed bins of true redshift."""
+    if frame.empty or "z_true" not in frame:
+        return pd.DataFrame()
+    edges = np.asarray(bins, dtype=float)
+    edges = np.unique(edges[np.isfinite(edges)])
+    if edges.size < 2:
+        raise ValueError("redshift bin edges must contain at least two finite values")
+    z_true = pd.to_numeric(frame["z_true"], errors="coerce")
+    valid = frame.loc[np.isfinite(z_true)].copy()
+    if valid.empty:
+        return pd.DataFrame()
+    valid["_z_bin"] = pd.cut(
+        z_true.loc[valid.index],
+        edges,
+        right=False,
+        include_lowest=True,
+    )
+    rows = []
+    for interval, group in valid.groupby("_z_bin", observed=True, sort=True):
+        if group.empty or pd.isna(interval):
+            continue
+        summary = summarize_redshift_metrics(group)
+        delta = pd.to_numeric(group["delta_z"], errors="coerce").to_numpy(dtype=float)
+        delta = delta[np.isfinite(delta)]
+        rows.append(
+            {
+                "z_bin_lower": float(interval.left),
+                "z_bin_upper": float(interval.right),
+                "n_objects": int(summary["n_objects"]),
+                "mean_bias": float(np.mean(delta)) if delta.size else float("nan"),
+                "median_bias": summary["median_bias"],
+                "sigma_mad": summary["sigma_mad"],
+                "rmse": summary["rmse"],
+                "outlier_fraction_0p15": summary["outlier_fraction_0p15"],
+                "pit_mean": summary["pit_mean"],
+                "coverage_68": summary["coverage_68"],
+                "coverage_95": summary["coverage_95"],
+                "posterior_width_68_median": summary[
+                    "posterior_width_68_median"
+                ],
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def posterior_truth_metrics(
     posterior_samples: pd.DataFrame,
     truth: pd.DataFrame,
@@ -237,6 +299,8 @@ def write_redshift_metrics_for_run(
     )
     photoz_path = out / "photoz_metrics.csv"
     summary_frame.to_csv(photoz_path, index=False)
+    binned_path = out / "photoz_metrics_by_redshift_bin.csv"
+    redshift_metrics_by_truth_bin(object_metrics).to_csv(binned_path, index=False)
     residuals = (
         pd.concat(residual_frames, ignore_index=True)
         if residual_frames
@@ -248,6 +312,7 @@ def write_redshift_metrics_for_run(
     return {
         "photoz_object_metrics": object_path,
         "photoz_metrics": photoz_path,
+        "photoz_metrics_by_redshift_bin": binned_path,
         "posterior_vs_truth_metrics": posterior_path,
     }
 

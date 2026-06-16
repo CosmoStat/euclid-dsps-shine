@@ -8,10 +8,14 @@ import jax.numpy as jnp
 
 from euclid_dsps.calibration import (
     GlobalSedScaleState,
+    PerBandFluxCalibrationState,
     alpha_from_log_alpha,
     apply_global_sed_scale_to_flux,
+    apply_per_band_flux_calibration_to_flux,
     global_sed_scale_config,
     global_sed_scale_prior_penalty,
+    per_band_flux_calibration_config,
+    per_band_flux_calibration_prior_penalty,
 )
 
 from .config import require_equinox
@@ -27,6 +31,7 @@ class AmortizedModel(eqx.Module):
     encoder: object
     prior: object
     sed_scale: GlobalSedScaleState
+    band_calibration: PerBandFluxCalibrationState | None = None
 
 
 def negative_elbo(
@@ -74,11 +79,22 @@ def negative_elbo(
             parameter_names,
         )
     scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
     log_alpha_sed = model.sed_scale.log_alpha_sed
     model_flux = (
         apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
         if scale_cfg.enabled
         else model_flux_raw
+    )
+    log_alpha_band = (
+        model.band_calibration.log_alpha_band
+        if band_cfg.enabled and model.band_calibration is not None
+        else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
+    )
+    model_flux = (
+        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+        if band_cfg.enabled
+        else model_flux
     )
     alpha_prior_penalty = (
         global_sed_scale_prior_penalty(
@@ -86,6 +102,14 @@ def negative_elbo(
             scale_cfg.prior_sigma_log_alpha,
         )
         if scale_cfg.enabled
+        else jnp.asarray(0.0, dtype=model_flux.dtype)
+    )
+    band_prior_penalty = (
+        per_band_flux_calibration_prior_penalty(
+            log_alpha_band,
+            band_cfg.prior_sigma_log_alpha,
+        )
+        if band_cfg.enabled
         else jnp.asarray(0.0, dtype=model_flux.dtype)
     )
     loglike = photometric_loglike(
@@ -101,7 +125,7 @@ def negative_elbo(
     logp = model.prior.log_prob(x_samples)
     kl_mc = logq - logp
     loss_terms = -loglike + float(kl_weight) * kl_mc
-    loss = jnp.mean(loss_terms) + alpha_prior_penalty
+    loss = jnp.mean(loss_terms) + alpha_prior_penalty + band_prior_penalty
     obs = batch.flux[None, :, :]
     mask = batch.mask[None, :, :]
     residual = jnp.where(mask, model_flux - obs, 0.0)
@@ -119,6 +143,10 @@ def negative_elbo(
         "log_alpha_sed": log_alpha_sed,
         "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
         "alpha_prior_penalty": alpha_prior_penalty,
+        "band_alpha_prior_penalty": band_prior_penalty,
+        "max_abs_band_delta_mag": jnp.max(
+            jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
+        ),
         "residual_rms": jnp.sqrt(jnp.sum(residual**2) / n_valid),
         "finite_fraction": jnp.mean(jnp.isfinite(loss_terms).astype(jnp.float32)),
     }
