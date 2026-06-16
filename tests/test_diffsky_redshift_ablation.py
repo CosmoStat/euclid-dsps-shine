@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from euclid_dsps.diffsky_redshift_ablation import (
+    redshift_metrics_by_truth_bin,
     redshift_metrics_from_samples,
     summarize_redshift_metrics,
     write_redshift_metrics_for_run,
@@ -53,6 +54,26 @@ def test_redshift_summary_outlier_fraction() -> None:
     assert summary["outlier_fraction_0p15"] == 0.5
     assert summary["coverage_68"] == 0.5
     assert summary["coverage_95"] == 1.0
+
+
+def test_redshift_metrics_by_truth_bin() -> None:
+    frame = pd.DataFrame(
+        {
+            "z_true": [0.5, 1.0],
+            "delta_z": [0.01, -0.02],
+            "pit": [0.5, 0.4],
+            "covered_68": [True, False],
+            "covered_95": [True, True],
+            "posterior_width_68": [0.1, 0.2],
+        }
+    )
+
+    binned = redshift_metrics_by_truth_bin(frame)
+
+    assert int(binned["n_objects"].sum()) == 2
+    assert {"z_bin_lower", "z_bin_upper", "median_bias", "coverage_68"} <= set(
+        binned.columns
+    )
 
 
 def test_write_redshift_metrics_includes_alpha_and_likelihood_metadata(tmp_path) -> None:
@@ -154,7 +175,9 @@ def test_write_redshift_metrics_reads_posterior_sample_shards(tmp_path) -> None:
 
     photoz = pd.read_csv(run / "photoz_metrics.csv")
     posterior = pd.read_csv(run / "posterior_vs_truth_metrics.csv")
+    binned = pd.read_csv(run / "photoz_metrics_by_redshift_bin.csv")
     assert int(photoz.loc[0, "n_objects"]) == 2
+    assert int(binned["n_objects"].sum()) == 2
     assert "mass_bias_raw" in set(posterior["metric_name"])
 
 

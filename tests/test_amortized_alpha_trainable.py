@@ -25,6 +25,7 @@ if HAS_DEPS:
     from euclid_dsps.amortized.train import (
         build_amortized_model,
         component_grad_norms,
+        zero_band_calibration_grads,
         zero_sed_scale_grads,
     )
 
@@ -105,3 +106,34 @@ def test_frozen_alpha_gradients_can_be_zeroed() -> None:
     assert component_grad_norms(zeroed)["alpha_grad_norm"] == 0.0
     assert jnp.allclose(model.sed_scale.log_alpha_sed, 0.0)
     assert jnp.allclose(updated.sed_scale.log_alpha_sed, model.sed_scale.log_alpha_sed)
+
+
+def test_per_band_calibration_receives_and_zeros_gradients() -> None:
+    config = _alpha_config(True)
+    config["bands"] = [{"name": f"band_{index}"} for index in range(10)]
+    config["calibration"]["per_band_zero_points"] = {
+        "enabled": True,
+        "mode": "learn_per_band",
+        "trainable": False,
+        "prior_sigma_mag": 0.05,
+    }
+    model, ((_loss, metrics), grads) = _loss_and_grads(config)
+    zeroed = zero_band_calibration_grads(grads)
+    optimizer = optax.adamw(1.0e-2)
+    opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+    updates, _ = optimizer.update(
+        zeroed,
+        opt_state,
+        eqx.filter(model, eqx.is_inexact_array),
+    )
+    updated = eqx.apply_updates(model, updates)
+
+    assert jnp.isfinite(metrics["band_alpha_prior_penalty"])
+    assert component_grad_norms(grads)["band_alpha_grad_norm"] > 0.0
+    assert component_grad_norms(zeroed)["band_alpha_grad_norm"] == 0.0
+    assert model.band_calibration is not None
+    assert updated.band_calibration is not None
+    assert jnp.allclose(
+        updated.band_calibration.log_alpha_band,
+        model.band_calibration.log_alpha_band,
+    )
