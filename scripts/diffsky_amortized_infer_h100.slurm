@@ -16,9 +16,9 @@ set -Eeuo pipefail
 
 # Sharded checkpoint-only amortized inference.
 #
-# Default use case: inspect the completed standard-normal training from the
-# interrupted Jean-Zay run, using last.eqx/epoch_0015 quality rather than the
-# old annealed-loss best.eqx.
+# Default use case: inspect a completed unsupervised joint RealNVP training
+# run. Redshift is not fixed; truth columns are used only for closure metrics
+# when available.
 #
 # Submit a 5k-object diagnostic:
 #
@@ -26,7 +26,7 @@ set -Eeuo pipefail
 #
 # Full-dataset inference after diagnostics look sane:
 #
-#   sbatch --export=ALL,LIMIT=,RUN_NAME=diffsky_standard_normal_last_full_ps128 \
+#   sbatch --export=ALL,LIMIT=,RUN_NAME=diffsky_realnvp_unsup_full_ps128 \
 #     scripts/diffsky_amortized_infer_h100.slurm
 #
 # Switch to a specific epoch checkpoint:
@@ -38,13 +38,13 @@ REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
-CONFIG="${CONFIG:-configs/amortized_diffsky_hltds_standard_normal_gpu.yaml}"
+CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml}"
 DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
-TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_full_h100_science_b256_ps512_e8/amortized_standard_normal}"
-CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/last.eqx}"
+TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_realnvp_unsup_stable_30k_e20}"
+CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-${TRAIN_RUN}/feature_stats.json}"
 
-RUN_NAME="${RUN_NAME:-diffsky_standard_normal_last_infer_ps128_limit5000}"
+RUN_NAME="${RUN_NAME:-diffsky_realnvp_unsup_stable_30k_e20_infer_ps128_limit5000}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
@@ -57,7 +57,7 @@ POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-128}"
 PRIOR_SAMPLES="${PRIOR_SAMPLES:-8192}"
 SEED="${SEED:-42}"
 LIMIT="${LIMIT:-5000}"
-SELECTION_MODE="${SELECTION_MODE:-sequential}"
+SELECTION_MODE="${SELECTION_MODE:-random}"
 STRATIFIED_STRATEGY="${STRATIFIED_STRATEGY:-balanced}"
 SELECTION_SEED="${SELECTION_SEED:-$SEED}"
 
@@ -161,6 +161,21 @@ printf ' %q' "${cmd[@]}"
 echo
 
 "${cmd[@]}"
+
+finalize_cmd=(
+  python -m euclid_dsps.cli
+  --config "$CONFIG"
+  amortized-finalize-inference
+  --out "$OUT_DIR"
+)
+if [[ -n "$LIMIT" ]]; then
+  finalize_cmd+=(--limit "$LIMIT")
+fi
+
+echo "[job] finalize command:"
+printf ' %q' "${finalize_cmd[@]}"
+echo
+"${finalize_cmd[@]}"
 
 echo "[job] inference summary: $OUT_DIR/inference_summary.json"
 echo "[job] shard manifest: $OUT_DIR/posterior_shards_manifest.json"

@@ -1,5 +1,38 @@
 # Plan
 
+## 2026-06-17 Diffsky Unsupervised RealNVP Stabilization
+
+- Current implementation slice: keep the science objective fully
+  photometry-driven and unsupervised. Do not train on `redshift_true` and do
+  not fix redshift; truth columns are closure diagnostics only.
+- Stabilize the encoder/DSPS/RealNVP path so the learned NF prior captures
+  population degeneracies instead of amplifying a collapsed amortized posterior.
+  The target changes are likelihood-temperature scheduling, posterior entropy
+  floors, delayed/alternating prior updates, prior-predictive distribution
+  diagnostics, and checkpoint gates based on non-supervised collapse signals.
+- Add dense inference batching so selected rows are packed into full
+  `jax_batch_size` batches rather than hundreds of sparse catalog-window
+  micro-shards.
+- Add an inference finalizer that can combine shard outputs, report incomplete
+  runs, compute diagnostics, and generate plots after a Slurm interruption.
+- Add a MAP-Adam under learned RealNVP prior workflow so final science
+  estimates can optimize the DSPS photometric likelihood plus learned prior
+  log-density, with redshift remaining free.
+- Implemented in the working tree:
+  `configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml`,
+  anti-collapse objective controls in the amortized ELBO/training loop,
+  prior update schedules, prior-predictive color diagnostics, dense selected
+  inference batches, an `amortized-finalize-inference` CLI, and
+  `diffsky-map-adam-prior` plus `scripts/diffsky_map_adam_prior_h100.slurm`.
+- Validation completed: `uv run python -m compileall euclid_dsps scripts`,
+  `uv run ruff check euclid_dsps tests`, targeted amortized/redshift pytest
+  (`18 passed`), CLI help smokes for train/infer/finalize/MAP, `bash -n` on
+  the three H100 Slurm scripts, and `git diff --check`.
+- Next Jean-Zay order: run a 5k/5-epoch RealNVP smoke, infer 1k with dense
+  shards, run MAP-Adam 1k under the learned prior, then scale to 30k/20 epochs
+  only if prior-predictive colors, entropy/log-std diagnostics, photo-z closure
+  plots, and MAP optimizer traces look non-collapsed.
+
 ## 2026-06-16 Diffsky Photo-z RealNVP Calibration
 
 - Current implementation slice: refocus the next Diffsky H100 run on

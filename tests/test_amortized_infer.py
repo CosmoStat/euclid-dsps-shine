@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 
 import jax.numpy as jnp
+import pandas as pd
 import pytest
 
 HAS_DEPS = (
@@ -65,3 +66,53 @@ def test_model_flux_from_x_sample_chunks_rejects_nonpositive_chunk() -> None:
             spec.names,
             sample_chunk_size=0,
         )
+
+
+def test_combine_inference_shard_tables_writes_dense_outputs(tmp_path) -> None:
+    out = tmp_path
+    for directory in infer_mod._inference_shard_dirs(out).values():
+        directory.mkdir(parents=True, exist_ok=True)
+
+    for batch in (1, 2):
+        paths = infer_mod._inference_shard_paths(out, batch)
+        pd.DataFrame(
+            {
+                "object_id": [f"obj-{batch}"],
+                "row_index": [batch - 1],
+                "redshift_median": [0.5 + batch],
+            }
+        ).to_parquet(paths["summary"], index=False)
+        pd.DataFrame({"object_id": [f"obj-{batch}"], "sample_id": [0]}).to_parquet(
+            paths["samples"],
+            index=False,
+        )
+        pd.DataFrame({"object_id": [f"obj-{batch}"], "residual_rms": [0.1]}).to_parquet(
+            paths["residual_summary"],
+            index=False,
+        )
+        pd.DataFrame({"object_id": [f"obj-{batch}"], "finite_flux": [True]}).to_parquet(
+            paths["features"],
+            index=False,
+        )
+        paths["metadata"].write_text(
+            f'{{"batch": {batch}, "counts": {{"summary_rows": 1}}}}',
+            encoding="utf-8",
+        )
+
+    records = infer_mod._discover_shard_records(out)
+    frames = infer_mod._combine_inference_shard_tables(
+        out,
+        records,
+        combine_sample_shards=False,
+    )
+
+    assert [record["batch"] for record in records] == [1, 2]
+    assert all(record["complete"] for record in records)
+    assert len(frames["summary"]) == 2
+    assert len(frames["features"]) == 2
+    assert len(frames["residual_summary"]) == 2
+    assert not (out / "posterior_samples.parquet").exists()
+    assert pd.read_parquet(out / "posterior_summary.parquet")["row_index"].tolist() == [
+        0,
+        1,
+    ]

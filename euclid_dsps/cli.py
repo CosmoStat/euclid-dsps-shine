@@ -26,6 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
             "{download-assets,check,fit,posterior,"
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
             "amortized-train-diffsky,amortized-infer-diffsky,"
+            "amortized-finalize-inference,diffsky-map-adam-prior,"
             "amortized-prior-overlap-diffsky,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-supervised-prior-report,"
@@ -296,6 +297,44 @@ def build_parser() -> argparse.ArgumentParser:
     overlap.add_argument("--dataset", help="Prepared Diffsky parquet override.")
     overlap.add_argument("--out", help="Output report directory.")
     overlap.add_argument("--max-objects", type=int)
+
+    finalize = sub.add_parser(
+        "amortized-finalize-inference",
+        help="Combine sharded amortized inference outputs and write diagnostics.",
+    )
+    finalize.add_argument("--out", required=True, help="Inference output directory.")
+    finalize.add_argument("--limit", type=int)
+    finalize.add_argument(
+        "--combine-sample-shards",
+        action="store_true",
+        help="Write monolithic posterior_samples.parquet as well as summary tables.",
+    )
+    finalize.add_argument("--quiet", action="store_true")
+
+    map_prior = sub.add_parser(
+        "diffsky-map-adam-prior",
+        help="Fit free-redshift MAP DSPS estimates under a learned RealNVP prior.",
+    )
+    map_prior.add_argument("--out", default="outputs/runs/dev_diffsky_map_prior")
+    map_prior.add_argument("--checkpoint", required=True)
+    map_prior.add_argument("--feature-stats")
+    map_prior.add_argument("--limit", type=int)
+    map_prior.add_argument("--batch-size", type=int)
+    map_prior.add_argument("--n-starts", type=int)
+    map_prior.add_argument("--maxiter", type=int)
+    map_prior.add_argument("--learning-rate", type=float)
+    map_prior.add_argument("--prior-weight", type=float)
+    map_prior.add_argument("--seed", type=int)
+    map_prior.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+    )
+    map_prior.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+    )
+    map_prior.add_argument("--selection-seed", type=int)
+    map_prior.add_argument("--quiet", action="store_true")
 
     train_prior = sub.add_parser(
         "diffsky-train-supervised-prior",
@@ -597,6 +636,41 @@ def _add_amortized_train_arguments(
         type=int,
         help="Override amortized.training.best_checkpoint_min_epoch.",
     )
+    parser.add_argument(
+        "--prior-freeze-epochs",
+        type=int,
+        help="Freeze RealNVP prior gradients for this many initial epochs.",
+    )
+    parser.add_argument(
+        "--prior-update-schedule",
+        choices=["joint", "delayed_joint", "alternating", "encoder_then_prior"],
+        help="Override amortized.prior.update_schedule.",
+    )
+    parser.add_argument(
+        "--likelihood-temperature-initial",
+        type=float,
+        help="Initial temperature dividing the photometric NLL.",
+    )
+    parser.add_argument(
+        "--likelihood-temperature-final",
+        type=float,
+        help="Final temperature dividing the photometric NLL.",
+    )
+    parser.add_argument(
+        "--likelihood-temperature-annealing-epochs",
+        type=int,
+        help="Epochs used to anneal likelihood temperature.",
+    )
+    parser.add_argument(
+        "--entropy-floor-weight",
+        type=float,
+        help="Override posterior entropy floor regularization weight.",
+    )
+    parser.add_argument(
+        "--entropy-floor-min-log-std",
+        type=float,
+        help="Minimum encoder log_std encouraged by entropy floor.",
+    )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
 
@@ -734,6 +808,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "amortized-infer-diffsky":
         _run_amortized_infer(config, args, dataset_label="Diffsky HLTDS")
+        return
+    if args.command == "amortized-finalize-inference":
+        _run_amortized_finalize_inference(config, args)
+        return
+    if args.command == "diffsky-map-adam-prior":
+        _run_diffsky_map_adam_prior(config, args)
         return
     if args.command == "amortized-prior-overlap-diffsky":
         _run_amortized_prior_overlap_diffsky(config, args)
@@ -1079,6 +1159,10 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     amortized = dict(config.get("amortized", {}) or {})
     data = dict(amortized.get("data", {}) or {})
     training = dict(amortized.get("training", {}) or {})
+    prior = dict(amortized.get("prior", {}) or {})
+    posterior_regularization = dict(
+        amortized.get("posterior_regularization", {}) or {}
+    )
     if args.selection_mode is not None:
         data["selection_mode"] = args.selection_mode
     if args.stratified_strategy is not None:
@@ -1093,8 +1177,33 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         training["validation_every"] = int(args.validation_every)
     if getattr(args, "best_checkpoint_min_epoch", None) is not None:
         training["best_checkpoint_min_epoch"] = int(args.best_checkpoint_min_epoch)
+    if getattr(args, "prior_freeze_epochs", None) is not None:
+        prior["freeze_epochs"] = int(args.prior_freeze_epochs)
+    if getattr(args, "prior_update_schedule", None) is not None:
+        prior["update_schedule"] = str(args.prior_update_schedule)
+    if getattr(args, "likelihood_temperature_initial", None) is not None:
+        training["likelihood_temperature_initial"] = float(
+            args.likelihood_temperature_initial
+        )
+    if getattr(args, "likelihood_temperature_final", None) is not None:
+        training["likelihood_temperature_final"] = float(
+            args.likelihood_temperature_final
+        )
+    if getattr(args, "likelihood_temperature_annealing_epochs", None) is not None:
+        training["likelihood_temperature_annealing_epochs"] = int(
+            args.likelihood_temperature_annealing_epochs
+        )
+    if getattr(args, "entropy_floor_weight", None) is not None:
+        posterior_regularization["entropy_floor_enabled"] = True
+        posterior_regularization["weight"] = float(args.entropy_floor_weight)
+    if getattr(args, "entropy_floor_min_log_std", None) is not None:
+        posterior_regularization["entropy_floor_enabled"] = True
+        posterior_regularization["min_log_std"] = float(args.entropy_floor_min_log_std)
     amortized["data"] = data
     amortized["training"] = training
+    amortized["prior"] = prior
+    if posterior_regularization:
+        amortized["posterior_regularization"] = posterior_regularization
     config["amortized"] = amortized
     return config
 
@@ -1160,6 +1269,66 @@ def _run_amortized_infer(
         selection_seed=getattr(args, "selection_seed", None),
         dataset_label=dataset_label,
     )
+
+
+def _run_amortized_finalize_inference(config: dict, args) -> None:
+    try:
+        from .amortized.infer import finalize_amortized_inference
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    payload = finalize_amortized_inference(
+        config,
+        Path(args.out),
+        limit=args.limit,
+        combine_sample_shards=bool(args.combine_sample_shards),
+        dataset_label="Diffsky HLTDS",
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(
+        "[amortized] finalized "
+        f"{payload['n_processed']}/{payload['expected_selected_rows']} objects "
+        f"complete={payload['complete']}"
+    )
+
+
+def _run_diffsky_map_adam_prior(config: dict, args) -> None:
+    try:
+        from .amortized.config import amortized_config
+        from .amortized.map_adam import run_map_adam_under_prior
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = amortized_config(config)
+    training = cfg["training"]
+    map_cfg = dict(cfg.get("map_adam", {}) or {})
+    summary = run_map_adam_under_prior(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
+        limit=args.limit,
+        batch_size=int(args.batch_size or map_cfg.get("batch_size", 128)),
+        n_starts=int(args.n_starts or map_cfg.get("n_starts", 4)),
+        maxiter=int(args.maxiter or map_cfg.get("maxiter", 120)),
+        learning_rate=float(
+            args.learning_rate
+            if args.learning_rate is not None
+            else map_cfg.get("learning_rate", 0.02)
+        ),
+        prior_weight=float(
+            args.prior_weight
+            if args.prior_weight is not None
+            else map_cfg.get("prior_weight", 0.05)
+        ),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        selection_mode=getattr(args, "selection_mode", None),
+        stratified_strategy=getattr(args, "stratified_strategy", None),
+        selection_seed=getattr(args, "selection_seed", None),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(f"[map-prior] summary -> {Path(args.out) / 'map_summary.json'}")
+    print(f"[map-prior] objects -> {summary['n_objects']}")
 
 
 def _run_amortized_prior_overlap_diffsky(config: dict, args) -> None:

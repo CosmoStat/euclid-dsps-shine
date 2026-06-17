@@ -392,6 +392,7 @@ def train_amortized_fs2(
     key, model_key = jax.random.split(key)
     model = build_amortized_model(config, model_key)
     train_prior = _train_prior_jointly(cfg["prior"])
+    prior_update_schedule = _prior_update_schedule(cfg["prior"])
     calibration_runtime_config = {"calibration": config.get("calibration", {}) or {}}
     sed_scale_cfg = global_sed_scale_config(calibration_runtime_config)
     train_alpha = bool(sed_scale_cfg.enabled and sed_scale_cfg.trainable)
@@ -409,6 +410,8 @@ def train_amortized_fs2(
         f"realnvp_hidden={cfg['prior'].get('hidden_size')} "
         f"prior_source={cfg['prior'].get('source')} "
         f"train_prior={train_prior} "
+        f"prior_update_schedule={prior_update_schedule['mode']} "
+        f"prior_freeze_epochs={prior_update_schedule['freeze_epochs']} "
         f"alpha_sed_enabled={sed_scale_cfg.enabled} "
         f"train_alpha={train_alpha} "
         f"per_band_calibration_enabled={band_calibration_cfg.enabled} "
@@ -460,9 +463,20 @@ def train_amortized_fs2(
             int(cfg["training"].get("kl_annealing_epochs", 5)),
             max_weight=kl_weight_max,
         )
+        objective_config = _objective_config_for_epoch(cfg, epoch)
+        update_phase = _training_update_phase(
+            cfg["prior"],
+            epoch=epoch,
+            train_prior=train_prior,
+        )
         epoch_rows = []
         _log(
-            verbose, f"[amortized] epoch {epoch}/{int(epochs)} start kl={kl_weight:.3f}"
+            verbose,
+            "[amortized] epoch "
+            f"{epoch}/{int(epochs)} start kl={kl_weight:.3f} "
+            f"phase={update_phase} "
+            "temp="
+            f"{float(objective_config.get('likelihood_temperature', 1.0)):.3g}",
         )
         train_order = np.arange(len(train_arrays.object_id))
         if epoch_shuffle:
@@ -493,9 +507,14 @@ def train_amortized_fs2(
                     float(kl_weight),
                     cfg["likelihood"],
                     calibration_runtime_config,
+                    objective_config,
                 )
-                if not train_prior:
+                if update_phase in {"encoder", "joint_no_prior", "frozen_prior"}:
                     grads = zero_prior_grads(grads)
+                if update_phase == "prior":
+                    grads = zero_encoder_grads(grads)
+                    grads = zero_sed_scale_grads(grads)
+                    grads = zero_band_calibration_grads(grads)
                 if not train_alpha:
                     grads = zero_sed_scale_grads(grads)
                 if not train_band_calibration:
@@ -526,6 +545,10 @@ def train_amortized_fs2(
                         "epoch": int(epoch),
                         "batch": int(batch_index),
                         "kl_weight": float(kl_weight),
+                        "likelihood_temperature": float(
+                            objective_config.get("likelihood_temperature", 1.0)
+                        ),
+                        "update_phase": update_phase,
                         "n_objects": int(batch.flux.shape[0]),
                         "loss_finite": float(loss_finite),
                         "grads_finite": float(grads_finite),
@@ -599,6 +622,7 @@ def train_amortized_fs2(
                 kl_weight=float(kl_weight),
                 likelihood_config=cfg["likelihood"],
                 calibration_config=calibration_runtime_config,
+                objective_config=objective_config,
                 progress=bool(progress),
                 total=val_expected_batches,
                 desc=f"val {epoch}/{int(epochs)}",
@@ -683,6 +707,28 @@ def train_amortized_fs2(
             and epoch % diagnostics_every == 0
         ):
             write_training_diagnostics(out / "training_log.csv", out)
+        prior_diag_cfg = dict(cfg.get("prior_predictive_diagnostics", {}) or {})
+        if bool(prior_diag_cfg.get("enabled", False)) and (
+            diagnostics_every <= 0 or epoch % diagnostics_every == 0
+        ):
+            key, prior_diag_key = jax.random.split(key)
+            _write_prior_predictive_training_diagnostics(
+                out,
+                model,
+                validation_arrays if validation_arrays is not None else train_arrays,
+                latent_spec,
+                context,
+                model_args,
+                latent_spec.names,
+                prior_diag_key,
+                config=config,
+                epoch=epoch,
+                band_names=train_arrays.band_names,
+                calibration_config=calibration_runtime_config,
+                n_prior_samples=int(prior_diag_cfg.get("n_prior_samples", 512)),
+                n_observed=int(prior_diag_cfg.get("n_observed", 5000)),
+                batch_size=int(prior_diag_cfg.get("batch_size", 256)),
+            )
         epoch_loss = _finite_mean([row["loss"] for row in epoch_rows])
         epoch_nll = _finite_mean([row["negative_loglike"] for row in epoch_rows])
         epoch_kl = _finite_mean([row["kl_mc_mean"] for row in epoch_rows])
@@ -753,11 +799,22 @@ def train_amortized_fs2(
             "encoder": True,
             "realnvp_prior": bool(train_prior),
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
+            "prior_update_schedule": _prior_update_schedule(cfg["prior"]),
             "global_sed_scale": bool(train_alpha),
             "per_band_flux_calibration": bool(train_band_calibration),
             "decoder": False,
             "kl_estimator": "monte_carlo_logq_minus_logp",
         },
+        "likelihood_temperature": {
+            "initial": float(cfg["training"].get("likelihood_temperature_initial", 1.0)),
+            "final": float(cfg["training"].get("likelihood_temperature_final", 1.0)),
+            "annealing_epochs": int(
+                cfg["training"].get("likelihood_temperature_annealing_epochs", 0)
+            ),
+        },
+        "posterior_regularization": dict(
+            cfg.get("posterior_regularization", {}) or {}
+        ),
         "global_sed_scale": alpha_metadata(
             float(np.asarray(jax.device_get(model.sed_scale.log_alpha_sed))),
             sed_scale_cfg.prior_sigma_log_alpha,
@@ -1035,6 +1092,7 @@ def evaluate_validation_epoch(
     desc: str,
     epoch: int,
     calibration_config: dict[str, Any] | None = None,
+    objective_config: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, float | int | str]], list[dict[str, float | int | str]]]:
     """Evaluate validation ELBO and redshift-bin metrics without updates."""
     rows: list[dict[str, float | int | str]] = []
@@ -1083,6 +1141,7 @@ def evaluate_validation_epoch(
                 float(kl_weight),
                 likelihood_config,
                 calibration_config,
+                objective_config or {},
             )
             record = _metrics_record(metrics)
             record.update(
@@ -1144,12 +1203,15 @@ def _evaluation_metrics(
     kl_weight,
     likelihood_config,
     calibration_config,
+    objective_config,
 ):
+    objective_config = objective_config or {}
     x_samples, logq = model.encoder.sample_and_log_prob(
         key,
         batch.features,
         int(n_samples),
     )
+    _mean, log_std = model.encoder(batch.features)
     model_flux_raw = model_flux_from_x(
         x_samples,
         latent_spec,
@@ -1203,7 +1265,12 @@ def _evaluation_metrics(
     )
     logp = model.prior.log_prob(x_samples)
     kl = logq - logp
-    objective = -loglike + float(kl_weight) * kl
+    likelihood_temperature = jnp.asarray(
+        max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
+        dtype=loglike.dtype,
+    )
+    entropy_penalty = _posterior_entropy_floor_penalty_train(log_std, objective_config)
+    objective = -loglike / likelihood_temperature + float(kl_weight) * kl
     chi = (model_flux - batch.flux[None, :, :]) / batch.flux_err[None, :, :]
     chi = jnp.where(batch.mask[None, :, :], chi, 0.0)
     object_loss = jnp.mean(objective, axis=0)
@@ -1211,12 +1278,23 @@ def _evaluation_metrics(
     object_kl = jnp.mean(kl, axis=0)
     object_chi2 = jnp.mean(jnp.sum(chi**2, axis=-1), axis=0)
     metrics = {
-        "loss": jnp.mean(objective) + alpha_prior_penalty + band_prior_penalty,
+        "loss": (
+            jnp.mean(objective)
+            + alpha_prior_penalty
+            + band_prior_penalty
+            + entropy_penalty
+        ),
         "negative_loglike": jnp.mean(-loglike),
         "loglike_mean": jnp.mean(loglike),
         "logprior_mean": jnp.mean(logp),
         "logq_mean": jnp.mean(logq),
         "kl_mc_mean": jnp.mean(kl),
+        "likelihood_temperature": likelihood_temperature,
+        "entropy_floor_penalty": entropy_penalty,
+        "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
+        "posterior_min_log_std": jnp.min(log_std),
+        "posterior_median_log_std": jnp.median(log_std),
+        "posterior_max_log_std": jnp.max(log_std),
         "model_flux_mean": jnp.mean(model_flux),
         "mean_model_flux_raw": jnp.mean(model_flux_raw),
         "mean_model_flux_scaled": jnp.mean(model_flux),
@@ -1499,6 +1577,7 @@ def _loss_with_metrics(
     kl_weight,
     likelihood_config,
     calibration_config,
+    objective_config,
 ):
     return negative_elbo(
         model,
@@ -1512,6 +1591,7 @@ def _loss_with_metrics(
         kl_weight,
         likelihood_config,
         calibration_config,
+        objective_config,
     )
 
 
@@ -1537,6 +1617,7 @@ def _loss_and_grads_jit(
     kl_weight,
     likelihood_config,
     calibration_config,
+    objective_config,
 ):
     actual_context = context.value if isinstance(context, _StaticArg) else context
     return eqx.filter_value_and_grad(_loss_with_metrics, has_aux=True)(
@@ -1551,6 +1632,7 @@ def _loss_and_grads_jit(
         kl_weight,
         likelihood_config,
         calibration_config,
+        objective_config,
     )
 
 
@@ -1567,6 +1649,7 @@ def _evaluation_metrics_jit(
     kl_weight,
     likelihood_config,
     calibration_config,
+    objective_config,
 ):
     actual_context = context.value if isinstance(context, _StaticArg) else context
     return _evaluation_metrics(
@@ -1581,6 +1664,7 @@ def _evaluation_metrics_jit(
         kl_weight,
         likelihood_config,
         calibration_config,
+        objective_config,
     )
 
 
@@ -1635,6 +1719,24 @@ def zero_prior_grads(grads: AmortizedModel) -> AmortizedModel:
     )
 
 
+def zero_encoder_grads(grads: AmortizedModel) -> AmortizedModel:
+    """Return gradients with all trainable encoder leaves set to zero."""
+    encoder_grads = getattr(grads, "encoder", None)
+    if encoder_grads is None:
+        return grads
+
+    def zero_leaf(leaf):
+        if eqx.is_inexact_array(leaf):
+            return jnp.zeros_like(leaf)
+        return leaf
+
+    return eqx.tree_at(
+        lambda tree: tree.encoder,
+        grads,
+        jax.tree_util.tree_map(zero_leaf, encoder_grads),
+    )
+
+
 def zero_sed_scale_grads(grads: AmortizedModel) -> AmortizedModel:
     """Return gradients with global SED-scale leaves set to zero."""
     sed_scale_grads = getattr(grads, "sed_scale", None)
@@ -1676,6 +1778,103 @@ def _train_prior_jointly(prior_cfg: dict[str, Any]) -> bool:
     if source == "standard_normal":
         return False
     return bool(prior_cfg.get("train_jointly", source == "joint_realnvp"))
+
+
+def _prior_update_schedule(prior_cfg: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": str(prior_cfg.get("update_schedule", "joint")).lower(),
+        "freeze_epochs": max(0, int(prior_cfg.get("freeze_epochs", 0))),
+        "update_every_epochs": max(1, int(prior_cfg.get("update_every_epochs", 1))),
+    }
+
+
+def _training_update_phase(
+    prior_cfg: dict[str, Any],
+    *,
+    epoch: int,
+    train_prior: bool,
+) -> str:
+    if not train_prior:
+        return "joint_no_prior"
+    schedule = _prior_update_schedule(prior_cfg)
+    if int(epoch) <= int(schedule["freeze_epochs"]):
+        return "frozen_prior"
+    mode = str(schedule["mode"])
+    if mode in {"joint", "delayed_joint"}:
+        return "joint"
+    if mode in {"alternating", "alternating_epochs"}:
+        offset = int(epoch) - int(schedule["freeze_epochs"]) - 1
+        period = 2 * int(schedule["update_every_epochs"])
+        return "prior" if offset % period >= int(schedule["update_every_epochs"]) else "encoder"
+    if mode in {"encoder_then_prior", "prior_only_after_freeze"}:
+        return "prior"
+    raise ValueError(
+        "amortized.prior.update_schedule must be one of "
+        "joint, delayed_joint, alternating, encoder_then_prior"
+    )
+
+
+def _objective_config_for_epoch(
+    cfg: dict[str, Any],
+    epoch: int,
+) -> dict[str, Any]:
+    training = cfg["training"]
+    temperature = _annealed_value(
+        epoch=epoch,
+        initial=float(training.get("likelihood_temperature_initial", 1.0)),
+        final=float(training.get("likelihood_temperature_final", 1.0)),
+        epochs=int(training.get("likelihood_temperature_annealing_epochs", 0)),
+    )
+    regularization = dict(cfg.get("posterior_regularization", {}) or {})
+    if regularization:
+        initial_weight = float(regularization.get("weight", 0.0))
+        final_weight = float(regularization.get("final_weight", initial_weight))
+        regularization["weight"] = _annealed_value(
+            epoch=epoch,
+            initial=initial_weight,
+            final=final_weight,
+            epochs=int(regularization.get("anneal_epochs", 0)),
+        )
+    return {
+        "likelihood_temperature": float(temperature),
+        "posterior_regularization": regularization,
+    }
+
+
+def _annealed_value(*, epoch: int, initial: float, final: float, epochs: int) -> float:
+    if epochs <= 1:
+        return float(final)
+    t = min(1.0, max(0.0, (float(epoch) - 1.0) / (float(epochs) - 1.0)))
+    return float(initial + t * (final - initial))
+
+
+def _diag_gaussian_entropy_train(log_std: jnp.ndarray) -> jnp.ndarray:
+    return 0.5 * jnp.sum(
+        1.0 + jnp.log(2.0 * jnp.pi) + 2.0 * log_std,
+        axis=-1,
+    )
+
+
+def _posterior_entropy_floor_penalty_train(
+    log_std: jnp.ndarray,
+    objective_config: dict[str, Any],
+) -> jnp.ndarray:
+    regularization = dict(objective_config.get("posterior_regularization", {}) or {})
+    enabled = bool(regularization.get("entropy_floor_enabled", False))
+    weight = float(regularization.get("weight", 0.0))
+    if not enabled or weight <= 0.0:
+        return jnp.asarray(0.0, dtype=log_std.dtype)
+    min_log_std = regularization.get("min_log_std")
+    if min_log_std is None:
+        min_scale = float(regularization.get("min_scale", 0.0))
+        if min_scale <= 0.0:
+            return jnp.asarray(0.0, dtype=log_std.dtype)
+        min_log_std = float(np.log(min_scale))
+    deficit = jnp.maximum(
+        jnp.asarray(float(min_log_std), dtype=log_std.dtype) - log_std,
+        jnp.asarray(0.0, dtype=log_std.dtype),
+    )
+    return jnp.asarray(weight, dtype=log_std.dtype) * jnp.mean(deficit**2)
 
 
 def tree_all_finite(tree) -> bool:
@@ -1898,6 +2097,146 @@ def _effective_jax_batch_size(training_config: dict[str, Any], batch_size: int) 
     if value <= 0:
         raise ValueError("amortized.training.jax_batch_size must be positive")
     return min(requested, value)
+
+
+def _write_prior_predictive_training_diagnostics(
+    out: Path,
+    model: AmortizedModel,
+    arrays,
+    latent_spec: LatentSpec,
+    context,
+    model_args,
+    parameter_names: tuple[str, ...],
+    key,
+    *,
+    config: dict[str, Any],
+    epoch: int,
+    band_names: tuple[str, ...],
+    calibration_config: dict[str, Any],
+    n_prior_samples: int,
+    n_observed: int,
+    batch_size: int,
+) -> None:
+    n_prior_samples = max(1, int(n_prior_samples))
+    batch_size = max(1, int(batch_size))
+    prior_x = model.prior.sample(key, n_prior_samples)
+    prior_flux_raw = []
+    for start in range(0, n_prior_samples, batch_size):
+        prior_flux_raw.append(
+            model_flux_from_x(
+                prior_x[start : start + batch_size],
+                latent_spec,
+                context,
+                model_args,
+                parameter_names,
+            )
+        )
+    model_flux_raw = jnp.concatenate(prior_flux_raw, axis=0)
+    scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
+    model_flux = (
+        apply_global_sed_scale_to_flux(model_flux_raw, model.sed_scale.log_alpha_sed)
+        if scale_cfg.enabled
+        else model_flux_raw
+    )
+    log_alpha_band = (
+        model.band_calibration.log_alpha_band
+        if band_cfg.enabled and model.band_calibration is not None
+        else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
+    )
+    model_flux = (
+        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+        if band_cfg.enabled
+        else model_flux
+    )
+    observed_flux = np.asarray(arrays.flux, dtype=float)
+    if len(observed_flux) > int(n_observed):
+        rng = np.random.default_rng(int(epoch))
+        observed_flux = observed_flux[
+            rng.choice(len(observed_flux), size=int(n_observed), replace=False)
+        ]
+    prior_flux = np.asarray(jax.device_get(model_flux), dtype=float)
+    rows = _prior_predictive_color_distance_rows(
+        observed_flux,
+        prior_flux,
+        band_names=band_names,
+        epoch=epoch,
+    )
+    if not rows:
+        return
+    path = out / "training_prior_predictive_color_metrics.csv"
+    frame = pd.DataFrame(rows)
+    if path.exists():
+        previous = pd.read_csv(path)
+        frame = pd.concat(
+            [previous.loc[previous["epoch"] != int(epoch)], frame],
+            ignore_index=True,
+        )
+    frame = frame.sort_values(["epoch", "color"])
+    frame.to_csv(path, index=False)
+    _write_prior_predictive_color_plot(frame, out)
+
+
+def _prior_predictive_color_distance_rows(
+    observed_flux: np.ndarray,
+    prior_flux: np.ndarray,
+    *,
+    band_names: tuple[str, ...],
+    epoch: int,
+) -> list[dict[str, float | int | str]]:
+    rows: list[dict[str, float | int | str]] = []
+    obs_log = np.log10(np.clip(np.asarray(observed_flux, dtype=float), 1.0e-300, None))
+    prior_log = np.log10(np.clip(np.asarray(prior_flux, dtype=float), 1.0e-300, None))
+    for index in range(len(band_names) - 1):
+        obs_color = obs_log[:, index] - obs_log[:, index + 1]
+        prior_color = prior_log[:, index] - prior_log[:, index + 1]
+        obs_color = obs_color[np.isfinite(obs_color)]
+        prior_color = prior_color[np.isfinite(prior_color)]
+        if obs_color.size == 0 or prior_color.size == 0:
+            continue
+        q = np.linspace(0.05, 0.95, 19)
+        obs_q = np.quantile(obs_color, q)
+        prior_q = np.quantile(prior_color, q)
+        rows.append(
+            {
+                "epoch": int(epoch),
+                "color": f"{band_names[index]}-{band_names[index + 1]}",
+                "quantile_l1": float(np.mean(np.abs(obs_q - prior_q))),
+                "observed_median": float(np.median(obs_color)),
+                "prior_median": float(np.median(prior_color)),
+                "observed_std": float(np.std(obs_color)),
+                "prior_std": float(np.std(prior_color)),
+            }
+        )
+    return rows
+
+
+def _write_prior_predictive_color_plot(frame: pd.DataFrame, out: Path) -> None:
+    if frame.empty:
+        return
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    summary = (
+        frame.groupby("epoch", sort=True)["quantile_l1"]
+        .mean()
+        .reset_index(name="mean_quantile_l1")
+    )
+    fig, ax = plt.subplots(figsize=(7.2, 4.0))
+    ax.plot(
+        summary["epoch"].to_numpy(dtype=float),
+        summary["mean_quantile_l1"].to_numpy(dtype=float),
+        marker="o",
+        lw=1.8,
+    )
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("mean adjacent-color quantile L1")
+    ax.set_title("Prior predictive color distance")
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out / "prior_predictive_color_distance.png", dpi=160)
+    plt.close(fig)
 
 
 def _training_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -46,6 +46,7 @@ def negative_elbo(
     kl_weight: float,
     likelihood_config: dict,
     calibration_config: dict | None = None,
+    objective_config: dict | None = None,
     use_mock_decoder: bool = False,
     mock_decoder_params=None,
 ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
@@ -55,11 +56,13 @@ def negative_elbo(
     Carlo as ``E_q[logq - logp]`` because the RealNVP prior has nonlinear
     coupling networks, so the expectation has no Gaussian closed form.
     """
+    objective_config = objective_config or {}
     x_samples, logq = model.encoder.sample_and_log_prob(
         key,
         batch.features,
         int(n_samples),
     )
+    _mean, log_std = model.encoder(batch.features)
     if use_mock_decoder:
         if mock_decoder_params is None:
             raise ValueError(
@@ -124,8 +127,18 @@ def negative_elbo(
     )
     logp = model.prior.log_prob(x_samples)
     kl_mc = logq - logp
-    loss_terms = -loglike + float(kl_weight) * kl_mc
-    loss = jnp.mean(loss_terms) + alpha_prior_penalty + band_prior_penalty
+    likelihood_temperature = jnp.asarray(
+        max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
+        dtype=loglike.dtype,
+    )
+    entropy_penalty = _posterior_entropy_floor_penalty(log_std, objective_config)
+    loss_terms = -loglike / likelihood_temperature + float(kl_weight) * kl_mc
+    loss = (
+        jnp.mean(loss_terms)
+        + alpha_prior_penalty
+        + band_prior_penalty
+        + entropy_penalty
+    )
     obs = batch.flux[None, :, :]
     mask = batch.mask[None, :, :]
     residual = jnp.where(mask, model_flux - obs, 0.0)
@@ -137,6 +150,12 @@ def negative_elbo(
         "logprior_mean": jnp.mean(logp),
         "logq_mean": jnp.mean(logq),
         "kl_mc_mean": jnp.mean(kl_mc),
+        "likelihood_temperature": likelihood_temperature,
+        "entropy_floor_penalty": entropy_penalty,
+        "posterior_entropy_mean": _diag_gaussian_entropy(log_std).mean(),
+        "posterior_min_log_std": jnp.min(log_std),
+        "posterior_median_log_std": jnp.median(log_std),
+        "posterior_max_log_std": jnp.max(log_std),
         "model_flux_mean": jnp.mean(model_flux),
         "mean_model_flux_raw": jnp.mean(model_flux_raw),
         "mean_model_flux_scaled": jnp.mean(model_flux),
@@ -151,3 +170,33 @@ def negative_elbo(
         "finite_fraction": jnp.mean(jnp.isfinite(loss_terms).astype(jnp.float32)),
     }
     return loss, metrics
+
+
+def _diag_gaussian_entropy(log_std: jnp.ndarray) -> jnp.ndarray:
+    return 0.5 * jnp.sum(
+        1.0 + jnp.log(2.0 * jnp.pi) + 2.0 * log_std,
+        axis=-1,
+    )
+
+
+def _posterior_entropy_floor_penalty(
+    log_std: jnp.ndarray,
+    objective_config: dict,
+) -> jnp.ndarray:
+    regularization = dict(objective_config.get("posterior_regularization", {}) or {})
+    enabled = bool(regularization.get("entropy_floor_enabled", False))
+    weight = float(regularization.get("weight", 0.0))
+    if not enabled or weight <= 0.0:
+        return jnp.asarray(0.0, dtype=log_std.dtype)
+    min_log_std = regularization.get("min_log_std")
+    if min_log_std is None:
+        min_scale = float(regularization.get("min_scale", 0.0))
+        if min_scale <= 0.0:
+            return jnp.asarray(0.0, dtype=log_std.dtype)
+        min_log_std = float(jnp.log(jnp.asarray(min_scale)))
+    deficit = jax_nn_relu(jnp.asarray(float(min_log_std), dtype=log_std.dtype) - log_std)
+    return jnp.asarray(weight, dtype=log_std.dtype) * jnp.mean(deficit**2)
+
+
+def jax_nn_relu(value: jnp.ndarray) -> jnp.ndarray:
+    return jnp.maximum(value, jnp.asarray(0.0, dtype=value.dtype))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,11 @@ from .catalog_identity import (
     write_truth_snapshot,
 )
 from .config import amortized_config
-from .data import iter_photometry_batches_from_config
+from .data import (
+    iter_photometry_batches_from_arrays,
+    iter_photometry_batches_from_config,
+    load_photometry_arrays_from_config,
+)
 from .decoder import model_flux_from_x
 from .diagnostics import (
     feature_diagnostics_frame,
@@ -282,6 +287,7 @@ def infer_amortized_fs2(
             write_posterior_predictive=write_posterior_predictive,
             write_residual_samples=write_residual_samples,
         )
+    dense_selected_batches = bool(inference_cfg.get("dense_selected_batches", True))
     run_signature = {
         "catalog_path": str(config.get("catalog_path")),
         "checkpoint": str(checkpoint),
@@ -298,18 +304,35 @@ def infer_amortized_fs2(
         "write_residual_samples": bool(write_residual_samples),
         "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
         "per_band_calibration_enabled": bool(band_calibration_cfg.enabled),
+        "dense_selected_batches": bool(dense_selected_batches),
     }
-    n_objects_total = 0
-    for batch_index, batch in enumerate(
-        iter_photometry_batches_from_config(
+    if row_indices is not None and dense_selected_batches:
+        if verbose:
+            print(
+                "[amortized] loading selected inference rows for dense batching: "
+                f"rows={len(row_indices)} jax_batch_size={int(jax_batch_size)}"
+            )
+        selected_arrays = load_photometry_arrays_from_config(
+            config,
+            batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
+            row_indices=row_indices,
+        )
+        batch_iterable = iter_photometry_batches_from_arrays(
+            selected_arrays,
+            batch_size=int(jax_batch_size),
+            feature_stats=feature_stats,
+        )
+    else:
+        batch_iterable = iter_photometry_batches_from_config(
             config,
             batch_size=int(jax_batch_size),
             limit=limit,
             feature_stats=feature_stats,
             row_indices=row_indices,
-        ),
-        start=1,
-    ):
+        )
+
+    n_objects_total = 0
+    for batch_index, batch in enumerate(batch_iterable, start=1):
         if verbose:
             print(
                 "[amortized] inference batch "
@@ -715,6 +738,7 @@ def infer_amortized_fs2(
             "write_residual_samples": bool(write_residual_samples),
             "combine_sample_shards": bool(combine_sample_shards),
             "combine_summary_shards": bool(combine_summary_shards),
+            "dense_selected_batches": bool(dense_selected_batches),
             "n_objects": int(n_objects_total),
             "samples_rows": int(row_counts["samples_rows"]),
             "summary_rows": int(row_counts["summary_rows"]),
@@ -745,6 +769,219 @@ def infer_amortized_fs2(
     if verbose:
         print("[amortized] inference complete")
         print(f"[amortized] summary: {out / 'inference_summary.json'}")
+
+
+def finalize_amortized_inference(
+    config: dict[str, Any],
+    out_dir: Path,
+    *,
+    limit: int | None = None,
+    combine_sample_shards: bool = False,
+    dataset_label: str = "FS2",
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Combine sharded inference outputs and write diagnostics/plots.
+
+    This is intentionally independent from the GPU inference loop so a Slurm
+    run that hit walltime can still be summarized safely on login/CPU nodes.
+    """
+    out = Path(out_dir)
+    if not out.exists():
+        raise FileNotFoundError(f"Missing inference output directory: {out}")
+    shard_records = _discover_shard_records(out)
+    complete_records = [record for record in shard_records if record["complete"]]
+    if verbose:
+        print(
+            "[amortized] finalize inference: "
+            f"run={out} complete_shards={len(complete_records)} "
+            f"all_shards={len(shard_records)}"
+        )
+    frames = _combine_inference_shard_tables(
+        out,
+        complete_records,
+        combine_sample_shards=bool(combine_sample_shards),
+    )
+    selection = _read_json_if_exists(out / "inference_selection.json")
+    expected = selection.get("selected_rows")
+    processed = int(len(frames.get("summary", pd.DataFrame())))
+    row_indices = _load_inference_indices(out)
+    manifest_payload = {
+        "shard_outputs": True,
+        "finalized": True,
+        "n_shards": int(len(complete_records)),
+        "summary_rows": processed,
+        "samples_rows": int(_frame_len(frames.get("samples"))),
+        "residual_summary_rows": int(_frame_len(frames.get("residual_summary"))),
+        "feature_diagnostics_rows": int(_frame_len(frames.get("features"))),
+        "expected_selected_rows": int(expected) if expected is not None else None,
+        "incomplete": bool(expected is not None and processed < int(expected)),
+        "shards_written": [
+            _inference_shard_manifest_record(
+                int(record["batch"]),
+                _inference_shard_paths(out, int(record["batch"])),
+                dict(record.get("counts", {})),
+            )
+            for record in complete_records
+        ],
+        "shards_skipped": [],
+    }
+    _write_shard_manifest(out, manifest_payload)
+    metric_outputs: dict[str, str] = {}
+    try:
+        metric_outputs = {
+            key: str(value)
+            for key, value in write_redshift_metrics_for_run(
+                dataset_path=config["catalog_path"],
+                run_dir=out,
+                out_dir=out,
+                label=dataset_label,
+            ).items()
+        }
+    except Exception as exc:
+        metric_outputs = {"warning": str(exc)}
+    summarize_inference_outputs(
+        out / "posterior_summary.parquet",
+        out,
+        config=config,
+        limit=limit,
+        row_indices=row_indices,
+    )
+    payload = {
+        "run_dir": str(out),
+        "n_processed": processed,
+        "expected_selected_rows": int(expected) if expected is not None else None,
+        "complete": bool(expected is None or processed >= int(expected)),
+        "n_complete_shards": int(len(complete_records)),
+        "n_discovered_shards": int(len(shard_records)),
+        "combine_sample_shards": bool(combine_sample_shards),
+        "metric_outputs": metric_outputs,
+        "posterior_summary": str(out / "posterior_summary.parquet"),
+        "posterior_diagnostics_summary": str(
+            out / "posterior_diagnostics_summary.json"
+        ),
+    }
+    summary_name = (
+        "inference_summary.json"
+        if payload["complete"]
+        else "inference_incomplete_summary.json"
+    )
+    write_json(out / summary_name, payload)
+    if not payload["complete"]:
+        write_json(out / "inference_incomplete_summary.json", payload)
+    if verbose:
+        print(f"[amortized] finalize summary: {out / summary_name}")
+    return payload
+
+
+def _discover_shard_records(out: Path) -> list[dict[str, Any]]:
+    metadata_dir = _inference_shard_dirs(out)["metadata"]
+    records: list[dict[str, Any]] = []
+    if metadata_dir.exists():
+        for path in sorted(metadata_dir.glob("batch_*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            batch = int(payload.get("batch", _batch_index_from_path(path)))
+            paths = _inference_shard_paths(out, batch)
+            counts = dict(payload.get("counts", {}) or {})
+            records.append(
+                {
+                    "batch": batch,
+                    "metadata": path,
+                    "counts": counts,
+                    "complete": _basic_shard_tables_exist(paths),
+                }
+            )
+    if records:
+        return sorted(records, key=lambda record: int(record["batch"]))
+    summary_dir = _inference_shard_dirs(out)["summary"]
+    if not summary_dir.exists():
+        return []
+    for path in sorted(summary_dir.glob("batch_*.parquet")):
+        batch = _batch_index_from_path(path)
+        paths = _inference_shard_paths(out, batch)
+        records.append(
+            {
+                "batch": batch,
+                "metadata": paths["metadata"],
+                "counts": _inference_shard_row_counts(
+                    paths,
+                    write_posterior_predictive=paths["predictive"].exists(),
+                    write_residual_samples=paths["residuals"].exists(),
+                )
+                if _basic_shard_tables_exist(paths)
+                else {},
+                "complete": _basic_shard_tables_exist(paths),
+            }
+        )
+    return records
+
+
+def _combine_inference_shard_tables(
+    out: Path,
+    records: list[dict[str, Any]],
+    *,
+    combine_sample_shards: bool,
+) -> dict[str, pd.DataFrame]:
+    table_specs = {
+        "summary": ("summary", out / "posterior_summary.parquet", True),
+        "features": ("features", out / "feature_diagnostics.parquet", True),
+        "residual_summary": (
+            "residual_summary",
+            out / "posterior_predictive_residual_summary.parquet",
+            True,
+        ),
+        "samples": ("samples", out / "posterior_samples.parquet", combine_sample_shards),
+    }
+    frames: dict[str, pd.DataFrame] = {}
+    for name, (path_key, output_path, should_write) in table_specs.items():
+        paths = [
+            _inference_shard_paths(out, int(record["batch"]))[path_key]
+            for record in records
+        ]
+        existing = [path for path in paths if path.exists() and path.stat().st_size > 0]
+        frame = (
+            pd.concat((pd.read_parquet(path) for path in existing), ignore_index=True)
+            if existing
+            else pd.DataFrame()
+        )
+        frames[name] = frame
+        if should_write and not frame.empty:
+            frame.to_parquet(output_path, index=False)
+    return frames
+
+
+def _basic_shard_tables_exist(paths: dict[str, Path]) -> bool:
+    required = ["samples", "summary", "residual_summary", "features"]
+    return all(paths[key].exists() and paths[key].stat().st_size > 0 for key in required)
+
+
+def _batch_index_from_path(path: Path) -> int:
+    return int(path.stem.split("_")[-1])
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _load_inference_indices(out: Path) -> np.ndarray | None:
+    path = out / "inference_indices.npy"
+    if not path.exists():
+        return None
+    try:
+        return np.load(path)
+    except Exception:
+        return None
+
+
+def _frame_len(frame: pd.DataFrame | None) -> int:
+    return 0 if frame is None else int(len(frame))
 
 
 def _ensure_inference_shard_dirs(

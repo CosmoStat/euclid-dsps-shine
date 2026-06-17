@@ -335,6 +335,7 @@ def write_redshift_metrics_for_run(
     summary_frame.to_csv(photoz_path, index=False)
     binned_path = out / "photoz_metrics_by_redshift_bin.csv"
     redshift_metrics_by_truth_bin(object_metrics).to_csv(binned_path, index=False)
+    plot_paths = _write_photoz_metric_plots(object_metrics, out)
     residuals = (
         pd.concat(residual_frames, ignore_index=True)
         if residual_frames
@@ -348,7 +349,84 @@ def write_redshift_metrics_for_run(
         "photoz_metrics": photoz_path,
         "photoz_metrics_by_redshift_bin": binned_path,
         "posterior_vs_truth_metrics": posterior_path,
+        **{f"photoz_plot_{index}": path for index, path in enumerate(plot_paths)},
     }
+
+
+def _write_photoz_metric_plots(frame: pd.DataFrame, out: Path) -> list[Path]:
+    if frame.empty or not {"z_true", "z_pred_median"}.issubset(frame.columns):
+        return []
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return []
+    written: list[Path] = []
+    work = frame.replace([np.inf, -np.inf], np.nan).dropna(
+        subset=["z_true", "z_pred_median"]
+    )
+    if work.empty:
+        return []
+    z_true = work["z_true"].to_numpy(dtype=float)
+    z_pred = work["z_pred_median"].to_numpy(dtype=float)
+    delta = work["delta_z"].to_numpy(dtype=float)
+
+    fig, ax = plt.subplots(figsize=(5.2, 5.0))
+    ax.scatter(z_true, z_pred, s=9, alpha=0.45)
+    lo = float(np.nanmin([z_true.min(), z_pred.min()]))
+    hi = float(np.nanmax([z_true.max(), z_pred.max()]))
+    ax.plot([lo, hi], [lo, hi], color="black", lw=1.0, alpha=0.65)
+    ax.set_xlabel("true redshift")
+    ax.set_ylabel("posterior median z")
+    ax.set_title("Photo-z closure")
+    fig.tight_layout()
+    path = out / "photoz_truth_vs_pred.png"
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    written.append(path)
+
+    fig, ax = plt.subplots(figsize=(6.2, 4.0))
+    ax.axhline(0.0, color="black", lw=1.0, alpha=0.65)
+    ax.scatter(z_true, delta, s=9, alpha=0.45)
+    ax.axhline(0.15, color="#ef476f", lw=0.9, alpha=0.7)
+    ax.axhline(-0.15, color="#ef476f", lw=0.9, alpha=0.7)
+    ax.set_xlabel("true redshift")
+    ax.set_ylabel("(z_med - z_true) / (1 + z_true)")
+    ax.set_title("Photo-z residual")
+    fig.tight_layout()
+    path = out / "photoz_delta_vs_ztrue.png"
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    written.append(path)
+
+    if "pit" in work:
+        fig, ax = plt.subplots(figsize=(5.5, 4.0))
+        ax.hist(work["pit"].to_numpy(dtype=float), bins=np.linspace(0, 1, 21))
+        ax.set_xlabel("P(z <= z_true)")
+        ax.set_ylabel("object count")
+        ax.set_title("Photo-z PIT")
+        fig.tight_layout()
+        path = out / "photoz_pit_hist.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        written.append(path)
+
+    if {"posterior_width_68", "delta_z"}.issubset(work.columns):
+        fig, ax = plt.subplots(figsize=(5.8, 4.2))
+        ax.scatter(
+            work["posterior_width_68"].to_numpy(dtype=float),
+            np.abs(work["delta_z"].to_numpy(dtype=float)),
+            s=9,
+            alpha=0.45,
+        )
+        ax.set_xlabel("posterior width 68")
+        ax.set_ylabel("|normalized photo-z error|")
+        ax.set_title("Posterior width vs error")
+        fig.tight_layout()
+        path = out / "photoz_width_vs_abs_error.png"
+        fig.savefig(path, dpi=160)
+        plt.close(fig)
+        written.append(path)
+    return written
 
 
 def run_redshift_ablation(

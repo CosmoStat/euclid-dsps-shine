@@ -1,0 +1,45 @@
+extends: diffsky_hltds_joint_realnvp_photoz_h100.yaml
+
+experiment:
+    name: diffsky_hltds_joint_realnvp_unsup_stable_h100
+    description: Unsupervised Diffsky HLTDS encoder/DSPS/RealNVP run with anti-collapse stabilization and MAP-prior follow-up.
+
+amortized:
+    data:
+        selection_mode: random
+        stratified_strategy: balanced
+    prior:
+        update_schedule: alternating
+        freeze_epochs: 3
+        update_every_epochs: 1
+    training:
+        epochs: 20
+        n_samples: 4
+        kl_annealing_epochs: 15
+        kl_weight_max: 0.02
+        best_checkpoint_metric: validation_loss
+        best_checkpoint_min_epoch: 8
+        likelihood_temperature_initial: 4.0
+        likelihood_temperature_final: 1.0
+        likelihood_temperature_annealing_epochs: 10
+    posterior_regularization:
+        entropy_floor_enabled: true
+        min_log_std: -3.2
+        weight: 0.10
+        final_weight: 0.02
+        anneal_epochs: 15
+    prior_predictive_diagnostics:
+        enabled: true
+        n_prior_samples: 512
+        n_observed: 5000
+        batch_size: 256
+    inference:
+        selection_mode: random
+        stratified_strategy: balanced
+        dense_selected_batches: true
+    map_adam:
+        batch_size: 128
+        n_starts: 4
+        maxiter: 160
+        learning_rate: 0.015
+        prior_weight: 0.05
