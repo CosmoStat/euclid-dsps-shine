@@ -754,20 +754,24 @@ def _add_amortized_infer_shard_arguments(parser: argparse.ArgumentParser) -> Non
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    supervised_prior_commands = {
+    config_backed_diffsky_commands = {
         "diffsky-train-supervised-prior",
         "diffsky-sample-supervised-prior",
         "diffsky-supervised-prior-report",
         "diffsky-forward-closure",
         "diffsky-redshift-ablation",
         "diffsky-run-full-validation",
+        "diffsky-map-adam-prior",
     }
     if args.command == "download-assets":
         from .assets import download_assets
 
         download_assets(Path(args.out), overwrite=bool(args.overwrite))
         return
-    if args.command.startswith("diffsky-") and args.command not in supervised_prior_commands:
+    if (
+        args.command.startswith("diffsky-")
+        and args.command not in config_backed_diffsky_commands
+    ):
         from .diffsky_data.cli import run_diffsky_command
 
         run_diffsky_command(args)
