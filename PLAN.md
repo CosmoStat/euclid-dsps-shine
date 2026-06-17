@@ -1,5 +1,32 @@
 # Plan
 
+## 2026-06-17 Diffsky Collapse-Fix Validation Ladder
+
+- Current implementation slice: keep redshift free and keep training
+  unsupervised. Truth columns are used only for closure diagnostics and plots.
+- Added `PLAN_FIX.md` as the implementation checklist for phases A-E:
+  extended truth diagnostics, actual `popcosmos_bins` decoder proxy closure,
+  MAP-Adam multistart likelihood-landscape diagnostics, low-dimensional
+  controlled configs, and automatic collapse gates.
+- Implemented extended truth snapshots/diagnostics for inference and MAP runs:
+  posterior/MAP/prior-vs-truth tables, object-level parquet outputs, truth
+  vs estimate plots, bias plots, population overlays, and compact population
+  corner plots for comparable/proxy parameters.
+- Implemented `diffsky-popcosmos-proxy-closure` plus
+  `scripts/diffsky_popcosmos_proxy_closure_h100.slurm` to validate the exact
+  amortized `popcosmos_bins` decoder against Diffsky truth proxies before
+  interpreting encoder/NF results.
+- Implemented MAP-Adam start modes `encoder`, `prior`, `z_grid`, `lowz_grid`,
+  `latin_hypercube`, and `mixed`, with per-start-family parquet/CSV outputs
+  and plots. This supports likelihood-only debug runs via `PRIOR_WEIGHT=0.0`.
+- Added H100 configs for full widened redshift bounds and low-dimensional
+  `z + mass + SFH proxy + dust` diagnostics:
+  `diffsky_hltds_popcosmos_full_bounds_h100.yaml`,
+  `diffsky_hltds_popcosmos_lowdim_z_mass_dust_h100.yaml`, and
+  `diffsky_hltds_popcosmos_lowdim_z_mass_dust_lowz_h100.yaml`.
+- Added automatic training/inference/MAP collapse gates that write JSON
+  artifacts and surface pass/warn/fail status in run summaries.
+
 ## 2026-06-17 Diffsky Unsupervised RealNVP Stabilization
 
 - Current implementation slice: keep the science objective fully

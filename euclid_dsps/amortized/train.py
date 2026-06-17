@@ -30,6 +30,7 @@ from euclid_dsps.io import ensure_dir, truth_column_from_spec, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
 
 from .catalog_identity import write_catalog_fingerprint
+from .collapse_gates import write_training_collapse_gate
 from .config import amortized_config, require_amortized_dependencies
 from .data import (
     PhotometryBatch,
@@ -283,10 +284,10 @@ def train_amortized_fs2(
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
     redshift_bins_for_fingerprint = (
-        ((config.get("amortized", {}) or {}).get("data", {}) or {}).get(
-            "redshift_bins",
-            None,
-        )
+        (config.get("amortized", {}) or {}).get("data", {}) or {}
+    ).get(
+        "redshift_bins",
+        None,
     )
     catalog_identity = write_catalog_fingerprint(
         out,
@@ -304,7 +305,7 @@ def train_amortized_fs2(
     )
     _log(
         verbose,
-        "[amortized] JAX backend: " f"{jax.default_backend()} devices={jax.devices()}",
+        f"[amortized] JAX backend: {jax.default_backend()} devices={jax.devices()}",
     )
     write_json(out / "normalized_config.json", config)
     split = build_training_split(config, limit=limit, seed=seed)
@@ -448,7 +449,9 @@ def train_amortized_fs2(
     val_expected_batches = (
         None
         if validation_arrays is None
-        else _expected_batch_count(len(validation_arrays.object_id), int(jax_batch_size))
+        else _expected_batch_count(
+            len(validation_arrays.object_id), int(jax_batch_size)
+        )
     )
     validation_bin_rows: list[dict[str, float | int | str]] = []
     train_rng = np.random.default_rng(int(seed) + 10_000)
@@ -631,9 +634,7 @@ def train_amortized_fs2(
             rows.extend(validation_rows)
             validation_bin_rows.extend(epoch_bin_rows)
             val_loss = _finite_mean([row["loss"] for row in validation_rows])
-            val_nll = _finite_mean(
-                [row["negative_loglike"] for row in validation_rows]
-            )
+            val_nll = _finite_mean([row["negative_loglike"] for row in validation_rows])
             checkpoint_metric_value = _checkpoint_metric_from_rows(
                 validation_rows,
                 best_checkpoint_metric,
@@ -780,9 +781,7 @@ def train_amortized_fs2(
         "best_checkpoint_metric_requested": configured_best_metric,
         "best_checkpoint_min_epoch": int(best_checkpoint_min_epoch),
         "best_checkpoint_epoch": (
-            int(best_checkpoint_epoch)
-            if best_checkpoint_epoch is not None
-            else None
+            int(best_checkpoint_epoch) if best_checkpoint_epoch is not None else None
         ),
         "elapsed_time_s": float(time.time() - start_time),
         "checkpoint_best": "checkpoints/best.eqx",
@@ -806,15 +805,15 @@ def train_amortized_fs2(
             "kl_estimator": "monte_carlo_logq_minus_logp",
         },
         "likelihood_temperature": {
-            "initial": float(cfg["training"].get("likelihood_temperature_initial", 1.0)),
+            "initial": float(
+                cfg["training"].get("likelihood_temperature_initial", 1.0)
+            ),
             "final": float(cfg["training"].get("likelihood_temperature_final", 1.0)),
             "annealing_epochs": int(
                 cfg["training"].get("likelihood_temperature_annealing_epochs", 0)
             ),
         },
-        "posterior_regularization": dict(
-            cfg.get("posterior_regularization", {}) or {}
-        ),
+        "posterior_regularization": dict(cfg.get("posterior_regularization", {}) or {}),
         "global_sed_scale": alpha_metadata(
             float(np.asarray(jax.device_get(model.sed_scale.log_alpha_sed))),
             sed_scale_cfg.prior_sigma_log_alpha,
@@ -843,6 +842,16 @@ def train_amortized_fs2(
     )
     if save_training_curves:
         write_training_diagnostics(out / "training_log.csv", out)
+    try:
+        gate = write_training_collapse_gate(out)
+        summary["training_collapse_gate"] = {
+            "path": str(out / "training_collapse_gate.json"),
+            "status": gate.get("status"),
+        }
+        write_json(out / "training_summary.json", summary)
+    except Exception as exc:
+        summary["training_collapse_gate_warning"] = str(exc)
+        write_json(out / "training_summary.json", summary)
     _log(verbose, "[amortized] training complete")
     _log(verbose, f"[amortized] summary: {out / 'training_summary.json'}")
     _log(verbose, f"[amortized] progress: {out / 'training_progress.json'}")
@@ -1805,7 +1814,11 @@ def _training_update_phase(
     if mode in {"alternating", "alternating_epochs"}:
         offset = int(epoch) - int(schedule["freeze_epochs"]) - 1
         period = 2 * int(schedule["update_every_epochs"])
-        return "prior" if offset % period >= int(schedule["update_every_epochs"]) else "encoder"
+        return (
+            "prior"
+            if offset % period >= int(schedule["update_every_epochs"])
+            else "encoder"
+        )
     if mode in {"encoder_then_prior", "prior_only_after_freeze"}:
         return "prior"
     raise ValueError(

@@ -25,6 +25,7 @@ from .catalog_identity import (
     write_catalog_fingerprint,
     write_truth_snapshot,
 )
+from .collapse_gates import write_inference_collapse_gate
 from .config import amortized_config
 from .data import (
     iter_photometry_batches_from_arrays,
@@ -32,9 +33,10 @@ from .data import (
 )
 from .decoder import model_flux_from_x
 from .features import read_feature_stats
-from .latent import latent_spec_from_config, x_to_theta
+from .latent import latent_spec_from_config, theta_to_x, x_to_theta
 from .likelihood import photometric_loglike
 from .train import load_checkpoint
+from .truth_diagnostics import write_extended_truth_diagnostics
 
 
 def run_map_adam_under_prior(
@@ -50,6 +52,7 @@ def run_map_adam_under_prior(
     learning_rate: float,
     prior_weight: float,
     seed: int,
+    start_mode: str = "encoder",
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
@@ -60,7 +63,9 @@ def run_map_adam_under_prior(
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
     inference_cfg = cfg["inference"]
-    selection_mode = str(selection_mode or inference_cfg.get("selection_mode", "sequential"))
+    selection_mode = str(
+        selection_mode or inference_cfg.get("selection_mode", "sequential")
+    )
     stratified_strategy = str(
         stratified_strategy or inference_cfg.get("stratified_strategy", "balanced")
     )
@@ -116,7 +121,9 @@ def run_map_adam_under_prior(
     model_args = dynamic_model_args(context)
     latent_spec = latent_spec_from_config(config)
     model = load_checkpoint(checkpoint, config)
-    scale_cfg = global_sed_scale_config({"calibration": config.get("calibration", {}) or {}})
+    scale_cfg = global_sed_scale_config(
+        {"calibration": config.get("calibration", {}) or {}}
+    )
     band_cfg = per_band_flux_calibration_config(
         {"calibration": config.get("calibration", {}) or {}}
     )
@@ -136,10 +143,12 @@ def run_map_adam_under_prior(
         print(
             "[map-prior] run config: "
             f"limit={limit} batch_size={batch_size} n_starts={n_starts} "
-            f"maxiter={maxiter} lr={learning_rate} prior_weight={prior_weight}"
+            f"maxiter={maxiter} lr={learning_rate} prior_weight={prior_weight} "
+            f"start_mode={start_mode}"
         )
     key = jax.random.PRNGKey(int(seed))
     rows = []
+    rows_by_start = []
     traces = []
     for batch_index, batch in enumerate(
         iter_photometry_batches_from_arrays(
@@ -164,6 +173,7 @@ def run_map_adam_under_prior(
             maxiter=int(maxiter),
             learning_rate=float(learning_rate),
             prior_weight=float(prior_weight),
+            start_mode=str(start_mode),
             likelihood_config=cfg["likelihood"],
             log_alpha_sed=log_alpha_sed,
             log_alpha_band=log_alpha_band,
@@ -183,27 +193,43 @@ def run_map_adam_under_prior(
             "map_prior_logprob": np.asarray(jax.device_get(result["best_logprior"])),
             "map_chi2": np.asarray(jax.device_get(result["best_chi2"])),
             "map_start_index": np.asarray(jax.device_get(result["best_start"])),
+            "map_start_family": np.asarray(result["start_family"], dtype=object)[
+                np.asarray(jax.device_get(result["best_start"]))
+            ],
             "map_grad_norm": np.asarray(jax.device_get(result["grad_norm"])),
         }
         for index, name in enumerate(latent_spec.names):
             row[name] = theta[:, index]
         rows.append(pd.DataFrame(row))
+        by_start = _map_by_start_frame(
+            result,
+            batch,
+            latent_spec,
+        )
+        if not by_start.empty:
+            by_start["batch"] = batch_index
+            rows_by_start.append(by_start)
         trace = pd.DataFrame(
             {
                 "batch": batch_index,
                 "iteration": np.arange(result["trace_objective"].shape[0]),
-                "mean_objective": np.asarray(
-                    jax.device_get(result["trace_objective"])
-                ),
+                "mean_objective": np.asarray(jax.device_get(result["trace_objective"])),
             }
         )
         traces.append(trace)
     estimates = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+    by_start_frame = (
+        pd.concat(rows_by_start, ignore_index=True) if rows_by_start else pd.DataFrame()
+    )
     trace_frame = pd.concat(traces, ignore_index=True) if traces else pd.DataFrame()
     estimates.to_parquet(out / "map_estimates.parquet", index=False)
     estimates.to_csv(out / "map_estimates.csv", index=False)
+    if not by_start_frame.empty:
+        by_start_frame.to_parquet(out / "map_estimates_by_start.parquet", index=False)
+        by_start_frame.to_csv(out / "map_estimates_by_start.csv", index=False)
+        _write_start_family_summary(by_start_frame, out)
     trace_frame.to_parquet(out / "map_optimizer_trace.parquet", index=False)
-    _write_map_plots(estimates, trace_frame, out)
+    _write_map_plots(estimates, trace_frame, out, by_start_frame)
     summary = {
         "checkpoint": str(checkpoint),
         "feature_stats_path": str(feature_stats_path),
@@ -217,10 +243,31 @@ def run_map_adam_under_prior(
         "maxiter": int(maxiter),
         "learning_rate": float(learning_rate),
         "prior_weight": float(prior_weight),
+        "start_mode": str(start_mode),
         "dataset_label": dataset_label,
     }
     write_json(out / "map_summary.json", summary)
     _write_map_closure_metrics(out, estimates)
+    try:
+        extended_outputs = write_extended_truth_diagnostics(out)
+    except Exception as exc:
+        extended_outputs = {"warning": str(exc)}
+    if extended_outputs:
+        summary["extended_truth_diagnostics"] = extended_outputs
+    try:
+        gate = write_inference_collapse_gate(out)
+        summary["collapse_gate"] = {
+            "path": str(out / "collapse_gate.json"),
+            "status": gate.get("status"),
+        }
+    except Exception as exc:
+        summary["collapse_gate_warning"] = str(exc)
+    if (
+        extended_outputs
+        or "collapse_gate" in summary
+        or "collapse_gate_warning" in summary
+    ):
+        write_json(out / "map_summary.json", summary)
     return summary
 
 
@@ -237,6 +284,7 @@ def _map_adam_batch(
     maxiter: int,
     learning_rate: float,
     prior_weight: float,
+    start_mode: str,
     likelihood_config: dict[str, Any],
     log_alpha_sed,
     log_alpha_band,
@@ -244,15 +292,17 @@ def _map_adam_batch(
     use_band_calibration: bool,
 ) -> dict[str, jnp.ndarray]:
     mean, log_std = model.encoder(batch.features)
-    n_objects, latent_dim = mean.shape
+    n_objects = mean.shape[0]
     n_starts = max(1, int(n_starts))
-    eps = jax.random.normal(
+    starts, start_family = _make_map_starts(
+        model,
+        mean,
+        log_std,
+        latent_spec,
         key,
-        (n_starts, n_objects, latent_dim),
-        dtype=mean.dtype,
+        n_starts=n_starts,
+        start_mode=start_mode,
     )
-    starts = mean[None, :, :] + jnp.exp(log_std)[None, :, :] * eps
-    starts = starts.at[0].set(mean)
 
     def metrics_for_x(x):
         model_flux_raw = model_flux_from_x(
@@ -337,13 +387,270 @@ def _map_adam_batch(
         "best_start": start_index,
         "grad_norm": grad_norm,
         "trace_objective": jnp.asarray(trace),
+        "all_best_x": best_x,
+        "all_best_objective": best_obj,
+        "all_best_nll": best_nll,
+        "all_best_logprior": best_logprior,
+        "all_best_chi2": best_chi2,
+        "start_x": starts,
+        "start_family": tuple(start_family),
     }
+
+
+def _make_map_starts(
+    model,
+    mean: jnp.ndarray,
+    log_std: jnp.ndarray,
+    latent_spec,
+    key,
+    *,
+    n_starts: int,
+    start_mode: str,
+) -> tuple[jnp.ndarray, tuple[str, ...]]:
+    """Build MAP starting points and a family label for each start."""
+    mode = str(start_mode or "encoder").strip().lower()
+    if mode not in {
+        "encoder",
+        "prior",
+        "z_grid",
+        "lowz_grid",
+        "latin_hypercube",
+        "mixed",
+    }:
+        raise ValueError(
+            "Unsupported MAP start_mode. Use encoder, prior, z_grid, "
+            "lowz_grid, latin_hypercube, or mixed."
+        )
+    n_starts = max(1, int(n_starts))
+    if mode == "encoder":
+        return _encoder_map_starts(mean, log_std, key, n_starts)
+    if mode == "prior":
+        return (
+            model.prior.sample(key, (n_starts, int(mean.shape[0]))),
+            tuple("prior" for _ in range(n_starts)),
+        )
+    if mode == "z_grid":
+        return _z_grid_map_starts(latent_spec, int(mean.shape[0]), n_starts)
+    if mode == "lowz_grid":
+        return _z_grid_map_starts(
+            latent_spec,
+            int(mean.shape[0]),
+            n_starts,
+            z_upper_override=0.45,
+            family="lowz_grid",
+        )
+    if mode == "latin_hypercube":
+        return _latin_hypercube_map_starts(
+            latent_spec, key, int(mean.shape[0]), n_starts
+        )
+    return _mixed_map_starts(model, mean, log_std, latent_spec, key, n_starts)
+
+
+def _encoder_map_starts(
+    mean: jnp.ndarray,
+    log_std: jnp.ndarray,
+    key,
+    n_starts: int,
+) -> tuple[jnp.ndarray, tuple[str, ...]]:
+    n_objects, latent_dim = mean.shape
+    eps = jax.random.normal(
+        key,
+        (n_starts, n_objects, latent_dim),
+        dtype=mean.dtype,
+    )
+    starts = mean[None, :, :] + jnp.exp(log_std)[None, :, :] * eps
+    starts = starts.at[0].set(mean)
+    labels = ["encoder"] * n_starts
+    labels[0] = "encoder_mean"
+    return starts, tuple(labels)
+
+
+def _z_grid_map_starts(
+    latent_spec,
+    n_objects: int,
+    n_starts: int,
+    *,
+    z_upper_override: float | None = None,
+    family: str = "z_grid",
+) -> tuple[jnp.ndarray, tuple[str, ...]]:
+    try:
+        z_index = latent_spec.names.index("z_obs")
+    except ValueError as exc:
+        raise ValueError("MAP z_grid start_mode requires z_obs in the latent") from exc
+    lower = jnp.asarray(latent_spec.lower, dtype=jnp.float32)
+    upper = jnp.asarray(latent_spec.upper, dtype=jnp.float32)
+    theta = 0.5 * (lower + upper)
+    z_low = lower[z_index]
+    z_high = upper[z_index]
+    if z_upper_override is not None:
+        z_high = jnp.minimum(
+            z_high, jnp.asarray(float(z_upper_override), dtype=jnp.float32)
+        )
+        z_high = jnp.maximum(z_high, z_low + jnp.asarray(1.0e-4, dtype=jnp.float32))
+    z_values = jnp.linspace(z_low, z_high, int(n_starts), dtype=jnp.float32)
+    theta = jnp.broadcast_to(theta, (int(n_starts), int(n_objects), theta.shape[0]))
+    theta = theta.at[:, :, z_index].set(z_values[:, None])
+    starts = theta_to_x(theta, latent_spec)
+    return starts, tuple(family for _ in range(int(n_starts)))
+
+
+def _latin_hypercube_map_starts(
+    latent_spec,
+    key,
+    n_objects: int,
+    n_starts: int,
+) -> tuple[jnp.ndarray, tuple[str, ...]]:
+    lower = jnp.asarray(latent_spec.lower, dtype=jnp.float32)
+    upper = jnp.asarray(latent_spec.upper, dtype=jnp.float32)
+    unit = jax.random.uniform(
+        key,
+        (int(n_starts), int(n_objects), int(lower.shape[0])),
+        minval=0.02,
+        maxval=0.98,
+        dtype=jnp.float32,
+    )
+    theta = lower + (upper - lower) * unit
+    return theta_to_x(theta, latent_spec), tuple(
+        "latin_hypercube" for _ in range(int(n_starts))
+    )
+
+
+def _mixed_map_starts(
+    model,
+    mean: jnp.ndarray,
+    log_std: jnp.ndarray,
+    latent_spec,
+    key,
+    n_starts: int,
+) -> tuple[jnp.ndarray, tuple[str, ...]]:
+    keys = jax.random.split(key, 4)
+    counts = _split_start_counts(int(n_starts), 4)
+    pieces = []
+    labels: list[str] = []
+    if counts[0]:
+        starts, family = _encoder_map_starts(mean, log_std, keys[0], counts[0])
+        pieces.append(starts)
+        labels.extend(family)
+    if counts[1]:
+        pieces.append(model.prior.sample(keys[1], (counts[1], int(mean.shape[0]))))
+        labels.extend(["prior"] * counts[1])
+    if counts[2]:
+        starts, family = _z_grid_map_starts(latent_spec, int(mean.shape[0]), counts[2])
+        pieces.append(starts)
+        labels.extend(family)
+    if counts[3]:
+        starts, family = _latin_hypercube_map_starts(
+            latent_spec,
+            keys[3],
+            int(mean.shape[0]),
+            counts[3],
+        )
+        pieces.append(starts)
+        labels.extend(family)
+    return jnp.concatenate(pieces, axis=0), tuple(labels)
+
+
+def _split_start_counts(total: int, n_groups: int) -> list[int]:
+    base = int(total) // int(n_groups)
+    remainder = int(total) % int(n_groups)
+    return [base + (1 if index < remainder else 0) for index in range(int(n_groups))]
+
+
+def _map_by_start_frame(result: dict[str, Any], batch, latent_spec) -> pd.DataFrame:
+    all_best_x = np.asarray(jax.device_get(result["all_best_x"]))
+    if all_best_x.size == 0:
+        return pd.DataFrame()
+    best_theta = np.asarray(
+        jax.device_get(x_to_theta(result["all_best_x"], latent_spec))
+    )
+    start_theta = np.asarray(jax.device_get(x_to_theta(result["start_x"], latent_spec)))
+    n_starts, n_objects, _latent_dim = best_theta.shape
+    object_id = np.asarray(batch.object_id)
+    row_index = (
+        np.asarray(batch.row_index, dtype=np.int64)
+        if batch.row_index is not None
+        else np.arange(n_objects, dtype=np.int64)
+    )
+    start_index = np.broadcast_to(
+        np.arange(n_starts, dtype=np.int64)[:, None],
+        (n_starts, n_objects),
+    )
+    best_start = np.asarray(jax.device_get(result["best_start"]), dtype=np.int64)
+    selected = start_index == best_start[None, :]
+    family = np.asarray(result["start_family"], dtype=object)
+    frame = pd.DataFrame(
+        {
+            "object_id": np.broadcast_to(
+                object_id[None, :], (n_starts, n_objects)
+            ).ravel(),
+            "row_index": np.broadcast_to(
+                row_index[None, :], (n_starts, n_objects)
+            ).ravel(),
+            "start_index": start_index.ravel(),
+            "start_family": np.repeat(family, n_objects),
+            "is_selected": selected.ravel(),
+            "map_objective": np.asarray(
+                jax.device_get(result["all_best_objective"])
+            ).ravel(),
+            "map_photometric_nll": np.asarray(
+                jax.device_get(result["all_best_nll"])
+            ).ravel(),
+            "map_prior_logprob": np.asarray(
+                jax.device_get(result["all_best_logprior"])
+            ).ravel(),
+            "map_chi2": np.asarray(jax.device_get(result["all_best_chi2"])).ravel(),
+        }
+    )
+    for index, name in enumerate(latent_spec.names):
+        frame[f"map_{name}"] = best_theta[:, :, index].ravel()
+        frame[f"start_{name}"] = start_theta[:, :, index].ravel()
+    return frame
+
+
+def _write_start_family_summary(frame: pd.DataFrame, out: Path) -> None:
+    if frame.empty or "start_family" not in frame:
+        return
+    grouped = frame.groupby("start_family", dropna=False)
+    summary = grouped.agg(
+        n_rows=("start_family", "size"),
+        n_objects=("row_index", "nunique"),
+        selected_count=("is_selected", "sum"),
+        median_objective=("map_objective", "median"),
+        median_photometric_nll=("map_photometric_nll", "median"),
+        median_chi2=("map_chi2", "median"),
+    ).reset_index()
+    summary["selected_fraction"] = summary["selected_count"] / np.maximum(
+        summary["n_rows"],
+        1,
+    )
+    if "map_z_obs" in frame:
+        z_summary = (
+            grouped["map_z_obs"]
+            .agg(
+                median_map_z_obs="median",
+                p16_map_z_obs=lambda value: float(np.nanpercentile(value, 16)),
+                p84_map_z_obs=lambda value: float(np.nanpercentile(value, 84)),
+            )
+            .reset_index()
+        )
+        summary = summary.merge(z_summary, on="start_family", how="left")
+    summary.to_csv(out / "map_start_family_summary.csv", index=False)
+    selected = frame.loc[frame["is_selected"]].copy()
+    if not selected.empty:
+        winners = (
+            selected.groupby("start_family", dropna=False)
+            .size()
+            .reset_index(name="n_winning_objects")
+        )
+        winners.to_csv(out / "map_best_by_start_family.csv", index=False)
+        winners.to_csv(out / "map_start_family_winners.csv", index=False)
 
 
 def _write_map_plots(
     estimates: pd.DataFrame,
     trace: pd.DataFrame,
     out: Path,
+    by_start_frame: pd.DataFrame | None = None,
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -382,6 +689,54 @@ def _write_map_plots(
         fig.tight_layout()
         fig.savefig(out / "map_optimizer_trace.png", dpi=160)
         plt.close(fig)
+    if (
+        by_start_frame is not None
+        and not by_start_frame.empty
+        and {"start_z_obs", "map_chi2", "start_family"}.issubset(by_start_frame)
+    ):
+        fig, ax = plt.subplots(figsize=(6.5, 4.5))
+        for family, group in by_start_frame.groupby("start_family", dropna=False):
+            sample = group
+            if len(sample) > 3000:
+                sample = sample.sample(n=3000, random_state=0)
+            ax.scatter(
+                sample["start_z_obs"].to_numpy(dtype=float),
+                np.log10(np.maximum(sample["map_chi2"].to_numpy(dtype=float), 1.0e-12)),
+                s=8,
+                alpha=0.35,
+                label=str(family),
+            )
+        ax.set_xlabel("initial z_obs")
+        ax.set_ylabel("log10 best chi2 from that start")
+        ax.set_title("MAP multistart redshift basin diagnostic")
+        ax.legend(fontsize=8)
+        fig.tight_layout()
+        fig.savefig(out / "map_chi2_vs_start_z.png", dpi=160)
+        plt.close(fig)
+    if (
+        by_start_frame is not None
+        and not by_start_frame.empty
+        and {"map_z_obs", "start_family", "is_selected"}.issubset(by_start_frame)
+    ):
+        selected = by_start_frame.loc[by_start_frame["is_selected"]].copy()
+        if not selected.empty:
+            fig, ax = plt.subplots(figsize=(6.5, 4.0))
+            labels = []
+            values = []
+            for family, group in selected.groupby("start_family", dropna=False):
+                vals = group["map_z_obs"].to_numpy(dtype=float)
+                vals = vals[np.isfinite(vals)]
+                if vals.size:
+                    labels.append(str(family))
+                    values.append(vals)
+            if values:
+                ax.boxplot(values, labels=labels, showfliers=False)
+                ax.set_ylabel("selected MAP z_obs")
+                ax.set_title("Winning MAP redshift by start family")
+                ax.tick_params(axis="x", labelrotation=20)
+                fig.tight_layout()
+                fig.savefig(out / "map_selected_z_by_start_family.png", dpi=160)
+            plt.close(fig)
 
 
 def _write_map_closure_metrics(out: Path, estimates: pd.DataFrame) -> None:
@@ -397,9 +752,10 @@ def _write_map_closure_metrics(out: Path, estimates: pd.DataFrame) -> None:
         return
     if merged.empty or "redshift_true" not in merged:
         return
-    dz = (merged["z_obs"].to_numpy(dtype=float) - merged["redshift_true"].to_numpy(dtype=float)) / (
-        1.0 + merged["redshift_true"].to_numpy(dtype=float)
-    )
+    dz = (
+        merged["z_obs"].to_numpy(dtype=float)
+        - merged["redshift_true"].to_numpy(dtype=float)
+    ) / (1.0 + merged["redshift_true"].to_numpy(dtype=float))
     finite = dz[np.isfinite(dz)]
     if finite.size == 0:
         return

@@ -35,6 +35,7 @@ from .catalog_identity import (
     write_catalog_fingerprint,
     write_truth_snapshot,
 )
+from .collapse_gates import write_inference_collapse_gate
 from .config import amortized_config
 from .data import (
     iter_photometry_batches_from_arrays,
@@ -57,6 +58,7 @@ from .train import (
     load_checkpoint,
     write_per_band_flux_calibration_artifacts,
 )
+from .truth_diagnostics import write_extended_truth_diagnostics
 
 
 def infer_amortized_fs2(
@@ -215,7 +217,9 @@ def infer_amortized_fs2(
                 f"requested_batch_size={int(batch_size)} "
                 f"jax_batch_size={jax_batch_size}"
             )
-        print(f"[amortized] JAX backend: {jax.default_backend()} devices={jax.devices()}")
+        print(
+            f"[amortized] JAX backend: {jax.default_backend()} devices={jax.devices()}"
+        )
         print(f"[amortized] feature stats: {feature_stats_path}")
     feature_stats = read_feature_stats(feature_stats_path)
     model = load_checkpoint(checkpoint, config)
@@ -557,7 +561,9 @@ def infer_amortized_fs2(
         else pd.DataFrame()
     )
     feature_diagnostics = (
-        pd.concat(feature_frames, ignore_index=True) if feature_frames else pd.DataFrame()
+        pd.concat(feature_frames, ignore_index=True)
+        if feature_frames
+        else pd.DataFrame()
     )
     residual_summary = (
         pd.concat(residual_summary_frames, ignore_index=True)
@@ -631,7 +637,9 @@ def infer_amortized_fs2(
             samples.to_parquet(out / "posterior_samples.parquet", index=False)
         if combine_summary_shards:
             summary.to_parquet(out / "posterior_summary.parquet", index=False)
-            feature_diagnostics.to_parquet(out / "feature_diagnostics.parquet", index=False)
+            feature_diagnostics.to_parquet(
+                out / "feature_diagnostics.parquet", index=False
+            )
             residual_summary.to_parquet(
                 out / "posterior_predictive_residual_summary.parquet",
                 index=False,
@@ -657,7 +665,9 @@ def infer_amortized_fs2(
         samples.to_parquet(out / "posterior_samples.parquet", index=False)
         summary.to_parquet(out / "posterior_summary.parquet", index=False)
         if write_posterior_predictive:
-            predictive.to_parquet(out / "posterior_predictive_flux.parquet", index=False)
+            predictive.to_parquet(
+                out / "posterior_predictive_flux.parquet", index=False
+            )
         if write_residual_samples:
             residuals.to_parquet(
                 out / "posterior_predictive_residuals.parquet",
@@ -717,6 +727,21 @@ def infer_amortized_fs2(
         }
     except Exception as exc:
         metric_outputs = {"warning": str(exc)}
+    try:
+        metric_outputs.update(
+            {
+                f"extended_{key}": str(value)
+                for key, value in write_extended_truth_diagnostics(out).items()
+            }
+        )
+    except Exception as exc:
+        metric_outputs["extended_truth_warning"] = str(exc)
+    try:
+        gate = write_inference_collapse_gate(out)
+        metric_outputs["collapse_gate"] = str(out / "collapse_gate.json")
+        metric_outputs["collapse_gate_status"] = str(gate.get("status"))
+    except Exception as exc:
+        metric_outputs["collapse_gate_warning"] = str(exc)
     write_json(
         out / "inference_summary.json",
         {
@@ -839,6 +864,21 @@ def finalize_amortized_inference(
         }
     except Exception as exc:
         metric_outputs = {"warning": str(exc)}
+    try:
+        metric_outputs.update(
+            {
+                f"extended_{key}": str(value)
+                for key, value in write_extended_truth_diagnostics(out).items()
+            }
+        )
+    except Exception as exc:
+        metric_outputs["extended_truth_warning"] = str(exc)
+    try:
+        gate = write_inference_collapse_gate(out)
+        metric_outputs["collapse_gate"] = str(out / "collapse_gate.json")
+        metric_outputs["collapse_gate_status"] = str(gate.get("status"))
+    except Exception as exc:
+        metric_outputs["collapse_gate_warning"] = str(exc)
     summarize_inference_outputs(
         out / "posterior_summary.parquet",
         out,
@@ -932,7 +972,11 @@ def _combine_inference_shard_tables(
             out / "posterior_predictive_residual_summary.parquet",
             True,
         ),
-        "samples": ("samples", out / "posterior_samples.parquet", combine_sample_shards),
+        "samples": (
+            "samples",
+            out / "posterior_samples.parquet",
+            combine_sample_shards,
+        ),
     }
     frames: dict[str, pd.DataFrame] = {}
     for name, (path_key, output_path, should_write) in table_specs.items():
@@ -954,7 +998,9 @@ def _combine_inference_shard_tables(
 
 def _basic_shard_tables_exist(paths: dict[str, Path]) -> bool:
     required = ["samples", "summary", "residual_summary", "features"]
-    return all(paths[key].exists() and paths[key].stat().st_size > 0 for key in required)
+    return all(
+        paths[key].exists() and paths[key].stat().st_size > 0 for key in required
+    )
 
 
 def _batch_index_from_path(path: Path) -> int:
@@ -1099,7 +1145,9 @@ def _inference_shard_complete(
         required.append("predictive")
     if write_residual_samples:
         required.append("residuals")
-    if not all(paths[key].exists() and paths[key].stat().st_size > 0 for key in required):
+    if not all(
+        paths[key].exists() and paths[key].stat().st_size > 0 for key in required
+    ):
         return False
     return _inference_shard_signature_matches(paths["metadata"], signature)
 
@@ -1114,9 +1162,7 @@ def _inference_shard_row_counts(
         "samples_rows": _parquet_row_count(paths["samples"]),
         "summary_rows": _parquet_row_count(paths["summary"]),
         "predictive_rows": (
-            _parquet_row_count(paths["predictive"])
-            if write_posterior_predictive
-            else 0
+            _parquet_row_count(paths["predictive"]) if write_posterior_predictive else 0
         ),
         "residual_rows": (
             _parquet_row_count(paths["residuals"]) if write_residual_samples else 0

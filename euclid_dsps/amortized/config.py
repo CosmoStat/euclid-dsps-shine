@@ -96,6 +96,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["map_adam"].setdefault("maxiter", 120)
     raw["map_adam"].setdefault("learning_rate", 0.02)
     raw["map_adam"].setdefault("prior_weight", 0.05)
+    raw["map_adam"].setdefault("start_mode", "encoder")
     raw["inference"].setdefault("posterior_samples", 32)
     raw["inference"].setdefault("prior_samples", 8192)
     raw["inference"].setdefault("decoder_sample_chunk_size", 1)

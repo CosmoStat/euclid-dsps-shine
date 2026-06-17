@@ -25,7 +25,7 @@ def object_id_column_from_config(config: dict[str, Any]) -> str | None:
 
 def configured_redshift_column(config: dict[str, Any]) -> str | None:
     """Return the configured truth redshift column, if available."""
-    data_cfg = ((config.get("amortized", {}) or {}).get("data", {}) or {})
+    data_cfg = (config.get("amortized", {}) or {}).get("data", {}) or {}
     explicit = data_cfg.get("stratify_column")
     if explicit:
         return str(explicit)
@@ -37,9 +37,41 @@ def configured_redshift_column(config: dict[str, Any]) -> str | None:
     return truth_column_from_spec(redshift.get("truth_column"))
 
 
+EXTENDED_DIFFSKY_TRUTH_COLUMNS = (
+    "redshift_true",
+    "logsm_true",
+    "logsfr_true",
+    "logssfr_true",
+    "logmp_true",
+    "logmp_host_true",
+    "central_true",
+    "r50_disk_true",
+    "r50_bulge_true",
+    "diffmah_early_index",
+    "diffmah_late_index",
+    "diffmah_logm0",
+    "diffmah_logmp0",
+    "diffmah_logtc",
+    "diffmah_t_peak",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffstar_indx_lo",
+    "diffstar_indx_hi",
+    "diffstar_lg_qt",
+    "diffstar_qlglgdt",
+    "diffstar_lg_drop",
+    "diffstar_lg_rejuv",
+    "dust_av",
+    "dust_delta",
+    "burst_lgfburst",
+    "burst_lgyr_peak",
+    "burst_lgyr_max",
+)
+
+
 def truth_columns_from_config(config: dict[str, Any]) -> list[str]:
     """Return configured truth/proxy columns used by diagnostics."""
-    columns = ["redshift_true", "logsm_true", "logsfr_true", "logssfr_true"]
+    columns = list(EXTENDED_DIFFSKY_TRUTH_COLUMNS)
     truth = config.get("truth", {}) or {}
     redshift_column = truth_column_from_spec(truth.get("redshift_column"))
     if redshift_column:
@@ -51,6 +83,7 @@ def truth_columns_from_config(config: dict[str, Any]) -> list[str]:
     id_column = object_id_column_from_config(config)
     if id_column:
         columns.append(id_column)
+    columns.extend(str(column) for column in config.get("extra_columns", []) or [])
     return sorted(set(columns))
 
 
@@ -307,7 +340,9 @@ def _select_stratified_indices(
     return selected
 
 
-def _indices_by_redshift_bin(redshift: np.ndarray, bins: np.ndarray) -> list[np.ndarray]:
+def _indices_by_redshift_bin(
+    redshift: np.ndarray, bins: np.ndarray
+) -> list[np.ndarray]:
     redshift = np.asarray(redshift, dtype=float)
     base_indices = np.arange(len(redshift), dtype=np.int64)
     groups = []
@@ -373,7 +408,9 @@ def write_truth_snapshot(
                     [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2],
                 ),
             )
-            pd.DataFrame(hist).to_csv(out / "inference_redshift_histogram.csv", index=False)
+            pd.DataFrame(hist).to_csv(
+                out / "inference_redshift_histogram.csv", index=False
+            )
     return truth
 
 

@@ -30,7 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
             "amortized-prior-overlap-diffsky,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-supervised-prior-report,"
-            "diffsky-forward-closure,diffsky-redshift-ablation,"
+            "diffsky-forward-closure,diffsky-popcosmos-proxy-closure,"
+            "diffsky-redshift-ablation,"
             "diffsky-run-full-validation,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
@@ -324,6 +325,10 @@ def build_parser() -> argparse.ArgumentParser:
     map_prior.add_argument("--maxiter", type=int)
     map_prior.add_argument("--learning-rate", type=float)
     map_prior.add_argument("--prior-weight", type=float)
+    map_prior.add_argument(
+        "--start-mode",
+        choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
+    )
     map_prior.add_argument("--seed", type=int)
     map_prior.add_argument(
         "--selection-mode",
@@ -361,7 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Sample theta values from a supervised prior checkpoint.",
     )
     sample_prior.add_argument("--checkpoint", required=True)
-    sample_prior.add_argument("--out", default="outputs/runs/diffsky_supervised_prior_samples")
+    sample_prior.add_argument(
+        "--out", default="outputs/runs/diffsky_supervised_prior_samples"
+    )
     sample_prior.add_argument("--n-samples", type=int)
     sample_prior.add_argument("--seed", type=int)
 
@@ -385,6 +392,18 @@ def build_parser() -> argparse.ArgumentParser:
     forward_closure.add_argument(
         "--out",
         default="outputs/runs/diffsky_trueparam_forward_closure",
+    )
+
+    proxy_closure = sub.add_parser(
+        "diffsky-popcosmos-proxy-closure",
+        help="Run PopCosmos proxy-truth closure for the amortized decoder.",
+    )
+    proxy_closure.add_argument("--dataset", required=True)
+    proxy_closure.add_argument("--limit", type=int)
+    proxy_closure.add_argument("--batch-size", type=int, default=64)
+    proxy_closure.add_argument(
+        "--out",
+        default="outputs/runs/diffsky_popcosmos_proxy_truth_closure",
     )
 
     redshift_ablation = sub.add_parser(
@@ -759,6 +778,7 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-sample-supervised-prior",
         "diffsky-supervised-prior-report",
         "diffsky-forward-closure",
+        "diffsky-popcosmos-proxy-closure",
         "diffsky-redshift-ablation",
         "diffsky-run-full-validation",
         "diffsky-map-adam-prior",
@@ -788,7 +808,10 @@ def main(argv: list[str] | None = None) -> None:
             "jax_platforms": "auto",
             "require_gpu": False,
         }
-    if args.command.startswith("experimental-ssp-inr") and getattr(args, "runtime", "config") != "config":
+    if (
+        args.command.startswith("experimental-ssp-inr")
+        and getattr(args, "runtime", "config") != "config"
+    ):
         runtime_config = {
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
@@ -833,6 +856,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "diffsky-forward-closure":
         _run_diffsky_forward_closure(config, args)
+        return
+    if args.command == "diffsky-popcosmos-proxy-closure":
+        _run_diffsky_popcosmos_proxy_closure(config, args)
         return
     if args.command == "diffsky-redshift-ablation":
         _run_diffsky_redshift_ablation(config, args)
@@ -1117,6 +1143,19 @@ def _run_diffsky_forward_closure(config: dict, args) -> None:
     print(f"[diffsky] forward closure report -> {report}")
 
 
+def _run_diffsky_popcosmos_proxy_closure(config: dict, args) -> None:
+    from .diffsky_forward_closure import run_popcosmos_proxy_truth_closure
+
+    report = run_popcosmos_proxy_truth_closure(
+        config,
+        dataset_path=Path(args.dataset),
+        out_dir=Path(args.out),
+        limit=args.limit,
+        batch_size=int(args.batch_size),
+    )
+    print(f"[diffsky] PopCosmos proxy closure report -> {report}")
+
+
 def _run_diffsky_redshift_ablation(config: dict, args) -> None:
     del config
     from .diffsky_redshift_ablation import parse_run_specs, run_redshift_ablation
@@ -1164,9 +1203,7 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     data = dict(amortized.get("data", {}) or {})
     training = dict(amortized.get("training", {}) or {})
     prior = dict(amortized.get("prior", {}) or {})
-    posterior_regularization = dict(
-        amortized.get("posterior_regularization", {}) or {}
-    )
+    posterior_regularization = dict(amortized.get("posterior_regularization", {}) or {})
     if args.selection_mode is not None:
         data["selection_mode"] = args.selection_mode
     if args.stratified_strategy is not None:
@@ -1326,6 +1363,9 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
             else map_cfg.get("prior_weight", 0.05)
         ),
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        start_mode=str(
+            getattr(args, "start_mode", None) or map_cfg.get("start_mode", "encoder")
+        ),
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),
         selection_seed=getattr(args, "selection_seed", None),

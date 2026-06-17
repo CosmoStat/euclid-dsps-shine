@@ -1,0 +1,23 @@
+extends: diffsky_hltds_popcosmos_lowdim_z_mass_dust_h100.yaml
+
+experiment:
+    name: diffsky_hltds_popcosmos_lowdim_z_mass_dust_lowz_h100
+    description: Low-z closure-only variant of the low-dimensional PopCosmos diagnostic.
+
+redshift:
+    min: 0.001
+    max: 0.45
+
+fit:
+    free_parameters:
+        z_obs:
+            initial: 0.2
+            bounds: [0.001, 0.45]
+
+amortized:
+    data:
+        redshift_bins: [0.0, 0.1, 0.2, 0.3, 0.45]
+    inference:
+        redshift_bins: [0.0, 0.1, 0.2, 0.3, 0.45]
+    map_adam:
+        start_mode: lowz_grid
