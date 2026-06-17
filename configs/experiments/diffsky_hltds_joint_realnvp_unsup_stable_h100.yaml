@@ -44,3 +44,4 @@ amortized:
         learning_rate: 0.015
         prior_weight: 0.05
         start_mode: mixed
+        start_chunk_size: 1

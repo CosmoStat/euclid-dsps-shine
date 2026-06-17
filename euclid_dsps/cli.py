@@ -329,6 +329,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--start-mode",
         choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
     )
+    map_prior.add_argument(
+        "--start-chunk-size",
+        type=int,
+        help="Number of MAP starts optimized together on device.",
+    )
     map_prior.add_argument("--seed", type=int)
     map_prior.add_argument(
         "--selection-mode",
@@ -1365,6 +1370,11 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
         start_mode=str(
             getattr(args, "start_mode", None) or map_cfg.get("start_mode", "encoder")
+        ),
+        start_chunk_size=(
+            int(args.start_chunk_size)
+            if getattr(args, "start_chunk_size", None) is not None
+            else int(map_cfg.get("start_chunk_size", 1))
         ),
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),

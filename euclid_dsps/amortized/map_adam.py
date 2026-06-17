@@ -53,6 +53,7 @@ def run_map_adam_under_prior(
     prior_weight: float,
     seed: int,
     start_mode: str = "encoder",
+    start_chunk_size: int | None = None,
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
@@ -137,6 +138,7 @@ def run_map_adam_under_prior(
         if band_cfg.enabled and model.band_calibration is not None
         else jnp.zeros((len(config["bands"]),), dtype=jnp.float32)
     )
+    start_chunk_size = _effective_start_chunk_size(start_chunk_size, int(n_starts))
     if verbose:
         print(f"[map-prior] checkpoint: {checkpoint}")
         print(f"[map-prior] output directory: {out}")
@@ -144,7 +146,7 @@ def run_map_adam_under_prior(
             "[map-prior] run config: "
             f"limit={limit} batch_size={batch_size} n_starts={n_starts} "
             f"maxiter={maxiter} lr={learning_rate} prior_weight={prior_weight} "
-            f"start_mode={start_mode}"
+            f"start_mode={start_mode} start_chunk_size={start_chunk_size}"
         )
     key = jax.random.PRNGKey(int(seed))
     rows = []
@@ -174,6 +176,7 @@ def run_map_adam_under_prior(
             learning_rate=float(learning_rate),
             prior_weight=float(prior_weight),
             start_mode=str(start_mode),
+            start_chunk_size=int(start_chunk_size),
             likelihood_config=cfg["likelihood"],
             log_alpha_sed=log_alpha_sed,
             log_alpha_band=log_alpha_band,
@@ -244,6 +247,7 @@ def run_map_adam_under_prior(
         "learning_rate": float(learning_rate),
         "prior_weight": float(prior_weight),
         "start_mode": str(start_mode),
+        "start_chunk_size": int(start_chunk_size),
         "dataset_label": dataset_label,
     }
     write_json(out / "map_summary.json", summary)
@@ -285,6 +289,7 @@ def _map_adam_batch(
     learning_rate: float,
     prior_weight: float,
     start_mode: str,
+    start_chunk_size: int,
     likelihood_config: dict[str, Any],
     log_alpha_sed,
     log_alpha_band,
@@ -303,7 +308,97 @@ def _map_adam_batch(
         n_starts=n_starts,
         start_mode=start_mode,
     )
+    chunk_size = _effective_start_chunk_size(start_chunk_size, n_starts)
+    chunk_results = []
+    weighted_trace = None
+    for start in range(0, n_starts, chunk_size):
+        end = min(start + chunk_size, n_starts)
+        chunk = starts[start:end]
+        chunk_result = _optimize_map_start_chunk(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            chunk,
+            maxiter=int(maxiter),
+            learning_rate=float(learning_rate),
+            prior_weight=float(prior_weight),
+            likelihood_config=likelihood_config,
+            log_alpha_sed=log_alpha_sed,
+            log_alpha_band=log_alpha_band,
+            use_global_scale=use_global_scale,
+            use_band_calibration=use_band_calibration,
+        )
+        chunk_results.append(chunk_result)
+        weight = float(end - start)
+        trace_piece = chunk_result["trace_objective"] * weight
+        weighted_trace = (
+            trace_piece if weighted_trace is None else weighted_trace + trace_piece
+        )
+    best_x = jnp.concatenate([result["best_x"] for result in chunk_results], axis=0)
+    best_obj = jnp.concatenate(
+        [result["best_objective"] for result in chunk_results], axis=0
+    )
+    best_nll = jnp.concatenate([result["best_nll"] for result in chunk_results], axis=0)
+    best_logprior = jnp.concatenate(
+        [result["best_logprior"] for result in chunk_results],
+        axis=0,
+    )
+    best_chi2 = jnp.concatenate(
+        [result["best_chi2"] for result in chunk_results], axis=0
+    )
+    grad_norm_all = jnp.concatenate(
+        [result["grad_norm"] for result in chunk_results],
+        axis=0,
+    )
+    trace = weighted_trace / float(n_starts)
+    start_index = jnp.argmin(best_obj, axis=0)
+    object_index = jnp.arange(n_objects)
+    chosen_x = best_x[start_index, object_index]
+    chosen_obj = best_obj[start_index, object_index]
+    chosen_nll = best_nll[start_index, object_index]
+    chosen_logprior = best_logprior[start_index, object_index]
+    chosen_chi2 = best_chi2[start_index, object_index]
+    grad_norm = grad_norm_all[start_index, object_index]
+    return {
+        "best_x": chosen_x,
+        "best_objective": chosen_obj,
+        "best_nll": chosen_nll,
+        "best_logprior": chosen_logprior,
+        "best_chi2": chosen_chi2,
+        "best_start": start_index,
+        "grad_norm": grad_norm,
+        "trace_objective": jnp.asarray(trace),
+        "all_best_x": best_x,
+        "all_best_objective": best_obj,
+        "all_best_nll": best_nll,
+        "all_best_logprior": best_logprior,
+        "all_best_chi2": best_chi2,
+        "start_x": starts,
+        "start_family": tuple(start_family),
+    }
 
+
+def _optimize_map_start_chunk(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names: tuple[str, ...],
+    starts: jnp.ndarray,
+    *,
+    maxiter: int,
+    learning_rate: float,
+    prior_weight: float,
+    likelihood_config: dict[str, Any],
+    log_alpha_sed,
+    log_alpha_band,
+    use_global_scale: bool,
+    use_band_calibration: bool,
+) -> dict[str, jnp.ndarray]:
     def metrics_for_x(x):
         model_flux_raw = model_flux_from_x(
             x,
@@ -369,32 +464,26 @@ def _map_adam_batch(
         m_hat = m / (1.0 - beta1**iteration)
         v_hat = v / (1.0 - beta2**iteration)
         x = x - float(learning_rate) * m_hat / (jnp.sqrt(v_hat) + eps_adam)
-    start_index = jnp.argmin(best_obj, axis=0)
-    object_index = jnp.arange(n_objects)
-    chosen_x = best_x[start_index, object_index]
-    chosen_obj = best_obj[start_index, object_index]
-    chosen_nll = best_nll[start_index, object_index]
-    chosen_logprior = best_logprior[start_index, object_index]
-    chosen_chi2 = best_chi2[start_index, object_index]
     _value, final_grad = value_and_grad(best_x)
-    grad_norm = jnp.linalg.norm(final_grad[start_index, object_index], axis=-1)
+    grad_norm = jnp.linalg.norm(final_grad, axis=-1)
     return {
-        "best_x": chosen_x,
-        "best_objective": chosen_obj,
-        "best_nll": chosen_nll,
-        "best_logprior": chosen_logprior,
-        "best_chi2": chosen_chi2,
-        "best_start": start_index,
+        "best_x": best_x,
+        "best_objective": best_obj,
+        "best_nll": best_nll,
+        "best_logprior": best_logprior,
+        "best_chi2": best_chi2,
         "grad_norm": grad_norm,
         "trace_objective": jnp.asarray(trace),
-        "all_best_x": best_x,
-        "all_best_objective": best_obj,
-        "all_best_nll": best_nll,
-        "all_best_logprior": best_logprior,
-        "all_best_chi2": best_chi2,
-        "start_x": starts,
-        "start_family": tuple(start_family),
     }
+
+
+def _effective_start_chunk_size(value: int | None, n_starts: int) -> int:
+    if value is None:
+        return 1
+    chunk = int(value)
+    if chunk <= 0:
+        raise ValueError("MAP start_chunk_size must be positive")
+    return max(1, min(chunk, int(n_starts)))
 
 
 def _make_map_starts(
