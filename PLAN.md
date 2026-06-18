@@ -1,5 +1,29 @@
 # Plan
 
+## 2026-06-18 Remove 0.4 Redshift Island From Main Subset
+
+- Status: implemented on branch `feature/diffsky-likelihood-sanity-plan`.
+- Recompute the main continuous-low-z Diffsky subset with
+  `redshift_true <= 0.35` instead of `<= 0.5` to exclude the separated
+  `z~0.4` island seen in the redshift histogram.
+- Keep the main parquet path stable:
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`,
+  but update manifests, configs, Slurm defaults, docs, and rebuilt HTML docs to
+  state the `0.0--0.35` subset contract.
+- Update Jean-Zay run names to include `z035` so new no-KL and
+  posterior-predictive runs are not confused with older `lowz` outputs.
+- Recomputed the stable main parquet with `78651` objects,
+  `redshift_true` range `0.006876--0.334662`, median `0.249744`, and the same
+  `fractional_snr` SNR 50 `fluxerr_*` model.
+- Copied the rebuilt redshift/truth plots into `docs/source/_static/` and
+  rebuilt both `docs/build/html/diffsky_dataset.html` and
+  `docs/_build/html/diffsky_dataset.html`; both HTML pages now show the z<0.35
+  subset plots and no `z~0.4` island.
+- Validation completed: `python -m compileall euclid_dsps scripts`, `bash -n`
+  on H100 Slurm scripts, config-load smoke for active Diffsky configs,
+  `uv run ruff check euclid_dsps tests`, targeted pytest (`63 passed`), and
+  full `uv run pytest` (`349 passed, 5 skipped, 2 warnings`).
+
 ## 2026-06-18 Continuous Low-z Dataset As Main Diffsky Dataset
 
 - Status: implemented on branch `feature/diffsky-likelihood-sanity-plan`.
@@ -22,8 +46,8 @@
   SSP/compressed SSP usage.
 - Recomputed the main subset:
   `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`
-  with `111244` objects, `redshift_true` range `0.006876--0.433668`,
-  median `0.290137`, and 14 materialized `fluxerr_*` bands from the
+  with `78651` objects, `redshift_true` range `0.006876--0.334662`,
+  median `0.249744`, and 14 materialized `fluxerr_*` bands from the
   `fractional_snr` SNR 50 model. Companion manifest, schema, summary,
   truth summary/report, and redshift/truth distribution plots were written.
 - Generated the SSP/dust audit under

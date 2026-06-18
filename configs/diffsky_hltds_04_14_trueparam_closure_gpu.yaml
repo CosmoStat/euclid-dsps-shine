@@ -21,7 +21,7 @@ redshift:
     truth_column: redshift_true
     fixed_value: 0.25
     min: 0.001
-    max: 0.5
+    max: 0.35
     seed: 42
     prior_z:
         mode: none
@@ -109,7 +109,7 @@ fit:
     free_parameters:
         z_obs:
             initial: 0.25
-            bounds: [0.001, 0.5]
+            bounds: [0.001, 0.35]
         log10_stellar_mass:
             initial: 10.0
             bounds: [6.0, 13.5]

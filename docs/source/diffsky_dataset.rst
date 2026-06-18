@@ -18,8 +18,8 @@ different redshift ranges and have different error semantics.
      - Recommended role
    * - ``hltds_cosmos_260215_04_14_2026_continuous_lowz``
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
-     - ``111244`` objects from the 04/14 prepared source
-     - ``z = 0.0069 -- 0.4337``; median ``z = 0.290``
+     - ``78651`` objects from the 04/14 prepared source
+     - ``z = 0.0069 -- 0.3347``; median ``z = 0.250``
      - Main training, no-KL autoencoder, MAP, and inference dataset.
    * - ``hltds_cosmos_260215_04_14_2026_source_noerr``
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet``
@@ -169,7 +169,7 @@ It is rebuilt from the full prepared 04/14 source parquet with:
      --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --redshift-min 0.0 \
-     --redshift-max 0.5 \
+     --redshift-max 0.35 \
      --error-model fractional_snr \
      --snr 50
 
@@ -185,6 +185,16 @@ The companion files are:
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.report.md
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/redshift_true_distribution.png
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/truth_distributions.png
+
+The rebuilt subset should show no separated ``z~0.4`` island:
+
+.. image:: _static/diffsky_04_14_continuous_z035_redshift_distribution.png
+   :alt: Redshift distribution for the Diffsky 04/14 continuous z<0.35 subset.
+   :width: 90%
+
+.. image:: _static/diffsky_04_14_continuous_z035_truth_distributions.png
+   :alt: Truth distributions for the Diffsky 04/14 continuous z<0.35 subset.
+   :width: 90%
 
 Integrity Contract
 ------------------

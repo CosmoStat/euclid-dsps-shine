@@ -13,7 +13,7 @@ diffsky_dataset:
     redshift_subset:
         column: redshift_true
         min: 0.0
-        max: 0.5
+        max: 0.35
     error_model:
         type: fractional_snr
         snr: 50.0

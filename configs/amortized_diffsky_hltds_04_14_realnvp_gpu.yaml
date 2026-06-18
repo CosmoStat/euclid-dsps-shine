@@ -21,7 +21,7 @@ redshift:
     truth_column: redshift_true
     fixed_value: 0.25
     min: 0.001
-    max: 0.5
+    max: 0.35
     seed: 42
     prior_z:
         mode: none
@@ -81,7 +81,7 @@ fit:
     free_parameters:
         z_obs:
             initial: 0.25
-            bounds: [0.001, 0.5]
+            bounds: [0.001, 0.35]
         log10_stellar_mass:
             initial: 10.0
             bounds: [7.5, 12.5]
@@ -149,7 +149,7 @@ amortized:
         selection_mode: stratified_redshift
         stratified_strategy: proportional
         stratify_column: redshift_true
-        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
         validation_fraction: 0.1
         epoch_shuffle: true
         catalog_batch_size: 10000

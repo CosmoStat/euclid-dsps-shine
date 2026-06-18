@@ -92,7 +92,7 @@ explicit flux-dependent error model:
      --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --redshift-min 0.0 \
-     --redshift-max 0.5 \
+     --redshift-max 0.35 \
      --error-model fractional_snr \
      --snr 50
 

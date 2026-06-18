@@ -17,7 +17,7 @@ redshift:
     truth_column: redshift_true
     fixed_value: 0.25
     min: 0.001
-    max: 0.5
+    max: 0.35
     seed: 42
     prior_z:
         mode: none

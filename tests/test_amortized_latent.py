@@ -82,7 +82,7 @@ def test_diffsky_supervised_prior_config_matches_truth_basic_schema() -> None:
     )
     np.testing.assert_allclose(
         np.asarray(spec.upper),
-        np.asarray([0.5, 13.5, -7.0, 5.0, 1.0], dtype=np.float32),
+        np.asarray([0.35, 13.5, -7.0, 5.0, 1.0], dtype=np.float32),
     )
 
 

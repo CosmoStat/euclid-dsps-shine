@@ -19,7 +19,7 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml}"
-RUN_NAME="${RUN_NAME:-diffsky_autoencoder_nokl_lowz_$(date +%Y%m%d_%H%M%S)}"
+RUN_NAME="${RUN_NAME:-diffsky_autoencoder_nokl_z035_$(date +%Y%m%d_%H%M%S)}"
 TRAIN_OUT="${TRAIN_OUT:-outputs/runs/${RUN_NAME}}"
 INFER_OUT="${INFER_OUT:-outputs/runs/${RUN_NAME}_infer}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"

@@ -10,7 +10,7 @@ amortized:
         selection_mode: stratified_redshift
         stratified_strategy: balanced
         stratify_column: redshift_true
-        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
         validation_fraction: 0.1
         epoch_shuffle: true
         catalog_batch_size: 10000
@@ -41,7 +41,7 @@ amortized:
         selection_mode: stratified_redshift
         stratified_strategy: balanced
         selection_seed: 4242
-        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
         jax_batch_size: 256
         decoder_sample_chunk_size: 4
         prior_predictive_batch_size: 1024

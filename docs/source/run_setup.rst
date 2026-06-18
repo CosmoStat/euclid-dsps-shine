@@ -86,11 +86,11 @@ source parquet with:
      --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --redshift-min 0.0 \
-     --redshift-max 0.5 \
+     --redshift-max 0.35 \
      --error-model fractional_snr \
      --snr 50
 
-This writes ``111244`` objects in the current local build, companion
+This writes ``78651`` objects in the current local build, companion
 manifest/schema/truth reports, and the redshift/truth distribution plots. The
 old ``*_photometry_truth_noerr.parquet`` file is only the source artifact for
 this subset.
@@ -369,7 +369,7 @@ written:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,TRAIN_RUN=outputs/runs/diffsky_realnvp_lowz_30k_e20,LIMIT=5000,POSTERIOR_SAMPLES=128 \
+   sbatch --export=ALL,TRAIN_RUN=outputs/runs/diffsky_realnvp_z035_30k_e20,LIMIT=5000,POSTERIOR_SAMPLES=128 \
      scripts/diffsky_amortized_infer_h100.slurm
 
 Useful overrides:

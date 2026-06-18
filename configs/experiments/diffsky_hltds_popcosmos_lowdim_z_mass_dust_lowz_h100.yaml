@@ -6,18 +6,18 @@ experiment:
 
 redshift:
     min: 0.001
-    max: 0.45
+    max: 0.35
 
 fit:
     free_parameters:
         z_obs:
             initial: 0.2
-            bounds: [0.001, 0.45]
+            bounds: [0.001, 0.35]
 
 amortized:
     data:
-        redshift_bins: [0.0, 0.1, 0.2, 0.3, 0.45]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
     inference:
-        redshift_bins: [0.0, 0.1, 0.2, 0.3, 0.45]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
     map_adam:
         start_mode: lowz_grid
