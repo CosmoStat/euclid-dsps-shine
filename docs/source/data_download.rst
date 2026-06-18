@@ -13,6 +13,7 @@ The current public paths are:
 
    Data/Euclid FS2 LC galaxy catalog_phz1.parquet
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
@@ -72,7 +73,7 @@ Inspect local HDF5 files:
      --root Data/diffsky/raw/hltds_cosmos_260215_04_14_2026 \
      --out outputs/diffsky_hltds_04_14_local_inventory.json
 
-Build the normalized parquet without inventing photometric errors:
+Build the full normalized source parquet without inventing photometric errors:
 
 .. code-block:: bash
 
@@ -82,13 +83,26 @@ Build the normalized parquet without inventing photometric errors:
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
      --no-synthetic-errors
 
+Then build the current main continuous-redshift training subset with the
+explicit flux-dependent error model:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli diffsky-redshift-subset \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --redshift-min 0.0 \
+     --redshift-max 0.5 \
+     --error-model fractional_snr \
+     --snr 50
+
 Validate readiness for prior-learning experiments:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-validate-dataset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_manifest.yaml \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml \
      --out outputs/reports/diffsky_hltds_04_14/prior_learning_validation_report.md
 
 Write dataset diagnostics:
@@ -96,16 +110,17 @@ Write dataset diagnostics:
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-dataset-diagnostics \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_manifest.yaml \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml \
      --out outputs/reports/diffsky_hltds_04_14/dataset
 
 The prepared file keeps native HLTDS AB magnitudes and truth columns such as
 ``redshift_true``, ``logsm_true``, ``logssfr_true``, ``logsfr_true``,
-``logmp_true``, central flags, and size proxies when they are present. It does
-not create ``fluxerr_*`` columns when ``--no-synthetic-errors`` is used.
-The fit configs handle this by using a documented magnitude-space model
-tolerance, ``sigma_mag``.
+``logmp_true``, central flags, and size proxies when they are present. The
+source parquet does not create ``fluxerr_*`` columns when
+``--no-synthetic-errors`` is used. The current main subset does create
+``fluxerr_*`` columns with ``fractional_snr`` SNR 50 and is the default input
+for Diffsky training, MAP, and posterior-predictive diagnostics.
 
 Diffsky SSP Asset
 -----------------

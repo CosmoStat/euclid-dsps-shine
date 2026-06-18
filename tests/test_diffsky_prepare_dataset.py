@@ -53,7 +53,8 @@ def test_prepare_dataset_creates_truth_photometry_and_manifest(tmp_path: Path) -
     assert (tmp_path / "diffsky_dataset_integrity_report.md").exists()
     manifest = yaml.safe_load(out.with_suffix(".manifest.yaml").read_text())
     schema = json.loads(out.with_suffix(".schema.json").read_text())
-    assert manifest["error_model"]["type"] == "synthetic_snr_error"
+    assert manifest["error_model"]["type"] == "fractional_snr"
+    assert manifest["error_model"]["synthetic"] is True
     assert "diffstar_lgmcrit" in manifest["generated_truth_columns"]
     assert "dust_av" in schema["column_semantics"]["generated_truth"]
     assert "logsfr_true" in schema["column_semantics"]["derived_truth"]

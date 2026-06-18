@@ -1,11 +1,19 @@
 extends: diffsky_hltds_04_14_simple_gpu.yaml
 
 diffsky_dataset:
-    name: hltds_cosmos_260215_04_14_2026
+    name: hltds_cosmos_260215_04_14_2026_continuous_lowz
     raw_root: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026
-    processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
-    manifest_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.manifest.yaml
-    schema_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.schema.json
-    truth_report_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.truth_report.md
+    source_processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+    processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+    manifest_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml
+    schema_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.schema.json
+    truth_report_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.truth_report.md
     integrity_report_path: Data/diffsky/processed/diffsky_dataset_integrity_report.md
-    no_synthetic_errors: true
+    no_synthetic_errors: false
+    redshift_subset:
+        column: redshift_true
+        min: 0.0
+        max: 0.5
+    error_model:
+        type: fractional_snr
+        snr: 50.0

@@ -1,12 +1,12 @@
-catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
 ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
 dataset:
-    name: diffsky_hltds_04_14
+    name: diffsky_hltds_04_14_continuous_lowz
     id_column: object_id
 
 runtime: gpu
-bands: diffsky_hltds_lsst_roman_14_abmag_modelerr
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
 nebular_emission: ssp_flux
 
 selection:
@@ -19,9 +19,9 @@ redshift:
     initial: random_uniform
     column:
     truth_column: redshift_true
-    fixed_value: 0.8
-    min: 0.05
-    max: 1.2
+    fixed_value: 0.25
+    min: 0.001
+    max: 0.5
     seed: 42
     prior_z:
         mode: none
@@ -61,10 +61,6 @@ model:
     z_sun: 0.0142
     dust_tesc_logyr: 7.0
     dust1_index: -1.0
-    fixed_parameters:
-        dlog10_sfr_4: 0.0
-        dlog10_sfr_5: 0.0
-        dlog10_sfr_6: 0.0
 
 fit:
     method: jax_adam
@@ -84,8 +80,8 @@ fit:
     batch_grad_mode: per_galaxy
     free_parameters:
         z_obs:
-            initial: 0.8
-            bounds: [0.05, 1.2]
+            initial: 0.25
+            bounds: [0.001, 0.5]
         log10_stellar_mass:
             initial: 10.0
             bounds: [7.5, 12.5]
@@ -96,6 +92,15 @@ fit:
             initial: 0.0
             bounds: [-3.0, 3.0]
         dlog10_sfr_3:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_4:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_5:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_6:
             initial: 0.0
             bounds: [-3.0, 3.0]
         log10_stellar_metallicity:
@@ -144,7 +149,7 @@ amortized:
         selection_mode: stratified_redshift
         stratified_strategy: proportional
         stratify_column: redshift_true
-        redshift_bins: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
         validation_fraction: 0.1
         epoch_shuffle: true
         catalog_batch_size: 10000
@@ -152,6 +157,20 @@ amortized:
         schema: diffsky_hltds_prior_v1
         include_redshift: true
         use_fit_bounds: true
+        normalization: standardized_logit
+        physical_scales:
+            z_obs: 0.20
+            log10_stellar_mass: 0.50
+            dlog10_sfr_1: 0.50
+            dlog10_sfr_2: 0.50
+            dlog10_sfr_3: 0.50
+            dlog10_sfr_4: 0.50
+            dlog10_sfr_5: 0.50
+            dlog10_sfr_6: 0.50
+            log10_stellar_metallicity: 0.35
+            tau2: 0.40
+            dust_index_n: 0.30
+            tau1_over_tau2: 0.35
     features:
         type: flux_and_errors
         n_flux_bands: 14
@@ -162,7 +181,7 @@ amortized:
     encoder:
         type: gaussian_mlp
         input_dim: 28
-        latent_dim: 9
+        latent_dim: 12
         hidden_sizes: [192, 192, 192]
         activation: gelu
         log_std_min: -6.0

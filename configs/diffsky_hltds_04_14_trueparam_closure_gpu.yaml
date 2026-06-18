@@ -1,4 +1,4 @@
-catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
 ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
 dataset:
@@ -6,7 +6,7 @@ dataset:
     id_column: object_id
 
 runtime: gpu
-bands: diffsky_hltds_lsst_roman_14_abmag_modelerr
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
 nebular_emission: ssp_flux
 
 selection:
@@ -19,9 +19,9 @@ redshift:
     initial: catalog_column
     column: redshift_true
     truth_column: redshift_true
-    fixed_value: 0.8
-    min: 0.0
-    max: 6.0
+    fixed_value: 0.25
+    min: 0.001
+    max: 0.5
     seed: 42
     prior_z:
         mode: none
@@ -92,10 +92,10 @@ calibration:
 
 fit:
     method: jax_adam
-    likelihood_space: mag
+    likelihood_space: flux
     photometric_likelihood: student_t
     student_t_dof: 2.0
-    flux_error_floor_frac: 0.0
+    flux_error_floor_frac: 0.02
     flux_error_jitter: 0.0
     maxiter: 1
     learning_rate: 0.02
@@ -108,8 +108,8 @@ fit:
     batch_grad_mode: per_galaxy
     free_parameters:
         z_obs:
-            initial: 0.8
-            bounds: [0.0, 6.0]
+            initial: 0.25
+            bounds: [0.001, 0.5]
         log10_stellar_mass:
             initial: 10.0
             bounds: [6.0, 13.5]

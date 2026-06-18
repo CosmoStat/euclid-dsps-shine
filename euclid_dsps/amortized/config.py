@@ -34,6 +34,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["latent"].setdefault("schema", "popcosmos_16")
     raw["latent"].setdefault("include_redshift", True)
     raw["latent"].setdefault("use_fit_bounds", True)
+    raw["latent"].setdefault("normalization", "identity")
     raw["features"].setdefault("type", "flux_and_errors")
     raw["features"].setdefault("n_flux_bands", 10)
     raw["features"].setdefault("n_error_bands", 10)

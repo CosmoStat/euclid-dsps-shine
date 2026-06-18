@@ -31,11 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-supervised-prior-report,"
             "diffsky-forward-closure,diffsky-popcosmos-proxy-closure,"
-            "diffsky-redshift-ablation,"
+            "diffsky-redshift-ablation,diffsky-dust-ssp-audit,"
             "diffsky-run-full-validation,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
-            "diffsky-dataset-diagnostics,diffsky-validate-dataset,"
+            "diffsky-dataset-diagnostics,diffsky-redshift-subset,"
+            "diffsky-validate-dataset,"
             "diffsky-fit-report}"
         ),
     )
@@ -427,6 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="outputs/reports/diffsky_redshift_ablation",
     )
 
+    dust_audit = sub.add_parser(
+        "diffsky-dust-ssp-audit",
+        help="Audit PopCosmos dust parameters against the configured SSP assets.",
+    )
+    dust_audit.add_argument("--out", default="outputs/reports/diffsky_dust_ssp_audit")
+
     full_validation = sub.add_parser(
         "diffsky-run-full-validation",
         help="Run or aggregate the full Diffsky physical-validation workflow.",
@@ -787,6 +794,7 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-redshift-ablation",
         "diffsky-run-full-validation",
         "diffsky-map-adam-prior",
+        "diffsky-dust-ssp-audit",
     }
     if args.command == "download-assets":
         from .assets import download_assets
@@ -867,6 +875,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "diffsky-redshift-ablation":
         _run_diffsky_redshift_ablation(config, args)
+        return
+    if args.command == "diffsky-dust-ssp-audit":
+        _run_diffsky_dust_ssp_audit(config, args)
         return
     if args.command == "diffsky-run-full-validation":
         _run_diffsky_full_validation(config, args)
@@ -1173,6 +1184,16 @@ def _run_diffsky_redshift_ablation(config: dict, args) -> None:
         out_dir=Path(args.out),
     )
     print(f"[diffsky] redshift ablation report -> {report}")
+
+
+def _run_diffsky_dust_ssp_audit(config: dict, args) -> None:
+    from .dust_ssp_audit import write_dust_ssp_audit
+
+    payload = write_dust_ssp_audit(config, args.out)
+    print(
+        "[diffsky] dust/SSP audit -> "
+        f"{args.out} ({payload.get('dust_model')}, {payload.get('ssp_path')})"
+    )
 
 
 def _run_diffsky_full_validation(config: dict, args) -> None:

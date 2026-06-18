@@ -91,7 +91,7 @@ The H100-scale orchestration command is:
    python -m euclid_dsps.cli \
      --config configs/experiments/diffsky_hltds_full_h100.yaml \
      diffsky-run-full-validation \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --out outputs/runs/diffsky_hltds_full_validation
 
 It runs or aggregates the supervised prior, true-parameter closure, three

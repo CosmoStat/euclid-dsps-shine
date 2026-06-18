@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from ..photometric_uncertainty import (
+    flux_error_model_payload,
+    normalize_flux_error_model,
+)
 from .photometry import detect_photometry_columns, standardize_magnitude_photometry
 from .schema import (
     HLTDS_BURST_COLUMNS,
@@ -46,6 +50,7 @@ def build_diffsky_photometric_dataset(
     require_truths: tuple[str, ...] = ("redshift", "stellar_mass"),
     add_synthetic_errors: bool = True,
     snr: float = 50.0,
+    error_model: dict[str, Any] | None = None,
     seed: int = 42,
 ) -> DatasetBuildReport:
     del inventory_path, selected_photometry, require_truths, seed
@@ -63,6 +68,7 @@ def build_diffsky_photometric_dataset(
             limit=remaining,
             snr=snr,
             add_synthetic_errors=add_synthetic_errors,
+            error_model=error_model,
         )
         if remaining is not None:
             remaining -= len(frame)
@@ -74,9 +80,13 @@ def build_diffsky_photometric_dataset(
     dataset.to_parquet(output_path, index=False)
     band_names = tuple(column.removeprefix("flux_") for column in dataset.columns if column.startswith("flux_"))
     semantics = classify_diffsky_columns(dataset.columns)
-    error_model = _error_model_payload(add_synthetic_errors=add_synthetic_errors, snr=snr)
+    error_model_payload = _error_model_payload(
+        add_synthetic_errors=add_synthetic_errors,
+        snr=snr,
+        model=error_model,
+    )
     readiness = _readiness(dataset)
-    schema = _schema_for_dataset(dataset, band_names, semantics, error_model)
+    schema = _schema_for_dataset(dataset, band_names, semantics, error_model_payload)
     schema_path = output_path.with_suffix(".schema.json")
     schema_path.write_text(json.dumps(schema, indent=2), encoding="utf-8")
     manifest = {
@@ -88,7 +98,7 @@ def build_diffsky_photometric_dataset(
         "band_names": list(band_names),
         "photometry_unit": describe_photometry_unit("magnitude", "mag(AB)"),
         "prepared_flux_unit": "fnu_cgs",
-        "error_model": error_model,
+        "error_model": error_model_payload,
         "column_semantics": semantics.as_dict(),
         "truth_columns": list(semantics.truth),
         "derived_truth_columns": list(semantics.derived_truth),
@@ -123,6 +133,7 @@ def _read_hltds_shard(
     limit: int | None,
     snr: float,
     add_synthetic_errors: bool,
+    error_model: dict[str, Any] | None,
 ) -> pd.DataFrame:
     with h5py.File(path, "r") as handle:
         if "data" not in handle:
@@ -160,6 +171,7 @@ def _read_hltds_shard(
             phot_report,
             snr=snr,
             add_synthetic_errors=add_synthetic_errors,
+            error_model=error_model,
         )
         return pd.concat([frame, phot], axis=1)
 
@@ -203,14 +215,22 @@ def _assign_global_object_ids(frame: pd.DataFrame) -> dict[str, Any]:
     return report
 
 
-def _error_model_payload(*, add_synthetic_errors: bool, snr: float) -> dict[str, Any]:
+def _error_model_payload(
+    *,
+    add_synthetic_errors: bool,
+    snr: float,
+    model: dict[str, Any] | None,
+) -> dict[str, Any]:
     if add_synthetic_errors:
-        return {
-            "type": "synthetic_snr_error",
-            "snr": float(snr),
-            "native_error": False,
-            "description": "fluxerr_* columns were synthesized as abs(flux) / snr.",
-        }
+        normalized = (
+            {"type": "fractional_snr", "snr": float(snr)}
+            if model is None
+            else normalize_flux_error_model(model)
+        )
+        payload = flux_error_model_payload(normalized)
+        payload["native_error"] = False
+        payload["synthetic"] = True
+        return payload
     return {
         "type": "none",
         "native_error": False,

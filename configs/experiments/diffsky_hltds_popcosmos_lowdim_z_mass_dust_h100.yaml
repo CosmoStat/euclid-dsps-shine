@@ -2,42 +2,13 @@ extends: diffsky_hltds_popcosmos_full_bounds_h100.yaml
 
 experiment:
     name: diffsky_hltds_popcosmos_lowdim_z_mass_dust_h100
-    description: Low-dimensional PopCosmos diagnostic with free z, mass, one SFH proxy, and dust parameters.
-
-model:
-    fixed_parameters:
-        dlog10_sfr_2: 0.0
-        dlog10_sfr_3: 0.0
-        dlog10_sfr_4: 0.0
-        dlog10_sfr_5: 0.0
-        dlog10_sfr_6: 0.0
-        log10_stellar_metallicity: -0.2
-        tau1_over_tau2: 0.5
-
-fit:
-    free_parameters:
-        __replace__: true
-        z_obs:
-            initial: 0.5
-            bounds: [0.001, 1.2]
-        log10_stellar_mass:
-            initial: 10.0
-            bounds: [7.5, 12.5]
-        dlog10_sfr_1:
-            initial: 0.0
-            bounds: [-3.0, 3.0]
-        tau2:
-            initial: 0.3
-            bounds: [0.0, 4.0]
-        dust_index_n:
-            initial: -0.7
-            bounds: [-2.0, 0.5]
+    description: Compact-network PopCosmos diagnostic on the full 12D latent. Legacy filename kept for continuity; SFH bins are not frozen.
 
 amortized:
     latent:
         schema: config_free_parameters
     encoder:
-        latent_dim: 5
+        latent_dim: 12
         hidden_sizes: [160, 160, 160]
     prior:
         n_layers: 6

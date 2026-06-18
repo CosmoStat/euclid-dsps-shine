@@ -2,7 +2,7 @@ extends: ../amortized_diffsky_hltds_joint_realnvp_gpu.yaml
 
 experiment:
     name: diffsky_hltds_joint_realnvp_photoz_h100
-    description: Photo-z focused Diffsky HLTDS amortized run with joint RealNVP prior and per-band flux calibration.
+    description: Photo-z focused Diffsky HLTDS continuous-low-z amortized run with joint RealNVP prior and per-band flux calibration.
 
 amortized:
     data:
@@ -10,7 +10,7 @@ amortized:
         selection_mode: stratified_redshift
         stratified_strategy: balanced
         stratify_column: redshift_true
-        redshift_bins: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
         validation_fraction: 0.1
         epoch_shuffle: true
         catalog_batch_size: 10000
@@ -41,7 +41,7 @@ amortized:
         selection_mode: stratified_redshift
         stratified_strategy: balanced
         selection_seed: 4242
-        redshift_bins: [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
         jax_batch_size: 256
         decoder_sample_chunk_size: 4
         prior_predictive_batch_size: 1024

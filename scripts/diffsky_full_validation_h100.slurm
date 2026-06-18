@@ -50,7 +50,7 @@ LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_full_h100.yaml}"
-DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
+DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet}"
 RAW_ROOT="${RAW_ROOT:-Data/diffsky/raw/hltds_cosmos_260215_04_14_2026}"
 
 # These defaults are meant to fit a roughly 10h walltime budget on one H100.

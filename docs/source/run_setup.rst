@@ -69,7 +69,7 @@ uses the prepared file:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
 
 and the HLTDS SSP asset:
 
@@ -77,21 +77,23 @@ and the HLTDS SSP asset:
 
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
-Build or refresh the prepared dataset and integrity reports with the dataset
-CLI commands documented in :doc:`diffsky_dataset` and the public dataset
-config:
+Build or refresh the main subset and its reports from the full 04/14 prepared
+source parquet with:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_dataset_hltds_04_14.yaml \
-     diffsky-prepare-dataset \
-     --raw-root Data/diffsky/raw/hltds_cosmos_260215_04_14_2026 \
-     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --no-synthetic-errors
+   python -m euclid_dsps.cli diffsky-redshift-subset \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --redshift-min 0.0 \
+     --redshift-max 0.5 \
+     --error-model fractional_snr \
+     --snr 50
 
-The integrity report records object-id uniqueness, source shards, truth and
-generated-truth availability, photometry units, and the exact error model.
+This writes ``111244`` objects in the current local build, companion
+manifest/schema/truth reports, and the redshift/truth distribution plots. The
+old ``*_photometry_truth_noerr.parquet`` file is only the source artifact for
+this subset.
 
 Supervised prior learning
 -------------------------
@@ -103,7 +105,7 @@ Train the basic supervised prior directly on truth parameters:
    python -m euclid_dsps.cli \
      --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
      diffsky-train-supervised-prior \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --out outputs/runs/diffsky_supervised_prior_basic
 
 Then sample and report:
@@ -114,7 +116,7 @@ Then sample and report:
      --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
      diffsky-sample-supervised-prior \
      --checkpoint outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --out outputs/runs/diffsky_supervised_prior_basic
 
 Same-parameter forward closure
@@ -128,7 +130,7 @@ physical recovery:
    python -m euclid_dsps.cli \
      --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml \
      diffsky-forward-closure \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --limit 1024 \
      --out outputs/runs/diffsky_trueparam_forward_closure
 
@@ -181,19 +183,20 @@ Regenerate the Diffsky recovery report after a run:
      --label batch_fit \
      --reporting-level light
 
-The simple config fits only parameters that have direct/basic truth columns in
-the prepared dataset and are plausible for a broad-band DSPS fit:
+The simple config fits the HLTDS 12D PopCosmos-like proxy parameter vector:
 
 .. code-block:: text
 
    z_obs
    log10_stellar_mass
-   dlog10_sfr_1
+   dlog10_sfr_1 ... dlog10_sfr_6
+   log10_stellar_metallicity
    tau2
    dust_index_n
+   tau1_over_tau2
 
 It does not fit Diffstar/Diffmah latents, AGN parameters, gas ionization, or
-full SFH latent extensions.
+gas-metallicity/gas-ionization parameters.
 
 Diffsky fixed-redshift closure
 ------------------------------
@@ -217,9 +220,11 @@ This config reads ``redshift_true`` as the fixed catalog redshift and fits:
 .. code-block:: text
 
    log10_stellar_mass
-   dlog10_sfr_1
+   dlog10_sfr_1 ... dlog10_sfr_6
+   log10_stellar_metallicity
    tau2
    dust_index_n
+   tau1_over_tau2
 
 It is a model/photometry closure diagnostic, not a blind photo-z experiment.
 
@@ -322,6 +327,89 @@ The supervised-prior config expects a checkpoint produced by the supervised
 prior workflow and keeps it frozen unless ``train_jointly`` is explicitly set
 true.
 
+No-KL Autoencoder Sanity
+------------------------
+
+Before interpreting a RealNVP prior, run the autoencoder-only sanity check on
+the continuous low-z dataset. This disables the KL term and freezes the prior,
+so the relevant question is whether encoder plus DSPS decoder can reconstruct
+the input fluxes:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,LIMIT=10000,EPOCHS=12,BATCH_SIZE=128,JAX_BATCH_SIZE=128 \
+     scripts/diffsky_autoencoder_nokl_h100.slurm
+
+The script trains with
+``configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml`` and then runs
+inference on the best checkpoint. Inspect:
+
+.. code-block:: text
+
+   outputs/runs/<RUN_NAME>/training_log.csv
+   outputs/runs/<RUN_NAME>/feature_stats.json
+   outputs/runs/<RUN_NAME>/training_summary.json
+   outputs/runs/<RUN_NAME>_infer/posterior_predictive_residual_summary.parquet
+   outputs/runs/<RUN_NAME>_infer/posterior_predictive_normalized_residual_hist.png
+   outputs/runs/<RUN_NAME>_infer/posterior_predictive_normalized_residual_hist_by_band.png
+   outputs/runs/<RUN_NAME>_infer/posterior_predictive_residuals_by_band.png
+   outputs/runs/<RUN_NAME>_infer/posterior_predictive_normalized_residual_tails.csv
+
+The main pass/fail check is the distribution of
+``(flux_in - flux_out) / sigma_eff``. A useful first target is most median
+band residuals inside ``[-3, 3]`` without long asymmetric tails.
+
+Posterior Predictive Residuals On Jean-Zay
+------------------------------------------
+
+To recompute the posterior-predictive residual plots for an existing H100
+checkpoint, rerun sharded inference. Large per-sample flux and residual
+parquets are disabled by default, but compact residual summaries and plots are
+written:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,TRAIN_RUN=outputs/runs/diffsky_realnvp_lowz_30k_e20,LIMIT=5000,POSTERIOR_SAMPLES=128 \
+     scripts/diffsky_amortized_infer_h100.slurm
+
+Useful overrides:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,CHECKPOINT=outputs/runs/<RUN>/checkpoints/epoch_0012.eqx,FEATURE_STATS=outputs/runs/<RUN>/feature_stats.json,RUN_NAME=<RUN>_infer_residuals \
+     scripts/diffsky_amortized_infer_h100.slurm
+
+The files to inspect are the same residual summary and residual plot files
+listed in the no-KL section. If only the plot aggregation was interrupted after
+all shards completed, run:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml \
+     amortized-finalize-inference \
+     --out outputs/runs/<RUN_NAME>
+
+SSP and Dust Audit
+------------------
+
+For the written note on SSP/dust consistency, generate:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     diffsky-dust-ssp-audit \
+     --out outputs/reports/diffsky_dust_ssp_audit
+
+Inspect:
+
+.. code-block:: text
+
+   outputs/reports/diffsky_dust_ssp_audit/dust_ssp_audit.md
+   outputs/reports/diffsky_dust_ssp_audit/dust_ssp_audit.json
+   outputs/reports/diffsky_dust_ssp_audit/dust_transmission_grid.png
+
 Redshift Ablation
 -----------------
 
@@ -331,7 +419,7 @@ joint-prior modes, compare redshift posterior calibration:
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-redshift-ablation \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --run standard_normal=outputs/runs/amortized_diffsky_standard_normal_infer \
      --run supervised_prior=outputs/runs/amortized_diffsky_supervised_prior_infer \
      --run joint_realnvp=outputs/runs/amortized_diffsky_joint_realnvp_infer \

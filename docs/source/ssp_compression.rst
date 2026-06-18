@@ -31,8 +31,15 @@ Use the FS2 GPU config for production FS2 batches:
 
    configs/fs2_gpu.yaml
 
-The Diffsky HLTDS simple configs use the HLTDS SSP file directly and do not use
-these compressed FS2 gas/AGN runtime assets.
+The Diffsky HLTDS simple MAP configs can use the HLTDS SSP file directly. The
+active Diffsky amortized configs use a compressed basis built from that same
+HLTDS SSP file:
+
+.. code-block:: text
+
+   Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_basis_k64_coeff16.hdf5
+
+They do not use the compressed FS2 gas/AGN runtime assets.
 
 Compressed Assets
 -----------------

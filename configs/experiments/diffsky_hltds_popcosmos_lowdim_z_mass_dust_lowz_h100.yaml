@@ -2,7 +2,7 @@ extends: diffsky_hltds_popcosmos_lowdim_z_mass_dust_h100.yaml
 
 experiment:
     name: diffsky_hltds_popcosmos_lowdim_z_mass_dust_lowz_h100
-    description: Low-z closure-only variant of the low-dimensional PopCosmos diagnostic.
+    description: Low-z closure-only variant of the compact-network full-12D PopCosmos diagnostic.
 
 redshift:
     min: 0.001

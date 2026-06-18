@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ..photometric_uncertainty import flux_error_from_model
 from ..photometry import abmag_to_fnu_cgs
 
 
@@ -61,6 +62,7 @@ def standardize_magnitude_photometry(
     report: PhotometryColumnReport,
     snr: float,
     add_synthetic_errors: bool = True,
+    error_model: dict | None = None,
 ) -> pd.DataFrame:
     frame = pd.DataFrame()
     for band, column in zip(report.band_names, report.native_columns, strict=True):
@@ -70,7 +72,12 @@ def standardize_magnitude_photometry(
         frame[f"mag_{band}"] = mag
         frame[f"flux_{band}"] = flux
         if add_synthetic_errors:
-            err = np.maximum(np.abs(flux) / max(float(snr), 1.0e-12), 1.0e-40)
+            model = (
+                {"type": "fractional_snr", "snr": float(snr)}
+                if error_model is None
+                else error_model
+            )
+            err = flux_error_from_model(flux, model)
             frame[f"fluxerr_{band}"] = err
         frame[f"mask_{band}"] = valid
     return frame

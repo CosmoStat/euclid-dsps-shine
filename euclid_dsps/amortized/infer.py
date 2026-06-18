@@ -423,7 +423,7 @@ def infer_amortized_fs2(
             error_floor_frac=float(likelihood_cfg.get("error_floor_frac", 0.02)),
             error_jitter=float(likelihood_cfg.get("error_jitter", 0.0)),
         )
-        chi2 = _posterior_predictive_chi2(batch, model_flux)
+        chi2 = _posterior_predictive_chi2(batch, model_flux, likelihood_cfg)
         object_id = np.asarray(batch.object_id)
         theta_np = jax.device_get(theta)
         logq_np = jax.device_get(logq)
@@ -476,6 +476,7 @@ def infer_amortized_fs2(
                 model_flux_np,
                 band_names,
                 row_index=batch.row_index,
+                likelihood_config=likelihood_cfg,
             )
             if write_residual_samples
             else pd.DataFrame()
@@ -488,6 +489,7 @@ def infer_amortized_fs2(
             model_flux_np,
             band_names,
             row_index=batch.row_index,
+            likelihood_config=likelihood_cfg,
         )
         feature_frame = feature_diagnostics_frame(
             object_id,
@@ -1302,10 +1304,17 @@ def _model_flux_from_x_2d_chunks(
     return jnp.concatenate(chunks, axis=0)
 
 
-def _posterior_predictive_chi2(batch, model_flux):
+def _posterior_predictive_chi2(batch, model_flux, likelihood_config: dict[str, Any]):
     obs = batch.flux[None, :, :]
     err = batch.flux_err[None, :, :]
     mask = batch.mask[None, :, :]
-    chi = np.asarray((model_flux - obs) / err)
+    sigma2 = err**2
+    floor = float(likelihood_config.get("error_floor_frac", 0.0))
+    if floor:
+        sigma2 = sigma2 + (floor * jnp.abs(model_flux)) ** 2
+    jitter = float(likelihood_config.get("error_jitter", 0.0))
+    if jitter:
+        sigma2 = sigma2 + jitter**2
+    chi = np.asarray((model_flux - obs) / jnp.sqrt(jnp.maximum(sigma2, 1.0e-60)))
     valid = np.asarray(mask)
     return np.sum(np.where(valid, chi**2, 0.0), axis=-1)

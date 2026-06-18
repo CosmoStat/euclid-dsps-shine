@@ -12,8 +12,8 @@ fit:
     free_parameters:
         __replace__: true
         z_obs:
-            initial: 0.8
-            bounds: [0.0, 1.5]
+            initial: 0.25
+            bounds: [0.001, 0.5]
         log10_stellar_mass:
             initial: 10.0
             bounds: [6.0, 13.5]
@@ -35,6 +35,7 @@ amortized:
         schema: diffsky_truth_basic
         include_redshift: true
         use_fit_bounds: true
+        normalization: identity
     encoder:
         latent_dim: 5
     prior:

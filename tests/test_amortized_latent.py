@@ -48,13 +48,19 @@ def test_diffsky_hltds_latent_schema_uses_configured_free_parameters() -> None:
         "dlog10_sfr_1",
         "dlog10_sfr_2",
         "dlog10_sfr_3",
+        "dlog10_sfr_4",
+        "dlog10_sfr_5",
+        "dlog10_sfr_6",
         "log10_stellar_metallicity",
         "tau2",
         "dust_index_n",
         "tau1_over_tau2",
     )
-    assert spec.lower.shape == (9,)
-    assert spec.upper.shape == (9,)
+    assert spec.lower.shape == (12,)
+    assert spec.upper.shape == (12,)
+    assert spec.normalization == "standardized_logit"
+    assert spec.raw_center is not None
+    assert spec.raw_scale is not None
 
 
 def test_diffsky_supervised_prior_config_matches_truth_basic_schema() -> None:
@@ -72,11 +78,11 @@ def test_diffsky_supervised_prior_config_matches_truth_basic_schema() -> None:
     )
     np.testing.assert_allclose(
         np.asarray(spec.lower),
-        np.asarray([0.0, 6.0, -14.5, 0.0, -2.5], dtype=np.float32),
+        np.asarray([0.001, 6.0, -14.5, 0.0, -2.5], dtype=np.float32),
     )
     np.testing.assert_allclose(
         np.asarray(spec.upper),
-        np.asarray([1.5, 13.5, -7.0, 5.0, 1.0], dtype=np.float32),
+        np.asarray([0.5, 13.5, -7.0, 5.0, 1.0], dtype=np.float32),
     )
 
 

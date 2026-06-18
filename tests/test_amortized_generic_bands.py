@@ -58,7 +58,7 @@ def test_amortized_model_reads_b14_encoder_input_dim_from_config() -> None:
     assert log_std.shape == (2, 16)
 
 
-def test_diffsky_simple_gpu_config_uses_fourteen_native_mag_bands() -> None:
+def test_diffsky_simple_gpu_config_uses_fourteen_native_flux_bands() -> None:
     config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
 
     band_names = tuple(band["name"] for band in config["bands"])
@@ -81,19 +81,21 @@ def test_diffsky_simple_gpu_config_uses_fourteen_native_mag_bands() -> None:
         "roman_F184",
         "roman_F213",
     )
-    assert {band["units"] for band in config["bands"]} == {"abmag"}
-    assert all("error_column" not in band for band in config["bands"])
-    assert {band["sigma_mag"] for band in config["bands"]} == {0.10}
+    assert {band["units"] for band in config["bands"]} == {"fnu_cgs"}
+    assert {band["error_units"] for band in config["bands"]} == {"fnu_cgs"}
+    assert all(band["column"].startswith("flux_") for band in config["bands"])
+    assert all(band["error_column"].startswith("fluxerr_") for band in config["bands"])
     assert config["runtime"]["require_gpu"] is True
 
 
-def test_diffsky_amortized_gpu_config_is_b14_latent9_realnvp() -> None:
+def test_diffsky_amortized_gpu_config_is_b14_latent12_realnvp() -> None:
     config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
 
     assert len(config["bands"]) == 14
     assert config["amortized"]["encoder"]["input_dim"] == 28
-    assert config["amortized"]["encoder"]["latent_dim"] == 9
+    assert config["amortized"]["encoder"]["latent_dim"] == 12
     assert config["amortized"]["latent"]["schema"] == "diffsky_hltds_prior_v1"
+    assert config["amortized"]["latent"]["normalization"] == "standardized_logit"
     assert config["amortized"]["prior"]["type"] == "realnvp"
     assert config["runtime"]["require_gpu"] is True
     assert config["model"]["ssp_model"] == "compressed_basis"

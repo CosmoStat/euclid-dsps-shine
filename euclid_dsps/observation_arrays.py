@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .io import microjy_to_flux_fnu_cgs
+from .photometric_uncertainty import flux_error_from_model
 from .photometry import abmag_to_fnu_cgs, magerr_to_fluxerr_fnu_cgs
 
 
@@ -109,9 +110,13 @@ def _flux_error_array(
     flux_units: str,
 ) -> np.ndarray:
     fallback_sigma_mag = float(band.get("sigma_mag", 0.05))
-    fallback = np.asarray(
-        magerr_to_fluxerr_fnu_cgs(flux_fnu_cgs, fallback_sigma_mag), dtype=float
-    )
+    error_model = band.get("error_model") or band.get("uncertainty_model")
+    if error_model:
+        fallback = flux_error_from_model(flux_fnu_cgs, error_model)
+    else:
+        fallback = np.asarray(
+            magerr_to_fluxerr_fnu_cgs(flux_fnu_cgs, fallback_sigma_mag), dtype=float
+        )
     error_column = band.get("error_column")
     if not error_column or str(error_column) not in frame:
         return fallback

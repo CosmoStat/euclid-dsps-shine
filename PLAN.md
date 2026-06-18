@@ -1,5 +1,160 @@
 # Plan
 
+## 2026-06-18 Continuous Low-z Dataset As Main Diffsky Dataset
+
+- Status: implemented on branch `feature/diffsky-likelihood-sanity-plan`.
+- Promote
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`
+  to the default 04_14 Diffsky training/evaluation dataset. The old
+  `*_photometry_truth_noerr.parquet` catalog remains a source/input artifact
+  for rebuilding subsets, not the default science training catalog.
+- Recompute the continuous redshift subset with materialized `fluxerr_*`
+  columns using the shared flux-dependent error model and write companion
+  manifest, schema, truth summary/report, and distribution plots.
+- Clean active 04_14 configs so PopCosmos-like runs expose all SFH ratio bins
+  in the latent/free-parameter vector. Low-dimensional legacy experiment
+  filenames should no longer freeze `dlog10_sfr_2..6`.
+- Update Jean-Zay Slurm defaults so no-KL autoencoder and posterior predictive
+  residual diagnostics operate on the continuous low-z subset by default.
+- Document in `.rst` the main dataset path, the uncertainty model,
+  likelihood residual units, encoder flux/error feature standardization,
+  standardized-logit latent coordinates, DSPS physical parameter decoding, and
+  SSP/compressed SSP usage.
+- Recomputed the main subset:
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`
+  with `111244` objects, `redshift_true` range `0.006876--0.433668`,
+  median `0.290137`, and 14 materialized `fluxerr_*` bands from the
+  `fractional_snr` SNR 50 model. Companion manifest, schema, summary,
+  truth summary/report, and redshift/truth distribution plots were written.
+- Generated the SSP/dust audit under
+  `outputs/reports/diffsky_dust_ssp_audit/`, including
+  `dust_ssp_audit.md`, `dust_ssp_audit.json`, `dust_transmission_grid.csv`,
+  and `dust_transmission_grid.png`.
+- Validation completed after the documentation/config cleanup:
+  `python -m compileall euclid_dsps scripts`, `bash -n` on the updated Slurm
+  scripts, config-load smoke for active Diffsky configs,
+  `uv run ruff check euclid_dsps tests`, targeted pytest (`63 passed`),
+  `git diff --check`, and full `uv run pytest`
+  (`349 passed, 5 skipped, 2 warnings`).
+
+## 2026-06-18 Proposed Diffsky Model Sanity Plan
+
+- Status: implemented on branch `feature/diffsky-likelihood-sanity-plan`.
+- Add likelihood-consistent normalized residual diagnostics for post-training
+  inference: signed `(flux_in - flux_out) / sigma_eff` histograms globally and
+  per band, box/violin summaries by band, Gaussian reference curves, and
+  vertical markers at -3 and +3. Use the same `sigma_eff` definition as the
+  training likelihood, including flux error model, floor, and jitter, and
+  write both plots and machine-readable summary tables with tail fractions.
+- Generalize the existing posterior-predictive residual plots so every
+  residual labeled "sigma" is dimensionless and computed from flux units
+  consistently. Keep the sign convention explicit: input/catalog flux minus
+  predicted/model flux.
+- Reactivate all PopCosmos-like SFH bins by making `dlog10_sfr_4`,
+  `dlog10_sfr_5`, and `dlog10_sfr_6` free parameters in the relevant
+  Diffsky HLTDS configs, with matching bounds, latent names, encoder latent
+  dimension, RealNVP dimension, inference summaries, truth/proxy diagnostics,
+  and MAP start generation updated together.
+- Audit the current Prospector/FSPS dust parameters (`tau2`, `dust_index_n`,
+  `tau1_over_tau2`) against the SSP/data assets and DSPS implementation:
+  confirm physical meaning, allowed ranges, wavelength behavior, young/old
+  stellar population split, and whether the current bounds are coherent for
+  HLTDS closure tests.
+- Define and implement an explicit per-galaxy/per-band uncertainty model as a
+  function of flux for `*_noerr` catalogs. Candidate models to compare:
+  fractional-SNR Gaussian, magnitude-tolerance propagation, flux floor plus
+  fractional floor, and, only if survey exposure/depth metadata exists, a
+  Poisson/depth-inspired model. The chosen model must materialize
+  `fluxerr_*` columns or an equivalent runtime array and be used identically by
+  training, inference diagnostics, and MAP diagnostics.
+- Add normalized latent coordinates for the autoencoder path: train the
+  encoder/NF in a standardized latent coordinate system, then denormalize or
+  invert-transform before passing physical parameters to DSPS. Preserve the
+  existing bounded-parameter safety checks and document the exact transform in
+  run summaries.
+- Add a no-KL autoencoder sanity experiment: train with `kl_weight=0` and the
+  NF prior disabled or ignored, then check whether the encoder+DSPS decoder can
+  reconstruct catalog fluxes on train/validation using the normalized residual
+  diagnostics. This is the pass/fail gate before interpreting learned priors.
+- Build a continuous-redshift 04_14 subset dataset for easier first training:
+  identify the continuous-redshift slice, recompute a processed catalog for
+  that subset, report object counts, redshift distribution, and ground-truth
+  parameter distributions, then point dedicated smoke/science configs at this
+  subset.
+- Validation order after implementation: compileall and targeted tests,
+  regenerate the subset manifest, run a no-KL autoencoder smoke, run normal
+  KL/RealNVP training only if the no-KL flux reconstruction passes, and inspect
+  normalized residual tails before scaling.
+- Implemented `euclid_dsps.photometric_uncertainty` as the shared source for
+  flux-dependent synthetic errors and likelihood `sigma_eff`; Diffsky no-error
+  AB-mag presets now synthesize `fractional_snr` errors by default, while
+  prepared/subset datasets can materialize `fluxerr_*` columns.
+- Implemented likelihood-consistent posterior-predictive residual diagnostics:
+  signed `(flux_in - flux_out) / sigma_eff`, global and per-band histograms
+  with Gaussian reference and +/-3 markers, by-band box summaries, and
+  machine-readable tail tables.
+- Implemented full 12D PopCosmos-like HLTDS latent by freeing
+  `dlog10_sfr_4..6`, updating encoder latent dimension, adding standardized
+  logit latent coordinates, and preserving identity normalization for
+  supervised-prior checkpoint configs.
+- Implemented `diffsky-redshift-subset` to build continuous-redshift prepared
+  parquet subsets with optional `fluxerr_*` materialization, object counts,
+  redshift/truth summaries, manifests, and plots.
+- Implemented `diffsky-dust-ssp-audit` for SSP wavelength/age summaries and
+  Prospector/FSPS dust transmission curves over configured dust parameter
+  bounds.
+- Added configs for the continuous low-z subset and no-KL autoencoder sanity
+  check, plus `scripts/diffsky_autoencoder_nokl_h100.slurm` for train+infer
+  reconstruction validation.
+- Validation completed locally: `python -m compileall euclid_dsps scripts`,
+  `uv run ruff check euclid_dsps tests`, `bash -n` on the new Slurm script,
+  `git diff --check`, `diffsky-redshift-subset` smoke on 100 objects, targeted
+  amortized/config tests, and full `pytest` (`346 passed, 8 skipped`).
+
+## 2026-06-18 Model/Likelihood Audit
+
+- Current analysis slice: audit the current DSPS/amortized model rather than
+  changing science behavior. Answer the outstanding questions on photometric
+  error modeling, normalized flux residuals, latent/flux normalization,
+  RealNVP prior initialization/evolution, and the exact DSPS parameterization.
+- Inspect the code paths that load catalog errors, build likelihood weights,
+  normalize observed fluxes/features, initialize/train the NF prior, and map
+  latent vectors into DSPS inputs. Record gaps and follow-up implementation
+  work in this plan after the audit.
+- Audit completed: the active Diffsky HLTDS H100 configs use the `*_noerr`
+  processed catalog with no native or synthetic flux-error columns, so the fit
+  currently relies on the per-band `sigma_mag=0.10` model-tolerance fallback
+  plus likelihood floor/jitter rather than a Poisson or survey-depth noise
+  model. Older/non-noerr prepared catalogs and OpenUniverse helpers use a
+  simple Gaussian fractional-SNR recipe (`sigma = abs(flux) / snr`, usually
+  SNR 50), not a Poisson derivation.
+- Audit completed: MAP comparison outputs already contain
+  likelihood-space normalized residuals (`chi_likelihood`) including
+  floor/jitter, while amortized posterior-predictive residual summaries use
+  raw photometric errors, the opposite sign convention, and absolute-value
+  histograms. Follow-up: add signed `(flux_in - flux_out) / sigma_eff`
+  residual plots with Gaussian overlays and +/-3 lines using exactly the
+  likelihood sigma.
+- Audit completed: encoder photometry features are robustly normalized per
+  band, but DSPS parameters are physical bounded parameters mapped through an
+  unconstrained logit latent; they are not z-scored. Flux amplitude is set by
+  the surviving stellar mass parameter plus trainable global/per-band
+  calibration, not by a separate DSPS normalization parameter.
+- Audit completed: the joint RealNVP prior is initialized from random
+  RealNVP coupling networks over the unconstrained latent, with a standard
+  normal base distribution and small scale clamp; current stable configs
+  freeze the prior for early epochs and then alternate encoder/prior updates.
+  Existing training logs expose `logprior_mean`, `kl_mc_mean`,
+  `prior_grad_norm`, `update_phase`, entropy, and likelihood-temperature
+  evolution, but a dedicated prior-evolution report/plot should be added for
+  science runs.
+- Audit completed: the current Diffsky HLTDS decoder is a PopCosmos-binned
+  DSPS proxy with free `z_obs`, stellar mass, three SFH ratios, stellar
+  metallicity, and dust parameters. Later SFH ratios, gas/AGN, several dust
+  details, SSP metadata policy, and calibration priors are fixed by config.
+  The runtime uses the configured SSP HDF5 and compressed SSP basis rather
+  than plain DSPS package defaults.
+
 ## 2026-06-17 Diffsky Collapse-Fix Validation Ladder
 
 - Current implementation slice: keep redshift free and keep training

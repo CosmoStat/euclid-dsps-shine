@@ -15,6 +15,7 @@ from euclid_dsps.io import (
     truth_value_from_spec,
     write_json,
 )
+from euclid_dsps.photometric_uncertainty import effective_flux_sigma
 
 _CORNER_PARAMETER_ORDER = [
     "log10_stellar_mass",
@@ -419,8 +420,9 @@ def posterior_predictive_residual_frame(
     band_names: tuple[str, ...],
     *,
     row_index=None,
+    likelihood_config: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Return long-form normalized posterior predictive residual rows."""
+    """Return long-form likelihood-normalized posterior predictive residual rows."""
     object_id = np.asarray(object_id)
     row_index = _optional_row_index(row_index, object_id)
     obs_flux = np.asarray(obs_flux, dtype=float)
@@ -429,18 +431,33 @@ def posterior_predictive_residual_frame(
     model_flux = np.asarray(model_flux, dtype=float)
     if model_flux.ndim != 3:
         raise ValueError(f"model_flux must be [K,N,B], got {model_flux.shape}")
+    likelihood_config = likelihood_config or {}
+    sigma_eff = effective_flux_sigma(
+        obs_flux[None, :, :],
+        obs_err[None, :, :],
+        model_flux=model_flux,
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.0)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+        floor_reference=str(likelihood_config.get("error_floor_reference", "model")),
+    )
     rows = []
     n_samples, n_objects, n_bands = model_flux.shape
     for sample_id in range(n_samples):
         for object_index in range(n_objects):
             for band_index in range(n_bands):
                 err = obs_err[object_index, band_index]
+                sigma = sigma_eff[sample_id, object_index, band_index]
+                raw_residual = (
+                    obs_flux[object_index, band_index]
+                    - model_flux[sample_id, object_index, band_index]
+                )
                 residual = np.nan
-                if mask[object_index, band_index] and np.isfinite(err) and err > 0.0:
-                    residual = (
-                        model_flux[sample_id, object_index, band_index]
-                        - obs_flux[object_index, band_index]
-                    ) / err
+                raw_residual_sigma = np.nan
+                if mask[object_index, band_index]:
+                    if np.isfinite(sigma) and sigma > 0.0:
+                        residual = raw_residual / sigma
+                    if np.isfinite(err) and err > 0.0:
+                        raw_residual_sigma = raw_residual / err
                 rows.append(
                     {
                         "object_id": object_id[object_index],
@@ -452,7 +469,11 @@ def posterior_predictive_residual_frame(
                         "model_flux_fnu_cgs": float(
                             model_flux[sample_id, object_index, band_index]
                         ),
+                        "sigma_eff_fnu_cgs": float(sigma),
+                        "flux_residual_obs_minus_model_fnu_cgs": float(raw_residual),
+                        "chi_likelihood": float(residual),
                         "residual_sigma": float(residual),
+                        "raw_residual_sigma": float(raw_residual_sigma),
                         "valid": bool(mask[object_index, band_index]),
                     }
                 )
@@ -468,8 +489,9 @@ def posterior_predictive_residual_summary_frame(
     band_names: tuple[str, ...],
     *,
     row_index=None,
+    likelihood_config: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
-    """Return one posterior predictive residual summary row per object-band."""
+    """Return one likelihood-normalized residual summary row per object-band."""
     object_id = np.asarray(object_id)
     row_index = _optional_row_index(row_index, object_id)
     obs_flux = np.asarray(obs_flux, dtype=float)
@@ -478,13 +500,26 @@ def posterior_predictive_residual_summary_frame(
     model_flux = np.asarray(model_flux, dtype=float)
     if model_flux.ndim != 3:
         raise ValueError(f"model_flux must be [K,N,B], got {model_flux.shape}")
+    likelihood_config = likelihood_config or {}
     rows = []
     _n_samples, n_objects, n_bands = model_flux.shape
+    sigma_eff = effective_flux_sigma(
+        obs_flux[None, :, :],
+        obs_err[None, :, :],
+        model_flux=model_flux,
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.0)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+        floor_reference=str(likelihood_config.get("error_floor_reference", "model")),
+    )
+    flux_residual = obs_flux[None, :, :] - model_flux
     residual = np.full_like(model_flux, np.nan, dtype=float)
+    valid_sigma = np.isfinite(sigma_eff) & (sigma_eff > 0.0) & mask[None, :, :]
+    residual[valid_sigma] = flux_residual[valid_sigma] / sigma_eff[valid_sigma]
+    raw_residual = np.full_like(model_flux, np.nan, dtype=float)
     valid_err = np.isfinite(obs_err) & (obs_err > 0.0) & mask
-    residual[:, valid_err] = (
-        model_flux[:, valid_err] - obs_flux[None, :, :][:, valid_err]
-    ) / obs_err[None, :, :][:, valid_err]
+    raw_residual[:, valid_err] = (
+        flux_residual[:, valid_err] / obs_err[None, :, :][:, valid_err]
+    )
     for object_index in range(n_objects):
         for band_index in range(n_bands):
             rows.append(
@@ -503,6 +538,37 @@ def posterior_predictive_residual_summary_frame(
                     "model_flux_q84": float(
                         _nanquantile_or_nan(model_flux[:, object_index, band_index], 0.84)
                     ),
+                    "sigma_eff_q16": float(
+                        _nanquantile_or_nan(sigma_eff[:, object_index, band_index], 0.16)
+                    ),
+                    "sigma_eff_median": float(
+                        np.nanmedian(sigma_eff[:, object_index, band_index])
+                    ),
+                    "sigma_eff_q84": float(
+                        _nanquantile_or_nan(sigma_eff[:, object_index, band_index], 0.84)
+                    ),
+                    "flux_residual_obs_minus_model_q16": float(
+                        _nanquantile_or_nan(
+                            flux_residual[:, object_index, band_index], 0.16
+                        )
+                    ),
+                    "flux_residual_obs_minus_model_median": float(
+                        np.nanmedian(flux_residual[:, object_index, band_index])
+                    ),
+                    "flux_residual_obs_minus_model_q84": float(
+                        _nanquantile_or_nan(
+                            flux_residual[:, object_index, band_index], 0.84
+                        )
+                    ),
+                    "chi_likelihood_q16": float(
+                        _nanquantile_or_nan(residual[:, object_index, band_index], 0.16)
+                    ),
+                    "chi_likelihood_median": float(
+                        np.nanmedian(residual[:, object_index, band_index])
+                    ),
+                    "chi_likelihood_q84": float(
+                        _nanquantile_or_nan(residual[:, object_index, band_index], 0.84)
+                    ),
                     "residual_sigma_q16": float(
                         _nanquantile_or_nan(residual[:, object_index, band_index], 0.16)
                     ),
@@ -511,6 +577,9 @@ def posterior_predictive_residual_summary_frame(
                     ),
                     "residual_sigma_q84": float(
                         _nanquantile_or_nan(residual[:, object_index, band_index], 0.84)
+                    ),
+                    "raw_residual_sigma_median": float(
+                        np.nanmedian(raw_residual[:, object_index, band_index])
                     ),
                     "valid": bool(mask[object_index, band_index]),
                 }
@@ -595,6 +664,7 @@ def summarize_inference_outputs(
     )
     prior_summary = _write_learned_prior_summary(out)
     pit_summary = _write_redshift_pit(redshift, out)
+    residual_tail_summary = _write_residual_tail_summary(residual_summary, out)
     plots = _write_inference_plots(
         frame,
         residual_summary,
@@ -621,6 +691,7 @@ def summarize_inference_outputs(
         "catalog_proxy_comparison_rows": int(len(catalog_proxy)),
         "learned_prior_rows": int(prior_summary.get("n_samples", 0)),
         "redshift_pit": pit_summary,
+        "normalized_residual_tail_rows": int(len(residual_tail_summary)),
         "plots": plots,
     }
     if not residual_summary.empty:
@@ -638,6 +709,57 @@ def summarize_inference_outputs(
     write_json(Path(out_dir) / "posterior_diagnostics_summary.json", payload)
 
 
+def _residual_value_column(frame: pd.DataFrame) -> str | None:
+    for column in ("chi_likelihood_median", "residual_sigma_median"):
+        if column in frame:
+            return column
+    return None
+
+
+def _write_residual_tail_summary(residual_summary: pd.DataFrame, out: Path) -> pd.DataFrame:
+    column = _residual_value_column(residual_summary)
+    if residual_summary.empty or column is None:
+        return pd.DataFrame()
+    rows = [_residual_tail_row(residual_summary[column], band="__all__")]
+    for band, group in residual_summary.groupby("band", sort=True):
+        rows.append(_residual_tail_row(group[column], band=str(band)))
+    table = pd.DataFrame(rows)
+    table.to_csv(out / "posterior_predictive_normalized_residual_tails.csv", index=False)
+    table.to_parquet(
+        out / "posterior_predictive_normalized_residual_tails.parquet",
+        index=False,
+    )
+    return table
+
+
+def _residual_tail_row(values: pd.Series, *, band: str) -> dict[str, float | int | str]:
+    arr = pd.to_numeric(values, errors="coerce").to_numpy(dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return {
+            "band": band,
+            "n": 0,
+            "mean": np.nan,
+            "std": np.nan,
+            "median": np.nan,
+            "p16": np.nan,
+            "p84": np.nan,
+            "frac_abs_gt_3": np.nan,
+            "frac_abs_gt_5": np.nan,
+        }
+    return {
+        "band": band,
+        "n": int(arr.size),
+        "mean": float(np.mean(arr)),
+        "std": float(np.std(arr)),
+        "median": float(np.median(arr)),
+        "p16": float(np.quantile(arr, 0.16)),
+        "p84": float(np.quantile(arr, 0.84)),
+        "frac_abs_gt_3": float(np.mean(np.abs(arr) > 3.0)),
+        "frac_abs_gt_5": float(np.mean(np.abs(arr) > 5.0)),
+    }
+
+
 def _write_residual_summary(out: Path) -> pd.DataFrame:
     summary_path = out / "posterior_predictive_residual_summary.parquet"
     if summary_path.exists():
@@ -648,24 +770,70 @@ def _write_residual_summary(out: Path) -> pd.DataFrame:
     residuals = pd.read_parquet(residual_path)
     if residuals.empty:
         return pd.DataFrame()
+    residual_column = (
+        "chi_likelihood" if "chi_likelihood" in residuals else "residual_sigma"
+    )
     grouped = residuals.groupby(["object_id", "band"], sort=False)
-    summary = grouped.agg(
-        obs_flux_fnu_cgs=("obs_flux_fnu_cgs", "first"),
-        obs_err_fnu_cgs=("obs_err_fnu_cgs", "first"),
-        model_flux_q16=("model_flux_fnu_cgs", lambda x: _nanquantile_or_nan(x, 0.16)),
-        model_flux_median=("model_flux_fnu_cgs", "median"),
-        model_flux_q84=("model_flux_fnu_cgs", lambda x: _nanquantile_or_nan(x, 0.84)),
-        residual_sigma_q16=(
-            "residual_sigma",
+    agg_kwargs = {
+        "obs_flux_fnu_cgs": ("obs_flux_fnu_cgs", "first"),
+        "obs_err_fnu_cgs": ("obs_err_fnu_cgs", "first"),
+        "model_flux_q16": ("model_flux_fnu_cgs", lambda x: _nanquantile_or_nan(x, 0.16)),
+        "model_flux_median": ("model_flux_fnu_cgs", "median"),
+        "model_flux_q84": ("model_flux_fnu_cgs", lambda x: _nanquantile_or_nan(x, 0.84)),
+        "chi_likelihood_q16": (
+            residual_column,
             lambda x: _nanquantile_or_nan(x, 0.16),
         ),
-        residual_sigma_median=("residual_sigma", "median"),
-        residual_sigma_q84=(
-            "residual_sigma",
+        "chi_likelihood_median": (residual_column, "median"),
+        "chi_likelihood_q84": (
+            residual_column,
             lambda x: _nanquantile_or_nan(x, 0.84),
         ),
-        valid=("valid", "first"),
-    ).reset_index()
+        "residual_sigma_q16": (
+            residual_column,
+            lambda x: _nanquantile_or_nan(x, 0.16),
+        ),
+        "residual_sigma_median": (residual_column, "median"),
+        "residual_sigma_q84": (
+            residual_column,
+            lambda x: _nanquantile_or_nan(x, 0.84),
+        ),
+        "valid": ("valid", "first"),
+    }
+    if "sigma_eff_fnu_cgs" in residuals:
+        agg_kwargs.update(
+            {
+                "sigma_eff_q16": (
+                    "sigma_eff_fnu_cgs",
+                    lambda x: _nanquantile_or_nan(x, 0.16),
+                ),
+                "sigma_eff_median": ("sigma_eff_fnu_cgs", "median"),
+                "sigma_eff_q84": (
+                    "sigma_eff_fnu_cgs",
+                    lambda x: _nanquantile_or_nan(x, 0.84),
+                ),
+            }
+        )
+    if "flux_residual_obs_minus_model_fnu_cgs" in residuals:
+        agg_kwargs.update(
+            {
+                "flux_residual_obs_minus_model_q16": (
+                    "flux_residual_obs_minus_model_fnu_cgs",
+                    lambda x: _nanquantile_or_nan(x, 0.16),
+                ),
+                "flux_residual_obs_minus_model_median": (
+                    "flux_residual_obs_minus_model_fnu_cgs",
+                    "median",
+                ),
+                "flux_residual_obs_minus_model_q84": (
+                    "flux_residual_obs_minus_model_fnu_cgs",
+                    lambda x: _nanquantile_or_nan(x, 0.84),
+                ),
+            }
+        )
+    if "raw_residual_sigma" in residuals:
+        agg_kwargs["raw_residual_sigma_median"] = ("raw_residual_sigma", "median")
+    summary = grouped.agg(**agg_kwargs).reset_index()
     summary["abs_residual_sigma_median"] = summary["residual_sigma_median"].abs()
     summary.to_parquet(out / "posterior_predictive_residual_summary.parquet", index=False)
     return summary
@@ -956,19 +1124,24 @@ def _write_inference_plots(
 
     written: list[str] = []
     if not residual_summary.empty:
+        residual_column = _residual_value_column(residual_summary)
+        if residual_column is None:
+            residual_column = "residual_sigma_median"
         bands = list(dict.fromkeys(residual_summary["band"].astype(str)))
         data = [
             residual_summary.loc[
                 residual_summary["band"].astype(str) == band,
-                "residual_sigma_median",
+                residual_column,
             ].to_numpy()
             for band in bands
         ]
         fig, ax = plt.subplots(figsize=(10, 4.5))
         ax.axhline(0.0, color="black", lw=1.0, alpha=0.5)
+        ax.axhline(-3.0, color="tab:red", lw=1.0, alpha=0.6, ls="--")
+        ax.axhline(3.0, color="tab:red", lw=1.0, alpha=0.6, ls="--")
         ax.boxplot(data, tick_labels=bands, showfliers=False)
-        ax.set_ylabel("median posterior predictive residual (sigma)")
-        ax.set_title("Posterior predictive residuals by band")
+        ax.set_ylabel("median (flux_in - flux_out) / sigma_eff")
+        ax.set_title("Likelihood-normalized posterior predictive residuals by band")
         ax.tick_params(axis="x", rotation=45)
         fig.tight_layout()
         path = out / "posterior_predictive_residuals_by_band.png"
@@ -977,16 +1150,68 @@ def _write_inference_plots(
         written.append(path.name)
 
         fig, ax = plt.subplots(figsize=(7, 4))
-        values = residual_summary["abs_residual_sigma_median"].to_numpy()
-        ax.hist(values[np.isfinite(values)], bins=40)
-        ax.set_xlabel("|median residual| (sigma)")
-        ax.set_ylabel("object-band count")
-        ax.set_title("Normalized posterior predictive residuals")
+        values = pd.to_numeric(residual_summary[residual_column], errors="coerce").to_numpy(
+            dtype=float
+        )
+        values = values[np.isfinite(values)]
+        if values.size:
+            ax.hist(values, bins=60, density=True, alpha=0.65, label="posterior median")
+            x = np.linspace(
+                min(-6.0, float(np.nanpercentile(values, 1.0))),
+                max(6.0, float(np.nanpercentile(values, 99.0))),
+                400,
+            )
+            y = np.exp(-0.5 * x**2) / np.sqrt(2.0 * np.pi)
+            ax.plot(x, y, color="black", lw=1.2, label="N(0,1)")
+        ax.axvline(-3.0, color="tab:red", lw=1.0, ls="--")
+        ax.axvline(3.0, color="tab:red", lw=1.0, ls="--")
+        ax.axvline(0.0, color="black", lw=1.0, alpha=0.5)
+        ax.set_xlabel("(flux_in - flux_out) / sigma_eff")
+        ax.set_ylabel("density")
+        ax.set_title("Likelihood-normalized posterior predictive residuals")
+        ax.legend(loc="best")
         fig.tight_layout()
-        path = out / "posterior_predictive_abs_residual_hist.png"
+        path = out / "posterior_predictive_normalized_residual_hist.png"
         fig.savefig(path, dpi=150)
         plt.close(fig)
         written.append(path.name)
+
+        n_bands = len(bands)
+        if n_bands:
+            n_cols = min(4, n_bands)
+            n_rows = int(np.ceil(n_bands / n_cols))
+            fig, axes = plt.subplots(
+                n_rows,
+                n_cols,
+                figsize=(3.4 * n_cols, 2.6 * n_rows),
+                squeeze=False,
+            )
+            for ax, band, values_for_band in zip(
+                axes.ravel(),
+                bands,
+                data,
+                strict=False,
+            ):
+                band_values = np.asarray(values_for_band, dtype=float)
+                band_values = band_values[np.isfinite(band_values)]
+                if band_values.size:
+                    ax.hist(band_values, bins=40, density=True, alpha=0.65)
+                    x = np.linspace(-6.0, 6.0, 240)
+                    y = np.exp(-0.5 * x**2) / np.sqrt(2.0 * np.pi)
+                    ax.plot(x, y, color="black", lw=1.0)
+                ax.axvline(-3.0, color="tab:red", lw=0.9, ls="--")
+                ax.axvline(3.0, color="tab:red", lw=0.9, ls="--")
+                ax.axvline(0.0, color="black", lw=0.8, alpha=0.5)
+                ax.set_xlim(-8.0, 8.0)
+                ax.set_title(band)
+            for ax in axes.ravel()[n_bands:]:
+                ax.axis("off")
+            fig.suptitle("Likelihood-normalized residuals by band", y=0.995)
+            fig.tight_layout()
+            path = out / "posterior_predictive_normalized_residual_hist_by_band.png"
+            fig.savefig(path, dpi=150)
+            plt.close(fig)
+            written.append(path.name)
 
     if not top_chi2.empty:
         fig, ax = plt.subplots(figsize=(8, 4.5))

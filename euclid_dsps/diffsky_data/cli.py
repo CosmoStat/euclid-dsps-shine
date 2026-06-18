@@ -13,6 +13,7 @@ from .download import download_candidate_subset
 from .inventory import inventory_local_hdf5, inventory_remote_listing
 from .prepare import build_diffsky_photometric_dataset
 from .remote_listing import crawl_remote_tree, write_remote_listing
+from .subset import build_redshift_subset
 from .urls import HLTDS_COSMOS_20260414
 from .validation import validate_for_prior_learning, write_validation_report
 
@@ -47,6 +48,30 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     prepare.add_argument("--max-objects", type=int)
     prepare.add_argument("--snr", type=float, default=50.0)
     prepare.add_argument(
+        "--error-model",
+        choices=("fractional_snr", "magnitude_tolerance", "fractional_floor"),
+        default="fractional_snr",
+        help="Synthetic per-band flux-error model to write when native errors are absent.",
+    )
+    prepare.add_argument(
+        "--sigma-mag",
+        type=float,
+        default=0.10,
+        help="AB magnitude tolerance for --error-model magnitude_tolerance.",
+    )
+    prepare.add_argument(
+        "--fractional-error",
+        type=float,
+        default=0.02,
+        help="Fractional term for --error-model fractional_floor.",
+    )
+    prepare.add_argument(
+        "--floor-fnu-cgs",
+        type=float,
+        default=0.0,
+        help="Absolute fnu_cgs floor for --error-model fractional_floor.",
+    )
+    prepare.add_argument(
         "--no-synthetic-errors",
         action="store_true",
         help="Do not write fluxerr_* columns when native photometric errors are absent.",
@@ -56,6 +81,29 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     diagnostics.add_argument("--dataset", required=True)
     diagnostics.add_argument("--manifest")
     diagnostics.add_argument("--out", default="outputs/reports/diffsky_dataset")
+
+    subset = sub.add_parser(
+        "diffsky-redshift-subset",
+        help="Build a prepared Diffsky parquet restricted to a continuous redshift slice.",
+    )
+    subset.add_argument("--dataset", required=True)
+    subset.add_argument("--out", required=True)
+    subset.add_argument("--redshift-column", default="redshift_true")
+    subset.add_argument("--redshift-min", type=float, default=0.0)
+    subset.add_argument("--redshift-max", type=float, default=0.5)
+    subset.add_argument("--max-objects", type=int)
+    subset.add_argument("--seed", type=int, default=42)
+    subset.add_argument(
+        "--error-model",
+        choices=("preserve", "fractional_snr", "magnitude_tolerance", "fractional_floor"),
+        default="fractional_snr",
+        help="Flux-error model to materialize for the subset, or preserve existing columns.",
+    )
+    subset.add_argument("--snr", type=float, default=50.0)
+    subset.add_argument("--sigma-mag", type=float, default=0.10)
+    subset.add_argument("--fractional-error", type=float, default=0.02)
+    subset.add_argument("--floor-fnu-cgs", type=float, default=0.0)
+    subset.add_argument("--no-plots", action="store_true")
 
     validate = sub.add_parser("diffsky-validate-dataset", help="Validate prepared Diffsky dataset for prior learning.")
     validate.add_argument("--dataset", required=True)
@@ -101,12 +149,29 @@ def run_diffsky_command(args: argparse.Namespace) -> None:
             max_objects=args.max_objects,
             snr=float(args.snr),
             add_synthetic_errors=not bool(args.no_synthetic_errors),
+            error_model=_prepare_error_model_from_args(args),
         )
         print(f"[diffsky] dataset -> {report.output_path}")
         print(f"[diffsky] readiness -> {report.readiness}")
     elif args.command == "diffsky-dataset-diagnostics":
         outputs = write_dataset_diagnostics(args.dataset, args.out)
         print(f"[diffsky] diagnostics -> {args.out} ({len(outputs)} files)")
+    elif args.command == "diffsky-redshift-subset":
+        report = build_redshift_subset(
+            dataset_path=Path(args.dataset),
+            output_path=Path(args.out),
+            redshift_column=str(args.redshift_column),
+            redshift_min=float(args.redshift_min),
+            redshift_max=float(args.redshift_max),
+            max_objects=args.max_objects,
+            seed=int(args.seed),
+            error_model=_subset_error_model_from_args(args),
+            make_plots=not bool(args.no_plots),
+        )
+        print(
+            "[diffsky] redshift subset -> "
+            f"{report['output_path']} ({report['n_objects']} objects)"
+        )
     elif args.command == "diffsky-validate-dataset":
         report = validate_for_prior_learning(args.dataset, args.manifest)
         path = write_validation_report(report, args.out)
@@ -121,6 +186,40 @@ def run_diffsky_command(args: argparse.Namespace) -> None:
         print(f"[diffsky] fit report -> {path}")
     else:
         raise ValueError(f"Unsupported Diffsky command: {args.command}")
+
+
+def _prepare_error_model_from_args(args: argparse.Namespace) -> dict | None:
+    if bool(getattr(args, "no_synthetic_errors", False)):
+        return None
+    kind = str(getattr(args, "error_model", "fractional_snr"))
+    if kind == "fractional_snr":
+        return {"type": kind, "snr": float(args.snr)}
+    if kind == "magnitude_tolerance":
+        return {"type": kind, "sigma_mag": float(args.sigma_mag)}
+    if kind == "fractional_floor":
+        return {
+            "type": kind,
+            "fractional_error": float(args.fractional_error),
+            "floor_fnu_cgs": float(args.floor_fnu_cgs),
+        }
+    raise ValueError(f"Unsupported error model: {kind}")
+
+
+def _subset_error_model_from_args(args: argparse.Namespace) -> dict | None:
+    kind = str(getattr(args, "error_model", "preserve"))
+    if kind == "preserve":
+        return None
+    if kind == "fractional_snr":
+        return {"type": kind, "snr": float(args.snr)}
+    if kind == "magnitude_tolerance":
+        return {"type": kind, "sigma_mag": float(args.sigma_mag)}
+    if kind == "fractional_floor":
+        return {
+            "type": kind,
+            "fractional_error": float(args.fractional_error),
+            "floor_fnu_cgs": float(args.floor_fnu_cgs),
+        }
+    raise ValueError(f"Unsupported subset error model: {kind}")
 
 
 def write_diffsky_fit_report(

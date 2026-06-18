@@ -33,6 +33,8 @@ def test_posterior_predictive_residual_diagnostics(tmp_path) -> None:
         model,
         bands,
     )
+    assert residuals.loc[0, "chi_likelihood"] == -1.0
+    assert residuals.loc[0, "residual_sigma"] == -1.0
     features = feature_diagnostics_frame(
         object_id,
         np.asarray([[1.0, -2.0, 0.1], [3.0, 4.0, -0.2]]),

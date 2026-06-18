@@ -653,34 +653,48 @@ def test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit() -> None:
     config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
     closure = load_config("configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml")
 
+    expected_free = (
+        "z_obs",
+        "log10_stellar_mass",
+        "dlog10_sfr_1",
+        "dlog10_sfr_2",
+        "dlog10_sfr_3",
+        "dlog10_sfr_4",
+        "dlog10_sfr_5",
+        "dlog10_sfr_6",
+        "log10_stellar_metallicity",
+        "tau2",
+        "dust_index_n",
+        "tau1_over_tau2",
+    )
+
     assert config["model"]["sfh_model"] == "popcosmos_bins"
     assert config["model"]["nebular_model"] == "fixed_ssp"
     assert config["model"]["agn_model"] == "none"
     assert config["model"]["asset_metadata_policy"] == "permissive"
     assert config["runtime"]["require_gpu"] is True
-    assert config["fit"]["likelihood_space"] == "mag"
+    assert config["fit"]["likelihood_space"] == "flux"
     assert config["fit"]["photometric_likelihood"] == "student_t"
     assert config["fit"]["student_t_dof"] == 2.0
+    assert config["fit"]["flux_error_floor_frac"] == 0.02
     assert len(config["bands"]) == 14
-    assert {band["units"] for band in config["bands"]} == {"abmag"}
-    assert all("error_column" not in band for band in config["bands"])
-    assert {band["sigma_mag"] for band in config["bands"]} == {0.10}
-    assert tuple(config["fit"]["free_parameters"]) == (
-        "z_obs",
-        "log10_stellar_mass",
-        "dlog10_sfr_1",
-        "tau2",
-        "dust_index_n",
-    )
+    assert {band["units"] for band in config["bands"]} == {"fnu_cgs"}
+    assert all("error_column" in band for band in config["bands"])
+    assert tuple(config["fit"]["free_parameters"]) == expected_free
     assert not any(
         name.startswith(("diffstar_", "diffmah_"))
         for name in config["fit"]["free_parameters"]
+    )
+    assert all(
+        f"dlog10_sfr_{index}" in config["fit"]["free_parameters"]
+        for index in range(1, 7)
     )
     assert set(config["truth"]["parameter_columns"]) == {
         "log10_stellar_mass",
         "log10_sfr_at_obs",
     }
     assert "z_obs" not in closure["fit"]["free_parameters"]
+    assert tuple(closure["fit"]["free_parameters"]) == expected_free[1:]
     assert closure["runtime"]["require_gpu"] is True
     assert closure["redshift"]["initial"] == "catalog_column"
     assert closure["redshift"]["column"] == "redshift_true"

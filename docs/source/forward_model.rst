@@ -70,8 +70,9 @@ The Diffsky simple configs intentionally remove poorly constrained components:
 * no AGN;
 * no gas-metallicity or gas-ionization fit;
 * no Diffstar/Diffmah latent recovery;
-* only one free recent-SFR offset, with older SFH offsets fixed to zero;
-* magnitude-space likelihood using a documented model tolerance.
+* all six PopCosmos-like SFH ratio bins free;
+* flux-space Student-t likelihood using the explicit synthetic ``fluxerr_*``
+  model plus a fractional likelihood floor.
 
 The free-redshift config fits:
 
@@ -79,18 +80,22 @@ The free-redshift config fits:
 
    z_obs
    log10_stellar_mass
-   dlog10_sfr_1
+   dlog10_sfr_1 ... dlog10_sfr_6
+   log10_stellar_metallicity
    tau2
    dust_index_n
+   tau1_over_tau2
 
 The fixed-redshift closure config fits:
 
 .. code-block:: text
 
    log10_stellar_mass
-   dlog10_sfr_1
+   dlog10_sfr_1 ... dlog10_sfr_6
+   log10_stellar_metallicity
    tau2
    dust_index_n
+   tau1_over_tau2
 
 These parameters are compared only to direct/basic HLTDS truth columns:
 ``redshift_true``, ``logsm_true``, and ``logsfr_true``. Halo mass, central flag,
@@ -113,10 +118,46 @@ Diffsky HLTDS simple fits use the SSP distributed with the HLTDS sample:
 
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
-That file does not carry the same PopCosmos metadata as the local FSPS assets,
-so Diffsky configs set ``model.asset_metadata_policy: permissive``. This is an
-explicit compatibility choice for a simple recovery test; it is not evidence
-that the DSPS model exactly reproduces the HLTDS generator.
+The amortized HLTDS configs decode the same SSP through the compressed basis:
+
+.. code-block:: text
+
+   Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_basis_k64_coeff16.hdf5
+
+The compressed basis is a runtime representation of the dataset SSP, not a
+different stellar-population model. It is upcast to ``float32`` on GPU in the
+active configs. The HLTDS SSP file does not carry the same PopCosmos metadata
+as the local FSPS assets, so Diffsky configs set
+``model.asset_metadata_policy: permissive``. This is an explicit compatibility
+choice for a recovery test; it is not evidence that the DSPS model exactly
+reproduces the HLTDS generator.
+
+Dust Parameterization
+---------------------
+
+The active Diffsky PopCosmos proxy uses ``model.dust_model:
+prospector_fsps``. The fitted dust parameters are:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Parameter
+     - Meaning in the DSPS wrapper
+   * - ``tau2``
+     - Diffuse dust optical-depth amplitude applied to the stellar SED.
+   * - ``dust_index_n``
+     - Power-law slope/shape of the diffuse attenuation curve.
+   * - ``tau1_over_tau2``
+     - Birth-cloud optical-depth ratio; the code uses
+       ``tau1 = tau1_over_tau2 * tau2`` for young populations.
+
+The configs also fix ``dust_tesc_logyr: 7.0`` and ``dust1_index: -1.0``. These
+dust parameters are coherent with the HLTDS SSP in the sense that they are
+applied by DSPS to the SSP wavelength/age grid loaded from the configured SSP
+asset. They are not metadata stored inside the SSP file, and they are not
+validated by the SSP itself. Use ``diffsky-dust-ssp-audit`` to write the
+current SSP wavelength/age summary and attenuation curves over the configured
+``tau2``, ``dust_index_n``, and ``tau1_over_tau2`` bounds.
 
 Likelihoods
 -----------
@@ -124,10 +165,13 @@ Likelihoods
 FS2 uses flux-space Student-t likelihood because catalog flux errors are part
 of the FS2 contract.
 
-Diffsky HLTDS simple fits use AB magnitudes with ``sigma_mag: 0.10`` because
-native photometric error columns were not confirmed in the downloaded HLTDS
-sample. The prepared Diffsky parquet is built with ``--no-synthetic-errors`` so
-the pipeline does not invent survey errors.
+Diffsky HLTDS simple fits now also use flux-space Student-t likelihood. Native
+photometric error columns were not confirmed in the downloaded HLTDS sample,
+so the continuous low-z subset materializes synthetic
+``fluxerr_<band> = max(abs(flux_<band>) / 50, 1e-40)``. The active likelihood
+then adds ``fit.flux_error_floor_frac: 0.02`` in quadrature using the larger of
+observed and model flux. This is a stated model uncertainty, not a Poisson or
+survey-depth noise derivation.
 
 What To Check First
 -------------------

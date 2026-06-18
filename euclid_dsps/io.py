@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .photometric_uncertainty import flux_error_from_model
 from .photometry import (
     abmag_to_fnu_cgs,
     fluxerr_fnu_cgs_to_magerr,
@@ -295,8 +296,21 @@ def build_observation(
                 f"Unsupported photometry units for {band['name']}: {units}"
             )
         error_column = band.get("error_column")
+        error_model = band.get("error_model") or band.get("uncertainty_model")
         flux_error = None
         sigma_mag = float(band.get("sigma_mag", 0.05))
+        if error_model:
+            modeled_error = float(flux_error_from_model(flux_fnu_cgs, error_model))
+            if np.isfinite(modeled_error) and modeled_error > 0.0:
+                flux_error = modeled_error
+                converted = flux_error_to_sigma_mag(
+                    flux_fnu_cgs,
+                    flux_error,
+                    floor=band.get("sigma_mag_floor"),
+                    ceiling=band.get("sigma_mag_ceiling"),
+                )
+                if np.isfinite(converted):
+                    sigma_mag = converted
         if error_column and error_column in row and pd.notna(row[error_column]):
             raw_error = float(row[error_column])
             error_units = band.get("error_units", units)

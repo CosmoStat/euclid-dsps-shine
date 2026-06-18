@@ -89,6 +89,9 @@ class JitLatentSpec(NamedTuple):
     names: tuple[str, ...]
     lower: jnp.ndarray
     upper: jnp.ndarray
+    raw_center: jnp.ndarray | None = None
+    raw_scale: jnp.ndarray | None = None
+    normalization: str = "identity"
 
 
 class _StaticArg:
@@ -116,6 +119,15 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     encoder_cfg = cfg["encoder"]
     input_dim = int(encoder_cfg.get("input_dim", 20))
     latent_dim = int(encoder_cfg.get("latent_dim", 16))
+    try:
+        expected_latent_dim = len(latent_spec_from_config(config).names)
+    except (KeyError, ValueError):
+        expected_latent_dim = latent_dim
+    if latent_dim != expected_latent_dim:
+        raise ValueError(
+            "amortized.encoder.latent_dim must match configured free parameters: "
+            f"latent_dim={latent_dim}, expected={expected_latent_dim}"
+        )
     encoder = GaussianEncoder(
         k_encoder,
         input_dim=input_dim,
@@ -382,6 +394,9 @@ def train_amortized_fs2(
         names=latent_spec.names,
         lower=latent_spec.lower,
         upper=latent_spec.upper,
+        raw_center=latent_spec.raw_center,
+        raw_scale=latent_spec.raw_scale,
+        normalization=latent_spec.normalization,
     )
     _log(
         verbose,
@@ -1122,6 +1137,9 @@ def evaluate_validation_epoch(
             names=latent_spec.names,
             lower=latent_spec.lower,
             upper=latent_spec.upper,
+            raw_center=latent_spec.raw_center,
+            raw_scale=latent_spec.raw_scale,
+            normalization=latent_spec.normalization,
         )
     )
     with _progress_bar(

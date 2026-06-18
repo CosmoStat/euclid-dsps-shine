@@ -23,19 +23,20 @@ The public dataset choices are deliberately limited:
 Diffsky HLTDS Readiness
 -----------------------
 
-Use the prepared no-synthetic-error parquet:
+Use the current continuous low-z parquet with materialized synthetic flux
+errors:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
 
 Run:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-validate-dataset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_manifest.yaml \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml \
      --out outputs/reports/diffsky_hltds_04_14/prior_learning_validation_report.md
 
 The dataset is useful for the current simple recovery path if the report says

@@ -12,11 +12,11 @@ calibration:
         enabled: false
 
 prior_learning:
-    dataset: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+    dataset: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
     schema: diffsky_truth_basic
     missing_policy: reduce
     bounds:
-        z_obs: [0.0, 1.5]
+        z_obs: [0.001, 0.5]
         log10_stellar_mass: [6.0, 13.5]
         log10_ssfr_at_obs: [-14.5, -7.0]
         log10_sfr_at_obs: [-5.0, 4.0]

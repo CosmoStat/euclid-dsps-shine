@@ -39,6 +39,7 @@ from ..model import (
 )
 from ..nebular import write_nebular_diagnostic_outputs
 from ..performance import PerformanceRecorder, write_performance_outputs
+from ..photometric_uncertainty import flux_error_from_model
 from ..photometry import magerr_to_fluxerr_fnu_cgs
 from ..reporting import (
     write_batch_outputs,
@@ -1991,6 +1992,14 @@ def _flux_error_arrays(
         fallback = np.asarray(
             magerr_to_fluxerr_fnu_cgs(flux, sigma_mag[:, band_index]), dtype=float
         )
+        error_model = band.get("error_model") or band.get("uncertainty_model")
+        if error_model:
+            modeled = flux_error_from_model(flux, error_model)
+            fallback = np.where(
+                np.isfinite(modeled) & (modeled > 0.0),
+                modeled,
+                fallback,
+            )
         error_column = band.get("error_column")
         if not error_column or error_column not in batch:
             columns.append(fallback)

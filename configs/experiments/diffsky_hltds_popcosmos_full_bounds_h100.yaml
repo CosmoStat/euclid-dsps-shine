@@ -2,22 +2,22 @@ extends: diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml
 
 experiment:
     name: diffsky_hltds_popcosmos_full_bounds_h100
-    description: Full 9D PopCosmos amortized run with redshift bounds widened to avoid a hard low-z basin.
+    description: Full 12D PopCosmos amortized run on the continuous low-z 04_14 subset with all SFH ratios free.
 
 redshift:
     min: 0.001
-    max: 1.2
+    max: 0.5
 
 fit:
     free_parameters:
         z_obs:
-            initial: 0.5
-            bounds: [0.001, 1.2]
+            initial: 0.25
+            bounds: [0.001, 0.5]
 
 amortized:
     data:
-        redshift_bins: [0.0, 0.1, 0.2, 0.3, 0.45, 0.6, 0.8, 1.0, 1.2]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
     inference:
-        redshift_bins: [0.0, 0.1, 0.2, 0.3, 0.45, 0.6, 0.8, 1.0, 1.2]
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5]
     map_adam:
         start_mode: mixed

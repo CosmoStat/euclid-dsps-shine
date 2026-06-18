@@ -4,9 +4,9 @@ Diffsky HLTDS Dataset
 Dataset Choice
 --------------
 
-Two local HLTDS Diffsky samples are useful for the current validation program.
-They should not be treated as interchangeable because they cover very
-different redshift ranges.
+Three local HLTDS Diffsky artifacts are useful for the current validation
+program. They should not be treated as interchangeable because they cover
+different redshift ranges and have different error semantics.
 
 .. list-table::
    :header-rows: 1
@@ -16,11 +16,16 @@ different redshift ranges.
      - Objects / shards
      - Redshift range
      - Recommended role
-   * - ``hltds_cosmos_260215_04_14_2026``
+   * - ``hltds_cosmos_260215_04_14_2026_continuous_lowz``
+     - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
+     - ``111244`` objects from the 04/14 prepared source
+     - ``z = 0.0069 -- 0.4337``; median ``z = 0.290``
+     - Main training, no-KL autoencoder, MAP, and inference dataset.
+   * - ``hltds_cosmos_260215_04_14_2026_source_noerr``
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet``
      - about 369k objects across 16 source files
      - ``z = 0.007 -- 1.006``; median ``z = 0.693``
-     - Current public development dataset for the PR1--PR7 pipeline.
+     - Source artifact used to rebuild subsets; not the default training catalog.
    * - ``hltds_cosmos_260215_03_31_2026``
      - ``Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet``
      - about 494k objects across 6 source files
@@ -29,13 +34,14 @@ different redshift ranges.
        prior tests, after it is regenerated with the current no-error
        preparation/integrity contract.
 
-The ``04_14`` sample is the current public config target because it has the
-newer no-error preparation path, current compressed-SSP assets, and the
-shortest route through the full validation pipeline. The ``03_31`` sample has
-a much more useful high-redshift distribution for redshift calibration and
-population-prior stress tests. If ``03_31`` passes same-parameter forward
-closure after regeneration, it should become the preferred science dataset for
-high-z validation.
+The continuous low-z ``04_14`` subset is the current public config target. Its
+redshift distribution is continuous and easier to learn than the multi-clump
+full 04/14 source distribution, and the subset materializes an explicit
+``fluxerr_*`` error model used by the likelihood and posterior-predictive
+residual diagnostics. The full ``04_14`` no-error parquet is retained as the
+source artifact for rebuilding subsets. The ``03_31`` sample is still a useful
+high-redshift candidate after it is regenerated with the same current
+preparation and error-model contract.
 
 .. image:: _static/diffsky_hltds_redshift_distributions.png
    :alt: Redshift distributions for the two Diffsky HLTDS dataset versions.
@@ -122,18 +128,16 @@ same generated-truth families used by the extended prior and true-parameter
 closure diagnostics: ``diffstar_*``, ``diffmah_*``, ``dust_*``, and
 ``burst_*``.
 
-Important caveat: the locally existing ``03_31`` parquet was prepared with
-synthetic fractional-SNR ``fluxerr_*`` columns. Those errors are not native
-observational errors. Before promoting ``03_31`` to the main science path,
-regenerate it with ``--no-synthetic-errors`` using the current
-``diffsky-prepare-dataset`` command so its manifest, object-id policy, and
-error semantics match the PR1 dataset integrity contract.
+Important caveat: the continuous low-z ``04_14`` subset and the locally
+existing ``03_31`` parquet use synthetic fractional-SNR ``fluxerr_*`` columns.
+Those errors are not native observational errors. They are explicit likelihood
+assumptions and are recorded in the dataset manifest/schema.
 
 The current validation dataset is:
 
 .. code-block:: text
 
-   hltds_cosmos_260215_04_14_2026
+   hltds_cosmos_260215_04_14_2026_continuous_lowz
 
 from:
 
@@ -150,30 +154,37 @@ end-to-end path documented here.
 Processed File
 --------------
 
-The normalized file used by the public Diffsky configs is:
+The normalized file used by the public Diffsky configs is now the continuous
+low-z subset with materialized flux errors:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
 
-It is built with:
+It is rebuilt from the full prepared 04/14 source parquet with:
 
 .. code-block:: bash
 
-   python -m euclid_dsps.cli diffsky-prepare-dataset \
-     --raw-root Data/diffsky/raw/hltds_cosmos_260215_04_14_2026 \
-     --inventory outputs/diffsky_hltds_04_14_local_inventory.json \
-     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --no-synthetic-errors
+   python -m euclid_dsps.cli diffsky-redshift-subset \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --redshift-min 0.0 \
+     --redshift-max 0.5 \
+     --error-model fractional_snr \
+     --snr 50
 
 The companion files are:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.manifest.yaml
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.schema.json
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.truth_report.md
-   Data/diffsky/processed/diffsky_dataset_integrity_report.md
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.schema.json
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.summary.json
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.truth_summary.csv
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.truth_report.md
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.report.md
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/redshift_true_distribution.png
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/truth_distributions.png
 
 Integrity Contract
 ------------------
@@ -214,7 +225,7 @@ from a photometric fit.
 Photometry Contract
 -------------------
 
-The public simple configs use 14 native AB-magnitude bands:
+The public Diffsky configs use 14 LSST+Roman bands:
 
 .. code-block:: text
 
@@ -233,21 +244,39 @@ The public simple configs use 14 native AB-magnitude bands:
    roman_F184
    roman_F213
 
-The prepared parquet keeps magnitude columns named ``mag_<band>``. Native
-photometric error columns were not confirmed in the downloaded sample, so the
-recommended prepared file does not write synthetic ``fluxerr_*`` values. The
-fit configs use a magnitude-space tolerance:
+The prepared source parquet keeps magnitude columns named ``mag_<band>`` and
+flux-density columns named ``flux_<band>``. The main continuous low-z subset
+uses the flux-density columns and writes ``fluxerr_<band>`` columns in
+``fnu_cgs``:
 
 .. code-block:: yaml
 
-   bands: diffsky_hltds_lsst_roman_14_abmag_modelerr
+   bands: diffsky_hltds_lsst_roman_14_fnu_cgs
    fit:
-     likelihood_space: mag
+     likelihood_space: flux
      photometric_likelihood: student_t
      student_t_dof: 2.0
+     flux_error_floor_frac: 0.02
 
-Each band has ``sigma_mag: 0.10``. This is a model-tolerance assumption for
-MAP debugging, not a native survey error model.
+Native photometric error columns were not confirmed in the downloaded sample.
+The adopted synthetic error model is therefore explicit and flux dependent:
+
+.. math::
+
+   \sigma_{\mathrm{cat}, i b} =
+   \max\left(\frac{|f_{i b}|}{50}, 10^{-40}\right)
+
+for object ``i`` and band ``b``. The likelihood uses
+
+.. math::
+
+   \sigma_{\mathrm{eff}, i b}^2 =
+   \sigma_{\mathrm{cat}, i b}^2 +
+   \left(0.02\,\max(|f_{i b}|, |f_{\mathrm{model}, i b}|)\right)^2
+
+because the active configs set ``fit.flux_error_floor_frac: 0.02`` and
+``fit.flux_error_jitter: 0.0``. This is a model/likelihood uncertainty, not a
+Poisson derivation from survey exposure metadata.
 
 The dataset manifest uses explicit error model labels:
 
@@ -258,6 +287,8 @@ The dataset manifest uses explicit error model labels:
      - Meaning
    * - ``native_error``
      - Error columns came from the source dataset.
+   * - ``fractional_snr``
+     - Synthetic ``fluxerr_* = abs(flux) / snr`` with a positive floor.
    * - ``synthetic_snr_error``
      - ``fluxerr_*`` columns were synthesized as ``abs(flux) / snr``.
    * - ``model_tolerance_mag``
@@ -387,9 +418,8 @@ The main Diffsky amortized config is:
 
    configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
 
-It uses the same 14 HLTDS LSST+Roman AB-magnitude bands, converts them to the
-internal flux-density representation for the fixed DSPS decoder, and trains a
-Gaussian encoder plus RealNVP prior in a compact 9-parameter latent:
+It uses the same 14 HLTDS LSST+Roman flux-density bands and trains a Gaussian
+encoder plus RealNVP prior in the 12-parameter HLTDS PopCosmos-like latent:
 
 .. code-block:: text
 
@@ -398,16 +428,18 @@ Gaussian encoder plus RealNVP prior in a compact 9-parameter latent:
    dlog10_sfr_1
    dlog10_sfr_2
    dlog10_sfr_3
+   dlog10_sfr_4
+   dlog10_sfr_5
+   dlog10_sfr_6
    log10_stellar_metallicity
    tau2
    dust_index_n
    tau1_over_tau2
 
-The remaining PopCosmos-bin SFH and nuisance parameters are fixed from
-``model.fixed_parameters``. This is deliberate: broad-band photometry is
-degenerate in age, metallicity, dust, SFR history, and redshift, so this path
-learns a population prior over the degenerate physical manifold instead of
-forcing an over-parameterized per-object recovery.
+Gas and AGN parameters are not part of this HLTDS simplified decoder, but all
+six PopCosmos-like SFH ratio bins are active. There should be no
+``dlog10_sfr_i`` entries in ``model.fixed_parameters`` for the active 04/14
+PopCosmos configs.
 
 The config is conservative for CUDA stability:
 
@@ -462,7 +494,7 @@ Compare truth, aggregate posterior, and learned prior:
      --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
      amortized-prior-overlap-diffsky \
      --run outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer/prior_overlap \
      --max-objects 10000
 

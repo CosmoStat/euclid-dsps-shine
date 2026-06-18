@@ -54,6 +54,10 @@ hundreds of scale units. Errors are normalized with
 ``log(err / err_scale + eps)``. The error terms are part of the input because
 two objects with identical fluxes but different per-band uncertainties do not
 carry the same information and should not receive the same posterior width.
+For Diffsky HLTDS, ``flux_scale`` and ``err_scale`` are learned once from the
+training catalog by ``compute_feature_stats`` as robust per-band scales and are
+stored in ``feature_stats.json``. DSPS never receives these normalized feature
+values; they are encoder inputs only.
 
 The posterior model is:
 
@@ -65,10 +69,9 @@ The posterior model is:
        -> DSPS(theta)
        -> flux_model_B
 
-``x`` is the unconstrained latent vector. ``theta`` is the bounded physical
+``x`` is the network latent vector. ``theta`` is the bounded physical
 parameter vector, including redshift. FS2 uses the 16-parameter PopCosmos-like
-schema. The legacy compact Diffsky amortized path uses a 9-parameter
-PopCosmos-bin schema:
+schema. The active Diffsky HLTDS path uses a 12-parameter PopCosmos-bin schema:
 
 .. code-block:: text
 
@@ -77,17 +80,24 @@ PopCosmos-bin schema:
    dlog10_sfr_1
    dlog10_sfr_2
    dlog10_sfr_3
+   dlog10_sfr_4
+   dlog10_sfr_5
+   dlog10_sfr_6
    log10_stellar_metallicity
    tau2
    dust_index_n
    tau1_over_tau2
 
-The other PopCosmos-bin nuisance and SFH parameters are supplied from
-``model.fixed_parameters`` when the decoder is called. This compact latent is
-not directly comparable to Diffstar/Diffmah generated truths; the true-param
-closure and supervised-prior paths are the same-parameter tests. ``psi``
-denotes the encoder parameters. ``beta`` denotes RealNVP prior parameters when
-a RealNVP prior is used.
+The active HLTDS configs set ``amortized.latent.normalization`` to
+``standardized_logit``. The encoder and RealNVP prior live in standardized
+bounded-logit coordinates. Before calling DSPS, the decoder maps
+``x_network -> x_raw_logit -> theta_physical`` using the configured parameter
+bounds, centers, and scales. DSPS receives physical values such as redshift,
+stellar mass, SFH ratios, metallicity, ``tau2``, ``dust_index_n``, and
+``tau1_over_tau2``; it does not receive normalized latent coordinates. The
+true-param closure and supervised-prior paths remain the same-parameter tests
+for Diffstar/Diffmah generated truths. ``psi`` denotes the encoder parameters.
+``beta`` denotes RealNVP prior parameters when a RealNVP prior is used.
 
 Implementation Architecture
 ---------------------------
@@ -482,9 +492,12 @@ Diffsky HLTDS inference example:
 The same conservative cap is applied during inference through
 ``amortized.inference.jax_batch_size: 4``.
 
-Inference diagnostics include normalized residuals
-``(model_flux - obs_flux) / obs_err`` for each object, sample, and band. The
-summary tables and figures report median residuals by band, the objects with
+Inference diagnostics include likelihood-normalized posterior-predictive
+residuals ``(obs_flux - model_flux) / sigma_eff`` for each object and band.
+``sigma_eff`` is the same effective uncertainty used by the likelihood,
+including catalog ``fluxerr_*``, fractional floor, and jitter. The summary
+tables and figures report median residuals by band, Gaussian-reference
+histograms with ``-3`` and ``+3`` markers, tail fractions, the objects with
 largest posterior predictive chi-square, histograms of maximum encoder-feature
 amplitude per object, ``z_obs`` posterior median versus catalog redshift proxy
 when columns such as ``z_true_gal`` are available, a redshift PIT histogram
@@ -512,7 +525,7 @@ For Diffsky HLTDS, run the explicit truth/prior overlap report after inference:
      --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-prior-overlap-diffsky \
      --run outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --out outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer/prior_overlap \
      --max-objects 10000
 

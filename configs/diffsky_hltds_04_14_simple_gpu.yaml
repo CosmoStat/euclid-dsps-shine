@@ -1,8 +1,8 @@
-catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
 ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
 runtime: gpu
-bands: diffsky_hltds_lsst_roman_14_abmag_modelerr
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
 nebular_emission: ssp_flux
 
 selection:
@@ -15,9 +15,9 @@ redshift:
     initial: random_uniform
     column:
     truth_column: redshift_true
-    fixed_value: 0.98
-    min: 0.5
-    max: 1.3
+    fixed_value: 0.25
+    min: 0.001
+    max: 0.5
     seed: 42
     prior_z:
         mode: none
@@ -55,21 +55,13 @@ model:
     z_sun: 0.0142
     dust_tesc_logyr: 7.0
     dust1_index: -1.0
-    fixed_parameters:
-        dlog10_sfr_2: 0.0
-        dlog10_sfr_3: 0.0
-        dlog10_sfr_4: 0.0
-        dlog10_sfr_5: 0.0
-        dlog10_sfr_6: 0.0
-        log10_stellar_metallicity: -0.2
-        tau1_over_tau2: 0.0
 
 fit:
     method: jax_adam
-    likelihood_space: mag
+    likelihood_space: flux
     photometric_likelihood: student_t
     student_t_dof: 2.0
-    flux_error_floor_frac: 0.0
+    flux_error_floor_frac: 0.02
     flux_error_jitter: 0.0
     maxiter: 220
     learning_rate: 0.02
@@ -82,20 +74,41 @@ fit:
     batch_grad_mode: per_galaxy
     free_parameters:
         z_obs:
-            initial: from_base
-            bounds: [0.5, 1.3]
+            initial: 0.25
+            bounds: [0.001, 0.5]
         log10_stellar_mass:
             initial: 10.0
             bounds: [7.5, 12.5]
         dlog10_sfr_1:
             initial: 0.0
             bounds: [-3.0, 3.0]
+        dlog10_sfr_2:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_3:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_4:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_5:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_6:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        log10_stellar_metallicity:
+            initial: -0.2
+            bounds: [-2.5, 0.3]
         tau2:
             initial: 0.3
             bounds: [0.0, 4.0]
         dust_index_n:
             initial: -0.7
             bounds: [-2.0, 0.5]
+        tau1_over_tau2:
+            initial: 0.5
+            bounds: [0.0, 3.0]
 
 sample:
     sampler: nuts

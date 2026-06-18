@@ -14,7 +14,8 @@
 
 set -Eeuo pipefail
 
-# Sharded checkpoint-only amortized inference.
+# Sharded checkpoint-only amortized inference and posterior-predictive
+# normalized residual diagnostics.
 #
 # Default use case: inspect a completed unsupervised joint RealNVP training
 # run. Redshift is not fixed; truth columns are used only for closure metrics
@@ -39,12 +40,12 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml}"
-DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
-TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_realnvp_unsup_stable_30k_e20}"
+DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet}"
+TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_realnvp_lowz_30k_e20}"
 CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-${TRAIN_RUN}/feature_stats.json}"
 
-RUN_NAME="${RUN_NAME:-diffsky_realnvp_unsup_stable_30k_e20_infer_ps128_limit5000}"
+RUN_NAME="${RUN_NAME:-diffsky_realnvp_lowz_30k_e20_infer_ps128_limit5000}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
@@ -96,7 +97,8 @@ echo "[job] seed: $SEED"
 echo "[job] selection_mode: $SELECTION_MODE"
 echo "[job] stratified_strategy: $STRATIFIED_STRATEGY"
 echo "[job] selection_seed: $SELECTION_SEED"
-echo "[job] outputs: sharded, resumable; posterior predictive flux and residual samples disabled"
+echo "[job] outputs: sharded, resumable; compact posterior-predictive residual summaries enabled"
+echo "[job] large posterior predictive flux and per-sample residual parquet outputs disabled"
 
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"

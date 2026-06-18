@@ -21,7 +21,7 @@ Command
    python -m euclid_dsps.cli \
      --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml \
      diffsky-forward-closure \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --limit 1024 \
      --out outputs/runs/diffsky_trueparam_forward_closure
 

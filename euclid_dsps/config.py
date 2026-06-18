@@ -634,8 +634,13 @@ BAND_PRESETS["diffsky_hltds_lsst_roman_14_abmag_modelerr"] = [
         "column": f"mag_{band_name}",
         "units": "abmag",
         # HLTDS public shards expose generated magnitudes, not native survey
-        # errors. Treat this as a model-mismatch tolerance for closure tests.
+        # errors. Use an explicit flux-dependent synthetic error model.
         "sigma_mag": 0.10,
+        "error_model": {
+            "type": "fractional_snr",
+            "snr": 50.0,
+            "min_sigma_fnu_cgs": 1.0e-40,
+        },
         "filter": {
             "kind": "hdf5_group",
             "path": DIFFSKY_HLTDS_FILTER_PATH,
