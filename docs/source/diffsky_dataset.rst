@@ -196,6 +196,11 @@ The rebuilt subset should show no separated ``z~0.4`` island:
    :alt: Truth distributions for the Diffsky 04/14 continuous z<0.35 subset.
    :width: 90%
 
+On Jean-Zay, the H100 Slurm scripts call the same
+``diffsky-redshift-subset`` command automatically if the subset parquet is
+missing and the full ``*_photometry_truth_noerr.parquet`` source exists. This
+keeps train/inference jobs from failing on a missing derived subset file.
+
 Integrity Contract
 ------------------
 

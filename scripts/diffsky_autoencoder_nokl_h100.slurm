@@ -19,6 +19,12 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml}"
+DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet}"
+SOURCE_DATASET="${SOURCE_DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
+REDSHIFT_MIN="${REDSHIFT_MIN:-0.0}"
+REDSHIFT_MAX="${REDSHIFT_MAX:-0.35}"
+ERROR_MODEL="${ERROR_MODEL:-fractional_snr}"
+ERROR_SNR="${ERROR_SNR:-50}"
 RUN_NAME="${RUN_NAME:-diffsky_autoencoder_nokl_z035_$(date +%Y%m%d_%H%M%S)}"
 TRAIN_OUT="${TRAIN_OUT:-outputs/runs/${RUN_NAME}}"
 INFER_OUT="${INFER_OUT:-outputs/runs/${RUN_NAME}_infer}"
@@ -53,6 +59,10 @@ echo "[job] start: $(date --iso-8601=seconds)"
 echo "[job] host: $(hostname)"
 echo "[job] repo: $REPO_DIR"
 echo "[job] config: $CONFIG"
+echo "[job] dataset: $DATASET"
+echo "[job] source_dataset: $SOURCE_DATASET"
+echo "[job] redshift_range: [$REDSHIFT_MIN, $REDSHIFT_MAX]"
+echo "[job] error_model: $ERROR_MODEL snr=$ERROR_SNR"
 echo "[job] train_out: $TRAIN_OUT"
 echo "[job] infer_out: $INFER_OUT"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
@@ -82,6 +92,36 @@ print("[job] jax_devices:", jax.devices())
 PY
 nvidia-smi || true
 git status --short --branch
+
+ensure_diffsky_dataset() {
+  if [[ -s "$DATASET" ]]; then
+    echo "[job] dataset exists"
+    ls -lh "$DATASET"
+    return
+  fi
+  echo "[job] dataset missing, rebuilding from source subset"
+  if [[ ! -s "$SOURCE_DATASET" ]]; then
+    cat <<MSG
+[job][error] Missing both DATASET and SOURCE_DATASET.
+[job][error] DATASET=$DATASET
+[job][error] SOURCE_DATASET=$SOURCE_DATASET
+[job][hint] Either copy the local subset parquet to Jean-Zay or build the
+[job][hint] full source parquet first with diffsky-prepare-dataset.
+MSG
+    exit 2
+  fi
+  mkdir -p "$(dirname "$DATASET")"
+  python -m euclid_dsps.cli diffsky-redshift-subset \
+    --dataset "$SOURCE_DATASET" \
+    --out "$DATASET" \
+    --redshift-min "$REDSHIFT_MIN" \
+    --redshift-max "$REDSHIFT_MAX" \
+    --error-model "$ERROR_MODEL" \
+    --snr "$ERROR_SNR"
+  ls -lh "$DATASET"
+}
+
+ensure_diffsky_dataset
 
 train_cmd=(
   python -m euclid_dsps.cli

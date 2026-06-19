@@ -95,6 +95,14 @@ manifest/schema/truth reports, and the redshift/truth distribution plots. The
 old ``*_photometry_truth_noerr.parquet`` file is only the source artifact for
 this subset.
 
+The H100 Slurm entry points run this same preflight automatically. If
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
+is missing on Jean-Zay but
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet``
+exists, they rebuild the ``z < 0.35`` subset before training or inference.
+If both files are missing, copy the local subset parquet to Jean-Zay or build
+the full source parquet first.
+
 Supervised prior learning
 -------------------------
 
@@ -342,7 +350,9 @@ the input fluxes:
 
 The script trains with
 ``configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml`` and then runs
-inference on the best checkpoint. Inspect:
+inference on the best checkpoint. It also rebuilds the ``78651`` object
+``z < 0.35`` dataset on Jean-Zay if the subset parquet is missing and the full
+source parquet exists. Inspect:
 
 .. code-block:: text
 

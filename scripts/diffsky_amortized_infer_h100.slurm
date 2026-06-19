@@ -41,6 +41,11 @@ CONDA_ENV="${CONDA_ENV:-shine}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml}"
 DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet}"
+SOURCE_DATASET="${SOURCE_DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
+REDSHIFT_MIN="${REDSHIFT_MIN:-0.0}"
+REDSHIFT_MAX="${REDSHIFT_MAX:-0.35}"
+ERROR_MODEL="${ERROR_MODEL:-fractional_snr}"
+ERROR_SNR="${ERROR_SNR:-50}"
 TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_realnvp_z035_30k_e20}"
 CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-${TRAIN_RUN}/feature_stats.json}"
@@ -84,6 +89,9 @@ echo "[job] out_dir: $OUT_DIR"
 echo "[job] log_file: $LOG_FILE"
 echo "[job] config: $CONFIG"
 echo "[job] dataset: $DATASET"
+echo "[job] source_dataset: $SOURCE_DATASET"
+echo "[job] redshift_range: [$REDSHIFT_MIN, $REDSHIFT_MAX]"
+echo "[job] error_model: $ERROR_MODEL snr=$ERROR_SNR"
 echo "[job] checkpoint: $CHECKPOINT"
 echo "[job] feature_stats: $FEATURE_STATS"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
@@ -122,6 +130,36 @@ print("[job] jax_backend:", jax.default_backend())
 print("[job] jax_devices:", jax.devices())
 PY
 nvidia-smi || true
+
+ensure_diffsky_dataset() {
+  if [[ -s "$DATASET" ]]; then
+    echo "[job] dataset exists"
+    ls -lh "$DATASET"
+    return
+  fi
+  echo "[job] dataset missing, rebuilding from source subset"
+  if [[ ! -s "$SOURCE_DATASET" ]]; then
+    cat <<MSG
+[job][error] Missing both DATASET and SOURCE_DATASET.
+[job][error] DATASET=$DATASET
+[job][error] SOURCE_DATASET=$SOURCE_DATASET
+[job][hint] Either copy the local subset parquet to Jean-Zay or build the
+[job][hint] full source parquet first with diffsky-prepare-dataset.
+MSG
+    exit 2
+  fi
+  mkdir -p "$(dirname "$DATASET")"
+  python -m euclid_dsps.cli diffsky-redshift-subset \
+    --dataset "$SOURCE_DATASET" \
+    --out "$DATASET" \
+    --redshift-min "$REDSHIFT_MIN" \
+    --redshift-max "$REDSHIFT_MAX" \
+    --error-model "$ERROR_MODEL" \
+    --snr "$ERROR_SNR"
+  ls -lh "$DATASET"
+}
+
+ensure_diffsky_dataset
 
 for path in "$DATASET" "$CHECKPOINT" "$FEATURE_STATS"; do
   if [[ -s "$path" ]]; then
