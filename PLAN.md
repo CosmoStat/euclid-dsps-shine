@@ -1,13 +1,123 @@
 # Plan
 
+## 2026-06-22 Diffsky Reconstruction Experiment Matrix
+
+- Status: implementation completed for the orchestration/tooling layer; science
+  runs are ready to launch on Jean-Zay.
+- Goal: make the no-KL Diffsky autoencoder debug loop reproducible and
+  extensible across MAP-Adam, MCLMC, input-noise, NF-prior, KL-sweep, and
+  prior-trajectory experiments on Jean-Zay H100 jobs capped at 20 hours.
+- Reference run: use
+  `outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128` and
+  `outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128_infer`
+  as the baseline. The catalog fingerprint points to
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`
+  with 78,651 rows, schema hash `d6d00d03d52496a55f8613f17c007114`, random
+  20k selection, seed 42, and best checkpoint epoch 27.
+- Reference row contract: `train_indices.npy` plus `validation_indices.npy`
+  exactly matches the inference `inference_indices.npy` set, so future runs
+  should reuse these explicit row-index artifacts rather than relying only on
+  random seed and limit.
+- Current reconstruction status: the no-KL run is stable but not yet a
+  likelihood-calibrated reconstruction pass. The all-band median residual is
+  about `-0.38 sigma`, `24.3%` of band residuals exceed `|3 sigma|`, and
+  `12.9%` exceed `|5 sigma|`; `lsst_u` and `lsst_g` dominate the failures.
+- Baseline comparison target: build a direct reconstruction table on the same
+  `worst_1000` rowset comparing (1) the existing amortized NN posterior
+  predictive from the reference checkpoint, (2) deterministic DSPS
+  JAX+Adam MAP fits, and (3) BlackJAX MCLMC posterior predictive summaries.
+  The comparison must report identical per-object/per-band residual metrics,
+  not only each method's native objective value. Start with `worst_500` if
+  MCLMC runtime is too high, then promote to `worst_1000` once timing is
+  measured.
+- Required implementation phase 1: add reusable experiment rowsets and rowset
+  manifests, including `reference_20k`, `reference_train`, `reference_val`, and
+  ranked `worst_*` rowsets derived from
+  `posterior_predictive_residual_summary.parquet`.
+- Required implementation phase 2: add explicit row-index-file support to the
+  amortized train, amortized infer, and `diffsky-map-adam-prior` paths, plus
+  train/validation split-file support for exact reruns. The existing MAP
+  `fit` and posterior `posterior` paths already support text/CSV row-index
+  files.
+- Required implementation phase 3: add a common reconstruction evaluator that
+  normalizes outputs from amortized inference, MAP-Adam fits, and MCLMC
+  posterior predictive runs into the same per-object/per-band residual tables
+  and summary gates.
+- Required implementation phase 4: add input-noise augmentation for the
+  amortized encoder, document whether noise perturbs encoder inputs only
+  (denoising) or both encoder inputs and likelihood targets, and record noise
+  config/seed in run summaries.
+- Required implementation phase 5: support NF-prior experiments with a clear
+  truth/pseudo-truth separation. The recommended first science-debug track is
+  the existing 5D `diffsky_truth_basic` parameterization, because those
+  quantities have actual catalog truth columns (`z_obs`, stellar mass, sSFR or
+  SFR, dust amplitude, dust slope) and the decoder already has an explicit
+  adapter to PopCosmos-bin parameters. Do not invent 12D "truth" columns for
+  `dlog10_sfr_1..6`, metallicity, `tau2`, `dust_index_n`, or
+  `tau1_over_tau2` unless a parameterization-compatible truth projection is
+  formally added and documented. If an apples-to-apples 12D prior is needed
+  for the current no-KL architecture, train it as a labeled pseudo-prior from
+  MAP or posterior estimates, not as a supervised truth prior.
+- Required implementation phase 6: turn the existing KL annealing knobs into a
+  reproducible KL sweep over fixed rowsets, and add prior-trajectory diagnostics
+  from epoch checkpoints, including an epoch-0 initial-prior checkpoint.
+- Required implementation phase 7: add Jean-Zay Slurm array wrappers so the
+  experiment matrix can run in parallel with per-experiment output directories,
+  logs, normalized configs, catalog fingerprints, rowset manifests, command
+  manifests, and compact comparison reports.
+- Initial runtime policy: run NN-based experiments on `reference_20k` because
+  the 30-epoch reference took about 3.1 hours on H100; run MAP and MCLMC first
+  on `worst_500` or `worst_1000`, then expand only if the timing and
+  reconstruction gates justify it. MCLMC should remain a small selected-row
+  diagnostic unless a vectorized/chunked posterior path is added.
+- Implemented:
+  - `diffsky-build-reconstruction-rowsets` writes `reference_20k`,
+    `reference_train`, `reference_validation`, ranked `worst_*` rowsets, and a
+    rowset manifest. The local reference rowsets were generated under
+    `outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k`.
+  - Amortized train/infer and `diffsky-map-adam-prior` accept explicit
+    row-index files. Amortized train also accepts exact train/validation index
+    files for apples-to-apples reruns.
+  - `diffsky-compare-reconstruction` normalizes amortized NN, standalone MAP
+    `fit`, and MCLMC posterior predictive residual outputs into common
+    per-band, per-object, and per-method summaries.
+  - MCLMC batch posterior runs now write
+    `batch_posterior_predictive_flux_residual_summary.{csv,parquet}`.
+  - Amortized training supports encoder-input-only Gaussian noise via
+    `amortized.input_noise` or `--input-noise-sigma-scale`; likelihood targets
+    remain unchanged.
+  - The supervised Diffsky NF-prior trainer accepts `--row-indices-file`, and
+    amortized training accepts `--prior-checkpoint` so a freshly trained 5D
+    `diffsky_truth_basic` prior can be used without editing YAML.
+  - Training now saves `checkpoints/epoch_0000.eqx` to anchor prior/encoder
+    trajectory diagnostics.
+  - `scripts/diffsky_reconstruction_baselines_h100.slurm` covers rowset
+    generation, NN inference, standalone MAP, MCLMC, comparison, input-noise
+    training, KL-sweep training, supervised NF-prior training, and training
+    with the supervised prior loaded.
+  - Documentation was added to `docs/source/amortized_inference.rst` and
+    `docs/source/run_setup.rst`.
+- Validation completed:
+  - `python -m compileall euclid_dsps scripts`
+  - `bash -n scripts/diffsky_reconstruction_baselines_h100.slurm`
+  - `pytest tests/test_amortized_catalog_identity.py tests/test_reconstruction_experiments.py tests/test_cli.py -q`
+  - `pytest tests/test_mcmc.py -q`
+  - Built real reference rowsets and ran an NN-only comparison smoke on
+    `worst_500`.
+
 ## 2026-06-22 PhotErr Error-Model Slides
 
-- Status: in progress.
+- Status: implemented.
 - Goal: create a Reveal.js slide deck explaining the PhotErr error model,
   the flux-space formula implemented in this repository, the regenerated error
   diagnostics, and how `fluxerr_*` plugs into the likelihood.
 - Scope: use local diagnostic PNGs and MathJax equations; do not add a
   JavaScript build pipeline or package dependency.
+- Completed: wrote `outputs/reports/photerr_error_model_slides.html` with
+  32 Reveal.js slides covering the PhotErr formula, the flux-space DSPS
+  implementation, regenerated error plots, and the effective likelihood sigma.
+- Validation completed: checked local image references in the HTML and ran
+  `git diff --check` on the slide deck and `PLAN.md`.
 
 ## 2026-06-21 No-KL z<0.35 Rerun With Updated Error Model
 

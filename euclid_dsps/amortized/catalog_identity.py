@@ -9,7 +9,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from euclid_dsps.io import iter_catalog_batches, truth_column_from_spec, write_json
+from euclid_dsps.io import (
+    iter_catalog_batches,
+    load_row_indices,
+    truth_column_from_spec,
+    write_json,
+)
 
 
 def object_id_column_from_config(config: dict[str, Any]) -> str | None:
@@ -115,11 +120,39 @@ def select_catalog_row_indices(
     stratified_strategy: str,
     seed: int,
     redshift_bins: list[float] | tuple[float, ...] | np.ndarray | None = None,
+    row_indices_file: str | Path | None = None,
 ) -> tuple[np.ndarray | None, dict[str, Any]]:
     """Return selected catalog row indices for non-sequential inference."""
     mode = str(selection_mode or "sequential")
     path = Path(config["catalog_path"])
     n_rows = _catalog_num_rows(path)
+    if row_indices_file:
+        selected = np.asarray(load_row_indices(row_indices_file), dtype=np.int64)
+        if limit is not None:
+            selected = selected[: min(max(int(limit), 0), selected.size)]
+        if selected.size:
+            if int(selected.min()) < 0 or int(selected.max()) >= int(n_rows):
+                raise ValueError(
+                    "row_indices_file contains row_index outside catalog bounds: "
+                    f"min={int(selected.min())} max={int(selected.max())} "
+                    f"catalog_rows={int(n_rows)}"
+                )
+        redshift_column = configured_redshift_column(config)
+        redshift = read_redshift_column(path, redshift_column)
+        summary: dict[str, Any] = {
+            "selection_mode": "row_indices_file",
+            "row_indices_file": str(row_indices_file),
+            "limit": limit,
+            "selected_rows": int(selected.size),
+            "catalog_rows": int(n_rows),
+            "redshift_column": redshift_column,
+            "row_index_min": int(selected.min()) if selected.size else None,
+            "row_index_max": int(selected.max()) if selected.size else None,
+        }
+        if redshift is not None and selected.size:
+            bins = _redshift_bins(config, redshift_bins)
+            summary["redshift_histogram"] = redshift_histogram(redshift[selected], bins)
+        return selected, summary
     total = n_rows if limit is None else min(max(int(limit), 0), n_rows)
     if mode == "sequential":
         return None, {

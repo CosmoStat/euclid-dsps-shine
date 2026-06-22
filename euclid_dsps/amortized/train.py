@@ -26,7 +26,12 @@ from euclid_dsps.calibration import (
     per_band_flux_calibration_prior_penalty,
 )
 from euclid_dsps.filters import load_filters
-from euclid_dsps.io import ensure_dir, truth_column_from_spec, write_json
+from euclid_dsps.io import (
+    ensure_dir,
+    load_row_indices,
+    truth_column_from_spec,
+    write_json,
+)
 from euclid_dsps.model import dynamic_model_args, load_context
 
 from .catalog_identity import write_catalog_fingerprint
@@ -41,7 +46,12 @@ from .decoder import model_flux_from_x
 from .diagnostics import write_training_diagnostics
 from .elbo import AmortizedModel, negative_elbo
 from .encoder import GaussianEncoder
-from .features import FeatureStats, compute_feature_stats, write_feature_stats
+from .features import (
+    FeatureStats,
+    compute_feature_stats,
+    make_encoder_features,
+    write_feature_stats,
+)
 from .flows import RealNVPPrior, StandardNormalPrior
 from .latent import (
     LatentSpec,
@@ -72,6 +82,9 @@ class TrainingSplit:
     selection_mode: str
     stratified_strategy: str
     validation_fraction: float
+    row_indices_file: str | None = None
+    train_indices_file: str | None = None
+    validation_indices_file: str | None = None
 
 
 class LossBatch(NamedTuple):
@@ -291,6 +304,9 @@ def train_amortized_fs2(
     verbose: bool = True,
     progress: bool = True,
     dataset_label: str = "FS2",
+    row_indices_file: str | Path | None = None,
+    train_indices_file: str | Path | None = None,
+    validation_indices_file: str | Path | None = None,
 ) -> None:
     """Train encoder and RealNVP prior jointly on configured photometry."""
     out = ensure_dir(out_dir)
@@ -320,7 +336,14 @@ def train_amortized_fs2(
         f"[amortized] JAX backend: {jax.default_backend()} devices={jax.devices()}",
     )
     write_json(out / "normalized_config.json", config)
-    split = build_training_split(config, limit=limit, seed=seed)
+    split = build_training_split(
+        config,
+        limit=limit,
+        seed=seed,
+        row_indices_file=row_indices_file,
+        train_indices_file=train_indices_file,
+        validation_indices_file=validation_indices_file,
+    )
     write_training_split_artifacts(out, split)
     _log(
         verbose,
@@ -433,10 +456,29 @@ def train_amortized_fs2(
         f"per_band_calibration_enabled={band_calibration_cfg.enabled} "
         f"train_per_band_calibration={train_band_calibration}",
     )
+    input_noise_cfg = _input_noise_config(cfg.get("input_noise", {}))
+    if input_noise_cfg["enabled"]:
+        _log(
+            verbose,
+            "[amortized] input noise enabled: "
+            f"mode={input_noise_cfg['mode']} "
+            f"sigma_scale={input_noise_cfg['sigma_scale']} "
+            f"apply_to={input_noise_cfg['apply_to']}",
+        )
     optimizer = make_optimizer(config)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
 
     ckpt_dir = ensure_dir(out / "checkpoints")
+    save_checkpoint(
+        ckpt_dir / "epoch_0000.eqx",
+        model,
+        config=config,
+        latent_spec=latent_spec,
+        feature_stats=feature_stats,
+        epoch=0,
+        metric=0.0,
+        metric_name="initial",
+    )
     rows = []
     configured_best_metric = str(
         cfg["training"].get("best_checkpoint_metric", "validation_negative_loglike")
@@ -512,10 +554,16 @@ def train_amortized_fs2(
             unit="batch",
         ) as pbar:
             for batch_index, batch in enumerate(batch_iter):
-                key, step_key = jax.random.split(key)
+                key, step_key, noise_key = jax.random.split(key, 3)
+                loss_batch = _loss_batch_with_input_noise(
+                    batch,
+                    feature_stats,
+                    noise_key,
+                    input_noise_cfg,
+                )
                 (loss, metrics), grads = _loss_and_grads_jit(
                     model,
-                    _loss_batch(batch),
+                    loss_batch,
                     jit_latent_spec,
                     jit_context,
                     model_args,
@@ -801,8 +849,10 @@ def train_amortized_fs2(
         "elapsed_time_s": float(time.time() - start_time),
         "checkpoint_best": "checkpoints/best.eqx",
         "checkpoint_last": "checkpoints/last.eqx",
+        "checkpoint_initial": "checkpoints/epoch_0000.eqx",
         "checkpoint_every": checkpoint_every,
         "diagnostics_every": diagnostics_every,
+        "input_noise": input_noise_cfg,
         "updates_applied": int(
             sum(row.get("update_applied", 0.0) for row in _training_rows(rows))
         ),
@@ -1007,6 +1057,9 @@ def build_training_split(
     *,
     limit: int | None,
     seed: int,
+    row_indices_file: str | Path | None = None,
+    train_indices_file: str | Path | None = None,
+    validation_indices_file: str | Path | None = None,
 ) -> TrainingSplit:
     """Build a reproducible train/validation row split for FS2."""
     cfg = amortized_config(config)
@@ -1021,7 +1074,6 @@ def build_training_split(
     redshift = _read_redshift_column(config["catalog_path"], redshift_column)
     if redshift is not None:
         n_rows = len(redshift)
-    total = n_rows if limit is None else min(int(limit), n_rows)
     redshift_bins = np.asarray(
         data_cfg.get(
             "redshift_bins",
@@ -1033,6 +1085,82 @@ def build_training_split(
         redshift_bins = np.asarray([0.0, 6.0], dtype=float)
     redshift_bins = np.unique(redshift_bins)
 
+    if train_indices_file or validation_indices_file:
+        if row_indices_file:
+            raise ValueError(
+                "--row-indices-file cannot be combined with explicit train/validation "
+                "index files"
+            )
+        if limit is not None:
+            raise ValueError(
+                "--limit cannot be combined with explicit train/validation index "
+                "files; create a smaller row-index file for smoke tests."
+            )
+        if not train_indices_file:
+            raise ValueError("--train-indices-file is required with validation indices")
+        train_indices = np.asarray(load_row_indices(train_indices_file), dtype=np.int64)
+        validation_indices = (
+            np.asarray(load_row_indices(validation_indices_file), dtype=np.int64)
+            if validation_indices_file
+            else np.asarray([], dtype=np.int64)
+        )
+        _validate_selected_indices(train_indices, n_rows, "train_indices_file")
+        _validate_selected_indices(
+            validation_indices,
+            n_rows,
+            "validation_indices_file",
+        )
+        overlap = np.intersect1d(train_indices, validation_indices)
+        if overlap.size:
+            raise ValueError(
+                "train and validation index files overlap; first overlapping "
+                f"row_index={int(overlap[0])}"
+            )
+        return TrainingSplit(
+            train_indices=train_indices,
+            validation_indices=validation_indices,
+            train_redshift=_redshift_for_indices(redshift, train_indices),
+            validation_redshift=_redshift_for_indices(redshift, validation_indices),
+            redshift_column=redshift_column if redshift is not None else None,
+            redshift_bins=redshift_bins,
+            selection_mode="explicit_train_validation_files",
+            stratified_strategy=stratified_strategy,
+            validation_fraction=(
+                float(validation_indices.size)
+                / float(max(train_indices.size + validation_indices.size, 1))
+            ),
+            train_indices_file=str(train_indices_file),
+            validation_indices_file=(
+                str(validation_indices_file) if validation_indices_file else None
+            ),
+        )
+
+    if row_indices_file:
+        selected = np.asarray(load_row_indices(row_indices_file), dtype=np.int64)
+        if limit is not None:
+            selected = selected[: min(max(int(limit), 0), selected.size)]
+        _validate_selected_indices(selected, n_rows, "row_indices_file")
+        train_indices, validation_indices = _split_train_validation(
+            selected,
+            redshift,
+            redshift_bins,
+            validation_fraction,
+            rng,
+        )
+        return TrainingSplit(
+            train_indices=np.asarray(train_indices, dtype=np.int64),
+            validation_indices=np.asarray(validation_indices, dtype=np.int64),
+            train_redshift=_redshift_for_indices(redshift, train_indices),
+            validation_redshift=_redshift_for_indices(redshift, validation_indices),
+            redshift_column=redshift_column if redshift is not None else None,
+            redshift_bins=redshift_bins,
+            selection_mode="row_indices_file",
+            stratified_strategy=stratified_strategy,
+            validation_fraction=validation_fraction,
+            row_indices_file=str(row_indices_file),
+        )
+
+    total = n_rows if limit is None else min(int(limit), n_rows)
     if selection_mode == "sequential":
         selected = np.arange(total, dtype=np.int64)
     elif selection_mode == "random" or redshift is None:
@@ -1089,6 +1217,9 @@ def write_training_split_artifacts(out: Path, split: TrainingSplit) -> None:
             "redshift_bins": split.redshift_bins.tolist(),
             "train_rows": int(len(split.train_indices)),
             "validation_rows": int(len(split.validation_indices)),
+            "row_indices_file": split.row_indices_file,
+            "train_indices_file": split.train_indices_file,
+            "validation_indices_file": split.validation_indices_file,
             "train_redshift_finite": int(np.isfinite(split.train_redshift).sum()),
             "validation_redshift_finite": int(
                 np.isfinite(split.validation_redshift).sum()
@@ -1422,6 +1553,22 @@ def _catalog_num_rows(path: str | Path) -> int:
     return int(pq.ParquetFile(path).metadata.num_rows)
 
 
+def _validate_selected_indices(
+    values: np.ndarray,
+    n_rows: int,
+    label: str,
+) -> None:
+    values = np.asarray(values, dtype=np.int64)
+    if not values.size:
+        return
+    if int(values.min()) < 0 or int(values.max()) >= int(n_rows):
+        raise ValueError(
+            f"{label} contains row_index outside catalog bounds: "
+            f"min={int(values.min())} max={int(values.max())} "
+            f"catalog_rows={int(n_rows)}"
+        )
+
+
 def _configured_redshift_column(
     config: dict[str, Any],
     data_cfg: dict[str, Any],
@@ -1629,6 +1776,55 @@ def _loss_batch(batch: PhotometryBatch) -> LossBatch:
         mask=batch.mask,
         features=batch.features,
     )
+
+
+def _loss_batch_with_input_noise(
+    batch: PhotometryBatch,
+    feature_stats: FeatureStats,
+    key,
+    input_noise_config: dict[str, Any],
+) -> LossBatch:
+    if not bool(input_noise_config.get("enabled", False)):
+        return _loss_batch(batch)
+    sigma_scale = float(input_noise_config.get("sigma_scale", 1.0))
+    if sigma_scale <= 0.0:
+        return _loss_batch(batch)
+    flux_err = jnp.where(jnp.isfinite(batch.flux_err), batch.flux_err, 0.0)
+    noise = sigma_scale * flux_err * jax.random.normal(
+        key,
+        shape=batch.flux.shape,
+        dtype=batch.flux.dtype,
+    )
+    noisy_flux = jnp.where(batch.mask, batch.flux + noise, batch.flux)
+    return LossBatch(
+        flux=batch.flux,
+        flux_err=batch.flux_err,
+        mask=batch.mask,
+        features=make_encoder_features(noisy_flux, batch.flux_err, feature_stats),
+    )
+
+
+def _input_noise_config(raw: dict[str, Any] | None) -> dict[str, Any]:
+    cfg = dict(raw or {})
+    apply_to = str(cfg.get("apply_to", "train")).strip().lower()
+    mode = str(cfg.get("mode", "encoder_flux")).strip().lower()
+    sigma_scale = float(cfg.get("sigma_scale", 1.0))
+    enabled = bool(cfg.get("enabled", False)) and sigma_scale > 0.0 and apply_to in {
+        "train",
+        "training",
+        "all",
+    }
+    if enabled and mode != "encoder_flux":
+        raise ValueError("amortized.input_noise.mode currently supports encoder_flux")
+    if sigma_scale < 0.0:
+        raise ValueError("amortized.input_noise.sigma_scale must be non-negative")
+    return {
+        "enabled": bool(enabled),
+        "mode": mode,
+        "sigma_scale": float(sigma_scale),
+        "apply_to": apply_to,
+        "target": "encoder_features_only",
+    }
 
 
 @eqx.filter_jit

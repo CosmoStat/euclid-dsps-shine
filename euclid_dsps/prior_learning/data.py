@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from euclid_dsps.amortized.latent import LatentSpec, theta_to_x, x_to_theta
+from euclid_dsps.io import load_row_indices
 
 from .schema import (
     ParameterSpec,
@@ -60,12 +61,24 @@ def load_truth_dataset(
     missing_policy: str = "reduce",
     bounds: dict[str, Any] | None = None,
     limit: int | None = None,
+    row_indices_file: str | Path | None = None,
 ) -> TruthDataset:
     """Load a prepared Diffsky parquet as truth theta and unconstrained x."""
     dataset_path = Path(dataset_path)
     frame = pd.read_parquet(dataset_path)
+    if row_indices_file:
+        row_indices = load_row_indices(row_indices_file)
+        if row_indices:
+            if min(row_indices) < 0 or max(row_indices) >= len(frame):
+                raise ValueError(
+                    "row_indices_file contains row_index outside truth dataset "
+                    f"bounds: min={min(row_indices)} max={max(row_indices)} "
+                    f"rows={len(frame)}"
+                )
+        frame = frame.iloc[row_indices].copy()
     if limit is not None:
         frame = frame.head(max(int(limit), 0))
+    source_row_base = frame.index.to_numpy(dtype=np.int64)
     schema = build_truth_schema(
         frame.columns,
         schema_name=schema_name,
@@ -85,7 +98,7 @@ def load_truth_dataset(
         if "object_id" in frame
         else np.nonzero(finite_mask)[0].astype(np.int64)
     )
-    source_rows = np.nonzero(finite_mask)[0].astype(np.int64)
+    source_rows = source_row_base[finite_mask]
     return TruthDataset(
         schema=schema,
         latent_spec=latent_spec,

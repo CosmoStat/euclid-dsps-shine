@@ -40,7 +40,9 @@ from ..model import (
 from ..nebular import write_nebular_diagnostic_outputs
 from ..performance import PerformanceRecorder, write_performance_outputs
 from ..photometric_uncertainty import flux_error_from_model
+from ..photometry import abmag_to_fnu_cgs as abmag_to_fnu_cgs_array
 from ..photometry import magerr_to_fluxerr_fnu_cgs
+from ..amortized.diagnostics import posterior_predictive_residual_summary_frame
 from ..reporting import (
     write_batch_outputs,
     write_eda_outputs,
@@ -236,6 +238,7 @@ def sample_batch(
 
     summary_rows = []
     predictive_rows = []
+    residual_summary_rows = []
     diagnostic_rows = []
     sample_rows = []
     save_samples = bool(config["sample"].get("save_samples", True))
@@ -292,6 +295,14 @@ def sample_batch(
                 predictive_rows.extend(
                     _posterior_predictive_rows(int(row_index), result, context_values)
                 )
+                residual_summary_rows.extend(
+                    _posterior_predictive_flux_residual_summary_rows(
+                        int(row_index),
+                        result,
+                        context_values,
+                        config,
+                    )
+                )
                 diagnostic_rows.append(
                     {
                         "row_index": int(row_index),
@@ -307,6 +318,16 @@ def sample_batch(
     pd.DataFrame(predictive_rows).to_csv(
         out / "batch_posterior_predictive.csv", index=False
     )
+    residual_summary_frame = pd.DataFrame(residual_summary_rows)
+    if not residual_summary_frame.empty:
+        residual_summary_frame.to_csv(
+            out / "batch_posterior_predictive_flux_residual_summary.csv",
+            index=False,
+        )
+        residual_summary_frame.to_parquet(
+            out / "batch_posterior_predictive_flux_residual_summary.parquet",
+            index=False,
+        )
     pd.DataFrame(diagnostic_rows).to_csv(
         out / "batch_mcmc_diagnostics.csv", index=False
     )
@@ -1393,6 +1414,42 @@ def _posterior_predictive_rows(
             }
         )
     return rows
+
+
+def _posterior_predictive_flux_residual_summary_rows(
+    row_index: int,
+    result,
+    context_values: dict[str, Any],
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return likelihood-normalized flux residual summaries for MCMC output."""
+    object_id = context_values.get("catalog_object_id", row_index)
+    model_flux = np.asarray(abmag_to_fnu_cgs_array(result.posterior_model_mags))
+    if model_flux.ndim == 2:
+        model_flux = model_flux[:, None, :]
+    obs_flux = np.asarray(result.observed_flux_fnu_cgs, dtype=float)[None, :]
+    obs_err = np.asarray(result.flux_error_fnu_cgs, dtype=float)[None, :]
+    mask = np.isfinite(obs_flux) & np.isfinite(obs_err) & (obs_err > 0.0)
+    fit_cfg = config.get("fit", {}) or {}
+    frame = posterior_predictive_residual_summary_frame(
+        [object_id],
+        obs_flux,
+        obs_err,
+        mask,
+        model_flux,
+        tuple(str(name) for name in result.band_names),
+        row_index=[int(row_index)],
+        likelihood_config={
+            "error_floor_frac": float(fit_cfg.get("flux_error_floor_frac", 0.0)),
+            "error_jitter": float(fit_cfg.get("flux_error_jitter", 0.0)),
+            "error_floor_reference": "observed",
+        },
+    )
+    if frame.empty:
+        return []
+    for key, value in context_values.items():
+        frame[key] = value
+    return frame.to_dict(orient="records")
 
 
 def _posterior_sample_rows(row_index: int, result) -> list[dict[str, Any]]:

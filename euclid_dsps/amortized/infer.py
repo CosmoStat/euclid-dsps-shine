@@ -84,6 +84,7 @@ def infer_amortized_fs2(
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
+    row_indices_file: str | Path | None = None,
     verbose: bool = True,
     dataset_label: str = "FS2",
 ) -> None:
@@ -133,6 +134,7 @@ def infer_amortized_fs2(
         stratified_strategy=stratified_strategy,
         seed=selection_seed,
         redshift_bins=redshift_bins_for_selection,
+        row_indices_file=row_indices_file,
     )
     if row_indices is not None:
         np.save(out / "inference_indices.npy", row_indices)
@@ -303,6 +305,7 @@ def infer_amortized_fs2(
         "selection_mode": selection_mode,
         "stratified_strategy": stratified_strategy,
         "selection_seed": int(selection_seed),
+        "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "posterior_samples": int(posterior_samples),
         "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
         "write_posterior_predictive": bool(write_posterior_predictive),

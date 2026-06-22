@@ -437,6 +437,27 @@ joint-prior modes, compare redshift posterior calibration:
 The report compares posterior median, PIT, 68/95 percent coverage, posterior
 width, RMSE, sigma MAD, bias, and outlier fraction.
 
+Reconstruction Baseline Matrix On Jean-Zay
+------------------------------------------
+
+The H100 wrapper ``scripts/diffsky_reconstruction_baselines_h100.slurm`` runs
+one reconstruction task at a time from a fixed rowset. Typical sequence:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,TASK=rowsets scripts/diffsky_reconstruction_baselines_h100.slurm
+   sbatch --export=ALL,TASK=nn-infer,ROWSET=worst_1000 scripts/diffsky_reconstruction_baselines_h100.slurm
+   sbatch --export=ALL,TASK=map,ROWSET=worst_1000,MAP_MAXITER=200 scripts/diffsky_reconstruction_baselines_h100.slurm
+   sbatch --export=ALL,TASK=mclmc,ROWSET=worst_500,MCLMC_NUM_WARMUP=64,MCLMC_NUM_SAMPLES=128 scripts/diffsky_reconstruction_baselines_h100.slurm
+   sbatch --export=ALL,TASK=compare,ROWSET=worst_1000 scripts/diffsky_reconstruction_baselines_h100.slurm
+   sbatch --export=ALL,TASK=train-supervised-prior,EPOCHS=30 scripts/diffsky_reconstruction_baselines_h100.slurm
+   sbatch --export=ALL,TASK=train-supervised-prior-nn,EPOCHS=30,TRAIN_OUT=outputs/runs/diffsky_supervised_prior_basic_nn scripts/diffsky_reconstruction_baselines_h100.slurm
+
+The wrapper defaults to the reference no-KL autoencoder run and writes rowsets
+under ``outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k``. Override
+``REF_TRAIN_RUN``, ``REF_INFER_RUN``, ``ROWSET_DIR``, ``ROWSET``, or output
+variables to compare another reference run without changing code.
+
 Outputs
 -------
 

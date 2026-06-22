@@ -74,6 +74,7 @@ def train_supervised_prior(
     seed: int | None = None,
     validation_fraction: float | None = None,
     missing_policy: str | None = None,
+    row_indices_file: str | Path | None = None,
     verbose: bool = True,
     progress: bool = True,
 ) -> None:
@@ -105,6 +106,7 @@ def train_supervised_prior(
         missing_policy=policy,
         bounds=cfg.get("bounds", {}),
         limit=limit,
+        row_indices_file=row_indices_file,
     )
     _log(
         verbose,
@@ -170,6 +172,7 @@ def train_supervised_prior(
     prior_frame.to_parquet(out / "learned_prior_samples.parquet", index=False)
     summary = {
         "dataset": str(dataset),
+        "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "schema": truth.schema.to_dict(),
         "parameter_names": list(truth.parameter_names),
         "n_truth_rows": int(truth.theta.shape[0]),

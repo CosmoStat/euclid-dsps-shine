@@ -58,3 +58,29 @@ def test_balanced_inference_selection_and_truth_snapshot(tmp_path) -> None:
     assert set(truth["row_index"]) == set(selected.tolist())
     assert "object_id" in truth
     assert int(truth["row_index"].min()) >= 0
+
+
+def test_row_indices_file_selection(tmp_path) -> None:
+    catalog = tmp_path / "catalog.parquet"
+    pd.DataFrame(
+        {
+            "object_id": np.arange(6) + 10,
+            "redshift_true": np.linspace(0.1, 0.9, 6),
+        }
+    ).to_parquet(catalog, index=False)
+    rows = tmp_path / "rows.txt"
+    rows.write_text("4\n1\n4\n", encoding="utf-8")
+
+    selected, summary = select_catalog_row_indices(
+        _config(catalog),
+        limit=None,
+        selection_mode="random",
+        stratified_strategy="balanced",
+        seed=123,
+        row_indices_file=rows,
+    )
+
+    assert selected.tolist() == [1, 4]
+    assert summary["selection_mode"] == "row_indices_file"
+    assert summary["selected_rows"] == 2
+    assert summary["row_indices_file"] == str(rows)

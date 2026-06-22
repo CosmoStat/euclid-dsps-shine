@@ -32,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
             "diffsky-supervised-prior-report,"
             "diffsky-forward-closure,diffsky-popcosmos-proxy-closure,"
             "diffsky-redshift-ablation,diffsky-dust-ssp-audit,"
+            "diffsky-build-reconstruction-rowsets,"
+            "diffsky-compare-reconstruction,"
             "diffsky-run-full-validation,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
@@ -200,6 +202,9 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--epochs", type=int)
     train.add_argument("--n-samples", type=int)
     train.add_argument("--seed", type=int)
+    train.add_argument("--row-indices-file")
+    train.add_argument("--train-indices-file")
+    train.add_argument("--validation-indices-file")
     train.add_argument(
         "--selection-mode",
         choices=["sequential", "random", "stratified_redshift"],
@@ -231,6 +236,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override amortized.training.validation_every.",
     )
     train.add_argument(
+        "--prior-checkpoint",
+        help="Override amortized.prior.checkpoint.",
+    )
+    train.add_argument(
+        "--input-noise-sigma-scale",
+        type=float,
+        help="Enable encoder input flux noise with this multiple of flux_err.",
+    )
+    train.add_argument(
+        "--input-noise-mode",
+        choices=["encoder_flux"],
+        help="Input-noise injection mode.",
+    )
+    train.add_argument(
         "--quiet",
         action="store_true",
         help="Reduce amortized training console output.",
@@ -260,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--batch-size", type=int)
     infer.add_argument("--jax-batch-size", type=int)
     infer.add_argument("--posterior-samples", type=int)
+    infer.add_argument("--row-indices-file")
     infer.add_argument(
         "--prior-samples",
         type=int,
@@ -321,6 +341,7 @@ def build_parser() -> argparse.ArgumentParser:
     map_prior.add_argument("--checkpoint", required=True)
     map_prior.add_argument("--feature-stats")
     map_prior.add_argument("--limit", type=int)
+    map_prior.add_argument("--row-indices-file")
     map_prior.add_argument("--batch-size", type=int)
     map_prior.add_argument("--n-starts", type=int)
     map_prior.add_argument("--maxiter", type=int)
@@ -355,6 +376,7 @@ def build_parser() -> argparse.ArgumentParser:
     train_prior.add_argument("--schema", help="Truth schema override.")
     train_prior.add_argument("--out", default="outputs/runs/diffsky_supervised_prior")
     train_prior.add_argument("--limit", type=int)
+    train_prior.add_argument("--row-indices-file")
     train_prior.add_argument("--batch-size", type=int)
     train_prior.add_argument("--epochs", type=int)
     train_prior.add_argument("--seed", type=int)
@@ -426,6 +448,45 @@ def build_parser() -> argparse.ArgumentParser:
     redshift_ablation.add_argument(
         "--out",
         default="outputs/reports/diffsky_redshift_ablation",
+    )
+
+    rowsets = sub.add_parser(
+        "diffsky-build-reconstruction-rowsets",
+        help="Build reproducible Diffsky reconstruction rowsets from a reference run.",
+    )
+    rowsets.add_argument("--train-run", required=True)
+    rowsets.add_argument("--infer-run", required=True)
+    rowsets.add_argument(
+        "--out",
+        default="outputs/rowsets/diffsky_reconstruction_reference",
+    )
+    rowsets.add_argument(
+        "--worst-size",
+        action="append",
+        type=int,
+        default=[],
+        help="Worst-N rowset size to write. Repeatable; defaults to 500 and 1000.",
+    )
+    rowsets.add_argument(
+        "--metric",
+        default="median_abs_sigma",
+        help="Object ranking metric from the residual summary aggregation.",
+    )
+
+    compare_reconstruction = sub.add_parser(
+        "diffsky-compare-reconstruction",
+        help="Compare NN, MAP, and MCLMC reconstruction residual summaries.",
+    )
+    compare_reconstruction.add_argument("--out", required=True)
+    compare_reconstruction.add_argument(
+        "--run",
+        action="append",
+        default=[],
+        help="Run directory as label=path. Repeat for each method.",
+    )
+    compare_reconstruction.add_argument(
+        "--rowset",
+        help="Optional row-index file used to restrict the comparison.",
     )
 
     dust_audit = sub.add_parser(
@@ -632,6 +693,9 @@ def _add_amortized_train_arguments(
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--n-samples", type=int)
     parser.add_argument("--seed", type=int)
+    parser.add_argument("--row-indices-file")
+    parser.add_argument("--train-indices-file")
+    parser.add_argument("--validation-indices-file")
     parser.add_argument(
         "--selection-mode",
         choices=["sequential", "random", "stratified_redshift"],
@@ -678,6 +742,10 @@ def _add_amortized_train_arguments(
         help="Override amortized.prior.update_schedule.",
     )
     parser.add_argument(
+        "--prior-checkpoint",
+        help="Override amortized.prior.checkpoint.",
+    )
+    parser.add_argument(
         "--likelihood-temperature-initial",
         type=float,
         help="Initial temperature dividing the photometric NLL.",
@@ -702,6 +770,21 @@ def _add_amortized_train_arguments(
         type=float,
         help="Minimum encoder log_std encouraged by entropy floor.",
     )
+    parser.add_argument(
+        "--input-noise-sigma-scale",
+        type=float,
+        help="Enable encoder input flux noise with this multiple of flux_err.",
+    )
+    parser.add_argument(
+        "--input-noise-mode",
+        choices=["encoder_flux"],
+        help="Input-noise injection mode.",
+    )
+    parser.add_argument(
+        "--input-noise-apply-to",
+        choices=["train", "training", "all", "none"],
+        help="Scope for input-noise augmentation.",
+    )
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--no-progress", action="store_true")
 
@@ -720,6 +803,7 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--decoder-sample-chunk-size", type=int)
     parser.add_argument("--prior-predictive-batch-size", type=int)
+    parser.add_argument("--row-indices-file")
     parser.add_argument(
         "--selection-mode",
         choices=["sequential", "random", "stratified_redshift"],
@@ -795,6 +879,8 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-run-full-validation",
         "diffsky-map-adam-prior",
         "diffsky-dust-ssp-audit",
+        "diffsky-build-reconstruction-rowsets",
+        "diffsky-compare-reconstruction",
     }
     if args.command == "download-assets":
         from .assets import download_assets
@@ -875,6 +961,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "diffsky-redshift-ablation":
         _run_diffsky_redshift_ablation(config, args)
+        return
+    if args.command == "diffsky-build-reconstruction-rowsets":
+        _run_diffsky_build_reconstruction_rowsets(config, args)
+        return
+    if args.command == "diffsky-compare-reconstruction":
+        _run_diffsky_compare_reconstruction(config, args)
         return
     if args.command == "diffsky-dust-ssp-audit":
         _run_diffsky_dust_ssp_audit(config, args)
@@ -1083,6 +1175,9 @@ def _run_amortized_train(
         verbose=not bool(getattr(args, "quiet", False)),
         progress=not bool(getattr(args, "no_progress", False)),
         dataset_label=dataset_label,
+        row_indices_file=getattr(args, "row_indices_file", None),
+        train_indices_file=getattr(args, "train_indices_file", None),
+        validation_indices_file=getattr(args, "validation_indices_file", None),
     )
 
 
@@ -1100,6 +1195,7 @@ def _run_diffsky_train_supervised_prior(config: dict, args) -> None:
         dataset_path=args.dataset,
         schema_name=args.schema,
         limit=args.limit,
+        row_indices_file=getattr(args, "row_indices_file", None),
         batch_size=int(args.batch_size or training.get("batch_size", 256)),
         epochs=int(args.epochs or training.get("epochs", 20)),
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
@@ -1186,6 +1282,35 @@ def _run_diffsky_redshift_ablation(config: dict, args) -> None:
     print(f"[diffsky] redshift ablation report -> {report}")
 
 
+def _run_diffsky_build_reconstruction_rowsets(config: dict, args) -> None:
+    del config
+    from .reconstruction_experiments import build_reconstruction_rowsets
+
+    outputs = build_reconstruction_rowsets(
+        train_run=Path(args.train_run),
+        infer_run=Path(args.infer_run),
+        out_dir=Path(args.out),
+        worst_sizes=tuple(args.worst_size or [500, 1000]),
+        metric=str(args.metric),
+    )
+    print(f"[diffsky] rowsets manifest -> {outputs['manifest']}")
+
+
+def _run_diffsky_compare_reconstruction(config: dict, args) -> None:
+    del config
+    from .diffsky_redshift_ablation import parse_run_specs
+    from .reconstruction_experiments import compare_reconstruction_runs
+
+    if not args.run:
+        raise SystemExit("diffsky-compare-reconstruction requires at least one --run")
+    outputs = compare_reconstruction_runs(
+        out_dir=Path(args.out),
+        runs=parse_run_specs(args.run),
+        rowset_path=Path(args.rowset) if args.rowset else None,
+    )
+    print(f"[diffsky] reconstruction report -> {outputs['report']}")
+
+
 def _run_diffsky_dust_ssp_audit(config: dict, args) -> None:
     from .dust_ssp_audit import write_dust_ssp_audit
 
@@ -1230,12 +1355,15 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     training = dict(amortized.get("training", {}) or {})
     prior = dict(amortized.get("prior", {}) or {})
     posterior_regularization = dict(amortized.get("posterior_regularization", {}) or {})
+    input_noise = dict(amortized.get("input_noise", {}) or {})
     if args.selection_mode is not None:
         data["selection_mode"] = args.selection_mode
     if args.stratified_strategy is not None:
         data["stratified_strategy"] = args.stratified_strategy
     if args.validation_fraction is not None:
         data["validation_fraction"] = float(args.validation_fraction)
+    if getattr(args, "jax_batch_size", None) is not None:
+        training["jax_batch_size"] = int(args.jax_batch_size)
     if args.kl_annealing_epochs is not None:
         training["kl_annealing_epochs"] = int(args.kl_annealing_epochs)
     if args.kl_weight_max is not None:
@@ -1248,6 +1376,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         prior["freeze_epochs"] = int(args.prior_freeze_epochs)
     if getattr(args, "prior_update_schedule", None) is not None:
         prior["update_schedule"] = str(args.prior_update_schedule)
+    if getattr(args, "prior_checkpoint", None) is not None:
+        prior["checkpoint"] = str(args.prior_checkpoint)
     if getattr(args, "likelihood_temperature_initial", None) is not None:
         training["likelihood_temperature_initial"] = float(
             args.likelihood_temperature_initial
@@ -1266,11 +1396,23 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     if getattr(args, "entropy_floor_min_log_std", None) is not None:
         posterior_regularization["entropy_floor_enabled"] = True
         posterior_regularization["min_log_std"] = float(args.entropy_floor_min_log_std)
+    if getattr(args, "input_noise_sigma_scale", None) is not None:
+        input_noise["enabled"] = True
+        input_noise["sigma_scale"] = float(args.input_noise_sigma_scale)
+    if getattr(args, "input_noise_mode", None) is not None:
+        input_noise["mode"] = str(args.input_noise_mode)
+    if getattr(args, "input_noise_apply_to", None) is not None:
+        apply_to = str(args.input_noise_apply_to)
+        input_noise["apply_to"] = apply_to
+        if apply_to == "none":
+            input_noise["enabled"] = False
     amortized["data"] = data
     amortized["training"] = training
     amortized["prior"] = prior
     if posterior_regularization:
         amortized["posterior_regularization"] = posterior_regularization
+    if input_noise:
+        amortized["input_noise"] = input_noise
     config["amortized"] = amortized
     return config
 
@@ -1334,6 +1476,7 @@ def _run_amortized_infer(
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),
         selection_seed=getattr(args, "selection_seed", None),
+        row_indices_file=getattr(args, "row_indices_file", None),
         dataset_label=dataset_label,
     )
 
@@ -1400,6 +1543,7 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),
         selection_seed=getattr(args, "selection_seed", None),
+        row_indices_file=getattr(args, "row_indices_file", None),
         verbose=not bool(getattr(args, "quiet", False)),
     )
     print(f"[map-prior] summary -> {Path(args.out) / 'map_summary.json'}")

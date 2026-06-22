@@ -539,6 +539,83 @@ does not compare raw ``dlog10_sfr_i`` ratios directly to ``logsfr_true``.
 Physical prior distributions do not include ``alpha_sed``; prior predictive
 photometry can depend on the selected global scale.
 
+Input Noise Augmentation
+------------------------
+
+The amortized trainer can inject Gaussian noise only into the encoder input
+fluxes while keeping the likelihood target equal to the original catalog
+photometry. This is a denoising-style augmentation: for each training batch,
+the feature flux is replaced by ``flux + sigma_scale * flux_err * N(0, 1)`` on
+valid bands, then encoder features are recomputed with the run feature stats.
+The observed flux and ``flux_err`` used by the DSPS likelihood are unchanged.
+
+Use CLI overrides for one-off experiments:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml \
+     amortized-train-diffsky \
+     --out outputs/runs/diffsky_autoencoder_input_noise_sigma1 \
+     --train-indices-file outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k/reference_train.txt \
+     --validation-indices-file outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k/reference_validation.txt \
+     --input-noise-sigma-scale 1.0
+
+The equivalent YAML block is:
+
+.. code-block:: yaml
+
+   amortized:
+     input_noise:
+       enabled: true
+       mode: encoder_flux
+       sigma_scale: 1.0
+       apply_to: train
+
+Diffsky Reconstruction Baselines
+--------------------------------
+
+For reconstruction-debug experiments, first freeze the row contract from a
+reference train+inference pair:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml \
+     diffsky-build-reconstruction-rowsets \
+     --train-run outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128 \
+     --infer-run outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128_infer \
+     --out outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k \
+     --worst-size 500 \
+     --worst-size 1000
+
+This writes ``reference_20k.txt``, ``reference_train.txt``,
+``reference_validation.txt``, ``worst_500.txt``, ``worst_1000.txt``, and
+``worst_ranked.csv``. The comparison command accepts any mix of NN inference
+runs, standalone MAP ``fit`` runs, and MCLMC ``posterior`` runs:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml \
+     diffsky-compare-reconstruction \
+     --rowset outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k/worst_1000.txt \
+     --run nn=outputs/runs/diffsky_reconstruction_nn_worst_1000 \
+     --run map=outputs/runs/diffsky_reconstruction_map_worst_1000 \
+     --run mclmc=outputs/runs/diffsky_reconstruction_mclmc_worst_1000 \
+     --out outputs/runs/diffsky_reconstruction_compare_worst_1000
+
+The summary tables report likelihood-normalized flux residuals by method,
+band, and object. The intended first baseline is NN vs standalone DSPS MAP vs
+BlackJAX MCLMC on ``worst_500``; scale to ``worst_1000`` once MCLMC runtime is
+acceptable within the H100 allocation.
+
+For supervised NF-prior tests, use the existing 5D ``diffsky_truth_basic``
+configuration first. Those parameters have catalog truth/proxy columns and are
+therefore scientifically defined. A 12D prior for the current no-KL architecture
+should be trained only from MAP/posterior pseudo-truth estimates, not by
+inventing missing truth columns.
+
 There is no exact published POP-COSMOS prior distribution implemented in this
 repository. FS2 comparison plots therefore compare the learned RealNVP prior
 against amortized posterior samples and available FS2 catalog redshift proxies,

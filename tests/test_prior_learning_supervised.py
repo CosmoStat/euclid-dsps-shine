@@ -85,6 +85,34 @@ def test_load_truth_dataset_uses_bounded_transform(tmp_path: Path) -> None:
     assert np.all(np.isfinite(truth.x))
 
 
+def test_load_truth_dataset_accepts_row_indices_file(tmp_path: Path) -> None:
+    path = tmp_path / "truth.parquet"
+    pd.DataFrame(
+        {
+            "object_id": [10, 11, 12],
+            "redshift_true": [0.1, 0.2, 0.3],
+            "logsm_true": [9.0, 10.0, 11.0],
+            "logsfr_true": [-1.0, 0.5, 0.7],
+        }
+    ).to_parquet(path)
+    rows = tmp_path / "rows.txt"
+    rows.write_text("2\n0\n", encoding="utf-8")
+
+    truth = load_truth_dataset(
+        path,
+        schema_name="diffsky_truth_basic",
+        bounds={
+            "z_obs": [0.0, 1.0],
+            "log10_stellar_mass": [8.0, 12.0],
+            "log10_sfr_at_obs": [-2.0, 1.0],
+        },
+        row_indices_file=rows,
+    )
+
+    assert truth.object_id.tolist() == [10, 12]
+    assert truth.source_rows.tolist() == [0, 2]
+
+
 def test_supervised_prior_diagnostics_skip_constant_corner_columns(tmp_path: Path) -> None:
     truth = pd.DataFrame(
         {

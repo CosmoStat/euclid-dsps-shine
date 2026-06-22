@@ -57,6 +57,7 @@ def run_map_adam_under_prior(
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
+    row_indices_file: str | Path | None = None,
     dataset_label: str = "Diffsky HLTDS",
     verbose: bool = True,
 ) -> dict[str, Any]:
@@ -87,6 +88,7 @@ def run_map_adam_under_prior(
         stratified_strategy=stratified_strategy,
         seed=selection_seed,
         redshift_bins=redshift_bins,
+        row_indices_file=row_indices_file,
     )
     if row_indices is not None:
         np.save(out / "map_indices.npy", row_indices)
