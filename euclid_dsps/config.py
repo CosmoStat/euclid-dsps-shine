@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from .photometric_uncertainty import default_m5_depth_error_model
 from .parameters import (
     DIFFSKY_BASIC_PARAMETER_NAMES,
     DIFFSKY_TRUTH_BASIC_PARAMETER_NAMES,
@@ -636,11 +637,7 @@ BAND_PRESETS["diffsky_hltds_lsst_roman_14_abmag_modelerr"] = [
         # HLTDS public shards expose generated magnitudes, not native survey
         # errors. Use an explicit flux-dependent synthetic error model.
         "sigma_mag": 0.10,
-        "error_model": {
-            "type": "fractional_snr",
-            "snr": 50.0,
-            "min_sigma_fnu_cgs": 1.0e-40,
-        },
+        "error_model": default_m5_depth_error_model(),
         "filter": {
             "kind": "hdf5_group",
             "path": DIFFSKY_HLTDS_FILTER_PATH,

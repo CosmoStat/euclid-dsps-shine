@@ -8,7 +8,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .model import model_mags_jax_dynamic
+from .model import (
+    _jax_result_derived_array,
+    model_mags_jax_dynamic,
+    run_dsps_model_jax_dynamic,
+)
 
 
 def parameter_names_from_config(config: dict[str, Any]) -> tuple[str, ...]:
@@ -180,6 +184,38 @@ def model_mags_from_theta_matrix_jax(
             getattr(context, "model_config", None),
         )
         return model_mags_jax_dynamic(context, model_args, params)
+
+    if theta.ndim == 1:
+        return single(theta)
+    if theta.ndim == 2:
+        return jax.vmap(single)(theta)
+    if theta.ndim == 3:
+        return jax.vmap(jax.vmap(single))(theta)
+    raise ValueError(f"theta must have rank 1, 2, or 3; got shape {theta.shape}")
+
+
+def derived_from_theta_matrix_jax(
+    context,
+    model_args,
+    theta: jnp.ndarray,
+    parameter_names: tuple[str, ...],
+) -> jnp.ndarray:
+    """Evaluate DSPS derived quantities for compact free-parameter vectors."""
+    theta = jnp.asarray(theta, dtype=jnp.float32)
+    if theta.shape[-1] != len(parameter_names):
+        raise ValueError(
+            "theta last dimension mismatch: "
+            f"expected {len(parameter_names)}, got {theta.shape[-1]}"
+        )
+
+    def single(theta_row):
+        params = theta_vector_to_model_param_dict(
+            theta_row,
+            parameter_names,
+            getattr(context, "model_config", None),
+        )
+        result = run_dsps_model_jax_dynamic(context, model_args, params)
+        return _jax_result_derived_array(result)
 
     if theta.ndim == 1:
         return single(theta)

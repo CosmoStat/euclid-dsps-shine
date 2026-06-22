@@ -8,7 +8,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ..photometric_uncertainty import flux_error_from_model
+from ..photometric_uncertainty import (
+    default_m5_depth_error_model,
+    flux_error_from_model,
+)
 from ..photometry import abmag_to_fnu_cgs
 
 
@@ -72,12 +75,8 @@ def standardize_magnitude_photometry(
         frame[f"mag_{band}"] = mag
         frame[f"flux_{band}"] = flux
         if add_synthetic_errors:
-            model = (
-                {"type": "fractional_snr", "snr": float(snr)}
-                if error_model is None
-                else error_model
-            )
-            err = flux_error_from_model(flux, model)
+            model = default_m5_depth_error_model() if error_model is None else error_model
+            err = flux_error_from_model(flux, model, band_name=band)
             frame[f"fluxerr_{band}"] = err
         frame[f"mask_{band}"] = valid
     return frame

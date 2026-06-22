@@ -1994,7 +1994,11 @@ def _flux_error_arrays(
         )
         error_model = band.get("error_model") or band.get("uncertainty_model")
         if error_model:
-            modeled = flux_error_from_model(flux, error_model)
+            modeled = flux_error_from_model(
+                flux,
+                error_model,
+                band_name=str(band["name"]),
+            )
             fallback = np.where(
                 np.isfinite(modeled) & (modeled > 0.0),
                 modeled,

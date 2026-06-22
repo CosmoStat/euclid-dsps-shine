@@ -39,8 +39,22 @@ set -Eeuo pipefail
 #
 # Leave LIMIT empty for the real full-dataset run.
 
-REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
-MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
+if [[ -z "${REPO_DIR:-}" ]]; then
+  if [[ -n "${SLURM_SUBMIT_DIR:-}" && -d "${SLURM_SUBMIT_DIR}/euclid_dsps" ]]; then
+    REPO_DIR="$SLURM_SUBMIT_DIR"
+  elif [[ -n "${WORK:-}" ]]; then
+    REPO_DIR="$WORK/euclid-dsps-shine"
+  else
+    REPO_DIR="$PWD"
+  fi
+fi
+if [[ -z "${MINICONDA_PATH:-}" ]]; then
+  if [[ -n "${WORK:-}" && -d "$WORK/miniconda3" ]]; then
+    MINICONDA_PATH="$WORK/miniconda3"
+  else
+    MINICONDA_PATH="$(dirname "$REPO_DIR")/miniconda3"
+  fi
+fi
 CONDA_ENV="${CONDA_ENV:-shine}"
 OFFLINE="${OFFLINE:-1}"
 
@@ -51,11 +65,12 @@ LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_full_h100.yaml}"
 DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet}"
-SOURCE_DATASET="${SOURCE_DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet}"
+SOURCE_DATASET="${SOURCE_DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet}"
 REDSHIFT_MIN="${REDSHIFT_MIN:-0.0}"
 REDSHIFT_MAX="${REDSHIFT_MAX:-0.35}"
-ERROR_MODEL="${ERROR_MODEL:-fractional_snr}"
+ERROR_MODEL="${ERROR_MODEL:-m5_depth}"
 ERROR_SNR="${ERROR_SNR:-50}"
+FORCE_REBUILD_DATASET="${FORCE_REBUILD_DATASET:-0}"
 RAW_ROOT="${RAW_ROOT:-Data/diffsky/raw/hltds_cosmos_260215_04_14_2026}"
 
 # These defaults are meant to fit a roughly 10h walltime budget on one H100.
@@ -97,7 +112,8 @@ echo "[job] config: $CONFIG"
 echo "[job] dataset: $DATASET"
 echo "[job] source_dataset: $SOURCE_DATASET"
 echo "[job] redshift_range: [$REDSHIFT_MIN, $REDSHIFT_MAX]"
-echo "[job] error_model: $ERROR_MODEL snr=$ERROR_SNR"
+echo "[job] error_model: $ERROR_MODEL snr_if_fractional=$ERROR_SNR"
+echo "[job] force_rebuild_dataset: $FORCE_REBUILD_DATASET"
 echo "[job] offline: $OFFLINE"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
 echo "[job] batch_size: $BATCH_SIZE"
@@ -140,15 +156,26 @@ git status --short --branch
 git rev-parse HEAD
 
 ensure_diffsky_dataset() {
+  case "$FORCE_REBUILD_DATASET" in
+    1|true|TRUE|yes|YES|y|Y)
+      echo "[job] force rebuild requested"
+      ;;
+    *)
+      if [[ -s "$DATASET" ]]; then
+        echo "[job] dataset exists"
+        ls -lh "$DATASET"
+        return
+      fi
+      ;;
+  esac
   if [[ -s "$DATASET" ]]; then
-    echo "[job] dataset exists"
-    ls -lh "$DATASET"
-    return
+    echo "[job] rebuilding existing dataset from source subset"
+  else
+    echo "[job] dataset missing, rebuilding from source subset"
   fi
-  echo "[job] dataset missing, rebuilding from source subset"
   if [[ ! -s "$SOURCE_DATASET" ]]; then
     cat <<MSG
-[job][error] Missing both DATASET and SOURCE_DATASET.
+[job][error] Missing SOURCE_DATASET.
 [job][error] DATASET=$DATASET
 [job][error] SOURCE_DATASET=$SOURCE_DATASET
 [job][hint] Either copy the local subset parquet to Jean-Zay or build the

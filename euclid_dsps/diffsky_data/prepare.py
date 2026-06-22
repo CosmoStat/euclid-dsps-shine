@@ -13,6 +13,7 @@ import pandas as pd
 import yaml
 
 from ..photometric_uncertainty import (
+    default_m5_depth_error_model,
     flux_error_model_payload,
     normalize_flux_error_model,
 )
@@ -223,7 +224,7 @@ def _error_model_payload(
 ) -> dict[str, Any]:
     if add_synthetic_errors:
         normalized = (
-            {"type": "fractional_snr", "snr": float(snr)}
+            default_m5_depth_error_model()
             if model is None
             else normalize_flux_error_model(model)
         )

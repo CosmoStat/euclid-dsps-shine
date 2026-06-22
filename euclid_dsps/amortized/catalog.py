@@ -156,6 +156,7 @@ def learned_prior_samples_frame(
     parameter_names: tuple[str, ...],
     logprior,
     *,
+    derived: dict[str, np.ndarray] | None = None,
     log_alpha_sed: float = 0.0,
     alpha_sed: float = 1.0,
 ) -> pd.DataFrame:
@@ -169,6 +170,7 @@ def learned_prior_samples_frame(
         raise ValueError(f"theta must be [S,D], got {theta.shape}")
     if x.shape[0] != theta.shape[0]:
         raise ValueError(f"x and theta must have same sample count, got {x.shape} and {theta.shape}")
+    derived = _normalized_derived_columns(derived, theta.shape[0])
     rows = []
     for sample_id in range(theta.shape[0]):
         row = {
@@ -183,6 +185,7 @@ def learned_prior_samples_frame(
         for param_index, name in enumerate(parameter_names):
             row[name] = float(theta[sample_id, param_index])
         _add_alpha_corrected_mass(row, alpha_sed)
+        _add_derived_columns(row, derived, sample_id)
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -195,6 +198,29 @@ def _add_alpha_corrected_mass(row: dict, alpha_sed: float) -> None:
     row["log10_stellar_mass_alpha_corrected"] = float(
         log10_mass_alpha_corrected(raw, alpha_sed)
     )
+
+
+def _normalized_derived_columns(
+    derived: dict[str, np.ndarray] | None,
+    n_rows: int,
+) -> dict[str, np.ndarray]:
+    if not derived:
+        return {}
+    out = {}
+    for name, values in derived.items():
+        array = np.asarray(values, dtype=float)
+        if array.shape[0] != n_rows:
+            raise ValueError(
+                f"derived column {name!r} length mismatch: "
+                f"{array.shape[0]} vs {n_rows}"
+            )
+        out[str(name)] = array
+    return out
+
+
+def _add_derived_columns(row: dict, derived: dict[str, np.ndarray], index: int) -> None:
+    for name, values in derived.items():
+        row[name] = float(values[index])
 
 
 def _optional_row_index(row_index, object_id: np.ndarray) -> np.ndarray | None:

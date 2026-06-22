@@ -14,7 +14,7 @@ The current public paths are:
    Data/Euclid FS2 LC galaxy catalog_phz1.parquet
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
    Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
@@ -73,15 +73,16 @@ Inspect local HDF5 files:
      --root Data/diffsky/raw/hltds_cosmos_260215_04_14_2026 \
      --out outputs/diffsky_hltds_04_14_local_inventory.json
 
-Build the full normalized source parquet without inventing photometric errors:
+Build the full normalized source parquet with deterministic synthetic
+``m5_depth`` photometric errors:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-prepare-dataset \
      --raw-root Data/diffsky/raw/hltds_cosmos_260215_04_14_2026 \
      --inventory outputs/diffsky_hltds_04_14_local_inventory.json \
-     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-     --no-synthetic-errors
+     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
+     --error-model m5_depth
 
 Then build the current main continuous-redshift training subset with the
 explicit flux-dependent error model:
@@ -89,12 +90,11 @@ explicit flux-dependent error model:
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-redshift-subset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --redshift-min 0.0 \
      --redshift-max 0.35 \
-     --error-model fractional_snr \
-     --snr 50
+     --error-model m5_depth
 
 Validate readiness for prior-learning experiments:
 
@@ -117,10 +117,10 @@ Write dataset diagnostics:
 The prepared file keeps native HLTDS AB magnitudes and truth columns such as
 ``redshift_true``, ``logsm_true``, ``logssfr_true``, ``logsfr_true``,
 ``logmp_true``, central flags, and size proxies when they are present. The
-source parquet does not create ``fluxerr_*`` columns when
-``--no-synthetic-errors`` is used. The current main subset does create
-``fluxerr_*`` columns with ``fractional_snr`` SNR 50 and is the default input
-for Diffsky training, MAP, and posterior-predictive diagnostics.
+source parquet and current main subset both create ``fluxerr_*`` columns with
+the deterministic ``m5_depth`` model and a PhotErr-style
+``sigma_sys_mag=0.005`` systematic floor. They are the default inputs for
+Diffsky training, MAP, and posterior-predictive diagnostics.
 
 Diffsky SSP Asset
 -----------------

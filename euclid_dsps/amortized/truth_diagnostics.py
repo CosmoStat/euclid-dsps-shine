@@ -28,6 +28,13 @@ POSTERIOR_TRUTH_PAIRS = (
         "log10_stellar_mass_alpha_corrected",
         "logsm_true",
     ),
+    TruthPair("log10_sfr_at_obs", "log10_sfr_at_obs_median", "logsfr_true"),
+    TruthPair(
+        "log10_sfr_at_obs_alpha_corrected",
+        "log10_sfr_at_obs_alpha_corrected",
+        "logsfr_true",
+    ),
+    TruthPair("log10_ssfr_at_obs", "log10_ssfr_at_obs_median", "logssfr_true"),
     TruthPair("tau2_proxy", "tau2_median", "tau2_truth_proxy", "proxy"),
     TruthPair(
         "dust_index_n_proxy",
@@ -40,6 +47,12 @@ POSTERIOR_TRUTH_PAIRS = (
 MAP_TRUTH_PAIRS = (
     TruthPair("z_obs", "z_obs", "redshift_true"),
     TruthPair("log10_stellar_mass", "log10_stellar_mass", "logsm_true"),
+    TruthPair(
+        "log10_sfr_at_obs_alpha_corrected",
+        "log10_sfr_at_obs_alpha_corrected",
+        "logsfr_true",
+    ),
+    TruthPair("log10_ssfr_at_obs", "log10_ssfr_at_obs", "logssfr_true"),
     TruthPair("tau2_proxy", "tau2", "tau2_truth_proxy", "proxy"),
     TruthPair("dust_index_n_proxy", "dust_index_n", "dust_index_truth_proxy", "proxy"),
 )
@@ -377,6 +390,18 @@ def _write_population_overlay_plots(
             "log10_stellar_mass_median",
             "log10_stellar_mass",
         ),
+        (
+            "log10_sfr_at_obs",
+            "logsfr_true",
+            "log10_sfr_at_obs_alpha_corrected",
+            "log10_sfr_at_obs_alpha_corrected",
+        ),
+        (
+            "log10_ssfr_at_obs",
+            "logssfr_true",
+            "log10_ssfr_at_obs_median",
+            "log10_ssfr_at_obs",
+        ),
         ("tau2_proxy", "tau2_truth_proxy", "tau2_median", "tau2"),
         (
             "dust_index_n_proxy",
@@ -426,7 +451,7 @@ def _write_corner_population_plot(
         import matplotlib.pyplot as plt
     except ImportError:
         return []
-    names = list(population_columns)[:4]
+    names = list(population_columns)[:6]
     labels = ("truth", "posterior", "map", "prior")
     colors = {
         "truth": "black",

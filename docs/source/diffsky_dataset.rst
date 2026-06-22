@@ -4,7 +4,7 @@ Diffsky HLTDS Dataset
 Dataset Choice
 --------------
 
-Three local HLTDS Diffsky artifacts are useful for the current validation
+Four local HLTDS Diffsky artifacts are useful for the current validation
 program. They should not be treated as interchangeable because they cover
 different redshift ranges and have different error semantics.
 
@@ -18,14 +18,19 @@ different redshift ranges and have different error semantics.
      - Recommended role
    * - ``hltds_cosmos_260215_04_14_2026_continuous_lowz``
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
-     - ``78651`` objects from the 04/14 prepared source
+     - ``78651`` objects from the 04/14 ``m5_depth`` prepared source
      - ``z = 0.0069 -- 0.3347``; median ``z = 0.250``
      - Main training, no-KL autoencoder, MAP, and inference dataset.
+   * - ``hltds_cosmos_260215_04_14_2026_source_m5depth``
+     - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet``
+     - ``369264`` objects across 16 source files
+     - ``z = 0.007 -- 1.006``; median ``z = 0.693``
+     - Full source artifact with the current synthetic ``fluxerr_*`` contract.
    * - ``hltds_cosmos_260215_04_14_2026_source_noerr``
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet``
      - about 369k objects across 16 source files
      - ``z = 0.007 -- 1.006``; median ``z = 0.693``
-     - Source artifact used to rebuild subsets; not the default training catalog.
+     - Historical source artifact without ``fluxerr_*`` columns.
    * - ``hltds_cosmos_260215_03_31_2026``
      - ``Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet``
      - about 494k objects across 6 source files
@@ -38,8 +43,8 @@ The continuous low-z ``04_14`` subset is the current public config target. Its
 redshift distribution is continuous and easier to learn than the multi-clump
 full 04/14 source distribution, and the subset materializes an explicit
 ``fluxerr_*`` error model used by the likelihood and posterior-predictive
-residual diagnostics. The full ``04_14`` no-error parquet is retained as the
-source artifact for rebuilding subsets. The ``03_31`` sample is still a useful
+residual diagnostics. The full ``04_14`` ``m5_depth`` parquet is the source
+artifact for rebuilding subsets. The ``03_31`` sample is still a useful
 high-redshift candidate after it is regenerated with the same current
 preparation and error-model contract.
 
@@ -166,12 +171,11 @@ It is rebuilt from the full prepared 04/14 source parquet with:
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-redshift-subset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --redshift-min 0.0 \
      --redshift-max 0.35 \
-     --error-model fractional_snr \
-     --snr 50
+     --error-model m5_depth
 
 The companion files are:
 
@@ -183,8 +187,14 @@ The companion files are:
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.truth_summary.csv
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.truth_report.md
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.report.md
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/flux_error_summary.csv
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/redshift_true_distribution.png
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/truth_distributions.png
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/flux_fractional_error_by_band.png
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/flux_snr_by_band.png
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/flux_vs_fluxerr_by_band.png
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/flux_error_model_curves_by_band.png
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/flux_fractional_error_model_curves_by_band.png
 
 The rebuilt subset should show no separated ``z~0.4`` island:
 
@@ -196,9 +206,29 @@ The rebuilt subset should show no separated ``z~0.4`` island:
    :alt: Truth distributions for the Diffsky 04/14 continuous z<0.35 subset.
    :width: 90%
 
+.. image:: _static/diffsky_04_14_continuous_z035_flux_fractional_error_by_band.png
+   :alt: Synthetic fractional flux-error distributions by band.
+   :width: 90%
+
+.. image:: _static/diffsky_04_14_continuous_z035_flux_snr_by_band.png
+   :alt: Synthetic catalog SNR distributions by band.
+   :width: 90%
+
+.. image:: _static/diffsky_04_14_continuous_z035_flux_vs_fluxerr_by_band.png
+   :alt: Synthetic flux-error versus flux by band.
+   :width: 90%
+
+.. image:: _static/diffsky_04_14_continuous_z035_flux_error_model_curves_by_band.png
+   :alt: Synthetic absolute flux-error model curves by band.
+   :width: 90%
+
+.. image:: _static/diffsky_04_14_continuous_z035_flux_fractional_error_model_curves_by_band.png
+   :alt: Synthetic fractional flux-error model curves by band.
+   :width: 90%
+
 On Jean-Zay, the H100 Slurm scripts call the same
 ``diffsky-redshift-subset`` command automatically if the subset parquet is
-missing and the full ``*_photometry_truth_noerr.parquet`` source exists. This
+missing and the full ``*_photometry_truth_m5depth.parquet`` source exists. This
 keeps train/inference jobs from failing on a missing derived subset file.
 
 Integrity Contract
@@ -274,24 +304,137 @@ uses the flux-density columns and writes ``fluxerr_<band>`` columns in
      flux_error_floor_frac: 0.02
 
 Native photometric error columns were not confirmed in the downloaded sample.
-The adopted synthetic error model is therefore explicit and flux dependent:
+The adopted synthetic error model is therefore explicit, deterministic, and
+flux dependent. For object ``i`` and band ``b``:
 
 .. math::
 
-   \sigma_{\mathrm{cat}, i b} =
-   \max\left(\frac{|f_{i b}|}{50}, 10^{-40}\right)
+   f_{5,b} = f_\nu(m_{5,b})
 
-for object ``i`` and band ``b``. The likelihood uses
+.. math::
+
+   \sigma_{\mathrm{rand}, i b}^2 =
+   (0.04-\gamma_b)\,|f_{i b}|\,f_{5,b}
+   + \gamma_b\,f_{5,b}^2
+
+Following the PhotErr convention, the materialized catalog error also includes
+an irreducible systematic term in flux space:
+
+.. math::
+
+   \mathrm{sys\_frac} =
+   10^{\sigma_{\mathrm{sys,mag}} / 2.5} - 1
+
+.. math::
+
+   \sigma_{\mathrm{cat}, i b}^2 =
+   \sigma_{\mathrm{rand}, i b}^2 +
+   \left(\mathrm{sys\_frac}\,|f_{i b}|\right)^2
+
+The current default is ``sigma_sys_mag = 0.005``, i.e. a relative floor of
+about ``0.46%`` in the materialized ``fluxerr_*`` columns.
+
+Equivalently, with explicit terms:
+
+.. math::
+
+   \mathrm{flux\_limit\_5sigma}_b =
+   f_\nu(\mathrm{magnitude\_limit\_5sigma}_b)
+
+.. math::
+
+   \mathrm{catalog\_error\_variance}_{i b} =
+   \mathrm{source\_variance\_weight}_b\,
+   |f_{i b}|\,\mathrm{flux\_limit\_5sigma}_b
+   +
+   \mathrm{background\_variance\_weight}_b\,
+   \mathrm{flux\_limit\_5sigma}_b^2
+   +
+   \left(\mathrm{systematic\_flux\_fraction}\,
+   |f_{i b}|\right)^2
+
+with:
+
+.. math::
+
+   \mathrm{source\_variance\_weight}_b = 0.04-\gamma_b
+
+.. math::
+
+   \mathrm{background\_variance\_weight}_b = \gamma_b
+
+and:
+
+.. math::
+
+   \mathrm{catalog\_error}_{i b} =
+   \sqrt{\mathrm{catalog\_error\_variance}_{i b}}
+
+The random term is the Rubin/LSST ``m5,gamma`` form rewritten in flux space,
+matching the core point-source model used by PhotErr. At ``|f| = f5`` it gives
+``sigma_rand = f5 / 5`` by construction, because ``m5`` is a 5-sigma limiting
+magnitude. ``sigma_cat`` is then slightly larger when ``sigma_sys_mag > 0``.
+The useful interpretation is:
+
+.. math::
+
+   \sigma_{\mathrm{cat}, b}^2 =
+   \sigma_{\mathrm{depth}, b}^2 +
+   \sigma_{\mathrm{source}, b}^2 +
+   \sigma_{\mathrm{sys}, b}^2
+
+with ``gamma_b f5_b^2`` acting as the depth/background term and
+``(0.04-gamma_b)|f|f5_b`` acting as the source/Poisson-like term. The
+``sigma_sys`` term is a small fractional photometric floor. What should
+decrease with luminosity is the relative error ``sigma_flux / flux`` until this
+floor is reached. The absolute error may increase for bright objects because
+source noise and the systematic floor grow with flux, but it grows more slowly
+than the flux until the fractional floor dominates, so the SNR still improves.
+
+For Roman bands, there is no official Roman equivalent of the Rubin ``gamma``
+parameter in the public WFI sensitivity tables. The current synthetic
+approximation uses Roman WFI one-hour point-source 5-sigma depths and sets
+``eta=0.95``, i.e. ``gamma=0.04*eta=0.038``. This keeps the depth term dominant
+while adding a simple non-zero source/Poisson-like term. An ETC/Pandeia-derived
+Roman SNR table should replace this approximation if a more realistic Roman
+noise model is needed.
+
+This is materialized once in the parquet; no new random noise draw is made
+during MAP or amortized inference.
+
+The active likelihood then inflates this catalog uncertainty with the configured
+fractional floor. Current MAP/MCMC paths use the observed flux as the floor
+reference:
 
 .. math::
 
    \sigma_{\mathrm{eff}, i b}^2 =
    \sigma_{\mathrm{cat}, i b}^2 +
-   \left(0.02\,\max(|f_{i b}|, |f_{\mathrm{model}, i b}|)\right)^2
+   \left(0.02\,|f_{i b}|\right)^2
+
+The amortized JAX likelihood and posterior-predictive residual diagnostics use
+the model flux as the floor reference:
+
+.. math::
+
+   \sigma_{\mathrm{eff}, i b}^2 =
+   \sigma_{\mathrm{cat}, i b}^2 +
+   \left(0.02\,|f_{\mathrm{model}, i b}|\right)^2
 
 because the active configs set ``fit.flux_error_floor_frac: 0.02`` and
-``fit.flux_error_jitter: 0.0``. This is a model/likelihood uncertainty, not a
-Poisson derivation from survey exposure metadata.
+``fit.flux_error_jitter: 0.0`` / ``amortized.likelihood.error_jitter: 0.0``.
+The ``fluxerr_*`` columns are catalog synthetic errors, including the
+``0.005 mag`` photometric systematic floor. The configured ``2%`` fractional
+floor is a separate DSPS/model/calibration tolerance. The floor-reference
+difference is an implementation detail that should be unified before comparing
+MAP and amortized likelihood values quantitatively.
+
+The generated diagnostics show the two complementary views:
+``flux_error_model_curves_by_band.png`` shows the absolute error versus flux,
+and ``flux_fractional_error_model_curves_by_band.png`` shows the relative error
+versus flux. With the current Roman ``eta=0.95`` setting and the PhotErr-style
+systematic floor, the Roman absolute error curves are no longer pure depth
+floors.
 
 The dataset manifest uses explicit error model labels:
 
@@ -302,17 +445,21 @@ The dataset manifest uses explicit error model labels:
      - Meaning
    * - ``native_error``
      - Error columns came from the source dataset.
+   * - ``m5_depth``
+     - Current synthetic depth model: Rubin/PhotErr random term plus
+       ``sigma_sys_mag=0.005`` systematic floor in quadrature.
    * - ``fractional_snr``
-     - Synthetic ``fluxerr_* = abs(flux) / snr`` with a positive floor.
+     - Legacy/test synthetic ``fluxerr_* = abs(flux) / snr`` with a positive
+       floor.
    * - ``synthetic_snr_error``
-     - ``fluxerr_*`` columns were synthesized as ``abs(flux) / snr``.
+     - Historical alias for ``fractional_snr``.
    * - ``model_tolerance_mag``
      - Fit configuration uses a magnitude tolerance such as ``sigma_mag``.
    * - ``none``
      - No observation-error columns were written.
 
-The HLTDS no-error prepared dataset uses ``error_model.type: none`` and must
-not be described as having native observational errors.
+The historical HLTDS no-error prepared dataset uses ``error_model.type: none``
+and must not be described as having native observational errors.
 
 Truth Policy
 ------------
@@ -427,11 +574,15 @@ problems, or a mismatch between HLTDS photometry and the simplified DSPS model.
 Amortized Prior Learning
 ------------------------
 
-The main Diffsky amortized config is:
+The main Diffsky joint-prior amortized config is:
 
 .. code-block:: text
 
-   configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
+   configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
+
+It extends the shared base config
+``configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml`` and explicitly sets
+``amortized.prior.source: joint_realnvp``.
 
 It uses the same 14 HLTDS LSST+Roman flux-density bands and trains a Gaussian
 encoder plus RealNVP prior in the 12-parameter HLTDS PopCosmos-like latent:
@@ -479,7 +630,7 @@ Before training, build the compressed HLTDS SSP asset described in
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-train-diffsky \
      --limit 10000 \
      --batch-size 64 \
@@ -492,7 +643,7 @@ Infer posterior samples under the learned prior:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-infer-diffsky \
      --checkpoint outputs/runs/amortized_diffsky_hltds_realnvp_n10000/checkpoints/best.eqx \
      --limit 10000 \
@@ -506,7 +657,7 @@ Compare truth, aggregate posterior, and learned prior:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-prior-overlap-diffsky \
      --run outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
      --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \

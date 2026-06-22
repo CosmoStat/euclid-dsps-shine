@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from euclid_dsps.amortized.catalog import (
+    learned_prior_samples_frame,
     posterior_predictive_flux_frame,
     posterior_summary_frame,
 )
@@ -50,3 +51,19 @@ def test_predictive_flux_frame_keeps_raw_and_scaled_flux() -> None:
         frame["model_flux_scaled_fnu_cgs"],
         2.0 * frame["model_flux_raw_fnu_cgs"],
     )
+
+
+def test_learned_prior_samples_frame_keeps_derived_columns() -> None:
+    frame = learned_prior_samples_frame(
+        x=np.zeros((2, 1)),
+        theta=np.asarray([[10.0], [10.5]]),
+        parameter_names=("log10_stellar_mass",),
+        logprior=np.zeros(2),
+        derived={
+            "log10_sfr_at_obs": np.asarray([0.0, 0.5]),
+            "log10_ssfr_at_obs": np.asarray([-10.0, -10.0]),
+        },
+    )
+
+    assert np.allclose(frame["log10_sfr_at_obs"], [0.0, 0.5])
+    assert np.allclose(frame["log10_ssfr_at_obs"], [-10.0, -10.0])

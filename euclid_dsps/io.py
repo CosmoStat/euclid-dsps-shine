@@ -300,7 +300,13 @@ def build_observation(
         flux_error = None
         sigma_mag = float(band.get("sigma_mag", 0.05))
         if error_model:
-            modeled_error = float(flux_error_from_model(flux_fnu_cgs, error_model))
+            modeled_error = float(
+                flux_error_from_model(
+                    flux_fnu_cgs,
+                    error_model,
+                    band_name=str(band["name"]),
+                )
+            )
             if np.isfinite(modeled_error) and modeled_error > 0.0:
                 flux_error = modeled_error
                 converted = flux_error_to_sigma_mag(

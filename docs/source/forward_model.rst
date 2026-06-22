@@ -167,11 +167,19 @@ of the FS2 contract.
 
 Diffsky HLTDS simple fits now also use flux-space Student-t likelihood. Native
 photometric error columns were not confirmed in the downloaded HLTDS sample,
-so the continuous low-z subset materializes synthetic
-``fluxerr_<band> = max(abs(flux_<band>) / 50, 1e-40)``. The active likelihood
-then adds ``fit.flux_error_floor_frac: 0.02`` in quadrature using the larger of
-observed and model flux. This is a stated model uncertainty, not a Poisson or
-survey-depth noise derivation.
+so the current source and continuous low-z subset materialize synthetic
+``m5_depth`` errors. For each band, ``f5=fnu(m5)`` and
+``sigma_rand^2=(0.04-gamma)*abs(flux)*f5 + gamma*f5^2``. The materialized
+``fluxerr_*`` values then add the PhotErr-style ``sigma_sys_mag=0.005``
+photometric floor in quadrature. LSST bands use the Rubin/LSST ``m5,gamma``
+form; Roman bands currently use WFI one-hour point-source 5-sigma depths with
+``eta=0.95`` so the depth/background term dominates but a source/Poisson-like
+term remains. The active likelihood then adds a separate 2% fractional model
+floor in quadrature. Current MAP/MCMC paths use the
+observed flux as the floor reference, while amortized likelihood and
+posterior-predictive residual diagnostics use the model flux as the floor
+reference; that choice should be unified before comparing MAP and amortized
+likelihood values quantitatively.
 
 What To Check First
 -------------------

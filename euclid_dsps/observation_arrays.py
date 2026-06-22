@@ -112,7 +112,11 @@ def _flux_error_array(
     fallback_sigma_mag = float(band.get("sigma_mag", 0.05))
     error_model = band.get("error_model") or band.get("uncertainty_model")
     if error_model:
-        fallback = flux_error_from_model(flux_fnu_cgs, error_model)
+        fallback = flux_error_from_model(
+            flux_fnu_cgs,
+            error_model,
+            band_name=str(band["name"]),
+        )
     else:
         fallback = np.asarray(
             magerr_to_fluxerr_fnu_cgs(flux_fnu_cgs, fallback_sigma_mag), dtype=float

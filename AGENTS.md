@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reporting/` writes tables and plots, and `workflows/` composes CLI workflows. Configurations live in `configs/`; the active science setups are `configs/popcosmos_binned.yaml` and `configs/popcosmos_diffstar.yaml`. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
+The standalone wrapper lives in `euclid_dsps/`. `model.py` is the DSPS boundary, `io.py` handles parquet rows and photometry units, `filters.py` loads or approximates transmission curves, `fit.py` contains optimization, `reporting/` writes tables and plots, and `workflows/` composes CLI workflows. Configurations live in `configs/`; the active science setups are `configs/diffsky_hltds_04_14_simple_gpu.yaml`, `configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml`, `configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml`, the Diffsky amortized configs, and `configs/fs2_gpu.yaml` as the Euclid comparison path. Local data and DSPS assets are under `Data/`. Generated artifacts belong in `outputs/` and should not be treated as source.
 
 ## Build, Test, and Development Commands
 
@@ -27,9 +27,9 @@ Run the main checks:
 
 ```bash
 python -m compileall euclid_dsps scripts
-python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --index 0 --out outputs/runs/dev_popcosmos_one --sed-samples 1
-python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml fit --limit 20 --batch-size 5 --out outputs/runs/dev_popcosmos_batch --sed-samples 4
-python -m euclid_dsps.cli --config configs/popcosmos_diffstar.yaml fit --index 0 --fit-maxiter 20 --out outputs/runs/dev_popcosmos_diffstar_one_short --sed-samples 1
+python -m euclid_dsps.cli --config configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml fit --limit 8 --batch-size 8 --fit-maxiter 40 --out outputs/runs/dev_diffsky_fixedz_smoke --sed-samples 0 --reporting-level light
+python -m euclid_dsps.cli --config configs/diffsky_hltds_04_14_simple_gpu.yaml fit --limit 16 --batch-size 16 --fit-maxiter 80 --out outputs/runs/dev_diffsky_simple_smoke --sed-samples 0 --reporting-level light
+python -m euclid_dsps.cli --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml diffsky-forward-closure --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet --limit 128 --out outputs/runs/dev_diffsky_trueparam_closure
 ```
 
 Use `fit` only with a small `--limit` while iterating because it runs one optimizer per galaxy.
@@ -43,7 +43,7 @@ Use Python 3.11+ with type hints and small, explicit functions. Keep DSPS-specif
 For changes, run `compileall`, `pytest`, one-row `fit`, and a small batch `fit`. If touching posterior logic, also run:
 
 ```bash
-python -m euclid_dsps.cli --config configs/popcosmos_binned.yaml posterior --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_popcosmos_posterior_one
+python -m euclid_dsps.cli --config configs/diffsky_hltds_04_14_simple_gpu.yaml posterior --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_diffsky_posterior_one
 ```
 
 ## Commit & Pull Request Guidelines

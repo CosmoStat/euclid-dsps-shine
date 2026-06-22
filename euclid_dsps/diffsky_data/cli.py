@@ -16,6 +16,7 @@ from .remote_listing import crawl_remote_tree, write_remote_listing
 from .subset import build_redshift_subset
 from .urls import HLTDS_COSMOS_20260414
 from .validation import validate_for_prior_learning, write_validation_report
+from ..photometric_uncertainty import default_m5_depth_error_model
 
 
 def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
@@ -49,8 +50,8 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     prepare.add_argument("--snr", type=float, default=50.0)
     prepare.add_argument(
         "--error-model",
-        choices=("fractional_snr", "magnitude_tolerance", "fractional_floor"),
-        default="fractional_snr",
+        choices=("m5_depth", "fractional_snr", "magnitude_tolerance", "fractional_floor"),
+        default="m5_depth",
         help="Synthetic per-band flux-error model to write when native errors are absent.",
     )
     prepare.add_argument(
@@ -71,6 +72,7 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
         default=0.0,
         help="Absolute fnu_cgs floor for --error-model fractional_floor.",
     )
+    _add_m5_depth_args(prepare)
     prepare.add_argument(
         "--no-synthetic-errors",
         action="store_true",
@@ -95,14 +97,15 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     subset.add_argument("--seed", type=int, default=42)
     subset.add_argument(
         "--error-model",
-        choices=("preserve", "fractional_snr", "magnitude_tolerance", "fractional_floor"),
-        default="fractional_snr",
+        choices=("preserve", "m5_depth", "fractional_snr", "magnitude_tolerance", "fractional_floor"),
+        default="m5_depth",
         help="Flux-error model to materialize for the subset, or preserve existing columns.",
     )
     subset.add_argument("--snr", type=float, default=50.0)
     subset.add_argument("--sigma-mag", type=float, default=0.10)
     subset.add_argument("--fractional-error", type=float, default=0.02)
     subset.add_argument("--floor-fnu-cgs", type=float, default=0.0)
+    _add_m5_depth_args(subset)
     subset.add_argument("--no-plots", action="store_true")
 
     validate = sub.add_parser("diffsky-validate-dataset", help="Validate prepared Diffsky dataset for prior learning.")
@@ -191,7 +194,9 @@ def run_diffsky_command(args: argparse.Namespace) -> None:
 def _prepare_error_model_from_args(args: argparse.Namespace) -> dict | None:
     if bool(getattr(args, "no_synthetic_errors", False)):
         return None
-    kind = str(getattr(args, "error_model", "fractional_snr"))
+    kind = str(getattr(args, "error_model", "m5_depth"))
+    if kind == "m5_depth":
+        return _m5_depth_error_model_from_args(args)
     if kind == "fractional_snr":
         return {"type": kind, "snr": float(args.snr)}
     if kind == "magnitude_tolerance":
@@ -206,9 +211,11 @@ def _prepare_error_model_from_args(args: argparse.Namespace) -> dict | None:
 
 
 def _subset_error_model_from_args(args: argparse.Namespace) -> dict | None:
-    kind = str(getattr(args, "error_model", "preserve"))
+    kind = str(getattr(args, "error_model", "m5_depth"))
     if kind == "preserve":
         return None
+    if kind == "m5_depth":
+        return _m5_depth_error_model_from_args(args)
     if kind == "fractional_snr":
         return {"type": kind, "snr": float(args.snr)}
     if kind == "magnitude_tolerance":
@@ -220,6 +227,61 @@ def _subset_error_model_from_args(args: argparse.Namespace) -> dict | None:
             "floor_fnu_cgs": float(args.floor_fnu_cgs),
         }
     raise ValueError(f"Unsupported subset error model: {kind}")
+
+
+def _add_m5_depth_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--m5-json",
+        help=(
+            "JSON mapping of band name to 5-sigma AB depth for --error-model m5_depth. "
+            "Values override the built-in LSST coadd + Roman WFI one-hour defaults."
+        ),
+    )
+    parser.add_argument(
+        "--gamma-json",
+        help="JSON mapping of band name to Rubin/LSST gamma for --error-model m5_depth.",
+    )
+    parser.add_argument(
+        "--eta-json",
+        help=(
+            "JSON mapping of band name to background fraction eta for --error-model "
+            "m5_depth; gamma=0.04*eta when gamma is not supplied."
+        ),
+    )
+    parser.add_argument(
+        "--default-eta",
+        type=float,
+        default=1.0,
+        help="Default eta for --error-model m5_depth bands without gamma/eta.",
+    )
+    parser.add_argument(
+        "--sigma-sys-mag",
+        type=float,
+        default=0.005,
+        help=(
+            "PhotErr-style irreducible systematic floor in AB mag for "
+            "--error-model m5_depth. Use 0 to recover the pure random term."
+        ),
+    )
+
+
+def _m5_depth_error_model_from_args(args: argparse.Namespace) -> dict:
+    model = default_m5_depth_error_model()
+    model["m5"].update(_json_mapping(getattr(args, "m5_json", None)))
+    model["gamma"].update(_json_mapping(getattr(args, "gamma_json", None)))
+    model["eta"].update(_json_mapping(getattr(args, "eta_json", None)))
+    model["default_eta"] = float(getattr(args, "default_eta", 1.0))
+    model["sigma_sys_mag"] = float(getattr(args, "sigma_sys_mag", 0.005))
+    return model
+
+
+def _json_mapping(raw: str | None) -> dict[str, float]:
+    if not raw:
+        return {}
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("Expected a JSON object mapping band names to numeric values")
+    return {str(key): float(value) for key, value in payload.items()}
 
 
 def write_diffsky_fit_report(

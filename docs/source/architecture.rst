@@ -27,7 +27,7 @@ assets:
      performance.py  Runtime, throughput, and device-cost summaries.
      photometry.py   Central AB magnitude and Fnu flux conversions.
      posterior_target.py  Pure-JAX posterior target for BlackJAX samplers.
-     amortized/      FS2-only amortized posterior prototype.
+     amortized/      FS2 and Diffsky HLTDS amortized posterior workflows.
      pipeline.py     Deprecated compatibility facade for workflow imports.
      reports.py      Deprecated compatibility facade for reporting imports.
      selection.py    Single-row catalog selection.
@@ -55,7 +55,15 @@ assets:
      diffsky_hltds_04_14_simple_gpu.yaml      Main Diffsky HLTDS simple fit.
      diffsky_hltds_04_14_fixedz_closure_gpu.yaml
                                                Diffsky fixed-redshift closure.
+     diffsky_hltds_04_14_trueparam_closure_gpu.yaml
+                                               Same-parameter Diffsky closure.
      amortized_fs2_realnvp.yaml               FS2 amortized RealNVP prior.
+     amortized_diffsky_hltds_standard_normal_gpu.yaml
+                                               Diffsky amortized baseline.
+     amortized_diffsky_hltds_supervised_prior_gpu.yaml
+                                               Diffsky frozen supervised prior.
+     amortized_diffsky_hltds_joint_realnvp_gpu.yaml
+                                               Diffsky joint RealNVP prior.
    scripts/
      generate_fsps_ssp_grid.py
      generate_fsps_gas_grid.py
@@ -64,10 +72,10 @@ assets:
    Data/             Local data and DSPS assets, not source.
    outputs/          Generated run outputs, not source.
 
-The active runtime path is intentionally narrow: Euclid FS2 MAP/posterior,
-Diffsky HLTDS simple MAP recovery, and FS2 amortized RealNVP prior learning.
-Generated data and spectral assets stay in ``Data/``; generated reports and
-run outputs stay in ``outputs/``.
+The active runtime path is intentionally narrow: Diffsky HLTDS MAP/closure,
+Diffsky supervised-prior and amortized posterior experiments, and Euclid FS2 as
+the comparison dataset. Generated data and spectral assets stay in ``Data/``;
+generated reports and run outputs stay in ``outputs/``.
 
 Layer Responsibilities
 ----------------------
@@ -101,9 +109,9 @@ Layer Responsibilities
 
 ``observation_arrays.py``
   Provides array-based photometry extraction for training workflows. It keeps
-  FS2 fluxes, flux errors, masks, and object identifiers in batch arrays so
-  amortized training does not construct ``GalaxyObservation`` objects in the
-  hot path.
+  configured fluxes, flux errors, masks, and object identifiers in batch arrays
+  so amortized training does not construct ``GalaxyObservation`` objects in the
+  hot path. FS2 uses ten bands; Diffsky HLTDS uses fourteen LSST+Roman bands.
 
 ``cosmos.py``
   Reconstructs template-level COSMOS proxy SEDs from ``sed_cosmos_*``,
@@ -132,21 +140,20 @@ Layer Responsibilities
   concerns.
 
 ``amortized/``
-  Owns the FS2-only amortized posterior prototype: latent transforms,
-  encoder features, Student-t flux likelihood, Equinox encoder, RealNVP prior,
-  negative ELBO, synthetic smoke, training, inference, catalog export, and
-  diagnostics. The encoder and RealNVP prior are optimized jointly by one
-  Optax update, while the DSPS decoder remains fixed behind
-  ``parameter_vectors.py``. Encoder features keep the 10 flux + 10 error
-  contract, using ``asinh(flux / flux_scale)`` for robust bright-object flux
-  normalization and log-normalized errors. Training writes progressive logs,
-  gradient-norm diagnostics, ``best``/``last`` checkpoints, and epoch
-  checkpoints controlled by ``amortized.output.checkpoint_every``. Inference
-  writes normalized posterior predictive residuals, top chi-square objects,
-  feature diagnostics, redshift proxy comparisons, redshift PIT diagnostics,
-  catalog-proxy mass/SFR comparisons, contour-style posterior corners, and
-  learned RealNVP prior samples/corners. It reuses the same DSPS model boundary
-  and does not replace the MAP or MCMC baselines.
+  Owns amortized posterior workflows for FS2 and Diffsky HLTDS: latent
+  transforms, encoder features, Student-t flux likelihood, Equinox encoder,
+  standard-normal / supervised-checkpoint / joint RealNVP priors, negative
+  ELBO, synthetic smoke, training, inference, catalog export, and diagnostics.
+  The DSPS decoder remains fixed behind ``parameter_vectors.py``. Encoder
+  features use configured ``flux_B + err_B`` arrays, with
+  ``asinh(flux / flux_scale)`` for robust bright-object flux normalization and
+  log-normalized errors. Training writes progressive logs, gradient-norm
+  diagnostics, ``best``/``last`` checkpoints, and epoch checkpoints controlled
+  by ``amortized.output.checkpoint_every``. Inference writes likelihood-
+  normalized posterior predictive residuals, top chi-square objects, feature
+  diagnostics, redshift comparisons, PIT diagnostics, posterior/prior corners,
+  and learned RealNVP prior samples. It reuses the same DSPS model boundary and
+  does not replace the MAP or MCMC baselines.
 
 ``nebular.py``
   Reads line metadata already loaded by ``model.py`` and writes diagnostic

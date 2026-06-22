@@ -1,5 +1,343 @@
 # Plan
 
+## 2026-06-22 PhotErr Error-Model Slides
+
+- Status: in progress.
+- Goal: create a Reveal.js slide deck explaining the PhotErr error model,
+  the flux-space formula implemented in this repository, the regenerated error
+  diagnostics, and how `fluxerr_*` plugs into the likelihood.
+- Scope: use local diagnostic PNGs and MathJax equations; do not add a
+  JavaScript build pipeline or package dependency.
+
+## 2026-06-21 No-KL z<0.35 Rerun With Updated Error Model
+
+- Status: implemented.
+- Goal: rerun the pure autoencoder/DSPS reconstruction sanity check on the
+  active continuous low-z Diffsky subset with the updated `m5_depth` +
+  PhotErr-style systematic flux-error model.
+- Dataset status: the local active subset
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`
+  has been regenerated from the `m5_depth` source parquet with
+  `sigma_sys_mag: 0.005`; it contains 78,651 objects with
+  `redshift_true <= 0.35` and no high-redshift 0.4 feature.
+- Slurm update: `scripts/diffsky_autoencoder_nokl_h100.slurm` now defaults to
+  the full active subset (`LIMIT=`), 20 epochs, no KL
+  (`--kl-weight-max 0.0`), and a 20-hour wall time. A smaller smoke run can
+  still be requested explicitly with `LIMIT=10000`.
+- Runtime guard: the script keeps the memory-safe posterior predictive
+  inference knobs (`DECODER_SAMPLE_CHUNK_SIZE` and
+  `PRIOR_PREDICTIVE_BATCH_SIZE`) so the post-training diagnostics can be run on
+  the full subset without repeating the previous H100 OOM pattern.
+- Follow-up adjustment: full-subset 30-epoch training is too slow for the
+  current diagnostic loop. The Slurm wrapper now exposes `SIGMA_SYS_MAG` and
+  `SELECTION_MODE` explicitly. The recommended short rerun is `LIMIT=20000`,
+  `SELECTION_MODE=random`, `FORCE_REBUILD_DATASET=1`, `ERROR_MODEL=m5_depth`,
+  and `SIGMA_SYS_MAG=0.005` so the parquet is rebuilt with the intended
+  PhotErr-inspired systematic floor before training.
+- Runtime fix: the H100 wrappers no longer require `$WORK` to be exported.
+  They infer `REPO_DIR` from `SLURM_SUBMIT_DIR` when submitted from the repo,
+  and infer `MINICONDA_PATH` from the parent directory of `REPO_DIR` when
+  needed.
+- Analysis completed for Jean-Zay job 730441
+  `diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128`: the run used
+  `m5_depth`, `sigma_sys_mag=0.005`, `FORCE_REBUILD_DATASET=1`, random
+  20k-row selection, and `kl_weight_max=0.0`. Training is stable and improves
+  through the run, with the best validation checkpoint at epoch 27.
+- Reconstruction verdict: the no-KL encoder+DSPS path recovers the central
+  photometry qualitatively better than the previous run, but it does not yet
+  pass a likelihood-calibrated flux-reconstruction gate. On the 20k selected
+  objects, `residual_sigma_median=(flux_in-flux_out)/sigma_eff` has global
+  median `-0.38`, robust width `~1.90 sigma`, standard deviation `4.70`,
+  `24.3%` of band residuals outside `|3 sigma|`, and `12.9%` outside
+  `|5 sigma|`. Validation residuals are essentially the same as train
+  residuals, so this is not simply a train/validation overfit artifact.
+- Dominant residual failures remain band-dependent: `lsst_u` and `lsst_g`
+  have median absolute residuals of roughly `6.8 sigma` and `5.4 sigma`, while
+  `roman_F129`, `roman_F146`, and `roman_F158` are close to acceptable.
+- Follow-up diagnostics update: future amortized inference outputs now add
+  exact DSPS-derived `log10_sfr_at_obs` and `log10_ssfr_at_obs` quantities to
+  posterior summaries and diagnostic prior samples. Extended truth comparisons
+  and the truth/posterior/prior population corner include SFR and sSFR when
+  `logsfr_true` and `logssfr_true` are available.
+
+## 2026-06-21 PhotErr-Inspired Systematic Floor
+
+- Status: implemented.
+- Goal: align the synthetic `m5_depth` flux-error model with the core PhotErr
+  point-source formulation without adding a runtime dependency on `photerr`.
+- Planned model: keep the existing Rubin/PhotErr random term
+  `sigma_rand^2 = (0.04 - gamma) * abs(flux) * f5 + gamma * f5^2`, then add
+  the PhotErr-style irreducible systematic floor in quadrature,
+  `sigma_sys^2 = (sys_frac * abs(flux))^2`, with
+  `sys_frac = 10 ** (sigma_sys_mag / 2.5) - 1` and default
+  `sigma_sys_mag = 0.005`.
+- Scope: implement the formula in `photometric_uncertainty.py`, expose the
+  default in manifests/config payloads, update tests and docs, and run targeted
+  validation. Do not add `photerr` as a package dependency.
+- Completed: added `DEFAULT_PHOTERR_SIGMA_SYS_MAG = 0.005` and the quadrature
+  systematic term to the `m5_depth` model, exposed `--sigma-sys-mag` on
+  Diffsky dataset/subset generation, and recorded `sigma_sys_mag` in manifests.
+- Completed: regenerated
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet`
+  and
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`.
+  The current manifests now declare `sigma_sys_mag: 0.005`.
+- Completed: regenerated subset flux-error diagnostics and analytical
+  error-vs-flux curves, including the Sphinx static PNG copies.
+- Validation completed: `pytest tests/test_photometry.py
+  tests/test_diffsky_prepare_dataset.py -q`, `python -m compileall euclid_dsps
+  scripts`, `diffsky-validate-dataset`, `pytest tests/test_config.py
+  tests/test_cli.py tests/test_diffsky_validation.py -q`, strict Sphinx build,
+  and `git diff --check`.
+
+## 2026-06-19 Full-Dataset No-KL m5-Depth Rerun Setup
+
+- Status: implemented.
+- Goal: rerun the pure autoencoder/DSPS sanity check on the full active
+  Diffsky dataset after regenerating or copying the new `m5_depth` `fluxerr_*`
+  model.
+- Added `FORCE_REBUILD_DATASET=1` support to the H100 autoencoder, inference,
+  and full-validation Slurm scripts. When set, the scripts rebuild the active
+  subset parquet from `SOURCE_DATASET` even if `DATASET` already exists; when
+  unset, an existing copied parquet is used as-is.
+- Fixed full-dataset overrides for the autoencoder and inference scripts:
+  `LIMIT=` and `INFER_LIMIT=` now mean no row limit instead of falling back to
+  the old 10k/5k defaults.
+- Current default generated dataset contract in the H100 scripts:
+  `DATASET=Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`,
+  rebuilt from
+  `SOURCE_DATASET=Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet`
+  with `ERROR_MODEL=m5_depth`, `REDSHIFT_MIN=0.0`, and
+  `REDSHIFT_MAX=0.35`.
+
+## 2026-06-19 No-KL z<0.35 Run Analysis
+
+- Status: completed.
+- Scope: analyze the completed Jean-Zay run
+  `outputs/runs/diffsky_autoencoder_nokl_z035_retry1` and its inference output
+  `outputs/runs/diffsky_autoencoder_nokl_z035_retry1_infer`.
+- Checks to perform: confirm KL was disabled in the objective, inspect
+  train/validation likelihood convergence, summarize posterior-predictive
+  normalized residual distributions globally and per band, inspect redshift and
+  truth diagnostics, and identify whether the no-KL autoencoder passes the
+  flux-reconstruction sanity gate.
+- Confirmed the run is genuinely no-KL in the objective: all logged rows have
+  `kl_weight=0.0`, the phase is `joint_no_prior`, the prior source is
+  `standard_normal`, `train_prior=false`, and `prior_grad_norm=0.0`. The logged
+  `kl_mc_mean` is only a diagnostic and is not multiplied into the loss.
+- Training/validation NLL improves through epoch 12, and the best checkpoint is
+  epoch 12. The run is numerically stable, but the inference closure gate fails.
+- Flux-reconstruction sanity verdict: fail under the current likelihood errors.
+  The global normalized residual distribution has mean `1.47`, standard
+  deviation `7.58`, median `-0.10`, `37.8%` outside `|3 sigma|`, and `24.5%`
+  outside `|5 sigma|`.
+- Dominant failing bands: `lsst_u`, `lsst_g`, `lsst_r`, `roman_F062`,
+  `lsst_i`, and `roman_F213`. Median absolute residuals are especially large
+  for `lsst_u` (`13.4 sigma`), `lsst_g` (`8.1 sigma`), `lsst_r`
+  (`4.1 sigma`), and `roman_F062` (`4.1 sigma`).
+- Inferred redshift collapses to the upper bound: median `z_obs_median` is
+  `0.34994`, `97.4%` of objects have `z_obs_median > 0.345`, and `90.9%` have
+  `z_obs_median > 0.349`. The median 68% posterior width in redshift is
+  `7.3e-5`, so the posterior is extremely overconfident.
+- Closure metrics fail on redshift: photo-z median bias `0.0804`, `z_obs`
+  median bias `0.1004`, and `coverage_68=0.0`. Stellar mass median bias is
+  moderate (`0.182 dex`), but this is not enough to accept the run.
+- The scalar `posterior_predictive_chi2_median` is `inf` for all 10k inference
+  objects while the per-band residual summary is finite. Treat that scalar as a
+  diagnostics bug/gap for this run and use
+  `posterior_predictive_residual_summary.parquet` plus
+  `posterior_predictive_normalized_residual_tails.csv` instead.
+- Recommended next gate: do not proceed to full KL/NF science training from
+  this checkpoint. First isolate whether the issue is the DSPS/data/error model
+  or the amortized encoder by running a redshift-fixed/truth-redshift no-KL
+  closure and a small likelihood-only MAP/z-grid check on the same z<0.35
+  subset.
+
+## 2026-06-19 Synthetic Flux Error Implementation Plan
+
+- Status: implemented.
+- Goal: replace the main Diffsky `fractional_snr` synthetic errors with a
+  simple band-depth error model that depends on flux, remains deterministic, and
+  is usable for all LSST+Roman bands.
+- Model: use `sigma_cat_b^2 = 0.04 * ((1 - eta_b) * abs(flux_b) * f5_b +
+  eta_b * f5_b^2)`, where `f5_b = fnu(m5_b)` and `eta_b` is the background
+  fraction of the 5-sigma variance. This is equivalent to the Rubin/LSST
+  `m5,gamma` form with `gamma_b = 0.04 * eta_b`.
+- LSST defaults: use the Rubin/LSST `m5,gamma` model for LSST bands. `m5_b`
+  must be chosen from the intended scenario, e.g. single-visit, 10-year coadd,
+  or HLTDS-like synthetic depth. `gamma_b` can be configured per band, with
+  Science Book/rubin_sim values as defaults.
+- Roman defaults: do not reuse LSST `gamma` as an official Roman model. Use
+  Roman WFI 5-sigma AB sensitivities as `m5_b`; set `eta_b=1.0` for a pure
+  depth floor or `eta_b~0.95` for a simple source-plus-background approximation
+  until an ETC/Pandeia-derived SNR table is available.
+- Integration: add a `depth_flux` or `m5_depth` error-model type in
+  `photometric_uncertainty.py`, expose per-band `m5` and `eta/gamma` through
+  `diffsky-redshift-subset`, update `configs/diffsky_dataset_hltds_04_14.yaml`
+  and H100 Slurm defaults, regenerate the `continuous_lowz_fluxerr` parquet,
+  and update docs/manifests to distinguish catalog/statistical `fluxerr_*` from
+  the likelihood model floor.
+- Likelihood cleanup: keep `fluxerr_*` as catalog noise and use a separate
+  `flux_error_floor_frac` only for model/calibration tolerance. Apply the same
+  floor reference convention in MAP/MCMC and amortized likelihoods before
+  comparing likelihood values across methods.
+- Completed: added the `m5_depth` model to `photometric_uncertainty.py` and
+  threaded `band_name` through dataset generation and all observation-loading
+  fallbacks (`io.py`, `observation_arrays.py`, and workflow batch arrays).
+- Completed: changed Diffsky dataset generation defaults and H100 preflight
+  scripts from `fractional_snr` to `m5_depth`; configs now point to
+  `hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet` as the
+  full source artifact.
+- Completed: regenerated the full source parquet
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet`
+  and the active low-z subset
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`
+  with `m5_depth` `fluxerr_*` columns.
+- Completed: generated error diagnostics under
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr/`:
+  `flux_error_summary.csv`, `flux_fractional_error_by_band.png`,
+  `flux_snr_by_band.png`, and `flux_vs_fluxerr_by_band.png`.
+- Completed: generated explanatory per-band error-vs-flux diagnostics:
+  `flux_error_model_curves_by_band.png`,
+  `flux_fractional_error_model_curves_by_band.png`, individual
+  `flux_error_model_curves/flux_error_model_curve_<band>.png` files, and
+  `flux_error_model_curve_summary.csv`.
+- Completed: updated Roman synthetic noise from a pure depth approximation
+  (`eta=1.0`, `gamma=0.04`) to `eta=0.95` (`gamma=0.038`) so Roman bands retain
+  a non-zero source/Poisson-like term while remaining depth dominated.
+  Regenerated the full source parquet, active low-z subset, manifests, standard
+  error diagnostics, and model-curve plots. Rebuilt `docs/_build/html` with the
+  explanation of absolute versus relative error.
+- Validation completed: targeted tests
+  `pytest tests/test_photometry.py tests/test_diffsky_prepare_dataset.py
+  tests/test_diffsky_validation.py -q`, config/CLI tests
+  `pytest tests/test_config.py tests/test_cli.py -q`, `python -m compileall
+  euclid_dsps scripts`, `bash -n` on the H100 Slurm scripts,
+  `diffsky-validate-dataset` on the regenerated low-z subset, strict Sphinx
+  build, and `git diff --check`.
+
+## 2026-06-19 Web Review of Synthetic Photometric Errors
+
+- Status: completed.
+- Scope: check external survey/photometry references for whether the current
+  `fluxerr_* = abs(flux) / 50` model is scientifically appropriate.
+- Finding: the formula is internally coherent only as a constant-SNR tolerance
+  model. It follows directly from `SNR = flux / sigma`, but it assumes every
+  band and every object is measured at the same fractional precision.
+- Finding: it is not a realistic Rubin/Roman/HLS-style photometric error model.
+  Survey references compute SNR from source counts plus sky/background,
+  read/dark/instrumental noise, aperture/PSF footprint, exposure time, object
+  size, and band-dependent limiting depth. Roman WFI documentation also gives
+  band/source-size/integration-dependent 5-sigma AB limits.
+- Recommended fix: replace the main science synthetic-errors path with a
+  band-dependent depth model, e.g. `sigma_depth_b = fnu(m5_b) / 5`, then combine
+  it in quadrature with an explicit calibration/model floor. Keep
+  `abs(flux)/50` only for closure/smoke tests where the desired assumption is a
+  fixed fractional tolerance.
+- Recommended fix: avoid double-counting the same fractional uncertainty in
+  both materialized `fluxerr_*` and `fit.flux_error_floor_frac`; decide whether
+  `fluxerr_*` means catalog/statistical noise and `flux_error_floor_frac` means
+  model/calibration tolerance, then apply the same convention in MAP/MCMC and
+  amortized likelihoods.
+
+## 2026-06-19 Documentation Contract Cleanup
+
+- Status: completed.
+- Scope: update repository guidance and public docs after the documentation,
+  dataset, and flux-error audit. Keep the public path on the
+  `continuous_lowz_fluxerr` Diffsky subset, document the deterministic
+  `fluxerr_*` generation, and remove stale references to removed PopCosmos and
+  FS2-only amortized paths.
+- Completed: refreshed `AGENTS.md`, the top-level README, `configs/README.md`,
+  and Sphinx pages for architecture, dataset, forward-model, and run setup.
+  Public commands now build the no-error 04/14 source parquet, materialize the
+  `z < 0.35` continuous subset with `fractional_snr` SNR 50 errors, and use the
+  `continuous_lowz_fluxerr` dataset for Diffsky MAP, closure, supervised-prior,
+  amortized, and diagnostics examples.
+- Completed: documented that `flux_*` columns are AB-magnitude-derived
+  `fnu_cgs` fluxes and that current `fluxerr_*` columns are deterministic
+  likelihood inputs, `max(abs(flux) / 50, 1e-40)`, not native survey errors or
+  per-fit random draws.
+- Follow-up: code still uses observed-flux fractional floors for MAP/MCMC and
+  model-flux fractional floors for amortized likelihood/residual diagnostics.
+  The docs now state this explicitly; unify the implementation before using
+  absolute MAP-vs-amortized likelihood values as a quantitative comparison.
+- Validation completed: `git diff --check`, `python -m compileall euclid_dsps
+  scripts`, and `uv run python -m sphinx -W --keep-going -b html docs/source
+  outputs/doc_audit_html`.
+
+## 2026-06-19 Documentation, Dataset, and Flux-Error Audit
+
+- Status: completed.
+- Scope: compare README/Sphinx/config documentation against the current
+  checkout, local processed datasets, public configs, and implemented
+  flux-error/likelihood paths.
+- Questions to answer: whether dataset choices and artifacts are documented
+  coherently, whether stale config names remain in the docs, and whether the
+  per-band flux-error model is random or an explicit deterministic likelihood
+  assumption.
+- Findings: the main Diffsky dataset contract is coherent in code/configs and
+  current Sphinx pages: active public configs point to
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`,
+  which exists locally with `78651` objects, `z=0.006876--0.334662`, 14
+  `flux_*` bands, and 14 `fluxerr_*` bands documented as synthetic
+  `fractional_snr` SNR 50 errors in both manifest and schema.
+- Findings: the top-level README is partially stale because several example
+  Diffsky commands still pass the source
+  `*_photometry_truth_noerr.parquet` to closure/prior/overlap/redshift
+  diagnostics, while `docs/source/run_setup.rst` and active configs use the
+  `continuous_lowz_fluxerr` subset.
+- Findings: `configs/README.md` and `docs/source/diffsky_dataset.rst` still
+  describe `amortized_diffsky_hltds_04_14_realnvp_gpu.yaml` as the main
+  Diffsky amortized config, but the public command docs promote
+  `amortized_diffsky_hltds_joint_realnvp_gpu.yaml`, which extends the base and
+  explicitly sets `prior.source: joint_realnvp`.
+- Findings: `docs/source/architecture.rst` is stale for amortized inference:
+  it still says `amortized/` is FS2-only and lists only the old narrow config
+  set, while the current code/configs support Diffsky HLTDS amortized training,
+  inference, prior overlap, sharded finalization, and H100 validation.
+- Findings: the synthetic flux-error model is deterministic after dataset
+  materialization, not random during fitting:
+  `fluxerr_* = max(abs(flux) / 50, 1e-40)` for the main subset. The
+  likelihood then adds a 2% fractional floor plus jitter in quadrature.
+- Blocker/gap: the documentation overstates the effective uncertainty formula
+  as using `max(abs(obs_flux), abs(model_flux))`; current code uses observed
+  flux for MAP/MCMC/posterior-target paths and model flux for amortized
+  likelihood/posterior-predictive diagnostics unless `error_floor_reference`
+  is overridden.
+- Blocker/gap: older local processed datasets with synthetic `fluxerr_*`
+  columns (`*_photometry_truth.parquet` and `03_31`) have manifests that note
+  synthetic SNR errors, but their schema JSON files do not list
+  `flux_error_columns`; they should be treated as historical artifacts or
+  regenerated if promoted again.
+- Validation completed: public config-load smoke for Diffsky/FS2 configs,
+  local parquet/manifest/schema inventory, CLI help checks, and
+  `uv run python -m sphinx -W --keep-going -b html docs/source outputs/doc_audit_html`.
+
+## 2026-06-19 Jean-Zay Dataset Preflight For z<0.35 Runs
+
+- Status: implemented on branch `feature/diffsky-likelihood-sanity-plan`.
+- Root cause from Jean-Zay logs: the no-KL job used the intended main dataset
+  path,
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`,
+  but that derived parquet was not present in the remote checkout, so training
+  failed during catalog fingerprinting before any model step.
+- Updated H100 Slurm scripts to treat the z<0.35 continuous subset as a
+  first-class runtime dependency. Before training/inference/validation they now
+  check `DATASET`, print its size when present, or rebuild it with
+  `diffsky-redshift-subset` from `SOURCE_DATASET` using
+  `REDSHIFT_MIN=0.0`, `REDSHIFT_MAX=0.35`, `ERROR_MODEL=fractional_snr`, and
+  `ERROR_SNR=50`.
+- The same preflight was added to:
+  `scripts/diffsky_autoencoder_nokl_h100.slurm`,
+  `scripts/diffsky_amortized_infer_h100.slurm`, and
+  `scripts/diffsky_full_validation_h100.slurm`.
+- Documentation updated to state that the main subset has `78651` objects and
+  that H100 entry points can rebuild the derived subset on Jean-Zay when the
+  source `*_photometry_truth_noerr.parquet` exists.
+- Validation completed: `bash -n` on the three edited Slurm scripts, rebuilt
+  Sphinx HTML in both documented output locations, and `git diff --check`.
+
 ## 2026-06-18 Remove 0.4 Redshift Island From Main Subset
 
 - Status: implemented on branch `feature/diffsky-likelihood-sanity-plan`.

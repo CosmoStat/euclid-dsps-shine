@@ -83,22 +83,21 @@ source parquet with:
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-redshift-subset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
      --redshift-min 0.0 \
      --redshift-max 0.35 \
-     --error-model fractional_snr \
-     --snr 50
+     --error-model m5_depth
 
 This writes ``78651`` objects in the current local build, companion
-manifest/schema/truth reports, and the redshift/truth distribution plots. The
-old ``*_photometry_truth_noerr.parquet`` file is only the source artifact for
-this subset.
+manifest/schema/truth reports, and the redshift/truth/error distribution plots.
+The old ``*_photometry_truth_noerr.parquet`` file is a historical source
+artifact and is not the default rebuild input.
 
 The H100 Slurm entry points run this same preflight automatically. If
 ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
 is missing on Jean-Zay but
-``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet``
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet``
 exists, they rebuild the ``z < 0.35`` subset before training or inference.
 If both files are missing, copy the local subset parquet to Jean-Zay or build
 the full source parquet first.
@@ -408,7 +407,7 @@ For the written note on SSP/dust consistency, generate:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml \
+     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      diffsky-dust-ssp-audit \
      --out outputs/reports/diffsky_dust_ssp_audit
 

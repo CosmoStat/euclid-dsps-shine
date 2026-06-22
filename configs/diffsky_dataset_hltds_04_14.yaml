@@ -3,7 +3,7 @@ extends: diffsky_hltds_04_14_simple_gpu.yaml
 diffsky_dataset:
     name: hltds_cosmos_260215_04_14_2026_continuous_lowz
     raw_root: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026
-    source_processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet
+    source_processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet
     processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
     manifest_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml
     schema_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.schema.json
@@ -15,5 +15,38 @@ diffsky_dataset:
         min: 0.0
         max: 0.35
     error_model:
-        type: fractional_snr
-        snr: 50.0
+        type: m5_depth
+        depth_reference: LSST 10-year coadd for lsst_*; Roman WFI one-hour point-source for roman_* with eta=0.95 synthetic source-noise mixing; PhotErr-style sigmaSys=0.005 mag systematic floor.
+        sigma_sys_mag: 0.005
+        m5:
+            lsst_u: 26.1
+            lsst_g: 27.4
+            lsst_r: 27.5
+            lsst_i: 26.8
+            lsst_z: 26.1
+            lsst_y: 24.9
+            roman_F062: 27.97
+            roman_F087: 27.63
+            roman_F106: 27.60
+            roman_F129: 27.60
+            roman_F146: 28.01
+            roman_F158: 27.52
+            roman_F184: 26.95
+            roman_F213: 25.64
+        gamma:
+            lsst_u: 0.037
+            lsst_g: 0.038
+            lsst_r: 0.039
+            lsst_i: 0.039
+            lsst_z: 0.040
+            lsst_y: 0.040
+        eta:
+            roman_F062: 0.95
+            roman_F087: 0.95
+            roman_F106: 0.95
+            roman_F129: 0.95
+            roman_F146: 0.95
+            roman_F158: 0.95
+            roman_F184: 0.95
+            roman_F213: 0.95
+        default_eta: 1.0

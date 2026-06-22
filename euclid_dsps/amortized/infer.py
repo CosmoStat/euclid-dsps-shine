@@ -22,7 +22,8 @@ from euclid_dsps.calibration import (
 from euclid_dsps.diffsky_redshift_ablation import write_redshift_metrics_for_run
 from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, write_json
-from euclid_dsps.model import dynamic_model_args, load_context
+from euclid_dsps.model import DERIVED_QUANTITY_NAMES, dynamic_model_args, load_context
+from euclid_dsps.parameter_vectors import derived_from_theta_matrix_jax
 
 from .catalog import (
     learned_prior_samples_frame,
@@ -454,6 +455,13 @@ def infer_amortized_fs2(
             log_alpha_sed=log_alpha_sed,
             alpha_sed=alpha_sed,
         )
+        _add_posterior_summary_derived_columns(
+            summary_frame,
+            context,
+            model_args,
+            latent_spec.names,
+            alpha_sed=alpha_sed,
+        )
         predictive_frame = (
             posterior_predictive_flux_frame(
                 object_id,
@@ -621,6 +629,14 @@ def infer_amortized_fs2(
         jax.device_get(prior_theta),
         latent_spec.names,
         jax.device_get(prior_logprob),
+        derived=_derived_columns_from_theta(
+            context,
+            model_args,
+            jax.device_get(prior_theta),
+            latent_spec.names,
+            alpha_sed=alpha_sed,
+            summary=False,
+        ),
         log_alpha_sed=log_alpha_sed,
         alpha_sed=alpha_sed,
     )
@@ -1238,6 +1254,97 @@ def _inference_shard_signature_matches(
 
 def _write_shard_manifest(out: Path, payload: dict[str, Any]) -> None:
     write_json(out / "posterior_shards_manifest.json", payload)
+
+
+def _add_posterior_summary_derived_columns(
+    summary: pd.DataFrame,
+    context,
+    model_args,
+    parameter_names: tuple[str, ...],
+    *,
+    alpha_sed: float,
+) -> None:
+    if summary.empty:
+        return
+    columns = [f"{name}_median" for name in parameter_names]
+    if any(column not in summary for column in columns):
+        return
+    theta = summary[columns].to_numpy(dtype=float)
+    derived = _derived_columns_from_theta(
+        context,
+        model_args,
+        theta,
+        parameter_names,
+        alpha_sed=alpha_sed,
+        summary=True,
+    )
+    for name, values in derived.items():
+        summary[name] = values
+
+
+def _derived_columns_from_theta(
+    context,
+    model_args,
+    theta: np.ndarray,
+    parameter_names: tuple[str, ...],
+    *,
+    alpha_sed: float,
+    summary: bool,
+) -> dict[str, np.ndarray]:
+    theta = np.asarray(theta, dtype=float)
+    if theta.size == 0:
+        return {}
+    derived_values = np.asarray(
+        jax.device_get(
+            derived_from_theta_matrix_jax(
+                context,
+                model_args,
+                jnp.asarray(theta, dtype=jnp.float32),
+                parameter_names,
+            )
+        ),
+        dtype=float,
+    )
+    derived = {
+        name: derived_values[:, index]
+        for index, name in enumerate(DERIVED_QUANTITY_NAMES)
+    }
+    log_sfr = np.asarray(derived["log10_sfr_at_obs"], dtype=float)
+    mass_index = (
+        parameter_names.index("log10_stellar_mass")
+        if "log10_stellar_mass" in parameter_names
+        else None
+    )
+    log_mass = (
+        theta[:, mass_index]
+        if mass_index is not None
+        else np.full(theta.shape[0], np.nan)
+    )
+    log_alpha = float(np.log10(max(float(alpha_sed), 1.0e-300)))
+    out: dict[str, np.ndarray] = {
+        "sfr_at_obs_msun_per_yr": np.asarray(
+            derived["sfr_at_obs_msun_per_yr"],
+            dtype=float,
+        ),
+        "log10_sfr_at_obs": log_sfr,
+        "log10_sfr_at_obs_alpha_corrected": log_sfr + log_alpha,
+        "log10_ssfr_at_obs": log_sfr - log_mass,
+        "log10_ssfr_at_obs_alpha_corrected": (log_sfr + log_alpha)
+        - (log_mass + log_alpha),
+    }
+    for index in range(1, 8):
+        name = f"sfr_bin_{index}"
+        if name in derived:
+            out[name] = np.asarray(derived[name], dtype=float)
+    if summary:
+        renamed = {}
+        for name, values in out.items():
+            if name.endswith("_alpha_corrected"):
+                renamed[name] = values
+            else:
+                renamed[f"{name}_median"] = values
+        return renamed
+    return out
 
 
 def _model_flux_from_x_sample_chunks(

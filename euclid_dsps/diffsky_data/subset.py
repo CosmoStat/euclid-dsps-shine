@@ -88,7 +88,11 @@ def _materialize_flux_errors(frame: pd.DataFrame, model: dict[str, Any]) -> None
         if not column.startswith("flux_") or column.startswith("fluxerr_"):
             continue
         band = column.removeprefix("flux_")
-        frame[f"fluxerr_{band}"] = flux_error_from_model(frame[column].to_numpy(), cfg)
+        frame[f"fluxerr_{band}"] = flux_error_from_model(
+            frame[column].to_numpy(),
+            cfg,
+            band_name=band,
+        )
 
 
 def _subset_report(
@@ -314,3 +318,88 @@ def _write_distribution_plots(frame: pd.DataFrame, output_path: Path) -> None:
         fig.tight_layout()
         fig.savefig(plot_dir / "truth_distributions.png", dpi=150)
         plt.close(fig)
+    _write_flux_error_diagnostics(frame, plot_dir, plt)
+
+
+def _write_flux_error_diagnostics(frame: pd.DataFrame, plot_dir: Path, plt: Any) -> None:
+    bands = [
+        column.removeprefix("flux_")
+        for column in frame.columns
+        if column.startswith("flux_")
+        and not column.startswith("fluxerr_")
+        and f"fluxerr_{column.removeprefix('flux_')}" in frame
+    ]
+    if not bands:
+        return
+    rows = []
+    frac_by_band = []
+    snr_by_band = []
+    scatter_payload = []
+    rng = np.random.default_rng(12345)
+    for band in bands:
+        flux = pd.to_numeric(frame[f"flux_{band}"], errors="coerce").to_numpy(dtype=float)
+        err = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(dtype=float)
+        ok = np.isfinite(flux) & np.isfinite(err) & (np.abs(flux) > 0.0) & (err > 0.0)
+        if not np.any(ok):
+            continue
+        abs_flux = np.abs(flux[ok])
+        err = err[ok]
+        frac = err / abs_flux
+        snr = abs_flux / err
+        rows.append(
+            {
+                "band": band,
+                "n": int(abs_flux.size),
+                "flux_median": float(np.median(abs_flux)),
+                "fluxerr_median": float(np.median(err)),
+                "fracerr_median": float(np.median(frac)),
+                "fracerr_p16": float(np.quantile(frac, 0.16)),
+                "fracerr_p84": float(np.quantile(frac, 0.84)),
+                "snr_median": float(np.median(snr)),
+                "snr_p16": float(np.quantile(snr, 0.16)),
+                "snr_p84": float(np.quantile(snr, 0.84)),
+            }
+        )
+        frac_by_band.append(np.log10(frac))
+        snr_by_band.append(np.log10(snr))
+        take_n = min(3000, abs_flux.size)
+        take = rng.choice(abs_flux.size, size=take_n, replace=False)
+        scatter_payload.append((band, np.log10(abs_flux[take]), np.log10(err[take])))
+    if not rows:
+        return
+    pd.DataFrame(rows).to_csv(plot_dir / "flux_error_summary.csv", index=False)
+    labels = [row["band"] for row in rows]
+    fig, ax = plt.subplots(figsize=(max(8.0, 0.55 * len(labels)), 4.5))
+    ax.boxplot(frac_by_band, labels=labels, showfliers=False)
+    ax.set_ylabel("log10(fluxerr / abs(flux))")
+    ax.set_title("Synthetic fractional flux error by band")
+    ax.tick_params(axis="x", rotation=45)
+    fig.tight_layout()
+    fig.savefig(plot_dir / "flux_fractional_error_by_band.png", dpi=150)
+    plt.close(fig)
+    fig, ax = plt.subplots(figsize=(max(8.0, 0.55 * len(labels)), 4.5))
+    ax.boxplot(snr_by_band, labels=labels, showfliers=False)
+    ax.set_ylabel("log10(abs(flux) / fluxerr)")
+    ax.set_title("Synthetic catalog SNR by band")
+    ax.tick_params(axis="x", rotation=45)
+    fig.tight_layout()
+    fig.savefig(plot_dir / "flux_snr_by_band.png", dpi=150)
+    plt.close(fig)
+    n_cols = min(4, len(scatter_payload))
+    n_rows = int(np.ceil(len(scatter_payload) / n_cols))
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(3.2 * n_cols, 2.8 * n_rows),
+        squeeze=False,
+    )
+    for ax, (band, log_flux, log_err) in zip(axes.ravel(), scatter_payload, strict=False):
+        ax.scatter(log_flux, log_err, s=2, alpha=0.25, rasterized=True)
+        ax.set_title(band)
+        ax.set_xlabel("log10(abs(flux))")
+        ax.set_ylabel("log10(fluxerr)")
+    for ax in axes.ravel()[len(scatter_payload) :]:
+        ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(plot_dir / "flux_vs_fluxerr_by_band.png", dpi=150)
+    plt.close(fig)

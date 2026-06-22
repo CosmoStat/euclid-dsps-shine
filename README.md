@@ -104,18 +104,27 @@ python -m euclid_dsps.cli diffsky-inventory-local \
 python -m euclid_dsps.cli diffsky-prepare-dataset \
   --raw-root Data/diffsky/raw/hltds_cosmos_260215_04_14_2026 \
   --inventory outputs/diffsky_hltds_04_14_local_inventory.json \
-  --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-  --no-synthetic-errors
+  --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
+  --error-model m5_depth
+
+python -m euclid_dsps.cli diffsky-redshift-subset \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
+  --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+  --redshift-min 0.0 \
+  --redshift-max 0.35 \
+  --error-model m5_depth
 
 python -m euclid_dsps.cli diffsky-validate-dataset \
-  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
-  --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.manifest.yaml
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+  --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml
 ```
 
 The prepared manifest records global object-id strategy, column semantics, and
-the error model. The no-error HLTDS dataset uses `error_model.type: none`; do
-not treat missing or synthetic `fluxerr_*` columns as native observational
-errors.
+the error model. The current HLTDS source and training/evaluation subset
+materialize deterministic `m5_depth` `fluxerr_*` columns for every configured
+band. These are synthetic catalog errors derived from per-band 5-sigma depths,
+with a PhotErr-style `sigma_sys_mag=0.005` systematic floor, not native
+observational errors.
 
 ## Main Fit Commands
 
@@ -145,7 +154,7 @@ Diffsky true-parameter forward closure:
 python -m euclid_dsps.cli \
   --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml \
   diffsky-forward-closure \
-  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
   --limit 1024 \
   --out outputs/runs/diffsky_trueparam_forward_closure
 ```
@@ -178,7 +187,7 @@ the photometric encoder or DSPS decoder:
 python -m euclid_dsps.cli \
   --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
   diffsky-train-supervised-prior \
-  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
   --schema diffsky_truth_basic \
   --out outputs/runs/diffsky_supervised_prior_basic
 
@@ -209,7 +218,7 @@ python -m euclid_dsps.cli \
   --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
   amortized-prior-overlap-diffsky \
   --run outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
-  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
   --out outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer/prior_overlap \
   --max-objects 10000
 ```
@@ -220,7 +229,7 @@ Compare redshift calibration across runs:
 python -m euclid_dsps.cli \
   --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
   diffsky-redshift-ablation \
-  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_noerr.parquet \
+  --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
   --run joint=outputs/runs/amortized_diffsky_hltds_realnvp_n10000_infer \
   --out outputs/reports/diffsky_redshift_ablation
 ```
