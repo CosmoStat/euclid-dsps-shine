@@ -214,6 +214,55 @@ def test_sample_one_galaxy_mclmc_smoke(monkeypatch) -> None:
     assert set(result.samples) == {"x", "y"}
 
 
+def test_mclmc_batch_initial_theta_uses_map_then_config() -> None:
+    transform = BoundedParameterTransform(
+        names=("x", "y"),
+        lower=jnp.asarray([-1.0, -2.0]),
+        upper=jnp.asarray([1.0, 2.0]),
+    )
+
+    theta = mcmc._mclmc_batch_initial_theta(
+        transform=transform,
+        free_names=("x", "y"),
+        base_params_rows=[{"x": 0.0, "y": 0.0}, {"x": 0.0, "y": 0.0}],
+        initial_params_rows=[{"x": 0.4, "y": -0.5}, None],
+        fit_config={
+            "free_parameters": {
+                "x": {"initial": 0.1, "bounds": [-1.0, 1.0]},
+                "y": {"initial": -0.2, "bounds": [-2.0, 2.0]},
+            }
+        },
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(theta),
+        np.asarray([[0.4, -0.5], [0.1, -0.2]], dtype=np.float32),
+    )
+
+
+def test_mclmc_batch_likelihood_arrays_flux_space() -> None:
+    observed_mag = np.asarray([[20.0, 21.0], [22.0, 23.0]])
+    sigma_mag = np.asarray([[0.1, 0.2], [0.3, 0.4]])
+    observed_flux = np.asarray([[1.0, 2.0], [3.0, 4.0]])
+    flux_error = np.asarray([[0.1, 0.2], [0.3, 0.4]])
+
+    observed, sigma, finite, likelihood_space = mcmc._mclmc_likelihood_batch_arrays(
+        {"likelihood_space": "flux", "flux_error_floor_frac": 0.1},
+        observed_mag=observed_mag,
+        sigma_mag=sigma_mag,
+        observed_flux=observed_flux,
+        flux_error=flux_error,
+    )
+
+    assert likelihood_space == "flux"
+    np.testing.assert_allclose(np.asarray(observed), observed_flux)
+    np.testing.assert_allclose(
+        np.asarray(sigma),
+        np.sqrt(flux_error**2 + (0.1 * observed_flux) ** 2),
+    )
+    assert np.asarray(finite).all()
+
+
 def test_mclmc_chunked_debug_runner_keeps_all_steps() -> None:
     def step_fn(key, state):
         del key

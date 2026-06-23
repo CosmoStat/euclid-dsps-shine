@@ -64,13 +64,16 @@ DECODER_SAMPLE_CHUNK_SIZE="${DECODER_SAMPLE_CHUNK_SIZE:-1}"
 PRIOR_PREDICTIVE_BATCH_SIZE="${PRIOR_PREDICTIVE_BATCH_SIZE:-256}"
 SEED="${SEED:-42}"
 
-MAP_BATCH_SIZE="${MAP_BATCH_SIZE:-128}"
+MAP_BATCH_SIZE="${MAP_BATCH_SIZE:-256}"
 MAP_MAXITER="${MAP_MAXITER:-200}"
 
-MCLMC_BATCH_SIZE="${MCLMC_BATCH_SIZE:-1}"
+MCLMC_BATCH_SIZE="${MCLMC_BATCH_SIZE:-8}"
 MCLMC_NUM_WARMUP="${MCLMC_NUM_WARMUP:-64}"
 MCLMC_NUM_SAMPLES="${MCLMC_NUM_SAMPLES:-128}"
 MCLMC_POSTERIOR_PREDICTIVE_BATCH_SIZE="${MCLMC_POSTERIOR_PREDICTIVE_BATCH_SIZE:-32}"
+MCLMC_PROGRESS_CHUNK_SIZE="${MCLMC_PROGRESS_CHUNK_SIZE:-16}"
+MCLMC_DEBUG="${MCLMC_DEBUG:-0}"
+MCLMC_INIT_STRATEGY="${MCLMC_INIT_STRATEGY:-}"
 
 EPOCHS="${EPOCHS:-30}"
 N_SAMPLES="${N_SAMPLES:-1}"
@@ -129,20 +132,95 @@ require_file() {
   fi
 }
 
+require_python_module() {
+  local module="$1"
+  local hint="$2"
+  python - "$module" "$hint" <<'PY'
+import importlib.util
+import sys
+
+module = sys.argv[1]
+hint = sys.argv[2]
+if importlib.util.find_spec(module) is None:
+    raise SystemExit(f"[job][missing] python module '{module}'. {hint}")
+PY
+}
+
+build_rowsets() {
+  mkdir -p "$ROWSET_DIR"
+  echo "[job] building rowsets -> $ROWSET_DIR"
+  python -m euclid_dsps.cli \
+    --config "$CONFIG" \
+    diffsky-build-reconstruction-rowsets \
+    --train-run "$REF_TRAIN_RUN" \
+    --infer-run "$REF_INFER_RUN" \
+    --out "$ROWSET_DIR" \
+    --worst-size 50 \
+    --worst-size 100 \
+    --worst-size 500 \
+    --worst-size 1000
+}
+
+ensure_rowsets() {
+  local lock_dir="${ROWSET_DIR}.lock"
+  local waited=0
+  if [[ -s "${ROWSET_DIR}/reference_train.txt" && -s "${ROWSET_DIR}/reference_validation.txt" && -s "${ROW_INDICES_FILE}" ]]; then
+    return
+  fi
+  echo "[job] rowsets missing; ensuring rowsets before TASK=$TASK"
+  until mkdir "$lock_dir" 2>/dev/null; do
+    if [[ -s "${ROWSET_DIR}/reference_train.txt" && -s "${ROWSET_DIR}/reference_validation.txt" && -s "${ROW_INDICES_FILE}" ]]; then
+      return
+    fi
+    if (( waited >= ${ROWSET_LOCK_WAIT_SECONDS:-900} )); then
+      echo "[job][missing] rowsets still unavailable after waiting ${waited}s"
+      exit 2
+    fi
+    echo "[job] waiting for rowset lock: $lock_dir"
+    sleep 10
+    waited=$((waited + 10))
+  done
+  trap 'rmdir "$lock_dir" 2>/dev/null || true' EXIT
+  build_rowsets
+  rmdir "$lock_dir" 2>/dev/null || true
+  trap - EXIT
+}
+
 require_rowset() {
+  ensure_rowsets
   require_file "$ROW_INDICES_FILE"
+}
+
+require_reference_split() {
+  ensure_rowsets
+  require_file "${ROWSET_DIR}/reference_train.txt"
+  require_file "${ROWSET_DIR}/reference_validation.txt"
+}
+
+require_reference_20k() {
+  ensure_rowsets
+  require_file "${ROWSET_DIR}/reference_20k.txt"
+}
+
+require_any_file() {
+  local label="$1"
+  shift
+  local path
+  for path in "$@"; do
+    if [[ -s "$path" ]]; then
+      return
+    fi
+  done
+  echo "[job][missing] $label"
+  for path in "$@"; do
+    echo "[job][missing] candidate: $path"
+  done
+  exit 2
 }
 
 case "$TASK" in
   rowsets)
-    python -m euclid_dsps.cli \
-      --config "$CONFIG" \
-      diffsky-build-reconstruction-rowsets \
-      --train-run "$REF_TRAIN_RUN" \
-      --infer-run "$REF_INFER_RUN" \
-      --out "$ROWSET_DIR" \
-      --worst-size 500 \
-      --worst-size 1000
+    build_rowsets
     ;;
 
   nn-infer)
@@ -171,6 +249,7 @@ case "$TASK" in
       --config "$MAP_CONFIG" \
       fit \
       --out "$MAP_OUT" \
+      --all \
       --row-indices-file "$ROW_INDICES_FILE" \
       --batch-size "$MAP_BATCH_SIZE" \
       --fit-maxiter "$MAP_MAXITER" \
@@ -179,23 +258,43 @@ case "$TASK" in
     ;;
 
   mclmc)
+    require_python_module "blackjax" "Install with: python -m pip install blackjax"
     require_rowset
+    mclmc_extra_args=()
+    if [[ "$MCLMC_DEBUG" == "1" || "$MCLMC_DEBUG" == "true" ]]; then
+      mclmc_extra_args+=(--mclmc-debug)
+    fi
+    if [[ -n "$MCLMC_INIT_STRATEGY" ]]; then
+      mclmc_extra_args+=(--mcmc-init-strategy "$MCLMC_INIT_STRATEGY")
+    fi
     python -m euclid_dsps.cli \
       --config "$MCLMC_CONFIG" \
       posterior \
       --out "$MCLMC_OUT" \
+      --all \
       --row-indices-file "$ROW_INDICES_FILE" \
       --batch-size "$MCLMC_BATCH_SIZE" \
       --sampler mclmc \
       --num-warmup "$MCLMC_NUM_WARMUP" \
       --num-samples "$MCLMC_NUM_SAMPLES" \
+      --mclmc-progress-chunk-size "$MCLMC_PROGRESS_CHUNK_SIZE" \
       --posterior-predictive-batch-size "$MCLMC_POSTERIOR_PREDICTIVE_BATCH_SIZE" \
       --seed "$SEED" \
+      "${mclmc_extra_args[@]}" \
       --no-progress
     ;;
 
   compare)
     require_rowset
+    require_any_file "NN residual summary" \
+      "${NN_OUT}/posterior_predictive_residual_summary.parquet" \
+      "${NN_OUT}/posterior_predictive_residual_summary.csv"
+    require_any_file "MAP photometry comparison" \
+      "${MAP_OUT}/batch_fit_photometry_comparison.parquet" \
+      "${MAP_OUT}/batch_fit_photometry_comparison.csv"
+    require_any_file "MCLMC flux residual summary" \
+      "${MCLMC_OUT}/batch_posterior_predictive_flux_residual_summary.parquet" \
+      "${MCLMC_OUT}/batch_posterior_predictive_flux_residual_summary.csv"
     python -m euclid_dsps.cli \
       --config "$CONFIG" \
       diffsky-compare-reconstruction \
@@ -207,8 +306,7 @@ case "$TASK" in
     ;;
 
   train-noise)
-    require_file "${ROWSET_DIR}/reference_train.txt"
-    require_file "${ROWSET_DIR}/reference_validation.txt"
+    require_reference_split
     python -m euclid_dsps.cli \
       --config "$CONFIG" \
       amortized-train-diffsky \
@@ -226,8 +324,7 @@ case "$TASK" in
     ;;
 
   train-kl)
-    require_file "${ROWSET_DIR}/reference_train.txt"
-    require_file "${ROWSET_DIR}/reference_validation.txt"
+    require_reference_split
     python -m euclid_dsps.cli \
       --config "$CONFIG" \
       amortized-train-diffsky \
@@ -244,7 +341,7 @@ case "$TASK" in
     ;;
 
   train-supervised-prior)
-    require_file "${ROWSET_DIR}/reference_20k.txt"
+    require_reference_20k
     python -m euclid_dsps.cli \
       --config "$PRIOR_CONFIG" \
       diffsky-train-supervised-prior \
@@ -256,8 +353,7 @@ case "$TASK" in
     ;;
 
   train-supervised-prior-nn)
-    require_file "${ROWSET_DIR}/reference_train.txt"
-    require_file "${ROWSET_DIR}/reference_validation.txt"
+    require_reference_split
     require_file "${PRIOR_OUT}/checkpoints/best.eqx"
     python -m euclid_dsps.cli \
       --config "$SUPERVISED_AMORTIZED_CONFIG" \

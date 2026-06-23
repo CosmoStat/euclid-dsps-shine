@@ -104,6 +104,73 @@
   - `pytest tests/test_mcmc.py -q`
   - Built real reference rowsets and ran an NN-only comparison smoke on
     `worst_500`.
+- 2026-06-23 Jean-Zay first-submit audit:
+  - Jobs `771654`-`771663` failed before science work because they started in
+    parallel with `TASK=rowsets` and checked for rowset files before job
+    `771653` finished writing them. `771653` completed successfully and wrote
+    the rowset manifest.
+  - Fixed `scripts/diffsky_reconstruction_baselines_h100.slurm` so dependent
+    tasks call `ensure_rowsets` and build rowsets under a filesystem lock if
+    needed, instead of failing immediately on missing rowset files.
+  - Added explicit output checks for `TASK=compare`, and updated the Jean-Zay
+    documentation to launch long dependencies with Slurm `afterok`.
+  - Follow-up live audit showed `MAP` was using the default `fit --limit 25`
+    and `MCLMC` was using the default `posterior --limit 5` despite the
+    `worst_500` row-index file. Fixed the wrapper to pass `--all` for MAP and
+    MCLMC rowset jobs, and added `posterior --all` support in the CLI.
+- 2026-06-23 Jean-Zay runtime audit:
+  - Synced logs from jobs `804614`-`805144` show the NN inference completed,
+    the amortized training variants are doing real work, and the supervised
+    prior path produced outputs.
+  - The standalone MAP relaunch `805143` is still unusably slow because sparse
+    `worst_500` row indices are yielded one selected row per parquet batch:
+    each iteration then pads `n_rows=1` to `128` and spends about 8 minutes in
+    one JAX optimization. The fix is to coalesce row-index-filtered parquet
+    chunks until a full selected batch is available.
+  - MCLMC jobs `804618` and `805144` failed because BlackJAX is missing in the
+    Jean-Zay `shine` environment. Add an early wrapper preflight and relaunch
+    MCLMC first on `worst_50`/`worst_100`, not `worst_500`.
+  - Implemented rowset coalescing in `iter_catalog_batches`: a sparse
+    `worst_500` rowset with `batch_size=256` now yields selected batch sizes
+    `[256, 244]` locally instead of 500 one-row batches. This should turn the
+    MAP job from about 68 hours to a small number of JAX optimization chunks.
+  - Updated the H100 wrapper default `MAP_BATCH_SIZE` to `256`, added
+    `worst_50` and `worst_100` rowsets for MCLMC probes, and added an early
+    BlackJAX preflight for `TASK=mclmc`.
+  - Validation completed: `pytest tests/test_io.py -q`,
+    `python -m compileall euclid_dsps scripts`, `bash -n
+    scripts/diffsky_reconstruction_baselines_h100.slurm`, and a real local
+    `worst_500` batching check.
+- 2026-06-23 MCLMC batched-galaxy follow-up:
+  - Jean-Zay job `809612` confirms the MAP fix: `worst_500` completed in
+    about 17 minutes with two compact selected batches (`256` and `244` rows).
+  - Jean-Zay job `809613` shows the remaining bottleneck: MCLMC still runs one
+    galaxy at a time in `sample_batch`, reaching only `2/100` objects after
+    about 38 minutes. Implement a true batched-galaxy MCLMC path for
+    `sample.sampler=mclmc` and `--batch-size > 1`.
+  - The first implementation should preserve the existing output tables and
+    compare compatibility, use vmap/JAX batching within each MCLMC transition,
+    keep the sequential path available for `--batch-size 1`, and leave room to
+    aggregate multiple H100 runs over disjoint rowsets.
+  - Implemented `sample_galaxy_batch_mclmc`: for `sample.sampler=mclmc` and
+    `--batch-size > 1`, the workflow now builds a joint factorized MCLMC state
+    over a compact galaxy batch, evaluates per-galaxy log densities with JAX
+    batching, and emits the same per-galaxy posterior output tables as the
+    sequential path. The joint state is flattened before entering BlackJAX for
+    better API compatibility.
+  - `sample_batch` now runs MAP initialization with the existing vmap Adam
+    batch path before batched MCLMC, avoiding one MAP optimization per galaxy.
+    `scripts/diffsky_reconstruction_baselines_h100.slurm` defaults
+    `MCLMC_BATCH_SIZE=8`, still overrideable to `1` for the old sequential
+    behavior.
+  - Added `scripts/merge_mclmc_runs.py` so disjoint MCLMC runs from several
+    H100 jobs can be concatenated into a compare-compatible output directory.
+  - Local validation completed without BlackJAX installed:
+    `pytest tests/test_mcmc.py tests/test_io.py -q`,
+    `python -m compileall euclid_dsps scripts`, `bash -n
+    scripts/diffsky_reconstruction_baselines_h100.slurm`, and
+    `python scripts/merge_mclmc_runs.py --help`. A real BlackJAX smoke must be
+    run on Jean-Zay.
 
 ## 2026-06-22 PhotErr Error-Model Slides
 

@@ -185,6 +185,7 @@ def iter_catalog_batches(
     start_index = max(int(start_index), 0)
     max_row_index = max(row_indices) if row_indices else None
     parquet = pq.ParquetFile(path)
+    pending_rowset_batches: list[pd.DataFrame] = []
 
     actual_columns = list(columns) if columns else None
     if actual_columns and "log10_metallicity_true" in actual_columns:
@@ -210,16 +211,56 @@ def iter_catalog_batches(
             df = df.loc[df.index >= start_index]
         if row_indices is not None:
             df = df.loc[df.index.isin(row_indices)]
+            if len(df):
+                pending_rowset_batches.append(df)
+            if pending_rowset_batches:
+                pending = (
+                    pd.concat(pending_rowset_batches)
+                    if len(pending_rowset_batches) > 1
+                    else pending_rowset_batches[0]
+                )
+                target_size = batch_size
+                if limit is not None:
+                    remaining = limit - yielded
+                    if remaining <= 0:
+                        return
+                    target_size = min(target_size, remaining)
+                while target_size > 0 and len(pending) >= target_size:
+                    output = pending.iloc[:target_size]
+                    yielded += len(output)
+                    yield output
+                    pending = pending.iloc[target_size:]
+                    target_size = batch_size
+                    if limit is not None:
+                        remaining = limit - yielded
+                        if remaining <= 0:
+                            return
+                        target_size = min(target_size, remaining)
+                pending_rowset_batches = [pending] if len(pending) else []
+        else:
+            if limit is not None:
+                remaining = limit - yielded
+                if remaining <= 0:
+                    break
+                df = df.head(remaining)
+            if len(df):
+                yielded += len(df)
+                yield df
+        if max_row_index is not None and seen > max_row_index:
+            break
+    if row_indices is not None and pending_rowset_batches:
+        pending = (
+            pd.concat(pending_rowset_batches)
+            if len(pending_rowset_batches) > 1
+            else pending_rowset_batches[0]
+        )
         if limit is not None:
             remaining = limit - yielded
             if remaining <= 0:
-                break
-            df = df.head(remaining)
-        if len(df):
-            yielded += len(df)
-            yield df
-        if max_row_index is not None and seen > max_row_index:
-            break
+                return
+            pending = pending.head(remaining)
+        if len(pending):
+            yield pending
 
 
 def load_row_indices(path: str | Path) -> list[int]:

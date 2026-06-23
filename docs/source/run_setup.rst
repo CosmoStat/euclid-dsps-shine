@@ -445,18 +445,27 @@ one reconstruction task at a time from a fixed rowset. Typical sequence:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,TASK=rowsets scripts/diffsky_reconstruction_baselines_h100.slurm
-   sbatch --export=ALL,TASK=nn-infer,ROWSET=worst_1000 scripts/diffsky_reconstruction_baselines_h100.slurm
-   sbatch --export=ALL,TASK=map,ROWSET=worst_1000,MAP_MAXITER=200 scripts/diffsky_reconstruction_baselines_h100.slurm
-   sbatch --export=ALL,TASK=mclmc,ROWSET=worst_500,MCLMC_NUM_WARMUP=64,MCLMC_NUM_SAMPLES=128 scripts/diffsky_reconstruction_baselines_h100.slurm
-   sbatch --export=ALL,TASK=compare,ROWSET=worst_1000 scripts/diffsky_reconstruction_baselines_h100.slurm
-   sbatch --export=ALL,TASK=train-supervised-prior,EPOCHS=30 scripts/diffsky_reconstruction_baselines_h100.slurm
-   sbatch --export=ALL,TASK=train-supervised-prior-nn,EPOCHS=30,TRAIN_OUT=outputs/runs/diffsky_supervised_prior_basic_nn scripts/diffsky_reconstruction_baselines_h100.slurm
+   ROWSETS=$(sbatch --parsable --export=ALL,TASK=rowsets scripts/diffsky_reconstruction_baselines_h100.slurm)
+   NN=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=nn-infer,ROWSET=worst_500 scripts/diffsky_reconstruction_baselines_h100.slurm)
+   MAP=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=map,ROWSET=worst_500,MAP_BATCH_SIZE=256,MAP_MAXITER=200 scripts/diffsky_reconstruction_baselines_h100.slurm)
+   MCLMC=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=mclmc,ROWSET=worst_100,MCLMC_BATCH_SIZE=8,MCLMC_NUM_WARMUP=32,MCLMC_NUM_SAMPLES=64 scripts/diffsky_reconstruction_baselines_h100.slurm)
+   sbatch --export=ALL,TASK=compare,ROWSET=worst_100,NN_OUT=outputs/runs/diffsky_reconstruction_nn_worst_500,MAP_OUT=outputs/runs/diffsky_reconstruction_map_worst_500,MCLMC_OUT=outputs/runs/diffsky_reconstruction_mclmc_worst_100,COMPARE_OUT=outputs/runs/diffsky_reconstruction_compare_worst_100 --dependency=afterok:${NN}:${MAP}:${MCLMC} scripts/diffsky_reconstruction_baselines_h100.slurm
+   PRIOR=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=train-supervised-prior,EPOCHS=30 scripts/diffsky_reconstruction_baselines_h100.slurm)
+   sbatch --dependency=afterok:${PRIOR} --export=ALL,TASK=train-supervised-prior-nn,EPOCHS=30,TRAIN_OUT=outputs/runs/diffsky_supervised_prior_basic_nn scripts/diffsky_reconstruction_baselines_h100.slurm
 
 The wrapper defaults to the reference no-KL autoencoder run and writes rowsets
 under ``outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k``. Override
 ``REF_TRAIN_RUN``, ``REF_INFER_RUN``, ``ROWSET_DIR``, ``ROWSET``, or output
 variables to compare another reference run without changing code.
+If a dependent job starts before the rowsets exist, the wrapper now regenerates
+the rowsets under a filesystem lock before continuing.
+For MCLMC, install BlackJAX in the active Jean-Zay environment before launch:
+``python -m pip install blackjax``. The MCLMC task batches galaxies when
+``MCLMC_BATCH_SIZE`` is greater than one; start with ``MCLMC_BATCH_SIZE=4`` or
+``8`` on ``worst_50`` before scaling to ``worst_100`` or larger rowsets.
+To combine disjoint MCLMC runs from several H100 jobs, use
+``python scripts/merge_mclmc_runs.py --out MERGED_DIR RUN_DIR ...`` and pass
+``MERGED_DIR`` to ``diffsky-compare-reconstruction``.
 
 Outputs
 -------

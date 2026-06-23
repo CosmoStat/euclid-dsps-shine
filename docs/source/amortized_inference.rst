@@ -586,13 +586,17 @@ reference train+inference pair:
      --train-run outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128 \
      --infer-run outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128_infer \
      --out outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k \
+     --worst-size 50 \
+     --worst-size 100 \
      --worst-size 500 \
      --worst-size 1000
 
 This writes ``reference_20k.txt``, ``reference_train.txt``,
-``reference_validation.txt``, ``worst_500.txt``, ``worst_1000.txt``, and
-``worst_ranked.csv``. The comparison command accepts any mix of NN inference
-runs, standalone MAP ``fit`` runs, and MCLMC ``posterior`` runs:
+``reference_validation.txt``, short MCLMC probe rowsets such as
+``worst_50.txt`` and ``worst_100.txt``, larger MAP/NN rowsets such as
+``worst_500.txt`` and ``worst_1000.txt``, and ``worst_ranked.csv``. The
+comparison command accepts any mix of NN inference runs, standalone MAP
+``fit`` runs, and MCLMC ``posterior`` runs:
 
 .. code-block:: bash
 
@@ -607,8 +611,12 @@ runs, standalone MAP ``fit`` runs, and MCLMC ``posterior`` runs:
 
 The summary tables report likelihood-normalized flux residuals by method,
 band, and object. The intended first baseline is NN vs standalone DSPS MAP vs
-BlackJAX MCLMC on ``worst_500``; scale to ``worst_1000`` once MCLMC runtime is
-acceptable within the H100 allocation.
+BlackJAX MCLMC with NN and MAP on ``worst_500`` and the first MCLMC timing
+probe on ``worst_50`` or ``worst_100``. MCLMC uses a batched-galaxy joint
+target when ``--batch-size`` is greater than one; on H100, start with
+``MCLMC_BATCH_SIZE=4`` or ``8`` and increase only after a timing smoke. For
+multiple H100 jobs over disjoint rowsets, merge the outputs with
+``scripts/merge_mclmc_runs.py`` before running the comparison.
 
 For supervised NF-prior tests, use the existing 5D ``diffsky_truth_basic``
 configuration first. Those parameters have catalog truth/proxy columns and are

@@ -130,6 +130,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit", type=int, default=5, help="Maximum catalog rows to sample."
     )
     posterior.add_argument(
+        "--all",
+        action="store_true",
+        help="Process all rows in --row-indices-file; full-catalog posterior is refused.",
+    )
+    posterior.add_argument(
         "--start-index",
         type=int,
         default=0,
@@ -1062,7 +1067,7 @@ def main(argv: list[str] | None = None) -> None:
             sample_batch(
                 config,
                 Path(args.out),
-                limit=getattr(args, "limit", 5),
+                limit=_limit_arg(args),
                 batch_size=args.batch_size,
                 row_indices_file=getattr(args, "row_indices_file", None),
                 start_index=getattr(args, "start_index", 0),

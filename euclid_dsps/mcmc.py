@@ -15,6 +15,8 @@ configure_jax_runtime()
 
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
+import jax.scipy.stats as jstats
 import numpy as np
 from jax import random
 
@@ -30,6 +32,10 @@ from .model import (
 )
 from .photometry import abmag_to_fnu_cgs_jax, magerr_to_fluxerr_fnu_cgs
 from .posterior_target import (
+    BoundedParameterTransform,
+    _gas_metallicity_constraint_indices,
+    _masked_observation_logprob,
+    _resolved_prior_spec,
     build_posterior_target,
     initial_unconstrained_position,
 )
@@ -316,7 +322,9 @@ def _sample_one_galaxy_mclmc(
         sample_config.get("mclmc_step_size", sample_config.get("step_size")),
         min(0.10, 1.0 / np.sqrt(float(dim))),
     )
-    inverse_mass_matrix = _mclmc_inverse_mass_matrix(sample_config, dim)
+    inverse_mass_matrix = _mclmc_batch_inverse_mass_matrix(
+        sample_config, n_galaxies, len(free_names)
+    )
 
     algorithm = blackjax.mclmc(
         logdensity_fn=target.logdensity,
@@ -485,6 +493,735 @@ def _sample_one_galaxy_mclmc(
         ),
         chain_ids=chain_ids,
     )
+
+
+def sample_galaxy_batch_mclmc(
+    context: DspsContext,
+    observations: list[GalaxyObservation],
+    base_params_rows: list[dict[str, float]],
+    fit_config: dict[str, Any],
+    sample_config: dict[str, Any],
+    initial_params_rows: list[dict[str, float] | None] | None = None,
+) -> list[MCMCResult]:
+    """Sample multiple independent galaxy posteriors in one joint MCLMC state.
+
+    The target factorizes over galaxies, but BlackJAX advances a single joint
+    state with shape ``(n_galaxies, n_free_parameters)``. This keeps the output
+    contract identical to one result per galaxy while letting each transition
+    evaluate the DSPS forward model with JAX batching.
+    """
+    try:
+        import blackjax
+    except ImportError as exc:  # pragma: no cover - depends on optional dependency
+        raise ImportError(
+            "sample.sampler='mclmc' requires BlackJAX. Install the optional "
+            "samplers extra or install blackjax in this environment."
+        ) from exc
+
+    n_galaxies = len(observations)
+    if n_galaxies == 0:
+        return []
+    if len(base_params_rows) != n_galaxies:
+        raise ValueError("base_params_rows must match observations length")
+    if initial_params_rows is None:
+        initial_params_rows = [None] * n_galaxies
+    if len(initial_params_rows) != n_galaxies:
+        raise ValueError("initial_params_rows must match observations length")
+    if n_galaxies == 1:
+        return [
+            _sample_one_galaxy_mclmc(
+                context,
+                observations[0],
+                base_params_rows[0],
+                fit_config,
+                sample_config,
+                initial_params=initial_params_rows[0],
+            )
+        ]
+
+    free = fit_config["free_parameters"]
+    free_names = tuple(free)
+    bounds = np.asarray(
+        [tuple(float(value) for value in free[name]["bounds"]) for name in free_names],
+        dtype=float,
+    )
+    lower = jnp.asarray(bounds[:, 0], dtype=jnp.float32)
+    upper = jnp.asarray(bounds[:, 1], dtype=jnp.float32)
+    transform = BoundedParameterTransform(
+        names=free_names,
+        lower=lower,
+        upper=upper,
+        gas_metallicity_constraint=_gas_metallicity_constraint_indices(free_names),
+    )
+
+    parameter_names = _mclmc_batch_parameter_names(base_params_rows)
+    base_matrix = jnp.asarray(
+        [
+            [float(row.get(name, np.nan)) for name in parameter_names]
+            for row in base_params_rows
+        ],
+        dtype=jnp.float32,
+    )
+    (
+        observed_mag,
+        sigma_mag,
+        observed_flux,
+        flux_error,
+        band_names,
+    ) = _mclmc_observation_batch_arrays(observations)
+    observed, sigma, finite, likelihood_space = _mclmc_likelihood_batch_arrays(
+        fit_config,
+        observed_mag=observed_mag,
+        sigma_mag=sigma_mag,
+        observed_flux=observed_flux,
+        flux_error=flux_error,
+    )
+    prior_arrays = _mclmc_prior_batch_arrays(
+        free_names=free_names,
+        free=free,
+        sample_config=sample_config,
+        base_params_rows=base_params_rows,
+    )
+    band_offsets = jnp.asarray(
+        fit_config.get("band_calibration_offsets_mag", []), dtype=jnp.float32
+    )
+    model_args = dynamic_model_args(context)
+    photometric_likelihood = _photometric_likelihood(fit_config)
+    student_t_dof = _student_t_dof(fit_config)
+
+    def params_from_base_theta(base, theta):
+        params = {
+            name: base[index]
+            for index, name in enumerate(parameter_names)
+        }
+        params.update(
+            {
+                name: theta[index]
+                for index, name in enumerate(free_names)
+            }
+        )
+        return params
+
+    def single_logdensity(
+        y,
+        base,
+        observed_i,
+        sigma_i,
+        finite_i,
+        prior_code_i,
+        prior_low_i,
+        prior_high_i,
+        prior_loc_i,
+        prior_scale_i,
+        prior_alpha_i,
+        prior_beta_i,
+    ):
+        theta = transform.to_bounded(y)
+        params = params_from_base_theta(base, theta)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
+        if band_offsets.size:
+            model_mag = model_mag + band_offsets
+        model_obs = (
+            abmag_to_fnu_cgs_jax(model_mag)
+            if likelihood_space == "flux"
+            else model_mag
+        )
+        loglike = _masked_observation_logprob(
+            observed=observed_i,
+            model_obs=model_obs,
+            sigma=sigma_i,
+            finite_mask=finite_i,
+            photometric_likelihood=photometric_likelihood,
+            student_t_dof=student_t_dof,
+        )
+        logprior = _mclmc_batched_bounded_log_prior(
+            theta=theta,
+            prior_code=prior_code_i,
+            low=prior_low_i,
+            high=prior_high_i,
+            loc=prior_loc_i,
+            scale=prior_scale_i,
+            alpha=prior_alpha_i,
+            beta=prior_beta_i,
+        )
+        logjac = transform.log_abs_det_jacobian(y)
+        if transform.gas_metallicity_constraint is None:
+            gas_penalty = gas_metallicity_constraint_penalty_jax(
+                params, context.model_config, penalty=jnp.inf
+            )
+        else:
+            gas_penalty = jnp.asarray(0.0, dtype=theta.dtype)
+        return loglike + logprior + logjac - gas_penalty
+
+    def joint_logdensity(y_flat):
+        y_batch = jnp.reshape(y_flat, (n_galaxies, len(free_names)))
+        logdensity = jax.vmap(
+            single_logdensity,
+            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+        )(
+            y_batch,
+            base_matrix,
+            observed,
+            sigma,
+            finite,
+            prior_arrays["code"],
+            prior_arrays["low"],
+            prior_arrays["high"],
+            prior_arrays["loc"],
+            prior_arrays["scale"],
+            prior_arrays["alpha"],
+            prior_arrays["beta"],
+        )
+        return jnp.sum(logdensity)
+
+    num_warmup = int(sample_config.get("num_warmup", 100))
+    num_samples = int(sample_config.get("num_samples", 200))
+    num_chains = int(sample_config.get("num_chains", 1))
+    if num_chains <= 0:
+        raise ValueError("sample.num_chains must be positive")
+    seed = int(sample_config.get("seed", 42))
+    progress_bar = bool(sample_config.get("progress_bar", True))
+    debug = bool(sample_config.get("mclmc_debug", False))
+    progress_chunk_size = int(sample_config.get("mclmc_progress_chunk_size", 16))
+    if progress_chunk_size <= 0:
+        raise ValueError("sample.mclmc_progress_chunk_size must be positive")
+
+    dim = n_galaxies * len(free_names)
+    L = _resolve_mclmc_float(
+        sample_config.get("mclmc_l", sample_config.get("L")), np.sqrt(float(dim))
+    )
+    step_size = _resolve_mclmc_float(
+        sample_config.get("mclmc_step_size", sample_config.get("step_size")),
+        min(0.10, 1.0 / np.sqrt(float(dim))),
+    )
+    inverse_mass_matrix = _mclmc_inverse_mass_matrix(sample_config, dim)
+    algorithm = blackjax.mclmc(
+        logdensity_fn=joint_logdensity,
+        L=L,
+        step_size=step_size,
+        inverse_mass_matrix=inverse_mass_matrix,
+        desired_energy_var_max_ratio=float(
+            sample_config.get("mclmc_desired_energy_var_max_ratio", np.inf)
+        ),
+    )
+
+    rng_key = random.PRNGKey(seed)
+    chain_keys = random.split(rng_key, num_chains)
+    init_position_keys = random.split(random.fold_in(rng_key, 87231), num_chains)
+    has_initial = any(row for row in initial_params_rows)
+    init_strategy = _mclmc_batch_init_strategy(sample_config, has_initial)
+    chain_y0s_matrix = _mclmc_batch_initial_positions(
+        transform=transform,
+        free_names=free_names,
+        base_params_rows=base_params_rows,
+        initial_params_rows=initial_params_rows,
+        fit_config=fit_config,
+        sample_config=sample_config,
+        keys=init_position_keys,
+        init_strategy=init_strategy,
+    )
+    chain_y0s = jnp.reshape(chain_y0s_matrix, (num_chains, dim))
+    chain_initial_theta = np.asarray(
+        jax.vmap(jax.vmap(transform.to_bounded))(chain_y0s_matrix)
+    )
+    _mclmc_log(
+        progress_bar or debug,
+        "backend="
+        f"{jax.default_backend()} devices={_jax_device_strings()} "
+        f"batch={n_galaxies} dim={dim} bands={len(band_names)} "
+        f"chains={num_chains} warmup={num_warmup} samples={num_samples} "
+        f"L={L:.6g} step_size={step_size:.6g} "
+        f"chunk={progress_chunk_size} init={init_strategy}",
+    )
+    _mclmc_log(progress_bar or debug, "compiling batched BlackJAX MCLMC step")
+    step_fn = algorithm.step
+    probe_steps = min(
+        progress_chunk_size,
+        max(num_warmup if num_warmup > 0 else 0, num_samples, 1),
+    )
+    first_init_key, first_compile_key = random.split(chain_keys[0])
+    first_state = algorithm.init(chain_y0s[0], first_init_key)
+    compile_start = time.perf_counter()
+    compiled_state, _ = _scan_mclmc(
+        step_fn, first_state, first_compile_key, probe_steps
+    )
+    jax.block_until_ready(compiled_state.position)
+    compile_time = time.perf_counter() - compile_start
+    _mclmc_log(progress_bar or debug, f"compile done in {compile_time:.3f}s")
+
+    theta_chains: list[np.ndarray] = []
+    warmup_infos = []
+    sample_infos = []
+    chain_summaries = []
+    total_warmup_time = 0.0
+    total_sampling_time = 0.0
+    for chain_index, chain_key in enumerate(chain_keys):
+        init_key, warmup_key, sample_key = random.split(chain_key, 3)
+        state = algorithm.init(chain_y0s[chain_index], init_key)
+        chain_label = f"chain {chain_index + 1}/{num_chains}"
+        _mclmc_log(progress_bar or debug, f"{chain_label} warmup start")
+        warmup_start = time.perf_counter()
+        state, warmup_info = _run_mclmc_steps(
+            step_fn,
+            state,
+            warmup_key,
+            num_warmup,
+            phase=f"mclmc-batch-c{chain_index + 1}-warmup",
+            progress_bar=progress_bar,
+            debug=debug,
+            chunk_size=progress_chunk_size,
+        )
+        _raise_if_mclmc_all_invalid(warmup_info, phase=f"{chain_label} warmup")
+        jax.block_until_ready(state.position)
+        warmup_time = time.perf_counter() - warmup_start
+        total_warmup_time += warmup_time
+        _mclmc_log(
+            progress_bar or debug,
+            f"{chain_label} warmup done in {warmup_time:.3f}s",
+        )
+
+        _mclmc_log(progress_bar or debug, f"{chain_label} sampling start")
+        sample_start = time.perf_counter()
+        state, sample_info = _run_mclmc_steps(
+            step_fn,
+            state,
+            sample_key,
+            num_samples,
+            phase=f"mclmc-batch-c{chain_index + 1}-sample",
+            progress_bar=progress_bar,
+            debug=debug,
+            chunk_size=progress_chunk_size,
+        )
+        _raise_if_mclmc_all_invalid(sample_info, phase=f"{chain_label} sampling")
+        positions = sample_info["position"]
+        jax.block_until_ready(positions)
+        sampling_time = time.perf_counter() - sample_start
+        total_sampling_time += sampling_time
+        _mclmc_log(
+            progress_bar or debug,
+            f"{chain_label} sampling done in {sampling_time:.3f}s",
+        )
+        positions_matrix = jnp.reshape(
+            positions, (positions.shape[0], n_galaxies, len(free_names))
+        )
+        theta = jax.vmap(jax.vmap(transform.to_bounded))(positions_matrix)
+        theta_chains.append(np.asarray(theta))
+        warmup_infos.append(warmup_info)
+        sample_infos.append(sample_info)
+        chain_summaries.append(
+            _mclmc_chain_summary(
+                chain_index=chain_index,
+                warmup_time=warmup_time,
+                sampling_time=sampling_time,
+                warmup_info=warmup_info,
+                sample_info=sample_info,
+            )
+        )
+
+    theta_np = np.concatenate(theta_chains, axis=0)
+    chain_ids = np.repeat(np.arange(num_chains, dtype=np.int32), num_samples)
+    warmup_info = _concat_mclmc_infos(warmup_infos)
+    sample_info = _concat_mclmc_infos(sample_infos)
+    diagnostics_template = _mclmc_diagnostics(
+        sample_config=sample_config,
+        initial_params=next((row for row in initial_params_rows if row), None),
+        likelihood_space=likelihood_space,
+        photometric_likelihood=photometric_likelihood,
+        student_t_dof=student_t_dof,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+        num_chains=num_chains,
+        L=L,
+        step_size=step_size,
+        progress_chunk_size=progress_chunk_size,
+        compile_time=compile_time,
+        warmup_time=total_warmup_time,
+        sampling_time=total_sampling_time,
+        warmup_info=warmup_info,
+        sample_info=sample_info,
+        chain_summaries=chain_summaries,
+        init_strategy=init_strategy,
+        init_jitter_scale=float(sample_config.get("init_jitter_scale", 0.25)),
+        chain_initial_theta=np.empty((0,)),
+        free_names=list(free_names),
+    )
+
+    results: list[MCMCResult] = []
+    for galaxy_index, observation in enumerate(observations):
+        samples = {
+            name: theta_np[:, galaxy_index, param_index]
+            for param_index, name in enumerate(free_names)
+        }
+        posterior_model_mags = _posterior_model_mags(
+            context,
+            base_params_rows[galaxy_index],
+            samples,
+            fit_config,
+            batch_size=int(sample_config.get("posterior_predictive_batch_size", 512)),
+        )
+        derived_samples = _posterior_derived(
+            context, base_params_rows[galaxy_index], samples
+        )
+        initial_params = initial_params_rows[galaxy_index]
+        diagnostics = {
+            **diagnostics_template,
+            "chain_method": "joint_batch_sequential_chains",
+            "mclmc_batch_size": int(n_galaxies),
+            "mclmc_batch_index": int(galaxy_index),
+            "mclmc_joint_dimension": int(dim),
+            "row_index": int(observation.row_index),
+            "initialized_from_map": bool(initial_params),
+            "aggregate_galaxy_samples_per_second": (
+                float((n_galaxies * num_chains * num_samples) / total_sampling_time)
+                if total_sampling_time > 0.0
+                else float("inf")
+            ),
+            "chain_initial_parameters": [
+                {
+                    name: float(chain_initial_theta[chain, galaxy_index, param_index])
+                    for param_index, name in enumerate(free_names)
+                }
+                for chain in range(chain_initial_theta.shape[0])
+            ],
+        }
+        if initial_params:
+            diagnostics["initial_parameters"] = {
+                name: float(value) for name, value in initial_params.items()
+            }
+        else:
+            diagnostics.pop("initial_parameters", None)
+        results.append(
+            MCMCResult(
+                samples=samples,
+                derived_samples=derived_samples,
+                summary=_sample_summary(samples),
+                posterior_model_mags=posterior_model_mags,
+                observed_mag=np.asarray(observed_mag[galaxy_index]),
+                sigma_mag=np.asarray(sigma_mag[galaxy_index]),
+                observed_flux_fnu_cgs=np.asarray(observed_flux[galaxy_index]),
+                flux_error_fnu_cgs=np.asarray(flux_error[galaxy_index]),
+                band_names=band_names,
+                diagnostics=diagnostics,
+                chain_ids=chain_ids,
+            )
+        )
+    return results
+
+
+def _mclmc_batch_parameter_names(
+    base_params_rows: list[dict[str, float]],
+) -> list[str]:
+    names = list(base_params_rows[0])
+    for row in base_params_rows[1:]:
+        for name in row:
+            if name not in names:
+                names.append(name)
+    return names
+
+
+def _mclmc_observation_batch_arrays(
+    observations: list[GalaxyObservation],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
+    band_names = [band.name for band in observations[0].bands]
+    for observation in observations[1:]:
+        names = [band.name for band in observation.bands]
+        if names != band_names:
+            raise ValueError("All batched MCLMC observations must have the same bands")
+    observed_mag = np.asarray(
+        [[band.mag_ab for band in observation.bands] for observation in observations],
+        dtype=float,
+    )
+    sigma_mag = np.asarray(
+        [[band.sigma_mag for band in observation.bands] for observation in observations],
+        dtype=float,
+    )
+    observed_flux = np.asarray(
+        [
+            [band.flux_fnu_cgs for band in observation.bands]
+            for observation in observations
+        ],
+        dtype=float,
+    )
+    flux_error = np.asarray(
+        [
+            [
+                (
+                    band.flux_error_fnu_cgs
+                    if band.flux_error_fnu_cgs is not None
+                    else magerr_to_fluxerr_fnu_cgs(band.flux_fnu_cgs, band.sigma_mag)
+                )
+                for band in observation.bands
+            ]
+            for observation in observations
+        ],
+        dtype=float,
+    )
+    return observed_mag, sigma_mag, observed_flux, flux_error, band_names
+
+
+def _mclmc_likelihood_batch_arrays(
+    fit_config: dict[str, Any],
+    *,
+    observed_mag: np.ndarray,
+    sigma_mag: np.ndarray,
+    observed_flux: np.ndarray,
+    flux_error: np.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, str]:
+    likelihood_space = str(fit_config.get("likelihood_space", "flux")).lower()
+    if likelihood_space == "flux":
+        floor_frac = float(fit_config.get("flux_error_floor_frac", 0.0))
+        jitter = float(fit_config.get("flux_error_jitter", 0.0))
+        observed = np.asarray(observed_flux, dtype=float)
+        sigma = np.sqrt(
+            np.asarray(flux_error, dtype=float) ** 2
+            + (floor_frac * np.asarray(observed_flux, dtype=float)) ** 2
+            + jitter**2
+        )
+    elif likelihood_space == "mag":
+        observed = np.asarray(observed_mag, dtype=float)
+        sigma = np.asarray(sigma_mag, dtype=float)
+    else:
+        raise ValueError(f"Unsupported fit.likelihood_space: {likelihood_space}")
+    finite = np.isfinite(observed) & np.isfinite(sigma) & (sigma > 0.0)
+    return (
+        jnp.asarray(observed, dtype=jnp.float32),
+        jnp.asarray(sigma, dtype=jnp.float32),
+        jnp.asarray(finite),
+        likelihood_space,
+    )
+
+
+def _mclmc_prior_batch_arrays(
+    *,
+    free_names: tuple[str, ...],
+    free: dict[str, Any],
+    sample_config: dict[str, Any],
+    base_params_rows: list[dict[str, float]],
+) -> dict[str, jnp.ndarray]:
+    priors = sample_config.get("priors", {}) or {}
+    type_codes = {
+        "uniform": 0,
+        "normal": 1,
+        "truncated_normal": 2,
+        "scaled_beta": 3,
+    }
+    code = np.zeros((len(base_params_rows), len(free_names)), dtype=np.int32)
+    low = np.zeros_like(code, dtype=np.float32)
+    high = np.zeros_like(low)
+    loc = np.zeros_like(low)
+    scale = np.ones_like(low)
+    alpha = np.ones_like(low)
+    beta = np.ones_like(low)
+    for row_index, base_params in enumerate(base_params_rows):
+        for param_index, name in enumerate(free_names):
+            spec = _resolved_prior_spec(
+                name,
+                free[name],
+                priors.get(name, {}),
+                base_params,
+            )
+            prior_type = str(spec["type"])
+            if prior_type not in type_codes:
+                raise ValueError(f"Unsupported sample prior type: {prior_type}")
+            code[row_index, param_index] = type_codes[prior_type]
+            low[row_index, param_index] = float(spec["low"])
+            high[row_index, param_index] = float(spec["high"])
+            loc[row_index, param_index] = float(spec["loc"])
+            scale[row_index, param_index] = float(spec["scale"])
+            alpha[row_index, param_index] = float(spec["alpha"])
+            beta[row_index, param_index] = float(spec["beta"])
+    return {
+        "code": jnp.asarray(code),
+        "low": jnp.asarray(low),
+        "high": jnp.asarray(high),
+        "loc": jnp.asarray(loc),
+        "scale": jnp.asarray(scale),
+        "alpha": jnp.asarray(alpha),
+        "beta": jnp.asarray(beta),
+    }
+
+
+def _mclmc_batched_bounded_log_prior(
+    *,
+    theta: jnp.ndarray,
+    prior_code: jnp.ndarray,
+    low: jnp.ndarray,
+    high: jnp.ndarray,
+    loc: jnp.ndarray,
+    scale: jnp.ndarray,
+    alpha: jnp.ndarray,
+    beta: jnp.ndarray,
+) -> jnp.ndarray:
+    span = high - low
+    scale = jnp.maximum(scale, 1.0e-6)
+    uniform = -jnp.log(span)
+    normal = jstats.norm.logpdf(theta, loc, scale)
+    norm = jnp.maximum(
+        jsp.special.ndtr((high - loc) / scale)
+        - jsp.special.ndtr((low - loc) / scale),
+        1.0e-12,
+    )
+    truncated = normal - jnp.log(norm)
+    unit = jnp.clip((theta - low) / span, 1.0e-6, 1.0 - 1.0e-6)
+    scaled_beta = (
+        (alpha - 1.0) * jnp.log(unit)
+        + (beta - 1.0) * jnp.log1p(-unit)
+        + (beta - 1.0) * jnp.log1p(-unit)
+        - jsp.special.betaln(alpha, beta)
+        - jnp.log(span)
+    )
+    logprob = jnp.where(
+        prior_code == 0,
+        uniform,
+        jnp.where(
+            prior_code == 1,
+            normal,
+            jnp.where(prior_code == 2, truncated, scaled_beta),
+        ),
+    )
+    return jnp.sum(logprob)
+
+
+def _mclmc_batch_init_strategy(
+    sample_config: dict[str, Any], has_initial: bool
+) -> str:
+    fallback = "map" if has_initial else "config"
+    strategy = str(sample_config.get("init_strategy", fallback)).lower()
+    if strategy == "map" and not has_initial:
+        return "config"
+    return strategy
+
+
+def _mclmc_batch_initial_positions(
+    *,
+    transform: BoundedParameterTransform,
+    free_names: tuple[str, ...],
+    base_params_rows: list[dict[str, float]],
+    initial_params_rows: list[dict[str, float] | None],
+    fit_config: dict[str, Any],
+    sample_config: dict[str, Any],
+    keys: jnp.ndarray,
+    init_strategy: str,
+) -> jnp.ndarray:
+    n_chains = int(keys.shape[0])
+    n_galaxies = len(base_params_rows)
+    if init_strategy == "random_uniform":
+        return jax.vmap(
+            lambda key: jax.vmap(
+                lambda subkey: _mclmc_random_uniform_position_for_transform(
+                    transform, subkey
+                )
+            )(random.split(key, n_galaxies))
+        )(keys)
+
+    theta0 = _mclmc_batch_initial_theta(
+        transform=transform,
+        free_names=free_names,
+        base_params_rows=base_params_rows,
+        initial_params_rows=initial_params_rows,
+        fit_config=fit_config,
+    )
+    base_y0 = jax.vmap(transform.to_unconstrained)(theta0)
+    if init_strategy in {"map", "config"}:
+        return jnp.repeat(base_y0[None, :, :], n_chains, axis=0)
+    if init_strategy == "map_jitter":
+        scale = float(sample_config.get("init_jitter_scale", 0.25))
+        noise = random.normal(
+            keys[0],
+            (n_chains, n_galaxies, len(free_names)),
+            dtype=base_y0.dtype,
+        )
+        return base_y0[None, :, :] + scale * noise
+    raise ValueError(
+        "sample.init_strategy must be one of "
+        "['map', 'config', 'map_jitter', 'random_uniform']"
+    )
+
+
+def _mclmc_batch_initial_theta(
+    *,
+    transform: BoundedParameterTransform,
+    free_names: tuple[str, ...],
+    base_params_rows: list[dict[str, float]],
+    initial_params_rows: list[dict[str, float] | None],
+    fit_config: dict[str, Any],
+) -> jnp.ndarray:
+    free = fit_config["free_parameters"]
+    rows = []
+    for base_params, initial_params in zip(
+        base_params_rows, initial_params_rows, strict=True
+    ):
+        values = []
+        for name in free_names:
+            if (
+                initial_params
+                and name in initial_params
+                and np.isfinite(initial_params[name])
+            ):
+                value = float(initial_params[name])
+            else:
+                value = _initial_value(free[name], name, base_params)
+            values.append(value)
+        rows.append(values)
+    theta = jnp.asarray(rows, dtype=jnp.float32)
+    eps = jnp.maximum((transform.upper - transform.lower) * 1.0e-6, 1.0e-7)
+    return jnp.clip(theta, transform.lower + eps, transform.upper - eps)
+
+
+def _mclmc_random_uniform_position_for_transform(
+    transform: BoundedParameterTransform, key: jnp.ndarray
+) -> jnp.ndarray:
+    lower = transform.lower
+    upper = transform.upper
+    eps = jnp.asarray(1.0e-4, dtype=lower.dtype)
+    unit = eps + (1.0 - 2.0 * eps) * random.uniform(
+        key, lower.shape, dtype=lower.dtype
+    )
+    theta = lower + (upper - lower) * unit
+    constraint = transform.gas_metallicity_constraint
+    if constraint is None:
+        return transform.to_unconstrained(theta)
+
+    stellar_index, gas_index = constraint
+    stellar_key, gas_key = random.split(random.fold_in(key, 4319))
+    stellar_low = lower[stellar_index]
+    stellar_high = jnp.minimum(upper[stellar_index], upper[gas_index])
+    stellar_unit = eps + (1.0 - 2.0 * eps) * random.uniform(
+        stellar_key, (), dtype=lower.dtype
+    )
+    stellar = stellar_low + (stellar_high - stellar_low) * stellar_unit
+    gas_low = jnp.maximum(lower[gas_index], stellar)
+    gas_span = jnp.maximum(upper[gas_index] - gas_low, 1.0e-6)
+    gas_unit = eps + (1.0 - 2.0 * eps) * random.uniform(
+        gas_key, (), dtype=lower.dtype
+    )
+    gas = gas_low + gas_span * gas_unit
+    theta = theta.at[stellar_index].set(stellar).at[gas_index].set(gas)
+    return transform.to_unconstrained(theta)
+
+
+def _mclmc_batch_inverse_mass_matrix(
+    sample_config: dict[str, Any], n_galaxies: int, n_free: int
+):
+    raw = sample_config.get("mclmc_inverse_mass_matrix")
+    if raw is None:
+        return 1.0
+    if isinstance(raw, str):
+        if raw.lower() == "identity":
+            return 1.0
+        if raw.lower() == "ones":
+            return jnp.ones((n_galaxies * n_free,), dtype=jnp.float32)
+    arr = jnp.asarray(raw, dtype=jnp.float32)
+    if arr.shape == ():
+        return float(arr)
+    if arr.shape == (n_free,):
+        return jnp.tile(arr, n_galaxies)
+    if arr.shape != (n_galaxies * n_free,):
+        raise ValueError(
+            "sample.mclmc_inverse_mass_matrix must be scalar, length n_free, "
+            f"or length batch*n_free ({n_galaxies * n_free}); got shape {arr.shape}"
+        )
+    return arr
 
 
 def _mclmc_init_strategy(

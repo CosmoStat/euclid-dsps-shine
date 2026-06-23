@@ -209,12 +209,12 @@ def sample_batch(
     row_indices_file: str | None = None,
     start_index: int = 0,
 ) -> None:
-    """Sample independent galaxy posteriors with NumPyro NUTS.
+    """Sample independent galaxy posteriors.
 
-    This intentionally runs one galaxy at a time; HMC/NUTS is for posterior
-    density checks on small subsets, while Adam/MAP remains the full-catalog path.
+    NumPyro HMC/NUTS stays one object at a time. BlackJAX MCLMC can use a
+    batched-galaxy joint target when ``batch_size > 1``.
     """
-    from ..mcmc import sample_one_galaxy
+    from ..mcmc import sample_galaxy_batch_mclmc, sample_one_galaxy
 
     if limit is None and not row_indices_file:
         raise ValueError(
@@ -242,8 +242,40 @@ def sample_batch(
     diagnostic_rows = []
     sample_rows = []
     save_samples = bool(config["sample"].get("save_samples", True))
+    sampler = str(config["sample"].get("sampler", "nuts")).lower()
+    use_batched_mclmc = sampler == "mclmc" and int(batch_size) > 1
+
+    def append_result_rows(
+        *,
+        row_index: int,
+        result: Any,
+        context_values: dict[str, Any],
+    ) -> None:
+        for item in result.summary:
+            summary_rows.append({"row_index": int(row_index), **item, **context_values})
+        predictive_rows.extend(
+            _posterior_predictive_rows(int(row_index), result, context_values)
+        )
+        residual_summary_rows.extend(
+            _posterior_predictive_flux_residual_summary_rows(
+                int(row_index),
+                result,
+                context_values,
+                config,
+            )
+        )
+        diagnostic_rows.append(
+            {
+                "row_index": int(row_index),
+                **result.diagnostics,
+                **context_values,
+            }
+        )
+        if save_samples:
+            sample_rows.extend(_posterior_sample_rows(int(row_index), result))
 
     total = _progress_total(config["catalog_path"], limit, row_indices)
+    chunk_index = 0
     with _make_progress_bar(
         total=total, desc="sample-batch", unit="galaxy"
     ) as progress:
@@ -255,6 +287,51 @@ def sample_batch(
             row_indices=row_indices,
             start_index=start_index,
         ):
+            if use_batched_mclmc and len(batch) > 1:
+                observations = []
+                base_rows = []
+                context_rows = []
+                for row_index, row in batch.iterrows():
+                    observation = build_observation(
+                        int(row_index), row, config["bands"]
+                    )
+                    params = parameters_for_row(
+                        config["model"]["fixed_parameters"],
+                        config["model"].get("parameter_columns", {}),
+                        row.to_dict(),
+                        config.get("redshift", {}),
+                    )
+                    observations.append(observation)
+                    base_rows.append(params)
+                    context_rows.append(_row_context(row.to_dict(), params, config))
+                initial_rows, map_chi2 = _map_start_batch(
+                    context, batch, config, chunk_index=chunk_index
+                )
+                results = sample_galaxy_batch_mclmc(
+                    context,
+                    observations,
+                    base_rows,
+                    config["fit"],
+                    config["sample"],
+                    initial_params_rows=initial_rows,
+                )
+                for local_index, (row_index, _row) in enumerate(batch.iterrows()):
+                    context_values = {
+                        **context_rows[local_index],
+                        "hmc_initialized_from_map": (
+                            initial_rows[local_index] is not None
+                        ),
+                        "map_chi2": map_chi2[local_index],
+                    }
+                    append_result_rows(
+                        row_index=int(row_index),
+                        result=results[local_index],
+                        context_values=context_values,
+                    )
+                    _update_progress(progress, row_index=int(row_index))
+                chunk_index += 1
+                continue
+
             for row_index, row in batch.iterrows():
                 observation = build_observation(int(row_index), row, config["bands"])
                 params = parameters_for_row(
@@ -288,31 +365,13 @@ def sample_batch(
                         "hmc_initialized_from_map": False,
                         "map_chi2": None,
                     }
-                for item in result.summary:
-                    summary_rows.append(
-                        {"row_index": int(row_index), **item, **context_values}
-                    )
-                predictive_rows.extend(
-                    _posterior_predictive_rows(int(row_index), result, context_values)
+                append_result_rows(
+                    row_index=int(row_index),
+                    result=result,
+                    context_values=context_values,
                 )
-                residual_summary_rows.extend(
-                    _posterior_predictive_flux_residual_summary_rows(
-                        int(row_index),
-                        result,
-                        context_values,
-                        config,
-                    )
-                )
-                diagnostic_rows.append(
-                    {
-                        "row_index": int(row_index),
-                        **result.diagnostics,
-                        **context_values,
-                    }
-                )
-                if save_samples:
-                    sample_rows.extend(_posterior_sample_rows(int(row_index), result))
                 _update_progress(progress, row_index=int(row_index))
+            chunk_index += 1
 
     pd.DataFrame(summary_rows).to_csv(out / "batch_posterior_summary.csv", index=False)
     pd.DataFrame(predictive_rows).to_csv(
@@ -499,6 +558,49 @@ def _map_start(context, observation, params: dict[str, float], config: dict[str,
     if not bool(config.get("sample", {}).get("init_from_map", True)):
         return None
     return fit_one_galaxy(context, observation, params, config["fit"])
+
+
+def _map_start_batch(
+    context,
+    batch: pd.DataFrame,
+    config: dict[str, Any],
+    *,
+    chunk_index: int,
+) -> tuple[list[dict[str, float] | None], list[float | None]]:
+    if not bool(config.get("sample", {}).get("init_from_map", True)):
+        return [None] * len(batch), [None] * len(batch)
+    batch_result = _fit_dataframe_batch(
+        context,
+        batch,
+        config,
+        chunk_index=chunk_index,
+        perf=None,
+    )
+    fit_rows_by_index = {
+        int(row["row_index"]): row
+        for row in batch_result["fit_rows"]
+        if "row_index" in row
+    }
+    free_names = list(config["fit"]["free_parameters"])
+    initial_rows: list[dict[str, float] | None] = []
+    chi2_rows: list[float | None] = []
+    for row_index in batch.index:
+        fit_row = fit_rows_by_index.get(int(row_index))
+        if fit_row is None:
+            initial_rows.append(None)
+            chi2_rows.append(None)
+            continue
+        initial: dict[str, float] = {}
+        for name in free_names:
+            key = f"fit_{name}"
+            value = fit_row.get(key)
+            if value is None or not np.isfinite(value):
+                continue
+            initial[name] = float(value)
+        initial_rows.append(initial if len(initial) == len(free_names) else None)
+        chi2 = fit_row.get("chi2")
+        chi2_rows.append(float(chi2) if chi2 is not None and np.isfinite(chi2) else None)
+    return initial_rows, chi2_rows
 
 
 def run_batch(
