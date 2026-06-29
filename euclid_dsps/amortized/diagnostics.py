@@ -108,6 +108,7 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         "logprior_mean",
         "logq_mean",
         "residual_rms",
+        "flux_residual_rms",
         "finite_fraction",
         "encoder_grad_norm",
         "prior_grad_norm",
@@ -154,6 +155,7 @@ def _write_training_epoch_summary(frame: pd.DataFrame, out: Path) -> pd.DataFram
         "logprior_mean",
         "logq_mean",
         "residual_rms",
+        "flux_residual_rms",
         "finite_fraction",
         "encoder_grad_norm",
         "prior_grad_norm",
@@ -451,13 +453,18 @@ def posterior_predictive_residual_frame(
                     obs_flux[object_index, band_index]
                     - model_flux[sample_id, object_index, band_index]
                 )
+                abs_obs_flux = max(abs(obs_flux[object_index, band_index]), 1.0e-300)
                 residual = np.nan
                 raw_residual_sigma = np.nan
+                snr_proxy = np.nan
+                err_over_abs_flux = np.nan
                 if mask[object_index, band_index]:
                     if np.isfinite(sigma) and sigma > 0.0:
                         residual = raw_residual / sigma
                     if np.isfinite(err) and err > 0.0:
                         raw_residual_sigma = raw_residual / err
+                        snr_proxy = abs_obs_flux / err
+                        err_over_abs_flux = err / abs_obs_flux
                 rows.append(
                     {
                         "object_id": object_id[object_index],
@@ -470,7 +477,13 @@ def posterior_predictive_residual_frame(
                             model_flux[sample_id, object_index, band_index]
                         ),
                         "sigma_eff_fnu_cgs": float(sigma),
+                        "snr_proxy": float(snr_proxy),
+                        "obs_err_over_abs_flux": float(err_over_abs_flux),
                         "flux_residual_obs_minus_model_fnu_cgs": float(raw_residual),
+                        "abs_flux_residual_fnu_cgs": float(abs(raw_residual)),
+                        "abs_flux_residual_over_abs_flux": float(
+                            abs(raw_residual) / abs_obs_flux
+                        ),
                         "chi_likelihood": float(residual),
                         "residual_sigma": float(residual),
                         "raw_residual_sigma": float(raw_residual_sigma),
@@ -512,6 +525,9 @@ def posterior_predictive_residual_summary_frame(
         floor_reference=str(likelihood_config.get("error_floor_reference", "model")),
     )
     flux_residual = obs_flux[None, :, :] - model_flux
+    abs_flux_residual = np.abs(flux_residual)
+    abs_obs_flux = np.maximum(np.abs(obs_flux), 1.0e-300)
+    abs_flux_residual_over_abs_flux = abs_flux_residual / abs_obs_flux[None, :, :]
     residual = np.full_like(model_flux, np.nan, dtype=float)
     valid_sigma = np.isfinite(sigma_eff) & (sigma_eff > 0.0) & mask[None, :, :]
     residual[valid_sigma] = flux_residual[valid_sigma] / sigma_eff[valid_sigma]
@@ -529,6 +545,16 @@ def posterior_predictive_residual_summary_frame(
                     "band": band_names[band_index],
                     "obs_flux_fnu_cgs": float(obs_flux[object_index, band_index]),
                     "obs_err_fnu_cgs": float(obs_err[object_index, band_index]),
+                    "snr_proxy": float(
+                        abs_obs_flux[object_index, band_index]
+                        / obs_err[object_index, band_index]
+                    )
+                    if obs_err[object_index, band_index] > 0.0
+                    else float("nan"),
+                    "obs_err_over_abs_flux": float(
+                        obs_err[object_index, band_index]
+                        / abs_obs_flux[object_index, band_index]
+                    ),
                     "model_flux_q16": float(
                         _nanquantile_or_nan(model_flux[:, object_index, band_index], 0.16)
                     ),
@@ -558,6 +584,16 @@ def posterior_predictive_residual_summary_frame(
                     "flux_residual_obs_minus_model_q84": float(
                         _nanquantile_or_nan(
                             flux_residual[:, object_index, band_index], 0.84
+                        )
+                    ),
+                    "abs_flux_residual_median": float(
+                        np.nanmedian(abs_flux_residual[:, object_index, band_index])
+                    ),
+                    "abs_flux_residual_over_abs_flux_median": float(
+                        np.nanmedian(
+                            abs_flux_residual_over_abs_flux[
+                                :, object_index, band_index
+                            ]
                         )
                     ),
                     "chi_likelihood_q16": float(

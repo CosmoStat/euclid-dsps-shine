@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+from types import SimpleNamespace
 
 import jax.numpy as jnp
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -66,6 +68,24 @@ def test_model_flux_from_x_sample_chunks_rejects_nonpositive_chunk() -> None:
             spec.names,
             sample_chunk_size=0,
         )
+
+
+def test_posterior_predictive_chi2_is_finite_for_tiny_fluxes() -> None:
+    batch = SimpleNamespace(
+        flux=jnp.asarray([[2.0e-41, 3.0e-40]], dtype=jnp.float32),
+        flux_err=jnp.asarray([[2.5e-31, 7.0e-32]], dtype=jnp.float32),
+        mask=jnp.asarray([[True, True]]),
+    )
+    model_flux = jnp.asarray([[[3.0e-35, 2.0e-31]]], dtype=jnp.float32)
+
+    chi2 = infer_mod._posterior_predictive_chi2(
+        batch,
+        model_flux,
+        {"error_floor_frac": 0.02, "error_jitter": 0.0},
+    )
+
+    assert chi2.shape == (1, 1)
+    assert np.isfinite(chi2).all()
 
 
 def test_combine_inference_shard_tables_writes_dense_outputs(tmp_path) -> None:

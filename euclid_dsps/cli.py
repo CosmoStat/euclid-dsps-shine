@@ -477,6 +477,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="median_abs_sigma",
         help="Object ranking metric from the residual summary aggregation.",
     )
+    rowsets.add_argument(
+        "--balanced-size",
+        type=int,
+        default=20000,
+        help=(
+            "Balanced diagnostic rowset size stratified by redshift and "
+            "photometric quality; use 0 to disable."
+        ),
+    )
+    rowsets.add_argument(
+        "--balanced-seed",
+        type=int,
+        default=42,
+        help="Random seed for the balanced diagnostic rowset.",
+    )
 
     compare_reconstruction = sub.add_parser(
         "diffsky-compare-reconstruction",
@@ -1288,15 +1303,23 @@ def _run_diffsky_redshift_ablation(config: dict, args) -> None:
 
 
 def _run_diffsky_build_reconstruction_rowsets(config: dict, args) -> None:
-    del config
     from .reconstruction_experiments import build_reconstruction_rowsets
 
+    redshift_bins = (
+        ((config.get("amortized", {}) or {}).get("data", {}) or {}).get(
+            "redshift_bins",
+            None,
+        )
+    )
     outputs = build_reconstruction_rowsets(
         train_run=Path(args.train_run),
         infer_run=Path(args.infer_run),
         out_dir=Path(args.out),
         worst_sizes=tuple(args.worst_size or [500, 1000]),
         metric=str(args.metric),
+        balanced_size=int(args.balanced_size),
+        balanced_seed=int(args.balanced_seed),
+        redshift_bins=redshift_bins,
     )
     print(f"[diffsky] rowsets manifest -> {outputs['manifest']}")
 

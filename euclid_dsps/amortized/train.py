@@ -44,7 +44,12 @@ from .data import (
 )
 from .decoder import model_flux_from_x
 from .diagnostics import write_training_diagnostics
-from .elbo import AmortizedModel, negative_elbo
+from .elbo import (
+    AmortizedModel,
+    is_deterministic_reconstruction,
+    negative_elbo,
+    objective_mode,
+)
 from .encoder import GaussianEncoder
 from .features import (
     FeatureStats,
@@ -55,11 +60,12 @@ from .features import (
 from .flows import RealNVPPrior, StandardNormalPrior
 from .latent import (
     LatentSpec,
+    initial_theta_from_config,
     latent_spec_from_config,
     latent_spec_to_jsonable,
     theta_to_x,
 )
-from .likelihood import photometric_loglike
+from .likelihood import photometric_loglike, photometric_normalized_residual
 
 eqx, optax = require_amortized_dependencies()
 
@@ -226,12 +232,20 @@ def _initialize_encoder_mean_if_possible(
     config: dict[str, Any],
     encoder: GaussianEncoder,
 ) -> GaussianEncoder:
-    """Start the real FS2 encoder near a stable PopCosmos theta point."""
+    """Start the encoder from the configured physical initialization."""
     try:
         spec = latent_spec_from_config(config)
     except (KeyError, ValueError):
         return encoder
-    theta0 = _default_initial_theta(spec)
+    theta0 = jnp.asarray(
+        initial_theta_from_config(
+            config,
+            spec.names,
+            np.asarray(spec.lower, dtype=float),
+            np.asarray(spec.upper, dtype=float),
+        ),
+        dtype=jnp.float32,
+    )
     x0 = theta_to_x(theta0, spec)
     zero_mean_weight = jnp.zeros_like(encoder.mean_head.weight)
     zero_log_std_weight = jnp.zeros_like(encoder.log_std_head.weight)
@@ -253,28 +267,96 @@ def _initialize_encoder_mean_if_possible(
     )
 
 
-def _default_initial_theta(spec: LatentSpec) -> jnp.ndarray:
-    defaults = {
-        "z_obs": 0.8,
-        "log10_stellar_mass": 10.0,
-        "log10_stellar_metallicity": -0.7,
-        "tau2": 0.4,
-        "dust_index_n": -0.7,
-        "tau1_over_tau2": 1.0,
-        "log10_gas_metallicity": -0.3,
-        "log10_gas_ionization": -2.5,
-        "ln_fagn": -8.0,
-        "ln_tauagn": float(np.log(20.0)),
+def _initial_theta_diagnostics_payload(
+    config: dict[str, Any],
+    latent_spec: LatentSpec,
+) -> dict[str, Any]:
+    lower = np.asarray(latent_spec.lower, dtype=float)
+    upper = np.asarray(latent_spec.upper, dtype=float)
+    theta0 = initial_theta_from_config(config, latent_spec.names, lower, upper)
+    span = np.maximum(upper - lower, 1.0e-12)
+    unit_position = (theta0 - lower) / span
+    distance_lower = theta0 - lower
+    distance_upper = upper - theta0
+    nearest_boundary_fraction = np.minimum(unit_position, 1.0 - unit_position)
+    threshold = float(
+        (
+            (config.get("amortized", {}) or {}).get("encoder", {}) or {}
+        ).get("initial_boundary_warning_fraction", 1.0e-3)
+    )
+    x0 = np.asarray(
+        jax.device_get(
+            theta_to_x(jnp.asarray(theta0, dtype=jnp.float32), latent_spec)
+        ),
+        dtype=float,
+    )
+    free = (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
+    rows = []
+    warnings = []
+    for index, name in enumerate(latent_spec.names):
+        raw_initial = (free.get(name, {}) or {}).get("initial")
+        configured_initial = _finite_float_or_none(raw_initial)
+        source = "config_initial" if configured_initial is not None else "midpoint"
+        if configured_initial is not None and not np.isclose(
+            configured_initial,
+            theta0[index],
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            source = "config_initial_clipped_to_bounds"
+        near_boundary = bool(nearest_boundary_fraction[index] < threshold)
+        if near_boundary:
+            warnings.append(
+                {
+                    "parameter": str(name),
+                    "theta_init": float(theta0[index]),
+                    "nearest_boundary_fraction": float(
+                        nearest_boundary_fraction[index]
+                    ),
+                }
+            )
+        rows.append(
+            {
+                "name": str(name),
+                "source": source,
+                "configured_initial": (
+                    float(configured_initial)
+                    if configured_initial is not None
+                    else None
+                ),
+                "theta_init": float(theta0[index]),
+                "network_x_init": float(x0[index]),
+                "lower": float(lower[index]),
+                "upper": float(upper[index]),
+                "unit_position": float(unit_position[index]),
+                "distance_to_lower": float(distance_lower[index]),
+                "distance_to_upper": float(distance_upper[index]),
+                "nearest_boundary_fraction": float(nearest_boundary_fraction[index]),
+                "near_boundary": near_boundary,
+            }
+        )
+    return {
+        "initialization_contract": (
+            "fit.free_parameters.<name>.initial with physical midpoint fallback"
+        ),
+        "boundary_warning_fraction": threshold,
+        "n_parameters": len(rows),
+        "n_near_boundary": len(warnings),
+        "parameters": rows,
+        "warnings": warnings,
     }
-    defaults.update({f"dlog10_sfr_{index}": 0.0 for index in range(1, 7)})
-    values = []
-    for index, name in enumerate(spec.names):
-        midpoint = 0.5 * (float(spec.lower[index]) + float(spec.upper[index]))
-        value = float(defaults.get(name, midpoint))
-        low = float(spec.lower[index])
-        high = float(spec.upper[index])
-        values.append(min(max(value, low + 1.0e-5), high - 1.0e-5))
-    return jnp.asarray(values, dtype=jnp.float32)
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return parsed
 
 
 def make_optimizer(config: dict[str, Any]):
@@ -311,6 +393,7 @@ def train_amortized_fs2(
     """Train encoder and RealNVP prior jointly on configured photometry."""
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
+    objective_mode_name = objective_mode(cfg.get("objective", {}))
     redshift_bins_for_fingerprint = (
         (config.get("amortized", {}) or {}).get("data", {}) or {}
     ).get(
@@ -329,7 +412,8 @@ def train_amortized_fs2(
         "[amortized] run config: "
         f"limit={limit if limit is not None else 'all'} "
         f"batch_size={int(batch_size)} epochs={int(epochs)} "
-        f"n_samples={int(n_samples)} seed={int(seed)}",
+        f"n_samples={int(n_samples)} seed={int(seed)} "
+        f"objective={objective_mode_name}",
     )
     _log(
         verbose,
@@ -427,6 +511,16 @@ def train_amortized_fs2(
         f"{len(latent_spec.names)} parameters, "
         f"first={latent_spec.names[0]}, last={latent_spec.names[-1]}",
     )
+    initial_theta_diagnostics = _initial_theta_diagnostics_payload(config, latent_spec)
+    write_json(out / "initial_theta_diagnostics.json", initial_theta_diagnostics)
+    if initial_theta_diagnostics["warnings"]:
+        _log(
+            verbose,
+            "[amortized] initial theta boundary warnings: "
+            f"{len(initial_theta_diagnostics['warnings'])} parameters within "
+            f"{initial_theta_diagnostics['boundary_warning_fraction']:.3g} "
+            "of a bound",
+        )
     key = jax.random.PRNGKey(int(seed))
     key, model_key = jax.random.split(key)
     model = build_amortized_model(config, model_key)
@@ -839,6 +933,7 @@ def train_amortized_fs2(
         "catalog_fingerprint": catalog_identity,
         "kl_annealing_epochs": int(cfg["training"].get("kl_annealing_epochs", 5)),
         "kl_weight_max": float(kl_weight_max),
+        "objective_mode": objective_mode_name,
         "best_loss": float(best_metric_value),
         "best_checkpoint_metric": best_checkpoint_metric,
         "best_checkpoint_metric_requested": configured_best_metric,
@@ -853,6 +948,13 @@ def train_amortized_fs2(
         "checkpoint_every": checkpoint_every,
         "diagnostics_every": diagnostics_every,
         "input_noise": input_noise_cfg,
+        "initial_theta_diagnostics": {
+            "path": "initial_theta_diagnostics.json",
+            "n_near_boundary": int(initial_theta_diagnostics["n_near_boundary"]),
+            "boundary_warning_fraction": float(
+                initial_theta_diagnostics["boundary_warning_fraction"]
+            ),
+        },
         "updates_applied": int(
             sum(row.get("update_applied", 0.0) for row in _training_rows(rows))
         ),
@@ -867,7 +969,12 @@ def train_amortized_fs2(
             "global_sed_scale": bool(train_alpha),
             "per_band_flux_calibration": bool(train_band_calibration),
             "decoder": False,
-            "kl_estimator": "monte_carlo_logq_minus_logp",
+            "encoder_objective": objective_mode_name,
+            "kl_estimator": (
+                "disabled_deterministic_reconstruction"
+                if objective_mode_name == "deterministic_reconstruction"
+                else "monte_carlo_logq_minus_logp"
+            ),
         },
         "likelihood_temperature": {
             "initial": float(
@@ -1364,12 +1471,17 @@ def _evaluation_metrics(
     objective_config,
 ):
     objective_config = objective_config or {}
-    x_samples, logq = model.encoder.sample_and_log_prob(
-        key,
-        batch.features,
-        int(n_samples),
-    )
-    _mean, log_std = model.encoder(batch.features)
+    deterministic = is_deterministic_reconstruction(objective_config)
+    mean, log_std = model.encoder(batch.features)
+    if deterministic:
+        x_samples = mean[None, ...]
+        logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
+    else:
+        x_samples, logq = model.encoder.sample_and_log_prob(
+            key,
+            batch.features,
+            int(n_samples),
+        )
     model_flux_raw = model_flux_from_x(
         x_samples,
         latent_spec,
@@ -1421,16 +1533,37 @@ def _evaluation_metrics(
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
     )
-    logp = model.prior.log_prob(x_samples)
+    logp = (
+        jnp.zeros_like(logq)
+        if deterministic
+        else model.prior.log_prob(x_samples)
+    )
     kl = logq - logp
     likelihood_temperature = jnp.asarray(
         max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
         dtype=loglike.dtype,
     )
-    entropy_penalty = _posterior_entropy_floor_penalty_train(log_std, objective_config)
+    entropy_penalty = (
+        jnp.asarray(0.0, dtype=loglike.dtype)
+        if deterministic
+        else _posterior_entropy_floor_penalty_train(log_std, objective_config)
+    )
     objective = -loglike / likelihood_temperature + float(kl_weight) * kl
-    chi = (model_flux - batch.flux[None, :, :]) / batch.flux_err[None, :, :]
-    chi = jnp.where(batch.mask[None, :, :], chi, 0.0)
+    chi = photometric_normalized_residual(
+        obs_flux=batch.flux,
+        model_flux=model_flux,
+        obs_err=batch.flux_err,
+        mask=batch.mask,
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+    )
+    raw_flux_residual = jnp.where(
+        batch.mask[None, :, :],
+        model_flux - batch.flux[None, :, :],
+        0.0,
+    )
+    n_valid_residual = jnp.maximum(jnp.sum(batch.mask) * x_samples.shape[0], 1)
+    n_valid_flux = jnp.maximum(jnp.sum(batch.mask), 1)
     object_loss = jnp.mean(objective, axis=0)
     object_nll = jnp.mean(-loglike, axis=0)
     object_kl = jnp.mean(kl, axis=0)
@@ -1449,10 +1582,31 @@ def _evaluation_metrics(
         "kl_mc_mean": jnp.mean(kl),
         "likelihood_temperature": likelihood_temperature,
         "entropy_floor_penalty": entropy_penalty,
-        "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
-        "posterior_min_log_std": jnp.min(log_std),
-        "posterior_median_log_std": jnp.median(log_std),
-        "posterior_max_log_std": jnp.max(log_std),
+        "posterior_entropy_mean": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else _diag_gaussian_entropy_train(log_std).mean()
+        ),
+        "posterior_min_log_std": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else jnp.min(log_std)
+        ),
+        "posterior_median_log_std": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else jnp.median(log_std)
+        ),
+        "posterior_max_log_std": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else jnp.max(log_std)
+        ),
+        "deterministic_reconstruction": jnp.asarray(
+            1.0 if deterministic else 0.0,
+            dtype=loglike.dtype,
+        ),
+        "effective_n_samples": jnp.asarray(x_samples.shape[0], dtype=loglike.dtype),
         "model_flux_mean": jnp.mean(model_flux),
         "mean_model_flux_raw": jnp.mean(model_flux_raw),
         "mean_model_flux_scaled": jnp.mean(model_flux),
@@ -1463,7 +1617,8 @@ def _evaluation_metrics(
         "max_abs_band_delta_mag": jnp.max(
             jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
         ),
-        "residual_rms": jnp.sqrt(jnp.mean(chi**2)),
+        "residual_rms": jnp.sqrt(jnp.sum(chi**2) / n_valid_residual),
+        "flux_residual_rms": jnp.sqrt(jnp.sum(raw_flux_residual**2) / n_valid_flux),
         "finite_fraction": jnp.mean(jnp.isfinite(objective)),
     }
     object_metrics = {
@@ -2062,7 +2217,9 @@ def _objective_config_for_epoch(
             final=final_weight,
             epochs=int(regularization.get("anneal_epochs", 0)),
         )
+    objective = dict(cfg.get("objective", {}) or {})
     return {
+        "mode": str(objective.get("mode", "stochastic_elbo")),
         "likelihood_temperature": float(temperature),
         "posterior_regularization": regularization,
     }

@@ -206,7 +206,7 @@ def _latent_normalization_from_config(
         raise ValueError(
             "amortized.latent.normalization must be 'identity' or 'standardized_logit'"
         )
-    theta0 = _initial_theta_for_normalization(config, names, lower, upper)
+    theta0 = initial_theta_from_config(config, names, lower, upper)
     span = np.maximum(upper - lower, 1.0e-12)
     eps = 1.0e-6
     scaled = np.clip((theta0 - lower) / span, eps, 1.0 - eps)
@@ -228,32 +228,40 @@ def _latent_normalization_from_config(
     return raw_center, raw_scale, "standardized_logit"
 
 
-def _initial_theta_for_normalization(
+def initial_theta_from_config(
     config: dict[str, Any],
     names: tuple[str, ...],
     lower: np.ndarray,
     upper: np.ndarray,
 ) -> np.ndarray:
-    defaults = {
-        "z_obs": 0.8,
-        "log10_stellar_mass": 10.0,
-        "log10_stellar_metallicity": -0.7,
-        "tau2": 0.4,
-        "dust_index_n": -0.7,
-        "tau1_over_tau2": 1.0,
-        "log10_gas_metallicity": -0.3,
-        "log10_gas_ionization": -2.5,
-        "ln_fagn": -8.0,
-        "ln_tauagn": float(np.log(20.0)),
-    }
-    defaults.update({f"dlog10_sfr_{index}": 0.0 for index in range(1, 7)})
+    """Return physical latent initialization from config, with midpoint fallback."""
+    lower = np.asarray(lower, dtype=float)
+    upper = np.asarray(upper, dtype=float)
+    if lower.shape != upper.shape or lower.shape != (len(names),):
+        raise ValueError("initial_theta_from_config bounds must match names")
+    span = upper - lower
+    if np.any(~np.isfinite(span)) or np.any(span <= 0.0):
+        raise ValueError("initial_theta_from_config bounds must be finite increasing")
     free = (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
+    midpoint = 0.5 * (lower + upper)
+    edge = np.minimum(1.0e-5, 0.01 * span)
     values = []
     for index, name in enumerate(names):
         configured = (free.get(name, {}) or {}).get("initial")
-        if isinstance(configured, int | float) and np.isfinite(float(configured)):
-            value = float(configured)
-        else:
-            value = float(defaults.get(name, 0.5 * (lower[index] + upper[index])))
-        values.append(np.clip(value, lower[index] + 1.0e-5, upper[index] - 1.0e-5))
+        value = _finite_float_or_none(configured)
+        if value is None:
+            value = float(midpoint[index])
+        values.append(np.clip(value, lower[index] + edge[index], upper[index] - edge[index]))
     return np.asarray(values, dtype=float)
+
+
+def _finite_float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(parsed):
+        return None
+    return parsed

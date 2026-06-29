@@ -3,7 +3,12 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from euclid_dsps.amortized.latent import latent_spec_from_config, theta_to_x, x_to_theta
+from euclid_dsps.amortized.latent import (
+    initial_theta_from_config,
+    latent_spec_from_config,
+    theta_to_x,
+    x_to_theta,
+)
 from euclid_dsps.config import load_config
 from euclid_dsps.parameters import POPCOSMOS_PARAMETER_NAMES
 
@@ -61,6 +66,33 @@ def test_diffsky_hltds_latent_schema_uses_configured_free_parameters() -> None:
     assert spec.normalization == "standardized_logit"
     assert spec.raw_center is not None
     assert spec.raw_scale is not None
+
+
+def test_initial_theta_uses_config_initial_with_midpoint_fallback() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+    spec = latent_spec_from_config(config)
+
+    theta = initial_theta_from_config(
+        config,
+        spec.names,
+        np.asarray(spec.lower),
+        np.asarray(spec.upper),
+    )
+    by_name = dict(zip(spec.names, theta, strict=True))
+
+    assert by_name["z_obs"] == 0.25
+
+    fallback_config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+    del fallback_config["fit"]["free_parameters"]["tau2"]["initial"]
+    fallback_theta = initial_theta_from_config(
+        fallback_config,
+        spec.names,
+        np.asarray(spec.lower),
+        np.asarray(spec.upper),
+    )
+    fallback_by_name = dict(zip(spec.names, fallback_theta, strict=True))
+
+    assert fallback_by_name["tau2"] == 2.0
 
 
 def test_diffsky_supervised_prior_config_matches_truth_basic_schema() -> None:

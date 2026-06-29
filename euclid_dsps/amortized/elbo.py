@@ -21,7 +21,7 @@ from euclid_dsps.calibration import (
 from .config import require_equinox
 from .decoder import mock_model_flux_from_x, model_flux_from_x
 from .latent import LatentSpec
-from .likelihood import photometric_loglike
+from .likelihood import photometric_loglike, photometric_normalized_residual
 
 eqx = require_equinox()
 
@@ -57,12 +57,17 @@ def negative_elbo(
     coupling networks, so the expectation has no Gaussian closed form.
     """
     objective_config = objective_config or {}
-    x_samples, logq = model.encoder.sample_and_log_prob(
-        key,
-        batch.features,
-        int(n_samples),
-    )
-    _mean, log_std = model.encoder(batch.features)
+    deterministic = is_deterministic_reconstruction(objective_config)
+    mean, log_std = model.encoder(batch.features)
+    if deterministic:
+        x_samples = mean[None, ...]
+        logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
+    else:
+        x_samples, logq = model.encoder.sample_and_log_prob(
+            key,
+            batch.features,
+            int(n_samples),
+        )
     if use_mock_decoder:
         if mock_decoder_params is None:
             raise ValueError(
@@ -125,13 +130,21 @@ def negative_elbo(
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
     )
-    logp = model.prior.log_prob(x_samples)
+    logp = (
+        jnp.zeros_like(logq)
+        if deterministic
+        else model.prior.log_prob(x_samples)
+    )
     kl_mc = logq - logp
     likelihood_temperature = jnp.asarray(
         max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
         dtype=loglike.dtype,
     )
-    entropy_penalty = _posterior_entropy_floor_penalty(log_std, objective_config)
+    entropy_penalty = (
+        jnp.asarray(0.0, dtype=loglike.dtype)
+        if deterministic
+        else _posterior_entropy_floor_penalty(log_std, objective_config)
+    )
     loss_terms = -loglike / likelihood_temperature + float(kl_weight) * kl_mc
     loss = (
         jnp.mean(loss_terms)
@@ -143,6 +156,15 @@ def negative_elbo(
     mask = batch.mask[None, :, :]
     residual = jnp.where(mask, model_flux - obs, 0.0)
     n_valid = jnp.maximum(jnp.sum(mask), 1)
+    chi = photometric_normalized_residual(
+        obs_flux=batch.flux,
+        model_flux=model_flux,
+        obs_err=batch.flux_err,
+        mask=batch.mask,
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+    )
+    n_valid_residual = jnp.maximum(jnp.sum(mask) * x_samples.shape[0], 1)
     metrics = {
         "loss": loss,
         "negative_loglike": jnp.mean(-loglike),
@@ -152,10 +174,31 @@ def negative_elbo(
         "kl_mc_mean": jnp.mean(kl_mc),
         "likelihood_temperature": likelihood_temperature,
         "entropy_floor_penalty": entropy_penalty,
-        "posterior_entropy_mean": _diag_gaussian_entropy(log_std).mean(),
-        "posterior_min_log_std": jnp.min(log_std),
-        "posterior_median_log_std": jnp.median(log_std),
-        "posterior_max_log_std": jnp.max(log_std),
+        "posterior_entropy_mean": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else _diag_gaussian_entropy(log_std).mean()
+        ),
+        "posterior_min_log_std": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else jnp.min(log_std)
+        ),
+        "posterior_median_log_std": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else jnp.median(log_std)
+        ),
+        "posterior_max_log_std": (
+            jnp.asarray(0.0, dtype=loglike.dtype)
+            if deterministic
+            else jnp.max(log_std)
+        ),
+        "deterministic_reconstruction": jnp.asarray(
+            1.0 if deterministic else 0.0,
+            dtype=loglike.dtype,
+        ),
+        "effective_n_samples": jnp.asarray(x_samples.shape[0], dtype=loglike.dtype),
         "model_flux_mean": jnp.mean(model_flux),
         "mean_model_flux_raw": jnp.mean(model_flux_raw),
         "mean_model_flux_scaled": jnp.mean(model_flux),
@@ -166,10 +209,36 @@ def negative_elbo(
         "max_abs_band_delta_mag": jnp.max(
             jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
         ),
-        "residual_rms": jnp.sqrt(jnp.sum(residual**2) / n_valid),
+        "residual_rms": jnp.sqrt(jnp.sum(chi**2) / n_valid_residual),
+        "flux_residual_rms": jnp.sqrt(jnp.sum(residual**2) / n_valid),
         "finite_fraction": jnp.mean(jnp.isfinite(loss_terms).astype(jnp.float32)),
     }
     return loss, metrics
+
+
+def objective_mode(objective_config: dict | None) -> str:
+    """Return normalized amortized objective mode."""
+    raw = str((objective_config or {}).get("mode", "stochastic_elbo"))
+    mode = raw.strip().lower().replace("-", "_")
+    aliases = {
+        "stochastic": "stochastic_elbo",
+        "elbo": "stochastic_elbo",
+        "stochastic_elbo": "stochastic_elbo",
+        "deterministic": "deterministic_reconstruction",
+        "autoencoder": "deterministic_reconstruction",
+        "deterministic_autoencoder": "deterministic_reconstruction",
+        "deterministic_reconstruction": "deterministic_reconstruction",
+    }
+    if mode not in aliases:
+        raise ValueError(
+            "amortized.objective.mode must be 'stochastic_elbo' or "
+            "'deterministic_reconstruction'"
+        )
+    return aliases[mode]
+
+
+def is_deterministic_reconstruction(objective_config: dict | None) -> bool:
+    return objective_mode(objective_config) == "deterministic_reconstruction"
 
 
 def _diag_gaussian_entropy(log_std: jnp.ndarray) -> jnp.ndarray:

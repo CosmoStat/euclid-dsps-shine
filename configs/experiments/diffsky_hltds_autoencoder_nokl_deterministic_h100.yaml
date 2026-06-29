@@ -1,0 +1,13 @@
+extends: diffsky_hltds_autoencoder_nokl_h100.yaml
+
+experiment:
+    name: diffsky_hltds_autoencoder_nokl_deterministic_h100
+    description: Deterministic no-KL Diffsky HLTDS autoencoder reconstruction run using only the encoder mean.
+
+amortized:
+    objective:
+        mode: deterministic_reconstruction
+    training:
+        n_samples: 1
+    inference:
+        posterior_samples: 1

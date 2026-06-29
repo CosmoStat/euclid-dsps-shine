@@ -50,6 +50,7 @@ from .diagnostics import (
     posterior_predictive_residual_summary_frame,
     summarize_inference_outputs,
 )
+from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
 from .latent import latent_spec_from_config, x_to_theta
 from .likelihood import photometric_loglike
@@ -99,6 +100,10 @@ def infer_amortized_fs2(
         raise ValueError("decoder_sample_chunk_size must be positive")
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
+    objective_mode_name = objective_mode(cfg.get("objective", {}))
+    deterministic_reconstruction = is_deterministic_reconstruction(
+        cfg.get("objective", {})
+    )
     inference_cfg = cfg.get("inference", {})
     selection_mode = str(
         selection_mode
@@ -206,7 +211,8 @@ def infer_amortized_fs2(
             f"write_posterior_predictive={write_posterior_predictive} "
             f"write_residual_samples={write_residual_samples} "
             f"selection_mode={selection_mode} "
-            f"stratified_strategy={stratified_strategy}"
+            f"stratified_strategy={stratified_strategy} "
+            f"objective={objective_mode_name}"
         )
         print(
             "[amortized] inference selection: "
@@ -285,6 +291,7 @@ def infer_amortized_fs2(
         "residual_rows": 0,
         "residual_summary_rows": 0,
         "feature_diagnostics_rows": 0,
+        "parameter_bound_diagnostics_rows": 0,
     }
     shards_written: list[dict[str, Any]] = []
     shards_skipped: list[dict[str, Any]] = []
@@ -307,6 +314,10 @@ def infer_amortized_fs2(
         "selection_seed": int(selection_seed),
         "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "posterior_samples": int(posterior_samples),
+        "effective_posterior_samples": (
+            1 if deterministic_reconstruction else int(posterior_samples)
+        ),
+        "objective_mode": objective_mode_name,
         "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
         "write_posterior_predictive": bool(write_posterior_predictive),
         "write_residual_samples": bool(write_residual_samples),
@@ -386,11 +397,16 @@ def infer_amortized_fs2(
             if verbose:
                 print(f"[amortized] shard batch {batch_index} exists; skipping")
             continue
-        x_samples, logq = model.encoder.sample_and_log_prob(
-            sample_key,
-            batch.features,
-            int(posterior_samples),
-        )
+        if deterministic_reconstruction:
+            mean, _log_std = model.encoder(batch.features)
+            x_samples = mean[None, ...]
+            logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
+        else:
+            x_samples, logq = model.encoder.sample_and_log_prob(
+                sample_key,
+                batch.features,
+                int(posterior_samples),
+            )
         theta = x_to_theta(x_samples, latent_spec)
         model_flux_raw = _model_flux_from_x_sample_chunks(
             x_samples,
@@ -416,7 +432,11 @@ def infer_amortized_fs2(
             if band_calibration_cfg.enabled
             else model_flux
         )
-        logprior = model.prior.log_prob(x_samples)
+        logprior = (
+            jnp.zeros_like(logq)
+            if deterministic_reconstruction
+            else model.prior.log_prob(x_samples)
+        )
         loglike = photometric_loglike(
             obs_flux=batch.flux,
             model_flux=model_flux,
@@ -583,6 +603,14 @@ def infer_amortized_fs2(
         if residual_summary_frames
         else pd.DataFrame()
     )
+    parameter_bound_diagnostics = _write_parameter_bound_diagnostics(
+        summary,
+        latent_spec,
+        out,
+    )
+    row_counts["parameter_bound_diagnostics_rows"] = int(
+        len(parameter_bound_diagnostics)
+    )
     if not shard_outputs:
         row_counts = {
             "samples_rows": int(len(samples)),
@@ -591,6 +619,7 @@ def infer_amortized_fs2(
             "residual_rows": int(len(residuals)),
             "residual_summary_rows": int(len(residual_summary)),
             "feature_diagnostics_rows": int(len(feature_diagnostics)),
+            "parameter_bound_diagnostics_rows": int(len(parameter_bound_diagnostics)),
         }
     key, prior_key = jax.random.split(key)
     if verbose:
@@ -732,6 +761,17 @@ def infer_amortized_fs2(
     write_json(
         out / "inference_summary.json",
         {
+            "objective_mode": objective_mode_name,
+            "deterministic_reconstruction": bool(deterministic_reconstruction),
+            "requested_posterior_samples": int(posterior_samples),
+            "effective_posterior_samples": (
+                1 if deterministic_reconstruction else int(posterior_samples)
+            ),
+            "parameter_bound_diagnostics": (
+                "parameter_bound_diagnostics.csv"
+                if not parameter_bound_diagnostics.empty
+                else None
+            ),
             "global_sed_scale": global_sed_scale_payload,
             "per_band_flux_calibration": per_band_payload,
         },
@@ -1414,17 +1454,65 @@ def _model_flux_from_x_2d_chunks(
     return jnp.concatenate(chunks, axis=0)
 
 
+def _write_parameter_bound_diagnostics(
+    summary: pd.DataFrame,
+    latent_spec,
+    out: Path,
+) -> pd.DataFrame:
+    rows = []
+    if summary.empty:
+        return pd.DataFrame()
+    lower = np.asarray(latent_spec.lower, dtype=float)
+    upper = np.asarray(latent_spec.upper, dtype=float)
+    span = np.maximum(upper - lower, 1.0e-12)
+    for index, name in enumerate(latent_spec.names):
+        column = f"{name}_median"
+        if column not in summary:
+            continue
+        values = pd.to_numeric(summary[column], errors="coerce").to_numpy(dtype=float)
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            continue
+        unit = (finite - lower[index]) / span[index]
+        nearest = np.minimum(unit, 1.0 - unit)
+        rows.append(
+            {
+                "parameter": str(name),
+                "n_objects": int(finite.size),
+                "lower": float(lower[index]),
+                "upper": float(upper[index]),
+                "median_value": float(np.nanmedian(finite)),
+                "median_unit_position": float(np.nanmedian(unit)),
+                "frac_within_1pct_lower": float(np.mean(unit < 0.01)),
+                "frac_within_1pct_upper": float(np.mean(unit > 0.99)),
+                "frac_within_1pct_boundary": float(np.mean(nearest < 0.01)),
+                "frac_within_5pct_boundary": float(np.mean(nearest < 0.05)),
+            }
+        )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    frame.to_csv(out / "parameter_bound_diagnostics.csv", index=False)
+    frame.to_parquet(out / "parameter_bound_diagnostics.parquet", index=False)
+    return frame
+
+
 def _posterior_predictive_chi2(batch, model_flux, likelihood_config: dict[str, Any]):
-    obs = batch.flux[None, :, :]
-    err = batch.flux_err[None, :, :]
-    mask = batch.mask[None, :, :]
-    sigma2 = err**2
+    obs = np.asarray(jax.device_get(batch.flux), dtype=float)[None, :, :]
+    err = np.asarray(jax.device_get(batch.flux_err), dtype=float)[None, :, :]
+    mask = np.asarray(jax.device_get(batch.mask), dtype=bool)[None, :, :]
+    model = np.asarray(jax.device_get(model_flux), dtype=float)
+    unit = np.maximum(np.maximum(np.abs(obs), err), 1.0e-30)
+    obs_scaled = obs / unit
+    model_scaled = model / unit
+    err_scaled = err / unit
+    sigma2 = err_scaled**2
     floor = float(likelihood_config.get("error_floor_frac", 0.0))
     if floor:
-        sigma2 = sigma2 + (floor * jnp.abs(model_flux)) ** 2
+        sigma2 = sigma2 + (floor * np.abs(model_scaled)) ** 2
     jitter = float(likelihood_config.get("error_jitter", 0.0))
     if jitter:
-        sigma2 = sigma2 + jitter**2
-    chi = np.asarray((model_flux - obs) / jnp.sqrt(jnp.maximum(sigma2, 1.0e-60)))
-    valid = np.asarray(mask)
-    return np.sum(np.where(valid, chi**2, 0.0), axis=-1)
+        sigma2 = sigma2 + (jitter / unit) ** 2
+    sigma = np.sqrt(np.maximum(sigma2, 1.0e-12))
+    chi = (model_scaled - obs_scaled) / sigma
+    return np.sum(np.where(mask, chi**2, 0.0), axis=-1)

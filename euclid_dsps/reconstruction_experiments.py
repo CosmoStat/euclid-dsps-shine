@@ -18,6 +18,9 @@ def build_reconstruction_rowsets(
     out_dir: str | Path,
     worst_sizes: tuple[int, ...] = (500, 1000),
     metric: str = "median_abs_sigma",
+    balanced_size: int = 20_000,
+    balanced_seed: int = 42,
+    redshift_bins: tuple[float, ...] | list[float] | None = None,
 ) -> dict[str, str]:
     """Write reference and worst-case row-index files from an inference run."""
     train_run = Path(train_run)
@@ -62,6 +65,28 @@ def build_reconstruction_rowsets(
         "reference_validation": "reference_validation.txt",
         "reference_20k": "reference_20k.txt",
     }
+    balanced_summary: dict[str, Any] | None = None
+    if int(balanced_size) > 0:
+        truth = _read_optional_table(infer_run, ("inference_truth",))
+        balanced, balanced_diagnostics, balanced_summary = _balanced_rowset(
+            residual,
+            truth,
+            reference_indices=reference_indices,
+            size=int(balanced_size),
+            seed=int(balanced_seed),
+            redshift_bins=redshift_bins,
+        )
+        balanced_name = "balanced20k" if int(balanced_size) == 20_000 else f"balanced_{int(balanced_size)}"
+        _write_indices(out / f"{balanced_name}.txt", balanced)
+        balanced_diagnostics.to_csv(
+            out / f"{balanced_name}_diagnostics.csv",
+            index=False,
+        )
+        balanced_diagnostics.to_parquet(
+            out / f"{balanced_name}_diagnostics.parquet",
+            index=False,
+        )
+        rowsets[balanced_name] = f"{balanced_name}.txt"
     for size in sorted({int(value) for value in worst_sizes if int(value) > 0}):
         selected = ranked.head(size)["row_index"].to_numpy(dtype=np.int64)
         name = f"worst_{size}"
@@ -75,6 +100,7 @@ def build_reconstruction_rowsets(
         "reference_rows": int(reference_indices.size),
         "train_rows": int(train_indices.size),
         "validation_rows": int(validation_indices.size),
+        "balanced_rowset": balanced_summary,
         "rowsets": rowsets,
         "ranking": "worst_ranked.csv",
     }
@@ -136,6 +162,188 @@ def compare_reconstruction_runs(
     return {"report": str(out / "reconstruction_comparison.md")}
 
 
+def _balanced_rowset(
+    residual: pd.DataFrame,
+    truth: pd.DataFrame | None,
+    *,
+    reference_indices: np.ndarray,
+    size: int,
+    seed: int,
+    redshift_bins: tuple[float, ...] | list[float] | None,
+) -> tuple[np.ndarray, pd.DataFrame, dict[str, Any]]:
+    diagnostics = _object_quality_diagnostics(residual, reference_indices)
+    z_column = None
+    if truth is not None and not truth.empty and "row_index" in truth:
+        z_column = _first_existing_column(
+            truth,
+            ("redshift_true", "z_obs", "z_true_gal", "redshift", "z"),
+        )
+        keep = ["row_index"]
+        if z_column:
+            keep.append(z_column)
+        diagnostics = diagnostics.merge(truth[keep], on="row_index", how="left")
+    if z_column is not None:
+        diagnostics["redshift_reference"] = pd.to_numeric(
+            diagnostics[z_column],
+            errors="coerce",
+        )
+    else:
+        diagnostics["redshift_reference"] = np.nan
+    diagnostics["redshift_bin"] = _redshift_bin_codes(
+        diagnostics["redshift_reference"].to_numpy(dtype=float),
+        redshift_bins,
+    )
+    diagnostics["quality_bin"] = _quantile_codes(
+        np.log10(
+            np.maximum(
+                diagnostics["median_err_over_abs_flux"].to_numpy(dtype=float),
+                1.0e-12,
+            )
+        ),
+        n_bins=4,
+    )
+    diagnostics["balanced_group"] = (
+        diagnostics["redshift_bin"].astype(str)
+        + "_"
+        + diagnostics["quality_bin"].astype(str)
+    )
+    selected = _balanced_sample_indices(
+        diagnostics,
+        group_column="balanced_group",
+        size=min(int(size), int(len(diagnostics))),
+        seed=int(seed),
+    )
+    diagnostics["selected_balanced"] = diagnostics["row_index"].isin(selected)
+    selected_sorted = np.sort(np.asarray(selected, dtype=np.int64))
+    summary = {
+        "name": "balanced20k" if int(size) == 20_000 else f"balanced_{int(size)}",
+        "requested_rows": int(size),
+        "selected_rows": int(selected_sorted.size),
+        "seed": int(seed),
+        "redshift_column": z_column,
+        "redshift_bins": list(redshift_bins) if redshift_bins is not None else None,
+        "quality_proxy": "median obs_err_fnu_cgs / abs(obs_flux_fnu_cgs)",
+        "quality_bins": 4,
+        "diagnostics": (
+            "balanced20k_diagnostics.csv"
+            if int(size) == 20_000
+            else f"balanced_{int(size)}_diagnostics.csv"
+        ),
+    }
+    return selected_sorted, diagnostics, summary
+
+
+def _object_quality_diagnostics(
+    residual: pd.DataFrame,
+    reference_indices: np.ndarray,
+) -> pd.DataFrame:
+    required = {"row_index", "obs_flux_fnu_cgs", "obs_err_fnu_cgs"}
+    missing = required - set(residual.columns)
+    if missing:
+        raise ValueError(
+            "balanced rowset requires residual summary columns: "
+            f"{sorted(missing)}"
+        )
+    frame = residual[residual["row_index"].isin(reference_indices)].copy()
+    frame["obs_flux_fnu_cgs"] = pd.to_numeric(
+        frame["obs_flux_fnu_cgs"],
+        errors="coerce",
+    )
+    frame["obs_err_fnu_cgs"] = pd.to_numeric(
+        frame["obs_err_fnu_cgs"],
+        errors="coerce",
+    )
+    abs_flux = np.maximum(np.abs(frame["obs_flux_fnu_cgs"].to_numpy(float)), 1.0e-300)
+    err = frame["obs_err_fnu_cgs"].to_numpy(float)
+    frame["err_over_abs_flux"] = err / abs_flux
+    frame["snr_proxy"] = abs_flux / np.maximum(err, 1.0e-300)
+    grouped = frame.groupby("row_index", sort=False)
+    rows = grouped.agg(
+        median_err_over_abs_flux=("err_over_abs_flux", "median"),
+        max_err_over_abs_flux=("err_over_abs_flux", "max"),
+        median_snr_proxy=("snr_proxy", "median"),
+        min_snr_proxy=("snr_proxy", "min"),
+        n_valid_bands=("err_over_abs_flux", "count"),
+    ).reset_index()
+    rows["row_index"] = rows["row_index"].astype(np.int64)
+    return rows
+
+
+def _balanced_sample_indices(
+    frame: pd.DataFrame,
+    *,
+    group_column: str,
+    size: int,
+    seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(int(seed))
+    selected: list[int] = []
+    remaining = frame.copy()
+    while len(selected) < int(size) and not remaining.empty:
+        groups = list(remaining.groupby(group_column, sort=True))
+        if not groups:
+            break
+        quota = max(1, int(np.ceil((int(size) - len(selected)) / len(groups))))
+        used_positions = []
+        for _group_name, group in groups:
+            take = min(quota, len(group), int(size) - len(selected))
+            if take <= 0:
+                continue
+            choices = rng.choice(group.index.to_numpy(), size=take, replace=False)
+            used_positions.extend(int(value) for value in choices)
+            selected.extend(
+                int(value) for value in group.loc[choices, "row_index"].to_numpy()
+            )
+            if len(selected) >= int(size):
+                break
+        if not used_positions:
+            break
+        remaining = remaining.drop(index=used_positions)
+    if len(selected) < int(size):
+        unselected = frame[~frame["row_index"].isin(selected)]
+        take = min(int(size) - len(selected), len(unselected))
+        if take > 0:
+            choices = rng.choice(unselected.index.to_numpy(), size=take, replace=False)
+            selected.extend(
+                int(value) for value in unselected.loc[choices, "row_index"].to_numpy()
+            )
+    return np.asarray(selected[: int(size)], dtype=np.int64)
+
+
+def _redshift_bin_codes(
+    redshift: np.ndarray,
+    redshift_bins: tuple[float, ...] | list[float] | None,
+) -> np.ndarray:
+    if redshift_bins is None:
+        return np.zeros(redshift.shape, dtype=np.int64)
+    bins = np.asarray(redshift_bins, dtype=float)
+    if bins.ndim != 1 or bins.size < 2 or np.any(np.diff(bins) <= 0.0):
+        return np.zeros(redshift.shape, dtype=np.int64)
+    codes = np.digitize(redshift, bins, right=False) - 1
+    valid = np.isfinite(redshift) & (codes >= 0) & (codes < bins.size - 1)
+    return np.where(valid, codes, -1).astype(np.int64)
+
+
+def _quantile_codes(values: np.ndarray, *, n_bins: int) -> np.ndarray:
+    finite = np.isfinite(values)
+    codes = np.full(values.shape, -1, dtype=np.int64)
+    unique = np.unique(values[finite])
+    if unique.size <= 1:
+        codes[finite] = 0
+        return codes
+    q = min(int(n_bins), int(unique.size))
+    ranked = pd.qcut(values[finite], q=q, labels=False, duplicates="drop")
+    codes[finite] = np.asarray(ranked, dtype=np.int64)
+    return codes
+
+
+def _first_existing_column(frame: pd.DataFrame, names: tuple[str, ...]) -> str | None:
+    for name in names:
+        if name in frame:
+            return name
+    return None
+
+
 def _load_reconstruction_run(run: Path) -> tuple[pd.DataFrame, str]:
     try:
         frame = _read_first_table(run, ("posterior_predictive_residual_summary",))
@@ -187,6 +395,8 @@ def _normalize_map_comparison(frame: pd.DataFrame) -> pd.DataFrame:
         errors="coerce",
     )
     residual = obs_flux - model_flux
+    abs_obs_flux = np.maximum(np.abs(obs_flux.to_numpy(dtype=float)), 1.0e-300)
+    abs_flux_residual = np.abs(residual.to_numpy(dtype=float))
     chi_likelihood = pd.to_numeric(frame.get("chi_likelihood"), errors="coerce")
     raw_residual = residual / obs_err
     out = pd.DataFrame(
@@ -200,7 +410,14 @@ def _normalize_map_comparison(frame: pd.DataFrame) -> pd.DataFrame:
             "obs_err_fnu_cgs": obs_err,
             "model_flux_median": model_flux,
             "sigma_eff_median": sigma_eff,
+            "snr_proxy": np.abs(obs_flux.to_numpy(dtype=float))
+            / np.maximum(obs_err.to_numpy(dtype=float), 1.0e-300),
+            "obs_err_over_abs_flux": obs_err.to_numpy(dtype=float) / abs_obs_flux,
             "flux_residual_obs_minus_model_median": residual,
+            "abs_flux_residual_median": abs_flux_residual,
+            "abs_flux_residual_over_abs_flux_median": (
+                abs_flux_residual / abs_obs_flux
+            ),
             "residual_sigma_median": chi_likelihood,
             "raw_residual_sigma_median": raw_residual,
             "valid": (
@@ -239,6 +456,17 @@ def _object_residual_ranking(frame: pd.DataFrame) -> pd.DataFrame:
     rows["frac_abs_gt5"] = grouped["abs_residual_sigma_median"].apply(
         lambda values: float(np.mean(np.asarray(values, dtype=float) > 5.0))
     )
+    optional_aggs = {
+        "snr_proxy": "median_snr_proxy",
+        "obs_err_over_abs_flux": "median_err_over_abs_flux",
+        "abs_flux_residual_median": "median_abs_flux_residual",
+        "abs_flux_residual_over_abs_flux_median": "median_frac_flux_residual",
+    }
+    for column, output in optional_aggs.items():
+        if column in valid:
+            rows[output] = grouped[column].median()
+    if "obs_err_over_abs_flux" in valid:
+        rows["max_err_over_abs_flux"] = grouped["obs_err_over_abs_flux"].max()
     if "object_id" in valid:
         rows["object_id"] = grouped["object_id"].first()
     return rows.reset_index()
@@ -282,6 +510,28 @@ def _band_summary(frame: pd.DataFrame) -> pd.DataFrame:
                 "n_valid_band_rows": int(len(valid)),
                 "median_residual_sigma": _nanmedian(residual),
                 "median_abs_residual_sigma": _nanmedian(abs_residual),
+                "median_snr_proxy": _nanmedian(
+                    valid["snr_proxy"].to_numpy(dtype=float)
+                )
+                if "snr_proxy" in valid
+                else float("nan"),
+                "median_err_over_abs_flux": _nanmedian(
+                    valid["obs_err_over_abs_flux"].to_numpy(dtype=float)
+                )
+                if "obs_err_over_abs_flux" in valid
+                else float("nan"),
+                "median_abs_flux_residual": _nanmedian(
+                    valid["abs_flux_residual_median"].to_numpy(dtype=float)
+                )
+                if "abs_flux_residual_median" in valid
+                else float("nan"),
+                "median_frac_flux_residual": _nanmedian(
+                    valid[
+                        "abs_flux_residual_over_abs_flux_median"
+                    ].to_numpy(dtype=float)
+                )
+                if "abs_flux_residual_over_abs_flux_median" in valid
+                else float("nan"),
                 "frac_abs_gt3": _frac_abs_gt(abs_residual, 3.0),
                 "frac_abs_gt5": _frac_abs_gt(abs_residual, 5.0),
             }
@@ -306,6 +556,29 @@ def _object_summary(frame: pd.DataFrame) -> pd.DataFrame:
             "median_residual_sigma": _nanmedian(residual),
             "median_abs_residual_sigma": _nanmedian(abs_residual),
             "max_abs_residual_sigma": _nanmax(abs_residual),
+            "median_snr_proxy": _nanmedian(group["snr_proxy"].to_numpy(dtype=float))
+            if "snr_proxy" in group
+            else float("nan"),
+            "median_err_over_abs_flux": _nanmedian(
+                group["obs_err_over_abs_flux"].to_numpy(dtype=float)
+            )
+            if "obs_err_over_abs_flux" in group
+            else float("nan"),
+            "max_err_over_abs_flux": _nanmax(
+                group["obs_err_over_abs_flux"].to_numpy(dtype=float)
+            )
+            if "obs_err_over_abs_flux" in group
+            else float("nan"),
+            "median_abs_flux_residual": _nanmedian(
+                group["abs_flux_residual_median"].to_numpy(dtype=float)
+            )
+            if "abs_flux_residual_median" in group
+            else float("nan"),
+            "median_frac_flux_residual": _nanmedian(
+                group["abs_flux_residual_over_abs_flux_median"].to_numpy(dtype=float)
+            )
+            if "abs_flux_residual_over_abs_flux_median" in group
+            else float("nan"),
             "frac_abs_gt3": _frac_abs_gt(abs_residual, 3.0),
             "frac_abs_gt5": _frac_abs_gt(abs_residual, 5.0),
         }
@@ -337,6 +610,13 @@ def _read_first_table(run: Path, stems: tuple[str, ...]) -> pd.DataFrame:
             return pd.read_csv(csv)
     names = ", ".join(stems)
     raise FileNotFoundError(f"No table found in {run} for: {names}")
+
+
+def _read_optional_table(run: Path, stems: tuple[str, ...]) -> pd.DataFrame | None:
+    try:
+        return _read_first_table(run, stems)
+    except FileNotFoundError:
+        return None
 
 
 def _load_npy_int(path: Path) -> np.ndarray:

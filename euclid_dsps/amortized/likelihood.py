@@ -81,6 +81,37 @@ def photometric_loglike(
     return jnp.sum(jnp.where(finite, logpdf, 0.0), axis=-1)
 
 
+def photometric_normalized_residual(
+    obs_flux: jnp.ndarray,
+    model_flux: jnp.ndarray,
+    obs_err: jnp.ndarray,
+    mask: jnp.ndarray,
+    *,
+    error_floor_frac: float = 0.02,
+    error_jitter: float = 0.0,
+) -> jnp.ndarray:
+    """Return stable likelihood-space residuals ``(model - obs) / sigma_eff``."""
+    obs_flux = _with_sample_axis(jnp.asarray(obs_flux, dtype=jnp.float32))
+    obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=jnp.float32))
+    mask = _with_sample_axis(jnp.asarray(mask, dtype=bool))
+    model_flux = jnp.asarray(model_flux, dtype=jnp.float32)
+    unit = _likelihood_unit(obs_flux, obs_err)
+    obs_flux_scaled = obs_flux / unit
+    model_flux_scaled = model_flux / unit
+    obs_err_scaled = obs_err / unit
+    error_jitter_scaled = float(error_jitter) / unit
+    sigma_eff = jnp.sqrt(
+        obs_err_scaled**2
+        + (float(error_floor_frac) * jnp.abs(model_flux_scaled)) ** 2
+        + error_jitter_scaled**2
+        + 1.0e-12
+    )
+    finite = mask & jnp.isfinite(obs_flux_scaled) & jnp.isfinite(model_flux_scaled)
+    finite &= jnp.isfinite(sigma_eff) & (sigma_eff > 0.0)
+    chi = (model_flux_scaled - obs_flux_scaled) / sigma_eff
+    return jnp.where(finite, chi, 0.0)
+
+
 def _with_sample_axis(value: jnp.ndarray) -> jnp.ndarray:
     if value.ndim == 2:
         return value[None, :, :]
