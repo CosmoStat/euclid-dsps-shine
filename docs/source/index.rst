@@ -104,6 +104,7 @@ parameters physically.
    forward_model
    prior_learning
    amortized_inference
+   diffsky_nn_experiment_matrix
    scientific_validation_plan
    science_assessment
    cosmos_sed
