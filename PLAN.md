@@ -1,5 +1,26 @@
 # Plan
 
+## 2026-06-30 Add Full-Latent Truth/Prior/Posterior Corner
+
+- Status: completed.
+- Goal: make amortized inference write a MCLMC-comparable full latent corner
+  overlay with posterior, learned prior, and truth/projected-truth on the same
+  figure.
+- Scope: inference diagnostics only; no training or inference rerun logic
+  changes.
+- Planned: use posterior samples when available, otherwise posterior medians.
+- Planned: use `inference_truth.parquet` plus `truth.parameter_columns` for
+  truth overlays, without inventing values for missing truth dimensions.
+- Planned: keep the existing median-only and standard posterior/prior plots for
+  backward compatibility.
+- Completed: added `corner_full_latent_truth_prior_posterior.png` to inference
+  diagnostics.
+- Completed: the overlay uses posterior samples if combined, then falls back to
+  posterior medians; learned prior can be read from either prior-sample parquet
+  name used by the runs.
+- Completed: smoke-tested the full overlay path in `/tmp` with 12 latent
+  dimensions.
+
 ## 2026-06-29 Add Diffsky NN Run Matrix
 
 - Status: completed.

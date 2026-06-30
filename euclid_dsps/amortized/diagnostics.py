@@ -778,6 +778,51 @@ def _write_full_latent_posterior_median_corner(
     )
 
 
+def _write_full_latent_truth_prior_posterior_corner(
+    summary: pd.DataFrame,
+    out: Path,
+    plt,
+    *,
+    config: dict[str, Any] | None,
+) -> Path | None:
+    posterior, posterior_label = _full_latent_posterior_frame(
+        summary,
+        out,
+        config=config,
+    )
+    if posterior.empty:
+        return None
+    truth = _truth_parameter_frame(out, config=config)
+    prior = _read_learned_prior(out)
+    return _write_multi_overlay_corner_plot(
+        posterior,
+        out,
+        plt,
+        truth=truth,
+        prior=prior,
+        filename="corner_full_latent_truth_prior_posterior.png",
+        title="Full latent truth / prior / posterior",
+        posterior_label=posterior_label,
+        config=config,
+    )
+
+
+def _full_latent_posterior_frame(
+    summary: pd.DataFrame,
+    out: Path,
+    *,
+    config: dict[str, Any] | None,
+) -> tuple[pd.DataFrame, str]:
+    samples_path = out / "posterior_samples.parquet"
+    if samples_path.exists():
+        samples = pd.read_parquet(samples_path)
+        columns = _corner_columns_for_config(samples, config)
+        if len(columns) >= 2:
+            return samples[columns], "posterior samples"
+    medians = _posterior_median_parameter_frame(summary, config=config)
+    return medians, "posterior medians"
+
+
 def _posterior_median_parameter_frame(
     summary: pd.DataFrame,
     *,
@@ -805,6 +850,103 @@ def _posterior_median_parameter_frame(
     if len(columns) < 2:
         return pd.DataFrame()
     return summary[columns].rename(columns=rename)
+
+
+def _truth_parameter_frame(
+    out: Path,
+    *,
+    config: dict[str, Any] | None,
+) -> pd.DataFrame:
+    truth_path = out / "inference_truth.parquet"
+    if config is None or not truth_path.exists():
+        return pd.DataFrame()
+    truth = pd.read_parquet(truth_path)
+    if truth.empty:
+        return pd.DataFrame()
+    truth_specs = dict((config.get("truth", {}) or {}).get("parameter_columns") or {})
+    names = _configured_free_parameters(config)
+    if not names:
+        names = [column for column in _CORNER_PARAMETER_ORDER if column in truth]
+    columns: dict[str, pd.Series] = {}
+    for name in names:
+        spec = truth_specs.get(name)
+        if isinstance(spec, dict) and str(spec.get("kind", "")).lower() == "missing":
+            continue
+        series = _truth_parameter_series(truth, name, spec)
+        if series is not None:
+            columns[name] = series
+    if len(columns) < 2:
+        return pd.DataFrame()
+    return pd.DataFrame(columns)
+
+
+def _truth_parameter_series(
+    truth: pd.DataFrame,
+    name: str,
+    spec: Any,
+) -> pd.Series | None:
+    spec_column = truth_column_from_spec(spec)
+    candidates = []
+    if spec_column:
+        candidates.append(spec_column)
+    candidates.extend(_truth_fallback_columns(name))
+    for column in dict.fromkeys(candidates):
+        if column not in truth:
+            continue
+        return _apply_truth_spec_to_series(truth[column], spec)
+    if name == "tau2" and "dust_av" in truth:
+        return pd.to_numeric(truth["dust_av"], errors="coerce") / 1.086
+    if name == "dust_index_n" and "dust_delta" in truth:
+        return pd.to_numeric(truth["dust_delta"], errors="coerce")
+    return None
+
+
+def _truth_fallback_columns(name: str) -> list[str]:
+    fallback = {
+        "z_obs": ["z_obs", "redshift_true", "z_true", "z_true_gal", "z_obs_gal"],
+        "log10_stellar_mass": [
+            "log10_stellar_mass",
+            "logsm_true",
+            "log10_stellar_mass_true",
+        ],
+        "log10_stellar_metallicity": [
+            "log10_stellar_metallicity",
+            "log10_metallicity",
+            "log10_metallicity_true",
+        ],
+        "tau2": ["tau2"],
+        "dust_index_n": ["dust_index_n", "dust_delta"],
+        "tau1_over_tau2": ["tau1_over_tau2"],
+    }
+    if name.startswith("dlog10_sfr_"):
+        return [name]
+    return fallback.get(name, [name])
+
+
+def _apply_truth_spec_to_series(series: pd.Series, spec: Any) -> pd.Series:
+    values = pd.to_numeric(series, errors="coerce").astype(float)
+    if not isinstance(spec, dict):
+        return values
+    arr = values.to_numpy(dtype=float)
+    transform = spec.get("transform")
+    if transform == "log10":
+        arr = np.where(arr > 0.0, np.log10(arr), np.nan)
+    elif transform == "log_stellar_mass_h2_to_msun":
+        h = float(spec.get("h"))
+        if np.isfinite(h) and h > 0.0:
+            arr = arr + 2.0 * np.log10(h)
+        else:
+            arr = np.full_like(arr, np.nan, dtype=float)
+    elif transform not in {None, "linear"}:
+        rows = [{truth_column_from_spec(spec): value} for value in values]
+        arr = np.asarray(
+            [truth_value_from_spec(row, spec) for row in rows],
+            dtype=float,
+        )
+        return pd.Series(arr, index=series.index)
+    arr = arr * float(spec.get("scale", 1.0))
+    arr = arr + float(spec.get("offset", 0.0))
+    return pd.Series(arr, index=series.index)
 
 
 def _residual_value_column(frame: pd.DataFrame) -> str | None:
@@ -1223,6 +1365,14 @@ def _write_inference_plots(
         return []
 
     written: list[str] = []
+    path = _write_full_latent_truth_prior_posterior_corner(
+        summary,
+        out,
+        plt,
+        config=config,
+    )
+    if path is not None:
+        written.append(path.name)
     path = _write_full_latent_posterior_median_corner(summary, out, plt, config=config)
     if path is not None:
         written.append(path.name)
@@ -1466,11 +1616,233 @@ def _write_inference_plots(
 
 
 def _read_learned_prior(out: Path) -> pd.DataFrame | None:
-    prior_path = out / "learned_prior_samples.parquet"
-    if not prior_path.exists():
+    for filename in (
+        "learned_prior_samples.parquet",
+        "learned_or_loaded_prior_samples.parquet",
+    ):
+        prior_path = out / filename
+        if not prior_path.exists():
+            continue
+        prior = pd.read_parquet(prior_path)
+        if not prior.empty:
+            return prior
+    return None
+
+
+def _write_multi_overlay_corner_plot(
+    posterior: pd.DataFrame,
+    out: Path,
+    plt,
+    *,
+    truth: pd.DataFrame | None,
+    prior: pd.DataFrame | None,
+    filename: str,
+    title: str,
+    posterior_label: str,
+    config: dict[str, Any] | None,
+) -> Path | None:
+    columns = _corner_columns_for_config(posterior, config)
+    if len(columns) < 2 or posterior.empty:
         return None
-    prior = pd.read_parquet(prior_path)
-    return prior if not prior.empty else None
+    frames = [
+        {
+            "key": "posterior",
+            "label": posterior_label,
+            "frame": _finite_sample_partial(posterior, columns, max_rows=4_000),
+            "color": "#2a9fd6",
+            "linestyle": "-",
+            "linewidth": 0.95,
+        },
+    ]
+    if truth is not None and not truth.empty:
+        frames.append(
+            {
+                "key": "truth",
+                "label": "truth / projected truth",
+                "frame": _finite_sample_partial(truth, columns, max_rows=4_000),
+                "color": "#f58518",
+                "linestyle": "--",
+                "linewidth": 1.15,
+            }
+        )
+    if prior is not None and not prior.empty:
+        frames.append(
+            {
+                "key": "prior",
+                "label": "learned prior",
+                "frame": _finite_sample_partial(prior, columns, max_rows=4_000),
+                "color": "#3a7d44",
+                "linestyle": ":",
+                "linewidth": 1.05,
+            }
+        )
+    frames = [item for item in frames if not item["frame"].empty]
+    if not frames or frames[0]["key"] != "posterior":
+        return None
+    columns = [
+        column
+        for column in columns
+        if any(column in item["frame"] for item in frames)
+    ]
+    if len(columns) < 2:
+        return None
+    ranges = _corner_ranges_multi(
+        [item["frame"] for item in frames],
+        columns,
+    )
+    n_columns = len(columns)
+    fig, axes = plt.subplots(
+        n_columns,
+        n_columns,
+        figsize=(1.75 * n_columns, 1.75 * n_columns),
+    )
+    for row, y_col in enumerate(columns):
+        for col, x_col in enumerate(columns):
+            ax = axes[row, col]
+            if row == col:
+                for item in frames:
+                    frame = item["frame"]
+                    if x_col not in frame:
+                        continue
+                    _plot_1d_hist(
+                        ax,
+                        frame[x_col].to_numpy(dtype=float),
+                        ranges[x_col],
+                        color=item["color"],
+                        label=item["label"],
+                        linestyle=item["linestyle"],
+                        linewidth=item["linewidth"],
+                    )
+                posterior_frame = frames[0]["frame"]
+                if x_col in posterior_frame:
+                    values = posterior_frame[x_col].to_numpy(dtype=float)
+                    values = values[np.isfinite(values)]
+                    if values.size:
+                        q16, q50, q84 = np.nanquantile(values, [0.16, 0.50, 0.84])
+                        ax.axvline(q50, color=frames[0]["color"], lw=0.9, alpha=0.8)
+                        ax.set_title(
+                            f"{_label(x_col)}={q50:.2g}"
+                            f"+{q84 - q50:.2g}/-{q50 - q16:.2g}",
+                            fontsize=6,
+                            color=frames[0]["color"],
+                        )
+            elif row > col:
+                for item in frames:
+                    frame = item["frame"]
+                    if x_col not in frame or y_col not in frame:
+                        continue
+                    _plot_2d_contours(
+                        ax,
+                        frame[x_col].to_numpy(dtype=float),
+                        frame[y_col].to_numpy(dtype=float),
+                        ranges[x_col],
+                        ranges[y_col],
+                        color=item["color"],
+                        linewidth=item["linewidth"],
+                        linestyle=item["linestyle"],
+                    )
+                ax.set_ylim(*ranges[y_col])
+            else:
+                ax.axis("off")
+                continue
+            if row == n_columns - 1:
+                ax.set_xlabel(_label(x_col), fontsize=7)
+            else:
+                ax.set_xticklabels([])
+            if col == 0:
+                ax.set_ylabel(_label(y_col), fontsize=7)
+            else:
+                ax.set_yticklabels([])
+            ax.set_xlim(*ranges[x_col])
+            ax.tick_params(labelsize=5)
+    from matplotlib.lines import Line2D
+
+    legend_items = [
+        Line2D(
+            [0],
+            [0],
+            color=item["color"],
+            linestyle=item["linestyle"],
+            linewidth=max(1.4, float(item["linewidth"])),
+            label=str(item["label"]),
+        )
+        for item in frames
+    ]
+    legend_ax = axes[0, min(1, n_columns - 1)]
+    legend_ax.legend(handles=legend_items, frameon=False, fontsize=7, loc="center")
+    fig.suptitle(title, y=1.002)
+    fig.tight_layout()
+    path = out / filename
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
+def _corner_columns_for_config(
+    frame: pd.DataFrame,
+    config: dict[str, Any] | None,
+) -> list[str]:
+    configured = _configured_free_parameters(config)
+    ordered = [
+        column
+        for column in _CORNER_PARAMETER_ORDER
+        if column in frame and (not configured or column in configured)
+    ]
+    for column in configured:
+        if column in frame and column not in ordered:
+            ordered.append(column)
+    if ordered:
+        return ordered
+    return _corner_columns(frame)
+
+
+def _configured_free_parameters(config: dict[str, Any] | None) -> list[str]:
+    if config is None:
+        return []
+    parameters = (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
+    return [str(name) for name in parameters]
+
+
+def _finite_sample_partial(
+    frame: pd.DataFrame,
+    columns: list[str],
+    *,
+    max_rows: int,
+) -> pd.DataFrame:
+    available = [column for column in columns if column in frame]
+    if not available:
+        return pd.DataFrame()
+    work = frame[available].replace([np.inf, -np.inf], np.nan).dropna(how="all")
+    if len(work) > max_rows:
+        work = work.sample(max_rows, random_state=0)
+    return work
+
+
+def _corner_ranges_multi(
+    frames: list[pd.DataFrame],
+    columns: list[str],
+) -> dict[str, tuple[float, float]]:
+    ranges = {}
+    for column in columns:
+        values = []
+        for frame in frames:
+            if column in frame:
+                arr = frame[column].to_numpy(dtype=float)
+                arr = arr[np.isfinite(arr)]
+                if arr.size:
+                    values.append(arr)
+        if not values:
+            ranges[column] = (0.0, 1.0)
+            continue
+        merged = np.concatenate(values)
+        lo, hi = np.nanquantile(merged, [0.005, 0.995])
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+            lo, hi = float(np.nanmin(merged)), float(np.nanmax(merged))
+        if lo == hi:
+            lo, hi = lo - 0.5, hi + 0.5
+        pad = 0.05 * (hi - lo)
+        ranges[column] = (float(lo - pad), float(hi + pad))
+    return ranges
 
 
 def _write_catalog_proxy_plots(
@@ -1884,7 +2256,16 @@ def _corner_ranges(
     return ranges
 
 
-def _plot_1d_hist(ax, values, value_range, *, color: str, label: str) -> None:
+def _plot_1d_hist(
+    ax,
+    values,
+    value_range,
+    *,
+    color: str,
+    label: str,
+    linestyle: str = "-",
+    linewidth: float = 1.0,
+) -> None:
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
@@ -1896,7 +2277,8 @@ def _plot_1d_hist(ax, values, value_range, *, color: str, label: str) -> None:
         density=True,
         histtype="step",
         color=color,
-        lw=1.0,
+        lw=linewidth,
+        ls=linestyle,
         label=label,
     )
 
@@ -1910,6 +2292,7 @@ def _plot_2d_contours(
     *,
     color: str,
     linewidth: float,
+    linestyle: str = "-",
 ) -> None:
     x_values = np.asarray(x_values, dtype=float)
     y_values = np.asarray(y_values, dtype=float)
@@ -1936,6 +2319,7 @@ def _plot_2d_contours(
         levels=levels,
         colors=color,
         linewidths=linewidth,
+        linestyles=linestyle,
     )
 
 
