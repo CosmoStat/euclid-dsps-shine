@@ -473,11 +473,19 @@ Then materialize the DSPS projected-truth columns outside any notebook:
 This final parquet keeps the 78651 rows from the low-z flux-error subset and
 adds ``row_index``, ``z_obs``, ``log10_stellar_mass``,
 ``log10_sfr_at_obs``, ``log10_ssfr_at_obs``, ``dlog10_sfr_1`` through
-``dlog10_sfr_6``, ``tau2``, ``dust_index_n``,
+``dlog10_sfr_6``, ``projected_log10_sfr_bin_1`` through
+``projected_log10_sfr_bin_7``, ``tau2``, ``dust_index_n``,
 ``log10_stellar_metallicity``, ``tau1_over_tau2``, and
 ``projected_truth_available``. The metallicity and birth-cloud ratio columns
 are present but all-NaN because the active low-z Diffsky parquet has no
 object-level truth for them.
+
+The script also writes
+``hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.sfr_consistency.csv``.
+This table compares catalog ``logsfr_true`` and ``logssfr_true`` against each
+projected PopCosmos SFR bin. The youngest projected bin is a lookback-bin
+average, so it is a diagnostic of convention consistency rather than a
+requirement that it be identical to instantaneous ``logsfr_true``.
 
 The reference no-KL train/validation subset supplied to supervisors is:
 

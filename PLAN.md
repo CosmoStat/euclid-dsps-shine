@@ -1,5 +1,25 @@
 # Plan
 
+## 2026-06-30 Canonical Projected Truth Dataset
+
+- Status: completed.
+- Goal: rely on the global low-z projected-truth parquet for NN/MCLMC
+  diagnostics, including historical runs whose normalized config still points
+  at the raw low-z parquet.
+- Scope: projected-truth dataset builder, amortized inference diagnostics, and
+  lightweight validation.
+- Planned: teach inference diagnostics to prefer the sibling
+  `_projected_truth.parquet` when available.
+- Planned: add SFR/sSFR consistency metrics comparing catalog
+  `logsfr_true`/`logssfr_true` against projected PopCosmos SFR bins.
+- Completed: historical inference diagnostics now prefer the sibling
+  projected-truth parquet even when `normalized_config.json` points at the raw
+  low-z parquet.
+- Completed: projected-truth generation now writes
+  `projected_log10_sfr_bin_1..7` and a `.sfr_consistency.csv` sidecar.
+- Completed: targeted tests cover projected-truth sibling lookup and SFR
+  consistency metrics.
+
 ## 2026-06-30 Improve Full-Latent Corner Readability
 
 - Status: completed.

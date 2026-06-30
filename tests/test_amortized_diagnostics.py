@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from euclid_dsps.amortized.diagnostics import (
+    _truth_parameter_frame,
     feature_diagnostics_frame,
     posterior_predictive_residual_frame,
     summarize_inference_outputs,
@@ -152,3 +153,39 @@ def test_catalog_proxy_diagnostics(tmp_path) -> None:
     ).exists()
     assert (tmp_path / "catalog_proxy_sfr_distribution.png").exists()
     assert (tmp_path / "catalog_proxy_mass_sfr_plane.png").exists()
+
+
+def test_truth_frame_prefers_projected_truth_sibling(tmp_path) -> None:
+    raw = pd.DataFrame(
+        {
+            "redshift_true": [0.1, 0.2],
+            "logsm_true": [9.5, 10.5],
+        }
+    )
+    raw_path = tmp_path / "catalog.parquet"
+    raw.to_parquet(raw_path)
+    projected = raw.assign(
+        z_obs=[0.1, 0.2],
+        log10_stellar_mass=[9.5, 10.5],
+        dlog10_sfr_1=[0.3, -0.2],
+        tau2=[0.4, 0.8],
+    )
+    projected.to_parquet(tmp_path / "catalog_projected_truth.parquet")
+    summary = pd.DataFrame({"row_index": [0, 1], "object_id": [0, 1]})
+    config = {
+        "catalog_path": str(raw_path),
+        "fit": {
+            "free_parameters": {
+                "z_obs": {},
+                "log10_stellar_mass": {},
+                "dlog10_sfr_1": {},
+                "tau2": {},
+            }
+        },
+        "truth": {"parameter_columns": {}},
+    }
+
+    truth = _truth_parameter_frame(summary, tmp_path, config=config)
+
+    assert truth["dlog10_sfr_1"].tolist() == [0.3, -0.2]
+    assert truth["tau2"].tolist() == [0.4, 0.8]

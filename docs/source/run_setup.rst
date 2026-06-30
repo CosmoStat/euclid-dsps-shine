@@ -103,6 +103,10 @@ notebook:
 
 The final default file is
 ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet``.
+The companion
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.sfr_consistency.csv``
+checks catalog ``logsfr_true``/``logssfr_true`` against the projected
+PopCosmos SFR bins.
 The 20k parquet supplied for supervisor review is
 ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth_nokl_trainval20k.parquet``.
 

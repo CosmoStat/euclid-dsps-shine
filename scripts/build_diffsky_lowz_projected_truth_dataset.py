@@ -15,7 +15,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-
 DEFAULT_INPUT = Path(
     "Data/diffsky/processed/"
     "hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet"
@@ -58,6 +57,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Defaults to OUT with suffix .summary.json.",
     )
+    parser.add_argument(
+        "--consistency-out",
+        type=Path,
+        default=None,
+        help="Defaults to OUT with suffix .sfr_consistency.csv.",
+    )
     parser.add_argument("--chunk-size", type=int, default=4096)
     parser.add_argument("--n-sfh-bins", type=int, default=80)
     parser.add_argument("--force", action="store_true")
@@ -72,7 +77,11 @@ def main() -> None:
         raise SystemExit(f"Missing input parquet: {args.input}")
 
     frame = pd.read_parquet(args.input)
-    projected, metadata = build_projected_truth(frame, args.n_sfh_bins, args.chunk_size)
+    projected, metadata, consistency = build_projected_truth(
+        frame,
+        args.n_sfh_bins,
+        args.chunk_size,
+    )
     augmented = frame.copy()
     if "row_index" not in augmented:
         augmented.insert(0, "row_index", projected["row_index"].to_numpy(int))
@@ -90,6 +99,11 @@ def main() -> None:
     )
     metadata.to_csv(metadata_out, index=False)
 
+    consistency_out = args.consistency_out or args.out.with_suffix(
+        ".sfr_consistency.csv"
+    )
+    consistency.to_csv(consistency_out, index=False)
+
     summary_out = args.summary_out or args.out.with_suffix(".summary.json")
     summary = {
         "input_path": str(args.input),
@@ -104,7 +118,20 @@ def main() -> None:
         "redshift_min": float(pd.to_numeric(augmented["redshift_true"]).min()),
         "redshift_max": float(pd.to_numeric(augmented["redshift_true"]).max()),
         "metadata_path": str(metadata_out),
+        "sfr_consistency_path": str(consistency_out),
+        "sfr_consistency_rows": int(len(consistency)),
     }
+    if not consistency.empty:
+        key = "projected_log10_sfr_bin_1_vs_logsfr_true"
+        row = consistency.loc[consistency["metric"] == key]
+        if not row.empty:
+            summary["projected_log10_sfr_bin_1_vs_logsfr_true"] = {
+                "median_delta_projected_minus_reference": float(
+                    row["median_delta_projected_minus_reference"].iloc[0]
+                ),
+                "p95_abs_delta": float(row["p95_abs_delta"].iloc[0]),
+                "corr": float(row["corr"].iloc[0]),
+            }
     summary_out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2))
 
@@ -113,7 +140,7 @@ def build_projected_truth(
     frame: pd.DataFrame,
     n_sfh_bins: int,
     chunk_size: int,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     row_index = (
         frame["row_index"].to_numpy(int)
         if "row_index" in frame
@@ -202,7 +229,7 @@ def build_projected_truth(
             formula="log10_ssfr_at_obs = logsfr_true - logsm_true",
         )
 
-    dlogs = project_diffsky_sfh_to_popcosmos_dlogs(
+    dlogs, log_sfr_bins = project_diffsky_sfh_to_popcosmos_sfr_projection(
         frame,
         n_sfh_bins=n_sfh_bins,
         chunk_size=chunk_size,
@@ -218,6 +245,21 @@ def build_projected_truth(
                 "project_sfh_to_popcosmos_dlogsfr_jax"
             ),
             notes="Projected into PopCosmos adjacent lookback-bin log-SFR ratios.",
+        )
+    for index in range(1, 8):
+        assign(
+            f"projected_log10_sfr_bin_{index}",
+            log_sfr_bins[:, index - 1],
+            source_kind="projected_generated_truth",
+            source_columns=",".join(DIFFSKY_SFH_TRUTH_COLUMNS),
+            formula=(
+                "Diffstar/Diffmah generated SFH -> "
+                "project_sfh_to_popcosmos_sfr_bins_jax -> log10"
+            ),
+            notes=(
+                "PopCosmos lookback-bin average SFR; bin 1 is the youngest "
+                "lookback bin, not necessarily identical to instantaneous SFR."
+            ),
         )
 
     assign(
@@ -255,15 +297,16 @@ def build_projected_truth(
             notes=note,
         )
 
-    return truth, pd.DataFrame(metadata_rows)
+    consistency = sfr_consistency_frame(frame, log_sfr_bins)
+    return truth, pd.DataFrame(metadata_rows), consistency
 
 
-def project_diffsky_sfh_to_popcosmos_dlogs(
+def project_diffsky_sfh_to_popcosmos_sfr_projection(
     frame: pd.DataFrame,
     *,
     n_sfh_bins: int,
     chunk_size: int,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     try:
         import jax
         import jax.numpy as jnp
@@ -272,6 +315,7 @@ def project_diffsky_sfh_to_popcosmos_dlogs(
         from euclid_dsps.model import (
             build_diffsky_basic_sfh_table_jax,
             project_sfh_to_popcosmos_dlogsfr_jax,
+            project_sfh_to_popcosmos_sfr_bins_jax,
         )
     except Exception as exc:  # pragma: no cover - environment dependent
         raise SystemExit(
@@ -281,7 +325,8 @@ def project_diffsky_sfh_to_popcosmos_dlogs(
 
     def project_one(z_obs, *values):
         params = {
-            name: value for name, value in zip(DIFFSKY_SFH_TRUTH_COLUMNS, values)
+            name: value
+            for name, value in zip(DIFFSKY_SFH_TRUTH_COLUMNS, values, strict=True)
         }
         t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
         gal_t_table = jnp.linspace(
@@ -290,7 +335,10 @@ def project_diffsky_sfh_to_popcosmos_dlogs(
             int(n_sfh_bins),
         )
         sfh = build_diffsky_basic_sfh_table_jax(gal_t_table, t_obs, params)
-        return project_sfh_to_popcosmos_dlogsfr_jax(gal_t_table, sfh, t_obs)
+        dlogs = project_sfh_to_popcosmos_dlogsfr_jax(gal_t_table, sfh, t_obs)
+        sfr_bins = project_sfh_to_popcosmos_sfr_bins_jax(gal_t_table, sfh, t_obs)
+        log_sfr_bins = jnp.log10(jnp.maximum(sfr_bins, 1.0e-30))
+        return jnp.concatenate([dlogs, log_sfr_bins])
 
     project_batch = jax.jit(jax.vmap(project_one))
     chunks = []
@@ -303,7 +351,116 @@ def project_diffsky_sfh_to_popcosmos_dlogs(
         )
         chunks.append(np.asarray(project_batch(*arrays), dtype=float))
         print(f"[projected-truth] rows {start + len(chunk):,}/{len(frame):,}")
-    return np.vstack(chunks) if chunks else np.empty((0, 6), dtype=float)
+    projected = np.vstack(chunks) if chunks else np.empty((0, 13), dtype=float)
+    return projected[:, :6], projected[:, 6:]
+
+
+def project_diffsky_sfh_to_popcosmos_dlogs(
+    frame: pd.DataFrame,
+    *,
+    n_sfh_bins: int,
+    chunk_size: int,
+) -> np.ndarray:
+    dlogs, _ = project_diffsky_sfh_to_popcosmos_sfr_projection(
+        frame,
+        n_sfh_bins=n_sfh_bins,
+        chunk_size=chunk_size,
+    )
+    return dlogs
+
+
+def sfr_consistency_frame(
+    frame: pd.DataFrame,
+    log_sfr_bins: np.ndarray,
+) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    if "logsfr_true" not in frame or log_sfr_bins.size == 0:
+        return pd.DataFrame(rows)
+    logsfr_true = pd.to_numeric(frame["logsfr_true"], errors="coerce").to_numpy(float)
+    logsm_true = pd.to_numeric(frame["logsm_true"], errors="coerce").to_numpy(float)
+    for index in range(log_sfr_bins.shape[1]):
+        column = f"projected_log10_sfr_bin_{index + 1}"
+        rows.append(
+            _consistency_row(
+                f"{column}_vs_logsfr_true",
+                reference=logsfr_true,
+                projected=log_sfr_bins[:, index],
+                reference_column="logsfr_true",
+                projected_column=column,
+            )
+        )
+        if "logssfr_true" in frame:
+            logssfr_true = pd.to_numeric(
+                frame["logssfr_true"],
+                errors="coerce",
+            ).to_numpy(float)
+            rows.append(
+                _consistency_row(
+                    f"{column}_minus_logsm_true_vs_logssfr_true",
+                    reference=logssfr_true,
+                    projected=log_sfr_bins[:, index] - logsm_true,
+                    reference_column="logssfr_true",
+                    projected_column=f"{column} - logsm_true",
+                )
+            )
+    if "logssfr_true" in frame:
+        logssfr_true = pd.to_numeric(frame["logssfr_true"], errors="coerce").to_numpy(
+            float
+        )
+        rows.append(
+            _consistency_row(
+                "logsfr_true_minus_logsm_true_vs_logssfr_true",
+                reference=logssfr_true,
+                projected=logsfr_true - logsm_true,
+                reference_column="logssfr_true",
+                projected_column="logsfr_true - logsm_true",
+            )
+        )
+    return pd.DataFrame(rows)
+
+
+def _consistency_row(
+    metric: str,
+    *,
+    reference: np.ndarray,
+    projected: np.ndarray,
+    reference_column: str,
+    projected_column: str,
+) -> dict[str, Any]:
+    reference = np.asarray(reference, dtype=float)
+    projected = np.asarray(projected, dtype=float)
+    finite = np.isfinite(reference) & np.isfinite(projected)
+    if not finite.any():
+        return {
+            "metric": metric,
+            "reference_column": reference_column,
+            "projected_column": projected_column,
+            "n_objects": 0,
+            "bias_projected_minus_reference": float("nan"),
+            "median_delta_projected_minus_reference": float("nan"),
+            "rmse": float("nan"),
+            "sigma_mad": float("nan"),
+            "p95_abs_delta": float("nan"),
+            "corr": float("nan"),
+        }
+    delta = projected[finite] - reference[finite]
+    corr = (
+        float(np.corrcoef(projected[finite], reference[finite])[0, 1])
+        if finite.sum() > 1
+        else float("nan")
+    )
+    return {
+        "metric": metric,
+        "reference_column": reference_column,
+        "projected_column": projected_column,
+        "n_objects": int(finite.sum()),
+        "bias_projected_minus_reference": float(np.mean(delta)),
+        "median_delta_projected_minus_reference": float(np.median(delta)),
+        "rmse": float(np.sqrt(np.mean(delta**2))),
+        "sigma_mad": float(1.4826 * np.median(np.abs(delta - np.median(delta)))),
+        "p95_abs_delta": float(np.nanquantile(np.abs(delta), 0.95)),
+        "corr": corr,
+    }
 
 
 if __name__ == "__main__":

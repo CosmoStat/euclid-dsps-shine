@@ -900,6 +900,7 @@ def _catalog_truth_frame(
     path = Path(str(catalog_path))
     if not path.is_absolute():
         path = Path.cwd() / path
+    path = _prefer_projected_truth_catalog(path)
     if not path.exists():
         return pd.DataFrame()
     try:
@@ -941,6 +942,13 @@ def _catalog_truth_frame(
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
+
+
+def _prefer_projected_truth_catalog(path: Path) -> Path:
+    if path.stem.endswith("_projected_truth"):
+        return path
+    candidate = path.with_name(f"{path.stem}_projected_truth{path.suffix}")
+    return candidate if candidate.exists() else path
 
 
 def _combine_truth_frames(
