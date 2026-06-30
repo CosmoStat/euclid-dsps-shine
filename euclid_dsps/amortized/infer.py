@@ -886,6 +886,7 @@ def finalize_amortized_inference(
         out,
         complete_records,
         combine_sample_shards=bool(combine_sample_shards),
+        verbose=verbose,
     )
     selection = _read_json_if_exists(out / "inference_selection.json")
     expected = selection.get("selected_rows")
@@ -1024,6 +1025,7 @@ def _combine_inference_shard_tables(
     records: list[dict[str, Any]],
     *,
     combine_sample_shards: bool,
+    verbose: bool = False,
 ) -> dict[str, pd.DataFrame]:
     table_specs = {
         "summary": ("summary", out / "posterior_summary.parquet", True),
@@ -1041,19 +1043,44 @@ def _combine_inference_shard_tables(
     }
     frames: dict[str, pd.DataFrame] = {}
     for name, (path_key, output_path, should_write) in table_specs.items():
+        if verbose:
+            print(
+                "[amortized] combine shards: "
+                f"table={name} write={bool(should_write)}"
+            )
         paths = [
             _inference_shard_paths(out, int(record["batch"]))[path_key]
             for record in records
         ]
         existing = [path for path in paths if path.exists() and path.stat().st_size > 0]
-        frame = (
-            pd.concat((pd.read_parquet(path) for path in existing), ignore_index=True)
-            if existing
-            else pd.DataFrame()
-        )
+        pieces = []
+        total = len(existing)
+        if verbose:
+            print(
+                "[amortized] combine shards: "
+                f"table={name} files={total}"
+            )
+        for index, path in enumerate(existing, start=1):
+            pieces.append(pd.read_parquet(path))
+            if verbose and (index == 1 or index == total or index % 25 == 0):
+                print(
+                    "[amortized] combine shards: "
+                    f"table={name} read={index}/{total}"
+                )
+        frame = pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
         frames[name] = frame
         if should_write and not frame.empty:
+            if verbose:
+                print(
+                    "[amortized] combine shards: "
+                    f"table={name} rows={len(frame)} -> {output_path}"
+                )
             frame.to_parquet(output_path, index=False)
+        elif verbose:
+            print(
+                "[amortized] combine shards: "
+                f"table={name} rows={len(frame)} skipped_write={not should_write}"
+            )
     return frames
 
 

@@ -708,6 +708,7 @@ def summarize_inference_outputs(
         redshift,
         catalog_proxy,
         out,
+        config=config,
     )
     payload = {
         "n_objects": int(len(frame)),
@@ -743,6 +744,67 @@ def summarize_inference_outputs(
             str(band): float(value) for band, value in band_stats.items()
         }
     write_json(Path(out_dir) / "posterior_diagnostics_summary.json", payload)
+
+
+def _write_full_latent_posterior_median_corner(
+    summary: pd.DataFrame,
+    out: Path,
+    plt,
+    *,
+    config: dict[str, Any] | None,
+) -> Path | None:
+    frame = _posterior_median_parameter_frame(summary, config=config)
+    if frame.empty:
+        return None
+    prior = _read_learned_prior(out)
+    comparison = None
+    title = "Full latent posterior medians"
+    if prior is not None and not prior.empty:
+        shared = [column for column in _corner_columns(frame) if column in prior]
+        if len(shared) >= 2:
+            comparison = prior
+            title = "Full latent posterior medians vs learned prior"
+    return _write_corner_plot(
+        frame,
+        out,
+        plt,
+        comparison=comparison,
+        filename="corner_full_latent_posterior_medians.png",
+        title=title,
+        color="#2a9fd6",
+        label="posterior median per galaxy",
+        comparison_color="#ef476f",
+        comparison_label="learned prior samples",
+    )
+
+
+def _posterior_median_parameter_frame(
+    summary: pd.DataFrame,
+    *,
+    config: dict[str, Any] | None,
+) -> pd.DataFrame:
+    if summary.empty:
+        return pd.DataFrame()
+    configured = []
+    if config is not None:
+        configured = list(
+            (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
+        )
+    candidates = configured or [
+        column[: -len("_median")]
+        for column in summary.columns
+        if column.endswith("_median")
+    ]
+    columns = []
+    rename = {}
+    for name in candidates:
+        median_column = f"{name}_median"
+        if median_column in summary:
+            columns.append(median_column)
+            rename[median_column] = str(name)
+    if len(columns) < 2:
+        return pd.DataFrame()
+    return summary[columns].rename(columns=rename)
 
 
 def _residual_value_column(frame: pd.DataFrame) -> str | None:
@@ -1151,6 +1213,8 @@ def _write_inference_plots(
     redshift: pd.DataFrame,
     catalog_proxy: pd.DataFrame,
     out: Path,
+    *,
+    config: dict[str, Any] | None = None,
 ) -> list[str]:
     try:
         _prepare_matplotlib_cache(out)
@@ -1159,6 +1223,9 @@ def _write_inference_plots(
         return []
 
     written: list[str] = []
+    path = _write_full_latent_posterior_median_corner(summary, out, plt, config=config)
+    if path is not None:
+        written.append(path.name)
     if not residual_summary.empty:
         residual_column = _residual_value_column(residual_summary)
         if residual_column is None:
