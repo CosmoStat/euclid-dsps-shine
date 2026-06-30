@@ -1,6 +1,6 @@
 extends: diffsky_hltds_popcosmos_full_bounds_h100.yaml
 
-catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
 
 experiment:
     name: diffsky_hltds_continuous_lowz_h100

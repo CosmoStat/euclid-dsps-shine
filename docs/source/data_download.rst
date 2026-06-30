@@ -13,8 +13,12 @@ The current public paths are:
 
    Data/Euclid FS2 LC galaxy catalog_phz1.parquet
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/
+   Data/diffsky/raw/hltds_cosmos_260215_03_31_2026/
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth_nokl_trainval20k.parquet
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_wNE_logGasU-2.0_logGasZ0.0.h5
    Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5
    Data/popcosmos_chabrier_stellar_ssp_basis_k64_coeff16.h5
@@ -84,8 +88,8 @@ Build the full normalized source parquet with deterministic synthetic
      --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
      --error-model m5_depth
 
-Then build the current main continuous-redshift training subset with the
-explicit flux-dependent error model:
+Then build the current continuous-redshift low-z intermediate with the explicit
+flux-dependent error model:
 
 .. code-block:: bash
 
@@ -95,6 +99,34 @@ explicit flux-dependent error model:
      --redshift-min 0.0 \
      --redshift-max 0.35 \
      --error-model m5_depth
+
+Add DSPS projected-truth columns to make the default modeling dataset:
+
+.. code-block:: bash
+
+   conda activate shine
+   python scripts/build_diffsky_lowz_projected_truth_dataset.py --force
+
+This writes
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet``
+with ``78651`` rows in the current local build.
+
+Build the canonical truth-rich high-redshift subset with the same
+``m5_depth`` error contract:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli diffsky-redshift-subset \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet \
+     --out Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet \
+     --redshift-min 0.0 \
+     --redshift-max 3.35 \
+     --error-model m5_depth
+
+This is the preferred dataset when generated truth is the reference population.
+The local 03/31 source currently reaches ``z = 3.0319715``, so the ``3.35`` cut
+keeps all available high-redshift rows while making the intended upper bound
+explicit.
 
 Validate readiness for prior-learning experiments:
 
@@ -114,13 +146,18 @@ Write dataset diagnostics:
      --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml \
      --out outputs/reports/diffsky_hltds_04_14/dataset
 
-The prepared file keeps native HLTDS AB magnitudes and truth columns such as
+The prepared files keep native HLTDS AB magnitudes and truth columns such as
 ``redshift_true``, ``logsm_true``, ``logssfr_true``, ``logsfr_true``,
 ``logmp_true``, central flags, and size proxies when they are present. The
-source parquet and current main subset both create ``fluxerr_*`` columns with
+source parquet and low-z intermediate both create ``fluxerr_*`` columns with
 the deterministic ``m5_depth`` model and a PhotErr-style
-``sigma_sys_mag=0.005`` systematic floor. They are the default inputs for
-Diffsky training, MAP, and posterior-predictive diagnostics.
+``sigma_sys_mag=0.005`` systematic floor. The default projected-truth parquet
+adds DSPS truth columns and is the default input for Diffsky training, MAP,
+and posterior-predictive diagnostics.
+
+For the exact ``m5_depth``/``photo_err``/PhotErr-style formula, the separate
+2% likelihood floor, and the current ``worst100`` huge-error-bar failure
+examples, see ``diffsky_dataset.rst`` under "Photometry Contract".
 
 Diffsky SSP Asset
 -----------------

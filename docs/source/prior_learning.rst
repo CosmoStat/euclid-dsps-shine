@@ -87,7 +87,7 @@ Train
    python -m euclid_dsps.cli \
      --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
      diffsky-train-supervised-prior \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --schema diffsky_truth_basic \
      --out outputs/runs/diffsky_supervised_prior_basic
 
@@ -127,7 +127,7 @@ Report
      --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
      diffsky-supervised-prior-report \
      --run outputs/runs/diffsky_supervised_prior_basic \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
 
 Diagnostics include per-parameter histogram comparisons, KS distance,
 Wasserstein distance, mean/std/median residuals, a z/logM/logSFR pair plot when

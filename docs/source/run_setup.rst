@@ -64,12 +64,11 @@ fast instead of silently falling back to CPU.
 Diffsky HLTDS dataset
 ---------------------
 
-This is the recommended dataset for the current physical-recovery tests. It
-uses the prepared file:
+The fast reconstruction/debug path uses the prepared low-z projected-truth file:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
 
 and the HLTDS SSP asset:
 
@@ -77,8 +76,8 @@ and the HLTDS SSP asset:
 
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
-Build or refresh the main subset and its reports from the full 04/14 prepared
-source parquet with:
+Build or refresh the low-z flux-error intermediate and its reports from the
+full 04/14 prepared source parquet with:
 
 .. code-block:: bash
 
@@ -94,13 +93,51 @@ manifest/schema/truth reports, and the redshift/truth/error distribution plots.
 The old ``*_photometry_truth_noerr.parquet`` file is a historical source
 artifact and is not the default rebuild input.
 
-The H100 Slurm entry points run this same preflight automatically. If
-``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
+Then add the DSPS projected-truth columns used by the configs and supervisor
+notebook:
+
+.. code-block:: bash
+
+   conda activate shine
+   python scripts/build_diffsky_lowz_projected_truth_dataset.py --force
+
+The final default file is
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet``.
+The 20k parquet supplied for supervisor review is
+``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth_nokl_trainval20k.parquet``.
+
+The canonical truth-rich dataset for population-truth, supervised-prior, and
+projection diagnostics is:
+
+.. code-block:: text
+
+   Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet
+
+Build it from the 03/31 high-redshift source with:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli diffsky-redshift-subset \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet \
+     --out Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet \
+     --redshift-min 0.0 \
+     --redshift-max 3.35 \
+     --error-model m5_depth
+
+The local source reaches ``z = 3.0319715`` and writes ``493903`` objects in the
+current build. Use this dataset when generated Diffstar/Diffmah/dust truth is
+the scientific reference; use the low-z subset when the goal is a smaller
+continuous-redshift smoke/debug run.
+
+The H100 Slurm entry points run the low-z flux-error preflight automatically.
+If ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
 is missing on Jean-Zay but
 ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet``
 exists, they rebuild the ``z < 0.35`` subset before training or inference.
-If both files are missing, copy the local subset parquet to Jean-Zay or build
-the full source parquet first.
+The projected-truth parquet remains the default catalog path; rebuild it with
+``scripts/build_diffsky_lowz_projected_truth_dataset.py`` after the flux-error
+intermediate exists. If both source files are missing, copy the local projected
+truth parquet to Jean-Zay or build the full source parquet first.
 
 Supervised prior learning
 -------------------------
@@ -112,7 +149,7 @@ Train the basic supervised prior directly on truth parameters:
    python -m euclid_dsps.cli \
      --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
      diffsky-train-supervised-prior \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --out outputs/runs/diffsky_supervised_prior_basic
 
 Then sample and report:
@@ -123,7 +160,7 @@ Then sample and report:
      --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
      diffsky-sample-supervised-prior \
      --checkpoint outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --out outputs/runs/diffsky_supervised_prior_basic
 
 Same-parameter forward closure
@@ -137,7 +174,7 @@ physical recovery:
    python -m euclid_dsps.cli \
      --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml \
      diffsky-forward-closure \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --limit 1024 \
      --out outputs/runs/diffsky_trueparam_forward_closure
 
@@ -338,9 +375,9 @@ No-KL Autoencoder Sanity
 ------------------------
 
 Before interpreting a RealNVP prior, run the autoencoder-only sanity check on
-the continuous low-z dataset. This disables the KL term and freezes the prior,
-so the relevant question is whether encoder plus DSPS decoder can reconstruct
-the input fluxes:
+the continuous low-z projected-truth dataset. This disables the KL term and
+freezes the prior, so the relevant question is whether encoder plus DSPS
+decoder can reconstruct the input fluxes:
 
 .. code-block:: bash
 
@@ -350,8 +387,9 @@ the input fluxes:
 The script trains with
 ``configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml`` and then runs
 inference on the best checkpoint. It also rebuilds the ``78651`` object
-``z < 0.35`` dataset on Jean-Zay if the subset parquet is missing and the full
-source parquet exists. Inspect:
+``z < 0.35`` flux-error intermediate on Jean-Zay if that intermediate parquet
+is missing and the full source parquet exists; the final default modeling file
+is the projected-truth parquet. Inspect:
 
 .. code-block:: text
 
@@ -367,6 +405,23 @@ source parquet exists. Inspect:
 The main pass/fail check is the distribution of
 ``(flux_in - flux_out) / sigma_eff``. A useful first target is most median
 band residuals inside ``[-3, 3]`` without long asymmetric tails.
+
+Supervisor no-KL package
+------------------------
+
+The zip-ready supervisor bundle is written under:
+
+.. code-block:: text
+
+   outputs/supervisor_package/diffsky_nokl_lowz_baseline/
+
+It contains the full 78651-row projected-truth low-z parquet, the exact 20000
+row train/validation subset used by
+``diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128``, the best no-KL
+weights, feature statistics, local config with relative package paths, HLTDS
+SSP/filter assets, and
+``notebooks/diffsky_baseline_nokl_minimal.ipynb``. Open the notebook from this
+directory or set ``DIFFSKY_PACKAGE_DIR`` to the package path.
 
 Posterior Predictive Residuals On Jean-Zay
 ------------------------------------------
@@ -428,7 +483,7 @@ joint-prior modes, compare redshift posterior calibration:
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-redshift-ablation \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --run standard_normal=outputs/runs/amortized_diffsky_standard_normal_infer \
      --run supervised_prior=outputs/runs/amortized_diffsky_supervised_prior_infer \
      --run joint_realnvp=outputs/runs/amortized_diffsky_joint_realnvp_infer \

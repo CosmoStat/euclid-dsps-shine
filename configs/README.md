@@ -1,12 +1,16 @@
 # Public Configs
 
-The public config surface is intentionally small. The main science path is
-Diffsky HLTDS 04/14 on the continuous `z < 0.35` subset with materialized
-`m5_depth` synthetic `fluxerr_*` columns. Euclid FS2 remains the comparison
-path.
+The public config surface is intentionally small. The fast reconstruction path
+is Diffsky HLTDS 04/14 on the continuous `z < 0.35` subset with materialized
+`m5_depth` synthetic `fluxerr_*` columns and DSPS projected-truth columns. The
+truth/prior/projection reference dataset is the HLTDS 03/31 `z <= 3.35`
+m5-depth derivative. Euclid FS2 remains the comparison path.
 
 - `diffsky_dataset_hltds_04_14.yaml`: rebuild and validate
-  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`.
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet`.
+- `diffsky_dataset_hltds_03_31_zmax335_m5depth.yaml`: rebuild and validate
+  `Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet`,
+  the canonical truth-rich dataset for generated-truth population work.
 - `diffsky_hltds_04_14_simple_gpu.yaml`: main Diffsky HLTDS MAP setup. It uses
   14 LSST+Roman `fnu_cgs` flux bands, `fluxerr_*` errors, the HLTDS SSP/filter
   assets, and a 12-parameter PopCosmos-bin DSPS proxy.

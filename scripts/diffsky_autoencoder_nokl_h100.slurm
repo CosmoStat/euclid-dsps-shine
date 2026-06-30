@@ -33,7 +33,7 @@ fi
 CONDA_ENV="${CONDA_ENV:-shine}"
 
 CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml}"
-DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet}"
+DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet}"
 SOURCE_DATASET="${SOURCE_DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet}"
 REDSHIFT_MIN="${REDSHIFT_MIN:-0.0}"
 REDSHIFT_MAX="${REDSHIFT_MAX:-0.35}"

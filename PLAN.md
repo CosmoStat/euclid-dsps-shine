@@ -1,5 +1,704 @@
 # Plan
 
+## 2026-06-29 Add Diffsky NN Run Matrix
+
+- Status: completed.
+- Goal: make the next Diffsky NN experiments launchable from Jean Zay with a
+  documented order: build the balanced rowset, then run deterministic no-KL,
+  stochastic no-KL, fixed-KL, and annealed-KL jobs on the same rowset.
+- Scope: new experiment configs, new SLURM launchers, and a Sphinx runbook.
+- Completed: added fixed-KL and annealed-KL RealNVP configs.
+- Completed: added `scripts/diffsky_nn_build_rowsets_h100.slurm` for
+  reproducible `balanced20k` and worst rowsets.
+- Completed: added `scripts/diffsky_nn_experiment_matrix_h100.slurm` as a
+  four-task SLURM array over `nokl_det`, `nokl_stoch`, `kl_fixed`, and
+  `kl_annealed`.
+- Completed: documented the launch order, outputs, diagnostics, and useful
+  overrides in `docs/source/diffsky_nn_experiment_matrix.rst`.
+
+## 2026-06-29 Fix Amortized Init And no-KL Diagnostics
+
+- Status: completed.
+- Goal: remove hidden physical-parameter constants from amortized encoder
+  initialization, add a true deterministic no-KL reconstruction objective,
+  add a documented balanced Diffsky rowset path, and expand diagnostics for
+  initialization, parameter bounds, SNR, and flux residual interpretation.
+- Scope: amortized latent/train/inference diagnostics, reconstruction rowset
+  utilities, CLI wiring, focused tests/docs, and lightweight validation only.
+- Planned: use `fit.free_parameters.<name>.initial` as the only configured
+  physical initialization source, with midpoint fallback.
+- Planned: keep learned-prior/KL training on the stochastic Gaussian encoder,
+  while adding an explicit deterministic reconstruction mode for pure no-KL
+  autoencoder experiments.
+- Planned: build one documented `balanced20k` rowset option stratified by
+  redshift and observable photometric quality/SNR proxies.
+- Completed: moved physical initialization to the config-driven
+  `initial_theta_from_config` helper and removed hidden encoder defaults such
+  as `z_obs=0.8`.
+- Completed: training now writes `initial_theta_diagnostics.json` with
+  per-parameter bound distances and boundary warnings.
+- Completed: added `amortized.objective.mode=deterministic_reconstruction`,
+  inference support for deterministic checkpoints, and a dedicated H100
+  deterministic no-KL config.
+- Completed: stabilized posterior-predictive chi2 on tiny flux/error scales
+  and split likelihood-space `residual_rms` from `flux_residual_rms`.
+- Completed: added SNR/error-over-flux/absolute and fractional flux residual
+  diagnostics to residual summaries and reconstruction comparisons.
+- Completed: `diffsky-build-reconstruction-rowsets` now writes a documented
+  `balanced20k` rowset by default, with size/seed CLI controls.
+- Validation completed: ruff passed on touched files, compileall passed on
+  touched modules/tests, targeted pytest passed
+  (`tests/test_amortized_latent.py`, `tests/test_amortized_elbo.py`,
+  `tests/test_amortized_infer.py`), config smoke confirmed `z_obs=0.25`, and
+  rowset smoke wrote a 100-row balanced set under `/tmp`.
+
+## 2026-06-26 Rename Deliverable And Add Install Cell
+
+- Status: completed.
+- Goal: remove supervisor-specific names from the zip-ready deliverable, rename
+  the config/package paths cleanly, and add an optional notebook bootstrap cell
+  for installing the public `euclid-dsps-shine` branch.
+- Scope: final deliverable directory, package README/MANIFEST, and notebook
+  path/config references; no heavy JAX/DSPS reruns.
+- Completed: final deliverable now lives at
+  `outputs/deliverables/diffsky_nokl_lowz_baseline/`; the old
+  `diffsky_nokl_lowz_baseline_for_supervisor` directory was removed.
+- Completed: renamed the packaged config to
+  `configs/diffsky_nokl_trainval20k.yaml` and updated notebook, README, and
+  MANIFEST references.
+- Completed: added a notebook bootstrap cell that checks for `euclid_dsps` and,
+  if missing, clones `https://github.com/CosmoStat/euclid-dsps-shine.git` on
+  branch `feature/diffsky-likelihood-sanity-plan` into `_deps/` and installs it
+  editable.
+- Validation completed: no `supervisor`/`for_supervisor` names remain in the
+  final deliverable, setup/install/config cells run from both package root and
+  `notebooks/`, the final notebook parses with `ast`, all required/YAML paths
+  exist, and `git diff --check` passed.
+
+## 2026-06-26 Finalize Supervisor Zip Package
+
+- Status: completed.
+- Goal: make the no-KL Diffsky notebook and all loaded files zip-ready for a
+  supervisor: portable package-root discovery, clear notebook explanations,
+  complete local assets, and concise run instructions.
+- Scope: active notebook, packaged notebook copy, package README/manifest, and
+  a final copied deliverable directory; avoid heavy JAX/DSPS reruns.
+- Completed: made package discovery portable by searching
+  `DIFFSKY_PACKAGE_DIR`, the current directory, current parents, and only then
+  the source-checkout fallback.
+- Completed: cleared notebook outputs, updated README/MANIFEST, and copied a
+  final lean package to
+  `outputs/supervisor_package/diffsky_nokl_lowz_baseline_for_supervisor/`
+  containing notebooks, configs, data, weights, and assets.
+- Validation completed: final notebook has 12 cells, zero stored outputs, and
+  parses with `ast`; setup/config cells run from both the package root and
+  package `notebooks/`; all required files and YAML-referenced asset paths
+  exist; `git diff --check` passed.
+
+## 2026-06-26 Simplify Config Load Cell
+
+- Status: completed.
+- Goal: make the notebook config/data load cell easy to read by removing the
+  verbose JSON dump and redundant tables, while preserving variables needed by
+  later EDA, truth, training, and inference cells.
+- Scope: active notebook and packaged notebook copy only.
+- Completed: replaced the verbose config cell with a compact `important_config`
+  table plus four direct prints for config path, dataset sizes, band list, and
+  truth metadata row count.
+- Completed: removed the unused `json` import and old `config_summary`,
+  `readable_config`, `band_table`, and full `truth_metadata` display from the
+  cell.
+- Validation completed: both notebooks parse with `ast`, old verbose blocks no
+  longer appear in notebook search, and `git diff --check` passed.
+
+## 2026-06-26 Clarify Inference Residual Row Count
+
+- Status: completed.
+- Goal: make the notebook explicit that residual summaries are long-form
+  object-band tables, so `N_INFER=4` with 14 bands produces 56 rows.
+- Scope: active notebook and packaged notebook copy only.
+- Completed: the inference cell now prints object count, band count, the
+  object-band row formula, and asserts that the residual table length matches
+  `n_objects * n_bands`.
+- Validation completed: both notebooks parse with `ast`, and
+  `git diff --check` passed.
+
+## 2026-06-26 Remove MAP Section From Supervisor Notebook
+
+- Status: completed.
+- Goal: simplify the no-KL supervisor notebook by removing all MAP cells and
+  leaving only loaded-weight inference followed by global and by-band residual
+  plots.
+- Scope: active notebook and packaged notebook copy; no JAX/DSPS execution.
+- Completed: rebuilt both notebooks to 12 cells: setup, config/data load, EDA,
+  truth inspection, neural-network definition, optional training, weight load,
+  active-weight inference, global residual plot, and residuals by band.
+- Completed: removed all notebook references to worst-object selection, MAP,
+  cached reference plot display, and the old after-MAP diagnostics.
+- Completed: cleared the generated package `runs/` directory; the optional
+  training cell recreates `runs/retrain_nokl` only if it is executed.
+- Validation completed: both notebooks parse with `ast`, targeted notebook
+  search has no MAP/worst/reference-plot remnants, and `git diff --check`
+  passed.
+
+## 2026-06-26 Fix After-MAP Worst-Object Join
+
+- Status: completed.
+- Goal: make the notebook after-MAP residual cell read existing
+  `map_estimates.parquet` files even when MAP stored the selected catalog
+  position in `row_index` instead of the original dataset `row_index`.
+- Scope: active notebook and packaged notebook copy only; no MAP rerun.
+- Completed: the after-MAP cell now first tries the strict
+  `row_index`/`object_id` join, then falls back to matching
+  `catalog_position` against `map_estimates.row_index`, and finally to
+  `object_id` only for debugging continuity.
+- Validation completed: both notebooks parse with `ast`, the existing
+  `classic_no_prior/map_estimates.parquet` matches all 8 worst objects via
+  `catalog_position`, and `git diff --check` passed.
+
+## 2026-06-26 Make MAP Notebook Cells Reload Safe
+
+- Status: completed.
+- Goal: prevent repeated `KeyError: 'z_obs'` in an already-running notebook
+  kernel by making MAP closure diagnostics non-fatal and forcing notebook MAP
+  cells to reload `euclid_dsps.amortized.map_adam` before calling it.
+- Scope: `euclid_dsps/amortized/map_adam.py`, source notebook, packaged
+  notebook; lightweight syntax checks only.
+- Completed: wrapped `_write_map_closure_metrics` in `run_map_adam_under_prior`
+  so closure diagnostics write `map_closure_warning` instead of aborting after
+  `map_estimates.parquet` has already been produced.
+- Completed: updated both MAP notebook cells to `importlib.reload(map_adam)`
+  before direct function calls, so an already-running notebook kernel picks up
+  local source fixes without restart.
+- Validation completed: `py_compile` passed, both notebooks parse with `ast`,
+  and `git diff --check` passed.
+
+## 2026-06-26 Fix MAP Closure z_obs Merge Collision
+
+- Status: completed.
+- Goal: fix the `KeyError: 'z_obs'` raised at the end of
+  `run_map_adam_under_prior` when the truth snapshot also contains a `z_obs`
+  column and pandas suffixes MAP/truth columns during merge.
+- Scope: `euclid_dsps/amortized/map_adam.py` plus lightweight syntax checks;
+  do not rerun MAP locally.
+- Completed: `_write_map_closure_metrics` now merges with explicit
+  `("_map", "_truth")` suffixes and uses `z_obs_map` for MAP closure metrics
+  when the truth snapshot also has `z_obs`.
+- Validation completed: `py_compile` passed, a synthetic no-JAX closure test
+  with colliding MAP/truth `z_obs` columns wrote
+  `map_closure_photoz_metrics.csv`, and `git diff --check` passed.
+
+## 2026-06-26 Reorder Residual Diagnostics And MAP Plots
+
+- Status: completed.
+- Goal: move the reference global/by-band residual diagnostics immediately
+  after the neural-network definition, and add separate worst-object residual
+  plots before and after MAP.
+- Scope: source notebook plus packaged notebook copy; keep MAP execution
+  opt-in, use direct Python functions only, and do not execute JAX/DSPS locally.
+- Completed: moved `# Reference global residual plot` and
+  `# Reference residuals by band` immediately after `# Neural-network
+  definition`.
+- Completed: split the MAP section into separate cells for worst-object
+  Student-t selection, residual heatmaps before MAP, direct classic MAP run,
+  residual heatmap/table after classic MAP, and optional learned-prior MAP.
+- Completed: the before-MAP plot shows per-band `residual_sigma_median` and
+  per-band Student-t NLL for the selected worst objects.
+- Completed: the after-MAP plot reads `map_estimates.parquet` when present,
+  decodes MAP parameters through DSPS, rebuilds a
+  `posterior_predictive_residual_summary_frame`, and plots per-band residuals
+  for the same worst objects.
+- Validation completed: source and packaged notebook code cells parse with
+  `ast`, `git diff --check` passes, and no JAX/DSPS MAP execution was run.
+
+## 2026-06-26 Add Worst-Object MAP Checks To no-KL Notebook
+
+- Status: completed.
+- Goal: add two opt-in notebook cells after amortized inference: one selecting
+  the worst NN posterior-predictive objects and running classic DSPS/JAX
+  MAP-Adam with no learned prior, and one running the same MAP under a learned
+  RealNVP prior when a KL-trained checkpoint is supplied.
+- Scope: source notebook plus packaged notebook copy; keep both MAP cells off
+  by default to avoid WSL instability and use direct Python function calls
+  rather than CLI commands.
+- Completed: inserted a classic no-prior MAP cell after inference. It ranks
+  objects by summed Student-t negative log-likelihood from the reference 20k
+  posterior-predictive residual summary, maps original `row_index`/`object_id`
+  values back to configured parquet positions, writes
+  `runs/notebook_worst_object_map/worst_nn_catalog_positions.txt`, and
+  optionally calls `run_map_adam_under_prior` directly with `prior_weight=0.0`.
+- Completed: inserted a learned-prior MAP cell that uses the same worst-object
+  rowset, but requires a KL/RealNVP checkpoint supplied through
+  `DIFFSKY_KL_CHECKPOINT` and optionally `DIFFSKY_KL_FEATURE_STATS`; it remains
+  skipped for the packaged no-KL checkpoint because that prior is not learned.
+- Completed: the MAP section now uses Student-t NLL as the NN failure score and
+  direct Python calls only; CLI command printing was removed.
+- Validation completed: source and packaged notebook code cells parse with
+  `ast`, `git diff --check` passes, and no JAX/DSPS MAP execution was run.
+
+## 2026-06-26 Make no-KL Notebook Explanatory
+
+- Status: completed.
+- Goal: make the no-KL supervisor notebook easier to read for a non-repo
+  reader by adding plain comments, a compact config summary immediately after
+  load, an explicit explanation of the MLP activation path, and a clear note on
+  stellar metallicity being inferred without catalog truth supervision.
+- Scope: source notebook plus packaged notebook copy; text/JSON edits only, no
+  notebook execution or JAX/DSPS validation because WSL was unstable.
+- Completed: added a readable config summary and compact JSON config print
+  immediately after `load_config`.
+- Completed: rewrote notebook cells with more spacing and English comments
+  explaining setup, EDA, truth availability, model definition, optional
+  training, weight loading, inference smoke check, and residual plots.
+- Completed: clarified that the printed Equinox `GaussianEncoder` lists
+  parameter-owning `Linear` modules only; the actual trunk applies `GELU`
+  after each hidden linear layer.
+- Completed: documented `log10_stellar_metallicity` as a DSPS-required latent
+  with no reliable catalog truth in this dataset, learned only through the
+  photometric reconstruction likelihood and therefore interpreted as an
+  inferred nuisance parameter.
+- Validation completed: source and packaged notebook code cells parse with
+  `ast`, `git diff --check` passes, and no JAX/DSPS notebook execution was run
+  after WSL instability.
+
+## 2026-06-26 Clarify no-KL Notebook Residuals And Training Cell
+
+- Status: completed.
+- Goal: remove the confusing `train_like_jean_zay` wrapper from
+  `notebooks/diffsky_baseline_nokl_minimal.ipynb`, replace it with a compact
+  self-contained no-KL FS2 training loop, and make the notebook explicit about
+  which residual plots are the reference 20k posterior-predictive diagnostics
+  versus the small notebook smoke check.
+- Scope: notebook source plus the packaged notebook copy; no dataset,
+  checkpoint, or residual-summary artifact regeneration unless validation shows
+  the existing package files are inconsistent.
+- Completed: removed the `train_like_jean_zay` wrapper and any direct
+  `train_amortized_fs2` import/call from the source and packaged notebooks.
+- Completed: added a compact `simple_train_amortized_fs2` notebook cell that
+  keeps the no-KL FS2 objective, feature normalization, Student-t likelihood,
+  global SED scale, per-band calibration, AdamW updates, and validation best
+  checkpoint save, while dropping the heavyweight training entrypoint's logs,
+  run fingerprints, diagnostics, and progress machinery.
+- Completed: added import comments for `read_feature_stats`,
+  `latent_spec_from_config`, `x_to_theta`, `architecture_summary`, and
+  `build_amortized_model`.
+- Completed: made the residual distinction explicit: the notebook now treats
+  `diagnostics/posterior_predictive_normalized_residual_hist.png` and
+  `diagnostics/posterior_predictive_residuals_by_band.png` as the reference
+  20k posterior-predictive plots, while the 256-row posterior-mean inference
+  cell is labeled only as a smoke check.
+- Completed: removed the misleading `notebook_small_inference_*.png` files
+  from the package diagnostics directory.
+- Validation completed: notebook JSON/code cells parse, `git diff --check`
+  passes, no direct `train_amortized_fs2` import/call remains, and the packaged
+  diagnostics directory contains only the two reference plots plus
+  `posterior_predictive_residual_summary.parquet`. Full notebook execution was
+  intentionally stopped after WSL instability.
+
+## 2026-06-26 Supervisor Package Low-z Projected-Truth Dataset
+
+- Status: completed.
+- Goal: build the deliverable supervisor workflow around a default continuous
+  low-z Diffsky dataset that already contains the m5-depth error model and
+  projected DSPS truth columns, plus a 20k train/validation subset matching the
+  reference no-KL run.
+- Scope: generate the augmented dataset outside the notebook; document it and
+  make configs default to it; copy dataset, subset, weights, feature stats,
+  configs, and notebook into one zip-ready output directory; rewrite the
+  notebook so it loads the packaged data, does EDA, exposes the NN/training
+  entrypoint used on Jean Zay, loads provided weights, runs small inference,
+  and reproduces the accepted residual plots.
+- Completed: added `scripts/build_diffsky_lowz_projected_truth_dataset.py`,
+  generated
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet`
+  with 78651 rows and 106 columns, and generated the exact reference
+  train/validation subset
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth_nokl_trainval20k.parquet`
+  with 17999 train rows and 2001 validation rows.
+- Completed: updated 04/14 configs and H100 script defaults to use the
+  projected-truth parquet; updated truth-column metadata for the DSPS latent
+  inputs where available and explicit missing columns where unavailable.
+- Completed: rewrote `notebooks/diffsky_baseline_nokl_minimal.ipynb` into a
+  package-oriented notebook with simple cells for data load, EDA, photometry
+  error summaries, DSPS truth distributions, NN architecture, Jean-Zay training
+  entrypoint, provided-weight loading, short inference, and the two residual
+  plots.
+- Completed: assembled the zip-ready package at
+  `outputs/supervisor_package/diffsky_nokl_lowz_baseline/` with the full
+  projected-truth parquet, 20k subset parquet, configs, train/validation index
+  files, `best.eqx`, feature stats, training logs/summaries, residual
+  diagnostics, HLTDS SSP/filter assets, README, manifest, and notebook.
+- Validation completed: package notebook executed from the package directory in
+  `conda shine` with `RUN_TRAINING=False`; source and package configs loaded
+  and validated against their parquet schemas; Sphinx docs built successfully;
+  `git diff --check` passed.
+
+## 2026-06-26 Fix no-KL Baseline Notebook Consistency
+
+- Status: completed.
+- Goal: correct `notebooks/diffsky_baseline_nokl_minimal.ipynb` so it uses the
+  active low-z `04_14` no-KL inference dataset/run, removes the misleading
+  training/fit framing, reproduces the existing posterior-predictive residual
+  plots, and materializes projected-truth diagnostics from the low-z rows.
+- Scope: notebook plus the dataset-only `03_31_zmax335_m5depth` YAML cleanup;
+  do not change the existing no-KL checkpoint, inference run outputs, or
+  unrelated docs.
+- Completed: rewrote the notebook as a read-only diagnostic notebook using
+  `outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128_infer`
+  and
+  `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet`.
+- Completed: removed the training/save/load checkpoint cells and added cached
+  low-z projected-truth outputs:
+  `lowz_inference_projected_truth.parquet` and
+  `lowz_inference_dataset_with_projected_truth.parquet` under
+  `outputs/notebooks/diffsky_baseline_nokl_minimal/`.
+- Completed: regenerated notebook copies of the two posterior-predictive
+  diagnostics with the same plotting contract and image sizes as the reference
+  run: `posterior_predictive_normalized_residual_hist.png` and
+  `posterior_predictive_residuals_by_band.png`.
+- Completed: made `configs/diffsky_dataset_hltds_03_31_zmax335_m5depth.yaml`
+  dataset-only by removing the inherited fit config and the explicit
+  redshift/`fit.free_parameters.z_obs` block.
+- Validation completed: parsed notebook code cells, executed the notebook in
+  `conda shine`, verified the projected-truth and augmented low-z tables have
+  20,000 rows, checked both regenerated PNG dimensions against the reference
+  run, loaded the cleaned YAML with `load_config`, and ran `git diff --check`.
+
+## 2026-06-26 Minimal Baseline no-KL Notebook
+
+- Status: completed.
+- Goal: replace the over-complex supervisor notebook path with a minimal
+  notebook that takes only dataset/config/weights as inputs, exposes the
+  JAX/Equinox architecture and train loop directly in notebook cells, and keeps
+  the same checkpoint load/save contract as the repo.
+- Scope: add a separate `notebooks/diffsky_baseline_nokl_minimal.ipynb`, keep
+  the old debug playground untouched, and make the notebook clear about the
+  difference between inspecting the existing low-z checkpoint outputs and
+  training a new baseline on the canonical `zmax335_m5depth` dataset.
+- Completed: rewrote `notebooks/diffsky_baseline_nokl_minimal.ipynb` as a
+  linear 11-cell notebook: inputs, raw dataset EDA, explicit YAML config cell,
+  model architecture plus direct train loop, train cell, save cell, load-best
+  cell, NN+DSPS inference cell, residual histogram, and band-error summary.
+- Completed: removed `RUN_*` style flags from the notebook. The with/without-KL
+  behavior is controlled by the visible `KL_WEIGHT_MAX` config value and by the
+  checkpoint selected in the load cell.
+- Validation completed: parsed notebook JSON/code, executed the non-training
+  path in `conda shine` through checkpoint load, NN+DSPS inference, residual
+  histograms, and band-error tables; also ran a micro train smoke on 4 objects
+  to confirm the notebook train loop compiles and applies updates.
+
+## 2026-06-26 Supervisor-Ready Diffsky Prior Notebook
+
+- Status: completed.
+- Goal: make `notebooks/diffsky_prior_debug_playground.ipynb` self-contained
+  for supervisor review: canonical dataset, train/validation rowsets, generated
+  notebook configs, explicit no-KL versus KL training loop, and local weight
+  registry.
+- Scope: update notebook cells only plus this plan; keep heavy training
+  opt-in, defaulting to printed commands and lightweight dataset/config
+  inspection.
+- Completed: rewrote the notebook setup so it starts from the canonical
+  `03_31 zmax335 m5_depth` truth-rich dataset, extracts a deterministic
+  notebook parquet under `outputs/notebooks/diffsky_prior_debug/datasets/`,
+  writes local train/validation/debug rowsets, and materializes standard,
+  no-KL, KL, and direct-DSPS configs under the notebook output directory.
+- Completed: added a notebook training loop that prints and can optionally run
+  no-KL and `kl_weight_max=0.05` training via `train_amortized_fs2`, plus a
+  weight manifest listing the two existing local checkpoints and their training
+  summaries.
+- Validation completed: parsed the notebook JSON and code cells, executed the
+  lightweight setup/training-manifest/load/debug cells without launching heavy
+  jobs, verified the generated configs point to the notebook parquet, and ran
+  `git diff --check`.
+
+## 2026-06-26 Canonical Truth Dataset Documentation
+
+- Status: completed.
+- Goal: document the end-to-end projected-truth workflow completely and add the
+  high-redshift truth-rich Diffsky subset with materialized errors as the
+  canonical "real truth" dataset for truth/prior/projection work.
+- Scope: create or document the `z <= 3.35` HLTDS truth subset with
+  `m5_depth` `fluxerr_*`, add a dataset config, update Diffsky dataset/data
+  download/run setup docs, and validate Sphinx.
+- Completed: generated
+  `Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet`
+  from the 03/31 source with `--redshift-max 3.35 --error-model m5_depth`.
+  The current local source keeps 493903 objects, spans
+  `z=1.0552149..3.0319715`, and has 14 `flux_*` plus 14 `fluxerr_*` columns.
+- Completed: added `configs/diffsky_dataset_hltds_03_31_zmax335_m5depth.yaml`
+  and documented the dataset as the canonical truth-rich reference in
+  `docs/source/diffsky_dataset.rst`, `docs/source/data_download.rst`,
+  `docs/source/run_setup.rst`, and `configs/README.md`.
+- Completed: copied the new redshift, truth, and fractional-error diagnostic
+  plots into `docs/source/_static/`.
+- Validation completed: parsed the new YAML config, checked generated parquet
+  summary/manifest/truth report, ran `git diff --check`, and built docs with
+  `conda run -n shine python -m sphinx -b html docs/source docs/_build/html`.
+
+## 2026-06-25 MCLMC Projection Method Documentation Detail
+
+- Status: completed.
+- Goal: document the exact generation method for each MCLMC projected-truth
+  parameter, including the Diffstar/Diffmah SFH projection equations and the
+  dust mapping, not only the final truth distributions.
+- Scope: update `docs/source/diffsky_dataset.rst` and validate the Sphinx
+  build; no plot regeneration is needed unless the documented artifact paths or
+  generated images are stale.
+- Completed: added the exact projected-truth generation chain to
+  `docs/source/diffsky_dataset.rst`: direct catalog mappings, the
+  Diffstar/Diffmah SFH source columns, `age_at_z`, SFH time grid,
+  PopCosmos lookback-bin edges, trapezoidal SFH integration, adjacent
+  log-SFR-ratio equations, dust mapping, and unavailable truth parameters.
+- Validation completed: confirmed the aggregate MCLMC corners were regenerated
+  at 2026-06-25 17:47, ran `git diff --check`, and rebuilt the docs with
+  `conda run -n shine python -m sphinx -b html docs/source docs/_build/html`.
+
+## 2026-06-25 MCLMC Truth Everywhere And Docs
+
+- Status: completed.
+- Goal: make the newly generated catalog/projected truth appear consistently in
+  every MCLMC parameter diagnostic and document the truth distributions in the
+  Sphinx `.rst` docs.
+- Scope: update `scripts/build_diffsky_reconstruction_comparison.py` so the
+  1D posterior-median distribution plot, aggregate corners, and individual
+  corners all use the same finite projected-truth column selection; add a
+  dedicated projected-truth distribution plot; add the generated truth
+  distribution figure/explanation to `docs/source/diffsky_dataset.rst`.
+- Completed: added `mclmc_projected_truth_distributions.png`, made
+  `mclmc_posterior_median_distributions.png` use the same MCLMC projected-truth
+  coordinate list as the corners, and regenerated good/average/bad plus legacy
+  best/median/worst individual aliases.
+- Completed: copied the projected-truth distribution figure into
+  `docs/source/_static/` and documented direct truth, projected generated
+  truth, and missing truth in `docs/source/diffsky_dataset.rst`.
+- Validation completed: verified MCLMC corner columns and truth-distribution
+  columns programmatically, visually inspected the new truth-only and
+  posterior-median distribution plots, ran
+  `python -m compileall scripts/build_diffsky_reconstruction_comparison.py`,
+  `git diff --check`, and
+  `conda run -n shine python -m sphinx -b html docs/source docs/_build/html`.
+
+## 2026-06-25 MCLMC Projected Truth All-Axes Fix
+
+- Status: completed.
+- Goal: ensure every MCLMC corner plot that claims to show
+  catalog/projected truth uses all posterior coordinates with finite projected
+  truth, not the older reduced core axis list.
+- Scope: update the MCLMC corner column selection in
+  `scripts/build_diffsky_reconstruction_comparison.py`, regenerate the targeted
+  MCLMC plot suite, and verify that `dlog10_sfr_1..6`, `tau2`, and
+  `dust_index_n` are all included where truth exists.
+- Completed: replaced the old `MCLMC_CORE_CORNER_PARAMETERS` selection for
+  pooled, posterior-median, and individual corners with a helper that prefers
+  every posterior coordinate with finite projected truth.
+- Completed: regenerated the targeted MCLMC plot suite so the main corners and
+  the good/average/bad individual aliases now include `z_obs`,
+  `log10_stellar_mass`, `dlog10_sfr_1..6`, `tau2`, and `dust_index_n`.
+- Validation completed: checked the selected column list programmatically,
+  verified the projected-truth table has 100 finite values for each of those 10
+  axes, visually inspected pooled/posterior-median/bad corners, ran
+  `python -m compileall scripts/build_diffsky_reconstruction_comparison.py` and
+  `git diff --check`.
+
+## 2026-06-25 MCLMC Truth Overlay Visibility Fix
+
+- Status: completed.
+- Goal: make the catalog/projected truth overlays unmistakable on every MCLMC
+  corner plot and keep that behavior in the reusable comparison pipeline.
+- Scope: update `scripts/build_diffsky_reconstruction_comparison.py`, regenerate
+  the MCLMC dashboard PNGs, and keep the README/plan language aligned with the
+  fact that some truth is projected rather than direct catalog truth.
+- Completed: aggregate MCLMC corners now show catalog/projected truth with
+  orange density contours plus star markers, diagonal rugs, and dashed median
+  lines; individual corners keep orange star/line truth markers and force finite
+  truth values into the plotted range.
+- Completed: regenerated the targeted MCLMC plot suite and README under
+  `outputs/comparison/diffsky_reconstruction_debug/plots/mclmc/worst100_b32_w64_s256`.
+- Validation completed: visually inspected pooled, posterior-median,
+  projected-truth, good, average, and bad MCLMC corners; ran
+  `python -m compileall scripts/build_diffsky_reconstruction_comparison.py` and
+  `git diff --check`.
+
+## 2026-06-25 MCLMC Projected Ground Truth Implementation
+
+- Status: completed.
+- Goal: generate the richest defensible ground-truth/proxy table for the active
+  MCLMC PopCosmos parameters and overlay it on the MCLMC corner plots.
+- Scope: update `scripts/build_diffsky_reconstruction_comparison.py`, using
+  direct catalog truth where available, Diffstar/Diffmah SFH projection for
+  `dlog10_sfr_*`, the existing dust mapping for `tau2`/`dust_index_n`, and
+  explicit missing/nuisance metadata for unsupported parameters.
+- Completed: added `mclmc_projected_truth_parameters.{csv,parquet}` and
+  `mclmc_projected_truth_metadata.{csv,parquet}` under the MCLMC dashboard plot
+  directory. The table includes direct truth for `z_obs`, stellar mass, SFR,
+  and sSFR; projected generated truth for all six `dlog10_sfr_*` ratios from
+  Diffstar/Diffmah SFHs; projected dust truth for `tau2` and `dust_index_n`;
+  and explicit missing metadata for `log10_stellar_metallicity` and
+  `tau1_over_tau2`.
+- Completed: MCLMC pooled, median, projected-truth, and representative
+  good/average/bad corner plots now overlay the catalog/projected truth where
+  the plotted axis has a finite truth value, using explicit orange
+  stars/rugs/median lines so the truth is visible in aggregate and individual
+  corners.
+- Validation completed: regenerated the MCLMC dashboard plot suite in
+  `conda shine` so Diffstar/Diffmah projection was available, inspected the
+  aggregate and individual corners, verified metadata finite fractions, ran
+  `python -m compileall scripts/build_diffsky_reconstruction_comparison.py`,
+  and ran `git diff --check`.
+
+## 2026-06-25 Diffsky Ground-Truth Projection Investigation
+
+- Status: completed.
+- Goal: identify which active Diffsky/PopCosmos MCLMC parameters can receive
+  direct catalog truth, which need deterministic projections from generated
+  Diffsky latents, and which only support nuisance or pseudo-truth treatment.
+- Completed: verified the active parquet contains `redshift_true`, `logsm_true`,
+  `logsfr_true`, `logssfr_true`, `diffstar_*`, `diffmah_*`, `dust_av`,
+  `dust_delta`, and `burst_*`, but no object-level stellar-metallicity or
+  birth-cloud dust-ratio truth column.
+- Completed: confirmed the cleanest SFH enrichment is to project the generated
+  Diffstar/Diffmah SFH through `project_sfh_to_popcosmos_dlogsfr_jax`, rather
+  than using the existing rough constant-slope `logssfr_true` proxy.
+- Completed: confirmed dust can be mapped consistently with the existing
+  `diffsky_basic_dust_params_jax` convention: `tau2=dust_av/1.086`,
+  `dust_index_n=dust_delta`, and `tau1_over_tau2` remains a fixed/nuisance
+  convention unless a birth-cloud latent is added.
+- Validation completed: inspected the active parquet schema and relevant model
+  adapters, checked that `diffstar`/`diffmah` are available in `conda shine`,
+  and computed projected SFH/dust examples for rows `21788`, `78247`, and
+  `77681`.
+
+## 2026-06-25 MCLMC Corner Plot Upgrade
+
+- Status: completed.
+- Goal: replace the current rough MCLMC corner plots in
+  `outputs/comparison/diffsky_reconstruction_debug` with clearer, more
+  accurate diagnostics: aggregate posterior contours, truth overlays, and
+  individual corners for representative good/typical/bad objects.
+- Scope: update `scripts/build_diffsky_reconstruction_comparison.py` and
+  regenerate only the comparison dashboard artifacts.
+- Completed: added density-contour MCLMC corner plots for pooled posterior
+  samples, posterior medians, and truth-comparable parameters, with catalog
+  truth overlays limited to parameters that have direct truth columns.
+- Completed: added stable individual corner aliases for representative
+  `good`, `average`, and `bad` objects. For individual objects, catalog truth
+  is drawn as explicit orange markers/lines and is forced into the displayed
+  axis range so failures where MCLMC is far from truth remain visible.
+- Validation completed: regenerated the MCLMC dashboard plot suite under
+  `outputs/comparison/diffsky_reconstruction_debug/plots/mclmc/worst100_b32_w64_s256`,
+  visually inspected the aggregate and individual corners, ran
+  `python -m compileall scripts/build_diffsky_reconstruction_comparison.py`,
+  and ran `git diff --check`.
+
+## 2026-06-25 PhotErr Parameter Explanation
+
+- Status: completed.
+- Goal: expand the PhotErr explainer so the figure/PDF explain, in English,
+  where each parameter comes from, which parquet columns are used, how `m5` is
+  obtained, and what enters the Student-t likelihood.
+- Scope: keep the existing compact equation/curve artifacts, but add a more
+  verbose annotated artifact for supervision/reporting.
+- Completed: added `photerr_error_model_annotated.{png,pdf,svg}` with explicit
+  English panels for catalog columns, `m5` provenance, and Student-t inputs.
+- Completed: expanded `photerr_error_model_equations.{tex,md,pdf,png}` and
+  `photerr_error_model_summary.json` with column names, units, `m5` source,
+  `gamma`/`eta` source, and the MAP versus amortized Student-t usage.
+- Validation completed: regenerated the report artifacts, visually inspected
+  the annotated and equation PNG previews, checked PDF headers/sizes, ran
+  `python -m compileall scripts/generate_photerr_error_model_explainer.py`, and
+  `git diff --check`.
+
+## 2026-06-25 PhotErr Equation PDF
+
+- Status: completed.
+- Goal: produce a PDF version of the color-coded PhotErr equation explainer
+  from the generated LaTeX equations.
+- Scope: keep the output next to the existing report artifacts under
+  `outputs/reports/photerr_error_model_explainer/`; if a system LaTeX engine
+  is unavailable, generate an equivalent PDF rendering and keep a standalone
+  `.tex` wrapper for later compilation.
+- Completed: extended `scripts/generate_photerr_error_model_explainer.py` to
+  write `photerr_error_model_equations.pdf` and
+  `photerr_error_model_equations_standalone.tex`.
+- Note: no local `pdflatex`, `latexmk`, `xelatex`, `lualatex`, `tectonic`, or
+  `typst` executable was available, so the PDF was rendered with Matplotlib's
+  math renderer while preserving the standalone TeX source for later native
+  compilation.
+- Validation completed: regenerated the report artifacts, checked the PDF
+  header/size, ran
+  `python -m compileall scripts/generate_photerr_error_model_explainer.py`, and
+  `git diff --check`.
+
+## 2026-06-25 PhotErr Error-Model Figure
+
+- Status: completed.
+- Goal: generate a compact, presentation-ready explanation of the active
+  Diffsky flux-error model, with a colored plot showing the depth/random,
+  PhotErr-style systematic, catalog, likelihood-floor, and total likelihood
+  uncertainty terms, plus LaTeX-ready equations.
+- Scope: keep this as a reproducible reporting artifact under
+  `outputs/reports/photerr_error_model_explainer/` and use the implemented
+  `m5_depth` formula instead of a hand-written approximation.
+- Completed: added `scripts/generate_photerr_error_model_explainer.py` and
+  generated PNG/PDF/SVG figure outputs plus LaTeX, Markdown, and JSON summary
+  files under `outputs/reports/photerr_error_model_explainer/`.
+- Validation completed: `python scripts/generate_photerr_error_model_explainer.py`,
+  `python -m compileall scripts/generate_photerr_error_model_explainer.py`, and
+  `git diff --check`.
+
+## 2026-06-25 Diffsky Error-Model Documentation
+
+- Status: completed.
+- Goal: make the Diffsky photometric error contract understandable enough to
+  interpret the worst100 MAP/MCLMC recovery plots, especially objects with huge
+  apparent error bars and misleading normalized-residual gains.
+- Scope: update the docs with the exact
+  ``m5_depth``/``photo_err``/PhotErr-style formula, how ``fluxerr_*`` feeds
+  ``sigma_eff`` in MAP, MCMC, and amortized diagnostics, and numerical examples
+  from the generated huge-error-bar diagnostics.
+- Completed: rewrote the Diffsky photometry contract documentation with the
+  deterministic ``m5_depth`` formula, depth/gamma defaults, PhotErr-style
+  ``sigma_sys_mag=0.005`` term, separate 2% likelihood floor, MAP/MCMC versus
+  amortized floor-reference difference, and the ``row_index=10355`` numerical
+  failure case.
+- Completed: regenerated the dashboard report so
+  `outputs/comparison/diffsky_reconstruction_debug/tables/worst100/worst100_huge_error_bar_explanation.md`
+  now includes the same formula chain and worked example.
+- Validation completed: `python scripts/build_diffsky_reconstruction_comparison.py`,
+  `python -m compileall euclid_dsps scripts`, and
+  `conda run -n shine python -m sphinx -b html docs/source docs/_build/html`.
+  The system Python lacks Sphinx, so the docs build was run in the repo's
+  `shine` environment.
+
+## 2026-06-25 Diffsky Prior-Debug Notebook
+
+- Status: implemented.
+- Goal: create a self-contained exploratory notebook for supervisor-facing
+  debugging of the learned-prior/amortized-encoder path against direct DSPS
+  MAP and small MCLMC probes.
+- Scope: the notebook should load the active Diffsky low-z parquet, inspect
+  photometry/truth/error distributions, load existing amortized checkpoints and
+  inference outputs when available, expose small local commands for rerunning
+  amortized inference, MAP-under-prior, and MCLMC on tiny rowsets, and plot
+  prior/posterior/input/output distributions from one place.
+- Runtime policy: default cells must be safe to run interactively on CPU by
+  reading existing outputs; DSPS decoding, MAP, and MCLMC reruns stay behind
+  explicit boolean switches or printed commands.
+- Completed: added
+  `notebooks/diffsky_prior_debug_playground.ipynb`. It sets all paths and
+  runtime toggles up front, loads the active Diffsky low-z parquet, builds a
+  tiny debug rowset, plots input photometry/error/SNR distributions, loads
+  existing amortized inference/MAP/dashboard outputs, overlays learned-prior,
+  posterior, MAP, and truth distributions where available, and includes live
+  encoder/prior inspection from a checkpoint.
+- Completed: added opt-in notebook cells that print or run tiny commands for
+  `amortized-infer-diffsky`, `diffsky-map-adam-prior`, direct DSPS `posterior
+  --sampler mclmc`, and small config variants for likelihood/prior ablations.
+- Validation completed: `python -m json.tool` on the notebook, compilation of
+  all notebook code cells, `python -m compileall euclid_dsps scripts`, a
+  minimal load smoke for config/parquet/rowset/photometry arrays, and
+  `git diff --check`.
+
 ## 2026-06-22 Diffsky Reconstruction Experiment Matrix
 
 - Status: implementation completed for the orchestration/tooling layer; science
@@ -171,6 +870,91 @@
     scripts/diffsky_reconstruction_baselines_h100.slurm`, and
     `python scripts/merge_mclmc_runs.py --help`. A real BlackJAX smoke must be
     run on Jean-Zay.
+- 2026-06-24 comparison-dashboard phase:
+  - Build `outputs/comparison/diffsky_reconstruction_debug` as the human-facing
+    comparison directory. The canonical reference is the full 20k no-KL
+    inference run
+    `outputs/runs/diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128_infer`;
+    the `worst_500`/`worst_100` rowsets are diagnostic slices derived from this
+    reference, not independent references.
+  - Keep original run directories intact and expose them through symlinks under
+    the comparison directory. Generate normalized residual tables, MAP/MCLMC
+    residual plots matching the NN diagnostics, corner-style parameter plots,
+    NN training/inference galleries, and a README/index documenting exactly
+    which source run each plot uses.
+  - Implemented `scripts/build_diffsky_reconstruction_comparison.py`, which
+    builds the dashboard idempotently from the local canonical run plus the
+    synced Jean-Zay outputs. It writes `manifest.json`, `README.md`,
+    `index.html`, normalized `reference_full`, `worst500`, and `worst100`
+    residual tables, symlinks to all compared runs, MAP/MCLMC residual and
+    corner plots, and NN training/inference galleries.
+  - Generated the dashboard locally at
+    `outputs/comparison/diffsky_reconstruction_debug`. The full-reference
+    summary is median `|residual|=1.338 sigma`; on the diagnostic `worst_100`,
+    the canonical NN has median `|residual|=9.434 sigma` while MAP reaches
+    `1.726 sigma` and MCLMC reaches `1.349 sigma`, supporting the conclusion
+    that DSPS can recover much of the photometry on NN failure cases.
+  - Corrected the diagnostic plots after inspection: all residual histograms
+    and boxplots now use `(flux_in - flux_out) / sigma_eff` with `-3`/`+3`
+    guides, MAP observed-vs-modeled plots have explicit flux axis labels,
+    MAP/MCLMC parameter corners and distributions overlay catalog truth where
+    available plus flat-prior bounds, NN inference PNGs are copied into the
+    dashboard so browser links render, and MAP/MCLMC include best/median/worst
+    photometric SED-point plots. The README/index now explain input-noise
+    training, full-reference versus worst-slice semantics, and pooled MCLMC
+    samples versus posterior medians.
+  - Refocused the comparison dashboard on the photometric recoverability
+    question: for the exact same worst-slice row indices, generate paired
+    baseline-vs-method tables and plots at object level and `(object, band)`
+    level. Positive paired-improvement values mean the tested method has lower
+    absolute photometric error than the canonical NN baseline. The `worst_100`
+    comparison now also includes the larger `map_1000_iter400` run filtered to
+    those same 100 objects.
+- 2026-06-25 visual diagnostic follow-up:
+  - Goal: make the worst-slice recoverability argument more explicit by showing
+    where the selected `worst_100` objects sit inside the full 20k NN baseline
+    error distribution, where those same objects land after DSPS MAP fitting,
+    and several per-object photometric SED examples for baseline NN, MAP, and
+    MCLMC rather than only best/median/worst examples.
+  - Implemented in `scripts/build_diffsky_reconstruction_comparison.py`.
+    Regenerated `outputs/comparison/diffsky_reconstruction_debug` with
+    `plots/worst100_dsps_recovery/worst100_location_in_full_nn_and_map.png`,
+    which overlays the selected `worst_100` and the same objects after MAP on
+    the full 20k NN baseline object/band error distributions.
+  - Added
+    `plots/worst100_dsps_recovery/sed_examples_baseline_map_mclmc_grid.png`,
+    a multi-example SED grid with NN baseline, DSPS MAP, and DSPS MCLMC columns.
+    Rows are chosen from the same `worst_100` by MAP recovery outcome: large
+    MAP gains, typical MAP gains, and cases still hard after MAP. The catalog
+    flux is plotted as the reconstruction target/truth because no separate
+    noiseless truth-flux column exists in the processed Diffsky parquet.
+  - Validation completed: `python scripts/build_diffsky_reconstruction_comparison.py`
+    and `python -m compileall euclid_dsps scripts`.
+- 2026-06-25 error-bar clarification follow-up:
+  - Goal: simplify
+    `plots/worst100_dsps_recovery/worst100_location_in_full_nn_and_map.png`
+    because the overlaid histogram view is hard to parse, and investigate the
+    apparent "huge MAP gain" SED examples whose catalog error bars are so large
+    that the object is not scientifically recovered despite a small normalized
+    residual.
+  - Implemented a simpler location plot: the left panel is now a strip plot of
+    full-reference NN objects, the selected `worst_100` in NN space, and the
+    same objects after MAP; the right panel is a direct same-object NN-vs-MAP
+    scatter with huge `obs_err/abs(obs_flux)` cases circled and labeled.
+  - Added `plots/worst100_dsps_recovery/huge_error_bar_diagnostics.png`,
+    `tables/worst100/worst100_huge_error_bar_band_diagnostics.{csv,parquet}`,
+    `tables/worst100/worst100_huge_error_bar_object_diagnostics.{csv,parquet}`,
+    and `tables/worst100/worst100_huge_error_bar_explanation.md`.
+  - Main finding: the worst apparent gains are near-zero-flux catalog rows with
+    finite synthetic depth errors from the `m5_depth` `fluxerr_*` model. Example:
+    row `10355`, `lsst_u`, has `F_obs=2.106595e-41`, `fluxerr=2.535871e-31`,
+    `fluxerr/abs(F_obs)=1.203777e10`; MAP has normalized residual
+    `0.000146` but `abs(F_obs-F_map)/abs(F_obs)=1.762682e6`.
+  - Updated the SED grid labels so the first group is explicitly
+    `huge-error gain`, followed by `credible MAP gain` and `still hard after
+    MAP`.
+  - Validation completed: `python scripts/build_diffsky_reconstruction_comparison.py`
+    and `python -m compileall euclid_dsps scripts`.
 
 ## 2026-06-22 PhotErr Error-Model Slides
 

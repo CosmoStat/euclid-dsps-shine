@@ -1,4 +1,4 @@
-catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
 ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
 runtime: gpu
@@ -25,8 +25,20 @@ redshift:
 truth:
     redshift_column: redshift_true
     parameter_columns:
-        log10_stellar_mass: {column: logsm_true, kind: truth}
-        log10_sfr_at_obs: {column: logsfr_true, kind: truth}
+        z_obs: {column: z_obs, kind: direct_truth}
+        log10_stellar_mass: {column: log10_stellar_mass, kind: direct_truth}
+        log10_sfr_at_obs: {column: log10_sfr_at_obs, kind: direct_truth}
+        log10_ssfr_at_obs: {column: log10_ssfr_at_obs, kind: direct_truth}
+        dlog10_sfr_1: {column: dlog10_sfr_1, kind: projected_generated_truth}
+        dlog10_sfr_2: {column: dlog10_sfr_2, kind: projected_generated_truth}
+        dlog10_sfr_3: {column: dlog10_sfr_3, kind: projected_generated_truth}
+        dlog10_sfr_4: {column: dlog10_sfr_4, kind: projected_generated_truth}
+        dlog10_sfr_5: {column: dlog10_sfr_5, kind: projected_generated_truth}
+        dlog10_sfr_6: {column: dlog10_sfr_6, kind: projected_generated_truth}
+        tau2: {column: tau2, kind: projected_generated_truth}
+        dust_index_n: {column: dust_index_n, kind: projected_generated_truth}
+        log10_stellar_metallicity: {column: log10_stellar_metallicity, kind: missing}
+        tau1_over_tau2: {column: tau1_over_tau2, kind: missing}
 
 extra_columns:
     - object_id
@@ -127,8 +139,8 @@ sample:
     priors: {}
 
 reporting:
-    level: light
-    save_sed_samples: 0
+    level: full
+    save_sed_samples: 10
     plot_filters: false
     plot_ground_truth: false
 

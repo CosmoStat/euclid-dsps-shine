@@ -24,18 +24,18 @@ Diffsky HLTDS Readiness
 -----------------------
 
 Use the current continuous low-z parquet with materialized synthetic flux
-errors:
+errors and DSPS projected truth:
 
 .. code-block:: text
 
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
 
 Run:
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli diffsky-validate-dataset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --manifest Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml \
      --out outputs/reports/diffsky_hltds_04_14/prior_learning_validation_report.md
 

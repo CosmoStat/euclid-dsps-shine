@@ -1,13 +1,17 @@
 extends: diffsky_hltds_04_14_simple_gpu.yaml
 
 diffsky_dataset:
-    name: hltds_cosmos_260215_04_14_2026_continuous_lowz
+    name: hltds_cosmos_260215_04_14_2026_continuous_lowz_projected_truth
     raw_root: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026
     source_processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet
-    processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+    fluxerr_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+    processed_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
     manifest_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.manifest.yaml
     schema_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.schema.json
     truth_report_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.truth_report.md
+    projected_truth_metadata_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.projected_truth_metadata.csv
+    projected_truth_summary_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.summary.json
+    trainval20k_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth_nokl_trainval20k.parquet
     integrity_report_path: Data/diffsky/processed/diffsky_dataset_integrity_report.md
     no_synthetic_errors: false
     redshift_subset:

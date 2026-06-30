@@ -253,7 +253,11 @@ def run_map_adam_under_prior(
         "dataset_label": dataset_label,
     }
     write_json(out / "map_summary.json", summary)
-    _write_map_closure_metrics(out, estimates)
+    try:
+        _write_map_closure_metrics(out, estimates)
+    except Exception as exc:
+        summary["map_closure_warning"] = str(exc)
+        write_json(out / "map_summary.json", summary)
     try:
         extended_outputs = write_extended_truth_diagnostics(out)
     except Exception as exc:
@@ -836,15 +840,28 @@ def _write_map_closure_metrics(out: Path, estimates: pd.DataFrame) -> None:
         return
     truth = pd.read_parquet(truth_path)
     if "row_index" in estimates and "row_index" in truth:
-        merged = estimates.merge(truth, on="row_index", how="inner")
+        merged = estimates.merge(
+            truth,
+            on="row_index",
+            how="inner",
+            suffixes=("_map", "_truth"),
+        )
     elif "object_id" in estimates and "object_id" in truth:
-        merged = estimates.merge(truth, on="object_id", how="inner")
+        merged = estimates.merge(
+            truth,
+            on="object_id",
+            how="inner",
+            suffixes=("_map", "_truth"),
+        )
     else:
         return
     if merged.empty or "redshift_true" not in merged:
         return
+    map_z_column = "z_obs_map" if "z_obs_map" in merged else "z_obs"
+    if map_z_column not in merged:
+        return
     dz = (
-        merged["z_obs"].to_numpy(dtype=float)
+        merged[map_z_column].to_numpy(dtype=float)
         - merged["redshift_true"].to_numpy(dtype=float)
     ) / (1.0 + merged["redshift_true"].to_numpy(dtype=float))
     finite = dz[np.isfinite(dz)]
@@ -864,12 +881,16 @@ def _write_map_closure_metrics(out: Path, estimates: pd.DataFrame) -> None:
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.scatter(
         merged["redshift_true"].to_numpy(dtype=float),
-        merged["z_obs"].to_numpy(dtype=float),
+        merged[map_z_column].to_numpy(dtype=float),
         s=10,
         alpha=0.55,
     )
-    lo = float(np.nanmin([merged["redshift_true"].min(), merged["z_obs"].min()]))
-    hi = float(np.nanmax([merged["redshift_true"].max(), merged["z_obs"].max()]))
+    lo = float(
+        np.nanmin([merged["redshift_true"].min(), merged[map_z_column].min()])
+    )
+    hi = float(
+        np.nanmax([merged["redshift_true"].max(), merged[map_z_column].max()])
+    )
     ax.plot([lo, hi], [lo, hi], color="black", lw=1.0, alpha=0.6)
     ax.set_xlabel("true redshift")
     ax.set_ylabel("MAP z_obs")

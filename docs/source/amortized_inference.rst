@@ -525,7 +525,7 @@ For Diffsky HLTDS, run the explicit truth/prior overlap report after inference:
      --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
      amortized-prior-overlap-diffsky \
      --run outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
+     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
      --out outputs/runs/amortized_diffsky_hltds_joint_realnvp_n10000_infer/prior_overlap \
      --max-objects 10000
 

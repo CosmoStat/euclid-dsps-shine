@@ -12,7 +12,7 @@ calibration:
         enabled: false
 
 prior_learning:
-    dataset: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet
+    dataset: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
     schema: diffsky_truth_basic
     missing_policy: reduce
     bounds:
