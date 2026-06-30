@@ -1,5 +1,24 @@
 # Plan
 
+## 2026-06-30 Improve Full-Latent Corner Readability
+
+- Status: completed.
+- Goal: make the full latent NN corner visually comparable to the MCLMC corner,
+  with readable truth/posterior/prior overlays and truth present for every
+  defensible parameter.
+- Scope: amortized inference plotting diagnostics only.
+- Planned: switch the full-overlay corner to the config free-parameter order.
+- Planned: use higher-contrast colors and filled posterior density behind
+  stronger truth/prior contours.
+- Planned: enrich truth lookup from the selected catalog rows when the
+  `inference_truth.parquet` snapshot misses available columns.
+- Completed: full overlay now uses config free-parameter order and a
+  higher-contrast posterior/truth/prior style.
+- Completed: truth lookup combines `inference_truth.parquet` with selected
+  catalog rows by `row_index`.
+- Completed: added `corner_full_latent_truth_prior_posterior_columns.csv` so
+  missing truth dimensions are explicit.
+
 ## 2026-06-30 Add Full-Latent Truth/Prior/Posterior Corner
 
 - Status: completed.

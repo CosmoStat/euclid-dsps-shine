@@ -9,6 +9,10 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.amortized.catalog_identity import (
+    available_columns,
+    truth_columns_from_config,
+)
 from euclid_dsps.io import (
     iter_catalog_batches,
     truth_column_from_spec,
@@ -792,7 +796,7 @@ def _write_full_latent_truth_prior_posterior_corner(
     )
     if posterior.empty:
         return None
-    truth = _truth_parameter_frame(out, config=config)
+    truth = _truth_parameter_frame(summary, out, config=config)
     prior = _read_learned_prior(out)
     return _write_multi_overlay_corner_plot(
         posterior,
@@ -853,14 +857,17 @@ def _posterior_median_parameter_frame(
 
 
 def _truth_parameter_frame(
+    summary: pd.DataFrame,
     out: Path,
     *,
     config: dict[str, Any] | None,
 ) -> pd.DataFrame:
     truth_path = out / "inference_truth.parquet"
-    if config is None or not truth_path.exists():
+    if config is None:
         return pd.DataFrame()
-    truth = pd.read_parquet(truth_path)
+    truth = pd.read_parquet(truth_path) if truth_path.exists() else pd.DataFrame()
+    catalog_truth = _catalog_truth_frame(summary, config=config)
+    truth = _combine_truth_frames(truth, catalog_truth)
     if truth.empty:
         return pd.DataFrame()
     truth_specs = dict((config.get("truth", {}) or {}).get("parameter_columns") or {})
@@ -878,6 +885,90 @@ def _truth_parameter_frame(
     if len(columns) < 2:
         return pd.DataFrame()
     return pd.DataFrame(columns)
+
+
+def _catalog_truth_frame(
+    summary: pd.DataFrame,
+    *,
+    config: dict[str, Any],
+) -> pd.DataFrame:
+    if summary.empty or "row_index" not in summary:
+        return pd.DataFrame()
+    catalog_path = config.get("catalog_path")
+    if not catalog_path:
+        return pd.DataFrame()
+    path = Path(str(catalog_path))
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        available = available_columns(path)
+    except Exception:
+        return pd.DataFrame()
+    names = _configured_free_parameters(config)
+    fallback_columns = [
+        column
+        for name in names
+        for column in _truth_fallback_columns(name)
+    ]
+    requested_columns = []
+    for column in [*truth_columns_from_config(config), *fallback_columns]:
+        if column in available:
+            requested_columns.append(column)
+        elif column == "log10_metallicity_true" and "metallicity_true" in available:
+            requested_columns.append(column)
+    requested_columns = sorted(set(requested_columns))
+    if not requested_columns:
+        return pd.DataFrame()
+    row_indices = (
+        pd.to_numeric(summary["row_index"], errors="coerce")
+        .dropna()
+        .astype(np.int64)
+        .drop_duplicates()
+        .to_numpy()
+    )
+    if row_indices.size == 0:
+        return pd.DataFrame()
+    frames = []
+    for batch in iter_catalog_batches(
+        path,
+        columns=requested_columns,
+        batch_size=10_000,
+        row_indices=set(row_indices.tolist()),
+    ):
+        frames.append(batch.reset_index(names="row_index"))
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)
+
+
+def _combine_truth_frames(
+    primary: pd.DataFrame,
+    fallback: pd.DataFrame,
+) -> pd.DataFrame:
+    if primary.empty:
+        return fallback
+    if fallback.empty:
+        return primary
+    if "row_index" not in primary or "row_index" not in fallback:
+        return primary
+    merged = primary.merge(
+        fallback,
+        on="row_index",
+        how="outer",
+        suffixes=("", "__catalog"),
+    )
+    for column in list(merged.columns):
+        if not column.endswith("__catalog"):
+            continue
+        base = column[: -len("__catalog")]
+        if base in merged:
+            merged[base] = merged[base].combine_first(merged[column])
+            merged = merged.drop(columns=[column])
+        else:
+            merged = merged.rename(columns={column: base})
+    return merged
 
 
 def _truth_parameter_series(
@@ -1649,9 +1740,12 @@ def _write_multi_overlay_corner_plot(
             "key": "posterior",
             "label": posterior_label,
             "frame": _finite_sample_partial(posterior, columns, max_rows=4_000),
-            "color": "#2a9fd6",
+            "color": "#0072b2",
             "linestyle": "-",
-            "linewidth": 0.95,
+            "linewidth": 1.15,
+            "fill_alpha": 0.16,
+            "contour_alpha": 0.95,
+            "points": False,
         },
     ]
     if truth is not None and not truth.empty:
@@ -1660,9 +1754,12 @@ def _write_multi_overlay_corner_plot(
                 "key": "truth",
                 "label": "truth / projected truth",
                 "frame": _finite_sample_partial(truth, columns, max_rows=4_000),
-                "color": "#f58518",
+                "color": "#d55e00",
                 "linestyle": "--",
-                "linewidth": 1.15,
+                "linewidth": 1.45,
+                "fill_alpha": 0.0,
+                "contour_alpha": 0.98,
+                "points": True,
             }
         )
     if prior is not None and not prior.empty:
@@ -1671,9 +1768,12 @@ def _write_multi_overlay_corner_plot(
                 "key": "prior",
                 "label": "learned prior",
                 "frame": _finite_sample_partial(prior, columns, max_rows=4_000),
-                "color": "#3a7d44",
+                "color": "#111827",
                 "linestyle": ":",
-                "linewidth": 1.05,
+                "linewidth": 1.25,
+                "fill_alpha": 0.0,
+                "contour_alpha": 0.88,
+                "points": False,
             }
         )
     frames = [item for item in frames if not item["frame"].empty]
@@ -1712,6 +1812,7 @@ def _write_multi_overlay_corner_plot(
                         label=item["label"],
                         linestyle=item["linestyle"],
                         linewidth=item["linewidth"],
+                        fill_alpha=item["fill_alpha"],
                     )
                 posterior_frame = frames[0]["frame"]
                 if x_col in posterior_frame:
@@ -1740,7 +1841,18 @@ def _write_multi_overlay_corner_plot(
                         color=item["color"],
                         linewidth=item["linewidth"],
                         linestyle=item["linestyle"],
+                        fill_alpha=item["fill_alpha"],
+                        alpha=item["contour_alpha"],
                     )
+                    if item["points"]:
+                        _plot_2d_points(
+                            ax,
+                            frame[x_col].to_numpy(dtype=float),
+                            frame[y_col].to_numpy(dtype=float),
+                            ranges[x_col],
+                            ranges[y_col],
+                            color=item["color"],
+                        )
                 ax.set_ylim(*ranges[y_col])
             else:
                 ax.axis("off")
@@ -1775,7 +1887,36 @@ def _write_multi_overlay_corner_plot(
     path = out / filename
     fig.savefig(path, dpi=150, bbox_inches="tight")
     plt.close(fig)
+    _write_multi_overlay_corner_metadata(out, filename, columns, frames)
     return path
+
+
+def _write_multi_overlay_corner_metadata(
+    out: Path,
+    filename: str,
+    columns: list[str],
+    frames: list[dict[str, Any]],
+) -> None:
+    rows = []
+    for column in columns:
+        row: dict[str, Any] = {"parameter": column}
+        for item in frames:
+            key = str(item["key"])
+            frame = item["frame"]
+            if column not in frame:
+                row[f"{key}_finite_rows"] = 0
+                row[f"{key}_available"] = False
+                continue
+            values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+            finite = np.isfinite(values)
+            row[f"{key}_finite_rows"] = int(finite.sum())
+            row[f"{key}_available"] = bool(finite.any())
+        rows.append(row)
+    if not rows:
+        return
+    suffix = ".png"
+    stem = filename[: -len(suffix)] if filename.endswith(suffix) else filename
+    pd.DataFrame(rows).to_csv(out / f"{stem}_columns.csv", index=False)
 
 
 def _corner_columns_for_config(
@@ -1783,6 +1924,9 @@ def _corner_columns_for_config(
     config: dict[str, Any] | None,
 ) -> list[str]:
     configured = _configured_free_parameters(config)
+    configured_order = [column for column in configured if column in frame]
+    if len(configured_order) >= 2:
+        return configured_order
     ordered = [
         column
         for column in _CORNER_PARAMETER_ORDER
@@ -2265,21 +2409,33 @@ def _plot_1d_hist(
     label: str,
     linestyle: str = "-",
     linewidth: float = 1.0,
+    fill_alpha: float = 0.0,
 ) -> None:
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
     if values.size == 0:
         return
+    hist_kwargs = {
+        "bins": 36,
+        "range": value_range,
+        "density": True,
+        "color": color,
+        "label": label,
+    }
+    if fill_alpha > 0.0:
+        ax.hist(
+            values,
+            histtype="stepfilled",
+            alpha=fill_alpha,
+            **hist_kwargs,
+        )
     ax.hist(
         values,
-        bins=36,
-        range=value_range,
-        density=True,
         histtype="step",
-        color=color,
         lw=linewidth,
         ls=linestyle,
-        label=label,
+        alpha=0.95,
+        **hist_kwargs,
     )
 
 
@@ -2293,6 +2449,8 @@ def _plot_2d_contours(
     color: str,
     linewidth: float,
     linestyle: str = "-",
+    fill_alpha: float = 0.0,
+    alpha: float = 1.0,
 ) -> None:
     x_values = np.asarray(x_values, dtype=float)
     y_values = np.asarray(y_values, dtype=float)
@@ -2312,6 +2470,17 @@ def _plot_2d_contours(
         return
     x_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
     y_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+    if fill_alpha > 0.0:
+        fill_levels = [levels[0], float(np.nanmax(hist))]
+        if fill_levels[0] < fill_levels[1]:
+            ax.contourf(
+                x_centers,
+                y_centers,
+                hist.T,
+                levels=fill_levels,
+                colors=[color],
+                alpha=fill_alpha,
+            )
     ax.contour(
         x_centers,
         y_centers,
@@ -2320,6 +2489,47 @@ def _plot_2d_contours(
         colors=color,
         linewidths=linewidth,
         linestyles=linestyle,
+        alpha=alpha,
+    )
+
+
+def _plot_2d_points(
+    ax,
+    x_values,
+    y_values,
+    x_range,
+    y_range,
+    *,
+    color: str,
+) -> None:
+    x_values = np.asarray(x_values, dtype=float)
+    y_values = np.asarray(y_values, dtype=float)
+    finite = (
+        np.isfinite(x_values)
+        & np.isfinite(y_values)
+        & (x_values >= x_range[0])
+        & (x_values <= x_range[1])
+        & (y_values >= y_range[0])
+        & (y_values <= y_range[1])
+    )
+    if finite.sum() == 0:
+        return
+    x = x_values[finite]
+    y = y_values[finite]
+    if x.size > 900:
+        rng = np.random.default_rng(0)
+        choice = rng.choice(x.size, size=900, replace=False)
+        x = x[choice]
+        y = y[choice]
+    ax.scatter(
+        x,
+        y,
+        s=3.0,
+        marker=".",
+        color=color,
+        alpha=0.18,
+        linewidths=0,
+        zorder=5,
     )
 
 
