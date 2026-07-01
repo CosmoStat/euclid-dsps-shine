@@ -1,5 +1,38 @@
 # Plan
 
+## 2026-07-01 Robust Diffsky Population-Prior Learning
+
+- Status: in progress.
+- Goal: implement the five-phase debug and prior-learning plan for Diffsky
+  population-level priors: unbiased latent geometry, projected-truth closure
+  checks, redshift likelihood profiles, MAP sweeps under learned priors, and a
+  post-hoc RealNVP prior learned from MAP/MCLMC rather than from a collapsing
+  amortized encoder.
+- Scope: amortized latent geometry, closure diagnostics, MAP/prior-learning
+  workflow glue, Jean Zay SLURM launchers, and documentation/runbook updates.
+- Phase 1 completed: decoupled encoder initialization from the latent coordinate
+  center/scale, add safer low-z configs, and write latent-prior geometry
+  diagnostics before large runs.
+- Phase 2 completed: compare projected truth, NN posterior median, and
+  flat-prior MAP in the same DSPS likelihood; truth-start MAP remains a
+  heavier optional extension.
+- Phase 3 completed: write fixed-nuisance redshift likelihood profiles; full
+  profiled-redshift optimization remains a heavier follow-up mode.
+- Phase 4 completed: run a minimal MAP sweep under the current learned prior on
+  the same normal `balanced20k` rowset only.
+- Phase 5 completed: train the first robust RealNVP population prior post-hoc
+  from flat/weak-prior MAP or MCLMC samples, then use the NN only as a
+  distillation/proposal layer.
+- Completed: added H100 launchers for the phase 1-4 diagnostic array, MCLMC
+  calibration shards, and post-hoc inferred-prior training.
+- Completed: added a Sphinx runbook explaining the order of the
+  phases, expected artifacts, Jean Zay array commands, and scientific decision
+  criteria.
+- Validation completed: targeted `ruff check`, `compileall`, `bash -n` on new
+  SLURM files, CLI help, CPU latent-geometry smoke, CPU closure smoke without
+  MAP on two galaxies, and CPU inferred-prior smoke in the local conda `shine`
+  environment.
+
 ## 2026-06-30 Canonical Projected Truth Dataset
 
 - Status: completed.

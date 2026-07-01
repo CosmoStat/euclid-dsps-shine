@@ -5,6 +5,8 @@ import numpy as np
 
 from euclid_dsps.amortized.latent import (
     initial_theta_from_config,
+    latent_center_theta_from_config,
+    latent_prior_geometry_frame,
     latent_spec_from_config,
     theta_to_x,
     x_to_theta,
@@ -93,6 +95,42 @@ def test_initial_theta_uses_config_initial_with_midpoint_fallback() -> None:
     fallback_by_name = dict(zip(spec.names, fallback_theta, strict=True))
 
     assert fallback_by_name["tau2"] == 2.0
+
+
+def test_latent_center_can_be_decoupled_from_encoder_initialization() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+    config["amortized"]["latent"]["center_source"] = "midpoint"
+    config["amortized"]["latent"]["centers"] = {"tau2": 1.0}
+    spec = latent_spec_from_config(config)
+
+    init_theta = initial_theta_from_config(
+        config,
+        spec.names,
+        np.asarray(spec.lower),
+        np.asarray(spec.upper),
+    )
+    center_theta = latent_center_theta_from_config(
+        config,
+        spec.names,
+        np.asarray(spec.lower),
+        np.asarray(spec.upper),
+    )
+    by_name_init = dict(zip(spec.names, init_theta, strict=True))
+    by_name_center = dict(zip(spec.names, center_theta, strict=True))
+
+    assert by_name_init["z_obs"] == 0.25
+    np.testing.assert_allclose(by_name_center["z_obs"], 0.5 * (0.001 + 0.35))
+    assert by_name_center["tau2"] == 1.0
+
+
+def test_latent_prior_geometry_reports_near_bound_mass() -> None:
+    config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+    frame, payload = latent_prior_geometry_frame(config, n_samples=512, seed=1)
+
+    assert set(frame["parameter"]) == set(config["fit"]["free_parameters"])
+    assert payload["normalization"] == "standardized_logit"
+    assert "z_obs" in set(frame["parameter"])
+    assert "frac_within_either_5pct" in frame
 
 
 def test_diffsky_supervised_prior_config_matches_truth_basic_schema() -> None:

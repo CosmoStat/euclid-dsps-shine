@@ -1,0 +1,25 @@
+extends: diffsky_hltds_joint_realnvp_kl_annealed_h100.yaml
+
+experiment:
+    name: diffsky_hltds_joint_realnvp_kl_annealed_zscale005_tau2safe_h100
+    description: Annealed-KL Diffsky run with safer latent redshift and tau2 reference geometry.
+
+amortized:
+    latent:
+        center_source: midpoint
+        geometry_samples: 200000
+        centers:
+            tau2: 1.0
+        physical_scales:
+            z_obs: 0.05
+            log10_stellar_mass: 0.50
+            dlog10_sfr_1: 0.50
+            dlog10_sfr_2: 0.50
+            dlog10_sfr_3: 0.50
+            dlog10_sfr_4: 0.50
+            dlog10_sfr_5: 0.50
+            dlog10_sfr_6: 0.50
+            log10_stellar_metallicity: 0.35
+            tau2: 0.20
+            dust_index_n: 0.30
+            tau1_over_tau2: 0.35

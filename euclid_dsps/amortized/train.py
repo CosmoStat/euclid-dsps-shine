@@ -64,6 +64,7 @@ from .latent import (
     latent_spec_from_config,
     latent_spec_to_jsonable,
     theta_to_x,
+    write_latent_prior_geometry,
 )
 from .likelihood import photometric_loglike, photometric_normalized_residual
 
@@ -513,6 +514,13 @@ def train_amortized_fs2(
     )
     initial_theta_diagnostics = _initial_theta_diagnostics_payload(config, latent_spec)
     write_json(out / "initial_theta_diagnostics.json", initial_theta_diagnostics)
+    geometry_cfg = dict((config.get("amortized", {}) or {}).get("latent", {}) or {})
+    latent_geometry = write_latent_prior_geometry(
+        config,
+        out,
+        n_samples=int(geometry_cfg.get("geometry_samples", 200_000)),
+        seed=int(geometry_cfg.get("geometry_seed", seed)),
+    )
     if initial_theta_diagnostics["warnings"]:
         _log(
             verbose,
@@ -520,6 +528,13 @@ def train_amortized_fs2(
             f"{len(initial_theta_diagnostics['warnings'])} parameters within "
             f"{initial_theta_diagnostics['boundary_warning_fraction']:.3g} "
             "of a bound",
+        )
+    if latent_geometry.get("parameters_near_bounds_5pct"):
+        _log(
+            verbose,
+            "[amortized] latent prior geometry warning: "
+            "x~N(0,1) puts >5% mass near bounds for "
+            + ", ".join(latent_geometry["parameters_near_bounds_5pct"]),
         )
     key = jax.random.PRNGKey(int(seed))
     key, model_key = jax.random.split(key)
@@ -953,6 +968,17 @@ def train_amortized_fs2(
             "n_near_boundary": int(initial_theta_diagnostics["n_near_boundary"]),
             "boundary_warning_fraction": float(
                 initial_theta_diagnostics["boundary_warning_fraction"]
+            ),
+        },
+        "latent_prior_geometry": {
+            "path": "latent_prior_geometry.json",
+            "csv": "latent_prior_geometry.csv",
+            "plot": latent_geometry.get("plot"),
+            "max_frac_within_either_5pct": float(
+                latent_geometry.get("max_frac_within_either_5pct", np.nan)
+            ),
+            "parameters_near_bounds_5pct": list(
+                latent_geometry.get("parameters_near_bounds_5pct", [])
             ),
         },
         "updates_applied": int(

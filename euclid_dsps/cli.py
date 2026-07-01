@@ -27,8 +27,12 @@ def build_parser() -> argparse.ArgumentParser:
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
             "amortized-train-diffsky,amortized-infer-diffsky,"
             "amortized-finalize-inference,diffsky-map-adam-prior,"
+            "diffsky-latent-prior-geometry,"
+            "diffsky-closure-optimum-diagnostics,"
+            "diffsky-map-prior-sweep,"
             "amortized-prior-overlap-diffsky,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
+            "diffsky-train-inferred-prior,"
             "diffsky-supervised-prior-report,"
             "diffsky-forward-closure,diffsky-popcosmos-proxy-closure,"
             "diffsky-redshift-ablation,diffsky-dust-ssp-audit,"
@@ -373,6 +377,99 @@ def build_parser() -> argparse.ArgumentParser:
     map_prior.add_argument("--selection-seed", type=int)
     map_prior.add_argument("--quiet", action="store_true")
 
+    latent_geometry = sub.add_parser(
+        "diffsky-latent-prior-geometry",
+        help="Write diagnostics for the physical prior induced by x~N(0,1).",
+    )
+    latent_geometry.add_argument(
+        "--out",
+        default="outputs/reports/diffsky_latent_prior_geometry",
+    )
+    latent_geometry.add_argument("--n-samples", type=int, default=200_000)
+    latent_geometry.add_argument("--seed", type=int, default=42)
+
+    closure_optimum = sub.add_parser(
+        "diffsky-closure-optimum-diagnostics",
+        help="Compare projected truth, NN median, and flat MAP in the DSPS likelihood.",
+    )
+    closure_optimum.add_argument(
+        "--out",
+        default="outputs/runs/diffsky_closure_optimum_diagnostics",
+    )
+    closure_optimum.add_argument("--checkpoint", required=True)
+    closure_optimum.add_argument("--feature-stats")
+    closure_optimum.add_argument("--nn-run")
+    closure_optimum.add_argument("--row-indices-file")
+    closure_optimum.add_argument("--limit", type=int)
+    closure_optimum.add_argument("--batch-size", type=int, default=128)
+    closure_optimum.add_argument("--map-n-starts", type=int, default=8)
+    closure_optimum.add_argument("--map-maxiter", type=int, default=160)
+    closure_optimum.add_argument("--map-learning-rate", type=float, default=0.015)
+    closure_optimum.add_argument(
+        "--map-start-mode",
+        choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
+        default="mixed",
+    )
+    closure_optimum.add_argument("--map-start-chunk-size", type=int, default=1)
+    closure_optimum.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+    )
+    closure_optimum.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+    )
+    closure_optimum.add_argument("--selection-seed", type=int)
+    closure_optimum.add_argument("--redshift-profile-count", type=int, default=24)
+    closure_optimum.add_argument("--redshift-grid-size", type=int, default=96)
+    closure_optimum.add_argument(
+        "--redshift-profile-source",
+        choices=["truth_projected", "nn_median", "map_flat"],
+        default="truth_projected",
+    )
+    closure_optimum.add_argument(
+        "--skip-map",
+        action="store_true",
+        help="Only evaluate truth/NN tables; do not run the flat-prior MAP stage.",
+    )
+    closure_optimum.add_argument("--quiet", action="store_true")
+
+    map_sweep = sub.add_parser(
+        "diffsky-map-prior-sweep",
+        help="Run a compact MAP sweep over learned-prior weights.",
+    )
+    map_sweep.add_argument("--out", default="outputs/runs/diffsky_map_prior_sweep")
+    map_sweep.add_argument("--checkpoint", required=True)
+    map_sweep.add_argument("--feature-stats")
+    map_sweep.add_argument(
+        "--weights",
+        default="0,0.03,0.1,0.3,1.0",
+        help="Comma-separated prior weights.",
+    )
+    map_sweep.add_argument("--row-indices-file")
+    map_sweep.add_argument("--limit", type=int)
+    map_sweep.add_argument("--batch-size", type=int, default=128)
+    map_sweep.add_argument("--n-starts", type=int, default=8)
+    map_sweep.add_argument("--maxiter", type=int, default=160)
+    map_sweep.add_argument("--learning-rate", type=float, default=0.015)
+    map_sweep.add_argument(
+        "--start-mode",
+        choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
+        default="mixed",
+    )
+    map_sweep.add_argument("--start-chunk-size", type=int, default=1)
+    map_sweep.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+    )
+    map_sweep.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+    )
+    map_sweep.add_argument("--selection-seed", type=int)
+    map_sweep.add_argument("--seed", type=int, default=42)
+    map_sweep.add_argument("--quiet", action="store_true")
+
     train_prior = sub.add_parser(
         "diffsky-train-supervised-prior",
         help="Train a supervised RealNVP prior directly on Diffsky truth parameters.",
@@ -393,6 +490,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_prior.add_argument("--quiet", action="store_true")
     train_prior.add_argument("--no-progress", action="store_true")
+
+    train_inferred_prior = sub.add_parser(
+        "diffsky-train-inferred-prior",
+        help="Train a RealNVP prior from MAP or MCLMC inferred theta samples.",
+    )
+    train_inferred_prior.add_argument(
+        "--input",
+        action="append",
+        required=True,
+        help="MAP/MCLMC parquet or CSV containing configured parameter columns.",
+    )
+    train_inferred_prior.add_argument(
+        "--out",
+        default="outputs/runs/diffsky_inferred_prior",
+    )
+    train_inferred_prior.add_argument("--limit", type=int)
+    train_inferred_prior.add_argument("--batch-size", type=int)
+    train_inferred_prior.add_argument("--epochs", type=int)
+    train_inferred_prior.add_argument("--seed", type=int)
+    train_inferred_prior.add_argument("--validation-fraction", type=float)
+    train_inferred_prior.add_argument("--quiet", action="store_true")
 
     sample_prior = sub.add_parser(
         "diffsky-sample-supervised-prior",
@@ -898,6 +1016,10 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-redshift-ablation",
         "diffsky-run-full-validation",
         "diffsky-map-adam-prior",
+        "diffsky-latent-prior-geometry",
+        "diffsky-closure-optimum-diagnostics",
+        "diffsky-map-prior-sweep",
+        "diffsky-train-inferred-prior",
         "diffsky-dust-ssp-audit",
         "diffsky-build-reconstruction-rowsets",
         "diffsky-compare-reconstruction",
@@ -961,11 +1083,23 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "diffsky-map-adam-prior":
         _run_diffsky_map_adam_prior(config, args)
         return
+    if args.command == "diffsky-latent-prior-geometry":
+        _run_diffsky_latent_prior_geometry(config, args)
+        return
+    if args.command == "diffsky-closure-optimum-diagnostics":
+        _run_diffsky_closure_optimum_diagnostics(config, args)
+        return
+    if args.command == "diffsky-map-prior-sweep":
+        _run_diffsky_map_prior_sweep(config, args)
+        return
     if args.command == "amortized-prior-overlap-diffsky":
         _run_amortized_prior_overlap_diffsky(config, args)
         return
     if args.command == "diffsky-train-supervised-prior":
         _run_diffsky_train_supervised_prior(config, args)
+        return
+    if args.command == "diffsky-train-inferred-prior":
+        _run_diffsky_train_inferred_prior(config, args)
         return
     if args.command == "diffsky-sample-supervised-prior":
         _run_diffsky_sample_supervised_prior(config, args)
@@ -1223,6 +1357,28 @@ def _run_diffsky_train_supervised_prior(config: dict, args) -> None:
         missing_policy=args.missing_policy,
         verbose=not bool(getattr(args, "quiet", False)),
         progress=not bool(getattr(args, "no_progress", False)),
+    )
+
+
+def _run_diffsky_train_inferred_prior(config: dict, args) -> None:
+    try:
+        from .prior_learning.inferred import train_inferred_prior
+        from .prior_learning.train import prior_learning_config
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    cfg = prior_learning_config(config)
+    training = cfg["training"]
+    train_inferred_prior(
+        config,
+        Path(args.out),
+        input_paths=tuple(Path(path) for path in args.input),
+        limit=args.limit,
+        batch_size=int(args.batch_size or training.get("batch_size", 256)),
+        epochs=int(args.epochs or training.get("epochs", 20)),
+        seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
+        validation_fraction=args.validation_fraction,
+        verbose=not bool(getattr(args, "quiet", False)),
     )
 
 
@@ -1576,6 +1732,83 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
     )
     print(f"[map-prior] summary -> {Path(args.out) / 'map_summary.json'}")
     print(f"[map-prior] objects -> {summary['n_objects']}")
+
+
+def _run_diffsky_latent_prior_geometry(config: dict, args) -> None:
+    from .amortized.latent import write_latent_prior_geometry
+
+    payload = write_latent_prior_geometry(
+        config,
+        Path(args.out),
+        n_samples=int(args.n_samples),
+        seed=int(args.seed),
+    )
+    print(f"[diffsky] latent prior geometry -> {Path(args.out)}")
+    print(
+        "[diffsky] max near-bound fraction -> "
+        f"{payload.get('max_frac_within_either_5pct')}"
+    )
+
+
+def _run_diffsky_closure_optimum_diagnostics(config: dict, args) -> None:
+    from .amortized.closure_optimum import run_closure_optimum_diagnostics
+
+    summary = run_closure_optimum_diagnostics(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
+        nn_run=Path(args.nn_run) if args.nn_run else None,
+        row_indices_file=Path(args.row_indices_file) if args.row_indices_file else None,
+        limit=args.limit,
+        batch_size=int(args.batch_size),
+        map_n_starts=int(args.map_n_starts),
+        map_maxiter=int(args.map_maxiter),
+        map_learning_rate=float(args.map_learning_rate),
+        map_start_mode=str(args.map_start_mode),
+        map_start_chunk_size=int(args.map_start_chunk_size),
+        selection_mode=getattr(args, "selection_mode", None),
+        stratified_strategy=getattr(args, "stratified_strategy", None),
+        selection_seed=getattr(args, "selection_seed", None),
+        redshift_profile_count=int(args.redshift_profile_count),
+        redshift_grid_size=int(args.redshift_grid_size),
+        redshift_profile_source=str(args.redshift_profile_source),
+        run_map=not bool(args.skip_map),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(f"[closure] summary -> {Path(args.out) / 'closure_optimum_summary.json'}")
+    print(f"[closure] objects -> {summary['n_objects']}")
+
+
+def _run_diffsky_map_prior_sweep(config: dict, args) -> None:
+    from .amortized.map_prior_sweep import run_map_prior_weight_sweep
+
+    weights = tuple(
+        float(item)
+        for item in str(args.weights).replace(";", ",").split(",")
+        if item.strip()
+    )
+    summary = run_map_prior_weight_sweep(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
+        weights=weights,
+        row_indices_file=Path(args.row_indices_file) if args.row_indices_file else None,
+        limit=args.limit,
+        batch_size=int(args.batch_size),
+        n_starts=int(args.n_starts),
+        maxiter=int(args.maxiter),
+        learning_rate=float(args.learning_rate),
+        start_mode=str(args.start_mode),
+        start_chunk_size=int(args.start_chunk_size),
+        selection_mode=getattr(args, "selection_mode", None),
+        stratified_strategy=getattr(args, "stratified_strategy", None),
+        selection_seed=getattr(args, "selection_seed", None),
+        seed=int(args.seed),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(f"[map-sweep] summary -> {Path(args.out) / summary['summary']}")
 
 
 def _run_amortized_prior_overlap_diffsky(config: dict, args) -> None:
