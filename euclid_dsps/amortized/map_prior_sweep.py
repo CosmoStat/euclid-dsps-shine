@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,7 @@ def run_map_prior_weight_sweep(
     learning_rate: float = 0.015,
     start_mode: str = "mixed",
     start_chunk_size: int = 1,
+    prior_density_space: str = "x",
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
@@ -55,6 +57,7 @@ def run_map_prior_weight_sweep(
             maxiter=int(maxiter),
             learning_rate=float(learning_rate),
             prior_weight=float(weight),
+            prior_density_space=str(prior_density_space),
             seed=int(seed),
             start_mode=str(start_mode),
             start_chunk_size=int(start_chunk_size),
@@ -81,6 +84,7 @@ def run_map_prior_weight_sweep(
         "checkpoint": str(checkpoint),
         "feature_stats_path": str(feature_stats_path) if feature_stats_path else None,
         "weights": [float(weight) for weight in weights],
+        "prior_density_space": str(prior_density_space),
         "limit": limit,
         "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "n_runs": int(len(run_dirs)),
@@ -91,9 +95,103 @@ def run_map_prior_weight_sweep(
     return payload
 
 
+def finalize_map_prior_weight_sweep(
+    out_dir: str | Path,
+    *,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Combine sharded MAP-prior sweep outputs into per-weight tables."""
+    out = ensure_dir(out_dir)
+    summary_rows = []
+    finalized = []
+    for weight_dir in sorted(out.glob("prior_weight_*")):
+        if not weight_dir.is_dir():
+            continue
+        shard_dirs = sorted(path for path in weight_dir.glob("shard_*") if path.is_dir())
+        if not shard_dirs:
+            continue
+        if verbose:
+            print(f"[map-sweep] finalizing {weight_dir}: {len(shard_dirs)} shards")
+        estimates = _concat_optional_tables(
+            shard / "map_estimates.parquet" for shard in shard_dirs
+        )
+        if estimates.empty:
+            continue
+        by_start = _concat_optional_tables(
+            shard / "map_estimates_by_start.parquet" for shard in shard_dirs
+        )
+        trace = _concat_optional_tables(
+            shard / "map_optimizer_trace.parquet" for shard in shard_dirs
+        )
+        truth = _concat_optional_tables(
+            shard / "inference_truth.parquet" for shard in shard_dirs
+        )
+        estimates.to_parquet(weight_dir / "map_estimates.parquet", index=False)
+        estimates.to_csv(weight_dir / "map_estimates.csv", index=False)
+        if not by_start.empty:
+            by_start.to_parquet(weight_dir / "map_estimates_by_start.parquet", index=False)
+            by_start.to_csv(weight_dir / "map_estimates_by_start.csv", index=False)
+        if not trace.empty:
+            trace.to_parquet(weight_dir / "map_optimizer_trace.parquet", index=False)
+        if not truth.empty:
+            truth = truth.drop_duplicates("row_index")
+            truth.to_parquet(weight_dir / "inference_truth.parquet", index=False)
+        weight = _weight_from_shards_or_label(weight_dir, shard_dirs)
+        summary_rows.append(
+            _summary_row(estimates, truth, weight=float(weight), run_dir=weight_dir)
+        )
+        finalized.append(
+            {
+                "run_dir": str(weight_dir),
+                "prior_weight": float(weight),
+                "n_shards": int(len(shard_dirs)),
+                "n_objects": int(len(estimates)),
+            }
+        )
+    summary = pd.DataFrame(summary_rows)
+    if not summary.empty:
+        summary = summary.sort_values("prior_weight").reset_index(drop=True)
+        summary.to_csv(out / "map_prior_weight_sweep_summary.csv", index=False)
+        _write_sweep_plots(out, summary)
+    payload = {
+        "out_dir": str(out),
+        "n_weight_runs": int(len(finalized)),
+        "finalized": finalized,
+        "summary": "map_prior_weight_sweep_summary.csv",
+    }
+    write_json(out / "map_prior_weight_sweep_summary.json", payload)
+    return payload
+
+
 def _weight_label(weight: float) -> str:
     text = f"{float(weight):.4g}".replace("-", "m").replace(".", "p")
     return f"prior_weight_{text}"
+
+
+def _concat_optional_tables(paths) -> pd.DataFrame:
+    frames = []
+    for path in paths:
+        path = Path(path)
+        if path.exists():
+            frames.append(pd.read_parquet(path))
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _weight_from_shards_or_label(weight_dir: Path, shard_dirs: list[Path]) -> float:
+    for shard in shard_dirs:
+        summary_path = shard / "map_summary.json"
+        if not summary_path.exists():
+            continue
+        try:
+            payload = json.loads(summary_path.read_text(encoding="utf-8"))
+            return float(payload["prior_weight"])
+        except (KeyError, ValueError, json.JSONDecodeError):
+            continue
+    text = weight_dir.name.removeprefix("prior_weight_").replace("m", "-").replace(
+        "p",
+        ".",
+    )
+    return float(text)
 
 
 def _summary_row(

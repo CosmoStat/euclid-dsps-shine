@@ -36,9 +36,13 @@ CLOSURE_BATCH_SIZE="${CLOSURE_BATCH_SIZE:-128}"
 CLOSURE_MAP_N_STARTS="${CLOSURE_MAP_N_STARTS:-8}"
 CLOSURE_MAP_MAXITER="${CLOSURE_MAP_MAXITER:-160}"
 CLOSURE_MAP_LR="${CLOSURE_MAP_LR:-0.015}"
+CLOSURE_MAP_START_CHUNK_SIZE="${CLOSURE_MAP_START_CHUNK_SIZE:-4}"
+CLOSURE_MAP_PRIOR_DENSITY_SPACE="${CLOSURE_MAP_PRIOR_DENSITY_SPACE:-x}"
+CLOSURE_RUN_MAP="${CLOSURE_RUN_MAP:-0}"
 REDSHIFT_PROFILE_COUNT="${REDSHIFT_PROFILE_COUNT:-24}"
 REDSHIFT_GRID_SIZE="${REDSHIFT_GRID_SIZE:-96}"
-MAP_SWEEP_WEIGHTS="${MAP_SWEEP_WEIGHTS:-0,0.03,0.1,0.3,1.0}"
+MAP_SWEEP_WEIGHTS="${MAP_SWEEP_WEIGHTS:-0,0.1,1.0}"
+MAP_SWEEP_LIMIT="${MAP_SWEEP_LIMIT:-512}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -112,7 +116,10 @@ case "$TASK_ID" in
         exit 2
       fi
     done
-    cmd=(python -m euclid_dsps.cli --config "$CONFIG" diffsky-closure-optimum-diagnostics --checkpoint "$CLOSURE_CHECKPOINT" --feature-stats "$CLOSURE_FEATURE_STATS" --row-indices-file "$ROWSET_FILE" --out "$RUN_ROOT/$LABEL" --batch-size "$CLOSURE_BATCH_SIZE" --map-n-starts "$CLOSURE_MAP_N_STARTS" --map-maxiter "$CLOSURE_MAP_MAXITER" --map-learning-rate "$CLOSURE_MAP_LR" --map-start-mode mixed --redshift-profile-count "$REDSHIFT_PROFILE_COUNT" --redshift-grid-size "$REDSHIFT_GRID_SIZE" --selection-seed "$SEED")
+    cmd=(python -m euclid_dsps.cli --config "$CONFIG" diffsky-closure-optimum-diagnostics --checkpoint "$CLOSURE_CHECKPOINT" --feature-stats "$CLOSURE_FEATURE_STATS" --row-indices-file "$ROWSET_FILE" --out "$RUN_ROOT/$LABEL" --batch-size "$CLOSURE_BATCH_SIZE" --map-n-starts "$CLOSURE_MAP_N_STARTS" --map-maxiter "$CLOSURE_MAP_MAXITER" --map-learning-rate "$CLOSURE_MAP_LR" --map-start-mode mixed --map-start-chunk-size "$CLOSURE_MAP_START_CHUNK_SIZE" --map-prior-density-space "$CLOSURE_MAP_PRIOR_DENSITY_SPACE" --redshift-profile-count "$REDSHIFT_PROFILE_COUNT" --redshift-grid-size "$REDSHIFT_GRID_SIZE" --selection-seed "$SEED")
+    if [[ "$CLOSURE_RUN_MAP" != "1" ]]; then
+      cmd+=(--skip-map)
+    fi
     if [[ -n "$NN_RUN" ]]; then
       cmd+=(--nn-run "$NN_RUN")
     fi
@@ -126,7 +133,10 @@ case "$TASK_ID" in
         exit 2
       fi
     done
-    cmd=(python -m euclid_dsps.cli --config "$CONFIG" diffsky-map-prior-sweep --checkpoint "$MAP_SWEEP_CHECKPOINT" --feature-stats "$MAP_SWEEP_FEATURE_STATS" --row-indices-file "$ROWSET_FILE" --out "$RUN_ROOT/$LABEL" --weights "$MAP_SWEEP_WEIGHTS" --batch-size "$CLOSURE_BATCH_SIZE" --n-starts "$CLOSURE_MAP_N_STARTS" --maxiter "$CLOSURE_MAP_MAXITER" --learning-rate "$CLOSURE_MAP_LR" --start-mode mixed --seed "$SEED" --selection-seed "$SEED")
+    cmd=(python -m euclid_dsps.cli --config "$CONFIG" diffsky-map-prior-sweep --checkpoint "$MAP_SWEEP_CHECKPOINT" --feature-stats "$MAP_SWEEP_FEATURE_STATS" --row-indices-file "$ROWSET_FILE" --out "$RUN_ROOT/$LABEL" --weights "$MAP_SWEEP_WEIGHTS" --batch-size "$CLOSURE_BATCH_SIZE" --n-starts "$CLOSURE_MAP_N_STARTS" --maxiter "$CLOSURE_MAP_MAXITER" --learning-rate "$CLOSURE_MAP_LR" --start-mode mixed --start-chunk-size "$CLOSURE_MAP_START_CHUNK_SIZE" --prior-density-space "$CLOSURE_MAP_PRIOR_DENSITY_SPACE" --seed "$SEED" --selection-seed "$SEED")
+    if [[ -n "$MAP_SWEEP_LIMIT" ]]; then
+      cmd+=(--limit "$MAP_SWEEP_LIMIT")
+    fi
     ;;
   *)
     echo "[prior-diag][error] unsupported task id: $TASK_ID"

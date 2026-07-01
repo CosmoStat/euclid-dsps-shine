@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,17 +27,24 @@ from .catalog_identity import (
     write_truth_snapshot,
 )
 from .collapse_gates import write_inference_collapse_gate
-from .config import amortized_config
+from .config import amortized_config, require_equinox
 from .data import (
     iter_photometry_batches_from_arrays,
     load_photometry_arrays_from_config,
 )
 from .decoder import model_flux_from_x
 from .features import read_feature_stats
-from .latent import latent_spec_from_config, theta_to_x, x_to_theta
+from .latent import (
+    latent_spec_from_config,
+    network_x_to_raw_x,
+    theta_to_x,
+    x_to_theta,
+)
 from .likelihood import photometric_loglike
-from .train import load_checkpoint
+from .train import JitLatentSpec, _StaticArg, load_checkpoint
 from .truth_diagnostics import write_extended_truth_diagnostics
+
+eqx = require_equinox()
 
 
 def run_map_adam_under_prior(
@@ -51,9 +59,12 @@ def run_map_adam_under_prior(
     maxiter: int,
     learning_rate: float,
     prior_weight: float,
+    prior_density_space: str = "x",
     seed: int,
     start_mode: str = "encoder",
     start_chunk_size: int | None = None,
+    shard_outputs: bool = True,
+    resume: bool = True,
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
@@ -123,6 +134,8 @@ def run_map_adam_under_prior(
     )
     model_args = dynamic_model_args(context)
     latent_spec = latent_spec_from_config(config)
+    jit_latent_spec = _jit_latent_spec(latent_spec)
+    jit_context = _StaticArg(context)
     model = load_checkpoint(checkpoint, config)
     scale_cfg = global_sed_scale_config(
         {"calibration": config.get("calibration", {}) or {}}
@@ -141,6 +154,13 @@ def run_map_adam_under_prior(
         else jnp.zeros((len(config["bands"]),), dtype=jnp.float32)
     )
     start_chunk_size = _effective_start_chunk_size(start_chunk_size, int(n_starts))
+    estimate_shard_dir = out / "map_estimates_shards"
+    by_start_shard_dir = out / "map_estimates_by_start_shards"
+    trace_shard_dir = out / "map_optimizer_trace_shards"
+    if shard_outputs:
+        estimate_shard_dir.mkdir(parents=True, exist_ok=True)
+        by_start_shard_dir.mkdir(parents=True, exist_ok=True)
+        trace_shard_dir.mkdir(parents=True, exist_ok=True)
     if verbose:
         print(f"[map-prior] checkpoint: {checkpoint}")
         print(f"[map-prior] output directory: {out}")
@@ -148,12 +168,16 @@ def run_map_adam_under_prior(
             "[map-prior] run config: "
             f"limit={limit} batch_size={batch_size} n_starts={n_starts} "
             f"maxiter={maxiter} lr={learning_rate} prior_weight={prior_weight} "
-            f"start_mode={start_mode} start_chunk_size={start_chunk_size}"
+            f"prior_density_space={prior_density_space} "
+            f"start_mode={start_mode} start_chunk_size={start_chunk_size} "
+            f"shard_outputs={shard_outputs} resume={resume}"
         )
     key = jax.random.PRNGKey(int(seed))
     rows = []
     rows_by_start = []
     traces = []
+    progress_rows = []
+    started_at = time.perf_counter()
     for batch_index, batch in enumerate(
         iter_photometry_batches_from_arrays(
             arrays,
@@ -162,14 +186,33 @@ def run_map_adam_under_prior(
         ),
         start=1,
     ):
+        estimate_shard = estimate_shard_dir / f"part_{batch_index:06d}.parquet"
+        by_start_shard = by_start_shard_dir / f"part_{batch_index:06d}.parquet"
+        trace_shard = trace_shard_dir / f"part_{batch_index:06d}.parquet"
+        if shard_outputs and resume and estimate_shard.exists():
+            if verbose:
+                print(
+                    "[map-prior] batch "
+                    f"{batch_index}: existing shard -> skip {estimate_shard}"
+                )
+            progress_rows.append(
+                {
+                    "batch": batch_index,
+                    "n_objects": int(batch.flux.shape[0]),
+                    "status": "skipped_existing_shard",
+                    "elapsed_s": 0.0,
+                }
+            )
+            continue
         if verbose:
             print(f"[map-prior] batch {batch_index}: n_objects={batch.flux.shape[0]}")
         key, batch_key = jax.random.split(key)
+        batch_started = time.perf_counter()
         result = _map_adam_batch(
             model,
             batch,
-            latent_spec,
-            context,
+            jit_latent_spec,
+            jit_context,
             model_args,
             latent_spec.names,
             batch_key,
@@ -177,6 +220,7 @@ def run_map_adam_under_prior(
             maxiter=int(maxiter),
             learning_rate=float(learning_rate),
             prior_weight=float(prior_weight),
+            prior_density_space=str(prior_density_space),
             start_mode=str(start_mode),
             start_chunk_size=int(start_chunk_size),
             likelihood_config=cfg["likelihood"],
@@ -185,6 +229,8 @@ def run_map_adam_under_prior(
             use_global_scale=bool(scale_cfg.enabled),
             use_band_calibration=bool(band_cfg.enabled),
         )
+        jax.block_until_ready(result["best_objective"])
+        batch_elapsed = time.perf_counter() - batch_started
         theta = np.asarray(jax.device_get(x_to_theta(result["best_x"], latent_spec)))
         row = {
             "object_id": np.asarray(batch.object_id),
@@ -205,7 +251,7 @@ def run_map_adam_under_prior(
         }
         for index, name in enumerate(latent_spec.names):
             row[name] = theta[:, index]
-        rows.append(pd.DataFrame(row))
+        estimates_piece = pd.DataFrame(row)
         by_start = _map_by_start_frame(
             result,
             batch,
@@ -213,7 +259,6 @@ def run_map_adam_under_prior(
         )
         if not by_start.empty:
             by_start["batch"] = batch_index
-            rows_by_start.append(by_start)
         trace = pd.DataFrame(
             {
                 "batch": batch_index,
@@ -221,7 +266,43 @@ def run_map_adam_under_prior(
                 "mean_objective": np.asarray(jax.device_get(result["trace_objective"])),
             }
         )
-        traces.append(trace)
+        if shard_outputs:
+            if not by_start.empty:
+                _write_parquet_atomic(by_start, by_start_shard)
+            _write_parquet_atomic(trace, trace_shard)
+            # This shard is the completion marker for resume, so write it last.
+            _write_parquet_atomic(estimates_piece, estimate_shard)
+        else:
+            rows.append(estimates_piece)
+            if not by_start.empty:
+                rows_by_start.append(by_start)
+            traces.append(trace)
+        throughput = (
+            float(batch.flux.shape[0]) / batch_elapsed
+            if batch_elapsed > 0.0
+            else float("nan")
+        )
+        progress_rows.append(
+            {
+                "batch": batch_index,
+                "n_objects": int(batch.flux.shape[0]),
+                "status": "completed",
+                "elapsed_s": float(batch_elapsed),
+                "objects_per_s": float(throughput),
+                "wall_elapsed_s": float(time.perf_counter() - started_at),
+            }
+        )
+        pd.DataFrame(progress_rows).to_csv(out / "map_progress.csv", index=False)
+        if verbose:
+            print(
+                "[map-prior] batch "
+                f"{batch_index} done in {batch_elapsed:.1f}s "
+                f"({throughput:.2f} objects/s)"
+            )
+    if shard_outputs:
+        rows = _read_shard_frames(estimate_shard_dir)
+        rows_by_start = _read_shard_frames(by_start_shard_dir)
+        traces = _read_shard_frames(trace_shard_dir)
     estimates = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     by_start_frame = (
         pd.concat(rows_by_start, ignore_index=True) if rows_by_start else pd.DataFrame()
@@ -248,8 +329,16 @@ def run_map_adam_under_prior(
         "maxiter": int(maxiter),
         "learning_rate": float(learning_rate),
         "prior_weight": float(prior_weight),
+        "prior_density_space": str(prior_density_space),
         "start_mode": str(start_mode),
         "start_chunk_size": int(start_chunk_size),
+        "shard_outputs": bool(shard_outputs),
+        "resume": bool(resume),
+        "shard_paths": {
+            "estimates": str(estimate_shard_dir) if shard_outputs else None,
+            "by_start": str(by_start_shard_dir) if shard_outputs else None,
+            "trace": str(trace_shard_dir) if shard_outputs else None,
+        },
         "dataset_label": dataset_label,
     }
     write_json(out / "map_summary.json", summary)
@@ -294,6 +383,7 @@ def _map_adam_batch(
     maxiter: int,
     learning_rate: float,
     prior_weight: float,
+    prior_density_space: str,
     start_mode: str,
     start_chunk_size: int,
     likelihood_config: dict[str, Any],
@@ -331,6 +421,7 @@ def _map_adam_batch(
             maxiter=int(maxiter),
             learning_rate=float(learning_rate),
             prior_weight=float(prior_weight),
+            prior_density_space=str(prior_density_space),
             likelihood_config=likelihood_config,
             log_alpha_sed=log_alpha_sed,
             log_alpha_band=log_alpha_band,
@@ -399,17 +490,80 @@ def _optimize_map_start_chunk(
     maxiter: int,
     learning_rate: float,
     prior_weight: float,
+    prior_density_space: str,
     likelihood_config: dict[str, Any],
     log_alpha_sed,
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
 ) -> dict[str, jnp.ndarray]:
+    density_space = _normalize_prior_density_space(prior_density_space)
+    if density_space == "theta" and "log10_gas_metallicity" in parameter_names:
+        raise ValueError(
+            "prior_density_space='theta' is not implemented for the coupled "
+            "stellar/gas metallicity latent transform"
+        )
+    likelihood_type = str(likelihood_config.get("type", "student_t"))
+    student_t_dof = float(likelihood_config.get("student_t_dof", 2.0))
+    error_floor_frac = float(likelihood_config.get("error_floor_frac", 0.02))
+    error_jitter = float(likelihood_config.get("error_jitter", 0.0))
+    return _optimize_map_start_chunk_jit(
+        model,
+        batch.flux,
+        batch.flux_err,
+        batch.mask,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        starts,
+        maxiter=int(maxiter),
+        learning_rate=float(learning_rate),
+        prior_weight=float(prior_weight),
+        prior_density_space=density_space,
+        likelihood_type=likelihood_type,
+        student_t_dof=student_t_dof,
+        error_floor_frac=error_floor_frac,
+        error_jitter=error_jitter,
+        log_alpha_sed=log_alpha_sed,
+        log_alpha_band=log_alpha_band,
+        use_global_scale=bool(use_global_scale),
+        use_band_calibration=bool(use_band_calibration),
+    )
+
+
+@eqx.filter_jit
+def _optimize_map_start_chunk_jit(
+    model,
+    flux: jnp.ndarray,
+    flux_err: jnp.ndarray,
+    mask: jnp.ndarray,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names: tuple[str, ...],
+    starts: jnp.ndarray,
+    *,
+    maxiter: int,
+    learning_rate: float,
+    prior_weight: float,
+    prior_density_space: str,
+    likelihood_type: str,
+    student_t_dof: float,
+    error_floor_frac: float,
+    error_jitter: float,
+    log_alpha_sed,
+    log_alpha_band,
+    use_global_scale: bool,
+    use_band_calibration: bool,
+) -> dict[str, jnp.ndarray]:
+    actual_context = context.value if isinstance(context, _StaticArg) else context
+
     def metrics_for_x(x):
         model_flux_raw = model_flux_from_x(
             x,
             latent_spec,
-            context,
+            actual_context,
             model_args,
             parameter_names,
         )
@@ -424,40 +578,44 @@ def _optimize_map_start_chunk(
             else model_flux
         )
         loglike = photometric_loglike(
-            obs_flux=batch.flux,
+            obs_flux=flux,
             model_flux=model_flux,
-            obs_err=batch.flux_err,
-            mask=batch.mask,
-            likelihood_type=str(likelihood_config.get("type", "student_t")),
-            student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
-            error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
-            error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+            obs_err=flux_err,
+            mask=mask,
+            likelihood_type=likelihood_type,
+            student_t_dof=float(student_t_dof),
+            error_floor_frac=float(error_floor_frac),
+            error_jitter=float(error_jitter),
         )
-        logprior = model.prior.log_prob(x)
-        chi = (model_flux - batch.flux[None, :, :]) / batch.flux_err[None, :, :]
-        chi = jnp.where(batch.mask[None, :, :], chi, 0.0)
+        logprior = _prior_log_prob_for_map(
+            model,
+            x,
+            latent_spec,
+            prior_density_space=prior_density_space,
+        )
+        chi = (model_flux - flux[None, :, :]) / flux_err[None, :, :]
+        chi = jnp.where(mask[None, :, :], chi, 0.0)
         chi2 = jnp.sum(chi**2, axis=-1)
         objective = -loglike - float(prior_weight) * logprior
         return objective, -loglike, logprior, chi2
 
-    def scalar_objective(x):
+    def scalar_objective_with_aux(x):
         objective, _nll, _logprior, _chi2 = metrics_for_x(x)
-        return jnp.mean(objective)
+        return jnp.mean(objective), metrics_for_x(x)
 
-    value_and_grad = jax.value_and_grad(scalar_objective)
+    value_and_grad = jax.value_and_grad(scalar_objective_with_aux, has_aux=True)
     x = starts
     m = jnp.zeros_like(x)
     v = jnp.zeros_like(x)
     best_x = x
     best_obj, best_nll, best_logprior, best_chi2 = metrics_for_x(x)
-    trace = []
     beta1 = 0.9
     beta2 = 0.999
     eps_adam = 1.0e-8
-    for iteration in range(1, int(maxiter) + 1):
-        value, grad = value_and_grad(x)
-        trace.append(value)
-        obj, nll, logprior, chi2 = metrics_for_x(x)
+
+    def step(carry, iteration_zero):
+        x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2 = carry
+        (value, (obj, nll, logprior, chi2)), grad = value_and_grad(x)
         improved = obj < best_obj
         best_x = jnp.where(improved[..., None], x, best_x)
         best_obj = jnp.where(improved, obj, best_obj)
@@ -467,10 +625,20 @@ def _optimize_map_start_chunk(
         grad = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
         m = beta1 * m + (1.0 - beta1) * grad
         v = beta2 * v + (1.0 - beta2) * (grad**2)
+        iteration = iteration_zero + 1
         m_hat = m / (1.0 - beta1**iteration)
         v_hat = v / (1.0 - beta2**iteration)
         x = x - float(learning_rate) * m_hat / (jnp.sqrt(v_hat) + eps_adam)
-    _value, final_grad = value_and_grad(best_x)
+        return (x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2), value
+
+    init = (x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2)
+    final, trace = jax.lax.scan(
+        step,
+        init,
+        jnp.arange(int(maxiter), dtype=jnp.float32),
+    )
+    _x, _m, _v, best_x, best_obj, best_nll, best_logprior, best_chi2 = final
+    (_value, _aux), final_grad = value_and_grad(best_x)
     grad_norm = jnp.linalg.norm(final_grad, axis=-1)
     return {
         "best_x": best_x,
@@ -483,13 +651,71 @@ def _optimize_map_start_chunk(
     }
 
 
+def _normalize_prior_density_space(value: str) -> str:
+    text = str(value or "x").strip().lower()
+    if text in {"x", "latent", "network"}:
+        return "x"
+    if text in {"theta", "physical"}:
+        return "theta"
+    raise ValueError("prior_density_space must be 'x' or 'theta'")
+
+
+def _prior_log_prob_for_map(
+    model,
+    x: jnp.ndarray,
+    latent_spec,
+    *,
+    prior_density_space: str,
+) -> jnp.ndarray:
+    logp_x = model.prior.log_prob(x)
+    if prior_density_space == "x":
+        return logp_x
+    raw = network_x_to_raw_x(x, latent_spec)
+    unit = jax.nn.sigmoid(raw)
+    scale = jnp.asarray(latent_spec.raw_scale, dtype=jnp.float32)
+    span = jnp.asarray(latent_spec.upper - latent_spec.lower, dtype=jnp.float32)
+    logdet = jnp.sum(
+        jnp.log(jnp.maximum(span, 1.0e-12))
+        + jnp.log(jnp.maximum(scale, 1.0e-12))
+        + jnp.log(jnp.maximum(unit, 1.0e-12))
+        + jnp.log(jnp.maximum(1.0 - unit, 1.0e-12)),
+        axis=-1,
+    )
+    return logp_x - logdet
+
+
 def _effective_start_chunk_size(value: int | None, n_starts: int) -> int:
     if value is None:
-        return 1
+        return int(n_starts)
     chunk = int(value)
     if chunk <= 0:
         raise ValueError("MAP start_chunk_size must be positive")
     return max(1, min(chunk, int(n_starts)))
+
+
+def _jit_latent_spec(latent_spec) -> JitLatentSpec:
+    return JitLatentSpec(
+        names=latent_spec.names,
+        lower=latent_spec.lower,
+        upper=latent_spec.upper,
+        raw_center=latent_spec.raw_center,
+        raw_scale=latent_spec.raw_scale,
+        normalization=latent_spec.normalization,
+    )
+
+
+def _write_parquet_atomic(frame: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    frame.to_parquet(tmp, index=False)
+    tmp.replace(path)
+
+
+def _read_shard_frames(directory: Path) -> list[pd.DataFrame]:
+    if not directory.exists():
+        return []
+    paths = sorted(directory.glob("part_*.parquet"))
+    return [pd.read_parquet(path) for path in paths]
 
 
 def _make_map_starts(

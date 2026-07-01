@@ -51,6 +51,7 @@ def run_closure_optimum_diagnostics(
     map_learning_rate: float = 0.015,
     map_start_mode: str = "mixed",
     map_start_chunk_size: int = 1,
+    map_prior_density_space: str = "x",
     selection_mode: str | None = None,
     stratified_strategy: str | None = None,
     selection_seed: int | None = None,
@@ -121,32 +122,6 @@ def run_closure_optimum_diagnostics(
         theta_frames["nn_median"] = nn_frame
 
     map_dir = out / "map_flat"
-    if run_map:
-        if verbose:
-            print(f"[closure] running flat-prior MAP -> {map_dir}")
-        run_map_adam_under_prior(
-            config,
-            map_dir,
-            checkpoint=Path(checkpoint),
-            feature_stats_path=(
-                Path(feature_stats_path) if feature_stats_path is not None else None
-            ),
-            limit=limit,
-            batch_size=int(batch_size),
-            n_starts=int(map_n_starts),
-            maxiter=int(map_maxiter),
-            learning_rate=float(map_learning_rate),
-            prior_weight=0.0,
-            seed=seed,
-            start_mode=str(map_start_mode),
-            start_chunk_size=int(map_start_chunk_size),
-            selection_mode=selection_mode,
-            stratified_strategy=stratified_strategy,
-            selection_seed=seed,
-            row_indices_file=row_indices_file,
-            dataset_label="Diffsky HLTDS closure MAP flat",
-            verbose=verbose,
-        )
     map_path = map_dir / "map_estimates.parquet"
     if map_path.exists():
         theta_frames["map_flat"] = _map_theta_frame(map_path, latent_spec)
@@ -224,6 +199,9 @@ def run_closure_optimum_diagnostics(
             "maxiter": int(map_maxiter),
             "learning_rate": float(map_learning_rate),
             "start_mode": str(map_start_mode),
+            "start_chunk_size": int(map_start_chunk_size),
+            "prior_density_space": str(map_prior_density_space),
+            "completed": bool(map_path.exists()),
         },
         "redshift_profiles": profile_summary,
         "outputs": {
@@ -233,6 +211,58 @@ def run_closure_optimum_diagnostics(
         },
     }
     write_json(out / "closure_optimum_summary.json", summary)
+    if run_map and not map_path.exists():
+        if verbose:
+            print(f"[closure] running flat-prior MAP -> {map_dir}")
+        run_map_adam_under_prior(
+            config,
+            map_dir,
+            checkpoint=Path(checkpoint),
+            feature_stats_path=(
+                Path(feature_stats_path) if feature_stats_path is not None else None
+            ),
+            limit=limit,
+            batch_size=int(batch_size),
+            n_starts=int(map_n_starts),
+            maxiter=int(map_maxiter),
+            learning_rate=float(map_learning_rate),
+            prior_weight=0.0,
+            prior_density_space=str(map_prior_density_space),
+            seed=seed,
+            start_mode=str(map_start_mode),
+            start_chunk_size=int(map_start_chunk_size),
+            selection_mode=selection_mode,
+            stratified_strategy=stratified_strategy,
+            selection_seed=seed,
+            row_indices_file=row_indices_file,
+            dataset_label="Diffsky HLTDS closure MAP flat",
+            verbose=verbose,
+        )
+        if map_path.exists():
+            return run_closure_optimum_diagnostics(
+                config,
+                out,
+                checkpoint=checkpoint,
+                feature_stats_path=feature_stats_path,
+                nn_run=nn_run,
+                row_indices_file=row_indices_file,
+                limit=limit,
+                batch_size=batch_size,
+                map_n_starts=map_n_starts,
+                map_maxiter=map_maxiter,
+                map_learning_rate=map_learning_rate,
+                map_start_mode=map_start_mode,
+                map_start_chunk_size=map_start_chunk_size,
+                map_prior_density_space=map_prior_density_space,
+                selection_mode=selection_mode,
+                stratified_strategy=stratified_strategy,
+                selection_seed=selection_seed,
+                redshift_profile_count=redshift_profile_count,
+                redshift_grid_size=redshift_grid_size,
+                redshift_profile_source=redshift_profile_source,
+                run_map=False,
+                verbose=verbose,
+            )
     return summary
 
 

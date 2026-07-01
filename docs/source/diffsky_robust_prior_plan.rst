@@ -34,8 +34,55 @@ New configs can decouple this with:
    amortized:
      latent:
        center_source: midpoint
+       centers:
+         tau2: 1.0
        physical_scales:
          z_obs: 0.05
+         tau2: 0.20
+
+The validated low-z reference config is now
+``configs/experiments/diffsky_hltds_joint_realnvp_kl_annealed_zscale005_tau2safe_h100.yaml``.
+It keeps encoder initialization tied to ``fit.free_parameters.<name>.initial``
+but changes the coordinate system used by the standard-normal latent reference:
+
+* ``center_source: midpoint`` removes hidden physical constants from the
+  neutral latent center;
+* ``z_obs: 0.05`` makes one latent standard deviation correspond to a
+  realistic low-z redshift scale instead of spreading mass to the bounds;
+* ``centers.tau2: 1.0`` and ``physical_scales.tau2: 0.20`` avoid putting the
+  reference mass close to the ``tau2=0`` dust boundary.
+
+The geometry run from job ``1182520`` measured:
+
+.. list-table::
+   :header-rows: 1
+
+   * - config
+     - center
+     - max near-bound fraction
+     - parameters near bounds
+   * - ``geometry_annealed_current``
+     - ``fit_initial``
+     - ``0.383735``
+     - ``z_obs``, ``tau2``, ``tau1_over_tau2``
+   * - ``geometry_annealed_zscale005``
+     - midpoint
+     - ``0.0``
+     - none
+   * - ``geometry_annealed_zscale003``
+     - midpoint
+     - ``0.0``
+     - none
+   * - ``geometry_annealed_zscale005_tau2safe``
+     - midpoint plus ``tau2=1.0``
+     - ``0.0``
+     - none
+
+This is not just a redshift issue.  In the old config, the reference
+``x ~ N(0,1)`` put about ``31.8%`` of ``z_obs`` samples and ``38.4%`` of
+``tau2`` samples inside the outer 5% of their physical bounds.  The dust
+geometry can feed back into redshift through the usual dust/SFH/redshift
+degeneracy.
 
 Before launching a large training run, write the implicit-prior diagnostic:
 
@@ -55,8 +102,10 @@ Inspect:
 Phase 2: Projected Truth vs DSPS Optimum
 ----------------------------------------
 
-The closure diagnostic evaluates projected truth, NN posterior median, and a
-flat-prior MAP solution in the same Student-t flux likelihood.
+The closure diagnostic now writes projected truth, NN posterior median, band
+residuals, and fixed-nuisance redshift profiles before running any expensive
+MAP.  Use ``--skip-map`` for the global diagnostic pass, then run MAP as a
+separate sharded job.
 
 .. code-block:: bash
 
@@ -67,7 +116,8 @@ flat-prior MAP solution in the same Student-t flux likelihood.
      --feature-stats outputs/runs/diffsky_nn_matrix/nokl_det_balanced20k_seed42/feature_stats.json \
      --nn-run outputs/runs/diffsky_nn_matrix/nokl_det_balanced20k_seed42_infer \
      --row-indices-file outputs/rowsets/diffsky_hltds_nokl_reference/balanced20k.txt \
-     --out outputs/runs/diffsky_robust_prior_diagnostics/closure_optimum
+     --out outputs/runs/diffsky_robust_prior_diagnostics/closure_optimum \
+     --skip-map
 
 Inspect:
 
@@ -102,7 +152,12 @@ These profiles answer whether the likelihood itself is monotonic toward
 Phase 4: MAP Under Current Learned Prior
 ----------------------------------------
 
-Run a compact prior-weight sweep on the same normal rowset only:
+The old monolithic sweep is only appropriate for small throughput checks.  It
+now writes per-batch shards and resumes from existing shards, but a full
+``balanced20k`` sweep should still be launched with the sharded SLURM script
+below.
+
+For a smoke test:
 
 .. code-block:: bash
 
@@ -113,7 +168,32 @@ Run a compact prior-weight sweep on the same normal rowset only:
      --feature-stats outputs/runs/diffsky_nn_matrix/kl_annealed_balanced20k_seed42/feature_stats.json \
      --row-indices-file outputs/rowsets/diffsky_hltds_nokl_reference/balanced20k.txt \
      --out outputs/runs/diffsky_robust_prior_diagnostics/map_prior_sweep \
-     --weights 0,0.03,0.1,0.3,1.0
+     --weights 0,0.1,1.0 \
+     --limit 512 \
+     --batch-size 256 \
+     --n-starts 4 \
+     --start-chunk-size 4 \
+     --maxiter 120
+
+For the full pass, shard over both rowset and prior weight:
+
+.. code-block:: bash
+
+   WEIGHTS=0,0.03,0.1,0.3,1.0 \
+   SHARD_COUNT=8 \
+   CONFIG=configs/experiments/diffsky_hltds_joint_realnvp_kl_annealed_h100.yaml \
+   CHECKPOINT=outputs/runs/diffsky_nn_matrix/kl_annealed_balanced20k_seed42/checkpoints/best.eqx \
+   FEATURE_STATS=outputs/runs/diffsky_nn_matrix/kl_annealed_balanced20k_seed42/feature_stats.json \
+   ROWSET_FILE=outputs/rowsets/diffsky_hltds_nokl_reference/balanced20k.txt \
+   OUT_ROOT=outputs/runs/diffsky_robust_prior_diagnostics/map_prior_sweep_sharded \
+   sbatch --array=0-39 scripts/diffsky_map_prior_sweep_sharded_h100.slurm
+
+Then finalize after all shards complete:
+
+.. code-block:: bash
+
+   OUT_ROOT=outputs/runs/diffsky_robust_prior_diagnostics/map_prior_sweep_sharded \
+   sbatch scripts/diffsky_map_prior_sweep_finalize_h100.slurm
 
 Inspect:
 
@@ -123,6 +203,12 @@ Inspect:
 
 If redshift bias grows sharply with small ``prior_weight``, the current learned
 prior is not a scientifically usable population prior.
+
+The MAP prior term defaults to ``prior_density_space: x``.  This means the
+RealNVP density is interpreted in the standardized latent coordinates used for
+training and MCMC.  ``prior_density_space: theta`` is available for uncoupled
+bounded-logit latents and subtracts the sigmoid-transform Jacobian; use it only
+when the scientific question is explicitly a physical-space MAP.
 
 Phase 5: Post-Hoc Inferred Prior
 --------------------------------
@@ -148,7 +234,8 @@ Jean Zay Launch Order
 ---------------------
 
 Use the diagnostic array first.  It runs four geometry tasks, then closure,
-then the MAP-prior sweep:
+then a small MAP-prior smoke.  The closure task uses ``--skip-map`` by default
+so the fast truth/NN/redshift-profile diagnostics are not blocked by MAP.
 
 .. code-block:: bash
 
@@ -161,6 +248,23 @@ then the MAP-prior sweep:
    NN_RUN=outputs/runs/diffsky_nn_matrix/nokl_det_balanced20k_seed42_infer \
    ROWSET_FILE=outputs/rowsets/diffsky_hltds_nokl_reference/balanced20k.txt \
    sbatch scripts/diffsky_robust_prior_diagnostics_h100.slurm
+
+The full MAP sweep should use the sharded script, not the diagnostic array:
+
+.. code-block:: bash
+
+   WEIGHTS=0,0.03,0.1,0.3,1.0 \
+   SHARD_COUNT=8 \
+   CONFIG=configs/experiments/diffsky_hltds_joint_realnvp_kl_annealed_h100.yaml \
+   CHECKPOINT=outputs/runs/diffsky_nn_matrix/kl_annealed_balanced20k_seed42/checkpoints/best.eqx \
+   FEATURE_STATS=outputs/runs/diffsky_nn_matrix/kl_annealed_balanced20k_seed42/feature_stats.json \
+   ROWSET_FILE=outputs/rowsets/diffsky_hltds_nokl_reference/balanced20k.txt \
+   OUT_ROOT=outputs/runs/diffsky_robust_prior_diagnostics/map_prior_sweep_sharded \
+   sbatch --array=0-39 scripts/diffsky_map_prior_sweep_sharded_h100.slurm
+
+   OUT_ROOT=outputs/runs/diffsky_robust_prior_diagnostics/map_prior_sweep_sharded \
+   sbatch --dependency=afterok:<MAP_SWEEP_JOBID> \
+     scripts/diffsky_map_prior_sweep_finalize_h100.slurm
 
 For a small MCLMC calibration subset, first create or reuse a rowset, then:
 
@@ -185,3 +289,7 @@ For the first full ``balanced20k`` pass, MAP flat is cheaper and should be the
 default source for the post-hoc prior.  MCLMC is better used as a calibration
 subset first.  If the MCLMC subset has acceptable walltime and diagnostics, run
 larger shards with ``--array=0-7`` and increase ``SHARD_COUNT=8``.
+
+If a MAP job is cancelled, rerun the same command with the same ``OUT_ROOT``:
+``diffsky-map-adam-prior`` skips existing ``map_estimates_shards/part_*.parquet``
+files and only recomputes missing batches.

@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
             "amortized-finalize-inference,diffsky-map-adam-prior,"
             "diffsky-latent-prior-geometry,"
             "diffsky-closure-optimum-diagnostics,"
-            "diffsky-map-prior-sweep,"
+            "diffsky-map-prior-sweep,diffsky-finalize-map-prior-sweep,"
             "amortized-prior-overlap-diffsky,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-train-inferred-prior,"
@@ -357,6 +357,14 @@ def build_parser() -> argparse.ArgumentParser:
     map_prior.add_argument("--learning-rate", type=float)
     map_prior.add_argument("--prior-weight", type=float)
     map_prior.add_argument(
+        "--prior-density-space",
+        choices=["x", "theta"],
+        help=(
+            "Density used for the MAP prior term. 'x' keeps the learned latent "
+            "density; 'theta' applies the sigmoid-transform Jacobian."
+        ),
+    )
+    map_prior.add_argument(
         "--start-mode",
         choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
     )
@@ -375,6 +383,16 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["balanced", "proportional"],
     )
     map_prior.add_argument("--selection-seed", type=int)
+    map_prior.add_argument(
+        "--no-shard-outputs",
+        action="store_true",
+        help="Disable per-batch MAP parquet shards.",
+    )
+    map_prior.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Recompute batches even when per-batch MAP shards already exist.",
+    )
     map_prior.add_argument("--quiet", action="store_true")
 
     latent_geometry = sub.add_parser(
@@ -410,7 +428,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
         default="mixed",
     )
-    closure_optimum.add_argument("--map-start-chunk-size", type=int, default=1)
+    closure_optimum.add_argument("--map-start-chunk-size", type=int, default=4)
+    closure_optimum.add_argument(
+        "--map-prior-density-space",
+        choices=["x", "theta"],
+        default="x",
+    )
     closure_optimum.add_argument(
         "--selection-mode",
         choices=["sequential", "random", "stratified_redshift"],
@@ -457,7 +480,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
         default="mixed",
     )
-    map_sweep.add_argument("--start-chunk-size", type=int, default=1)
+    map_sweep.add_argument("--start-chunk-size", type=int, default=4)
+    map_sweep.add_argument(
+        "--prior-density-space",
+        choices=["x", "theta"],
+        default="x",
+    )
     map_sweep.add_argument(
         "--selection-mode",
         choices=["sequential", "random", "stratified_redshift"],
@@ -469,6 +497,16 @@ def build_parser() -> argparse.ArgumentParser:
     map_sweep.add_argument("--selection-seed", type=int)
     map_sweep.add_argument("--seed", type=int, default=42)
     map_sweep.add_argument("--quiet", action="store_true")
+
+    finalize_map_sweep = sub.add_parser(
+        "diffsky-finalize-map-prior-sweep",
+        help="Combine sharded MAP-prior sweep outputs and write summary plots.",
+    )
+    finalize_map_sweep.add_argument(
+        "--out",
+        default="outputs/runs/diffsky_map_prior_sweep",
+    )
+    finalize_map_sweep.add_argument("--quiet", action="store_true")
 
     train_prior = sub.add_parser(
         "diffsky-train-supervised-prior",
@@ -1019,6 +1057,7 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-latent-prior-geometry",
         "diffsky-closure-optimum-diagnostics",
         "diffsky-map-prior-sweep",
+        "diffsky-finalize-map-prior-sweep",
         "diffsky-train-inferred-prior",
         "diffsky-dust-ssp-audit",
         "diffsky-build-reconstruction-rowsets",
@@ -1091,6 +1130,9 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "diffsky-map-prior-sweep":
         _run_diffsky_map_prior_sweep(config, args)
+        return
+    if args.command == "diffsky-finalize-map-prior-sweep":
+        _run_diffsky_finalize_map_prior_sweep(config, args)
         return
     if args.command == "amortized-prior-overlap-diffsky":
         _run_amortized_prior_overlap_diffsky(config, args)
@@ -1715,6 +1757,10 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
             if args.prior_weight is not None
             else map_cfg.get("prior_weight", 0.05)
         ),
+        prior_density_space=str(
+            getattr(args, "prior_density_space", None)
+            or map_cfg.get("prior_density_space", "x")
+        ),
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
         start_mode=str(
             getattr(args, "start_mode", None) or map_cfg.get("start_mode", "encoder")
@@ -1728,6 +1774,8 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
         stratified_strategy=getattr(args, "stratified_strategy", None),
         selection_seed=getattr(args, "selection_seed", None),
         row_indices_file=getattr(args, "row_indices_file", None),
+        shard_outputs=not bool(getattr(args, "no_shard_outputs", False)),
+        resume=not bool(getattr(args, "no_resume", False)),
         verbose=not bool(getattr(args, "quiet", False)),
     )
     print(f"[map-prior] summary -> {Path(args.out) / 'map_summary.json'}")
@@ -1767,6 +1815,7 @@ def _run_diffsky_closure_optimum_diagnostics(config: dict, args) -> None:
         map_learning_rate=float(args.map_learning_rate),
         map_start_mode=str(args.map_start_mode),
         map_start_chunk_size=int(args.map_start_chunk_size),
+        map_prior_density_space=str(args.map_prior_density_space),
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),
         selection_seed=getattr(args, "selection_seed", None),
@@ -1802,10 +1851,22 @@ def _run_diffsky_map_prior_sweep(config: dict, args) -> None:
         learning_rate=float(args.learning_rate),
         start_mode=str(args.start_mode),
         start_chunk_size=int(args.start_chunk_size),
+        prior_density_space=str(args.prior_density_space),
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),
         selection_seed=getattr(args, "selection_seed", None),
         seed=int(args.seed),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(f"[map-sweep] summary -> {Path(args.out) / summary['summary']}")
+
+
+def _run_diffsky_finalize_map_prior_sweep(config: dict, args) -> None:
+    del config
+    from .amortized.map_prior_sweep import finalize_map_prior_weight_sweep
+
+    summary = finalize_map_prior_weight_sweep(
+        Path(args.out),
         verbose=not bool(getattr(args, "quiet", False)),
     )
     print(f"[map-sweep] summary -> {Path(args.out) / summary['summary']}")

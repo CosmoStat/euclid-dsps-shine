@@ -43,5 +43,6 @@ amortized:
         maxiter: 160
         learning_rate: 0.015
         prior_weight: 0.05
+        prior_density_space: x
         start_mode: mixed
-        start_chunk_size: 1
+        start_chunk_size: 4

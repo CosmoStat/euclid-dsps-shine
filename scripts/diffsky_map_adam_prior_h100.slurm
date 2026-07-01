@@ -29,13 +29,17 @@ LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
 
 LIMIT="${LIMIT:-5000}"
-BATCH_SIZE="${BATCH_SIZE:-64}"
+BATCH_SIZE="${BATCH_SIZE:-256}"
 N_STARTS="${N_STARTS:-4}"
-START_CHUNK_SIZE="${START_CHUNK_SIZE:-1}"
+START_CHUNK_SIZE="${START_CHUNK_SIZE:-4}"
 MAXITER="${MAXITER:-160}"
 LEARNING_RATE="${LEARNING_RATE:-0.015}"
 PRIOR_WEIGHT="${PRIOR_WEIGHT:-0.05}"
+PRIOR_DENSITY_SPACE="${PRIOR_DENSITY_SPACE:-x}"
 START_MODE="${START_MODE:-encoder}"
+ROWSET_FILE="${ROWSET_FILE:-}"
+SHARD_OUTPUTS="${SHARD_OUTPUTS:-1}"
+RESUME="${RESUME:-1}"
 SEED="${SEED:-42}"
 SELECTION_MODE="${SELECTION_MODE:-random}"
 STRATIFIED_STRATEGY="${STRATIFIED_STRATEGY:-balanced}"
@@ -71,7 +75,11 @@ echo "[job] start_chunk_size: $START_CHUNK_SIZE"
 echo "[job] maxiter: $MAXITER"
 echo "[job] learning_rate: $LEARNING_RATE"
 echo "[job] prior_weight: $PRIOR_WEIGHT"
+echo "[job] prior_density_space: $PRIOR_DENSITY_SPACE"
 echo "[job] start_mode: $START_MODE"
+echo "[job] rowset_file: ${ROWSET_FILE:-<selection-mode>}"
+echo "[job] shard_outputs: $SHARD_OUTPUTS"
+echo "[job] resume: $RESUME"
 echo "[job] selection_mode: $SELECTION_MODE"
 echo "[job] stratified_strategy: $STRATIFIED_STRATEGY"
 echo "[job] selection_seed: $SELECTION_SEED"
@@ -121,6 +129,7 @@ cmd=(
   --maxiter "$MAXITER"
   --learning-rate "$LEARNING_RATE"
   --prior-weight "$PRIOR_WEIGHT"
+  --prior-density-space "$PRIOR_DENSITY_SPACE"
   --start-mode "$START_MODE"
   --seed "$SEED"
   --selection-mode "$SELECTION_MODE"
@@ -130,6 +139,15 @@ cmd=(
 
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
+fi
+if [[ -n "$ROWSET_FILE" ]]; then
+  cmd+=(--row-indices-file "$ROWSET_FILE")
+fi
+if [[ "$SHARD_OUTPUTS" != "1" ]]; then
+  cmd+=(--no-shard-outputs)
+fi
+if [[ "$RESUME" != "1" ]]; then
+  cmd+=(--no-resume)
 fi
 
 echo "[job] command:"

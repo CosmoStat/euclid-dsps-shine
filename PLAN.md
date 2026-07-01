@@ -32,6 +32,27 @@
   SLURM files, CLI help, CPU latent-geometry smoke, CPU closure smoke without
   MAP on two galaxies, and CPU inferred-prior smoke in the local conda `shine`
   environment.
+- 2026-07-01 follow-up: geometry artifacts from job `1182520` show the old
+  `fit_initial` latent geometry puts large mass near physical bounds
+  (`max_frac_within_either_5pct=0.383735`, driven by `tau2`, `z_obs`, and
+  `tau1_over_tau2`), while `zscale005`, `zscale003`, and
+  `zscale005_tau2safe` have no parameters above the 5% near-bound threshold.
+- Completed: validated `zscale005_tau2safe` as the next low-z reference
+  geometry: midpoint latent center, `z_obs` physical scale `0.05`, and
+  `tau2` centered at `1.0` with physical scale `0.20`.
+- Completed: refactored MAP-Adam to use a compiled `lax.scan` optimizer,
+  optimize multiple starts per device chunk, write per-batch parquet shards,
+  skip existing shards on resume, and record per-batch throughput.
+- Completed: closure optimum diagnostics now write truth/NN residuals and
+  redshift profiles before running expensive MAP; full MAP can be skipped by
+  default and aggregated after completion.
+- Completed: added explicit MAP `prior_density_space` handling (`x` by
+  default, optional uncoupled physical `theta` Jacobian mode).
+- Completed: added a sharded MAP prior sweep launcher over rowset shards and
+  prior weights plus a finalizer command/script to combine per-shard results.
+- Completed: updated the robust-prior runbook with the observed geometry table,
+  the validated latent-weight change, smoke-vs-full MAP launch policy, and
+  resume behavior.
 
 ## 2026-06-30 Canonical Projected Truth Dataset
 
