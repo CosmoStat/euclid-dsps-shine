@@ -47,6 +47,9 @@ if [[ -z "${MINICONDA_PATH:-}" ]]; then
 fi
 
 CONDA_ENV="${CONDA_ENV:-shine}"
+if [[ -z "${DIFFSKY_REPO:-}" && -n "${WORK:-}" && -d "$WORK/diffsky/diffsky" ]]; then
+  DIFFSKY_REPO="$WORK/diffsky"
+fi
 STAGE="${STAGE:-generate}"
 CONFIG="${CONFIG:-configs/diffsky_synthetic_feniks_260617_50k.yaml}"
 VALIDATION_CONFIG="${VALIDATION_CONFIG:-configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml}"
@@ -74,7 +77,15 @@ export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/euclid_dsps_matplotlib_${SLURM_JOB_ID:-manual}}"
 export REPO_DIR
-export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+if [[ -n "${DIFFSKY_REPO:-}" ]]; then
+  if [[ ! -d "$DIFFSKY_REPO/diffsky" ]]; then
+    echo "[job][error] DIFFSKY_REPO=$DIFFSKY_REPO does not contain a diffsky package"
+    exit 2
+  fi
+  export PYTHONPATH="$REPO_DIR:$DIFFSKY_REPO:${PYTHONPATH:-}"
+else
+  export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+fi
 export PIP_NO_INDEX=1
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -85,6 +96,7 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 echo "[job] start: $(date --iso-8601=seconds)"
 echo "[job] host: $(hostname)"
 echo "[job] repo: $REPO_DIR"
+echo "[job] diffsky_repo: ${DIFFSKY_REPO:-<conda/site-packages>}"
 echo "[job] stage: $STAGE"
 echo "[job] config: $CONFIG"
 echo "[job] validation_config: $VALIDATION_CONFIG"

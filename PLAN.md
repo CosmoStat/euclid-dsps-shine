@@ -1,5 +1,19 @@
 # Plan
 
+## 2026-07-02 Jean-Zay Diffsky Import Preflight
+
+- Status: completed.
+- Goal: handle the Jean-Zay failure where the H100 SLURM job starts from the
+  correct `shine` environment but cannot import the external `diffsky` package.
+- Completed:
+  - Add a `DIFFSKY_REPO` hook to the SLURM launcher so a local Diffsky clone can
+    be used through `PYTHONPATH` without reinstalling the conda environment.
+  - Keep the script compatible with an editable pip install of Diffsky.
+  - Provide exact commands to clone/update Diffsky and relaunch generation plus
+    validation.
+  - Verified with `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm`
+    and `git diff --check`.
+
 ## 2026-07-02 Sync Commit and Relaunch Instructions
 
 - Status: completed.
