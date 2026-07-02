@@ -50,6 +50,9 @@ CONDA_ENV="${CONDA_ENV:-shine}"
 if [[ -z "${DIFFSKY_REPO:-}" && -n "${WORK:-}" && -d "$WORK/diffsky/diffsky" ]]; then
   DIFFSKY_REPO="$WORK/diffsky"
 fi
+if [[ -z "${DIFFHALOS_REPO:-}" && -n "${WORK:-}" && -d "$WORK/diffhalos/diffhalos" ]]; then
+  DIFFHALOS_REPO="$WORK/diffhalos"
+fi
 STAGE="${STAGE:-generate}"
 CONFIG="${CONFIG:-configs/diffsky_synthetic_feniks_260617_50k.yaml}"
 VALIDATION_CONFIG="${VALIDATION_CONFIG:-configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml}"
@@ -77,15 +80,22 @@ export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/euclid_dsps_matplotlib_${SLURM_JOB_ID:-manual}}"
 export REPO_DIR
+PYTHONPATH_ENTRIES="$REPO_DIR"
 if [[ -n "${DIFFSKY_REPO:-}" ]]; then
   if [[ ! -d "$DIFFSKY_REPO/diffsky" ]]; then
     echo "[job][error] DIFFSKY_REPO=$DIFFSKY_REPO does not contain a diffsky package"
     exit 2
   fi
-  export PYTHONPATH="$REPO_DIR:$DIFFSKY_REPO:${PYTHONPATH:-}"
-else
-  export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+  PYTHONPATH_ENTRIES="$PYTHONPATH_ENTRIES:$DIFFSKY_REPO"
 fi
+if [[ -n "${DIFFHALOS_REPO:-}" ]]; then
+  if [[ ! -d "$DIFFHALOS_REPO/diffhalos" ]]; then
+    echo "[job][error] DIFFHALOS_REPO=$DIFFHALOS_REPO does not contain a diffhalos package"
+    exit 2
+  fi
+  PYTHONPATH_ENTRIES="$PYTHONPATH_ENTRIES:$DIFFHALOS_REPO"
+fi
+export PYTHONPATH="$PYTHONPATH_ENTRIES:${PYTHONPATH:-}"
 export PIP_NO_INDEX=1
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 
@@ -97,6 +107,7 @@ echo "[job] start: $(date --iso-8601=seconds)"
 echo "[job] host: $(hostname)"
 echo "[job] repo: $REPO_DIR"
 echo "[job] diffsky_repo: ${DIFFSKY_REPO:-<conda/site-packages>}"
+echo "[job] diffhalos_repo: ${DIFFHALOS_REPO:-<conda/site-packages>}"
 echo "[job] stage: $STAGE"
 echo "[job] config: $CONFIG"
 echo "[job] validation_config: $VALIDATION_CONFIG"
@@ -127,6 +138,7 @@ import os
 from pathlib import Path
 
 import diffmah
+import diffhalos
 import diffsky
 import diffstar
 import euclid_dsps
@@ -141,6 +153,7 @@ if repo not in pkg.parents:
     )
 print("[job] euclid_dsps:", pkg)
 print("[job] diffsky:", Path(diffsky.__file__).resolve())
+print("[job] diffhalos:", Path(diffhalos.__file__).resolve())
 print("[job] diffstar:", Path(diffstar.__file__).resolve())
 print("[job] diffmah:", Path(diffmah.__file__).resolve())
 print("[job] jax_backend:", jax.default_backend())

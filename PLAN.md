@@ -1,5 +1,20 @@
 # Plan
 
+## 2026-07-02 Jean-Zay Diffsky Backend Dependency Diagnostics
+
+- Status: completed.
+- Goal: expose the real missing dependency behind the generic Diffsky backend
+  `ImportError` seen on Jean-Zay during proposal generation.
+- Completed:
+  - Preserve the original Python import error in the raised backend exception.
+  - Add optional `DIFFHALOS_REPO` support to the H100 SLURM launcher because
+    Diffsky's analytic lightcone generator imports `diffhalos`.
+  - Provide relaunch commands that install or point to both external Diffsky
+    and Diffhalos.
+  - Verified with `python -m compileall euclid_dsps/synthetic_diffsky/backend.py`,
+    `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm`, and
+    `git diff --check`.
+
 ## 2026-07-02 Jean-Zay Diffsky Import Preflight
 
 - Status: completed.

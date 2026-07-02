@@ -73,10 +73,14 @@ def generate_diffsky_proposal_shard(
         from dsps.data_loaders.defaults import TransmissionCurve
         from dsps.metallicity.umzr import mzr_model
     except ImportError as exc:  # pragma: no cover - depends on science env
+        missing = getattr(exc, "name", None)
+        missing_msg = f" Missing module: {missing}." if missing else ""
         raise ImportError(
             "Diffsky synthetic closure generation requires diffsky, diffstar, "
-            "diffmah, dsps, and JAX in the active environment. Install the "
-            "FENIKS-capable Diffsky version before running the science backend."
+            "diffmah, diffhalos, dsps, and JAX in the active environment. "
+            "Install the FENIKS-capable Diffsky stack before running the "
+            "science backend."
+            f"{missing_msg} Original import error: {type(exc).__name__}: {exc}"
         ) from exc
 
     key = _jax_random_key(jran, int(split.source_seed) + int(shard_index))
