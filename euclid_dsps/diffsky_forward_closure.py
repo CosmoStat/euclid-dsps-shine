@@ -28,26 +28,27 @@ from euclid_dsps.photometry import abmag_to_fnu_cgs
 TRUTH_PARAMETER_MAP: dict[str, tuple[str, ...]] = {
     "z_obs": ("redshift_true",),
     "log10_stellar_mass": ("logsm_true",),
-    "diffstar_lgmcrit": ("diffstar_lgmcrit",),
-    "diffstar_lgy_at_mcrit": ("diffstar_lgy_at_mcrit",),
-    "diffstar_indx_lo": ("diffstar_indx_lo",),
-    "diffstar_indx_hi": ("diffstar_indx_hi",),
-    "diffstar_lg_qt": ("diffstar_lg_qt",),
-    "diffstar_qlglgdt": ("diffstar_qlglgdt",),
-    "diffstar_lg_drop": ("diffstar_lg_drop",),
-    "diffstar_lg_rejuv": ("diffstar_lg_rejuv",),
-    "diffmah_logm0": ("diffmah_logm0",),
-    "diffmah_logtc": ("diffmah_logtc",),
-    "diffmah_early_index": ("diffmah_early_index",),
-    "diffmah_late_index": ("diffmah_late_index",),
-    "diffmah_t_peak": ("diffmah_t_peak",),
+    "diffstar_lgmcrit": ("diffstar_lgmcrit_true", "diffstar_lgmcrit"),
+    "diffstar_lgy_at_mcrit": (
+        "diffstar_lgy_at_mcrit_true",
+        "diffstar_lgy_at_mcrit",
+    ),
+    "diffstar_indx_lo": ("diffstar_indx_lo_true", "diffstar_indx_lo"),
+    "diffstar_indx_hi": ("diffstar_indx_hi_true", "diffstar_indx_hi"),
+    "diffstar_lg_qt": ("diffstar_lg_qt_true", "diffstar_lg_qt"),
+    "diffstar_qlglgdt": ("diffstar_qlglgdt_true", "diffstar_qlglgdt"),
+    "diffstar_lg_drop": ("diffstar_lg_drop_true", "diffstar_lg_drop"),
+    "diffstar_lg_rejuv": ("diffstar_lg_rejuv_true", "diffstar_lg_rejuv"),
+    "diffmah_logm0": ("diffmah_logm0_true", "diffmah_logm0"),
+    "diffmah_logtc": ("diffmah_logtc_true", "diffmah_logtc"),
+    "diffmah_early_index": ("diffmah_early_index_true", "diffmah_early_index"),
+    "diffmah_late_index": ("diffmah_late_index_true", "diffmah_late_index"),
+    "diffmah_t_peak": ("diffmah_t_peak_true", "diffmah_t_peak"),
     "log10_stellar_metallicity": (
         "log10_stellar_metallicity_true",
-        "stellar_metallicity_true",
-        "metallicity_true",
     ),
-    "dust_av": ("dust_av", "dust_av_true"),
-    "dust_delta": ("dust_delta", "dust_delta_true"),
+    "dust_av": ("dust_av_true", "dust_av"),
+    "dust_delta": ("dust_delta_true", "dust_delta"),
 }
 
 REQUIRED_TRUTH_PARAMETERS = tuple(
@@ -62,17 +63,21 @@ def build_trueparam_theta(
     config: dict[str, Any],
     *,
     allow_partial_truth: bool = False,
+    truth_schema: str | None = None,
 ) -> tuple[np.ndarray, pd.DataFrame]:
     """Build a Diffsky-basic theta matrix from prepared truth columns."""
     fixed = dict((config.get("model", {}) or {}).get("fixed_parameters", {}) or {})
     default_metallicity = float(fixed.get("log10_stellar_metallicity", -0.7))
+    strict_full_truth = str(truth_schema or _forward_closure_truth_schema(config)) == (
+        "diffsky_dsps_closure_full"
+    )
     columns = []
     metadata = []
     missing = []
     for name in DIFFSKY_BASIC_PARAMETER_NAMES:
         column = _first_existing(frame, TRUTH_PARAMETER_MAP[name])
         if column is None:
-            if name == "log10_stellar_metallicity":
+            if name == "log10_stellar_metallicity" and not strict_full_truth:
                 values = np.full(len(frame), default_metallicity, dtype=np.float32)
                 metadata.append(
                     {
@@ -100,7 +105,7 @@ def build_trueparam_theta(
             values = pd.to_numeric(frame[column], errors="coerce").to_numpy(
                 dtype=np.float32
             )
-            source_kind = (
+            source_kind = "closure_ground_truth" if strict_full_truth else (
                 "truth"
                 if name in {"z_obs", "log10_stellar_mass"}
                 else "generated_truth"
@@ -119,7 +124,9 @@ def build_trueparam_theta(
         raise ValueError(
             "Missing Diffsky true-parameter columns for forward closure: "
             f"{joined}. Set diffsky_forward_closure.allow_partial_truth=true "
-            "only for explicit diagnostic runs."
+            "only for explicit diagnostic runs. The "
+            "diffsky_dsps_closure_full schema requires all 18 truths and never "
+            "uses fixed-metallicity fallback."
         )
     theta = np.stack(columns, axis=1).astype(np.float32)
     finite = np.isfinite(theta).all(axis=1)
@@ -127,6 +134,12 @@ def build_trueparam_theta(
         dropped = int((~finite).sum())
         raise ValueError(f"Forward closure theta contains {dropped} non-finite rows")
     return theta, pd.DataFrame(metadata)
+
+
+def _forward_closure_truth_schema(config: dict[str, Any]) -> str | None:
+    closure = config.get("diffsky_forward_closure", {}) or {}
+    truth = config.get("truth", {}) or {}
+    return closure.get("truth_schema") or truth.get("schema")
 
 
 def build_popcosmos_proxy_theta(
@@ -301,6 +314,7 @@ def run_diffsky_forward_closure(
         frame,
         config,
         allow_partial_truth=allow_partial,
+        truth_schema=_forward_closure_truth_schema(config),
     )
     band_names, observed_mag = _observed_magnitudes(frame, config)
     object_id = (

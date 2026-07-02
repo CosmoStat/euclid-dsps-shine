@@ -30,8 +30,8 @@ Where to Start
      - :doc:`run_setup`
      - ``python -m euclid_dsps.cli --config ...``
    * - Check physical closure
-     - :doc:`diffsky_forward_closure`
-     - ``diffsky-forward-closure``
+     - :doc:`diffsky_forward_closure`, :doc:`diffsky_synthetic_closure`
+     - ``diffsky-forward-closure``, ``diffsky-generate-dsps-closure``
    * - Train supervised priors
      - :doc:`prior_learning`
      - ``diffsky-train-supervised-prior``
@@ -101,6 +101,7 @@ parameters physically.
 
    diffsky_dataset
    diffsky_forward_closure
+   diffsky_synthetic_closure
    forward_model
    prior_learning
    amortized_inference

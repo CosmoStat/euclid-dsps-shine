@@ -25,6 +25,17 @@ The public config surface is intentionally small:
      - Supervised RealNVP prior on available Diffstar/Diffmah/dust generated truths.
    * - ``configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml``
      - Same-parameter Diffsky truth-to-photometry forward closure.
+   * - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
+     - Synthetic Diffsky/FENIKS weighted-proposal to DSPS-closure dataset
+       generation.
+   * - ``configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml``
+     - Exact true-parameter closure validation for the synthetic FENIKS
+       dataset.
+   * - ``configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml``
+     - Supervised RealNVP prior over the full 18D synthetic closure truths.
+   * - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
+     - 18D amortized closure inference config using the supervised FENIKS
+       prior checkpoint.
    * - ``configs/amortized_fs2_realnvp.yaml``
      - FS2 amortized encoder plus learned RealNVP prior.
    * - ``configs/amortized_diffsky_hltds_standard_normal_gpu.yaml``

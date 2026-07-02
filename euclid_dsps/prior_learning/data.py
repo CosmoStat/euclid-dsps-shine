@@ -111,6 +111,47 @@ def load_truth_dataset(
     )
 
 
+def load_truth_dataset_with_schema(
+    dataset_path: str | Path,
+    *,
+    schema: TruthSchema,
+    limit: int | None = None,
+) -> TruthDataset:
+    """Load a truth dataset using an already resolved schema and bounds."""
+    dataset_path = Path(dataset_path)
+    frame = pd.read_parquet(dataset_path)
+    if limit is not None:
+        frame = frame.head(max(int(limit), 0))
+    missing = [param.column for param in schema.parameters if param.column not in frame]
+    if missing:
+        raise ValueError(f"{dataset_path} is missing schema columns: {missing}")
+    source_row_base = frame.index.to_numpy(dtype=np.int64)
+    columns = [param.column for param in schema.parameters]
+    raw = frame[columns].apply(pd.to_numeric, errors="coerce")
+    finite_mask = np.isfinite(raw.to_numpy(dtype=float)).all(axis=1)
+    theta = raw.loc[finite_mask].to_numpy(dtype=np.float32)
+    if theta.size == 0:
+        raise ValueError(f"No finite truth rows found in {dataset_path}")
+    latent_spec = latent_spec_from_parameter_specs(schema.parameters)
+    x = np.asarray(theta_to_x(jnp.asarray(theta), latent_spec), dtype=np.float32)
+    object_id = (
+        frame.loc[finite_mask, "object_id"].to_numpy()
+        if "object_id" in frame
+        else np.nonzero(finite_mask)[0].astype(np.int64)
+    )
+    source_rows = source_row_base[finite_mask]
+    return TruthDataset(
+        schema=schema,
+        latent_spec=latent_spec,
+        theta=theta,
+        x=x,
+        object_id=object_id,
+        source_rows=source_rows,
+        dropped_rows=int((~finite_mask).sum()),
+        dataset_path=str(dataset_path),
+    )
+
+
 def latent_spec_from_parameter_specs(parameters: tuple[ParameterSpec, ...]) -> LatentSpec:
     """Build the amortized bounded-transform spec from truth parameter specs."""
     missing = [param.name for param in parameters if param.lower is None or param.upper is None]

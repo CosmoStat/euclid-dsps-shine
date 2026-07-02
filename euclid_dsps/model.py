@@ -2287,11 +2287,7 @@ def run_diffsky_basic_model_jax(
     from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
 
     model_config = _normalized_model_config(context.model_config)
-    if str(model_config.get("stellar_metallicity_model")) != "single":
-        raise ValueError(
-            "sfh_model='diffsky_basic' requires "
-            "model.stellar_metallicity_model='single'."
-        )
+    _validate_diffsky_basic_metallicity_model(model_config)
 
     z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
@@ -2301,7 +2297,9 @@ def run_diffsky_basic_model_jax(
     lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
         params["log10_stellar_metallicity"], context.z_sun
     )
-    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    frac_surviving_by_age = _diffsky_basic_surviving_mstar_by_age_jax(
+        context, model_config, lgmet_abs
+    )
     gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
         gal_t_table,
         raw_sfr_table,
@@ -2316,7 +2314,7 @@ def run_diffsky_basic_model_jax(
         ssp_lg_age_gyr,
         t_obs,
     )
-    ssp_flux_z = interpolate_context_ssp_stellar_metallicity_jax(context, lgmet_abs)
+    ssp_flux_z = diffsky_basic_ssp_flux_by_age_jax(context, model_config, lgmet_abs)
     sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
     intrinsic_sed = jnp.nan_to_num(
         sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
@@ -2373,6 +2371,7 @@ def run_diffsky_basic_model_mags_jax(
     from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
 
     model_config = _normalized_model_config(context.model_config)
+    _validate_diffsky_basic_metallicity_model(model_config)
     z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
@@ -2381,7 +2380,9 @@ def run_diffsky_basic_model_mags_jax(
     lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
         params["log10_stellar_metallicity"], context.z_sun
     )
-    frac_surviving_by_age = _context_surviving_mstar_by_age(context, lgmet_abs)
+    frac_surviving_by_age = _diffsky_basic_surviving_mstar_by_age_jax(
+        context, model_config, lgmet_abs
+    )
     gal_sfr_table, formed_mass, _ = normalize_sfh_to_stellar_mass_jax(
         gal_t_table,
         raw_sfr_table,
@@ -2396,7 +2397,7 @@ def run_diffsky_basic_model_mags_jax(
         ssp_lg_age_gyr,
         t_obs,
     )
-    ssp_flux_z = interpolate_context_ssp_stellar_metallicity_jax(context, lgmet_abs)
+    ssp_flux_z = diffsky_basic_ssp_flux_by_age_jax(context, model_config, lgmet_abs)
     sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
     tau2, dust_index_n, tau1_over_tau2 = diffsky_basic_dust_params_jax(params)
     wave = _context_ssp_wave(context)
@@ -2861,6 +2862,126 @@ def interpolate_context_ssp_stellar_metallicity_jax(
     basis = jnp.asarray(context.compressed_ssp_basis_jax, dtype=jnp.float32)
     reconstructed = jnp.einsum("ak,kw->aw", weighted_coeff, basis)
     return jnp.nan_to_num(reconstructed, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
+
+
+def lognormal_mdf_lgmet_weights_jax(
+    ssp_lgmet: jnp.ndarray,
+    lgmet_abs_median: jnp.ndarray,
+    scatter_dex: jnp.ndarray,
+) -> jnp.ndarray:
+    """Return DSPS lognormal-MDF weights over the SSP metallicity grid."""
+    from dsps.sed.metallicity_weights import calc_lgmet_weights_from_lognormal_mdf
+
+    weights = calc_lgmet_weights_from_lognormal_mdf(
+        jnp.asarray(lgmet_abs_median, dtype=jnp.float32),
+        jnp.maximum(jnp.asarray(scatter_dex, dtype=jnp.float32), 1.0e-6),
+        jnp.asarray(ssp_lgmet, dtype=jnp.float32),
+    )
+    weights = jnp.clip(jnp.asarray(weights, dtype=jnp.float32), 0.0, jnp.inf)
+    return weights / jnp.maximum(jnp.sum(weights), 1.0e-30)
+
+
+def context_ssp_lognormal_mdf_jax(
+    context: DspsContext,
+    lgmet_abs_median: jnp.ndarray,
+    scatter_dex: jnp.ndarray,
+) -> jnp.ndarray:
+    """Return age-by-wave SSP flux integrated over a lognormal metallicity MDF."""
+    weights = lognormal_mdf_lgmet_weights_jax(
+        _context_ssp_lgmet(context), lgmet_abs_median, scatter_dex
+    )
+    if (
+        context.compressed_ssp_basis_jax is None
+        or context.compressed_ssp_coeff_jax is None
+        or context.compressed_ssp_scale_jax is None
+    ):
+        flux = jnp.asarray(_context_ssp_flux(context), dtype=jnp.float32)
+        return jnp.nan_to_num(
+            jnp.einsum("m,maw->aw", weights, flux),
+            nan=0.0,
+            posinf=1.0e30,
+            neginf=-1.0e30,
+        )
+    coeff = jnp.asarray(context.compressed_ssp_coeff_jax, dtype=jnp.float32)
+    scale = jnp.asarray(context.compressed_ssp_scale_jax, dtype=jnp.float32)
+    weighted_coeff = coeff * scale[..., None]
+    coeff_mdf = jnp.einsum("m,mak->ak", weights, weighted_coeff)
+    basis = jnp.asarray(context.compressed_ssp_basis_jax, dtype=jnp.float32)
+    reconstructed = jnp.einsum("ak,kw->aw", coeff_mdf, basis)
+    return jnp.nan_to_num(reconstructed, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
+
+
+def diffsky_basic_ssp_flux_by_age_jax(
+    context: DspsContext,
+    model_config: dict[str, Any],
+    lgmet_abs: jnp.ndarray,
+) -> jnp.ndarray:
+    """Return Diffsky-basic SSP flux by age for the configured metallicity model."""
+    metallicity_model = str(model_config.get("stellar_metallicity_model", "single"))
+    if metallicity_model == "single":
+        return interpolate_context_ssp_stellar_metallicity_jax(context, lgmet_abs)
+    if metallicity_model == "lognormal_mdf_fixed_scatter":
+        return context_ssp_lognormal_mdf_jax(
+            context,
+            lgmet_abs,
+            jnp.asarray(model_config.get("stellar_metallicity_scatter_dex", 0.2)),
+        )
+    raise ValueError(
+        "sfh_model='diffsky_basic' supports model.stellar_metallicity_model "
+        "'single' or 'lognormal_mdf_fixed_scatter'."
+    )
+
+
+def _diffsky_basic_surviving_mstar_by_age_jax(
+    context: DspsContext,
+    model_config: dict[str, Any],
+    lgmet_abs: jnp.ndarray,
+) -> jnp.ndarray | None:
+    """Return survival fractions by age for single-metallicity or MDF modes."""
+    grid = _context_ssp_surviving_mstar(context)
+    if grid is None:
+        return None
+    metallicity_model = str(model_config.get("stellar_metallicity_model", "single"))
+    if metallicity_model == "single":
+        return _interp_axis0_linear(
+            _context_ssp_lgmet(context),
+            grid,
+            jnp.asarray(lgmet_abs, dtype=jnp.float32),
+        )
+    if metallicity_model == "lognormal_mdf_fixed_scatter":
+        weights = lognormal_mdf_lgmet_weights_jax(
+            _context_ssp_lgmet(context),
+            lgmet_abs,
+            jnp.asarray(model_config.get("stellar_metallicity_scatter_dex", 0.2)),
+        )
+        return jnp.nan_to_num(
+            jnp.einsum("m,ma->a", weights, jnp.asarray(grid, dtype=jnp.float32)),
+            nan=0.0,
+            posinf=1.0,
+            neginf=0.0,
+        )
+    raise ValueError(
+        "sfh_model='diffsky_basic' supports model.stellar_metallicity_model "
+        "'single' or 'lognormal_mdf_fixed_scatter'."
+    )
+
+
+def _validate_diffsky_basic_metallicity_model(model_config: dict[str, Any]) -> None:
+    metallicity_model = str(model_config.get("stellar_metallicity_model", "single"))
+    if metallicity_model == "single":
+        return
+    if metallicity_model == "lognormal_mdf_fixed_scatter":
+        scatter = float(model_config.get("stellar_metallicity_scatter_dex", 0.2))
+        if not np.isfinite(scatter) or scatter <= 0.0:
+            raise ValueError(
+                "model.stellar_metallicity_scatter_dex must be positive for "
+                "stellar_metallicity_model='lognormal_mdf_fixed_scatter'."
+            )
+        return
+    raise ValueError(
+        "sfh_model='diffsky_basic' supports model.stellar_metallicity_model "
+        "'single' or 'lognormal_mdf_fixed_scatter'."
+    )
 
 
 def interpolate_popcosmos_ssp_stellar_metallicity_jax(

@@ -128,7 +128,11 @@ SUPPORTED_SFH_MODELS = {
     "diffsky_basic",
 }
 SUPPORTED_SSP_MODELS = {"dense", "compressed_basis"}
-SUPPORTED_STELLAR_METALLICITY_MODELS = {"mdf", "single"}
+SUPPORTED_STELLAR_METALLICITY_MODELS = {
+    "mdf",
+    "single",
+    "lognormal_mdf_fixed_scatter",
+}
 SUPPORTED_MODEL_DUST_MODELS = {
     "legacy",
     "charlot_fall",
@@ -858,7 +862,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["model"]["sfh_model"] = sfh_model
     config["model"].setdefault(
         "stellar_metallicity_model",
-        "single" if sfh_model in {"popcosmos_bins", "diffstar_reduced6"} else "mdf",
+        "single" if _is_popcosmos_like_sfh(sfh_model) else "mdf",
     )
     popcosmos_like = _is_popcosmos_like_sfh(sfh_model)
     config["model"].setdefault(
@@ -1515,6 +1519,11 @@ def _validate_model(model: dict[str, Any], errors: list[str]) -> None:
     _finite_float(model.get("dust_tesc_logyr", 7.0), "model.dust_tesc_logyr", errors)
     _finite_float(model.get("dust1_index", -1.0), "model.dust1_index", errors)
     _positive_float(model.get("z_sun", 0.0134), "model.z_sun", errors)
+    _positive_float(
+        model.get("stellar_metallicity_scatter_dex", 0.2),
+        "model.stellar_metallicity_scatter_dex",
+        errors,
+    )
     if ssp_model == "compressed_basis":
         _require_model_path(
             model.get("compressed_ssp_path"), "model.compressed_ssp_path", errors
@@ -1770,10 +1779,12 @@ def _validate_diffsky_basic_free_parameters(
             "model.sfh_model='diffsky_basic'"
         )
 
-    if str(model.get("stellar_metallicity_model", "single")) != "single":
+    metallicity_model = str(model.get("stellar_metallicity_model", "single"))
+    if metallicity_model not in {"single", "lognormal_mdf_fixed_scatter"}:
         errors.append(
             "model.sfh_model='diffsky_basic' requires "
-            "model.stellar_metallicity_model='single'"
+            "model.stellar_metallicity_model='single' or "
+            "'lognormal_mdf_fixed_scatter'"
         )
     if _normalize_model_dust_model(
         model.get("dust_model", "prospector_fsps")

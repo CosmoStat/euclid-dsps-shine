@@ -1,0 +1,18 @@
+extends: diffsky_synthetic_feniks_260617_50k.yaml
+
+catalog_path: Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet
+
+diffsky_forward_closure:
+    truth_schema: diffsky_dsps_closure_full
+    allow_partial_truth: false
+
+calibration:
+    global_sed_scale:
+        enabled: false
+        mode: disabled
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: false
+    per_band_zero_points:
+        enabled: false

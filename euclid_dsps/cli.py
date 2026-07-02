@@ -35,6 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
             "diffsky-train-inferred-prior,"
             "diffsky-supervised-prior-report,"
             "diffsky-forward-closure,diffsky-popcosmos-proxy-closure,"
+            "diffsky-generate-dsps-closure,diffsky-validate-dsps-closure,"
+            "diffsky-evaluate-dsps-closure-inference,"
+            "diffsky-compare-dsps-closure-reference,"
             "diffsky-redshift-ablation,diffsky-dust-ssp-audit,"
             "diffsky-build-reconstruction-rowsets,"
             "diffsky-compare-reconstruction,"
@@ -583,6 +586,92 @@ def build_parser() -> argparse.ArgumentParser:
         default="outputs/runs/diffsky_trueparam_forward_closure",
     )
 
+    generate_closure = sub.add_parser(
+        "diffsky-generate-dsps-closure",
+        help="Generate a synthetic Diffsky/FENIKS DSPS closure dataset.",
+    )
+    generate_closure.add_argument(
+        "--split",
+        choices=("train", "validation", "test", "all"),
+        default="all",
+    )
+    generate_closure.add_argument("--max-galaxies", type=int)
+    generate_closure.add_argument("--smoke", action="store_true")
+    generate_closure.add_argument("--overwrite", action="store_true")
+    generate_closure.add_argument("--resume", action="store_true")
+    generate_closure.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress generation progress logs.",
+    )
+
+    validate_closure = sub.add_parser(
+        "diffsky-validate-dsps-closure",
+        help="Validate a synthetic Diffsky/FENIKS DSPS closure dataset.",
+    )
+    validate_closure.add_argument(
+        "--dataset-dir",
+        required=True,
+        help="Directory containing train/validation/test closure parquets.",
+    )
+    validate_closure.add_argument("--sample-size", type=int, default=256)
+    validate_closure.add_argument("--batch-size", type=int, default=256)
+    validate_closure.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime for validation.",
+    )
+
+    eval_closure = sub.add_parser(
+        "diffsky-evaluate-dsps-closure-inference",
+        help="Evaluate closure posterior outputs against synthetic DSPS truths.",
+    )
+    eval_closure.add_argument("--run", required=True, help="Inference run directory.")
+    eval_closure.add_argument(
+        "--dataset",
+        required=True,
+        help="Held-out closure parquet, usually test.parquet.",
+    )
+    eval_closure.add_argument("--out", help="Output evaluation directory.")
+
+    compare_closure_reference = sub.add_parser(
+        "diffsky-compare-dsps-closure-reference",
+        help="Compare a synthetic DSPS closure catalog to the current z<=0.35 reference.",
+    )
+    compare_closure_reference.add_argument(
+        "--synthetic",
+        default="Data/diffsky/synthetic/feniks_260617_dsps_closure/all_50k.parquet",
+        help="Synthetic closure parquet to compare.",
+    )
+    compare_closure_reference.add_argument(
+        "--reference",
+        default=(
+            "Data/diffsky/processed/"
+            "hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet"
+        ),
+        help="Reference z<=0.35 Diffsky HLTDS parquet.",
+    )
+    compare_closure_reference.add_argument(
+        "--out",
+        default="outputs/audits/feniks_synthetic_vs_z035_reference",
+        help="Output diagnostic directory.",
+    )
+    compare_closure_reference.add_argument(
+        "--proposal-dir",
+        help=(
+            "Optional proposals directory; when provided, weighted proposal "
+            "diagnostics are added to the report."
+        ),
+    )
+    compare_closure_reference.add_argument("--max-reference", type=int)
+    compare_closure_reference.add_argument("--seed", type=int, default=260617)
+    compare_closure_reference.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="Skip optional matplotlib plots and write only tables/JSON/report.",
+    )
+
     proxy_closure = sub.add_parser(
         "diffsky-popcosmos-proxy-closure",
         help="Run PopCosmos proxy-truth closure for the amortized decoder.",
@@ -1050,6 +1139,10 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-sample-supervised-prior",
         "diffsky-supervised-prior-report",
         "diffsky-forward-closure",
+        "diffsky-generate-dsps-closure",
+        "diffsky-validate-dsps-closure",
+        "diffsky-evaluate-dsps-closure-inference",
+        "diffsky-compare-dsps-closure-reference",
         "diffsky-popcosmos-proxy-closure",
         "diffsky-redshift-ablation",
         "diffsky-run-full-validation",
@@ -1087,6 +1180,22 @@ def main(argv: list[str] | None = None) -> None:
             **runtime_config,
             "jax_platforms": "auto",
             "require_gpu": False,
+        }
+    if args.command == "diffsky-generate-dsps-closure" and getattr(
+        args, "smoke", False
+    ):
+        runtime_config = {
+            **runtime_config,
+            "jax_platforms": "cpu",
+            "disable_jax_plugin_autoload": True,
+            "require_gpu": False,
+        }
+    if args.command == "diffsky-validate-dsps-closure" and getattr(
+        args, "runtime", "config"
+    ) != "config":
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
         }
     if (
         args.command.startswith("experimental-ssp-inr")
@@ -1151,6 +1260,18 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "diffsky-forward-closure":
         _run_diffsky_forward_closure(config, args)
+        return
+    if args.command == "diffsky-generate-dsps-closure":
+        _run_diffsky_generate_dsps_closure(config, args)
+        return
+    if args.command == "diffsky-validate-dsps-closure":
+        _run_diffsky_validate_dsps_closure(config, args)
+        return
+    if args.command == "diffsky-evaluate-dsps-closure-inference":
+        _run_diffsky_evaluate_dsps_closure_inference(config, args)
+        return
+    if args.command == "diffsky-compare-dsps-closure-reference":
+        _run_diffsky_compare_dsps_closure_reference(config, args)
         return
     if args.command == "diffsky-popcosmos-proxy-closure":
         _run_diffsky_popcosmos_proxy_closure(config, args)
@@ -1471,6 +1592,64 @@ def _run_diffsky_forward_closure(config: dict, args) -> None:
         batch_size=int(args.batch_size),
     )
     print(f"[diffsky] forward closure report -> {report}")
+
+
+def _run_diffsky_generate_dsps_closure(config: dict, args) -> None:
+    from .synthetic_diffsky import generate_dsps_closure_dataset
+
+    out = generate_dsps_closure_dataset(
+        config,
+        split=str(args.split),
+        max_galaxies=args.max_galaxies,
+        smoke=bool(args.smoke),
+        overwrite=bool(args.overwrite),
+        resume=bool(args.resume),
+        verbose=not bool(args.quiet),
+    )
+    print(f"[diffsky] synthetic DSPS closure dataset -> {out}")
+
+
+def _run_diffsky_validate_dsps_closure(config: dict, args) -> None:
+    from .synthetic_diffsky import validate_dsps_closure_dataset
+
+    report = validate_dsps_closure_dataset(
+        config,
+        dataset_dir=Path(args.dataset_dir),
+        sample_size=int(args.sample_size),
+        batch_size=int(args.batch_size),
+    )
+    print(f"[diffsky] synthetic DSPS closure validation -> {report}")
+
+
+def _run_diffsky_evaluate_dsps_closure_inference(config: dict, args) -> None:
+    del config
+    from .synthetic_diffsky.inference_evaluation import evaluate_closure_inference
+
+    report = evaluate_closure_inference(
+        run_dir=Path(args.run),
+        dataset_path=Path(args.dataset),
+        out_dir=Path(args.out) if args.out else None,
+    )
+    print(f"[diffsky] synthetic DSPS closure inference evaluation -> {report}")
+
+
+def _run_diffsky_compare_dsps_closure_reference(config: dict, args) -> None:
+    from .synthetic_diffsky.reference_comparison import (
+        compare_synthetic_closure_to_reference,
+    )
+
+    bands = [str(band["name"]) for band in config.get("bands", [])]
+    outputs = compare_synthetic_closure_to_reference(
+        synthetic_path=Path(args.synthetic),
+        reference_path=Path(args.reference),
+        out_dir=Path(args.out),
+        proposal_dir=Path(args.proposal_dir) if args.proposal_dir else None,
+        bands=bands or None,
+        max_reference=args.max_reference,
+        seed=int(args.seed),
+        plots=not bool(args.no_plots),
+    )
+    print(f"[diffsky] synthetic-vs-reference report -> {outputs['report']}")
 
 
 def _run_diffsky_popcosmos_proxy_closure(config: dict, args) -> None:

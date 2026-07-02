@@ -1,0 +1,354 @@
+"""End-to-end generation of synthetic Diffsky/FENIKS DSPS closure catalogs."""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from euclid_dsps.filters import load_filters
+from euclid_dsps.io import ensure_dir
+from euclid_dsps.model import load_context
+from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
+from euclid_dsps.photometric_uncertainty import flux_error_model_payload
+
+from .backend import generate_proposal_shard
+from .config import (
+    SyntheticDiffskyConfig,
+    load_synthetic_diffsky_config,
+    selected_splits,
+)
+from .manifest import (
+    base_manifest,
+    calibration_hash,
+    file_sha256,
+    filters_hash_payload,
+    stable_hash_payload,
+    write_manifest,
+)
+from .metallicity import metallicity_summary_payload
+from .photometry import GROUND_TRUTH_COLUMNS, add_dsps_closure_photometry
+from .population_diagnostics import run_generation_population_diagnostics
+from .resampling import resample_weighted_proposals, resampling_summary
+
+
+def generate_dsps_closure_dataset(
+    config: dict[str, Any],
+    *,
+    split: str = "all",
+    max_galaxies: int | None = None,
+    smoke: bool = False,
+    overwrite: bool = False,
+    resume: bool = False,
+    verbose: bool = True,
+) -> Path:
+    """Generate weighted proposals and final unweighted closure catalogs."""
+    gen_cfg = load_synthetic_diffsky_config(
+        config,
+        smoke=bool(smoke),
+        max_galaxies=max_galaxies,
+    )
+    out = gen_cfg.output_dir
+    chosen = selected_splits(split)
+    _progress(
+        verbose,
+        f"start output={out} splits={','.join(chosen)} smoke={bool(smoke)} "
+        f"z=[{gen_cfg.z_min}, {gen_cfg.z_max}]",
+    )
+    if out.exists() and overwrite and not resume:
+        _progress(verbose, f"overwrite requested; removing {out}")
+        shutil.rmtree(out)
+    ensure_dir(out)
+    ensure_dir(out / "proposals")
+    ensure_dir(out / "diagnostics")
+
+    _progress(verbose, "loading filters and SSP context")
+    filters = load_filters(config["bands"])
+    context = load_context(
+        config["ssp_path"],
+        filters,
+        n_sfh_bins=int((config.get("model", {}) or {}).get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
+    )
+    ssp_lgmet = np.asarray(context.ssp_lgmet_jax, dtype=float)
+    config_hash = stable_hash_payload(config)
+    manifest = base_manifest(
+        config=config,
+        config_hash=config_hash,
+        ssp_hash=file_sha256(config["ssp_path"]),
+        filter_hashes=filters_hash_payload(filters),
+        calibration_hash=calibration_hash(
+            gen_cfg.calibration_dir,
+            gen_cfg.calibration_name,
+        ),
+    )
+    manifest["synthetic_diffsky"] = {
+        "proposal_backend": gen_cfg.proposal_backend,
+        "n_host_halos_per_shard": int(gen_cfg.n_host_halos_per_shard),
+        "max_shards": int(gen_cfg.max_shards),
+        "z_min": float(gen_cfg.z_min),
+        "z_max": float(gen_cfg.z_max),
+        "lgmp_min": float(gen_cfg.lgmp_min),
+        "lgmp_max": float(gen_cfg.lgmp_max),
+        "sky_area_degsq": float(gen_cfg.sky_area_degsq),
+        "mc_merge": int(gen_cfg.mc_merge),
+        "metallicity_grid_policy": gen_cfg.metallicity_grid_policy,
+        "flux_error_model": flux_error_model_payload(gen_cfg.flux_error_model),
+        "smoke": bool(smoke),
+    }
+    manifest["splits"] = {}
+
+    for split_name in chosen:
+        split_cfg = gen_cfg.splits[split_name]
+        split_summary = _generate_one_split(
+            config,
+            gen_cfg,
+            split_cfg,
+            filters=filters,
+            ssp_lgmet=ssp_lgmet,
+            z_sun=float((config.get("model", {}) or {}).get("z_sun", context.z_sun)),
+            overwrite=overwrite,
+            resume=resume,
+            verbose=verbose,
+        )
+        manifest["splits"][split_name] = split_summary
+        write_manifest(out / "manifest.yaml", manifest)
+
+    _progress(verbose, "writing schema and combined catalog")
+    _write_schema(out / "schema.json", config)
+    _write_all_catalog(out)
+    _progress(verbose, "running post-generation population diagnostics")
+    diagnostics_path = run_generation_population_diagnostics(
+        config,
+        dataset_dir=out,
+        smoke=bool(smoke),
+    )
+    if diagnostics_path is not None:
+        manifest["population_diagnostics"] = str(diagnostics_path)
+        _progress(verbose, f"population diagnostics -> {diagnostics_path}")
+    write_manifest(out / "manifest.yaml", manifest)
+    _progress(verbose, f"done -> {out}")
+    return out
+
+
+def _generate_one_split(
+    config: dict[str, Any],
+    gen_cfg: SyntheticDiffskyConfig,
+    split_cfg,
+    *,
+    filters,
+    ssp_lgmet: np.ndarray,
+    z_sun: float,
+    overwrite: bool,
+    resume: bool,
+    verbose: bool,
+) -> dict[str, Any]:
+    out = gen_cfg.output_dir
+    final_path = out / f"{split_cfg.name}.parquet"
+    if final_path.exists() and not overwrite and not resume:
+        raise FileExistsError(
+            f"{final_path} already exists; pass --overwrite or --resume explicitly"
+        )
+    if final_path.exists() and resume:
+        frame = pd.read_parquet(final_path)
+        _progress(
+            verbose,
+            f"{split_cfg.name}: reusing existing final {final_path} rows={len(frame)}",
+        )
+        return {
+            "status": "reused_existing_final",
+            "final_path": str(final_path),
+            "final_size": int(len(frame)),
+        }
+    _progress(
+        verbose,
+        f"{split_cfg.name}: target={int(split_cfg.n_final)} "
+        f"pool_factor={gen_cfg.pool_size_factor} min_ess_factor={gen_cfg.min_ess_fraction}",
+    )
+    proposal_dir = ensure_dir(out / "proposals" / split_cfg.name)
+    if overwrite and proposal_dir.exists() and not resume:
+        shutil.rmtree(proposal_dir)
+        proposal_dir = ensure_dir(proposal_dir)
+
+    proposals: list[pd.DataFrame] = []
+    shard_metadata: list[dict[str, Any]] = []
+    result = None
+    for shard_index in range(int(gen_cfg.max_shards)):
+        shard_path = proposal_dir / f"shard_{shard_index:05d}.parquet"
+        _progress(
+            verbose,
+            f"{split_cfg.name}: shard {shard_index + 1}/{gen_cfg.max_shards} "
+            f"hosts={gen_cfg.n_host_halos_per_shard}",
+        )
+        if shard_path.exists() and resume:
+            shard = pd.read_parquet(shard_path)
+            meta = {"backend": gen_cfg.proposal_backend, "reused": True}
+            _progress(
+                verbose,
+                f"{split_cfg.name}: reused {shard_path} proposals={len(shard)}",
+            )
+        else:
+            shard, meta = generate_proposal_shard(
+                gen_cfg,
+                split_cfg,
+                shard_index,
+                filters=filters,
+                ssp_lgmet=ssp_lgmet,
+                z_sun=z_sun,
+                ssp_path=config["ssp_path"],
+            )
+            shard = _stamp_proposal_ids(shard, split_cfg, shard_index)
+            shard.to_parquet(shard_path, index=False)
+            _progress(
+                verbose,
+                f"{split_cfg.name}: wrote {shard_path} proposals={len(shard)}",
+            )
+        proposals.append(shard)
+        shard_metadata.append({**meta, "path": str(shard_path)})
+        pool = pd.concat(proposals, ignore_index=True)
+        result = resample_weighted_proposals(pool, split_cfg)
+        _progress(
+            verbose,
+            f"{split_cfg.name}: pool={result.pool_size} ESS={result.ess:.3g} "
+            f"dup={result.duplicate_fraction:.3g}",
+        )
+        if _pool_is_sufficient(result, split_cfg, gen_cfg):
+            _progress(verbose, f"{split_cfg.name}: pool targets reached")
+            break
+    if result is None:
+        raise ValueError(f"No proposals generated for split {split_cfg.name}")
+    if not _pool_is_sufficient(result, split_cfg, gen_cfg):
+        raise RuntimeError(
+            f"Split {split_cfg.name} did not reach ESS/duplication targets after "
+            f"{gen_cfg.max_shards} shards: ESS={result.ess:.3g}, "
+            f"duplication={result.duplicate_fraction:.3g}"
+        )
+    final = add_dsps_closure_photometry(
+        result.frame,
+        config,
+        batch_size=int(gen_cfg.jax_batch_size),
+        noise_seed=int(split_cfg.noise_seed),
+        flux_error_model=gen_cfg.flux_error_model,
+        verbose=verbose,
+    )
+    _progress(verbose, f"{split_cfg.name}: writing final parquet {final_path}")
+    final.to_parquet(final_path, index=False)
+    summary = {
+        "status": "generated",
+        "source_seed": int(split_cfg.source_seed),
+        "noise_seed": int(split_cfg.noise_seed),
+        "resample_seed": int(split_cfg.resample_seed),
+        "final_path": str(final_path),
+        "proposal_dir": str(proposal_dir),
+        "n_shards": int(len(proposals)),
+        "shards": shard_metadata,
+        **resampling_summary(result),
+        "metallicity": _metallicity_summary(pd.concat(proposals, ignore_index=True)),
+    }
+    return summary
+
+
+def _progress(verbose: bool, message: str) -> None:
+    if verbose:
+        print(f"[diffsky][generate] {message}", flush=True)
+
+
+def _stamp_proposal_ids(
+    frame: pd.DataFrame,
+    split_cfg,
+    shard_index: int,
+) -> pd.DataFrame:
+    stamped = frame.copy()
+    stamped["source_seed"] = int(split_cfg.source_seed)
+    stamped["source_split"] = split_cfg.name
+    stamped["source_shard"] = int(shard_index)
+    stamped["source_proposal_id"] = [
+        f"{split_cfg.name}:{split_cfg.source_seed}:{shard_index}:{i}"
+        for i in range(len(stamped))
+    ]
+    return stamped
+
+
+def _pool_is_sufficient(result, split_cfg, gen_cfg: SyntheticDiffskyConfig) -> bool:
+    if int(split_cfg.n_final) == 0:
+        return True
+    min_pool = int(np.ceil(float(gen_cfg.pool_size_factor) * int(split_cfg.n_final)))
+    min_ess = float(gen_cfg.min_ess_fraction) * int(split_cfg.n_final)
+    return (
+        result.pool_size >= min_pool
+        and result.ess >= min_ess
+        and result.duplicate_fraction <= float(gen_cfg.max_duplication_fraction)
+    )
+
+
+def _metallicity_summary(frame: pd.DataFrame) -> dict[str, Any]:
+    if "metallicity_clipped" not in frame:
+        return {}
+    mask = frame["metallicity_clipped"].astype(bool).to_numpy()
+    low = int(
+        frame.get("metallicity_clip_low", pd.Series(False, index=frame.index))
+        .astype(bool)
+        .sum()
+    )
+    high = int(
+        frame.get("metallicity_clip_high", pd.Series(False, index=frame.index))
+        .astype(bool)
+        .sum()
+    )
+    return metallicity_summary_payload(
+        type(
+            "MetallicityResult",
+            (),
+            {
+                "clipped_mask": mask,
+                "clip_low_count": low,
+                "clip_high_count": high,
+            },
+        )()
+    )
+
+
+def _write_schema(path: Path, config: dict[str, Any]) -> None:
+    bands = [str(band["name"]) for band in config["bands"]]
+    truth_columns = [
+        GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES
+    ]
+    payload = {
+        "name": "diffsky_dsps_closure_full",
+        "parameter_order": list(DIFFSKY_BASIC_PARAMETER_NAMES),
+        "ground_truth_columns": {
+            name: GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES
+        },
+        "truth_columns": truth_columns,
+        "bands": bands,
+        "flux_columns": {
+            band: {
+                "flux_true": f"flux_true_{band}",
+                "flux": f"flux_{band}",
+                "fluxerr": f"fluxerr_{band}",
+                "mask": f"mask_{band}",
+            }
+            for band in bands
+        },
+        "units": {
+            "flux": "fnu_cgs",
+            "redshift_true": "dimensionless",
+            "log10_stellar_metallicity_true": "log10(Z/Z_sun)",
+        },
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+
+
+def _write_all_catalog(out: Path) -> None:
+    paths = [out / "train.parquet", out / "validation.parquet", out / "test.parquet"]
+    if not all(path.exists() for path in paths):
+        return
+    frames = [pd.read_parquet(path) for path in paths]
+    all_frame = pd.concat(frames, ignore_index=True)
+    all_frame.to_parquet(out / "all_50k.parquet", index=False)

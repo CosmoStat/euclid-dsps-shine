@@ -15,8 +15,13 @@ from euclid_dsps.diffsky_data.schema import (
     HLTDS_DIFFSTAR_COLUMNS,
     HLTDS_DUST_COLUMNS,
 )
+from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
 
-SUPPORTED_TRUTH_SCHEMAS = ("diffsky_truth_basic", "diffsky_truth_extended")
+SUPPORTED_TRUTH_SCHEMAS = (
+    "diffsky_truth_basic",
+    "diffsky_truth_extended",
+    "diffsky_dsps_closure_full",
+)
 MISSING_POLICIES = ("reduce", "fail")
 
 
@@ -73,6 +78,32 @@ DEFAULT_BOUNDS: dict[str, tuple[float, float]] = {
     "diffmah_early_index": (-1.0, 6.0),
     "diffmah_late_index": (-1.0, 3.0),
     "diffmah_t_peak": (0.0, 15.0),
+    "log10_stellar_metallicity": (-2.5, 0.5),
+}
+
+
+DIFFSKY_DSPS_CLOSURE_FULL_COLUMNS: dict[str, tuple[str, ...]] = {
+    "z_obs": ("redshift_true",),
+    "log10_stellar_mass": ("logsm_true",),
+    "diffstar_lgmcrit": ("diffstar_lgmcrit_true", "diffstar_lgmcrit"),
+    "diffstar_lgy_at_mcrit": (
+        "diffstar_lgy_at_mcrit_true",
+        "diffstar_lgy_at_mcrit",
+    ),
+    "diffstar_indx_lo": ("diffstar_indx_lo_true", "diffstar_indx_lo"),
+    "diffstar_indx_hi": ("diffstar_indx_hi_true", "diffstar_indx_hi"),
+    "diffstar_lg_qt": ("diffstar_lg_qt_true", "diffstar_lg_qt"),
+    "diffstar_qlglgdt": ("diffstar_qlglgdt_true", "diffstar_qlglgdt"),
+    "diffstar_lg_drop": ("diffstar_lg_drop_true", "diffstar_lg_drop"),
+    "diffstar_lg_rejuv": ("diffstar_lg_rejuv_true", "diffstar_lg_rejuv"),
+    "diffmah_logm0": ("diffmah_logm0_true", "diffmah_logm0"),
+    "diffmah_logtc": ("diffmah_logtc_true", "diffmah_logtc"),
+    "diffmah_early_index": ("diffmah_early_index_true", "diffmah_early_index"),
+    "diffmah_late_index": ("diffmah_late_index_true", "diffmah_late_index"),
+    "diffmah_t_peak": ("diffmah_t_peak_true", "diffmah_t_peak"),
+    "log10_stellar_metallicity": ("log10_stellar_metallicity_true",),
+    "dust_av": ("dust_av_true", "dust_av"),
+    "dust_delta": ("dust_delta_true", "dust_delta"),
 }
 
 
@@ -107,6 +138,21 @@ def build_truth_schema(
         if required:
             joined = ", ".join(candidates)
             raise ValueError(f"Missing required truth column for {name}: {joined}")
+
+    if schema_name == "diffsky_dsps_closure_full":
+        for name in DIFFSKY_BASIC_PARAMETER_NAMES:
+            add_first(
+                name,
+                DIFFSKY_DSPS_CLOSURE_FULL_COLUMNS[name],
+                semantic="closure_ground_truth",
+                required=True,
+            )
+        return TruthSchema(
+            name=schema_name,
+            parameters=tuple(params),
+            missing_columns=(),
+            reduced=False,
+        )
 
     add_first("z_obs", ("redshift_true",), semantic="truth", required=True)
     add_first("log10_stellar_mass", ("logsm_true",), semantic="truth", required=True)

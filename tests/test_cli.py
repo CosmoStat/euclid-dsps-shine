@@ -47,3 +47,67 @@ def test_diffsky_map_adam_prior_dispatches_to_config_backed_handler(monkeypatch)
         "runtime": True,
         "map_handler": True,
     }
+
+
+def test_diffsky_compare_closure_reference_dispatches_to_config_backed_handler(
+    monkeypatch,
+) -> None:
+    called: dict[str, bool] = {}
+
+    def fail_diffsky_data_dispatch(args) -> None:
+        raise AssertionError(f"unexpected diffsky_data dispatch for {args.command}")
+
+    def fake_load_config(path: str) -> dict:
+        called["load_config"] = True
+        return {
+            "runtime": {},
+            "bands": [
+                {"name": "lsst_g"},
+                {"name": "lsst_r"},
+            ],
+        }
+
+    def fake_apply_runtime(runtime: dict) -> None:
+        called["runtime"] = True
+
+    def fake_compare_handler(config: dict, args) -> None:
+        called["compare_handler"] = True
+        assert args.command == "diffsky-compare-dsps-closure-reference"
+        assert args.synthetic == "synthetic.parquet"
+        assert args.reference == "reference.parquet"
+        assert args.out == "out"
+
+    monkeypatch.setattr(
+        "euclid_dsps.diffsky_data.cli.run_diffsky_command",
+        fail_diffsky_data_dispatch,
+    )
+    monkeypatch.setattr("euclid_dsps.config.load_config", fake_load_config)
+    monkeypatch.setattr(
+        "euclid_dsps.jax_runtime.apply_jax_runtime_env",
+        fake_apply_runtime,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_diffsky_compare_dsps_closure_reference",
+        fake_compare_handler,
+    )
+
+    cli.main(
+        [
+            "--config",
+            "config.yaml",
+            "diffsky-compare-dsps-closure-reference",
+            "--synthetic",
+            "synthetic.parquet",
+            "--reference",
+            "reference.parquet",
+            "--out",
+            "out",
+        ]
+    )
+
+    assert called == {
+        "load_config": True,
+        "runtime": True,
+        "compare_handler": True,
+    }

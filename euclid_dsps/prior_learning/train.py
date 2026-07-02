@@ -17,7 +17,12 @@ from euclid_dsps.amortized.config import require_amortized_dependencies
 from euclid_dsps.amortized.latent import LatentSpec, latent_spec_to_jsonable
 from euclid_dsps.io import ensure_dir, write_json
 
-from .data import TruthDataset, load_truth_dataset, prior_samples_frame
+from .data import (
+    TruthDataset,
+    load_truth_dataset,
+    load_truth_dataset_with_schema,
+    prior_samples_frame,
+)
 from .diagnostics import write_supervised_prior_diagnostics
 from .flows import RealNVPPrior
 from .schema import ParameterSpec, TruthSchema
@@ -40,6 +45,9 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     """Return supervised-prior config with local defaults."""
     raw = dict(config.get("prior_learning", {}) or {})
     raw.setdefault("dataset", config.get("catalog_path"))
+    raw.setdefault("train_dataset", None)
+    raw.setdefault("validation_dataset", None)
+    raw.setdefault("test_dataset", None)
     raw.setdefault("schema", "diffsky_truth_basic")
     raw.setdefault("missing_policy", "reduce")
     raw.setdefault("bounds", {})
@@ -82,7 +90,8 @@ def train_supervised_prior(
     del progress
     out = ensure_dir(out_dir)
     cfg = prior_learning_config(config)
-    dataset = Path(dataset_path or cfg["dataset"])
+    explicit_train_dataset = cfg.get("train_dataset")
+    dataset = Path(dataset_path or explicit_train_dataset or cfg["dataset"])
     schema = str(schema_name or cfg["schema"])
     policy = str(missing_policy or cfg["missing_policy"])
     training_cfg = dict(cfg["training"])
@@ -108,6 +117,24 @@ def train_supervised_prior(
         limit=limit,
         row_indices_file=row_indices_file,
     )
+    validation_truth = (
+        load_truth_dataset_with_schema(
+            cfg["validation_dataset"],
+            schema=truth.schema,
+            limit=limit,
+        )
+        if cfg.get("validation_dataset")
+        else None
+    )
+    test_truth = (
+        load_truth_dataset_with_schema(
+            cfg["test_dataset"],
+            schema=truth.schema,
+            limit=limit,
+        )
+        if cfg.get("test_dataset")
+        else None
+    )
     _log(
         verbose,
         "[prior] truth matrix: "
@@ -122,22 +149,34 @@ def train_supervised_prior(
         out / "truth_x_samples.parquet",
         index=False,
     )
-    split = _train_validation_split(
-        len(truth.x),
-        validation_fraction=float(training_cfg.get("validation_fraction", 0.1)),
-        seed=int(training_cfg.get("seed", 42)),
-    )
+    if validation_truth is None:
+        split = _train_validation_split(
+            len(truth.x),
+            validation_fraction=float(training_cfg.get("validation_fraction", 0.1)),
+            seed=int(training_cfg.get("seed", 42)),
+        )
+        x_train = truth.x[split["train"]]
+        x_validation = truth.x[split["validation"]] if len(split["validation"]) else None
+        validation_rows = int(len(split["validation"]))
+    else:
+        split = {
+            "train": np.arange(len(truth.x), dtype=np.int64),
+            "validation": np.arange(len(validation_truth.x), dtype=np.int64),
+        }
+        x_train = truth.x
+        x_validation = validation_truth.x
+        validation_rows = int(len(validation_truth.x))
     np.save(out / "train_indices.npy", split["train"])
     np.save(out / "validation_indices.npy", split["validation"])
     _log(
         verbose,
         "[prior] split: "
-        f"train={len(split['train'])} validation={len(split['validation'])}",
+        f"train={len(split['train'])} validation={validation_rows}",
     )
     start = time.time()
     result = fit_realnvp_to_x(
-        truth.x[split["train"]],
-        truth.x[split["validation"]] if len(split["validation"]) else None,
+        x_train,
+        x_validation,
         latent_dim=truth.x.shape[1],
         flow_config=cfg["flow"],
         training_config=training_cfg,
@@ -170,18 +209,36 @@ def train_supervised_prior(
     log_prob = np.asarray(result.prior.log_prob(jnp.asarray(x_prior)), dtype=float)
     prior_frame = prior_samples_frame(x_prior, truth.latent_spec, log_prob=log_prob)
     prior_frame.to_parquet(out / "learned_prior_samples.parquet", index=False)
+    final_train_nll = float(_prior_nll_jit(result.prior, jnp.asarray(x_train)))
+    final_validation_nll = (
+        None
+        if x_validation is None
+        else float(_prior_nll_jit(result.prior, jnp.asarray(x_validation)))
+    )
+    final_test_nll = (
+        None
+        if test_truth is None
+        else float(_prior_nll_jit(result.prior, jnp.asarray(test_truth.x)))
+    )
     summary = {
         "dataset": str(dataset),
+        "train_dataset": str(dataset),
+        "validation_dataset": str(cfg.get("validation_dataset") or ""),
+        "test_dataset": str(cfg.get("test_dataset") or ""),
         "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "schema": truth.schema.to_dict(),
         "parameter_names": list(truth.parameter_names),
         "n_truth_rows": int(truth.theta.shape[0]),
         "dropped_nonfinite_rows": int(truth.dropped_rows),
         "train_rows": int(len(split["train"])),
-        "validation_rows": int(len(split["validation"])),
+        "validation_rows": validation_rows,
+        "test_rows": 0 if test_truth is None else int(len(test_truth.x)),
         "epochs": int(training_cfg.get("epochs", 20)),
         "batch_size": int(training_cfg.get("batch_size", 256)),
         "initial_train_nll": float(result.initial_train_nll),
+        "final_train_nll": final_train_nll,
+        "final_validation_nll": final_validation_nll,
+        "final_test_nll": final_test_nll,
         "best_metric": float(result.best_metric),
         "best_epoch": int(result.best_epoch),
         "elapsed_time_s": float(time.time() - start),

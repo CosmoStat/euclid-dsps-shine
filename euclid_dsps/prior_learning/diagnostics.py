@@ -59,11 +59,22 @@ def write_supervised_prior_diagnostics(
     metrics = distribution_metrics_frame(truth, prior, parameter_names)
     metrics_path = out / "prior_vs_truth_metrics.csv"
     metrics.to_csv(metrics_path, index=False)
+    corr_payload = correlation_metrics(truth, prior, parameter_names)
+    write_json(out / "prior_vs_truth_correlation_metrics.json", corr_payload)
+    conditional = conditional_metrics_frame(truth, prior)
+    conditional_path = out / "prior_vs_truth_conditional_metrics.csv"
+    conditional.to_csv(conditional_path, index=False)
+    multivariate = multivariate_distance_metrics(truth, prior, parameter_names)
     payload = {
         **summary,
         "n_parameters": int(len(parameter_names)),
         "median_ks_distance": _safe_median(metrics.get("ks_distance")),
         "median_wasserstein_distance": _safe_median(metrics.get("wasserstein_distance")),
+        "correlation_frobenius_error": corr_payload["frobenius_error"],
+        "correlation_max_abs_error": corr_payload["max_abs_error"],
+        "sliced_wasserstein_distance": multivariate["sliced_wasserstein_distance"],
+        "energy_distance": multivariate["energy_distance"],
+        "prior_evaluated_after_physical_resampling": True,
     }
     write_json(out / "supervised_prior_summary.json", payload)
     report_path = out / "supervised_prior_vs_truth_report.md"
@@ -74,6 +85,8 @@ def write_supervised_prior_diagnostics(
     )
     outputs = {
         "metrics": str(metrics_path),
+        "correlation_metrics": str(out / "prior_vs_truth_correlation_metrics.json"),
+        "conditional_metrics": str(conditional_path),
         "summary": str(out / "supervised_prior_summary.json"),
         "report": str(report_path),
     }
@@ -147,6 +160,110 @@ def wasserstein_distance(a: np.ndarray, b: np.ndarray) -> float:
     aq = np.quantile(a, q)
     bq = np.quantile(b, q)
     return float(np.mean(np.abs(aq - bq)))
+
+
+def correlation_metrics(
+    truth: pd.DataFrame,
+    prior: pd.DataFrame,
+    parameter_names: tuple[str, ...],
+) -> dict[str, Any]:
+    """Compare true and generated parameter correlation matrices."""
+    names = [name for name in parameter_names if name in truth and name in prior]
+    if len(names) < 2:
+        return {
+            "parameters": names,
+            "frobenius_error": None,
+            "max_abs_error": None,
+            "truth_correlation": [],
+            "prior_correlation": [],
+            "correlation_error": [],
+        }
+    t = _finite_matrix(truth[names])
+    p = _finite_matrix(prior[names])
+    n = min(len(t), len(p))
+    if n < 3:
+        return {
+            "parameters": names,
+            "frobenius_error": None,
+            "max_abs_error": None,
+            "truth_correlation": [],
+            "prior_correlation": [],
+            "correlation_error": [],
+        }
+    t_corr = np.nan_to_num(np.corrcoef(t[:n], rowvar=False), nan=0.0)
+    p_corr = np.nan_to_num(np.corrcoef(p[:n], rowvar=False), nan=0.0)
+    err = p_corr - t_corr
+    return {
+        "parameters": names,
+        "frobenius_error": float(np.linalg.norm(err)),
+        "max_abs_error": float(np.max(np.abs(err))),
+        "truth_correlation": t_corr.tolist(),
+        "prior_correlation": p_corr.tolist(),
+        "correlation_error": err.tolist(),
+    }
+
+
+def multivariate_distance_metrics(
+    truth: pd.DataFrame,
+    prior: pd.DataFrame,
+    parameter_names: tuple[str, ...],
+    *,
+    n_projections: int = 64,
+    max_rows: int = 4096,
+) -> dict[str, float | None]:
+    """Return lightweight multivariate distribution distances."""
+    names = [name for name in parameter_names if name in truth and name in prior]
+    if len(names) < 2:
+        return {"sliced_wasserstein_distance": None, "energy_distance": None}
+    t = _finite_matrix(truth[names])
+    p = _finite_matrix(prior[names])
+    n = min(len(t), len(p), int(max_rows))
+    if n < 3:
+        return {"sliced_wasserstein_distance": None, "energy_distance": None}
+    rng = np.random.default_rng(260617)
+    t = t[rng.choice(len(t), size=n, replace=False)]
+    p = p[rng.choice(len(p), size=n, replace=False)]
+    center = np.mean(t, axis=0)
+    scale = np.std(t, axis=0)
+    scale = np.where(scale > 0.0, scale, 1.0)
+    tz = (t - center) / scale
+    pz = (p - center) / scale
+    dirs = rng.normal(size=(int(n_projections), len(names)))
+    dirs /= np.maximum(np.linalg.norm(dirs, axis=1, keepdims=True), 1.0e-12)
+    sw = [wasserstein_distance(tz @ direction, pz @ direction) for direction in dirs]
+    return {
+        "sliced_wasserstein_distance": float(np.mean(sw)),
+        "energy_distance": float(_energy_distance(tz, pz)),
+    }
+
+
+def conditional_metrics_frame(truth: pd.DataFrame, prior: pd.DataFrame) -> pd.DataFrame:
+    """Compare simple conditional slopes for important parameter pairs."""
+    pairs = [
+        ("log10_stellar_mass", "log10_stellar_metallicity"),
+        ("log10_stellar_mass", "log10_ssfr_at_obs"),
+        ("log10_stellar_mass", "dust_av"),
+        ("log10_stellar_mass", "diffstar_lgmcrit"),
+        ("z_obs", "diffstar_lgmcrit"),
+        ("log10_stellar_mass", "diffmah_logm0"),
+        ("z_obs", "diffmah_logm0"),
+    ]
+    rows = []
+    for xname, yname in pairs:
+        if xname not in truth or yname not in truth or xname not in prior or yname not in prior:
+            continue
+        truth_slope = _linear_slope(truth[xname], truth[yname])
+        prior_slope = _linear_slope(prior[xname], prior[yname])
+        rows.append(
+            {
+                "x": xname,
+                "y": yname,
+                "truth_slope": truth_slope,
+                "prior_slope": prior_slope,
+                "slope_residual": prior_slope - truth_slope,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _write_plots(
@@ -249,6 +366,38 @@ def _pair_plot_names(names: list[str]) -> list[str]:
 def _finite_array(values) -> np.ndarray:
     arr = np.asarray(values, dtype=float)
     return arr[np.isfinite(arr)]
+
+
+def _finite_matrix(frame: pd.DataFrame) -> np.ndarray:
+    arr = frame.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    return arr[np.isfinite(arr).all(axis=1)]
+
+
+def _energy_distance(a: np.ndarray, b: np.ndarray) -> float:
+    n = min(len(a), len(b), 2048)
+    if n < 2:
+        return float("nan")
+    a = np.asarray(a[:n], dtype=float)
+    b = np.asarray(b[:n], dtype=float)
+    d_ab = _mean_pairwise_distance(a, b)
+    d_aa = _mean_pairwise_distance(a, a)
+    d_bb = _mean_pairwise_distance(b, b)
+    return float(2.0 * d_ab - d_aa - d_bb)
+
+
+def _mean_pairwise_distance(a: np.ndarray, b: np.ndarray) -> float:
+    diff = a[:, None, :] - b[None, :, :]
+    return float(np.mean(np.sqrt(np.sum(diff * diff, axis=-1))))
+
+
+def _linear_slope(x, y) -> float:
+    xarr = np.asarray(x, dtype=float)
+    yarr = np.asarray(y, dtype=float)
+    mask = np.isfinite(xarr) & np.isfinite(yarr)
+    if mask.sum() < 3 or np.std(xarr[mask]) == 0.0:
+        return float("nan")
+    cov = np.cov(xarr[mask], yarr[mask], ddof=0)
+    return float(cov[0, 1] / cov[0, 0])
 
 
 def _has_dynamic_range(values) -> bool:

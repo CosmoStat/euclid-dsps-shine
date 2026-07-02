@@ -1,5 +1,267 @@
 # Plan
 
+## 2026-07-02 Sync Commit and Relaunch Instructions
+
+- Status: completed.
+- Goal: fetch/pull the current Diffsky likelihood branch, commit the FENIKS
+  synthetic-closure implementation without unrelated worktree noise, push it,
+  and provide exact relaunch commands.
+- Completed:
+  - Ran `git fetch origin`; the local branch was aligned with
+    `origin/feature/diffsky-likelihood-sanity-plan` (`0/0` ahead/behind), so no
+    merge/rebase was required.
+  - Staged only the FENIKS closure generation, validation, diagnostics, config,
+    docs, tests, and SLURM files.
+  - Left unrelated worktree noise unstaged: deleted `PLAN_*`/`RAPPORT.md` files
+    and the untracked `notebooks/` directory.
+  - Re-ran validation before commit: `python -m compileall euclid_dsps`,
+    `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm`, and
+    `pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    (`13 passed, 1 skipped`).
+
+## 2026-07-02 H100 Verbose Generation and Error-Model Diagnostics
+
+- Status: completed for implementation and smoke validation.
+- Goal: make the 50k FENIKS DSPS-closure production run easier to monitor on
+  H100, ensure the configured photometric error model is visibly applied during
+  dataset generation, and provide a SLURM launcher for generation plus closure
+  validation.
+- Completed:
+  - Add verbose progress output for split/shard/resampling/photometry/diagnostic
+    stages. The generation CLI is verbose by default and has `--quiet` for
+    batch logs that need less detail.
+  - Kept production plots enabled in
+    `configs/diffsky_synthetic_feniks_260617_50k.yaml`.
+  - Added explicit generated-error diagnostics tied to the configured flux
+    error model: `error_model_stats.csv`,
+    `plots/error_model_band_summary.png`,
+    `plots/normalized_noise_residual_histograms.png`, and
+    `plots/fluxerr_vs_mag_true.png`.
+  - Added `scripts/diffsky_synthetic_feniks_50k_h100.slurm`, supporting
+    `STAGE=generate`, `STAGE=validate`, and `STAGE=both`, with a guard against
+    using `OVERWRITE=1` and `RESUME=1` together.
+- Smoke validation:
+  - Ran `conda run -n shine` smoke generation with
+    `--split all --smoke --max-galaxies 24 --overwrite`; it produced 18/3/3
+    rows and wrote the error-model plots/statistics.
+  - Ran closure validation on the smoke dataset with `--sample-size 24
+    --batch-size 24 --runtime cpu`; gates passed, normalized noise residuals
+    passed, and flux recomputation reported `max_abs_delta_mag =
+    1.9073486328125e-06` and `max_relative_flux_error =
+    1.7567345522703518e-06`.
+- Validation completed:
+  - `python -m compileall euclid_dsps/synthetic_diffsky euclid_dsps/cli.py`
+    passed.
+  - `conda run -n shine python -m compileall euclid_dsps/synthetic_diffsky
+    euclid_dsps/cli.py` passed.
+  - `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm` passed.
+  - `git diff --check` on touched files passed.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    passed with `13 passed, 1 skipped`.
+  - Full `pytest -q` completed with `377 passed, 9 skipped` and the known
+    existing failure
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`.
+
+## 2026-07-02 Automatic FENIKS 50k Population Diagnostics
+
+- Status: completed for implementation and smoke validation.
+- Goal: make every production FENIKS DSPS-closure generation run write
+  automatic population diagnostics for the requested 50k dataset, including
+  redshift/mass/SFR/dust/metallicity parameter summaries, colors, photometry,
+  proposal-vs-final checks, plots, and corner plots.
+- Redshift decision:
+  - Configure the production synthetic closure run for ``0.001 <= z <= 3.0``
+    as a broad LSST+Roman/OpenUniverse-like photometric range.
+  - Keep comparisons to the current local z<=0.35 HLTDS parquet restricted to
+    the overlapping low-redshift interval, because a whole z<3 catalog should
+    not be directly compared to a z<0.35 reference sample.
+- Completed:
+  - Added `euclid_dsps.synthetic_diffsky.population_diagnostics` and wired it
+    into `generate_dsps_closure_dataset` after `all_50k.parquet` is written.
+  - Added automatic tables:
+    `parameter_stats.csv`, `photometry_stats.csv`, `color_stats.csv`,
+    `proposal_vs_final_metrics.csv`, and `correlation_matrices.json`.
+  - Added automatic plots:
+    truth-parameter histograms, physical-diagnostic histograms, magnitude and
+    color histograms, per-band photometry summary, mass/redshift/SFR/dust
+    scatter diagnostics, and core/full truth corner plots. Small smoke samples
+    use scatter-matrix fallbacks to avoid invalid contour warnings.
+  - Added optional overlap-only reference comparison against the local z<=0.35
+    HLTDS parquet under `diagnostics/population/reference_comparison/`.
+  - Updated validation weighted n(z) bins to use the generated manifest
+    redshift range instead of hard-coding z<=0.35.
+  - Updated the FENIKS 50k config to `z_min: 0.001`, `z_max: 3.0`, redshift
+    fit bounds `[0.001, 3.0]`, and enabled automatic diagnostics.
+  - Documented the redshift choice and diagnostics contract in
+    `docs/source/diffsky_synthetic_closure.rst`.
+- Smoke validation:
+  - Ran real Diffsky/FENIKS smoke generation with
+    `--split all --smoke --max-galaxies 24 --overwrite` in `conda activate
+    shine`; output split sizes are 18/3/3 and realized redshift range is
+    `0.343904` to `2.85961`.
+  - Verified diagnostics under
+    `Data/diffsky/synthetic/feniks_260617_dsps_closure/diagnostics/population/`.
+  - Ran closure validation on the z<3 smoke dataset; it passed.
+- Validation completed:
+  - `python -m compileall euclid_dsps/synthetic_diffsky euclid_dsps/cli.py`
+    passed.
+  - `python -m compileall euclid_dsps` passed.
+  - `git diff --check` passed.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    passed with `13 passed, 1 skipped`.
+  - Full `pytest -q` completed with `377 passed, 9 skipped` and the same
+    existing HLTDS config expectation failure:
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`.
+
+## 2026-07-02 FENIKS Synthetic vs Current z0.35 Dataset Investigation
+
+- Status: completed for smoke-scale investigation; production-scale 50k
+  comparison remains pending.
+- Goal: generate or reuse a small FENIKS synthetic DSPS-closure sample and
+  compare its latent, redshift, mass, SFR, dust, metallicity, and photometric
+  distributions against the current z<=0.35 Diffsky HLTDS reference dataset.
+- Scope completed:
+  - Identify the canonical local z0.35 reference parquet and its comparable
+    columns.
+  - Add a reproducible comparison diagnostic if the existing tools do not cover
+    this exact synthetic-vs-reference question.
+  - Run the comparison on the available smoke sample first, then decide whether
+    a larger local generation is safe.
+  - Report mismatches clearly without claiming FENIKS calibration success from
+    closure mechanics alone.
+- Implementation:
+  - Added `euclid_dsps.synthetic_diffsky.reference_comparison` and CLI command
+    `diffsky-compare-dsps-closure-reference`.
+  - The diagnostic writes `comparison_summary.json`, `distribution_metrics.csv`,
+    `photometry_metrics.csv`, `correlation_metrics.json`, a Markdown report,
+    and optional `proposal_weighted_metrics.csv` when a proposals directory is
+    supplied.
+  - Made `euclid_dsps.synthetic_diffsky` imports lazy so lightweight pandas
+    diagnostics do not initialize JAX/GPU-only generation code.
+- Local data generated:
+  - Ran real Diffsky/FENIKS smoke generation in `conda activate shine` with
+    `--max-galaxies 240 --overwrite`, producing 180/30/30 train/validation/test
+    rows under `Data/diffsky/synthetic/feniks_260617_dsps_closure/`.
+  - Ran closure validation on all 240 rows; validation passed with exact flux
+    recomputation (`max_abs_delta_mag=0`, `max_relative_flux_error=0`), normal
+    noise residuals (`mean=-1.23e-05`, `std=1.003`), and reported metallicity
+    clipping (`clipped_fraction=0.617` on this smoke sample).
+- Comparison outputs:
+  - `outputs/audits/feniks_synthetic_vs_z035_reference_smoke240/report.md`
+  - `outputs/audits/feniks_synthetic_vs_z035_reference_smoke240/comparison_summary.json`
+  - `outputs/audits/feniks_synthetic_vs_z035_reference_smoke240/distribution_metrics.csv`
+  - `outputs/audits/feniks_synthetic_vs_z035_reference_smoke240/photometry_metrics.csv`
+  - `outputs/audits/feniks_synthetic_vs_z035_reference_smoke240/proposal_weighted_metrics.csv`
+- Findings:
+  - The canonical reference parquet is
+    `Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet`.
+  - Closure mechanics are correct: the generated fluxes are exactly
+    reproducible from the 18 truths with the configured euclid_dsps forward
+    model.
+  - The smoke FENIKS proposal/final population is not distributionally
+    compatible with the current z0.35 reference catalog without additional
+    selection. In the final smoke sample, only `18.3%` of objects have
+    `logsm_true >= 9`, versus `96.6%` in the reference. The weighted proposal
+    pool has a similar fraction (`19.0%`), so this mismatch is already in the
+    weighted proposal population, not only in the resampling step.
+  - Median synthetic closure magnitudes are much fainter than the reference
+    Diffsky/HLTDS magnitudes: e.g. `lsst_g` median is `28.56` vs `21.75`,
+    and Roman median offsets reach `~8.45` mag on this smoke sample.
+  - Metallicities cannot be directly compared to the reference because the
+    current z0.35 reference `log10_stellar_metallicity` column has no finite
+    values.
+- Validation completed:
+  - `python -m compileall euclid_dsps` passed.
+  - `git diff --check` passed.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    passed with `12 passed, 1 skipped`.
+  - Full `pytest -q` completed with `376 passed, 9 skipped` and one existing
+    config expectation failure:
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`.
+    This failure is the same tracked HLTDS truth-column expectation issue and
+    is not caused by the new comparison diagnostic.
+
+## 2026-07-02 Port FENIKS Synthetic Closure Pipeline
+
+- Status: code/config/test layer ported into this checkout; full real-Diffsky
+  generation not run locally in this phase.
+- Goal: port the `lightcone_gen` worktree implementation of the
+  Diffsky/FENIKS DSPS closure dataset generator into this newer
+  `feature/diffsky-likelihood-sanity-plan` checkout without overwriting
+  unrelated local changes.
+- Scope:
+  - Reuse the ArgonneCPAC Diffsky main-branch integration work where possible.
+  - Preserve the current branch's newer MAP/prior-learning/debug features.
+  - Avoid local heavy Diffsky generation until the code path is compiled and
+    unit-tested; run only small smoke commands when the environment remains
+    stable.
+- Completed:
+  - Imported the structured `euclid_dsps.synthetic_diffsky` package, FENIKS
+    generation/closure/prior/amortized configs, synthetic closure docs, and
+    focused tests from the `lightcone_gen` worktree.
+  - Added CLI commands `diffsky-generate-dsps-closure`,
+    `diffsky-validate-dsps-closure`, and
+    `diffsky-evaluate-dsps-closure-inference` while preserving the newer MAP
+    and inferred-prior commands on this branch.
+  - Added `lognormal_mdf_fixed_scatter` metallicity support for
+    `sfh_model: diffsky_basic`, with DSPS MDF weights and compatibility for
+    dense and compressed SSP grids.
+  - Added strict `diffsky_dsps_closure_full` truth handling for forward closure
+    and prior learning; this schema requires all 18 truths and does not use the
+    historical fixed-metallicity fallback.
+  - Added explicit train/validation/test dataset support for supervised prior
+    learning and expanded prior diagnostics with correlation and multivariate
+    distance metrics.
+  - Linked the new synthetic closure documentation from the docs index and run
+    setup page.
+- Validation completed:
+  - `python -m compileall euclid_dsps/synthetic_diffsky euclid_dsps/cli.py
+    euclid_dsps/config.py euclid_dsps/model.py
+    euclid_dsps/diffsky_forward_closure.py euclid_dsps/prior_learning`
+    passed.
+  - `python -m compileall euclid_dsps scripts` passed.
+  - `git diff --check` passed.
+  - CLI help for `diffsky-generate-dsps-closure` and
+    `diffsky-validate-dsps-closure` passed.
+  - The four new FENIKS configs load successfully with 18 free parameters and
+    `stellar_metallicity_model: lognormal_mdf_fixed_scatter`.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py
+    tests/test_diffsky_trueparam_closure.py tests/test_cli.py` passed with
+    `13 passed, 1 skipped`.
+  - Full `pytest -q` completed without runtime crash but reported one
+    pre-existing/adjacent config expectation failure:
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`.
+    The failing assertion concerns tracked HLTDS config `truth.parameter_columns`,
+    not the new synthetic FENIKS files.
+- Local execution note:
+  - No real Diffsky lightcone generation was launched in this checkout after the
+    earlier environment instability. Use a GPU/CUDA JAX environment for the
+    real smoke and production generation.
+
+## 2026-07-02 Diffsky Truth/DSPS Parameter Audit
+
+- Status: completed.
+- Goal: audit the exact DSPS parameter spaces used by the active Diffsky
+  configs against the truth/generated-truth columns available in the current
+  parquet files, so a learned-prior-vs-flat-MAP comparison can use an honest
+  shared rowset.
+- Scope: inspect configured free parameters, projected-truth columns,
+  Diffsky-native closure columns, and any missing nuisance parameters without
+  changing runtime behavior.
+- Completed: generated
+  `outputs/audits/diffsky_truth_dsps_parameter_audit/` with raw/projected
+  inventories, a cross-space parameter matrix, a compact focus table, a JSON
+  summary, and a human-readable audit report.
+- Finding: the active 12D PopCosmos MAP space has finite truth/proxy columns
+  for 10 dimensions, but `log10_stellar_metallicity` and `tau1_over_tau2` are
+  all-NaN projected columns explicitly marked missing by the sidecar metadata.
+- Finding: the Diffsky-native 18D closure has generated truth for Diffstar,
+  Diffmah, `dust_av`, and `dust_delta`; object-level stellar metallicity is
+  still unavailable and remains fixed to `-0.7` in the closure config.
+- Finding: existing supervised-prior schemas are 5D (`diffsky_truth_basic`) or
+  22D (`diffsky_truth_extended`) and are not directly the same space as the
+  active 12D PopCosmos MAP.
+
 ## 2026-07-01 Robust Diffsky Population-Prior Learning
 
 - Status: in progress.
