@@ -36,7 +36,7 @@ synthetic_diffsky:
         validation: 26063702
         test: 26063703
     n_host_halos_per_shard: 4096
-    max_shards: 128
+    max_shards: 256
     jax_batch_size: 512
     smoke_n_host_halos_per_shard: 128
     smoke_max_shards: 8
@@ -44,11 +44,13 @@ synthetic_diffsky:
     smoke_pool_size_factor: 2.0
     smoke_min_ess_fraction: 1.0
     smoke_max_duplication_fraction: 0.5
-    # Broad LSST+Roman/OpenUniverse-like exploratory range. Reference
+    # Broad LSST+Roman/OpenUniverse-like exploratory proposal range. The final
+    # learning catalog is additionally selected below so it is not dominated by
+    # uninformative low-S/N or metallicity-grid-edge objects. Reference
     # comparisons to the current z<=0.35 HLTDS parquet are restricted to the
     # overlapping low-redshift interval by diagnostics.reference_overlap_only.
     z_min: 0.001
-    z_max: 3.0
+    z_max: 5.5
     lgmp_min: 10.5
     lgmp_max: 15.0
     sky_area_degsq: 10.0
@@ -64,6 +66,24 @@ synthetic_diffsky:
     max_duplication_fraction: 0.10
     metallicity_grid_policy: clip_with_warning
     stellar_metallicity_scatter_dex: 0.2
+    selection:
+        min_logsm: 8.0
+        require_metallicity_unclipped: true
+        max_metallicity_clipped_fraction: 0.0
+        snr_threshold: 5.0
+        min_true_snr_bands: 5
+        min_observed_snr_bands: 0
+        photometric_oversample_factor: 5.0
+    # Smoke runs are for environment/closure preflight on CPU-sized samples.
+    # They intentionally relax the production observability cuts because a
+    # 24-row smoke sample is too small to guarantee five >5-sigma bands.
+    smoke_selection:
+        min_logsm: 7.0
+        require_metallicity_unclipped: false
+        max_metallicity_clipped_fraction: null
+        min_true_snr_bands: 0
+        min_observed_snr_bands: 0
+        photometric_oversample_factor: 1.0
     flux_error_model:
         type: m5_depth
         sigma_sys_mag: 0.005
@@ -128,7 +148,7 @@ redshift:
     truth_column: redshift_true
     fixed_value: 0.25
     min: 0.001
-    max: 3.0
+    max: 5.5
     seed: 42
     prior_z:
         mode: none
@@ -179,7 +199,7 @@ fit:
     flux_error_jitter: 0.0
     maxiter: 1
     free_parameters:
-        z_obs: {initial: 0.8, bounds: [0.001, 3.0]}
+        z_obs: {initial: 0.8, bounds: [0.001, 5.5]}
         log10_stellar_mass: {initial: 10.0, bounds: [6.0, 13.5]}
         diffstar_lgmcrit: {initial: 12.0, bounds: [9.0, 14.5]}
         diffstar_lgy_at_mcrit: {initial: -10.0, bounds: [-13.0, -8.0]}

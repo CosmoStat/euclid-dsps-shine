@@ -7,7 +7,7 @@ prior_learning:
     schema: diffsky_dsps_closure_full
     missing_policy: fail
     bounds:
-        z_obs: [0.001, 0.35]
+        z_obs: [0.001, 5.5]
         log10_stellar_mass: [6.0, 13.5]
         diffstar_lgmcrit: [9.0, 14.5]
         diffstar_lgy_at_mcrit: [-13.0, -8.0]

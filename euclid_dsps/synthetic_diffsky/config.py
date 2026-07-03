@@ -49,6 +49,7 @@ class SyntheticDiffskyConfig:
     max_duplication_fraction: float
     min_ess_fraction: float
     pool_size_factor: float
+    selection: dict[str, Any]
     flux_error_model: dict[str, Any]
     splits: dict[str, SplitGenerationConfig]
     config_hash: str | None = None
@@ -94,6 +95,9 @@ def load_synthetic_diffsky_config(
     resample_seeds.update(raw.get("resample_seeds", {}) or {})
     starts = {"train": 0, "validation": 1_000_000_000, "test": 2_000_000_000}
     starts.update(raw.get("object_id_starts", {}) or {})
+    selection = dict(raw.get("selection", {}) or {})
+    if smoke:
+        selection.update(dict(raw.get("smoke_selection", {}) or {}))
     splits = {
         name: SplitGenerationConfig(
             name=name,
@@ -148,6 +152,7 @@ def load_synthetic_diffsky_config(
             _runtime_value(raw, "min_ess_fraction", 2.0, smoke=smoke)
         ),
         pool_size_factor=float(_runtime_value(raw, "pool_size_factor", 4.0, smoke=smoke)),
+        selection=selection,
         flux_error_model=dict(raw.get("flux_error_model", default_m5_depth_error_model()) or {}),
         splits=splits,
     )

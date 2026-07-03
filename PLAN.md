@@ -1,5 +1,86 @@
 # Plan
 
+## 2026-07-03 FENIKS Regeneration Fix Implementation
+
+- Status: completed.
+- Goal: make the next zero-regeneration scientifically usable by fixing the
+  metallicity convention, extending the production redshift proposal beyond
+  `z=5`, and adding explicit selection/validation gates for metallicity-grid
+  coverage and photometric informativeness.
+- Current implementation targets:
+  - Clip FENIKS absolute `log10(Z)` medians against the absolute SSP grid before
+    converting to `log10(Z/Zsun)`.
+  - Keep weighted proposal shards raw on disk, then report configurable
+    proposal-selection and photometric-selection counts in the manifest.
+  - Default production to `z_max: 5.5`, `logsm_true >= 8`, no metallicity
+    clipping in the final catalog, and at least five true-S/N detections above
+    five sigma.
+  - Validate SSP metallicity support, selected S/N gates, exact closure
+    recomputation, and negative noisy-flux preservation.
+- Completed:
+  - Added `synthetic_diffsky.selection` with proposal-level mass/metallicity
+    cuts and post-DSPS photometric S/N cuts; all cut sizes are written to the
+    manifest.
+  - Fixed the FENIKS metallicity conversion so absolute `log10(Z)` is clipped
+    against the absolute SSP grid before conversion to `log10(Z/Zsun)`, and
+    added `lgmet_abs_used_true` for convention auditing.
+  - Updated production configuration to propose `0.001 <= z <= 5.5`, require
+    `logsm_true >= 8`, require no clipped metallicities in the final catalog,
+    and require at least five true bands with S/N >= 5.
+  - Kept smoke runs lighter with `smoke_selection` so CPU preflight remains
+    usable on small samples.
+  - Updated validation to check the realized manifest selection, SSP
+    metallicity support, absolute/relative metallicity consistency, S/N counts,
+    and selected-proposal n(z) behavior.
+  - Updated prior-learning redshift bounds to `[0.001, 5.5]` and refreshed the
+    synthetic-closure documentation.
+- Validation completed:
+  - `python -m compileall euclid_dsps scripts` passed.
+  - `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm` passed.
+  - `git diff --check` passed.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    passed with `15 passed, 1 skipped`.
+  - Full `pytest -q` completed with `379 passed, 9 skipped` and the known
+    existing failure
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`.
+
+## 2026-07-03 FENIKS 50k Post-Run Audit and Regeneration Gate
+
+- Status: completed for audit and regeneration planning; implementation fixes
+  remain pending.
+- Goal: audit the completed Jean-Zay 50k FENIKS DSPS-closure run before any
+  zero-regeneration, identify scientific caveats, inspect available SSP grids,
+  and define the fixes needed for a physically useful dataset.
+- Current findings:
+  - Closure recomputation passes because the generated truth vector and DSPS
+    forward model are internally consistent, but this does not guarantee that
+    every truth convention is physically correct.
+  - The current metallicity transform appears to clip `log10(Z/Zsun)` values
+    against an SSP grid stored in absolute `log10(Z)`, causing the final
+    `log10_stellar_metallicity_true` convention to be wrong and the forward
+    metallicity effectively too low.
+  - The volume-complete/no-selection population contains many very low-mass and
+    low-S/N galaxies, producing many non-detections and making the z<=0.35
+    comparison to the current HLTDS reference strongly selection-mismatched.
+  - Several Diffstar/Diffmah latent parameters have large point masses at
+    calibration bounds or branch defaults, so the learned prior must handle
+    atoms/mixtures rather than assuming a smooth 18D density.
+- SSP audit:
+  - All local closure-relevant stellar SSP grids share the same metallicity
+    support, approximately `log10(Z)=[-4.3477,-1.3477]`, equivalent to
+    `log10(Z/Zsun)=[-2.5,+0.5]` for `z_sun=0.0142`.
+  - No local standard SSP grid currently expands the low-metallicity bound; a
+    physically useful no-clipping FENIKS sample must therefore be selected away
+    from the extremely low-metallicity/low-mass tail or use a newly generated
+    SSP grid.
+- Regeneration gate:
+  - Fix metallicity conversion and add convention tests before any new
+    production run.
+  - Add configurable preselection/postselection gates for mass, metallicity
+    grid coverage, magnitudes, S/N, and reference-calibrated diagnostics.
+  - Treat the current 50k run as a debug artifact only; do not train the prior
+    or inference model on it.
+
 ## 2026-07-03 FENIKS Full Run Criteria and OpenUniverse-Style Diagnostics
 
 - Status: completed.

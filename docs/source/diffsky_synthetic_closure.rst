@@ -42,12 +42,15 @@ proposal pools and seeds. They are not random splits of one parent catalog.
 Redshift Range and Realism Checks
 ---------------------------------
 
-The production FENIKS closure config is set to ``0.001 <= z <= 3.0``. This is a
-broad LSST+Roman/OpenUniverse-like photometric range. OpenUniverse2024 validates
-its extragalactic Diffsky-based catalog with galaxy number counts, redshift
-distributions in magnitude bins, and optical/NIR color evolution; the same
-classes of checks are written automatically by this generator. The current local
-z<=0.35 HLTDS parquet is still useful as a low-redshift reference, but
+The production FENIKS closure proposal range is set to ``0.001 <= z <= 5.5``.
+The final learning catalog is not a raw volume-complete proposal: it applies an
+explicit observable-population selection in ``synthetic_diffsky.selection``:
+``logsm_true >= 8``, no SSP-metallicity-grid clipping, and at least five true
+LSST+Roman bands with S/N >= 5 under the configured error model. OpenUniverse2024
+validates its extragalactic Diffsky-based catalog with galaxy number counts,
+redshift distributions in magnitude bins, and optical/NIR color evolution; the
+same classes of checks are written automatically by this generator. The current
+local z<=0.35 HLTDS parquet is still useful as a low-redshift reference, but
 comparisons to it are restricted to the overlapping low-redshift interval.
 
 Every generation run with ``synthetic_diffsky.diagnostics.enabled: true`` writes:
@@ -131,7 +134,7 @@ column for each free parameter in ``DIFFSKY_BASIC_PARAMETER_NAMES``.
      - ``lc_data.z_obs``
      - none
      - dimensionless
-     - ``[0.001, 3.0]``
+     - ``[0.001, 5.5]``
    * - ``log10_stellar_mass``
      - ``logsm_true``
      - ``phot_info.logsm_obs``
@@ -266,7 +269,10 @@ Production generation:
      --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
      diffsky-generate-dsps-closure \
      --split all \
-     --resume
+     --overwrite
+
+Use ``--resume`` instead of ``--overwrite`` only when continuing an interrupted
+generation with compatible configuration and proposal shards.
 
 Generation is verbose by default. It reports split/shard progress, proposal
 pool size, ESS, resampling duplication, DSPS photometry batches, and the
@@ -290,8 +296,9 @@ keeps population plots enabled and writes, in addition to the core catalogues:
 
 The production resampling gate currently allows up to 10% duplicate final
 objects. This is a practical bound for the high-dynamic-range FENIKS proposal
-weights observed in the z<=3 generation; the realized duplication fraction is
-recorded in ``manifest.yaml`` and should be reported with any science use.
+weights observed in the broad FENIKS proposal generation; the realized
+duplication fraction is recorded in ``manifest.yaml`` and should be reported
+with any science use.
 
 Run exact forward closure on the test set:
 

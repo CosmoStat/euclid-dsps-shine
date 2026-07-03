@@ -37,11 +37,10 @@ def absolute_lgmet_to_logzsol(
     if not np.isfinite(z_sun) or z_sun <= 0.0:
         raise ValueError("z_sun must be positive")
     logzsun = np.log10(float(z_sun))
-    logzsol = values - logzsun
     lo = float(np.nanmin(grid))
     hi = float(np.nanmax(grid))
-    below = logzsol < lo
-    above = logzsol > hi
+    below = values < lo
+    above = values > hi
     clipped = below | above
     policy = str(policy)
     if clipped.any() and policy == "fail":
@@ -55,8 +54,8 @@ def absolute_lgmet_to_logzsol(
             "synthetic_diffsky.metallicity_grid_policy must be 'fail', "
             "'clip', or 'clip_with_warning'"
         )
-    used_logzsol = np.clip(logzsol, lo, hi) if clipped.any() else logzsol.copy()
-    used_abs = used_logzsol + logzsun
+    used_abs = np.clip(values, lo, hi) if clipped.any() else values.copy()
+    used_logzsol = used_abs - logzsun
     return MetallicityTransformResult(
         log10_z_over_zsun=used_logzsol,
         lgmet_abs_used=used_abs,

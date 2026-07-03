@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,13 @@ from .metallicity import metallicity_summary_payload
 from .photometry import GROUND_TRUTH_COLUMNS, add_dsps_closure_photometry
 from .population_diagnostics import run_generation_population_diagnostics
 from .resampling import resample_weighted_proposals, resampling_summary
+from .selection import (
+    append_snr_selection_columns,
+    apply_photometric_selection,
+    apply_proposal_selection,
+    normalize_selection,
+    photometric_selection_enabled,
+)
 
 
 def generate_dsps_closure_dataset(
@@ -99,6 +107,7 @@ def generate_dsps_closure_dataset(
         "sky_area_degsq": float(gen_cfg.sky_area_degsq),
         "mc_merge": int(gen_cfg.mc_merge),
         "metallicity_grid_policy": gen_cfg.metallicity_grid_policy,
+        "selection": normalize_selection(gen_cfg.selection),
         "flux_error_model": flux_error_model_payload(gen_cfg.flux_error_model),
         "smoke": bool(smoke),
     }
@@ -182,9 +191,14 @@ def _generate_one_split(
         shutil.rmtree(proposal_dir)
         proposal_dir = ensure_dir(proposal_dir)
 
+    bands = [str(band["name"]) for band in config["bands"]]
+    selection_cfg = normalize_selection(gen_cfg.selection)
+    use_photometric_selection = photometric_selection_enabled(selection_cfg)
     proposals: list[pd.DataFrame] = []
     shard_metadata: list[dict[str, Any]] = []
     result = None
+    selected_pool = None
+    proposal_selection_summary: dict[str, Any] = {}
     for shard_index in range(int(gen_cfg.max_shards)):
         shard_path = proposal_dir / f"shard_{shard_index:05d}.parquet"
         _progress(
@@ -218,33 +232,104 @@ def _generate_one_split(
         proposals.append(shard)
         shard_metadata.append({**meta, "path": str(shard_path)})
         pool = pd.concat(proposals, ignore_index=True)
-        result = resample_weighted_proposals(pool, split_cfg)
+        selected_pool, proposal_selection_summary = apply_proposal_selection(
+            pool,
+            selection_cfg,
+        )
+        if len(selected_pool) == 0:
+            _progress(
+                verbose,
+                f"{split_cfg.name}: raw_pool={len(pool)} selected_pool=0",
+            )
+            continue
+        result = resample_weighted_proposals(selected_pool, split_cfg)
         _progress(
             verbose,
-            f"{split_cfg.name}: pool={result.pool_size} ESS={result.ess:.3g} "
-            f"dup={result.duplicate_fraction:.3g}",
+            f"{split_cfg.name}: raw_pool={len(pool)} selected_pool={result.pool_size} "
+            f"ESS={result.ess:.3g} dup={result.duplicate_fraction:.3g}",
         )
         if _pool_is_sufficient(result, split_cfg, gen_cfg):
             _progress(verbose, f"{split_cfg.name}: pool targets reached")
             break
     if result is None:
-        raise ValueError(f"No proposals generated for split {split_cfg.name}")
+        raise ValueError(
+            f"No selected proposals generated for split {split_cfg.name}. "
+            "Relax synthetic_diffsky.selection or increase max_shards."
+        )
     if not _pool_is_sufficient(result, split_cfg, gen_cfg):
         raise RuntimeError(
             f"Split {split_cfg.name} did not reach ESS/duplication targets after "
             f"{gen_cfg.max_shards} shards: ESS={result.ess:.3g}, "
             f"duplication={result.duplicate_fraction:.3g}"
         )
-    final = add_dsps_closure_photometry(
-        result.frame,
-        config,
-        batch_size=int(gen_cfg.jax_batch_size),
-        noise_seed=int(split_cfg.noise_seed),
-        flux_error_model=gen_cfg.flux_error_model,
-        verbose=verbose,
-    )
+    if selected_pool is None:
+        raise ValueError(f"No selected proposals generated for split {split_cfg.name}")
+    photometric_summary: dict[str, Any] = {"enabled": False}
+    candidate_size = int(split_cfg.n_final)
+    candidate_resampling_summary: dict[str, Any] = {}
+    if use_photometric_selection:
+        candidate_size = max(
+            int(split_cfg.n_final),
+            int(
+                np.ceil(
+                    float(selection_cfg["photometric_oversample_factor"])
+                    * int(split_cfg.n_final)
+                )
+            ),
+        )
+        candidate_split = replace(
+            split_cfg,
+            n_final=candidate_size,
+            resample_seed=int(split_cfg.resample_seed) + 104_729,
+        )
+        candidate_result = resample_weighted_proposals(selected_pool, candidate_split)
+        candidate_resampling_summary = resampling_summary(candidate_result)
+        candidate = add_dsps_closure_photometry(
+            candidate_result.frame,
+            config,
+            batch_size=int(gen_cfg.jax_batch_size),
+            noise_seed=int(split_cfg.noise_seed),
+            flux_error_model=gen_cfg.flux_error_model,
+            verbose=verbose,
+        )
+        selected_candidate, photometric_summary = apply_photometric_selection(
+            candidate,
+            bands,
+            selection_cfg,
+        )
+        photometric_summary["enabled"] = True
+        _progress(
+            verbose,
+            f"{split_cfg.name}: photometric selected "
+            f"{len(selected_candidate)}/{len(candidate)} candidates",
+        )
+        if len(selected_candidate) < int(split_cfg.n_final):
+            raise RuntimeError(
+                f"Split {split_cfg.name} selected only {len(selected_candidate)} "
+                f"photometric candidates for target {int(split_cfg.n_final)}. "
+                "Increase synthetic_diffsky.selection.photometric_oversample_factor "
+                "or relax the S/N selection."
+            )
+        final = selected_candidate.sample(
+            n=int(split_cfg.n_final),
+            replace=False,
+            random_state=int(split_cfg.resample_seed) + 271_828,
+        ).reset_index(drop=True)
+        final = _reset_final_identity(final, split_cfg)
+    else:
+        final = add_dsps_closure_photometry(
+            result.frame,
+            config,
+            batch_size=int(gen_cfg.jax_batch_size),
+            noise_seed=int(split_cfg.noise_seed),
+            flux_error_model=gen_cfg.flux_error_model,
+            verbose=verbose,
+        )
+        final = append_snr_selection_columns(final, bands, selection_cfg)
+    final_duplicate_fraction = _duplicate_fraction(final)
     _progress(verbose, f"{split_cfg.name}: writing final parquet {final_path}")
     final.to_parquet(final_path, index=False)
+    raw_pool = pd.concat(proposals, ignore_index=True)
     summary = {
         "status": "generated",
         "source_seed": int(split_cfg.source_seed),
@@ -254,8 +339,18 @@ def _generate_one_split(
         "proposal_dir": str(proposal_dir),
         "n_shards": int(len(proposals)),
         "shards": shard_metadata,
+        "raw_pool_size": int(len(raw_pool)),
+        "selected_pool_size": int(len(selected_pool)),
+        "proposal_selection": proposal_selection_summary,
+        "photometric_selection": photometric_summary,
+        "candidate_size": int(candidate_size),
+        "candidate_resampling": candidate_resampling_summary,
         **resampling_summary(result),
-        "metallicity": _metallicity_summary(pd.concat(proposals, ignore_index=True)),
+        "duplicate_fraction": float(final_duplicate_fraction),
+        "final_size": int(len(final)),
+        "metallicity": _metallicity_summary(final),
+        "selected_pool_metallicity": _metallicity_summary(selected_pool),
+        "raw_metallicity": _metallicity_summary(raw_pool),
     }
     return summary
 
@@ -279,6 +374,30 @@ def _stamp_proposal_ids(
         for i in range(len(stamped))
     ]
     return stamped
+
+
+def _reset_final_identity(frame: pd.DataFrame, split_cfg) -> pd.DataFrame:
+    final = frame.copy().reset_index(drop=True)
+    final = final.drop(columns=["object_id", "split"], errors="ignore")
+    final.insert(0, "split", split_cfg.name)
+    final.insert(
+        0,
+        "object_id",
+        np.arange(
+            int(split_cfg.object_id_start),
+            int(split_cfg.object_id_start) + len(final),
+            dtype=np.int64,
+        ),
+    )
+    return final
+
+
+def _duplicate_fraction(frame: pd.DataFrame) -> float:
+    if len(frame) == 0 or "source_proposal_id" not in frame:
+        return 0.0
+    return 1.0 - (
+        float(pd.Series(frame["source_proposal_id"]).nunique()) / float(len(frame))
+    )
 
 
 def _pool_is_sufficient(result, split_cfg, gen_cfg: SyntheticDiffskyConfig) -> bool:

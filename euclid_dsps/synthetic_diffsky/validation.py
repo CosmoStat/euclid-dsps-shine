@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+import h5py
 from jax import config as jax_config
 
 jax_config.update("jax_enable_x64", True)
@@ -26,6 +27,11 @@ from euclid_dsps.photometry import abmag_to_fnu_cgs
 from .config import DEFAULT_SPLIT_SIZES, SPLIT_ORDER
 from .photometry import GROUND_TRUTH_COLUMNS, theta_from_truth_frame
 from .resampling import effective_sample_size
+from .selection import (
+    apply_proposal_selection,
+    normalize_selection,
+    photometric_selection_enabled,
+)
 
 
 def validate_dsps_closure_dataset(
@@ -72,9 +78,21 @@ def validate_dsps_closure_dataset(
         report["noise"] = _noise_residual_report(all_frame, bands)
         if not report["noise"]["pass"]:
             errors.append(report["noise"]["message"])
-        report["metallicity"] = _metallicity_population_report(all_frame)
+        report["metallicity"] = _metallicity_population_report(
+            all_frame,
+            config,
+            manifest,
+        )
         if not report["metallicity"]["pass"]:
             errors.append(report["metallicity"]["message"])
+        report["photometric_selection"] = _photometric_selection_report(
+            all_frame,
+            bands,
+            config,
+            manifest,
+        )
+        if not report["photometric_selection"]["pass"]:
+            errors.append(report["photometric_selection"]["message"])
         recompute = _recompute_flux_report(
             config,
             all_frame,
@@ -166,6 +184,8 @@ def _validate_weighted_nz(root: Path, split_frames: dict[str, pd.DataFrame]) -> 
     errors: list[str] = []
     manifest = _read_manifest(root / "manifest.yaml")
     gen_cfg = dict(manifest.get("synthetic_diffsky", {}) or {})
+    selection = normalize_selection(gen_cfg.get("selection", {}) or {})
+    strict_nz_gate = not photometric_selection_enabled(selection)
     z_min = float(gen_cfg.get("z_min", 0.0))
     z_max = float(gen_cfg.get("z_max", 0.35))
     if not np.isfinite(z_min) or not np.isfinite(z_max) or z_max <= z_min:
@@ -181,6 +201,14 @@ def _validate_weighted_nz(root: Path, split_frames: dict[str, pd.DataFrame]) -> 
         if not {"redshift_true", "galaxy_weight"} <= set(proposals.columns):
             errors.append(f"{split}: proposals missing redshift_true/galaxy_weight")
             continue
+        try:
+            proposals, _ = apply_proposal_selection(proposals, selection)
+        except ValueError as exc:
+            errors.append(f"{split}: proposal selection failed for n(z): {exc}")
+            continue
+        if len(proposals) == 0:
+            errors.append(f"{split}: proposal selection leaves no rows for weighted n(z)")
+            continue
         prop_z = proposals["redshift_true"].to_numpy(float)
         weights = proposals["galaxy_weight"].to_numpy(float)
         final_z = final["redshift_true"].to_numpy(float)
@@ -194,7 +222,7 @@ def _validate_weighted_nz(root: Path, split_frames: dict[str, pd.DataFrame]) -> 
         max_delta = float(np.max(np.abs(prop_pdf - final_pdf)))
         ess = effective_sample_size(weights)
         threshold = max(0.15, 4.0 / np.sqrt(max(len(final), 1)))
-        if max_delta > threshold:
+        if max_delta > threshold and strict_nz_gate:
             errors.append(
                 f"{split}: weighted proposal n(z) and resampled n(z) differ by "
                 f"{max_delta:.3g} > {threshold:.3g} (ESS={ess:.3g})"
@@ -239,7 +267,11 @@ def _noise_residual_report(frame: pd.DataFrame, bands: list[str]) -> dict[str, A
     }
 
 
-def _metallicity_population_report(frame: pd.DataFrame) -> dict[str, Any]:
+def _metallicity_population_report(
+    frame: pd.DataFrame,
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
     met = frame["log10_stellar_metallicity_true"].to_numpy(float)
     mass = frame["logsm_true"].to_numpy(float)
     finite = np.isfinite(met) & np.isfinite(mass)
@@ -254,19 +286,151 @@ def _metallicity_population_report(frame: pd.DataFrame) -> dict[str, Any]:
         if "metallicity_clipped" in frame
         else np.zeros(len(frame), dtype=bool)
     )
-    ok = bool(np.isfinite(std) and std > 1.0e-4 and np.isfinite(corr) and corr > 0.05)
+    selection = _selection_from_config_or_manifest(config, manifest)
+    errors: list[str] = []
+    population_ok = bool(
+        np.isfinite(std) and std > 1.0e-4 and np.isfinite(corr) and corr > 0.05
+    )
+    if not population_ok:
+        errors.append("metallicity is constant or lacks a visible positive trend")
+    clipped_fraction = float(clipped.mean()) if len(clipped) else 0.0
+    max_clipped = selection.get("max_metallicity_clipped_fraction")
+    if max_clipped is not None and clipped_fraction > float(max_clipped):
+        errors.append(
+            f"metallicity clipped fraction {clipped_fraction:.4g} exceeds "
+            f"{float(max_clipped):.4g}"
+        )
+    if bool(selection.get("require_metallicity_unclipped")) and int(clipped.sum()) > 0:
+        errors.append(
+            f"selection requires unclipped metallicity but found {int(clipped.sum())} rows"
+        )
+    bounds = _ssp_relative_metallicity_bounds(config)
+    out_of_bounds_count = 0
+    if bounds is not None:
+        rel_lo, rel_hi = bounds
+        tol = 1.0e-6
+        out_of_bounds = finite & ((met < rel_lo - tol) | (met > rel_hi + tol))
+        out_of_bounds_count = int(np.count_nonzero(out_of_bounds))
+        if out_of_bounds_count:
+            errors.append(
+                f"{out_of_bounds_count} metallicity truths are outside SSP relative "
+                f"support [{rel_lo:.6g}, {rel_hi:.6g}]"
+            )
+    max_abs_conversion_delta = 0.0
+    if "lgmet_abs_used_true" in frame:
+        z_sun = float((config.get("model", {}) or {}).get("z_sun", 0.0142))
+        expected = frame["lgmet_abs_used_true"].to_numpy(float) - np.log10(z_sun)
+        valid = np.isfinite(expected) & np.isfinite(met)
+        if valid.any():
+            max_abs_conversion_delta = float(np.max(np.abs(expected[valid] - met[valid])))
+            if max_abs_conversion_delta > 1.0e-6:
+                errors.append(
+                    "log10_stellar_metallicity_true is inconsistent with "
+                    "lgmet_abs_used_true - log10(z_sun)"
+                )
+    ok = not errors
     return {
         "std": std,
         "mass_metallicity_corr": corr,
         "clipped_count": int(clipped.sum()),
-        "clipped_fraction": float(clipped.mean()) if len(clipped) else 0.0,
+        "clipped_fraction": clipped_fraction,
+        "ssp_relative_bounds": list(bounds) if bounds is not None else None,
+        "out_of_bounds_count": out_of_bounds_count,
+        "max_abs_conversion_delta": max_abs_conversion_delta,
         "pass": ok,
         "message": (
             "metallicity population checks pass"
             if ok
-            else "metallicity is constant or lacks a visible positive mass-metallicity trend"
+            else "; ".join(errors)
         ),
     }
+
+
+def _photometric_selection_report(
+    frame: pd.DataFrame,
+    bands: list[str],
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    selection = _selection_from_config_or_manifest(config, manifest)
+    min_true = int(selection["min_true_snr_bands"])
+    min_observed = int(selection["min_observed_snr_bands"])
+    if min_true <= 0 and min_observed <= 0:
+        return {"enabled": False, "pass": True, "message": "no S/N selection configured"}
+    errors: list[str] = []
+    if "n_bands_true_snr_ge_threshold" not in frame:
+        errors.append("missing n_bands_true_snr_ge_threshold")
+        true_counts = np.empty(0, dtype=float)
+    else:
+        true_counts = frame["n_bands_true_snr_ge_threshold"].to_numpy(float)
+    if "n_bands_observed_snr_ge_threshold" not in frame:
+        errors.append("missing n_bands_observed_snr_ge_threshold")
+        observed_counts = np.empty(0, dtype=float)
+    else:
+        observed_counts = frame["n_bands_observed_snr_ge_threshold"].to_numpy(float)
+    if min_true > 0 and true_counts.size:
+        failures = int(np.count_nonzero(true_counts < min_true))
+        if failures:
+            errors.append(f"{failures} rows fail min_true_snr_bands={min_true}")
+    if min_observed > 0 and observed_counts.size:
+        failures = int(np.count_nonzero(observed_counts < min_observed))
+        if failures:
+            errors.append(f"{failures} rows fail min_observed_snr_bands={min_observed}")
+    return {
+        "enabled": True,
+        "bands": list(bands),
+        "snr_threshold": float(selection["snr_threshold"]),
+        "min_true_snr_bands": min_true,
+        "min_observed_snr_bands": min_observed,
+        "true_snr_band_count_min": float(np.min(true_counts))
+        if true_counts.size
+        else float("nan"),
+        "true_snr_band_count_median": float(np.median(true_counts))
+        if true_counts.size
+        else float("nan"),
+        "observed_snr_band_count_min": float(np.min(observed_counts))
+        if observed_counts.size
+        else float("nan"),
+        "observed_snr_band_count_median": float(np.median(observed_counts))
+        if observed_counts.size
+        else float("nan"),
+        "pass": not errors,
+        "message": "photometric S/N selection checks pass"
+        if not errors
+        else "; ".join(errors),
+    }
+
+
+def _ssp_relative_metallicity_bounds(config: dict[str, Any]) -> tuple[float, float] | None:
+    path = Path(str(config.get("ssp_path", "")))
+    if not path.exists():
+        return None
+    with h5py.File(path, "r") as handle:
+        if "ssp_lgmet" not in handle:
+            return None
+        grid = np.asarray(handle["ssp_lgmet"][:], dtype=float)
+    grid = grid[np.isfinite(grid)]
+    if grid.size == 0:
+        return None
+    z_sun = float((config.get("model", {}) or {}).get("z_sun", 0.0142))
+    logzsun = float(np.log10(z_sun))
+    return float(np.min(grid) - logzsun), float(np.max(grid) - logzsun)
+
+
+def _selection_from_config_or_manifest(
+    config: dict[str, Any],
+    manifest: dict[str, Any],
+) -> dict[str, Any]:
+    manifest_selection = (
+        (manifest.get("synthetic_diffsky", {}) or {}).get("selection")
+        if isinstance(manifest, dict)
+        else None
+    )
+    if manifest_selection is not None:
+        return normalize_selection(manifest_selection)
+    return normalize_selection(
+        (config.get("synthetic_diffsky", {}) or {}).get("selection", {}) or {}
+    )
 
 
 def _recompute_flux_report(

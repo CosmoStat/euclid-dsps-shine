@@ -33,6 +33,10 @@ from euclid_dsps.synthetic_diffsky.resampling import (
     effective_sample_size,
     resample_weighted_proposals,
 )
+from euclid_dsps.synthetic_diffsky.selection import (
+    apply_photometric_selection,
+    apply_proposal_selection,
+)
 
 
 def test_diffsky_basic_parameter_order_is_canonical_18() -> None:
@@ -88,9 +92,10 @@ def test_prior_full_truth_schema_uses_canonical_order() -> None:
 
 
 def test_absolute_metallicity_conversion_and_clipping() -> None:
-    grid = np.asarray([-2.0, -1.0, 0.0])
+    logzsun = np.log10(0.0142)
+    grid = logzsun + np.asarray([-2.5, -1.0, 0.0, 0.5])
     converted = absolute_lgmet_to_logzsol(
-        np.asarray([np.log10(0.0142)]),
+        np.asarray([logzsun]),
         z_sun=0.0142,
         ssp_lgmet=grid,
         policy="fail",
@@ -98,19 +103,23 @@ def test_absolute_metallicity_conversion_and_clipping() -> None:
     assert converted.log10_z_over_zsun[0] == pytest.approx(0.0)
     with pytest.raises(ValueError, match="exceed the SSP grid"):
         absolute_lgmet_to_logzsol(
-            np.asarray([np.log10(0.0142) - 3.0]),
+            np.asarray([grid.min() - 0.1]),
             z_sun=0.0142,
             ssp_lgmet=grid,
             policy="fail",
         )
     clipped = absolute_lgmet_to_logzsol(
-        np.asarray([np.log10(0.0142) - 3.0, np.log10(0.0142) + 0.5]),
+        np.asarray([grid.min() - 0.1, grid.max() + 0.1]),
         z_sun=0.0142,
         ssp_lgmet=grid,
         policy="clip_with_warning",
     )
     assert clipped.clip_low_count == 1
     assert clipped.clip_high_count == 1
+    assert clipped.log10_z_over_zsun.tolist() == pytest.approx([-2.5, 0.5])
+    assert clipped.lgmet_abs_used.tolist() == pytest.approx(
+        [float(grid.min()), float(grid.max())]
+    )
 
 
 def test_lognormal_mdf_weights_are_finite_positive_normalized_continuous() -> None:
@@ -155,6 +164,44 @@ def test_weighted_resampling_and_ess_are_reproducible() -> None:
         "source_proposal_id"
     ].tolist()
     assert result_a.frame["object_id"].iloc[0] == 10
+
+
+def test_proposal_selection_filters_mass_and_metallicity_clipping() -> None:
+    proposals = pd.DataFrame(
+        {
+            "logsm_true": [7.9, 8.1, 9.0, 10.0],
+            "metallicity_clipped": [False, False, True, False],
+            "galaxy_weight": [1.0, 2.0, 3.0, np.nan],
+        }
+    )
+    selected, summary = apply_proposal_selection(
+        proposals,
+        {"min_logsm": 8.0, "require_metallicity_unclipped": True},
+    )
+    assert selected["logsm_true"].tolist() == [8.1]
+    assert summary["selected_size"] == 1
+    assert summary["cuts"]["min_logsm"]["rejected"] == 1
+
+
+def test_photometric_selection_keeps_negative_noisy_fluxes() -> None:
+    frame = pd.DataFrame(
+        {
+            "flux_true_lsst_u": [10.0, 1.0],
+            "flux_lsst_u": [-5.0, 1.0],
+            "fluxerr_lsst_u": [1.0, 1.0],
+            "flux_true_lsst_g": [8.0, 1.0],
+            "flux_lsst_g": [-4.0, 1.0],
+            "fluxerr_lsst_g": [1.0, 1.0],
+        }
+    )
+    selected, summary = apply_photometric_selection(
+        frame,
+        ["lsst_u", "lsst_g"],
+        {"snr_threshold": 5.0, "min_true_snr_bands": 2},
+    )
+    assert len(selected) == 1
+    assert selected["flux_lsst_u"].iloc[0] < 0.0
+    assert summary["selected_size"] == 1
 
 
 def test_toy_smoke_generation_validation_and_parquet_roundtrip(tmp_path) -> None:
