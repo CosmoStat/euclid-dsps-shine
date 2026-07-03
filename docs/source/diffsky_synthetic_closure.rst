@@ -39,19 +39,71 @@ The proposal shards keep ``cen_weight``, ``sat_weight`` and
 catalogs are independent weighted-resampling outputs from independent Diffsky
 proposal pools and seeds. They are not random splits of one parent catalog.
 
+Creation Process
+----------------
+
+The production command is intentionally a two-population workflow:
+
+1. Diffsky/FENIKS generates a raw weighted proposal lightcone for each split.
+   The generator calls ``weighted_lc_photdata`` and ``mc_lc_phot`` with the
+   FENIKS calibration, independent split seeds, and ``mc_merge: 0``. These raw
+   proposal shards are written under ``proposals/<split>/`` and are kept for
+   weighted diagnostics such as ``n(z)``. They are not the final learning
+   catalog.
+2. The generator extracts compact truth scalars from Diffsky immediately:
+   redshift, stellar mass, Diffstar parameters, Diffmah parameters, dust,
+   central/satellite state, SFR diagnostics, halo-mass diagnostics, and proposal
+   weights. Large intermediate tensors such as full SFHs, SEDs, SSP weights and
+   transmission tables are not stored per object.
+3. The FENIKS mass-metallicity-time relation supplies
+   ``lgmet_abs_median_true`` in absolute ``log10(Z)``. The code clips this
+   absolute value only against the absolute SSP metallicity grid when explicit
+   clipping is configured, stores ``lgmet_abs_used_true``, and then computes
+   ``log10_stellar_metallicity_true = lgmet_abs_used_true - log10(model.z_sun)``.
+   Production selection requires no clipped metallicities in the final catalog.
+4. Proposal-level selection is applied before weighted resampling. The current
+   production defaults keep ``logsm_true >= 8`` and reject clipped
+   metallicities. Selection counters are written to ``manifest.yaml`` under
+   ``proposal_selection``; the raw shards remain on disk unchanged.
+5. The selected proposal pool is resampled with replacement using probabilities
+   proportional to ``galaxy_weight``. ESS, weight sums, pool size and duplicate
+   fraction are recorded. The final splits are independent because they are
+   generated from independent proposal pools and seeds.
+6. If photometric selection is enabled, the code first draws an oversampled
+   candidate catalog, runs the DSPS closure photometer, and then keeps rows
+   satisfying the configured S/N gate. The current production gate requires at
+   least five true LSST+Roman bands with S/N >= 5 under the configured error
+   model. This creates an observable learning sample rather than a
+   volume-complete sample dominated by non-detections.
+7. Final true fluxes are generated only with this repository's DSPS forward
+   model using the 18 stored truths in ``DIFFSKY_BASIC_PARAMETER_NAMES`` order.
+   The same SSP, filters, cosmology, dust, metallicity and IGM settings are used
+   by closure validation and inference. Diffsky ``phot_info.obs_mags`` are not
+   used as closure fluxes.
+8. The configured LSST+Roman error model writes ``fluxerr_<band>`` and draws
+   noisy ``flux_<band> = flux_true_<band> + Normal(0, fluxerr_<band>)``.
+   Negative noisy fluxes are preserved. S/N-count diagnostic columns are kept in
+   the final catalog.
+9. The generator writes ``train.parquet``, ``validation.parquet``,
+   ``test.parquet``, ``all_50k.parquet``, ``schema.json``, ``manifest.yaml`` and
+   population diagnostics. Validation then recomputes DSPS fluxes from a random
+   truth sample, checks exact split sizes and disjoint identifiers, checks
+   metallicity-grid conventions, checks the S/N selection, checks noise
+   residuals, and compares the selected proposal ``n(z)`` to the final catalog
+   where appropriate.
+
 Redshift Range and Realism Checks
 ---------------------------------
 
 The production FENIKS closure proposal range is set to ``0.001 <= z <= 5.5``.
-The final learning catalog is not a raw volume-complete proposal: it applies an
-explicit observable-population selection in ``synthetic_diffsky.selection``:
-``logsm_true >= 8``, no SSP-metallicity-grid clipping, and at least five true
-LSST+Roman bands with S/N >= 5 under the configured error model. OpenUniverse2024
-validates its extragalactic Diffsky-based catalog with galaxy number counts,
-redshift distributions in magnitude bins, and optical/NIR color evolution; the
-same classes of checks are written automatically by this generator. The current
-local z<=0.35 HLTDS parquet is still useful as a low-redshift reference, but
-comparisons to it are restricted to the overlapping low-redshift interval.
+The final learning catalog is not a raw volume-complete proposal: it is an
+observable-population sample after the explicit selection described above.
+OpenUniverse2024 validates its extragalactic Diffsky-based catalog with galaxy
+number counts, redshift distributions in magnitude bins, and optical/NIR color
+evolution; the same classes of checks are written automatically by this
+generator. The current local z<=0.35 HLTDS parquet is still useful as a
+low-redshift reference, but comparisons to it are restricted to the overlapping
+low-redshift interval.
 
 Every generation run with ``synthetic_diffsky.diagnostics.enabled: true`` writes:
 
@@ -107,12 +159,13 @@ The FENIKS mass-metallicity-time relation returns absolute ``log10(Z)``:
        *feniks_params.mzr_params,
    )
 
-The catalog stores ``lgmet_abs_median_true`` and converts the fitted truth to
-``log10(Z/Z_sun)`` using exactly ``model.z_sun``. If a median falls outside the
-SSP metallicity grid, clipping only happens when
-``synthetic_diffsky.metallicity_grid_policy`` explicitly requests it. Clipped
-counts and fractions are written to ``manifest.yaml`` and checked during
-validation.
+The catalog stores both ``lgmet_abs_median_true`` and ``lgmet_abs_used_true``
+and converts the fitted truth to ``log10(Z/Z_sun)`` using exactly
+``model.z_sun``. If a median falls outside the SSP metallicity grid, clipping
+only happens when ``synthetic_diffsky.metallicity_grid_policy`` explicitly
+requests it. Clipped counts and fractions are written to ``manifest.yaml`` and
+checked during validation. The production selection rejects clipped
+metallicities from the final learning catalog.
 
 Ground Truth Contract
 ---------------------
@@ -240,6 +293,24 @@ column for each free parameter in ``DIFFSKY_BASIC_PARAMETER_NAMES``.
 
 Commands
 --------
+
+The current production-defining configuration is:
+
+.. code-block:: yaml
+
+   synthetic_diffsky:
+     z_min: 0.001
+     z_max: 5.5
+     metallicity_grid_policy: clip_with_warning
+     stellar_metallicity_scatter_dex: 0.2
+     selection:
+       min_logsm: 8.0
+       require_metallicity_unclipped: true
+       max_metallicity_clipped_fraction: 0.0
+       snr_threshold: 5.0
+       min_true_snr_bands: 5
+       min_observed_snr_bands: 0
+       photometric_oversample_factor: 5.0
 
 CPU smoke generation still requires Diffsky, Diffstar and Diffmah for the
 science backend:

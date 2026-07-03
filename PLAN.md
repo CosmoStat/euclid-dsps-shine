@@ -1,5 +1,30 @@
 # Plan
 
+## 2026-07-03 FENIKS Closure Creation Process Documentation
+
+- Status: completed.
+- Goal: document the concrete dataset-creation process after the z<=5.5,
+  metallicity, and observability-selection fixes, so the production run can be
+  interpreted without reading the generator code.
+- Scope:
+  - Explain the difference between raw weighted Diffsky proposals, selected
+    proposal pools, and final unweighted learning catalogues.
+  - Document the current production cuts, DSPS closure photometry generation,
+    error model, manifest fields, diagnostics, and validation gates.
+  - Keep the documentation aligned with
+    `configs/diffsky_synthetic_feniks_260617_50k.yaml`.
+- Completed:
+  - Added a `Creation Process` section to
+    `docs/source/diffsky_synthetic_closure.rst` describing the nine-step
+    production path from Diffsky proposal shards to validated DSPS closure
+    catalogues.
+  - Added the current production selection block to the commands section:
+    `z_max: 5.5`, `logsm_true >= 8`, no final metallicity clipping, and at
+    least five true S/N>=5 bands.
+  - Clarified that `lgmet_abs_used_true` is stored and that
+    `log10_stellar_metallicity_true` is audited as
+    `lgmet_abs_used_true - log10(model.z_sun)`.
+
 ## 2026-07-03 FENIKS Regeneration Fix Implementation
 
 - Status: completed.
