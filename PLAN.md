@@ -1,5 +1,17 @@
 # Plan
 
+## 2026-07-03 Documentation Rebuild
+
+- Status: completed.
+- Goal: rebuild the Sphinx documentation after the FENIKS closure creation
+  process documentation update and record any warnings or failures.
+- Completed:
+  - `make -C docs html` failed because the active Python environment does not
+    have `sphinx` installed.
+  - `uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -b html
+    docs/source docs/build/html` succeeded and wrote the rebuilt HTML under
+    `docs/build/html`.
+
 ## 2026-07-03 FENIKS Closure Creation Process Documentation
 
 - Status: completed.
