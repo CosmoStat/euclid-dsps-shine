@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-07-03 FENIKS Full Run Criteria and OpenUniverse-Style Diagnostics
+
+- Status: completed.
+- Goal: make the 50k FENIKS generation pass with the observed weighted
+  proposal behavior on Jean-Zay and improve diagnostics with clearer
+  OpenUniverse-style color-color overlays.
+- Completed:
+  - Relax only the duplication gate needed by the observed full train run while
+    preserving ESS reporting and exact manifest accounting.
+  - Make resume safer when stale smoke final parquets are present.
+  - Add black/reference and green/synthetic color-color scatter overlays for
+    LSST/Roman color pairs.
+  - Validate, commit, push, and provide clean Jean-Zay relaunch commands.
+  - Validation completed: `python -m compileall euclid_dsps/synthetic_diffsky
+    euclid_dsps/cli.py`, `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm`,
+    `git diff --check`, and `pytest -q
+    tests/test_synthetic_diffsky_closure.py tests/test_cli.py` (`13 passed, 1
+    skipped`).
+  - Full `pytest -q` completed with `377 passed, 9 skipped` and the known
+    existing HLTDS config failure
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`.
+
 ## 2026-07-02 Jean-Zay Diffsky Backend Dependency Diagnostics
 
 - Status: completed.

@@ -73,6 +73,21 @@ COLOR_PAIRS = (
     ("roman_F158", "roman_F213"),
 )
 
+COLOR_COLOR_PLOTS = (
+    ("lsst_u", "lsst_g", "lsst_r"),
+    ("lsst_g", "lsst_r", "lsst_i"),
+    ("lsst_r", "lsst_i", "lsst_z"),
+    ("lsst_i", "lsst_z", "lsst_y"),
+    ("roman_F062", "roman_F087", "roman_F106"),
+    ("roman_F087", "roman_F106", "roman_F129"),
+    ("roman_F106", "roman_F129", "roman_F158"),
+    ("roman_F129", "roman_F158", "roman_F184"),
+    ("roman_F158", "roman_F184", "roman_F213"),
+)
+
+REFERENCE_DOT_COLOR = "black"
+SYNTHETIC_DOT_COLOR = "#00a846"
+
 
 def compare_synthetic_closure_to_reference(
     *,
@@ -690,8 +705,208 @@ def _write_plots(
         path = _bar_plot(plt, top_phot, "delta_median", "top_mag_median_offsets", plot_dir)
         if path is not None:
             paths.append(path)
+    color_color_paths = _color_color_plots(plt, synthetic, reference, plot_dir)
+    paths.extend(color_color_paths)
     plt.close("all")
     return paths
+
+
+def _color_color_plots(
+    plt: Any,
+    synthetic: pd.DataFrame,
+    reference: pd.DataFrame,
+    plot_dir: Path,
+) -> list[Path]:
+    paths: list[Path] = []
+    rows: list[tuple[str, str, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+    for left, middle, right in COLOR_COLOR_PLOTS:
+        syn_x, syn_y = _color_color_arrays(
+            synthetic,
+            f"mag_true_{left}",
+            f"mag_true_{middle}",
+            f"mag_true_{right}",
+        )
+        ref_x, ref_y = _color_color_arrays(
+            reference,
+            f"mag_{left}",
+            f"mag_{middle}",
+            f"mag_{right}",
+        )
+        if syn_x.size < 2 or ref_x.size < 2:
+            continue
+        x_label = f"{left}-{middle}"
+        y_label = f"{middle}-{right}"
+        rows.append((x_label, y_label, syn_x, syn_y, ref_x, ref_y))
+        path = _color_color_single_plot(
+            plt,
+            plot_dir / f"color_color_{_slug(x_label)}__{_slug(y_label)}.png",
+            x_label,
+            y_label,
+            syn_x,
+            syn_y,
+            ref_x,
+            ref_y,
+        )
+        if path is not None:
+            paths.append(path)
+    panel = _color_color_panel_plot(plt, plot_dir, rows)
+    if panel is not None:
+        paths.append(panel)
+    return paths
+
+
+def _color_color_arrays(
+    frame: pd.DataFrame,
+    left_col: str,
+    middle_col: str,
+    right_col: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    if not {left_col, middle_col, right_col} <= set(frame.columns):
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
+    left = pd.to_numeric(frame[left_col], errors="coerce").to_numpy(dtype=float)
+    middle = pd.to_numeric(frame[middle_col], errors="coerce").to_numpy(dtype=float)
+    right = pd.to_numeric(frame[right_col], errors="coerce").to_numpy(dtype=float)
+    x = left - middle
+    y = middle - right
+    finite = np.isfinite(x) & np.isfinite(y)
+    return x[finite], y[finite]
+
+
+def _color_color_single_plot(
+    plt: Any,
+    path: Path,
+    x_label: str,
+    y_label: str,
+    syn_x: np.ndarray,
+    syn_y: np.ndarray,
+    ref_x: np.ndarray,
+    ref_y: np.ndarray,
+) -> Path | None:
+    if syn_x.size < 2 or ref_x.size < 2:
+        return None
+    syn_x, syn_y = _sample_xy(syn_x, syn_y, max_rows=25_000, seed=260617)
+    ref_x, ref_y = _sample_xy(ref_x, ref_y, max_rows=50_000, seed=260618)
+    fig, ax = plt.subplots(figsize=(5.2, 4.6))
+    _draw_color_color_axes(ax, x_label, y_label, syn_x, syn_y, ref_x, ref_y)
+    ax.legend(frameon=False, loc="best", markerscale=2.0)
+    fig.tight_layout()
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    return path
+
+
+def _color_color_panel_plot(
+    plt: Any,
+    plot_dir: Path,
+    rows: Sequence[tuple[str, str, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+) -> Path | None:
+    if not rows:
+        return None
+    ncols = 3
+    nrows = int(np.ceil(len(rows) / ncols))
+    fig, axes = plt.subplots(
+        nrows,
+        ncols,
+        figsize=(5.0 * ncols, 4.4 * nrows),
+        squeeze=False,
+    )
+    axes_arr = np.asarray(axes).reshape(-1)
+    for index, (ax, row) in enumerate(zip(axes_arr, rows, strict=False)):
+        x_label, y_label, syn_x, syn_y, ref_x, ref_y = row
+        syn_x, syn_y = _sample_xy(syn_x, syn_y, max_rows=12_000, seed=260617 + index)
+        ref_x, ref_y = _sample_xy(ref_x, ref_y, max_rows=24_000, seed=260717 + index)
+        _draw_color_color_axes(
+            ax,
+            x_label,
+            y_label,
+            syn_x,
+            syn_y,
+            ref_x,
+            ref_y,
+            show_legend=index == 0,
+        )
+    for ax in axes_arr[len(rows):]:
+        ax.axis("off")
+    fig.tight_layout()
+    path = plot_dir / "color_color_reference_black_synthetic_green.png"
+    fig.savefig(path, dpi=180)
+    plt.close(fig)
+    return path
+
+
+def _draw_color_color_axes(
+    ax: Any,
+    x_label: str,
+    y_label: str,
+    syn_x: np.ndarray,
+    syn_y: np.ndarray,
+    ref_x: np.ndarray,
+    ref_y: np.ndarray,
+    *,
+    show_legend: bool = True,
+) -> None:
+    ax.scatter(
+        ref_x,
+        ref_y,
+        s=4,
+        c=REFERENCE_DOT_COLOR,
+        alpha=0.16,
+        linewidths=0,
+        rasterized=True,
+        label="z<=0.35 reference",
+    )
+    ax.scatter(
+        syn_x,
+        syn_y,
+        s=7,
+        c=SYNTHETIC_DOT_COLOR,
+        alpha=0.55,
+        linewidths=0,
+        rasterized=True,
+        label="FENIKS DSPS closure",
+    )
+    xlim = _robust_limits(np.concatenate([ref_x, syn_x]))
+    ylim = _robust_limits(np.concatenate([ref_y, syn_y]))
+    if xlim is not None:
+        ax.set_xlim(*xlim)
+    if ylim is not None:
+        ax.set_ylim(*ylim)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.grid(True, color="0.9", linewidth=0.7)
+    if show_legend:
+        ax.legend(frameon=False, loc="best", markerscale=2.0)
+
+
+def _sample_xy(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    max_rows: int,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    n = min(x.size, y.size)
+    x = np.asarray(x[:n], dtype=float)
+    y = np.asarray(y[:n], dtype=float)
+    finite = np.isfinite(x) & np.isfinite(y)
+    x = x[finite]
+    y = y[finite]
+    if x.size <= int(max_rows):
+        return x, y
+    rng = np.random.default_rng(int(seed))
+    idx = rng.choice(x.size, size=int(max_rows), replace=False)
+    return x[idx], y[idx]
+
+
+def _robust_limits(values: np.ndarray) -> tuple[float, float] | None:
+    values = _finite_array(values)
+    if values.size < 2:
+        return None
+    lo, hi = np.quantile(values, [0.005, 0.995])
+    if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+        return None
+    pad = 0.08 * (hi - lo)
+    return float(lo - pad), float(hi + pad)
 
 
 def _hist_plot(

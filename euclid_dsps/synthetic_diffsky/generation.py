@@ -157,15 +157,21 @@ def _generate_one_split(
         )
     if final_path.exists() and resume:
         frame = pd.read_parquet(final_path)
+        if len(frame) == int(split_cfg.n_final):
+            _progress(
+                verbose,
+                f"{split_cfg.name}: reusing existing final {final_path} rows={len(frame)}",
+            )
+            return {
+                "status": "reused_existing_final",
+                "final_path": str(final_path),
+                "final_size": int(len(frame)),
+            }
         _progress(
             verbose,
-            f"{split_cfg.name}: reusing existing final {final_path} rows={len(frame)}",
+            f"{split_cfg.name}: ignoring stale final {final_path} rows={len(frame)} "
+            f"expected={int(split_cfg.n_final)}",
         )
-        return {
-            "status": "reused_existing_final",
-            "final_path": str(final_path),
-            "final_size": int(len(frame)),
-        }
     _progress(
         verbose,
         f"{split_cfg.name}: target={int(split_cfg.n_final)} "

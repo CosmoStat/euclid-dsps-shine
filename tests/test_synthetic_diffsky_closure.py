@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import h5py
 import numpy as np
 import pandas as pd
@@ -224,6 +226,7 @@ def test_closure_inference_evaluation_outputs_metrics(tmp_path) -> None:
 
 
 def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) -> None:
+    pytest.importorskip("matplotlib")
     synthetic = pd.DataFrame(
         {
             "redshift_true": [0.05, 0.1, 0.2, 0.3],
@@ -235,6 +238,7 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
             "dust_delta_true": [-0.4, -0.3, -0.2, -0.1],
             "mag_true_lsst_g": [24.0, 23.5, 23.0, 22.5],
             "mag_true_lsst_r": [23.8, 23.2, 22.9, 22.4],
+            "mag_true_lsst_i": [23.5, 23.0, 22.7, 22.1],
             "flux_true_lsst_g": [1.0, 2.0, 3.0, 4.0],
             "flux_lsst_g": [0.9, 2.1, 2.8, 4.2],
             "fluxerr_lsst_g": [0.1, 0.1, 0.2, 0.2],
@@ -243,6 +247,10 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
             "flux_lsst_r": [1.0, 2.2, 3.0, 4.3],
             "fluxerr_lsst_r": [0.1, 0.1, 0.2, 0.2],
             "mask_lsst_r": [True, True, False, True],
+            "flux_true_lsst_i": [1.2, 2.2, 3.2, 4.2],
+            "flux_lsst_i": [1.1, 2.3, 3.1, 4.4],
+            "fluxerr_lsst_i": [0.1, 0.1, 0.2, 0.2],
+            "mask_lsst_i": [True, True, True, True],
         }
     )
     reference = pd.DataFrame(
@@ -256,12 +264,16 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
             "dust_delta": [-0.4, -0.3, -0.25, -0.1, -0.05],
             "mag_lsst_g": [24.1, 23.4, 23.1, 22.6, 22.3],
             "mag_lsst_r": [23.9, 23.1, 22.8, 22.5, 22.2],
+            "mag_lsst_i": [23.6, 22.9, 22.5, 22.1, 21.9],
             "flux_lsst_g": [1.0, 2.0, 2.9, 4.1, 4.4],
             "fluxerr_lsst_g": [0.1, 0.1, 0.2, 0.2, 0.3],
             "mask_lsst_g": [True, True, True, True, False],
             "flux_lsst_r": [1.1, 2.1, 3.0, 4.2, 4.5],
             "fluxerr_lsst_r": [0.1, 0.1, 0.2, 0.2, 0.3],
             "mask_lsst_r": [True, True, True, False, False],
+            "flux_lsst_i": [1.2, 2.2, 3.1, 4.3, 4.6],
+            "fluxerr_lsst_i": [0.1, 0.1, 0.2, 0.2, 0.3],
+            "mask_lsst_i": [True, True, True, True, False],
         }
     )
     synthetic_path = tmp_path / "synthetic.parquet"
@@ -273,8 +285,8 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
         synthetic_path=synthetic_path,
         reference_path=reference_path,
         out_dir=tmp_path / "comparison",
-        bands=("lsst_g", "lsst_r"),
-        plots=False,
+        bands=("lsst_g", "lsst_r", "lsst_i"),
+        plots=True,
     )
 
     assert outputs["report"].exists()
@@ -283,6 +295,11 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
     assert "redshift" in set(distribution["quantity"])
     assert "lsst_g-lsst_r" in set(photometry["quantity"])
     assert "mask_fraction" in set(photometry["group"])
+    summary = json.loads(outputs["summary"].read_text())
+    assert any(
+        "color_color_reference_black_synthetic_green" in path
+        for path in summary["plot_paths"]
+    )
 
 
 def test_population_diagnostics_write_stats_and_proposal_metrics(tmp_path) -> None:

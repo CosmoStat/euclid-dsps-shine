@@ -283,6 +283,15 @@ keeps population plots enabled and writes, in addition to the core catalogues:
 - ``diagnostics/population/plots/fluxerr_vs_mag_true.png``;
 - ``diagnostics/population/plots/corner_18_truths.png`` when enough dynamic
   range is available.
+- ``diagnostics/population/reference_comparison/plots/color_color_reference_black_synthetic_green.png``
+  for OpenUniverse-style color-color overlays, with black points for the
+  z<=0.35 reference sample and green points for the synthetic DSPS-closure
+  catalog in the overlapping redshift range.
+
+The production resampling gate currently allows up to 10% duplicate final
+objects. This is a practical bound for the high-dynamic-range FENIKS proposal
+weights observed in the z<=3 generation; the realized duplication fraction is
+recorded in ``manifest.yaml`` and should be reported with any science use.
 
 Run exact forward closure on the test set:
 
