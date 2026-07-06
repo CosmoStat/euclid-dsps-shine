@@ -47,6 +47,7 @@ class SyntheticDiffskyConfig:
     metallicity_grid_policy: str
     stellar_metallicity_scatter_dex: float
     max_duplication_fraction: float
+    duplication_gate: str
     min_ess_fraction: float
     pool_size_factor: float
     selection: dict[str, Any]
@@ -148,6 +149,7 @@ def load_synthetic_diffsky_config(
         max_duplication_fraction=float(
             _runtime_value(raw, "max_duplication_fraction", 0.05, smoke=smoke)
         ),
+        duplication_gate=str(raw.get("duplication_gate", "fail")),
         min_ess_fraction=float(
             _runtime_value(raw, "min_ess_fraction", 2.0, smoke=smoke)
         ),

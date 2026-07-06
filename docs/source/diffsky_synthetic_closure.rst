@@ -365,10 +365,13 @@ keeps population plots enabled and writes, in addition to the core catalogues:
   z<=0.35 reference sample and green points for the synthetic DSPS-closure
   catalog in the overlapping redshift range.
 
-The production resampling gate currently allows up to 10% duplicate final
-objects. This is a practical bound for the high-dynamic-range FENIKS proposal
-weights observed in the broad FENIKS proposal generation; the realized
-duplication fraction is recorded in ``manifest.yaml`` and should be reported
+The production resampling gate treats 10% duplicate source proposals as a
+warning threshold. The generator keeps accumulating proposal shards while it can
+reduce duplication, but with the high-dynamic-range FENIKS weights the z<=5.5
+train pool can still have duplicate_fraction around 0.15 after all 256 shards.
+In that case ``duplication_gate: warn_after_max_shards`` lets the run continue
+only if the selected-pool-size and ESS gates pass. The realized pool and final
+duplication fractions are recorded in ``manifest.yaml`` and should be reported
 with any science use.
 
 Run exact forward closure on the test set:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -15,6 +16,7 @@ from euclid_dsps.synthetic_diffsky import (
     generate_dsps_closure_dataset,
     validate_dsps_closure_dataset,
 )
+from euclid_dsps.synthetic_diffsky.generation import _pool_is_sufficient
 from euclid_dsps.synthetic_diffsky.inference_evaluation import (
     evaluate_closure_inference,
 )
@@ -164,6 +166,23 @@ def test_weighted_resampling_and_ess_are_reproducible() -> None:
         "source_proposal_id"
     ].tolist()
     assert result_a.frame["object_id"].iloc[0] == 10
+
+
+def test_duplication_gate_warns_only_after_max_shards() -> None:
+    result = SimpleNamespace(pool_size=500, ess=250.0, duplicate_fraction=0.154)
+    split = SimpleNamespace(n_final=100)
+    cfg = SimpleNamespace(
+        pool_size_factor=4.0,
+        min_ess_fraction=2.0,
+        max_duplication_fraction=0.10,
+        duplication_gate="fail",
+    )
+    assert not _pool_is_sufficient(result, split, cfg, final_attempt=True)
+    cfg.duplication_gate = "warn_after_max_shards"
+    assert not _pool_is_sufficient(result, split, cfg, final_attempt=False)
+    assert _pool_is_sufficient(result, split, cfg, final_attempt=True)
+    cfg.duplication_gate = "warn"
+    assert _pool_is_sufficient(result, split, cfg, final_attempt=False)
 
 
 def test_proposal_selection_filters_mass_and_metallicity_clipping() -> None:

@@ -60,10 +60,12 @@ synthetic_diffsky:
     pool_size_factor: 4.0
     min_ess_fraction: 2.0
     # The weighted FENIKS proposal has a high dynamic range in galaxy weights.
-    # A Jean-Zay H100 full run reached ESS=1.76e5 for train after 128 shards
-    # but duplication=0.0949, so 0.10 keeps the run finite while still forcing
-    # duplication to be reported and bounded in the manifest.
+    # The z<=5.5 selected train pool reached ESS=1.04e5 after 256 shards but
+    # still had duplicate_fraction=0.154 for a 40k weighted resample. Keep 0.10
+    # as the warning threshold, continue accumulating shards while possible,
+    # then proceed after max_shards if ESS and pool-size gates are satisfied.
     max_duplication_fraction: 0.10
+    duplication_gate: warn_after_max_shards
     metallicity_grid_policy: clip_with_warning
     stellar_metallicity_scatter_dex: 0.2
     selection:

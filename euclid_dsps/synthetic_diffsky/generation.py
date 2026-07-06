@@ -107,6 +107,8 @@ def generate_dsps_closure_dataset(
         "sky_area_degsq": float(gen_cfg.sky_area_degsq),
         "mc_merge": int(gen_cfg.mc_merge),
         "metallicity_grid_policy": gen_cfg.metallicity_grid_policy,
+        "max_duplication_fraction": float(gen_cfg.max_duplication_fraction),
+        "duplication_gate": str(gen_cfg.duplication_gate),
         "selection": normalize_selection(gen_cfg.selection),
         "flux_error_model": flux_error_model_payload(gen_cfg.flux_error_model),
         "smoke": bool(smoke),
@@ -248,7 +250,20 @@ def _generate_one_split(
             f"{split_cfg.name}: raw_pool={len(pool)} selected_pool={result.pool_size} "
             f"ESS={result.ess:.3g} dup={result.duplicate_fraction:.3g}",
         )
-        if _pool_is_sufficient(result, split_cfg, gen_cfg):
+        final_attempt = shard_index + 1 >= int(gen_cfg.max_shards)
+        if _pool_is_sufficient(
+            result,
+            split_cfg,
+            gen_cfg,
+            final_attempt=final_attempt,
+        ):
+            if result.duplicate_fraction > float(gen_cfg.max_duplication_fraction):
+                _progress(
+                    verbose,
+                    f"{split_cfg.name}: duplication={result.duplicate_fraction:.3g} "
+                    f"exceeds threshold={gen_cfg.max_duplication_fraction:.3g}; "
+                    f"continuing because duplication_gate={gen_cfg.duplication_gate}",
+                )
             _progress(verbose, f"{split_cfg.name}: pool targets reached")
             break
     if result is None:
@@ -256,7 +271,12 @@ def _generate_one_split(
             f"No selected proposals generated for split {split_cfg.name}. "
             "Relax synthetic_diffsky.selection or increase max_shards."
         )
-    if not _pool_is_sufficient(result, split_cfg, gen_cfg):
+    if not _pool_is_sufficient(
+        result,
+        split_cfg,
+        gen_cfg,
+        final_attempt=True,
+    ):
         raise RuntimeError(
             f"Split {split_cfg.name} did not reach ESS/duplication targets after "
             f"{gen_cfg.max_shards} shards: ESS={result.ess:.3g}, "
@@ -345,6 +365,12 @@ def _generate_one_split(
         "photometric_selection": photometric_summary,
         "candidate_size": int(candidate_size),
         "candidate_resampling": candidate_resampling_summary,
+        "duplication_gate": str(gen_cfg.duplication_gate),
+        "max_duplication_fraction": float(gen_cfg.max_duplication_fraction),
+        "pool_duplicate_fraction": float(result.duplicate_fraction),
+        "resampling_duplicate_warning": bool(
+            result.duplicate_fraction > float(gen_cfg.max_duplication_fraction)
+        ),
         **resampling_summary(result),
         "duplicate_fraction": float(final_duplicate_fraction),
         "final_size": int(len(final)),
@@ -400,16 +426,32 @@ def _duplicate_fraction(frame: pd.DataFrame) -> float:
     )
 
 
-def _pool_is_sufficient(result, split_cfg, gen_cfg: SyntheticDiffskyConfig) -> bool:
+def _pool_is_sufficient(
+    result,
+    split_cfg,
+    gen_cfg: SyntheticDiffskyConfig,
+    *,
+    final_attempt: bool = False,
+) -> bool:
     if int(split_cfg.n_final) == 0:
         return True
     min_pool = int(np.ceil(float(gen_cfg.pool_size_factor) * int(split_cfg.n_final)))
     min_ess = float(gen_cfg.min_ess_fraction) * int(split_cfg.n_final)
-    return (
-        result.pool_size >= min_pool
-        and result.ess >= min_ess
-        and result.duplicate_fraction <= float(gen_cfg.max_duplication_fraction)
-    )
+    if result.pool_size < min_pool or result.ess < min_ess:
+        return False
+    if result.duplicate_fraction <= float(gen_cfg.max_duplication_fraction):
+        return True
+    gate = str(gen_cfg.duplication_gate)
+    if gate == "warn_after_max_shards":
+        return bool(final_attempt)
+    if gate == "warn":
+        return True
+    if gate != "fail":
+        raise ValueError(
+            "synthetic_diffsky.duplication_gate must be 'fail', 'warn', "
+            "or 'warn_after_max_shards'"
+        )
+    return False
 
 
 def _metallicity_summary(frame: pd.DataFrame) -> dict[str, Any]:
