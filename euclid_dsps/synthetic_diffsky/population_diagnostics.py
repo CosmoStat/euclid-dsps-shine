@@ -154,6 +154,24 @@ def run_generation_population_diagnostics(
             seed=sample_seed,
             smoke=smoke,
         )
+    for reference_cfg in list(diagnostics_cfg.get("reference_datasets", []) or []):
+        if not isinstance(reference_cfg, dict) or not reference_cfg.get("path"):
+            continue
+        name = str(reference_cfg.get("name", Path(str(reference_cfg["path"])).stem))
+        merged_cfg = dict(diagnostics_cfg)
+        merged_cfg.update(reference_cfg)
+        outputs = _run_reference_comparison(
+            config,
+            dataset_dir=dataset_dir,
+            all_frame=all_frame,
+            reference_path=Path(str(reference_cfg["path"])),
+            diagnostics_cfg=merged_cfg,
+            out=ensure_dir(out / f"{name}_comparison"),
+            bands=tuple(reference_cfg.get("bands", bands) or bands),
+            seed=sample_seed,
+            smoke=smoke,
+        )
+        reference_outputs[name] = outputs
 
     summary = _summary_payload(
         config=config,
@@ -835,6 +853,7 @@ def _run_reference_comparison(
         max_reference=diagnostics_cfg.get("reference_max_rows"),
         seed=seed,
         plots=bool(diagnostics_cfg.get("make_reference_plots", False)) and not smoke,
+        reference_kind=str(diagnostics_cfg.get("reference_kind", "auto")),
     )
     return {key: str(value) for key, value in outputs.items()}
 

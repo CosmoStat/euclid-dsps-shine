@@ -274,7 +274,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     train_diffsky = sub.add_parser(
         "amortized-train-diffsky",
-        help="Train the Diffsky HLTDS amortized encoder and RealNVP prior.",
+        help="Train a Diffsky amortized encoder and RealNVP prior.",
     )
     _add_amortized_train_arguments(
         train_diffsky,
@@ -316,7 +316,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     infer_diffsky = sub.add_parser(
         "amortized-infer-diffsky",
-        help="Run Diffsky HLTDS amortized posterior inference from a checkpoint.",
+        help="Run Diffsky amortized posterior inference from a checkpoint.",
     )
     _add_amortized_infer_arguments(
         infer_diffsky,
@@ -666,6 +666,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_closure_reference.add_argument("--max-reference", type=int)
     compare_closure_reference.add_argument("--seed", type=int, default=260617)
+    compare_closure_reference.add_argument(
+        "--reference-kind",
+        choices=("auto", "hltds", "fs2"),
+        default="auto",
+        help="Reference column convention used for magnitude/truth aliases.",
+    )
     compare_closure_reference.add_argument(
         "--no-plots",
         action="store_true",
@@ -1220,10 +1226,10 @@ def main(argv: list[str] | None = None) -> None:
         _run_amortized_infer(config, args)
         return
     if args.command == "amortized-train-diffsky":
-        _run_amortized_train(config, args, dataset_label="Diffsky HLTDS")
+        _run_amortized_train(config, args, dataset_label="Diffsky")
         return
     if args.command == "amortized-infer-diffsky":
-        _run_amortized_infer(config, args, dataset_label="Diffsky HLTDS")
+        _run_amortized_infer(config, args, dataset_label="Diffsky")
         return
     if args.command == "amortized-finalize-inference":
         _run_amortized_finalize_inference(config, args)
@@ -1648,6 +1654,7 @@ def _run_diffsky_compare_dsps_closure_reference(config: dict, args) -> None:
         max_reference=args.max_reference,
         seed=int(args.seed),
         plots=not bool(args.no_plots),
+        reference_kind=str(args.reference_kind),
     )
     print(f"[diffsky] synthetic-vs-reference report -> {outputs['report']}")
 

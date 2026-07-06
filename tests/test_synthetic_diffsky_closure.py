@@ -38,6 +38,7 @@ from euclid_dsps.synthetic_diffsky.resampling import (
 from euclid_dsps.synthetic_diffsky.selection import (
     apply_photometric_selection,
     apply_proposal_selection,
+    photometric_selection_enabled,
 )
 
 
@@ -223,6 +224,49 @@ def test_photometric_selection_keeps_negative_noisy_fluxes() -> None:
     assert summary["selected_size"] == 1
 
 
+def test_photometric_selection_supports_magnitude_limits() -> None:
+    frame = pd.DataFrame(
+        {
+            "mag_true_lsst_g": [24.0, 29.0, 25.0],
+            "mag_true_lsst_r": [23.5, 28.0, 30.0],
+            "flux_true_lsst_g": [10.0, 10.0, 10.0],
+            "flux_lsst_g": [10.0, 10.0, 10.0],
+            "fluxerr_lsst_g": [1.0, 1.0, 1.0],
+            "flux_true_lsst_r": [10.0, 10.0, 10.0],
+            "flux_lsst_r": [10.0, 10.0, 10.0],
+            "fluxerr_lsst_r": [1.0, 1.0, 1.0],
+        }
+    )
+    selection = {
+        "magnitude_limits": {"lsst_g": 26.0, "lsst_r": 26.0},
+        "min_magnitude_limit_bands": 2,
+    }
+    assert photometric_selection_enabled(selection)
+    selected, summary = apply_photometric_selection(
+        frame,
+        ["lsst_g", "lsst_r"],
+        selection,
+    )
+    assert selected.index.tolist() == [0]
+    assert selected["n_bands_mag_true_le_limit"].tolist() == [2]
+    assert summary["cuts"]["min_magnitude_limit_bands"]["kept"] == 1
+
+
+def test_lsst_euclid_roman_18_band_preset_resolves() -> None:
+    cfg = normalize_config(
+        {
+            "catalog_path": "dummy.parquet",
+            "ssp_path": "dummy.h5",
+            "bands": "diffsky_hltds_lsst_euclid_roman_18_fnu_cgs",
+        }
+    )
+    names = [band["name"] for band in cfg["bands"]]
+    assert len(names) == 18
+    assert names[:6] == ["lsst_u", "lsst_g", "lsst_r", "lsst_i", "lsst_z", "lsst_y"]
+    assert {"euclid_vis", "euclid_nisp_y", "euclid_nisp_j", "euclid_nisp_h"} <= set(names)
+    assert {"roman_F062", "roman_F213"} <= set(names)
+
+
 def test_toy_smoke_generation_validation_and_parquet_roundtrip(tmp_path) -> None:
     pytest.importorskip("diffmah")
     pytest.importorskip("diffstar")
@@ -252,6 +296,47 @@ def test_toy_smoke_generation_validation_and_parquet_roundtrip(tmp_path) -> None
     assert set(train["object_id"]).isdisjoint(set(validation["object_id"]))
     assert len(train) == 24
     assert (train[[f"flux_lsst_u", f"flux_lsst_g"]] < 0.0).any().any()
+
+
+def test_layered_toy_generation_writes_survey_and_inference_layers(tmp_path) -> None:
+    pytest.importorskip("diffmah")
+    pytest.importorskip("diffstar")
+    ssp_path = tmp_path / "ssp.h5"
+    _write_synthetic_ssp(ssp_path)
+    out = tmp_path / "closure_layers"
+    cfg = _base_config_dict(str(ssp_path), str(out))
+    cfg["synthetic_diffsky"]["smoke_split_sizes"] = {
+        "train": 8,
+        "validation": 0,
+        "test": 0,
+    }
+    cfg["synthetic_diffsky"]["output_layers"] = {
+        "enabled": True,
+        "survey_like": {
+            "enabled": True,
+            "size_factor": 1.0,
+            "selection": {"min_true_snr_bands": 0},
+        },
+        "inference_ready": {
+            "enabled": True,
+            "size_factor": 1.0,
+            "mirror_to_root": True,
+            "selection": {"min_true_snr_bands": 0},
+        },
+    }
+    dataset_dir = generate_dsps_closure_dataset(
+        normalize_config(cfg),
+        split="train",
+        smoke=True,
+        overwrite=True,
+    )
+    root = pd.read_parquet(dataset_dir / "train.parquet")
+    survey = pd.read_parquet(dataset_dir / "survey_like" / "train.parquet")
+    inference = pd.read_parquet(dataset_dir / "inference_ready" / "train.parquet")
+    assert len(root) == len(inference) == 8
+    assert len(survey) == 8
+    assert set(root["sample_layer"]) == {"inference_ready"}
+    assert set(survey["sample_layer"]) == {"survey_like"}
 
 
 def test_closure_inference_evaluation_outputs_metrics(tmp_path) -> None:
@@ -366,6 +451,58 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
         "color_color_reference_black_synthetic_green" in path
         for path in summary["plot_paths"]
     )
+
+
+def test_reference_comparison_supports_fs2_magnitude_columns(tmp_path) -> None:
+    synthetic = pd.DataFrame(
+        {
+            "redshift_true": [0.5, 0.7, 1.0],
+            "logsm_true": [9.0, 9.5, 10.0],
+            "mag_true_lsst_g": [24.0, 23.5, 23.0],
+            "mag_true_lsst_r": [23.7, 23.2, 22.9],
+            "mag_true_euclid_vis": [23.4, 22.9, 22.5],
+            "mag_true_euclid_nisp_y": [23.1, 22.6, 22.3],
+            "flux_true_lsst_g": [1.0, 2.0, 3.0],
+            "flux_lsst_g": [1.0, 2.0, 3.0],
+            "fluxerr_lsst_g": [0.1, 0.1, 0.1],
+            "mask_lsst_g": [True, True, True],
+        }
+    )
+    reference = pd.DataFrame(
+        {
+            "z_true_gal": [0.45, 0.75, 1.05],
+            "log_stellar_mass": [9.2, 9.8, 10.2],
+            "log_sfr_true": [-0.5, 0.0, 0.5],
+            "dust_ebv_true": [0.05, 0.1, 0.2],
+            "metallicity_true": [10.0, 10.1, 10.2],
+            "lsst_g": [24.1, 23.4, 23.1],
+            "lsst_r": [23.8, 23.1, 22.8],
+            "euclid_vis": [23.5, 22.8, 22.4],
+            "euclid_nisp_y": [23.2, 22.5, 22.1],
+        }
+    )
+    synthetic_path = tmp_path / "synthetic.parquet"
+    reference_path = tmp_path / "fs2.parquet"
+    synthetic.to_parquet(synthetic_path, index=False)
+    reference.to_parquet(reference_path, index=False)
+
+    outputs = compare_synthetic_closure_to_reference(
+        synthetic_path=synthetic_path,
+        reference_path=reference_path,
+        out_dir=tmp_path / "fs2_comparison",
+        bands=("lsst_g", "lsst_r", "euclid_vis", "euclid_nisp_y"),
+        plots=False,
+        reference_kind="fs2",
+    )
+
+    summary = json.loads(outputs["summary"].read_text())
+    photometry = pd.read_csv(outputs["photometry_metrics"])
+    assert summary["reference_kind"] == "fs2"
+    color = photometry[
+        (photometry["group"] == "color_true_vs_reference_color")
+        & (photometry["quantity"] == "euclid_vis-euclid_nisp_y")
+    ].iloc[0]
+    assert color["status"] == "ok"
 
 
 def test_population_diagnostics_write_stats_and_proposal_metrics(tmp_path) -> None:

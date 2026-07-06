@@ -612,8 +612,22 @@ DIFFSKY_HLTDS_LSST_ROMAN_BANDS = (
     "roman_F184",
     "roman_F213",
 )
-BAND_PRESETS["diffsky_hltds_lsst_roman_14_fnu_cgs"] = [
-    {
+DIFFSKY_HLTDS_LSST_BANDS = tuple(
+    band for band in DIFFSKY_HLTDS_LSST_ROMAN_BANDS if band.startswith("lsst_")
+)
+DIFFSKY_HLTDS_ROMAN_BANDS = tuple(
+    band for band in DIFFSKY_HLTDS_LSST_ROMAN_BANDS if band.startswith("roman_")
+)
+EUCLID_COMPARISON_FILTERS = {
+    "euclid_vis": "filters/Euclid_VIS.vis.dat",
+    "euclid_nisp_y": "filters/Euclid_NISP.Y.dat",
+    "euclid_nisp_j": "filters/Euclid_NISP.J.dat",
+    "euclid_nisp_h": "filters/Euclid_NISP.H.dat",
+}
+
+
+def _diffsky_hltds_hdf5_band_config(band_name: str) -> dict[str, Any]:
+    return {
         "name": band_name,
         "column": f"flux_{band_name}",
         "units": "fnu_cgs",
@@ -631,7 +645,53 @@ BAND_PRESETS["diffsky_hltds_lsst_roman_14_fnu_cgs"] = [
             "wave_unit": "angstrom",
         },
     }
+
+
+def _euclid_comparison_band_config(band_name: str) -> dict[str, Any]:
+    return {
+        "name": band_name,
+        "column": f"flux_{band_name}",
+        "units": "fnu_cgs",
+        "error_column": f"fluxerr_{band_name}",
+        "error_units": "fnu_cgs",
+        "sigma_mag": 0.05,
+        "sigma_mag_floor": 0.005,
+        "sigma_mag_ceiling": 0.5,
+        "filter": {
+            "kind": "ascii",
+            "path": EUCLID_COMPARISON_FILTERS[band_name],
+            "wave_unit": "angstrom",
+        },
+    }
+
+
+BAND_PRESETS["diffsky_hltds_lsst_roman_14_fnu_cgs"] = [
+    _diffsky_hltds_hdf5_band_config(band_name)
     for band_name in DIFFSKY_HLTDS_LSST_ROMAN_BANDS
+]
+BAND_PRESETS["diffsky_hltds_lsst_euclid_10_fnu_cgs"] = [
+    *[
+        _diffsky_hltds_hdf5_band_config(band_name)
+        for band_name in DIFFSKY_HLTDS_LSST_BANDS
+    ],
+    *[
+        _euclid_comparison_band_config(band_name)
+        for band_name in EUCLID_COMPARISON_FILTERS
+    ],
+]
+BAND_PRESETS["diffsky_hltds_lsst_euclid_roman_18_fnu_cgs"] = [
+    *[
+        _diffsky_hltds_hdf5_band_config(band_name)
+        for band_name in DIFFSKY_HLTDS_LSST_BANDS
+    ],
+    *[
+        _euclid_comparison_band_config(band_name)
+        for band_name in EUCLID_COMPARISON_FILTERS
+    ],
+    *[
+        _diffsky_hltds_hdf5_band_config(band_name)
+        for band_name in DIFFSKY_HLTDS_ROMAN_BANDS
+    ],
 ]
 BAND_PRESETS["diffsky_hltds_lsst_roman_14_abmag_modelerr"] = [
     {

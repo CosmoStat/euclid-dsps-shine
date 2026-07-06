@@ -31,6 +31,12 @@ DEFAULT_BANDS = (
     "roman_F213",
 )
 
+FS2_REFERENCE_ALIASES = {
+    "redshift_true": "z_true_gal",
+    "logsfr_true": "log_sfr_true",
+    "dust_av": "dust_ebv_true",
+}
+
 LATENT_COLUMN_PAIRS = (
     ("redshift", "redshift_true", "redshift_true"),
     ("logsm", "logsm_true", "logsm_true"),
@@ -71,6 +77,9 @@ COLOR_PAIRS = (
     ("roman_F087", "roman_F106"),
     ("roman_F106", "roman_F158"),
     ("roman_F158", "roman_F213"),
+    ("euclid_vis", "euclid_nisp_y"),
+    ("euclid_nisp_y", "euclid_nisp_j"),
+    ("euclid_nisp_j", "euclid_nisp_h"),
 )
 
 COLOR_COLOR_PLOTS = (
@@ -83,6 +92,8 @@ COLOR_COLOR_PLOTS = (
     ("roman_F106", "roman_F129", "roman_F158"),
     ("roman_F129", "roman_F158", "roman_F184"),
     ("roman_F158", "roman_F184", "roman_F213"),
+    ("euclid_vis", "euclid_nisp_y", "euclid_nisp_j"),
+    ("euclid_nisp_y", "euclid_nisp_j", "euclid_nisp_h"),
 )
 
 REFERENCE_DOT_COLOR = "black"
@@ -99,6 +110,7 @@ def compare_synthetic_closure_to_reference(
     max_reference: int | None = None,
     seed: int = 260617,
     plots: bool = True,
+    reference_kind: str = "auto",
 ) -> dict[str, Path]:
     """Write population and photometry diagnostics for synthetic-vs-reference data.
 
@@ -115,6 +127,8 @@ def compare_synthetic_closure_to_reference(
 
     synthetic = pd.read_parquet(synthetic_path)
     reference = pd.read_parquet(reference_path)
+    reference_kind = _infer_reference_kind(reference, reference_kind)
+    reference = _standardize_reference_frame(reference, reference_kind)
     if max_reference is not None and int(max_reference) > 0 and len(reference) > int(max_reference):
         reference = reference.sample(n=int(max_reference), random_state=int(seed))
     reference = reference.reset_index(drop=True)
@@ -154,6 +168,7 @@ def compare_synthetic_closure_to_reference(
     summary = _summary_payload(
         synthetic_path=synthetic_path,
         reference_path=reference_path,
+        reference_kind=reference_kind,
         out_dir=out,
         synthetic=synthetic,
         reference=reference,
@@ -199,6 +214,71 @@ def _distribution_metrics(
     return rows
 
 
+def _infer_reference_kind(reference: pd.DataFrame, requested: str) -> str:
+    requested = str(requested or "auto").lower()
+    if requested != "auto":
+        return requested
+    columns = set(reference.columns)
+    if {"z_true_gal", "log_stellar_mass", "lsst_u"} <= columns:
+        return "fs2"
+    return "hltds"
+
+
+def _standardize_reference_frame(
+    reference: pd.DataFrame,
+    reference_kind: str,
+) -> pd.DataFrame:
+    if str(reference_kind).lower() != "fs2":
+        return reference
+    frame = reference.copy()
+    if "redshift_true" not in frame and "z_true_gal" in frame:
+        frame["redshift_true"] = pd.to_numeric(frame["z_true_gal"], errors="coerce")
+    if "logsm_true" not in frame and "log_stellar_mass" in frame:
+        frame["logsm_true"] = (
+            pd.to_numeric(frame["log_stellar_mass"], errors="coerce")
+            + 2.0 * np.log10(0.73)
+        )
+    if "logsfr_true" not in frame and "log_sfr_true" in frame:
+        frame["logsfr_true"] = pd.to_numeric(frame["log_sfr_true"], errors="coerce")
+    if "logssfr_true" not in frame and {"logsfr_true", "logsm_true"} <= set(frame.columns):
+        frame["logssfr_true"] = frame["logsfr_true"] - frame["logsm_true"]
+    if "dust_av" not in frame and "dust_ebv_true" in frame:
+        frame["dust_av"] = 4.05 * pd.to_numeric(frame["dust_ebv_true"], errors="coerce")
+    if "log10_stellar_metallicity" not in frame and "metallicity_true" in frame:
+        frame["log10_stellar_metallicity"] = (
+            pd.to_numeric(frame["metallicity_true"], errors="coerce") - 10.61
+        )
+    return frame
+
+
+def _reference_mag_column(reference: pd.DataFrame, band: str) -> str | None:
+    for column in (f"mag_{band}", band, f"{band}_mag"):
+        if column in reference.columns:
+            return column
+    return None
+
+
+def _reference_flux_column(reference: pd.DataFrame, band: str) -> str | None:
+    for column in (f"flux_{band}", f"{band}_flux"):
+        if column in reference.columns:
+            return column
+    return None
+
+
+def _reference_fluxerr_column(reference: pd.DataFrame, band: str) -> str | None:
+    for column in (f"fluxerr_{band}", f"{band}_fluxerr", f"{band}_error"):
+        if column in reference.columns:
+            return column
+    return None
+
+
+def _reference_mask_column(reference: pd.DataFrame, band: str) -> str | None:
+    for column in (f"mask_{band}", f"{band}_mask"):
+        if column in reference.columns:
+            return column
+    return None
+
+
 def _photometry_metrics(
     synthetic: pd.DataFrame,
     reference: pd.DataFrame,
@@ -206,6 +286,10 @@ def _photometry_metrics(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for band in bands:
+        ref_mag_col = _reference_mag_column(reference, band)
+        ref_flux_col = _reference_flux_column(reference, band)
+        ref_err_col = _reference_fluxerr_column(reference, band)
+        ref_mask_col = _reference_mask_column(reference, band)
         rows.append(
             _metric_row_from_columns(
                 "mag_true_vs_reference_mag",
@@ -213,7 +297,7 @@ def _photometry_metrics(
                 synthetic,
                 reference,
                 f"mag_true_{band}",
-                f"mag_{band}",
+                ref_mag_col or f"mag_{band}",
             )
         )
         rows.append(
@@ -223,7 +307,7 @@ def _photometry_metrics(
                 synthetic,
                 reference,
                 f"flux_true_{band}",
-                f"flux_{band}",
+                ref_flux_col or f"flux_{band}",
             )
         )
         rows.append(
@@ -233,7 +317,7 @@ def _photometry_metrics(
                 synthetic,
                 reference,
                 f"flux_{band}",
-                f"flux_{band}",
+                ref_flux_col or f"flux_{band}",
             )
         )
         rows.append(
@@ -243,7 +327,7 @@ def _photometry_metrics(
                 synthetic,
                 reference,
                 f"fluxerr_{band}",
-                f"fluxerr_{band}",
+                ref_err_col or f"fluxerr_{band}",
             )
         )
         rows.append(
@@ -253,11 +337,15 @@ def _photometry_metrics(
                 synthetic,
                 reference,
                 f"mask_{band}",
-                f"mask_{band}",
+                ref_mask_col or f"mask_{band}",
             )
         )
         syn_snr = _ratio_from_columns(synthetic, f"flux_{band}", f"fluxerr_{band}")
-        ref_snr = _ratio_from_columns(reference, f"flux_{band}", f"fluxerr_{band}")
+        ref_snr = (
+            _ratio_from_columns(reference, ref_flux_col, ref_err_col)
+            if ref_flux_col and ref_err_col
+            else np.asarray([], dtype=float)
+        )
         rows.append(
             _metric_row_from_arrays(
                 "snr_observed",
@@ -265,7 +353,11 @@ def _photometry_metrics(
                 syn_snr,
                 ref_snr,
                 f"flux_{band}/fluxerr_{band}",
-                f"flux_{band}/fluxerr_{band}",
+                (
+                    f"{ref_flux_col}/{ref_err_col}"
+                    if ref_flux_col and ref_err_col
+                    else f"flux_{band}/fluxerr_{band}"
+                ),
             )
         )
     for left, right in COLOR_PAIRS:
@@ -276,7 +368,13 @@ def _photometry_metrics(
             f"mag_true_{left}",
             f"mag_true_{right}",
         )
-        ref_color = _difference_from_columns(reference, f"mag_{left}", f"mag_{right}")
+        ref_left = _reference_mag_column(reference, left)
+        ref_right = _reference_mag_column(reference, right)
+        ref_color = (
+            _difference_from_columns(reference, ref_left, ref_right)
+            if ref_left and ref_right
+            else np.asarray([], dtype=float)
+        )
         rows.append(
             _metric_row_from_arrays(
                 "color_true_vs_reference_color",
@@ -284,7 +382,7 @@ def _photometry_metrics(
                 syn_color,
                 ref_color,
                 f"mag_true_{left}-mag_true_{right}",
-                f"mag_{left}-mag_{right}",
+                f"{ref_left}-{ref_right}" if ref_left and ref_right else f"mag_{left}-mag_{right}",
             )
         )
     return rows
@@ -728,9 +826,9 @@ def _color_color_plots(
         )
         ref_x, ref_y = _color_color_arrays(
             reference,
-            f"mag_{left}",
-            f"mag_{middle}",
-            f"mag_{right}",
+            _reference_mag_column(reference, left),
+            _reference_mag_column(reference, middle),
+            _reference_mag_column(reference, right),
         )
         if syn_x.size < 2 or ref_x.size < 2:
             continue
@@ -757,10 +855,12 @@ def _color_color_plots(
 
 def _color_color_arrays(
     frame: pd.DataFrame,
-    left_col: str,
-    middle_col: str,
-    right_col: str,
+    left_col: str | None,
+    middle_col: str | None,
+    right_col: str | None,
 ) -> tuple[np.ndarray, np.ndarray]:
+    if left_col is None or middle_col is None or right_col is None:
+        return np.asarray([], dtype=float), np.asarray([], dtype=float)
     if not {left_col, middle_col, right_col} <= set(frame.columns):
         return np.asarray([], dtype=float), np.asarray([], dtype=float)
     left = pd.to_numeric(frame[left_col], errors="coerce").to_numpy(dtype=float)
@@ -981,6 +1081,7 @@ def _summary_payload(
     *,
     synthetic_path: Path,
     reference_path: Path,
+    reference_kind: str,
     out_dir: Path,
     synthetic: pd.DataFrame,
     reference: pd.DataFrame,
@@ -1005,6 +1106,7 @@ def _summary_payload(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "synthetic_path": str(synthetic_path),
         "reference_path": str(reference_path),
+        "reference_kind": str(reference_kind),
         "out_dir": str(out_dir),
         "n_synthetic": int(len(synthetic)),
         "n_reference_used": int(len(reference)),
@@ -1012,8 +1114,9 @@ def _summary_payload(
         "bands": list(bands),
         "parameter_order": list(DIFFSKY_BASIC_PARAMETER_NAMES),
         "interpretation": (
-            "Population sanity comparison only: reference photometry is Diffsky/HLTDS, "
-            "synthetic photometry is euclid_dsps closure photometry."
+            "Population sanity comparison only: reference photometry can come from "
+            "HLTDS, FS2, or another survey product, while synthetic photometry is "
+            "euclid_dsps closure photometry."
         ),
         "sample_warning": (
             "Synthetic sample has fewer than 1000 rows; use this only as a pipeline "
@@ -1055,6 +1158,7 @@ def _markdown_report(summary: dict[str, Any]) -> str:
         "",
         f"- Synthetic catalog: `{summary['synthetic_path']}`",
         f"- Reference catalog: `{summary['reference_path']}`",
+        f"- Reference kind: `{summary.get('reference_kind', 'unknown')}`",
         f"- Synthetic rows: {summary['n_synthetic']}",
         f"- Reference rows used: {summary['n_reference_used']}",
         "",

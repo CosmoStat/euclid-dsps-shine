@@ -51,6 +51,7 @@ class SyntheticDiffskyConfig:
     min_ess_fraction: float
     pool_size_factor: float
     selection: dict[str, Any]
+    output_layers: dict[str, Any]
     flux_error_model: dict[str, Any]
     splits: dict[str, SplitGenerationConfig]
     config_hash: str | None = None
@@ -99,6 +100,12 @@ def load_synthetic_diffsky_config(
     selection = dict(raw.get("selection", {}) or {})
     if smoke:
         selection.update(dict(raw.get("smoke_selection", {}) or {}))
+    output_layers = dict(raw.get("output_layers", {}) or {})
+    if smoke and raw.get("smoke_output_layers") is not None:
+        output_layers = _deep_merge_dicts(
+            output_layers,
+            dict(raw.get("smoke_output_layers") or {}),
+        )
     splits = {
         name: SplitGenerationConfig(
             name=name,
@@ -155,6 +162,7 @@ def load_synthetic_diffsky_config(
         ),
         pool_size_factor=float(_runtime_value(raw, "pool_size_factor", 4.0, smoke=smoke)),
         selection=selection,
+        output_layers=output_layers,
         flux_error_model=dict(raw.get("flux_error_model", default_m5_depth_error_model()) or {}),
         splits=splits,
     )
@@ -204,3 +212,13 @@ def _cap_split_sizes(split_sizes: dict[str, int], max_galaxies: int) -> dict[str
         capped[name] = target
         remaining -= target
     return capped
+
+
+def _deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dicts(dict(merged[key]), value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged

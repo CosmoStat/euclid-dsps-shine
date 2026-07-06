@@ -1,5 +1,155 @@
 # Plan
 
+## 2026-07-06 Survey-Like FENIKS Closure Dataset Plan
+
+- Status: completed.
+- Goal: evolve the FENIKS/DSPS closure generator from a single
+  inference-ready 50k catalog into a layered dataset product with explicit
+  raw weighted proposals, survey-like observable selection, and inference-ready
+  subsets.
+- Proposed scope:
+  - Add configurable observable selections based on magnitude limits, S/N, and
+    minimum detected-band counts, while avoiding a hard stellar-mass cut in the
+    final survey-like catalog unless it is explicitly marked as a technical
+    guardrail.
+  - Preserve `raw_weighted`, `survey_like`, and `inference_ready` outputs, each
+    with separate manifests, selection counters, ESS, duplication, and plots.
+  - Add FS2/OpenUniverse-style LSST color-color comparisons, using only bands
+    with a like-for-like filter definition unless a deliberate filter
+    conversion experiment is configured.
+  - Keep the HLTDS/FENIKS SSP and filter assets as the default closure assets;
+    treat alternate SSP grids as domain-shift experiments unless the full
+    generation/inference/validation stack is regenerated consistently.
+- Completed:
+  - Added magnitude-limit based photometric selection in addition to the
+    existing S/N-count gates.
+  - Added configurable output layers: raw weighted proposals remain under
+    `proposals/`, `survey_like/` is written with looser observable cuts, and
+    `inference_ready/` is mirrored to the dataset root for compatibility with
+    validation and inference commands.
+  - Added LSST+Euclid and LSST+Euclid+Roman band presets using existing
+    repository filter assets.
+  - Added 18-band production and validation configs, plus a Jean-Zay H100
+    wrapper script.
+  - Added FS2-aware reference comparison support, including FS2 column aliases
+    and LSST/Euclid color-color diagnostics.
+  - Updated the synthetic closure docs and config README with the layered
+    dataset contract and FS2 comparison workflow.
+- Validation:
+  - `python -m compileall euclid_dsps scripts` passed.
+  - `python -m pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    passed with `19 passed, 2 skipped`.
+  - `git diff --check` passed.
+  - `bash -n scripts/diffsky_synthetic_feniks_50k_h100.slurm scripts/diffsky_synthetic_feniks_18band_h100.slurm`
+    passed.
+  - Full `python -m pytest -q` ran to completion with `383 passed, 10 skipped`
+    and one pre-existing legacy config failure in
+    `tests/test_config.py::test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit`;
+    the failing assertion is on `configs/diffsky_hltds_04_14_simple_gpu.yaml`
+    truth columns, not the new FENIKS 18-band path.
+  - A real local Diffsky smoke was not run because this local environment lacks
+    `diffsky`, `diffstar`, `diffmah`, and `diffhalos`; run the provided smoke
+    command on Jean-Zay where the FENIKS stack is installed.
+
+## 2026-07-06 FENIKS 50k Result Analysis
+
+- Status: completed.
+- Goal: analyze the locally retrieved z<=5.5 FENIKS/DSPS closure dataset,
+  validation report, population diagnostics, reference comparison, and plots
+  before using it for prior learning or amortized inference.
+- Scope:
+  - Check manifest split sizes, ESS, duplication, proposal and photometric
+    selection counters.
+  - Check validation gates, closure recomputation, noise residuals, metallicity
+    support, and S/N cuts.
+  - Inspect distribution and color-color diagnostics for realism and remaining
+    caveats.
+- Findings:
+  - Closure validation passes on the 50k catalog: exact split sizes, 18 truth
+    columns, no metallicity clipping, exact DSPS flux recomputation on the
+    validation sample, and normalized noise residuals close to N(0, 1).
+  - The photometric selection makes the sample much more learnable than the
+    first broad run, with at least five true S/N>5 bands and a median of eleven.
+  - The population is not a low-redshift HLTDS match: the z<=0.35 overlap is
+    much lower mass/fainter than the reference and has different correlations.
+  - Main caveats before prior/inference work are weighted-resampling
+    duplicates, low-mass/star-forming bias, central-dominated composition, and
+    boundary spikes/atoms in several Diffstar/Diffmah truth dimensions.
+
+## 2026-07-06 FENIKS Production Duplication Gate
+
+- Status: completed.
+- Goal: unblock the Jean-Zay z<=5.5 production generation where the selected
+  train pool reached `2.4M` proposals and `ESS=1.04e5`, but the hard
+  duplication gate still failed at `0.154` after all 256 shards.
+- Scope:
+  - Keep ESS and selected-pool-size gates mandatory.
+  - Treat the configured duplication threshold as a warning after `max_shards`
+    is exhausted, because weighted resampling from a high-dynamic-range FENIKS
+    proposal has intrinsic repeated source proposals.
+  - Preserve manifest reporting of the measured duplication fraction and
+    provide a resume command that reuses the already written train shards.
+- Completed:
+  - Added `synthetic_diffsky.duplication_gate` with modes `fail`, `warn`, and
+    `warn_after_max_shards`.
+  - Set production to `duplication_gate: warn_after_max_shards` while keeping
+    `max_duplication_fraction: 0.10` as an alert threshold.
+  - Kept selected-pool-size and ESS gates mandatory; only the duplication gate
+    can become a warning after `max_shards` is exhausted.
+  - Added `pool_duplicate_fraction`, `max_duplication_fraction`,
+    `duplication_gate`, and `resampling_duplicate_warning` manifest fields.
+  - Updated the synthetic closure and production docs to describe the warning
+    semantics.
+- Validation completed:
+  - `python -m compileall euclid_dsps scripts` passed.
+  - `python -m compileall euclid_dsps/synthetic_diffsky` passed after the final
+    gate fix.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py::test_duplication_gate_warns_only_after_max_shards`
+    passed.
+  - `pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py`
+    passed with `16 passed, 1 skipped`.
+  - `git diff --check` passed.
+
+## 2026-07-03 Production Documentation Cleanup
+
+- Status: completed.
+- Goal: remove outdated production guidance from the public documentation path,
+  make the FENIKS/DSPS closure workflow the documented production route, and
+  keep historical HLTDS/debug plans clearly separated from production
+  acceptance gates.
+- Current scope:
+  - Add a production runbook with diagrams, canonical paths, commands,
+    acceptance gates, and scientific limits.
+  - Update the README, config README, Sphinx index, architecture, run setup,
+    prior learning, amortized inference, forward model, science assessment,
+    installation, and testing pages.
+  - Mark historical plan/experiment pages as orphaned historical records so
+    they are no longer presented as the production workflow.
+  - Rebuild Sphinx with warnings as errors and run lightweight code/docs
+    checks.
+- Completed:
+  - Added ``docs/source/production.rst`` as the production runbook for the
+    FENIKS/DSPS closure workflow.
+  - Updated the README, config README, Sphinx index, architecture, run setup,
+    prior-learning, amortized-inference, forward-model, science-assessment,
+    data/assets, HLTDS dataset, FS2 catalog-column, installation, and testing
+    pages to put the FENIKS/DSPS closure workflow first and label HLTDS/MCLMC
+    material as reference, debug, or historical where appropriate.
+  - Marked ``diffsky_nn_experiment_matrix.rst``,
+    ``diffsky_robust_prior_plan.rst``, and
+    ``scientific_validation_plan.rst`` as orphaned historical records.
+  - Cleaned the ``amortized-train-diffsky`` and ``amortized-infer-diffsky``
+    CLI help labels so they are no longer HLTDS-only.
+- Validation completed:
+  - ``python -m compileall euclid_dsps scripts`` passed.
+  - ``uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -W
+    --keep-going -b html docs/source docs/build/html`` passed.
+  - ``python -m euclid_dsps.cli --help`` passed and shows generic Diffsky
+    amortized labels.
+  - ``python -m pytest -q tests/test_cli.py tests/test_synthetic_diffsky_closure.py``
+    passed with ``15 passed, 1 skipped``.
+  - ``git diff --check`` passed.
+
 ## 2026-07-03 Documentation Rebuild
 
 - Status: completed.

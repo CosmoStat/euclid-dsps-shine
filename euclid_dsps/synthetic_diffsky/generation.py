@@ -44,6 +44,12 @@ from .selection import (
 )
 
 
+LAYER_OBJECT_ID_OFFSETS = {
+    "inference_ready": 0,
+    "survey_like": 10_000_000_000,
+}
+
+
 def generate_dsps_closure_dataset(
     config: dict[str, Any],
     *,
@@ -110,6 +116,7 @@ def generate_dsps_closure_dataset(
         "max_duplication_fraction": float(gen_cfg.max_duplication_fraction),
         "duplication_gate": str(gen_cfg.duplication_gate),
         "selection": normalize_selection(gen_cfg.selection),
+        "output_layers": _manifest_output_layers(gen_cfg.output_layers),
         "flux_error_model": flux_error_model_payload(gen_cfg.flux_error_model),
         "smoke": bool(smoke),
     }
@@ -134,6 +141,7 @@ def generate_dsps_closure_dataset(
     _progress(verbose, "writing schema and combined catalog")
     _write_schema(out / "schema.json", config)
     _write_all_catalog(out)
+    _write_layer_all_catalogs(out, gen_cfg.output_layers)
     _progress(verbose, "running post-generation population diagnostics")
     diagnostics_path = run_generation_population_diagnostics(
         config,
@@ -195,6 +203,12 @@ def _generate_one_split(
 
     bands = [str(band["name"]) for band in config["bands"]]
     selection_cfg = normalize_selection(gen_cfg.selection)
+    output_layers = _resolve_output_layers(
+        gen_cfg.output_layers,
+        fallback_selection=selection_cfg,
+        split_name=split_cfg.name,
+        n_final=int(split_cfg.n_final),
+    )
     use_photometric_selection = photometric_selection_enabled(selection_cfg)
     proposals: list[pd.DataFrame] = []
     shard_metadata: list[dict[str, Any]] = []
@@ -284,10 +298,28 @@ def _generate_one_split(
         )
     if selected_pool is None:
         raise ValueError(f"No selected proposals generated for split {split_cfg.name}")
-    photometric_summary: dict[str, Any] = {"enabled": False}
-    candidate_size = int(split_cfg.n_final)
-    candidate_resampling_summary: dict[str, Any] = {}
-    if use_photometric_selection:
+    layer_summaries: dict[str, Any] = {}
+    if output_layers:
+        final, layer_summaries, candidate_size, candidate_resampling_summary = (
+            _build_layered_final_catalogs(
+                config,
+                gen_cfg,
+                split_cfg,
+                selected_pool,
+                output_layers,
+                bands=bands,
+                verbose=verbose,
+            )
+        )
+        photometric_summary = dict(
+            layer_summaries.get("inference_ready", {}).get("selection_summary", {})
+        )
+        photometric_summary.setdefault("enabled", bool(photometric_summary))
+    else:
+        photometric_summary = {"enabled": False}
+        candidate_size = int(split_cfg.n_final)
+        candidate_resampling_summary: dict[str, Any] = {}
+    if not output_layers and use_photometric_selection:
         candidate_size = max(
             int(split_cfg.n_final),
             int(
@@ -337,15 +369,16 @@ def _generate_one_split(
         ).reset_index(drop=True)
         final = _reset_final_identity(final, split_cfg)
     else:
-        final = add_dsps_closure_photometry(
-            result.frame,
-            config,
-            batch_size=int(gen_cfg.jax_batch_size),
-            noise_seed=int(split_cfg.noise_seed),
-            flux_error_model=gen_cfg.flux_error_model,
-            verbose=verbose,
-        )
-        final = append_snr_selection_columns(final, bands, selection_cfg)
+        if not output_layers:
+            final = add_dsps_closure_photometry(
+                result.frame,
+                config,
+                batch_size=int(gen_cfg.jax_batch_size),
+                noise_seed=int(split_cfg.noise_seed),
+                flux_error_model=gen_cfg.flux_error_model,
+                verbose=verbose,
+            )
+            final = append_snr_selection_columns(final, bands, selection_cfg)
     final_duplicate_fraction = _duplicate_fraction(final)
     _progress(verbose, f"{split_cfg.name}: writing final parquet {final_path}")
     final.to_parquet(final_path, index=False)
@@ -363,6 +396,7 @@ def _generate_one_split(
         "selected_pool_size": int(len(selected_pool)),
         "proposal_selection": proposal_selection_summary,
         "photometric_selection": photometric_summary,
+        "output_layers": layer_summaries,
         "candidate_size": int(candidate_size),
         "candidate_resampling": candidate_resampling_summary,
         "duplication_gate": str(gen_cfg.duplication_gate),
@@ -379,6 +413,161 @@ def _generate_one_split(
         "raw_metallicity": _metallicity_summary(raw_pool),
     }
     return summary
+
+
+def _manifest_output_layers(raw: dict[str, Any]) -> dict[str, Any]:
+    if not raw:
+        return {"enabled": False}
+    payload = dict(raw)
+    payload["enabled"] = bool(payload.get("enabled", False))
+    return payload
+
+
+def _resolve_output_layers(
+    raw: dict[str, Any],
+    *,
+    fallback_selection: dict[str, Any],
+    split_name: str,
+    n_final: int,
+) -> dict[str, dict[str, Any]]:
+    if not bool((raw or {}).get("enabled", False)):
+        return {}
+    layers: dict[str, dict[str, Any]] = {}
+    for layer_name in ("survey_like", "inference_ready"):
+        layer_raw = dict((raw or {}).get(layer_name, {}) or {})
+        if not bool(layer_raw.get("enabled", layer_name == "inference_ready")):
+            continue
+        selection = dict(fallback_selection)
+        selection.update(dict(layer_raw.get("selection", {}) or {}))
+        split_sizes = dict(layer_raw.get("split_sizes", {}) or {})
+        if split_name in split_sizes:
+            target_size = int(split_sizes[split_name])
+        else:
+            size_factor = float(layer_raw.get("size_factor", 1.0))
+            target_size = int(np.ceil(float(n_final) * size_factor))
+        layers[layer_name] = {
+            "name": layer_name,
+            "directory": str(layer_raw.get("directory", layer_name)),
+            "selection": normalize_selection(selection),
+            "target_size": max(0, int(target_size)),
+            "allow_smaller": bool(
+                layer_raw.get("allow_smaller", layer_name != "inference_ready")
+            ),
+            "mirror_to_root": bool(
+                layer_raw.get("mirror_to_root", layer_name == "inference_ready")
+            ),
+        }
+    if not any(layer.get("mirror_to_root") for layer in layers.values()):
+        raise ValueError(
+            "synthetic_diffsky.output_layers must mark one layer with "
+            "mirror_to_root=true so train/validation/test parquets remain defined"
+        )
+    return layers
+
+
+def _build_layered_final_catalogs(
+    config: dict[str, Any],
+    gen_cfg: SyntheticDiffskyConfig,
+    split_cfg,
+    selected_pool: pd.DataFrame,
+    layers: dict[str, dict[str, Any]],
+    *,
+    bands: list[str],
+    verbose: bool,
+) -> tuple[pd.DataFrame, dict[str, Any], int, dict[str, Any]]:
+    candidate_size = 0
+    for layer in layers.values():
+        target = int(layer["target_size"])
+        if target <= 0:
+            continue
+        oversample = float(layer["selection"]["photometric_oversample_factor"])
+        candidate_size = max(candidate_size, int(np.ceil(target * oversample)))
+    candidate_size = max(candidate_size, int(split_cfg.n_final))
+    candidate_split = replace(
+        split_cfg,
+        n_final=candidate_size,
+        resample_seed=int(split_cfg.resample_seed) + 104_729,
+    )
+    candidate_result = resample_weighted_proposals(selected_pool, candidate_split)
+    candidate_resampling_summary = resampling_summary(candidate_result)
+    candidate = add_dsps_closure_photometry(
+        candidate_result.frame,
+        config,
+        batch_size=int(gen_cfg.jax_batch_size),
+        noise_seed=int(split_cfg.noise_seed),
+        flux_error_model=gen_cfg.flux_error_model,
+        verbose=verbose,
+    )
+    summaries: dict[str, Any] = {}
+    root_final: pd.DataFrame | None = None
+    for layer_index, (layer_name, layer) in enumerate(layers.items()):
+        target = int(layer["target_size"])
+        selection_cfg = layer["selection"]
+        if photometric_selection_enabled(selection_cfg):
+            selected, selection_summary = apply_photometric_selection(
+                candidate,
+                bands,
+                selection_cfg,
+            )
+            selection_summary["enabled"] = True
+        else:
+            selected = append_snr_selection_columns(candidate, bands, selection_cfg)
+            selection_summary = {
+                "enabled": False,
+                "input_size": int(len(candidate)),
+                "selected_size": int(len(selected)),
+                "selected_fraction": 1.0 if len(candidate) else 0.0,
+            }
+        _progress(
+            verbose,
+            f"{split_cfg.name}: layer {layer_name} selected "
+            f"{len(selected)}/{len(candidate)} candidates target={target}",
+        )
+        if len(selected) < target and not bool(layer["allow_smaller"]):
+            raise RuntimeError(
+                f"Split {split_cfg.name} layer {layer_name} selected only "
+                f"{len(selected)} candidates for target {target}. Increase "
+                "photometric_oversample_factor or relax the observable selection."
+            )
+        n_write = min(target, len(selected)) if bool(layer["allow_smaller"]) else target
+        if n_write > 0 and len(selected) > n_write:
+            layer_frame = selected.sample(
+                n=n_write,
+                replace=False,
+                random_state=int(split_cfg.resample_seed) + 271_828 + 1009 * layer_index,
+            )
+        else:
+            layer_frame = selected.head(n_write)
+        layer_split = replace(
+            split_cfg,
+            object_id_start=int(split_cfg.object_id_start)
+            + int(LAYER_OBJECT_ID_OFFSETS.get(layer_name, 20_000_000_000)),
+        )
+        layer_frame = _reset_final_identity(layer_frame, layer_split)
+        layer_frame["sample_layer"] = layer_name
+        layer_dir = ensure_dir(gen_cfg.output_dir / str(layer["directory"]))
+        layer_path = layer_dir / f"{split_cfg.name}.parquet"
+        _progress(
+            verbose,
+            f"{split_cfg.name}: writing layer {layer_name} parquet {layer_path}",
+        )
+        layer_frame.to_parquet(layer_path, index=False)
+        summaries[layer_name] = {
+            "path": str(layer_path),
+            "directory": str(layer_dir),
+            "target_size": int(target),
+            "final_size": int(len(layer_frame)),
+            "allow_smaller": bool(layer["allow_smaller"]),
+            "mirror_to_root": bool(layer["mirror_to_root"]),
+            "selection": normalize_selection(selection_cfg),
+            "selection_summary": selection_summary,
+            "duplicate_fraction": float(_duplicate_fraction(layer_frame)),
+        }
+        if bool(layer["mirror_to_root"]):
+            root_final = layer_frame.copy()
+    if root_final is None:
+        raise RuntimeError("No output layer was configured with mirror_to_root=true")
+    return root_final, summaries, int(candidate_size), candidate_resampling_summary
 
 
 def _progress(verbose: bool, message: str) -> None:
@@ -519,3 +708,25 @@ def _write_all_catalog(out: Path) -> None:
     frames = [pd.read_parquet(path) for path in paths]
     all_frame = pd.concat(frames, ignore_index=True)
     all_frame.to_parquet(out / "all_50k.parquet", index=False)
+
+
+def _write_layer_all_catalogs(out: Path, output_layers: dict[str, Any]) -> None:
+    if not bool((output_layers or {}).get("enabled", False)):
+        return
+    for layer_name in ("survey_like", "inference_ready"):
+        spec = dict((output_layers or {}).get(layer_name, {}) or {})
+        if not bool(spec.get("enabled", layer_name == "inference_ready")):
+            continue
+        layer_dir = out / str(spec.get("directory", layer_name))
+        paths = [
+            layer_dir / "train.parquet",
+            layer_dir / "validation.parquet",
+            layer_dir / "test.parquet",
+        ]
+        if not all(path.exists() for path in paths):
+            continue
+        frames = [pd.read_parquet(path) for path in paths]
+        all_frame = pd.concat(frames, ignore_index=True)
+        all_frame.to_parquet(layer_dir / "all.parquet", index=False)
+        if len(all_frame) == 50_000:
+            all_frame.to_parquet(layer_dir / "all_50k.parquet", index=False)

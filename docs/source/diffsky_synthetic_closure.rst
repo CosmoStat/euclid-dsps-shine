@@ -39,6 +39,34 @@ The proposal shards keep ``cen_weight``, ``sat_weight`` and
 catalogs are independent weighted-resampling outputs from independent Diffsky
 proposal pools and seeds. They are not random splits of one parent catalog.
 
+The survey-like 18-band configuration writes a layered product:
+
+.. code-block:: text
+
+   Data/diffsky/synthetic/feniks_260617_dsps_closure_18band/
+       proposals/                 # raw weighted Diffsky proposals
+       survey_like/               # observable-selected LSST+Euclid+Roman sample
+          train.parquet
+          validation.parquet
+          test.parquet
+          all.parquet
+       inference_ready/           # stricter closure/inference sample
+          train.parquet
+          validation.parquet
+          test.parquet
+          all_50k.parquet
+       train.parquet              # mirrors inference_ready/train.parquet
+       validation.parquet
+       test.parquet
+       all_50k.parquet
+       diagnostics/
+
+``raw_weighted`` is represented by the proposal shards and must be used with
+``galaxy_weight`` for weighted population diagnostics. ``survey_like`` applies
+observable magnitude/S/N cuts and is the right layer for realism checks.
+``inference_ready`` applies a stricter minimum number of detected bands and is
+the default layer used by closure validation and amortized inference.
+
 Creation Process
 ----------------
 
@@ -61,20 +89,24 @@ The production command is intentionally a two-population workflow:
    clipping is configured, stores ``lgmet_abs_used_true``, and then computes
    ``log10_stellar_metallicity_true = lgmet_abs_used_true - log10(model.z_sun)``.
    Production selection requires no clipped metallicities in the final catalog.
-4. Proposal-level selection is applied before weighted resampling. The current
-   production defaults keep ``logsm_true >= 8`` and reject clipped
-   metallicities. Selection counters are written to ``manifest.yaml`` under
-   ``proposal_selection``; the raw shards remain on disk unchanged.
+4. Proposal-level selection is applied before weighted resampling. The legacy
+   14-band production defaults keep ``logsm_true >= 8`` and reject clipped
+   metallicities. The 18-band survey-like configuration removes the stellar
+   mass cut from the final survey-like definition and keeps only the explicit
+   metallicity-grid guardrail. Selection counters are written to
+   ``manifest.yaml`` under ``proposal_selection``; the raw shards remain on
+   disk unchanged.
 5. The selected proposal pool is resampled with replacement using probabilities
    proportional to ``galaxy_weight``. ESS, weight sums, pool size and duplicate
    fraction are recorded. The final splits are independent because they are
    generated from independent proposal pools and seeds.
 6. If photometric selection is enabled, the code first draws an oversampled
    candidate catalog, runs the DSPS closure photometer, and then keeps rows
-   satisfying the configured S/N gate. The current production gate requires at
-   least five true LSST+Roman bands with S/N >= 5 under the configured error
-   model. This creates an observable learning sample rather than a
-   volume-complete sample dominated by non-detections.
+   satisfying the configured observable gates. Gates can combine magnitude
+   limits, S/N thresholds, and minimum detected-band counts. The 18-band config
+   writes both a looser ``survey_like`` layer and a stricter
+   ``inference_ready`` layer. This creates observable learning samples rather
+   than volume-complete samples dominated by non-detections.
 7. Final true fluxes are generated only with this repository's DSPS forward
    model using the 18 stored truths in ``DIFFSKY_BASIC_PARAMETER_NAMES`` order.
    The same SSP, filters, cosmology, dust, metallicity and IGM settings are used
@@ -132,6 +164,30 @@ These outputs are part of the scientific acceptance checks. FENIKS supplies a
 calibrated Diffsky population prior, but realism for a specific training set is
 established by the generated diagnostics after applying proposal weights,
 resampling, redshift cuts, and any survey-like selection.
+
+FS2 / Euclid Comparison
+-----------------------
+
+``configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml`` adds
+Euclid VIS/Y/J/H filters to the LSST+Roman closure bands and writes an automatic
+FS2 comparison when ``Data/Euclid FS2 LC galaxy catalog_phz1.parquet`` is
+available. The FS2 comparison uses like-for-like LSST and Euclid color-color
+planes. Roman colors are still generated for the synthetic catalog, but they
+are not interpreted as direct FS2 matches because FS2 does not contain Roman
+bands.
+
+Manual FS2 comparison:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml \
+     diffsky-compare-dsps-closure-reference \
+     --synthetic Data/diffsky/synthetic/feniks_260617_dsps_closure_18band/survey_like/all.parquet \
+     --reference "Data/Euclid FS2 LC galaxy catalog_phz1.parquet" \
+     --reference-kind fs2 \
+     --out outputs/audits/feniks18_survey_like_vs_fs2 \
+     --max-reference 100000
 
 Metallicity Convention
 ----------------------
@@ -341,6 +397,28 @@ Production generation:
      diffsky-generate-dsps-closure \
      --split all \
      --overwrite
+
+Survey-like LSST+Euclid+Roman generation:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml \
+     diffsky-generate-dsps-closure \
+     --split all \
+     --overwrite
+
+Validate the 18-band inference-ready layer mirrored at the dataset root:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure_18band.yaml \
+     diffsky-validate-dsps-closure \
+     --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure_18band \
+     --sample-size 512 \
+     --batch-size 256 \
+     --runtime gpu
 
 Use ``--resume`` instead of ``--overwrite`` only when continuing an interrupted
 generation with compatible configuration and proposal shards.
