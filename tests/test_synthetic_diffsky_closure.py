@@ -9,11 +9,11 @@ import pandas as pd
 import pytest
 
 from euclid_dsps.config import normalize_config
-from euclid_dsps.diffsky_forward_closure import build_trueparam_theta
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
 from euclid_dsps.photometry import abmag_to_fnu_cgs
 from euclid_dsps.prior_learning.schema import build_truth_schema
 from euclid_dsps.synthetic_diffsky import (
+    build_trueparam_theta,
     generate_dsps_closure_dataset,
     validate_dsps_closure_dataset,
 )
@@ -296,7 +296,7 @@ def test_toy_smoke_generation_validation_and_parquet_roundtrip(tmp_path) -> None
     validation = pd.read_parquet(dataset_dir / "validation.parquet")
     assert set(train["object_id"]).isdisjoint(set(validation["object_id"]))
     assert len(train) == 24
-    assert (train[[f"flux_lsst_u", f"flux_lsst_g"]] < 0.0).any().any()
+    assert (train[["flux_lsst_u", "flux_lsst_g"]] < 0.0).any().any()
 
 
 def test_layered_toy_generation_writes_survey_and_inference_layers(tmp_path) -> None:

@@ -1239,8 +1239,8 @@ def test_diffstar_mags_only_matches_full_forward() -> None:
     np.testing.assert_allclose(np.asarray(mags_only), np.asarray(full), rtol=1.0e-6)
 
 
-def test_diffsky_simple_config_loads_without_agn_or_gas_grid(tmp_path) -> None:
-    config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
+def test_hltds_dataset_config_loads_without_agn_or_gas_grid(tmp_path) -> None:
+    config = load_config("configs/diffsky_dataset_hltds_04_14.yaml")
     ssp_path = tmp_path / "ssp_chabrier.h5"
     wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
     config["ssp_path"] = str(ssp_path)

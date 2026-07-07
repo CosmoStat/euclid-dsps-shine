@@ -11,6 +11,7 @@ from euclid_dsps.amortized.data import iter_photometry_batches_from_arrays
 from euclid_dsps.amortized.features import compute_feature_stats, make_encoder_features
 from euclid_dsps.config import load_config
 from euclid_dsps.observation_arrays import PhotometryArrays
+from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
 
 
 def test_encoder_features_are_two_times_band_count_for_b14() -> None:
@@ -58,8 +59,8 @@ def test_amortized_model_reads_b14_encoder_input_dim_from_config() -> None:
     assert log_std.shape == (2, 16)
 
 
-def test_diffsky_simple_gpu_config_uses_fourteen_native_flux_bands() -> None:
-    config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
+def test_hltds_dataset_config_uses_fourteen_native_flux_bands() -> None:
+    config = load_config("configs/diffsky_dataset_hltds_04_14.yaml")
 
     band_names = tuple(band["name"] for band in config["bands"])
     assert len(band_names) == 14
@@ -88,39 +89,33 @@ def test_diffsky_simple_gpu_config_uses_fourteen_native_flux_bands() -> None:
     assert config["runtime"]["require_gpu"] is True
 
 
-def test_diffsky_amortized_gpu_config_is_b14_latent12_realnvp() -> None:
-    config = load_config("configs/amortized_diffsky_hltds_04_14_realnvp_gpu.yaml")
+def test_feniks_amortized_gpu_config_is_b14_latent18_realnvp() -> None:
+    config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
 
     assert len(config["bands"]) == 14
     assert config["amortized"]["encoder"]["input_dim"] == 28
-    assert config["amortized"]["encoder"]["latent_dim"] == 12
-    assert config["amortized"]["latent"]["schema"] == "diffsky_hltds_prior_v1"
-    assert config["amortized"]["latent"]["normalization"] == "standardized_logit"
+    assert config["amortized"]["encoder"]["latent_dim"] == 18
+    assert config["amortized"]["latent"]["schema"] == "diffsky_dsps_closure_full"
+    assert config["amortized"]["latent"]["normalization"] == "identity"
     assert config["amortized"]["prior"]["type"] == "realnvp"
     assert config["runtime"]["require_gpu"] is True
     assert config["model"]["ssp_model"] == "compressed_basis"
     assert config["model"]["compressed_ssp_runtime_dtype"] == "float32"
     assert "04_14_2026_ssp_basis_k64_coeff16" in config["model"]["compressed_ssp_path"]
-    assert config["amortized"]["training"]["jax_batch_size"] == 4
-    assert config["amortized"]["inference"]["jax_batch_size"] == 4
+    assert config["amortized"]["training"]["batch_size"] == 512
+    assert config["amortized"]["inference"]["posterior_samples"] == 256
 
 
-def test_diffsky_supervised_prior_config_is_b14_latent5_checkpoint() -> None:
-    config = load_config("configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml")
+def test_feniks_amortized_config_uses_frozen_supervised_prior_checkpoint() -> None:
+    config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
 
     assert len(config["bands"]) == 14
     assert config["amortized"]["encoder"]["input_dim"] == 28
-    assert config["amortized"]["encoder"]["latent_dim"] == 5
-    assert config["amortized"]["latent"]["schema"] == "diffsky_truth_basic"
+    assert config["amortized"]["encoder"]["latent_dim"] == 18
+    assert config["amortized"]["latent"]["schema"] == "diffsky_dsps_closure_full"
     assert config["amortized"]["prior"]["source"] == "supervised_checkpoint"
     assert config["amortized"]["prior"]["train_jointly"] is False
-    assert tuple(config["fit"]["free_parameters"]) == (
-        "z_obs",
-        "log10_stellar_mass",
-        "log10_ssfr_at_obs",
-        "dust_av",
-        "dust_delta",
-    )
+    assert tuple(config["fit"]["free_parameters"]) == DIFFSKY_BASIC_PARAMETER_NAMES
 
 
 def test_generic_batches_preserve_large_object_ids_as_int64() -> None:

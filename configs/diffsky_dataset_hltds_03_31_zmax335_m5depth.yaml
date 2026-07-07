@@ -5,6 +5,10 @@ runtime: gpu
 bands: diffsky_hltds_lsst_roman_14_fnu_cgs
 nebular_emission: ssp_flux
 
+fit:
+    photometric_likelihood: student_t
+    student_t_dof: 2.0
+
 diffsky_dataset:
     name: hltds_cosmos_260215_03_31_2026_zmax335_m5depth
     role: canonical_truth_dataset

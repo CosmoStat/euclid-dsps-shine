@@ -649,9 +649,8 @@ def test_fit_jax_optimizer_options_validation() -> None:
     assert "batch_grad_mode" in message
 
 
-def test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit() -> None:
-    config = load_config("configs/diffsky_hltds_04_14_simple_gpu.yaml")
-    closure = load_config("configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml")
+def test_diffsky_hltds_dataset_config_marks_debug_truth_contract() -> None:
+    config = load_config("configs/diffsky_dataset_hltds_04_14.yaml")
 
     expected_free = (
         "z_obs",
@@ -689,45 +688,53 @@ def test_diffsky_hltds_simple_config_is_recommended_basic_truth_fit() -> None:
         f"dlog10_sfr_{index}" in config["fit"]["free_parameters"]
         for index in range(1, 7)
     )
-    assert set(config["truth"]["parameter_columns"]) == {
-        "log10_stellar_mass",
-        "log10_sfr_at_obs",
+    truth_columns = config["truth"]["parameter_columns"]
+    truth_by_kind = {
+        kind: {
+            name
+            for name, spec in truth_columns.items()
+            if spec.get("kind") == kind
+        }
+        for kind in {"direct_truth", "projected_generated_truth", "missing"}
     }
-    assert "z_obs" not in closure["fit"]["free_parameters"]
-    assert tuple(closure["fit"]["free_parameters"]) == expected_free[1:]
-    assert closure["runtime"]["require_gpu"] is True
-    assert closure["redshift"]["initial"] == "catalog_column"
-    assert closure["redshift"]["column"] == "redshift_true"
-
-
-def test_config_deep_merge_replace_removes_inherited_free_parameters() -> None:
-    config = load_config("configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml")
-
-    assert tuple(config["fit"]["free_parameters"]) == (
+    assert truth_by_kind["direct_truth"] == {
         "z_obs",
         "log10_stellar_mass",
+        "log10_sfr_at_obs",
         "log10_ssfr_at_obs",
-        "dust_av",
-        "dust_delta",
-    )
-    assert "dlog10_sfr_1" not in config["fit"]["free_parameters"]
+    }
+    assert truth_by_kind["projected_generated_truth"] == {
+        "dlog10_sfr_1",
+        "dlog10_sfr_2",
+        "dlog10_sfr_3",
+        "dlog10_sfr_4",
+        "dlog10_sfr_5",
+        "dlog10_sfr_6",
+        "tau2",
+        "dust_index_n",
+    }
+    assert truth_by_kind["missing"] == {
+        "log10_stellar_metallicity",
+        "tau1_over_tau2",
+    }
+    assert config["diffsky_dataset"]["name"].startswith("hltds_cosmos_260215")
+    assert config["diffsky_dataset"]["redshift_subset"]["max"] == 0.35
 
 
-def test_cosmos_sed_defaults_are_normalized() -> None:
+def test_feniks_amortized_config_uses_full_diffsky_closure_schema() -> None:
+    config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
+
+    assert tuple(config["fit"]["free_parameters"]) == DIFFSKY_BASIC_PARAMETER_NAMES
+    assert config["model"]["sfh_model"] == "diffsky_basic"
+    assert config["amortized"]["latent"]["schema"] == "diffsky_dsps_closure_full"
+    assert config["amortized"]["features"]["n_flux_bands"] == 14
+    assert config["amortized"]["encoder"]["latent_dim"] == 18
+
+
+def test_minimal_config_does_not_enable_legacy_cosmos_sed() -> None:
     config = normalize_config(minimal_config())
 
-    assert config["cosmos_sed"]["template_list"] == "COSMOS_MOD.list"
-    assert config["cosmos_sed"]["filter_response_kind"] == "photon"
-    assert config["cosmos_sed"]["component_fraction_policy"] == "strict"
-    assert config["cosmos_sed"]["extinction"]["curves"][1] == "SMC_prevot"
-
-
-def test_invalid_cosmos_sed_extinction_mapping_fails() -> None:
-    config = minimal_config()
-    config["cosmos_sed"] = {"extinction": {"curves": {"bad": "SMC_prevot"}}}
-
-    with pytest.raises(ConfigValidationError, match="curves keys must be integers"):
-        normalize_config(config)
+    assert "cosmos_sed" not in config
 
 
 def test_invalid_runtime_config_fails_fast() -> None:

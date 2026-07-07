@@ -9,9 +9,7 @@ from euclid_dsps.prior_learning.inferred import load_inferred_theta_dataset
 
 
 def test_load_inferred_theta_dataset_uses_config_latent_space(tmp_path) -> None:
-    config = load_config(
-        "configs/experiments/diffsky_hltds_joint_realnvp_kl_annealed_zscale005_tau2safe_h100.yaml"
-    )
+    config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
     spec = latent_spec_from_config(config)
     lower = np.asarray(spec.lower, dtype=float)
     upper = np.asarray(spec.upper, dtype=float)

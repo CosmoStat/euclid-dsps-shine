@@ -8,11 +8,11 @@ import pytest
 from euclid_dsps.config import normalize_config, validate_catalog_columns
 from euclid_dsps.io import load_row_indices, read_catalog
 from euclid_dsps.selection import select_galaxy_row
+from euclid_dsps.workflows import run_eda
 from euclid_dsps.workflows.core import (
     _filter_padded_fit_batch_result,
     _pad_fit_batch_to_static_size,
 )
-from euclid_dsps.workflows.eda import run_eda
 
 FIXTURE = Path(__file__).parent / "data" / "synthetic_catalog.parquet"
 
