@@ -10,6 +10,41 @@ import pandas as pd
 
 from euclid_dsps.io import ensure_dir, write_json
 
+FENIKS_FULL_18D_PARAMETER_ORDER = [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffstar_indx_lo",
+    "diffstar_indx_hi",
+    "diffstar_lg_qt",
+    "diffstar_qlglgdt",
+    "diffstar_lg_drop",
+    "diffstar_lg_rejuv",
+    "diffmah_logm0",
+    "diffmah_logtc",
+    "diffmah_early_index",
+    "diffmah_late_index",
+    "diffmah_t_peak",
+]
+
+FENIKS_USEFUL_PARAMETER_ORDER = [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "log10_sfr_at_obs",
+    "log10_ssfr_at_obs",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffmah_logm0",
+    "diffmah_t_peak",
+]
+
 
 def distribution_metrics_frame(
     truth: pd.DataFrame,
@@ -53,6 +88,7 @@ def write_supervised_prior_diagnostics(
     parameter_names: tuple[str, ...],
     out_dir: str | Path,
     summary: dict[str, Any],
+    max_corner_rows: int = 4000,
 ) -> dict[str, str]:
     """Write CSV/JSON/Markdown diagnostics and best-effort plots."""
     out = ensure_dir(out_dir)
@@ -96,6 +132,7 @@ def write_supervised_prior_diagnostics(
             prior=prior,
             parameter_names=parameter_names,
             out_dir=out,
+            max_corner_rows=max_corner_rows,
         )
     )
     return outputs
@@ -272,6 +309,7 @@ def _write_plots(
     prior: pd.DataFrame,
     parameter_names: tuple[str, ...],
     out_dir: Path,
+    max_corner_rows: int,
 ) -> dict[str, str]:
     try:
         import matplotlib
@@ -299,10 +337,22 @@ def _write_plots(
         fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows))
         axes_arr = np.asarray(axes).reshape(-1)
         for ax, name in zip(axes_arr, names, strict=False):
-            ax.hist(_finite_array(truth[name]), bins=40, histtype="step", density=True, label="truth")
-            ax.hist(_finite_array(prior[name]), bins=40, histtype="step", density=True, label="prior")
+            ax.hist(
+                _finite_array(truth[name]),
+                bins=40,
+                histtype="step",
+                density=True,
+                label="truth",
+            )
+            ax.hist(
+                _finite_array(prior[name]),
+                bins=40,
+                histtype="step",
+                density=True,
+                label="prior",
+            )
             ax.set_title(name)
-        for ax in axes_arr[len(names):]:
+        for ax in axes_arr[len(names) :]:
             ax.axis("off")
         axes_arr[0].legend()
         fig.tight_layout()
@@ -312,7 +362,11 @@ def _write_plots(
         outputs["histograms"] = str(path)
     pair_names = _pair_plot_names(names)
     if len(pair_names) >= 2:
-        fig, axes = plt.subplots(1, len(pair_names) - 1, figsize=(4 * (len(pair_names) - 1), 4))
+        fig, axes = plt.subplots(
+            1,
+            len(pair_names) - 1,
+            figsize=(4 * (len(pair_names) - 1), 4),
+        )
         axes_arr = np.asarray(axes).reshape(-1)
         xname = pair_names[0]
         for ax, yname in zip(axes_arr, pair_names[1:], strict=True):
@@ -330,14 +384,21 @@ def _write_plots(
         import corner
     except Exception:
         return outputs
+    corner_metadata: list[dict[str, Any]] = []
     corner_names = [
         name
         for name in names
         if _has_dynamic_range(truth[name]) and _has_dynamic_range(prior[name])
     ][: min(len(names), 8)]
     if len(corner_names) >= 2:
-        truth_values = truth[corner_names].to_numpy(dtype=float)
-        prior_values = prior[corner_names].to_numpy(dtype=float)
+        truth_values = _cap_matrix_rows(
+            truth[corner_names].to_numpy(dtype=float),
+            max_rows=max_corner_rows,
+        )
+        prior_values = _cap_matrix_rows(
+            prior[corner_names].to_numpy(dtype=float),
+            max_rows=max_corner_rows,
+        )
         fig = corner.corner(
             truth_values,
             labels=corner_names,
@@ -355,7 +416,123 @@ def _write_plots(
         fig.savefig(path, dpi=150)
         plt.close(fig)
         outputs["corner"] = str(path)
+        corner_metadata.append(
+            {
+                "plot": path.name,
+                "kind": "legacy_first8",
+                "plotted_columns": ",".join(corner_names),
+                "n_columns": int(len(corner_names)),
+                "written": True,
+                "reason": "",
+            }
+        )
+    for kind, wanted, filename in [
+        (
+            "full18",
+            FENIKS_FULL_18D_PARAMETER_ORDER,
+            "corner_truth_vs_prior_full18.png",
+        ),
+        (
+            "useful",
+            FENIKS_USEFUL_PARAMETER_ORDER,
+            "corner_truth_vs_prior_useful.png",
+        ),
+    ]:
+        path, metadata = _write_truth_prior_corner(
+            corner,
+            truth=truth,
+            prior=prior,
+            wanted=wanted,
+            out_dir=out_dir,
+            filename=filename,
+            kind=kind,
+            max_rows=max_corner_rows,
+        )
+        corner_metadata.append(metadata)
+        if path is not None:
+            outputs[f"corner_{kind}"] = str(path)
+    if corner_metadata:
+        meta_path = out_dir / "corner_plot_metadata.csv"
+        pd.DataFrame(corner_metadata).to_csv(meta_path, index=False)
+        outputs["corner_plot_metadata"] = str(meta_path)
     return outputs
+
+
+def _write_truth_prior_corner(
+    corner,
+    *,
+    truth: pd.DataFrame,
+    prior: pd.DataFrame,
+    wanted: list[str],
+    out_dir: Path,
+    filename: str,
+    kind: str,
+    max_rows: int,
+) -> tuple[Path | None, dict[str, Any]]:
+    names = [
+        name
+        for name in wanted
+        if name in truth
+        and name in prior
+        and _has_dynamic_range(truth[name])
+        and _has_dynamic_range(prior[name])
+    ]
+    skipped = [name for name in wanted if name not in names]
+    if len(names) < 2:
+        return None, {
+            "plot": filename,
+            "kind": kind,
+            "plotted_columns": ",".join(names),
+            "skipped_columns": ",".join(skipped),
+            "n_columns": int(len(names)),
+            "written": False,
+            "reason": "fewer_than_two_dynamic_columns",
+        }
+    values_truth = _cap_matrix_rows(_finite_matrix(truth[names]), max_rows=max_rows)
+    values_prior = _cap_matrix_rows(_finite_matrix(prior[names]), max_rows=max_rows)
+    if len(values_truth) == 0 or len(values_prior) == 0:
+        return None, {
+            "plot": filename,
+            "kind": kind,
+            "plotted_columns": ",".join(names),
+            "skipped_columns": ",".join(skipped),
+            "n_columns": int(len(names)),
+            "written": False,
+            "reason": "no_finite_rows",
+        }
+    fig = corner.corner(
+        values_truth,
+        labels=names,
+        color="C0",
+        hist_kwargs={"density": True},
+    )
+    corner.corner(
+        values_prior,
+        fig=fig,
+        labels=names,
+        color="C1",
+        hist_kwargs={"density": True},
+    )
+    path = out_dir / filename
+    fig.savefig(path, dpi=150)
+    try:
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+    except Exception:
+        pass
+    return path, {
+        "plot": filename,
+        "kind": kind,
+        "plotted_columns": ",".join(names),
+        "skipped_columns": ",".join(skipped),
+        "n_columns": int(len(names)),
+        "truth_finite_rows": int(len(values_truth)),
+        "prior_finite_rows": int(len(values_prior)),
+        "max_corner_rows": int(max_rows),
+        "written": True,
+        "reason": "",
+    }
 
 
 def _pair_plot_names(names: list[str]) -> list[str]:
@@ -371,6 +548,19 @@ def _finite_array(values) -> np.ndarray:
 def _finite_matrix(frame: pd.DataFrame) -> np.ndarray:
     arr = frame.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
     return arr[np.isfinite(arr).all(axis=1)]
+
+
+def _cap_matrix_rows(values: np.ndarray, *, max_rows: int) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if values.ndim != 2:
+        values = np.reshape(values, (len(values), -1))
+    values = values[np.isfinite(values).all(axis=1)]
+    max_rows = max(int(max_rows), 1)
+    if len(values) <= max_rows:
+        return values
+    rng = np.random.default_rng(260617)
+    indices = np.sort(rng.choice(len(values), size=max_rows, replace=False))
+    return values[indices]
 
 
 def _energy_distance(a: np.ndarray, b: np.ndarray) -> float:

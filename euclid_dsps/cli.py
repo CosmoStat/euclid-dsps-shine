@@ -26,7 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
             "{download-assets,check,fit,posterior,"
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
             "amortized-train-diffsky,amortized-infer-diffsky,"
-            "amortized-finalize-inference,diffsky-map-adam-prior,"
+            "amortized-finalize-inference,amortized-jacobian-lens-diffsky,"
+            "amortized-finalize-jacobian-lens,diffsky-map-adam-prior,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-train-inferred-prior,"
             "diffsky-plan-prior-workflow,"
@@ -288,6 +289,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize.add_argument("--quiet", action="store_true")
 
+    jlens = sub.add_parser(
+        "amortized-jacobian-lens-diffsky",
+        help="Run Physical Jacobian Lens diagnostics for a trained Diffsky model.",
+    )
+    _add_amortized_jlens_arguments(jlens)
+
+    finalize_jlens = sub.add_parser(
+        "amortized-finalize-jacobian-lens",
+        help="Combine sharded Physical Jacobian Lens outputs and write plots.",
+    )
+    finalize_jlens.add_argument("--out", required=True, help="J-lens output directory.")
+    finalize_jlens.add_argument("--quiet", action="store_true")
+
     map_prior = sub.add_parser(
         "diffsky-map-adam-prior",
         help="Fit free-redshift MAP DSPS estimates under a learned RealNVP prior.",
@@ -354,6 +368,11 @@ def build_parser() -> argparse.ArgumentParser:
     train_prior.add_argument("--batch-size", type=int)
     train_prior.add_argument("--epochs", type=int)
     train_prior.add_argument("--seed", type=int)
+    train_prior.add_argument(
+        "--data-parallel",
+        choices=["single", "auto", "pmap"],
+        help="Override prior_learning.training.data_parallel.",
+    )
     train_prior.add_argument("--validation-fraction", type=float)
     train_prior.add_argument(
         "--missing-policy",
@@ -609,6 +628,11 @@ def _add_amortized_train_arguments(
         help="Override amortized.training.best_checkpoint_min_epoch.",
     )
     parser.add_argument(
+        "--data-parallel",
+        choices=["single", "auto", "pmap"],
+        help="Override amortized.training.data_parallel.",
+    )
+    parser.add_argument(
         "--prior-freeze-epochs",
         type=int,
         help="Freeze RealNVP prior gradients for this many initial epochs.",
@@ -745,6 +769,54 @@ def _add_amortized_infer_shard_arguments(parser: argparse.ArgumentParser) -> Non
     )
 
 
+def _add_amortized_jlens_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--out", default="outputs/runs/dev_amortized_diffsky_jlens")
+    parser.add_argument("--dataset", help="Override config catalog_path.")
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--feature-stats")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--row-indices-file")
+    parser.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+        default="sequential",
+    )
+    parser.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+        default="balanced",
+    )
+    parser.add_argument("--selection-seed", type=int, default=260617)
+    parser.add_argument(
+        "--mode",
+        choices=["decoder", "autoencoder", "both"],
+        default="decoder",
+    )
+    parser.add_argument("--posterior-point", choices=["mean", "median"], default="mean")
+    parser.add_argument("--max-objects", type=int)
+    parser.add_argument("--direction-top-k", type=int, default=5)
+    parser.add_argument(
+        "--include-prior-score",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--include-ae-lens",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip this shard when complete J-lens outputs already exist.",
+    )
+    parser.add_argument("--quiet", action="store_true")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     config_backed_diffsky_commands = {
@@ -819,6 +891,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "amortized-finalize-inference":
         _run_amortized_finalize_inference(config, args)
+        return
+    if args.command == "amortized-jacobian-lens-diffsky":
+        _run_amortized_jacobian_lens(config, args)
+        return
+    if args.command == "amortized-finalize-jacobian-lens":
+        _run_amortized_finalize_jacobian_lens(config, args)
         return
     if args.command == "diffsky-map-adam-prior":
         _run_diffsky_map_adam_prior(config, args)
@@ -998,6 +1076,15 @@ def _run_diffsky_train_supervised_prior(config: dict, args) -> None:
 
     cfg = prior_learning_config(config)
     training = cfg["training"]
+    if getattr(args, "data_parallel", None) is not None:
+        config = dict(config)
+        prior_learning = dict(config.get("prior_learning", {}) or {})
+        prior_training = dict(prior_learning.get("training", {}) or {})
+        prior_training["data_parallel"] = str(args.data_parallel)
+        prior_learning["training"] = prior_training
+        config["prior_learning"] = prior_learning
+        cfg = prior_learning_config(config)
+        training = cfg["training"]
     train_supervised_prior(
         config,
         Path(args.out),
@@ -1195,6 +1282,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         training["validation_every"] = int(args.validation_every)
     if getattr(args, "best_checkpoint_min_epoch", None) is not None:
         training["best_checkpoint_min_epoch"] = int(args.best_checkpoint_min_epoch)
+    if getattr(args, "data_parallel", None) is not None:
+        training["data_parallel"] = str(args.data_parallel)
     if getattr(args, "prior_freeze_epochs", None) is not None:
         prior["freeze_epochs"] = int(args.prior_freeze_epochs)
     if getattr(args, "prior_update_schedule", None) is not None:
@@ -1325,6 +1414,60 @@ def _run_amortized_finalize_inference(config: dict, args) -> None:
         "[amortized] finalized "
         f"{payload['n_processed']}/{payload['expected_selected_rows']} objects "
         f"complete={payload['complete']}"
+    )
+
+
+def _run_amortized_jacobian_lens(config: dict, args) -> None:
+    try:
+        from .amortized.jacobian_lens import run_jacobian_lens_diffsky
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if getattr(args, "dataset", None):
+        config = dict(config)
+        config["catalog_path"] = str(args.dataset)
+    payload = run_jacobian_lens_diffsky(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
+        limit=args.limit,
+        batch_size=int(args.batch_size),
+        row_indices_file=getattr(args, "row_indices_file", None),
+        selection_mode=str(args.selection_mode),
+        stratified_strategy=str(args.stratified_strategy),
+        selection_seed=int(args.selection_seed),
+        mode=str(args.mode),
+        posterior_point=str(args.posterior_point),
+        max_objects=args.max_objects,
+        direction_top_k=int(args.direction_top_k),
+        include_prior_score=bool(args.include_prior_score),
+        include_ae_lens=bool(args.include_ae_lens),
+        shard_index=int(args.shard_index),
+        num_shards=int(args.num_shards),
+        resume=bool(args.resume),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(
+        "[jlens] wrote "
+        f"{payload.get('n_objects', 0)} objects -> {payload.get('shard_dir')}"
+    )
+
+
+def _run_amortized_finalize_jacobian_lens(config: dict, args) -> None:
+    del config
+    try:
+        from .amortized.jacobian_lens import finalize_jacobian_lens
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    payload = finalize_jacobian_lens(
+        Path(args.out),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(
+        "[jlens] finalized "
+        f"{payload.get('n_objects', 0)} objects -> {args.out}"
     )
 
 

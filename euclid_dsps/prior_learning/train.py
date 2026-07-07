@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,7 @@ class PriorTrainingResult:
     initial_train_nll: float
     best_metric: float
     best_epoch: int
+    data_parallel: dict[str, Any]
 
 
 def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -54,10 +56,13 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw.setdefault("bounds", {})
     raw.setdefault("flow", {})
     raw.setdefault("training", {})
+    raw.setdefault("snapshots", {})
     raw.setdefault("output", {})
     raw["flow"].setdefault("n_layers", 8)
     raw["flow"].setdefault("hidden_size", 128)
     raw["flow"].setdefault("scale_clamp", 0.05)
+    raw["flow"].setdefault("init", "default")
+    raw["flow"].setdefault("init_scale", 1.0)
     raw["training"].setdefault("epochs", 20)
     raw["training"].setdefault("batch_size", 256)
     raw["training"].setdefault("learning_rate", 1.0e-3)
@@ -66,6 +71,15 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["training"].setdefault("validation_fraction", 0.1)
     raw["training"].setdefault("seed", 42)
     raw["training"].setdefault("epoch_shuffle", True)
+    raw["training"].setdefault("data_parallel", "single")
+    raw["snapshots"].setdefault("enabled", False)
+    raw["snapshots"].setdefault("every_epochs", 5)
+    raw["snapshots"].setdefault("include_epoch_zero", True)
+    raw["snapshots"].setdefault("prior_samples", 10_000)
+    raw["snapshots"].setdefault("truth_sample_limit", 10_000)
+    raw["snapshots"].setdefault("write_corner", True)
+    raw["snapshots"].setdefault("max_corner_rows", 4000)
+    raw["snapshots"].setdefault("checkpoint_every", 5)
     raw["output"].setdefault("prior_samples", 8192)
     raw["output"].setdefault("truth_sample_limit", 200_000)
     return raw
@@ -175,6 +189,17 @@ def train_supervised_prior(
         f"train={len(split['train'])} validation={validation_rows}",
     )
     start = time.time()
+    ckpt_dir = ensure_dir(out / "checkpoints")
+    snapshot_cfg = dict(cfg.get("snapshots", {}) or {})
+    epoch_callback = _supervised_prior_epoch_callback(
+        out,
+        config=config,
+        truth=truth,
+        flow_config=cfg["flow"],
+        snapshot_config=snapshot_cfg,
+        seed=int(training_cfg.get("seed", 42)),
+        checkpoint_dir=ckpt_dir,
+    )
     result = fit_realnvp_to_x(
         x_train,
         x_validation,
@@ -182,10 +207,10 @@ def train_supervised_prior(
         flow_config=cfg["flow"],
         training_config=training_cfg,
         seed=int(training_cfg.get("seed", 42)),
+        epoch_callback=epoch_callback,
     )
     result.training_log.to_csv(out / "prior_training_log.csv", index=False)
     result.validation_log.to_csv(out / "prior_validation_loglike.csv", index=False)
-    ckpt_dir = ensure_dir(out / "checkpoints")
     save_prior_checkpoint(
         ckpt_dir / "best.eqx",
         result.prior,
@@ -236,6 +261,14 @@ def train_supervised_prior(
         "test_rows": 0 if test_truth is None else int(len(test_truth.x)),
         "epochs": int(training_cfg.get("epochs", 20)),
         "batch_size": int(training_cfg.get("batch_size", 256)),
+        "data_parallel": {
+            "requested": str(training_cfg.get("data_parallel", "single")),
+            "effective": str(result.data_parallel["effective"]),
+            "enabled": bool(result.data_parallel["enabled"]),
+            "local_device_count": int(result.data_parallel["n_devices"]),
+            "global_batch_size": int(result.data_parallel["global_batch_size"]),
+            "per_device_batch_size": int(result.data_parallel["per_device_batch_size"]),
+        },
         "initial_train_nll": float(result.initial_train_nll),
         "final_train_nll": final_train_nll,
         "final_validation_nll": final_validation_nll,
@@ -245,7 +278,16 @@ def train_supervised_prior(
         "elapsed_time_s": float(time.time() - start),
         "checkpoint_best": "checkpoints/best.eqx",
         "checkpoint_last": "checkpoints/last.eqx",
-        "objective": "negative_mean_log_prob_theta_true",
+        "objective": "negative_mean_log_prob_on_truth_x",
+        "objective_distribution_direction": "empirical_truth_to_model_mle",
+        "equivalent_kl_note": (
+            "minimizes KL(p_truth || p_beta) up to the entropy of p_truth"
+        ),
+        "snapshots": {
+            "enabled": bool(snapshot_cfg.get("enabled", False)),
+            "every_epochs": int(snapshot_cfg.get("every_epochs", 5)),
+            "checkpoint_every": int(snapshot_cfg.get("checkpoint_every", 5)),
+        },
     }
     write_supervised_prior_diagnostics(
         truth=truth.theta_frame(),
@@ -259,6 +301,124 @@ def train_supervised_prior(
     _log(verbose, f"[prior] report: {out / 'supervised_prior_vs_truth_report.md'}")
 
 
+def _supervised_prior_epoch_callback(
+    out: Path,
+    *,
+    config: dict[str, Any],
+    truth: TruthDataset,
+    flow_config: dict[str, Any],
+    snapshot_config: dict[str, Any],
+    seed: int,
+    checkpoint_dir: Path,
+) -> Callable[[int, RealNVPPrior], None] | None:
+    enabled = bool(snapshot_config.get("enabled", False))
+    checkpoint_every = int(snapshot_config.get("checkpoint_every", 0) or 0)
+    if not enabled and checkpoint_every <= 0:
+        return None
+
+    def callback(epoch: int, prior: RealNVPPrior) -> None:
+        if _should_write_supervised_prior_snapshot(snapshot_config, epoch):
+            _write_supervised_prior_snapshot(
+                out,
+                epoch=epoch,
+                prior=prior,
+                truth=truth,
+                snapshot_config=snapshot_config,
+                seed=seed,
+            )
+        if checkpoint_every > 0 and int(epoch) > 0 and int(epoch) % checkpoint_every == 0:
+            save_prior_checkpoint(
+                checkpoint_dir / f"epoch_{int(epoch):04d}.eqx",
+                prior,
+                config=config,
+                truth=truth,
+                flow_config=flow_config,
+                epoch=int(epoch),
+                metric=float(_prior_nll_jit(prior, jnp.asarray(truth.x))),
+            )
+
+    return callback
+
+
+def _should_write_supervised_prior_snapshot(
+    snapshot_config: dict[str, Any],
+    epoch: int,
+) -> bool:
+    if not bool(snapshot_config.get("enabled", False)):
+        return False
+    if int(epoch) == 0:
+        return bool(snapshot_config.get("include_epoch_zero", True))
+    every_epochs = int(snapshot_config.get("every_epochs", 5) or 0)
+    return every_epochs > 0 and int(epoch) % every_epochs == 0
+
+
+def _write_supervised_prior_snapshot(
+    out: Path,
+    *,
+    epoch: int,
+    prior: RealNVPPrior,
+    truth: TruthDataset,
+    snapshot_config: dict[str, Any],
+    seed: int,
+) -> None:
+    snap = ensure_dir(out / "snapshots" / f"epoch_{int(epoch):04d}")
+    key = jax.random.PRNGKey(int(seed) + 10_000 + int(epoch))
+    n_prior = max(int(snapshot_config.get("prior_samples", 10_000)), 1)
+    x_prior = np.asarray(jax.device_get(prior.sample(key, n_prior)), dtype=np.float32)
+    log_prob = np.asarray(prior.log_prob(jnp.asarray(x_prior)), dtype=float)
+    prior_frame = prior_samples_frame(x_prior, truth.latent_spec, log_prob=log_prob)
+    prior_frame.to_parquet(snap / "prior_samples.parquet", index=False)
+
+    truth_frame = _snapshot_truth_sample(
+        truth,
+        limit=max(int(snapshot_config.get("truth_sample_limit", 10_000)), 1),
+        seed=int(seed) + int(epoch),
+    )
+    truth_frame.to_parquet(snap / "truth_samples.parquet", index=False)
+
+    diagnostics = write_supervised_prior_diagnostics(
+        truth=truth_frame,
+        prior=prior_frame,
+        parameter_names=truth.parameter_names,
+        out_dir=snap,
+        summary={
+            "epoch": int(epoch),
+            "objective": "negative_mean_log_prob_on_truth_x",
+            "objective_distribution_direction": "empirical_truth_to_model_mle",
+            "equivalent_kl_note": (
+                "minimizes KL(p_truth || p_beta) up to the entropy of p_truth"
+            ),
+            "prior_samples": int(len(prior_frame)),
+            "truth_samples": int(len(truth_frame)),
+        },
+        max_corner_rows=int(snapshot_config.get("max_corner_rows", 4000)),
+    )
+    write_json(
+        snap / "snapshot_summary.json",
+        {
+            "epoch": int(epoch),
+            "prior_samples": int(len(prior_frame)),
+            "truth_samples": int(len(truth_frame)),
+            "write_corner": bool(snapshot_config.get("write_corner", True)),
+            "diagnostics": diagnostics,
+        },
+    )
+
+
+def _snapshot_truth_sample(
+    truth: TruthDataset,
+    *,
+    limit: int,
+    seed: int,
+) -> pd.DataFrame:
+    frame = truth.theta_frame()
+    if len(frame) <= int(limit):
+        return frame
+    rng = np.random.default_rng(int(seed))
+    indices = np.sort(rng.choice(len(frame), size=int(limit), replace=False))
+    return frame.iloc[indices].reset_index(drop=True)
+
+
 def fit_realnvp_to_x(
     x_train: np.ndarray,
     x_validation: np.ndarray | None,
@@ -267,6 +427,7 @@ def fit_realnvp_to_x(
     flow_config: dict[str, Any],
     training_config: dict[str, Any],
     seed: int,
+    epoch_callback: Callable[[int, RealNVPPrior], None] | None = None,
 ) -> PriorTrainingResult:
     """Fit a RealNVP prior to an unconstrained truth matrix."""
     x_train = np.asarray(x_train, dtype=np.float32)
@@ -284,6 +445,8 @@ def fit_realnvp_to_x(
         n_layers=int(flow_config.get("n_layers", 8)),
         hidden_size=int(flow_config.get("hidden_size", 128)),
         scale_clamp=float(flow_config.get("scale_clamp", 0.05)),
+        init=str(flow_config.get("init", "default")),
+        init_scale=float(flow_config.get("init_scale", 1.0)),
     )
     prior = _cast_inexact_arrays(prior, jnp.float32)
     optimizer = _make_optimizer(training_config)
@@ -291,6 +454,17 @@ def fit_realnvp_to_x(
     batch_size = max(int(training_config.get("batch_size", 256)), 1)
     epochs = max(int(training_config.get("epochs", 20)), 1)
     epoch_shuffle = bool(training_config.get("epoch_shuffle", True))
+    data_parallel = _resolve_data_parallel_training(
+        training_config,
+        batch_size=batch_size,
+    )
+    pmap_train_step = None
+    prior_replicated = None
+    opt_state_replicated = None
+    if bool(data_parallel["enabled"]):
+        pmap_train_step = _make_prior_pmap_train_step(optimizer)
+        prior_replicated = _replicate_tree(prior, data_parallel["devices"])
+        opt_state_replicated = _replicate_tree(opt_state, data_parallel["devices"])
     rng = np.random.default_rng(int(seed) + 100)
     initial_train_nll = float(_prior_nll_jit(prior, jnp.asarray(x_train)))
     best_metric = float("inf")
@@ -298,24 +472,67 @@ def fit_realnvp_to_x(
     best_prior = prior
     rows: list[dict[str, float | int | str]] = []
     val_rows: list[dict[str, float | int | str]] = []
+    if epoch_callback is not None:
+        epoch_callback(0, prior)
     for epoch in range(1, epochs + 1):
         order = np.arange(len(x_train))
         if epoch_shuffle:
             rng.shuffle(order)
+        order, padded_rows = _pad_epoch_order_for_data_parallel(
+            order,
+            global_batch_size=batch_size,
+            enabled=bool(data_parallel["enabled"]),
+            rng=rng,
+        )
         epoch_losses = []
         for batch_index, start in enumerate(range(0, len(order), batch_size)):
             batch = jnp.asarray(x_train[order[start : start + batch_size]])
-            (loss, mean_log_prob), grads = _loss_and_grads_jit(prior, batch)
-            loss_finite = bool(np.isfinite(float(loss)))
-            grads_finite = _tree_all_finite(grads)
-            update_applied = bool(loss_finite and grads_finite)
-            if update_applied:
-                updates, opt_state = optimizer.update(
-                    grads,
-                    opt_state,
-                    eqx.filter(prior, eqx.is_inexact_array),
+            if bool(data_parallel["enabled"]):
+                if (
+                    pmap_train_step is None
+                    or prior_replicated is None
+                    or opt_state_replicated is None
+                ):
+                    raise RuntimeError("pmap prior training state was not initialized")
+                sharded_batch = _shard_x_batch(batch, int(data_parallel["n_devices"]))
+                (
+                    prior_replicated,
+                    opt_state_replicated,
+                    loss_value,
+                    mean_log_prob_value,
+                    grad_norm_value,
+                    loss_finite_value,
+                    grads_finite_value,
+                    update_applied_value,
+                ) = pmap_train_step(
+                    prior_replicated,
+                    opt_state_replicated,
+                    sharded_batch,
                 )
-                prior = eqx.apply_updates(prior, updates)
+                loss = _unreplicate_scalar(loss_value)
+                mean_log_prob = _unreplicate_scalar(mean_log_prob_value)
+                grad_norm = _unreplicate_scalar(grad_norm_value)
+                loss_finite = _unreplicate_bool(loss_finite_value)
+                grads_finite = _unreplicate_bool(grads_finite_value)
+                update_applied = _unreplicate_bool(update_applied_value)
+            else:
+                (loss_raw, mean_log_prob_raw), grads = _loss_and_grads_jit(
+                    prior,
+                    batch,
+                )
+                loss = float(loss_raw)
+                mean_log_prob = float(mean_log_prob_raw)
+                loss_finite = bool(np.isfinite(loss))
+                grads_finite = _tree_all_finite(grads)
+                update_applied = bool(loss_finite and grads_finite)
+                grad_norm = float(_tree_l2_norm(grads))
+                if update_applied:
+                    updates, opt_state = optimizer.update(
+                        grads,
+                        opt_state,
+                        eqx.filter(prior, eqx.is_inexact_array),
+                    )
+                    prior = eqx.apply_updates(prior, updates)
             epoch_losses.append(float(loss))
             rows.append(
                 {
@@ -325,12 +542,20 @@ def fit_realnvp_to_x(
                     "loss": float(loss),
                     "mean_log_prob": float(mean_log_prob),
                     "n_objects": int(batch.shape[0]),
+                    "data_parallel_mode": str(data_parallel["effective"]),
+                    "data_parallel_devices": int(data_parallel["n_devices"]),
+                    "data_parallel_per_device_batch_size": int(
+                        data_parallel["per_device_batch_size"]
+                    ),
+                    "data_parallel_epoch_padded_rows": int(padded_rows),
                     "loss_finite": float(loss_finite),
                     "grads_finite": float(grads_finite),
                     "update_applied": float(update_applied),
-                    "grad_norm": float(_tree_l2_norm(grads)),
+                    "grad_norm": float(grad_norm),
                 }
             )
+        if bool(data_parallel["enabled"]):
+            prior = _unreplicate_tree(prior_replicated)
         train_metric = float(np.nanmean(epoch_losses))
         if x_validation is not None:
             val_log_prob = float(
@@ -353,6 +578,8 @@ def fit_realnvp_to_x(
             best_metric = float(metric)
             best_epoch = int(epoch)
             best_prior = prior
+        if epoch_callback is not None:
+            epoch_callback(epoch, prior)
     return PriorTrainingResult(
         prior=best_prior,
         last_prior=prior,
@@ -361,6 +588,7 @@ def fit_realnvp_to_x(
         initial_train_nll=initial_train_nll,
         best_metric=best_metric,
         best_epoch=best_epoch,
+        data_parallel=data_parallel,
     )
 
 
@@ -388,6 +616,8 @@ def save_prior_checkpoint(
             "n_layers": int(flow_config.get("n_layers", 8)),
             "hidden_size": int(flow_config.get("hidden_size", 128)),
             "scale_clamp": float(flow_config.get("scale_clamp", 0.05)),
+            "init": str(flow_config.get("init", "default")),
+            "init_scale": float(flow_config.get("init_scale", 1.0)),
             "parameter_dtype": "float32",
         },
         "latent_spec": latent_spec_to_jsonable(truth.latent_spec),
@@ -410,6 +640,8 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         n_layers=int(arch["n_layers"]),
         hidden_size=int(arch["hidden_size"]),
         scale_clamp=float(arch["scale_clamp"]),
+        init=str(arch.get("init", "default")),
+        init_scale=float(arch.get("init_scale", 1.0)),
     )
     template = _cast_inexact_arrays(
         template,
@@ -421,6 +653,15 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         names=tuple(latent["names"]),
         lower=jnp.asarray(latent["lower"], dtype=jnp.float32),
         upper=jnp.asarray(latent["upper"], dtype=jnp.float32),
+        raw_center=jnp.asarray(
+            latent.get("raw_center", [0.0] * len(latent["names"])),
+            dtype=jnp.float32,
+        ),
+        raw_scale=jnp.asarray(
+            latent.get("raw_scale", [1.0] * len(latent["names"])),
+            dtype=jnp.float32,
+        ),
+        normalization=str(latent.get("normalization", "identity")),
     )
     schema_payload = sidecar["schema"]
     schema = TruthSchema(
@@ -475,6 +716,149 @@ def _make_optimizer(training_config: dict[str, Any]):
     return optax.chain(*transforms)
 
 
+def _resolve_data_parallel_training(
+    training_config: dict[str, Any],
+    *,
+    batch_size: int,
+) -> dict[str, Any]:
+    requested = str(training_config.get("data_parallel", "single")).strip().lower()
+    requested = {"none": "single", "false": "single", "true": "auto"}.get(
+        requested,
+        requested,
+    )
+    if requested not in {"single", "auto", "pmap"}:
+        raise ValueError(
+            "prior_learning.training.data_parallel must be one of: single, auto, pmap"
+        )
+    devices = tuple(jax.local_devices())
+    n_devices = len(devices)
+    if requested == "single":
+        enabled = False
+        effective = "single"
+    elif requested == "auto":
+        enabled = n_devices > 1
+        effective = "pmap" if enabled else "single"
+    else:
+        if n_devices < 2:
+            raise ValueError(
+                "prior_learning.training.data_parallel='pmap' requires at least two "
+                f"local JAX devices; visible devices={devices}"
+            )
+        enabled = True
+        effective = "pmap"
+    if enabled and int(batch_size) % int(n_devices) != 0:
+        raise ValueError(
+            "In pmap mode, prior_learning.training.batch_size must be divisible "
+            f"by local device count: batch_size={int(batch_size)} devices={n_devices}"
+        )
+    return {
+        "requested": requested,
+        "effective": effective,
+        "enabled": bool(enabled),
+        "devices": devices,
+        "n_devices": int(n_devices),
+        "global_batch_size": int(batch_size),
+        "per_device_batch_size": (
+            int(batch_size) // int(n_devices) if enabled else int(batch_size)
+        ),
+    }
+
+
+def _make_prior_pmap_train_step(optimizer):
+    @eqx.filter_pmap(axis_name="devices", in_axes=(0, 0, 0), out_axes=(0, 0, 0, 0, 0, 0, 0, 0))
+    def step(prior, opt_state, batch):
+        (loss, mean_log_prob), grads = eqx.filter_value_and_grad(
+            _prior_nll,
+            has_aux=True,
+        )(prior, batch)
+        grads = jax.lax.pmean(grads, axis_name="devices")
+        loss = jax.lax.pmean(loss, axis_name="devices")
+        mean_log_prob = jax.lax.pmean(mean_log_prob, axis_name="devices")
+        grad_norm = _tree_l2_norm_jax(grads)
+        loss_finite = jnp.isfinite(loss)
+        grads_finite = _tree_all_finite_jax(grads)
+        update_applied = jax.lax.pmin(
+            (loss_finite & grads_finite).astype(jnp.int32),
+            axis_name="devices",
+        ).astype(jnp.bool_)
+        safe_grads = _zero_tree_when_false(grads, update_applied)
+        updates, new_opt_state = optimizer.update(
+            safe_grads,
+            opt_state,
+            eqx.filter(prior, eqx.is_inexact_array),
+        )
+        new_prior = eqx.apply_updates(prior, updates)
+        prior = _select_tree_when_false(new_prior, prior, update_applied)
+        opt_state = _select_tree_when_false(new_opt_state, opt_state, update_applied)
+        return (
+            prior,
+            opt_state,
+            loss,
+            mean_log_prob,
+            grad_norm,
+            loss_finite,
+            grads_finite,
+            update_applied,
+        )
+
+    return step
+
+
+def _pad_epoch_order_for_data_parallel(
+    order: np.ndarray,
+    *,
+    global_batch_size: int,
+    enabled: bool,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, int]:
+    order = np.asarray(order, dtype=np.int64)
+    if not enabled or len(order) == 0:
+        return order, 0
+    remainder = len(order) % int(global_batch_size)
+    if remainder == 0:
+        return order, 0
+    pad_count = int(global_batch_size) - int(remainder)
+    padding = rng.choice(order, size=pad_count, replace=True)
+    return np.concatenate([order, np.asarray(padding, dtype=np.int64)]), pad_count
+
+
+def _shard_x_batch(batch: jnp.ndarray, n_devices: int) -> jnp.ndarray:
+    batch = jnp.asarray(batch)
+    if batch.shape[0] % int(n_devices) != 0:
+        raise ValueError(
+            "pmap prior batch leading dimension must be divisible by device count: "
+            f"shape={batch.shape} devices={n_devices}"
+        )
+    return batch.reshape((int(n_devices), batch.shape[0] // int(n_devices), *batch.shape[1:]))
+
+
+def _replicate_tree(tree, devices: tuple[Any, ...]):
+    return jax.device_put_replicated(tree, devices)
+
+
+def _unreplicate_tree(tree):
+    def first_leaf(leaf):
+        if eqx.is_array(leaf):
+            return leaf[0]
+        return leaf
+
+    return jax.tree_util.tree_map(first_leaf, tree)
+
+
+def _unreplicate_scalar(value) -> float:
+    arr = np.asarray(jax.device_get(value))
+    if arr.shape:
+        arr = arr.reshape(-1)[0]
+    return float(arr)
+
+
+def _unreplicate_bool(value) -> bool:
+    arr = np.asarray(jax.device_get(value))
+    if arr.shape:
+        arr = arr.reshape(-1)[0]
+    return bool(arr)
+
+
 def _prior_nll(prior: RealNVPPrior, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     log_prob = prior.log_prob(x)
     return -jnp.mean(log_prob), jnp.mean(log_prob)
@@ -486,6 +870,44 @@ def _prior_nll_scalar(prior: RealNVPPrior, x: jnp.ndarray) -> jnp.ndarray:
 
 _loss_and_grads_jit = eqx.filter_jit(eqx.filter_value_and_grad(_prior_nll, has_aux=True))
 _prior_nll_jit = eqx.filter_jit(_prior_nll_scalar)
+
+
+def _tree_all_finite_jax(tree) -> jnp.ndarray:
+    leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)
+    ]
+    if not leaves:
+        return jnp.asarray(True)
+    flags = [jnp.all(jnp.isfinite(leaf)) for leaf in leaves]
+    return jnp.all(jnp.asarray(flags))
+
+
+def _tree_l2_norm_jax(tree) -> jnp.ndarray:
+    leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)
+    ]
+    if not leaves:
+        return jnp.asarray(0.0, dtype=jnp.float32)
+    total = sum(jnp.sum(jnp.asarray(leaf) ** 2) for leaf in leaves)
+    return jnp.sqrt(total)
+
+
+def _zero_tree_when_false(tree, predicate):
+    def zero_leaf(leaf):
+        if eqx.is_inexact_array(leaf):
+            return jnp.where(predicate, leaf, jnp.zeros_like(leaf))
+        return leaf
+
+    return jax.tree_util.tree_map(zero_leaf, tree)
+
+
+def _select_tree_when_false(true_tree, false_tree, predicate):
+    def select_leaf(true_leaf, false_leaf):
+        if eqx.is_array(true_leaf):
+            return jnp.where(predicate, true_leaf, false_leaf)
+        return true_leaf
+
+    return jax.tree_util.tree_map(select_leaf, true_tree, false_tree)
 
 
 def _tree_all_finite(tree) -> bool:

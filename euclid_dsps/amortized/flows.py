@@ -17,7 +17,15 @@ class _CouplingLayer(eqx.Module):
     scale_clamp: float = eqx.field(static=True)
 
     def __init__(
-        self, key, *, latent_dim: int, hidden_size: int, mask, scale_clamp: float
+        self,
+        key,
+        *,
+        latent_dim: int,
+        hidden_size: int,
+        mask,
+        scale_clamp: float,
+        init: str = "default",
+        init_scale: float = 1.0,
     ):
         k_scale, k_shift = jax.random.split(key)
         self.mask = jnp.asarray(mask, dtype=jnp.float32)
@@ -37,6 +45,9 @@ class _CouplingLayer(eqx.Module):
             activation=jax.nn.gelu,
             key=k_shift,
         )
+        if str(init).lower() == "identity":
+            self.scale_net = _scale_last_linear(self.scale_net, float(init_scale))
+            self.shift_net = _scale_last_linear(self.shift_net, float(init_scale))
         self.scale_clamp = float(scale_clamp)
 
     def forward(self, x):
@@ -75,9 +86,14 @@ class RealNVPPrior(eqx.Module):
         n_layers: int = 8,
         hidden_size: int = 128,
         scale_clamp: float = 0.05,
+        init: str = "default",
+        init_scale: float = 1.0,
     ) -> None:
         keys = jax.random.split(key, int(n_layers))
         masks = _alternating_masks(int(latent_dim), int(n_layers))
+        init = str(init).lower()
+        if init not in {"default", "identity"}:
+            raise ValueError("RealNVPPrior init must be 'default' or 'identity'")
         self.layers = tuple(
             _CouplingLayer(
                 keys[index],
@@ -85,6 +101,8 @@ class RealNVPPrior(eqx.Module):
                 hidden_size=int(hidden_size),
                 mask=masks[index],
                 scale_clamp=float(scale_clamp),
+                init=init,
+                init_scale=float(init_scale),
             )
             for index in range(int(n_layers))
         )
@@ -156,6 +174,20 @@ def _apply_net(net, value):
     flat = value.reshape((-1, value.shape[-1]))
     out = jax.vmap(net)(flat)
     return out.reshape(leading + (out.shape[-1],))
+
+
+def _scale_last_linear(net, scale: float):
+    """Scale the final MLP affine layer for near-identity flow initialization."""
+    final = net.layers[-1]
+    scaled_weight = jnp.asarray(final.weight) * jnp.asarray(scale, dtype=final.weight.dtype)
+    if final.bias is None:
+        return eqx.tree_at(lambda item: item.layers[-1].weight, net, scaled_weight)
+    scaled_bias = jnp.asarray(final.bias) * jnp.asarray(scale, dtype=final.bias.dtype)
+    return eqx.tree_at(
+        lambda item: (item.layers[-1].weight, item.layers[-1].bias),
+        net,
+        (scaled_weight, scaled_bias),
+    )
 
 
 def _alternating_masks(latent_dim: int, n_layers: int) -> tuple[jnp.ndarray, ...]:

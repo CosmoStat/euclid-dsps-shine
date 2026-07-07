@@ -21,7 +21,42 @@ from euclid_dsps.io import (
 )
 from euclid_dsps.photometric_uncertainty import effective_flux_sigma
 
-_CORNER_PARAMETER_ORDER = [
+FENIKS_FULL_18D_PARAMETER_ORDER = [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffstar_indx_lo",
+    "diffstar_indx_hi",
+    "diffstar_lg_qt",
+    "diffstar_qlglgdt",
+    "diffstar_lg_drop",
+    "diffstar_lg_rejuv",
+    "diffmah_logm0",
+    "diffmah_logtc",
+    "diffmah_early_index",
+    "diffmah_late_index",
+    "diffmah_t_peak",
+]
+
+FENIKS_USEFUL_PARAMETER_ORDER = [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "log10_sfr_at_obs",
+    "log10_ssfr_at_obs",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffmah_logm0",
+    "diffmah_t_peak",
+]
+
+_LEGACY_POPCOSMOS_PARAMETER_ORDER = [
     "log10_stellar_mass",
     "log10_stellar_metallicity",
     "tau2",
@@ -40,16 +75,42 @@ _CORNER_PARAMETER_ORDER = [
     "dlog10_sfr_1",
 ]
 
+_CORNER_PARAMETER_ORDER = [
+    *FENIKS_FULL_18D_PARAMETER_ORDER,
+    *[
+        name
+        for name in _LEGACY_POPCOSMOS_PARAMETER_ORDER
+        if name not in FENIKS_FULL_18D_PARAMETER_ORDER
+    ],
+]
+
 _PARAMETER_LABELS = {
     "z_obs": "z",
     "log10_stellar_mass": "log M",
+    "log10_stellar_metallicity": "log Z*",
+    "dust_av": "A_V",
+    "dust_delta": "dust delta",
+    "log10_sfr_at_obs": "log SFR",
+    "log10_ssfr_at_obs": "log sSFR",
+    "diffstar_lgmcrit": "DS lgmcrit",
+    "diffstar_lgy_at_mcrit": "DS lgy",
+    "diffstar_indx_lo": "DS idx lo",
+    "diffstar_indx_hi": "DS idx hi",
+    "diffstar_lg_qt": "DS lg qt",
+    "diffstar_qlglgdt": "DS q dt",
+    "diffstar_lg_drop": "DS lg drop",
+    "diffstar_lg_rejuv": "DS lg rejuv",
+    "diffmah_logm0": "DM log M0",
+    "diffmah_logtc": "DM log tc",
+    "diffmah_early_index": "DM early",
+    "diffmah_late_index": "DM late",
+    "diffmah_t_peak": "DM tpeak",
     "dlog10_sfr_1": "dSFR1",
     "dlog10_sfr_2": "dSFR2",
     "dlog10_sfr_3": "dSFR3",
     "dlog10_sfr_4": "dSFR4",
     "dlog10_sfr_5": "dSFR5",
     "dlog10_sfr_6": "dSFR6",
-    "log10_stellar_metallicity": "log Z*",
     "tau2": "tau2",
     "dust_index_n": "n",
     "tau1_over_tau2": "tau1/tau2",

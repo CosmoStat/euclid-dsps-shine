@@ -65,6 +65,7 @@ from .latent import (
     latent_spec_to_jsonable,
     theta_to_x,
     write_latent_prior_geometry,
+    x_to_theta,
 )
 from .likelihood import photometric_loglike, photometric_normalized_residual
 
@@ -187,6 +188,8 @@ def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
             n_layers=int(prior_cfg.get("n_layers", 8)),
             hidden_size=int(prior_cfg.get("hidden_size", 128)),
             scale_clamp=float(prior_cfg.get("scale_clamp", 0.05)),
+            init=str(prior_cfg.get("init", "default")),
+            init_scale=float(prior_cfg.get("init_scale", 1.0)),
         )
     if source == "supervised_checkpoint":
         checkpoint = prior_cfg.get("checkpoint")
@@ -227,6 +230,29 @@ def _validate_loaded_prior_spec(active: LatentSpec, loaded: LatentSpec) -> None:
         atol=1.0e-6,
     ):
         raise ValueError("Supervised prior upper bounds do not match amortized config")
+    if active.normalization != loaded.normalization:
+        raise ValueError(
+            "Supervised prior latent normalization does not match amortized config: "
+            f"checkpoint={loaded.normalization}, config={active.normalization}"
+        )
+    if not np.allclose(
+        np.asarray(active.raw_center),
+        np.asarray(loaded.raw_center),
+        rtol=0.0,
+        atol=1.0e-6,
+    ):
+        raise ValueError(
+            "Supervised prior latent raw centers do not match amortized config"
+        )
+    if not np.allclose(
+        np.asarray(active.raw_scale),
+        np.asarray(loaded.raw_scale),
+        rtol=0.0,
+        atol=1.0e-6,
+    ):
+        raise ValueError(
+            "Supervised prior latent raw scales do not match amortized config"
+        )
 
 
 def _initialize_encoder_mean_if_possible(
@@ -447,6 +473,19 @@ def train_amortized_fs2(
             "[amortized] capping JAX/DSPS batch size: "
             f"requested_batch_size={int(batch_size)} jax_batch_size={jax_batch_size}",
         )
+    data_parallel = _resolve_data_parallel_training(
+        cfg["training"],
+        jax_batch_size=int(jax_batch_size),
+    )
+    _log(
+        verbose,
+        "[amortized] data parallel: "
+        f"requested={data_parallel['requested']} "
+        f"effective={data_parallel['effective']} "
+        f"local_devices={data_parallel['n_devices']} "
+        f"global_jax_batch={data_parallel['global_batch_size']} "
+        f"per_device_batch={data_parallel['per_device_batch_size']}",
+    )
     _log(verbose, "[amortized] loading selected train photometry arrays...")
     train_arrays = load_photometry_arrays_from_config(
         config,
@@ -576,6 +615,13 @@ def train_amortized_fs2(
         )
     optimizer = make_optimizer(config)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+    pmap_train_step = None
+    model_replicated = None
+    opt_state_replicated = None
+    if bool(data_parallel["enabled"]):
+        pmap_train_step = _make_pmap_train_step(optimizer)
+        model_replicated = _replicate_tree(model, data_parallel["devices"])
+        opt_state_replicated = _replicate_tree(opt_state, data_parallel["devices"])
 
     ckpt_dir = ensure_dir(out / "checkpoints")
     save_checkpoint(
@@ -588,6 +634,28 @@ def train_amortized_fs2(
         metric=0.0,
         metric_name="initial",
     )
+    snapshot_cfg = dict(cfg.get("training_snapshots", {}) or {})
+    snapshot_arrays = validation_arrays if validation_arrays is not None else train_arrays
+    if bool(snapshot_cfg.get("enabled", False)) and bool(
+        snapshot_cfg.get("include_epoch_zero", True)
+    ):
+        key, snapshot_key = jax.random.split(key)
+        _write_training_snapshot(
+            out,
+            epoch=0,
+            model=model,
+            arrays=snapshot_arrays,
+            feature_stats=feature_stats,
+            latent_spec=latent_spec,
+            key=snapshot_key,
+            snapshot_config=snapshot_cfg,
+            config=config,
+            kl_weight=0.0,
+            prior_source=str(cfg["prior"].get("source", "joint_realnvp")),
+            prior_train_jointly=bool(train_prior),
+            update_phase="initial",
+            deterministic=is_deterministic_reconstruction(cfg.get("objective", {})),
+        )
     rows = []
     configured_best_metric = str(
         cfg["training"].get("best_checkpoint_metric", "validation_negative_loglike")
@@ -609,9 +677,18 @@ def train_amortized_fs2(
     validation_every = int(cfg["training"].get("validation_every", 1))
     epoch_shuffle = bool(cfg["data"].get("epoch_shuffle", True))
     kl_weight_max = float(cfg["training"].get("kl_weight_max", 1.0))
-    expected_batches = _expected_batch_count(
-        len(train_arrays.object_id), int(jax_batch_size)
+    _log_prior_safety_messages(
+        verbose,
+        cfg["prior"],
+        train_prior=train_prior,
+        kl_weight_max=kl_weight_max,
     )
+    expected_train_rows = int(len(train_arrays.object_id))
+    if bool(data_parallel["enabled"]) and expected_train_rows > 0:
+        remainder = expected_train_rows % int(jax_batch_size)
+        if remainder:
+            expected_train_rows += int(jax_batch_size) - int(remainder)
+    expected_batches = _expected_batch_count(expected_train_rows, int(jax_batch_size))
     val_expected_batches = (
         None
         if validation_arrays is None
@@ -650,6 +727,19 @@ def train_amortized_fs2(
         train_order = np.arange(len(train_arrays.object_id))
         if epoch_shuffle:
             train_rng.shuffle(train_order)
+        train_order, data_parallel_padded_rows = _pad_epoch_order_for_data_parallel(
+            train_order,
+            global_batch_size=int(jax_batch_size),
+            enabled=bool(data_parallel["enabled"]),
+            rng=train_rng,
+        )
+        if data_parallel_padded_rows and verbose:
+            _log(
+                verbose,
+                "[amortized] pmap epoch padding: "
+                f"epoch={epoch} duplicated_rows={data_parallel_padded_rows} "
+                f"global_batch={int(jax_batch_size)}",
+            )
         batch_iter = iter_photometry_batches_from_arrays(
             train_arrays,
             batch_size=int(jax_batch_size),
@@ -670,43 +760,94 @@ def train_amortized_fs2(
                     noise_key,
                     input_noise_cfg,
                 )
-                (loss, metrics), grads = _loss_and_grads_jit(
-                    model,
-                    loss_batch,
-                    jit_latent_spec,
-                    jit_context,
-                    model_args,
-                    latent_spec.names,
-                    step_key,
-                    int(n_samples),
-                    float(kl_weight),
-                    cfg["likelihood"],
-                    calibration_runtime_config,
-                    objective_config,
-                )
-                if update_phase in {"encoder", "joint_no_prior", "frozen_prior"}:
-                    grads = zero_prior_grads(grads)
-                if update_phase == "prior":
-                    grads = zero_encoder_grads(grads)
-                    grads = zero_sed_scale_grads(grads)
-                    grads = zero_band_calibration_grads(grads)
-                if not train_alpha:
-                    grads = zero_sed_scale_grads(grads)
-                if not train_band_calibration:
-                    grads = zero_band_calibration_grads(grads)
-                record = _metrics_record(metrics)
-                record.update(component_grad_norms(grads))
-                loss_finite = bool(np.isfinite(float(np.asarray(jax.device_get(loss)))))
-                grads_finite = tree_all_finite(grads)
-                update_applied = bool(loss_finite and grads_finite)
-                if update_applied:
-                    updates, opt_state = optimizer.update(
-                        grads,
-                        opt_state,
-                        eqx.filter(model, eqx.is_inexact_array),
+                if bool(data_parallel["enabled"]):
+                    if (
+                        pmap_train_step is None
+                        or model_replicated is None
+                        or opt_state_replicated is None
+                    ):
+                        raise RuntimeError("pmap training state was not initialized")
+                    sharded_batch = _shard_loss_batch(
+                        loss_batch,
+                        int(data_parallel["n_devices"]),
                     )
-                    model = eqx.apply_updates(model, updates)
-                elif verbose:
+                    step_keys = jax.random.split(
+                        step_key,
+                        int(data_parallel["n_devices"]),
+                    )
+                    (
+                        model_replicated,
+                        opt_state_replicated,
+                        _loss,
+                        metrics,
+                        grad_norms,
+                        loss_finite_value,
+                        grads_finite_value,
+                        update_applied_value,
+                    ) = pmap_train_step(
+                        model_replicated,
+                        opt_state_replicated,
+                        sharded_batch,
+                        jit_latent_spec,
+                        jit_context,
+                        model_args,
+                        latent_spec.names,
+                        step_keys,
+                        int(n_samples),
+                        float(kl_weight),
+                        cfg["likelihood"],
+                        calibration_runtime_config,
+                        objective_config,
+                        update_phase,
+                        bool(train_alpha),
+                        bool(train_band_calibration),
+                    )
+                    record = _metrics_record(_unreplicate_metrics(metrics))
+                    record.update(
+                        {
+                            name: _unreplicate_scalar(value)
+                            for name, value in grad_norms.items()
+                        }
+                    )
+                    loss_finite = _unreplicate_bool(loss_finite_value)
+                    grads_finite = _unreplicate_bool(grads_finite_value)
+                    update_applied = _unreplicate_bool(update_applied_value)
+                else:
+                    (loss, metrics), grads = _loss_and_grads_jit(
+                        model,
+                        loss_batch,
+                        jit_latent_spec,
+                        jit_context,
+                        model_args,
+                        latent_spec.names,
+                        step_key,
+                        int(n_samples),
+                        float(kl_weight),
+                        cfg["likelihood"],
+                        calibration_runtime_config,
+                        objective_config,
+                    )
+                    grads = _apply_training_grad_masks(
+                        grads,
+                        update_phase=update_phase,
+                        train_alpha=bool(train_alpha),
+                        train_band_calibration=bool(train_band_calibration),
+                    )
+                    record = _metrics_record(metrics)
+                    record.update(component_grad_norms(grads))
+                    loss_finite = bool(
+                        np.isfinite(float(np.asarray(jax.device_get(loss))))
+                    )
+                    grads_finite = tree_all_finite(grads)
+                    update_applied = bool(loss_finite and grads_finite)
+                    if update_applied:
+                        updates, opt_state = optimizer.update(
+                            grads,
+                            opt_state,
+                            eqx.filter(model, eqx.is_inexact_array),
+                        )
+                        model = eqx.apply_updates(model, updates)
+                if not update_applied and verbose:
                     _log(
                         verbose,
                         "[amortized] skipped non-finite update: "
@@ -719,12 +860,32 @@ def train_amortized_fs2(
                         "split": "train",
                         "epoch": int(epoch),
                         "batch": int(batch_index),
+                        "kl_definition": "E_q[logq - logp_beta]",
+                        "kl_direction": "q_to_p",
                         "kl_weight": float(kl_weight),
+                        "prior_source": str(
+                            cfg["prior"].get("source", "joint_realnvp")
+                        ),
+                        "prior_train_jointly": float(train_prior),
+                        "prior_update_schedule": str(
+                            prior_update_schedule.get("mode", "joint")
+                        ),
+                        "prior_freeze_epochs": int(
+                            prior_update_schedule.get("freeze_epochs", 0)
+                        ),
                         "likelihood_temperature": float(
                             objective_config.get("likelihood_temperature", 1.0)
                         ),
                         "update_phase": update_phase,
                         "n_objects": int(batch.flux.shape[0]),
+                        "data_parallel_mode": str(data_parallel["effective"]),
+                        "data_parallel_devices": int(data_parallel["n_devices"]),
+                        "data_parallel_per_device_batch_size": int(
+                            data_parallel["per_device_batch_size"]
+                        ),
+                        "data_parallel_epoch_padded_rows": int(
+                            data_parallel_padded_rows
+                        ),
                         "loss_finite": float(loss_finite),
                         "grads_finite": float(grads_finite),
                         "update_applied": float(update_applied),
@@ -745,6 +906,8 @@ def train_amortized_fs2(
                     ):
                         best_metric_value = float(checkpoint_metric_value)
                         best_checkpoint_epoch = int(epoch)
+                        if bool(data_parallel["enabled"]):
+                            model = _unreplicate_tree(model_replicated)
                         save_checkpoint(
                             ckpt_dir / "best.eqx",
                             model,
@@ -769,6 +932,8 @@ def train_amortized_fs2(
                 )
                 if verbose and not progress:
                     _log(verbose, _batch_progress_line(record))
+        if bool(data_parallel["enabled"]):
+            model = _unreplicate_tree(model_replicated)
         if not epoch_rows:
             raise ValueError("No FS2 batches were produced for amortized training")
         validation_rows = []
@@ -858,6 +1023,24 @@ def train_amortized_fs2(
                 metric=_finite_mean([row["loss"] for row in epoch_rows]),
                 metric_name="train_loss",
             )
+        if _should_write_training_snapshot(snapshot_cfg, epoch):
+            key, snapshot_key = jax.random.split(key)
+            _write_training_snapshot(
+                out,
+                epoch=epoch,
+                model=model,
+                arrays=snapshot_arrays,
+                feature_stats=feature_stats,
+                latent_spec=latent_spec,
+                key=snapshot_key,
+                snapshot_config=snapshot_cfg,
+                config=config,
+                kl_weight=float(kl_weight),
+                prior_source=str(cfg["prior"].get("source", "joint_realnvp")),
+                prior_train_jointly=bool(train_prior),
+                update_phase=update_phase,
+                deterministic=is_deterministic_reconstruction(cfg.get("objective", {})),
+            )
         pd.DataFrame(rows).to_csv(out / "training_log.csv", index=False)
         if validation_bin_rows:
             pd.DataFrame(validation_bin_rows).to_csv(
@@ -937,6 +1120,14 @@ def train_amortized_fs2(
         "epochs": int(epochs),
         "batch_size": int(batch_size),
         "jax_batch_size": int(jax_batch_size),
+        "data_parallel": {
+            "requested": str(data_parallel["requested"]),
+            "effective": str(data_parallel["effective"]),
+            "enabled": bool(data_parallel["enabled"]),
+            "local_device_count": int(data_parallel["n_devices"]),
+            "global_batch_size": int(data_parallel["global_batch_size"]),
+            "per_device_batch_size": int(data_parallel["per_device_batch_size"]),
+        },
         "n_samples": int(n_samples),
         "limit": limit,
         "train_rows": int(len(split.train_indices)),
@@ -946,8 +1137,14 @@ def train_amortized_fs2(
         "stratified_strategy": split.stratified_strategy,
         "redshift_column": split.redshift_column,
         "catalog_fingerprint": catalog_identity,
+        "kl_definition": "E_q[logq - logp_beta]",
+        "kl_direction": "q_to_p",
         "kl_annealing_epochs": int(cfg["training"].get("kl_annealing_epochs", 5)),
         "kl_weight_max": float(kl_weight_max),
+        "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
+        "prior_train_jointly": bool(train_prior),
+        "prior_update_schedule": str(prior_update_schedule.get("mode", "joint")),
+        "prior_freeze_epochs": int(prior_update_schedule.get("freeze_epochs", 0)),
         "objective_mode": objective_mode_name,
         "best_loss": float(best_metric_value),
         "best_checkpoint_metric": best_checkpoint_metric,
@@ -2040,6 +2237,192 @@ def _loss_and_grads_jit(
     )
 
 
+def _make_pmap_train_step(optimizer):
+    @eqx.filter_pmap(
+        axis_name="devices",
+        in_axes=(
+            0,
+            0,
+            0,
+            None,
+            None,
+            None,
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        out_axes=(
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ),
+    )
+    def step(
+        model,
+        opt_state,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        key,
+        n_samples,
+        kl_weight,
+        likelihood_config,
+        calibration_config,
+        objective_config,
+        update_phase,
+        train_alpha,
+        train_band_calibration,
+    ):
+        actual_context = context.value if isinstance(context, _StaticArg) else context
+        (loss, metrics), grads = eqx.filter_value_and_grad(
+            _loss_with_metrics,
+            has_aux=True,
+        )(
+            model,
+            batch,
+            latent_spec,
+            actual_context,
+            model_args,
+            parameter_names,
+            key,
+            n_samples,
+            kl_weight,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+        )
+        grads = jax.lax.pmean(grads, axis_name="devices")
+        loss = jax.lax.pmean(loss, axis_name="devices")
+        metrics = jax.tree_util.tree_map(
+            lambda value: jax.lax.pmean(value, axis_name="devices"),
+            metrics,
+        )
+        grads = _apply_training_grad_masks(
+            grads,
+            update_phase=update_phase,
+            train_alpha=bool(train_alpha),
+            train_band_calibration=bool(train_band_calibration),
+        )
+        grad_norms = _component_grad_norms_jax(grads)
+        loss_finite = jnp.isfinite(loss)
+        grads_finite = _tree_all_finite_jax(grads)
+        update_applied = jax.lax.pmin(
+            (loss_finite & grads_finite).astype(jnp.int32),
+            axis_name="devices",
+        ).astype(jnp.bool_)
+        safe_grads = _zero_tree_when_false(grads, update_applied)
+        updates, new_opt_state = optimizer.update(
+            safe_grads,
+            opt_state,
+            eqx.filter(model, eqx.is_inexact_array),
+        )
+        new_model = eqx.apply_updates(model, updates)
+        model = _select_tree_when_false(new_model, model, update_applied)
+        opt_state = _select_tree_when_false(new_opt_state, opt_state, update_applied)
+        return (
+            model,
+            opt_state,
+            loss,
+            metrics,
+            grad_norms,
+            loss_finite,
+            grads_finite,
+            update_applied,
+        )
+
+    return step
+
+
+def _apply_training_grad_masks(
+    grads: AmortizedModel,
+    *,
+    update_phase: str,
+    train_alpha: bool,
+    train_band_calibration: bool,
+) -> AmortizedModel:
+    if update_phase in {"encoder", "joint_no_prior", "frozen_prior"}:
+        grads = zero_prior_grads(grads)
+    if update_phase == "prior":
+        grads = zero_encoder_grads(grads)
+        grads = zero_sed_scale_grads(grads)
+        grads = zero_band_calibration_grads(grads)
+    if not train_alpha:
+        grads = zero_sed_scale_grads(grads)
+    if not train_band_calibration:
+        grads = zero_band_calibration_grads(grads)
+    return grads
+
+
+def _component_grad_norms_jax(grads: AmortizedModel) -> dict[str, jnp.ndarray]:
+    encoder_norm = _tree_l2_norm_jax(getattr(grads, "encoder", None))
+    prior_norm = _tree_l2_norm_jax(getattr(grads, "prior", None))
+    alpha_norm = _tree_l2_norm_jax(getattr(grads, "sed_scale", None))
+    band_alpha_norm = _tree_l2_norm_jax(getattr(grads, "band_calibration", None))
+    return {
+        "encoder_grad_norm": encoder_norm,
+        "prior_grad_norm": prior_norm,
+        "alpha_grad_norm": alpha_norm,
+        "band_alpha_grad_norm": band_alpha_norm,
+        "joint_grad_norm": _tree_l2_norm_jax(grads),
+        "encoder_grad_nonzero": (encoder_norm > 0.0).astype(jnp.float32),
+        "prior_grad_nonzero": (prior_norm > 0.0).astype(jnp.float32),
+        "alpha_grad_nonzero": (alpha_norm > 0.0).astype(jnp.float32),
+        "band_alpha_grad_nonzero": (band_alpha_norm > 0.0).astype(jnp.float32),
+    }
+
+
+def _tree_l2_norm_jax(tree) -> jnp.ndarray:
+    leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)
+    ]
+    if not leaves:
+        return jnp.asarray(0.0, dtype=jnp.float32)
+    total = sum(jnp.sum(jnp.asarray(leaf) ** 2) for leaf in leaves)
+    return jnp.sqrt(total)
+
+
+def _tree_all_finite_jax(tree) -> jnp.ndarray:
+    leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)
+    ]
+    if not leaves:
+        return jnp.asarray(True)
+    flags = [jnp.all(jnp.isfinite(leaf)) for leaf in leaves]
+    return jnp.all(jnp.asarray(flags))
+
+
+def _zero_tree_when_false(tree, predicate):
+    def zero_leaf(leaf):
+        if eqx.is_inexact_array(leaf):
+            return jnp.where(predicate, leaf, jnp.zeros_like(leaf))
+        return leaf
+
+    return jax.tree_util.tree_map(zero_leaf, tree)
+
+
+def _select_tree_when_false(true_tree, false_tree, predicate):
+    def select_leaf(true_leaf, false_leaf):
+        if eqx.is_array(true_leaf):
+            return jnp.where(predicate, true_leaf, false_leaf)
+        return true_leaf
+
+    return jax.tree_util.tree_map(select_leaf, true_tree, false_tree)
+
+
 @eqx.filter_jit
 def _evaluation_metrics_jit(
     model,
@@ -2182,6 +2565,42 @@ def _train_prior_jointly(prior_cfg: dict[str, Any]) -> bool:
     if source == "standard_normal":
         return False
     return bool(prior_cfg.get("train_jointly", source == "joint_realnvp"))
+
+
+def _log_prior_safety_messages(
+    enabled: bool,
+    prior_cfg: dict[str, Any],
+    *,
+    train_prior: bool,
+    kl_weight_max: float,
+) -> None:
+    if not enabled:
+        return
+    source = str(prior_cfg.get("source", "joint_realnvp"))
+    if source == "joint_realnvp" and not train_prior and float(kl_weight_max) > 0.0:
+        _log(
+            True,
+            "[amortized] WARNING: joint_realnvp prior is fixed while KL is "
+            "enabled. This is a random fixed NF prior unless a checkpoint was "
+            "loaded explicitly.",
+        )
+    if source == "standard_normal" and float(kl_weight_max) > 0.0:
+        _log(
+            True,
+            "[amortized] KL prior is the fixed standard normal reference prior.",
+        )
+    if source == "supervised_checkpoint" and not train_prior:
+        _log(
+            True,
+            "[amortized] supervised RealNVP prior is frozen: KL updates the "
+            "encoder but does not update NF weights.",
+        )
+    if source == "supervised_checkpoint" and train_prior:
+        _log(
+            True,
+            "[amortized] supervised RealNVP prior is being fine-tuned jointly; "
+            "compare against truth-overlap diagnostics.",
+        )
 
 
 def _prior_update_schedule(prior_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -2335,6 +2754,8 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "n_layers": int(cfg["prior"].get("n_layers", 8)),
             "hidden_size": int(cfg["prior"].get("hidden_size", 128)),
             "scale_clamp": float(cfg["prior"].get("scale_clamp", 0.05)),
+            "init": str(cfg["prior"].get("init", "default")),
+            "init_scale": float(cfg["prior"].get("init_scale", 1.0)),
             "density": "exact_change_of_variables",
         },
         "global_sed_scale": {
@@ -2351,6 +2772,14 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "parameterization": "log_alpha_per_band",
             "prior_sigma_log_alpha": band_cfg.prior_sigma_log_alpha,
             "prior_sigma_mag": band_cfg.prior_sigma_mag,
+        },
+        "data_parallel": {
+            "requested": str(cfg["training"].get("data_parallel", "single")),
+            "semantics": (
+                "single uses the one-device step; auto uses pmap only when "
+                "more than one local JAX device is visible; pmap requires "
+                "multiple local devices and averages gradients with lax.pmean"
+            ),
         },
         "decoder": {
             "type": "fixed_dsps",
@@ -2509,6 +2938,128 @@ def _effective_jax_batch_size(training_config: dict[str, Any], batch_size: int) 
     return min(requested, value)
 
 
+def _resolve_data_parallel_training(
+    training_config: dict[str, Any],
+    *,
+    jax_batch_size: int,
+) -> dict[str, Any]:
+    requested = str(training_config.get("data_parallel", "single")).strip().lower()
+    aliases = {"none": "single", "false": "single", "true": "auto"}
+    requested = aliases.get(requested, requested)
+    if requested not in {"single", "auto", "pmap"}:
+        raise ValueError(
+            "amortized.training.data_parallel must be one of: single, auto, pmap"
+        )
+    devices = tuple(jax.local_devices())
+    n_devices = len(devices)
+    if requested == "single":
+        enabled = False
+        effective = "single"
+    elif requested == "auto":
+        enabled = n_devices > 1
+        effective = "pmap" if enabled else "single"
+    else:
+        if n_devices < 2:
+            raise ValueError(
+                "amortized.training.data_parallel='pmap' requires at least two "
+                f"local JAX devices; visible devices={devices}"
+            )
+        enabled = True
+        effective = "pmap"
+    if enabled and int(jax_batch_size) % n_devices != 0:
+        raise ValueError(
+            "In pmap mode, amortized.training.jax_batch_size must be divisible "
+            f"by the local device count: jax_batch_size={int(jax_batch_size)} "
+            f"devices={n_devices}"
+        )
+    return {
+        "requested": requested,
+        "effective": effective,
+        "enabled": bool(enabled),
+        "devices": devices,
+        "n_devices": int(n_devices),
+        "global_batch_size": int(jax_batch_size),
+        "per_device_batch_size": (
+            int(jax_batch_size) // int(n_devices) if enabled else int(jax_batch_size)
+        ),
+    }
+
+
+def _pad_epoch_order_for_data_parallel(
+    order: np.ndarray,
+    *,
+    global_batch_size: int,
+    enabled: bool,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, int]:
+    order = np.asarray(order, dtype=np.int64)
+    if not enabled:
+        return order, 0
+    if len(order) == 0:
+        return order, 0
+    remainder = len(order) % int(global_batch_size)
+    if remainder == 0:
+        return order, 0
+    pad_count = int(global_batch_size) - int(remainder)
+    padding = rng.choice(order, size=pad_count, replace=True)
+    return np.concatenate([order, np.asarray(padding, dtype=np.int64)]), pad_count
+
+
+def _shard_loss_batch(batch: LossBatch, n_devices: int) -> LossBatch:
+    if int(n_devices) <= 1:
+        return batch
+
+    def shard_array(value):
+        value = jnp.asarray(value)
+        if value.shape[0] % int(n_devices) != 0:
+            raise ValueError(
+                "pmap training batch leading dimension must be divisible by "
+                f"device count: shape={value.shape} devices={n_devices}"
+            )
+        return value.reshape((int(n_devices), value.shape[0] // int(n_devices), *value.shape[1:]))
+
+    return LossBatch(
+        flux=shard_array(batch.flux),
+        flux_err=shard_array(batch.flux_err),
+        mask=shard_array(batch.mask),
+        features=shard_array(batch.features),
+    )
+
+
+def _replicate_tree(tree, devices: tuple[Any, ...]):
+    return jax.device_put_replicated(tree, devices)
+
+
+def _unreplicate_tree(tree):
+    def first_leaf(leaf):
+        if eqx.is_array(leaf):
+            return leaf[0]
+        return leaf
+
+    return jax.tree_util.tree_map(first_leaf, tree)
+
+
+def _unreplicate_scalar(value) -> float:
+    arr = np.asarray(jax.device_get(value))
+    if arr.shape:
+        arr = arr.reshape(-1)[0]
+    return float(arr)
+
+
+def _unreplicate_bool(value) -> bool:
+    arr = np.asarray(jax.device_get(value))
+    if arr.shape:
+        arr = arr.reshape(-1)[0]
+    return bool(arr)
+
+
+def _unreplicate_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        name: jnp.asarray(np.asarray(jax.device_get(value)).reshape(-1)[0])
+        for name, value in metrics.items()
+    }
+
+
 def _write_prior_predictive_training_diagnostics(
     out: Path,
     model: AmortizedModel,
@@ -2646,6 +3197,473 @@ def _write_prior_predictive_color_plot(frame: pd.DataFrame, out: Path) -> None:
     ax.grid(alpha=0.25)
     fig.tight_layout()
     fig.savefig(out / "prior_predictive_color_distance.png", dpi=160)
+    plt.close(fig)
+
+
+def _should_write_training_snapshot(
+    snapshot_config: dict[str, Any],
+    epoch: int,
+) -> bool:
+    if not bool(snapshot_config.get("enabled", False)):
+        return False
+    every_epochs = int(snapshot_config.get("every_epochs", 5) or 0)
+    if every_epochs <= 0:
+        return False
+    return int(epoch) > 0 and int(epoch) % every_epochs == 0
+
+
+def _write_training_snapshot(
+    out: Path,
+    *,
+    epoch: int,
+    model: AmortizedModel,
+    arrays,
+    feature_stats: FeatureStats,
+    latent_spec: LatentSpec,
+    key,
+    snapshot_config: dict[str, Any],
+    config: dict[str, Any],
+    kl_weight: float,
+    prior_source: str,
+    prior_train_jointly: bool,
+    update_phase: str,
+    deterministic: bool,
+) -> None:
+    snap = ensure_dir(out / "training_snapshots" / f"epoch_{int(epoch):04d}")
+    n_available = int(arrays.flux.shape[0])
+    n_objects = min(
+        n_available,
+        max(int(snapshot_config.get("n_validation_objects", 256)), 1),
+    )
+    seed = int(snapshot_config.get("seed", 260617)) + int(epoch)
+    rng = np.random.default_rng(seed)
+    if n_available > n_objects:
+        order = np.sort(rng.choice(n_available, size=n_objects, replace=False))
+    else:
+        order = np.arange(n_available, dtype=int)
+
+    flux = jnp.asarray(arrays.flux[order], dtype=jnp.float32)
+    flux_err = jnp.asarray(arrays.flux_err[order], dtype=jnp.float32)
+    features = make_encoder_features(flux, flux_err, feature_stats)
+    mean, log_std = model.encoder(features)
+    mean_np = np.asarray(jax.device_get(mean), dtype=np.float32)
+    log_std_np = np.asarray(jax.device_get(log_std), dtype=np.float32)
+    theta_mean = _theta_frame_from_x(mean_np, latent_spec, prefix="")
+
+    object_id = np.asarray(arrays.object_id[order])
+    row_index = _snapshot_row_index(arrays, order)
+    posterior_summary = pd.DataFrame(
+        {
+            "row_index": row_index,
+            "object_id": object_id,
+            "epoch": int(epoch),
+        }
+    )
+    for index, name in enumerate(latent_spec.names):
+        posterior_summary[f"x_mean_{name}"] = mean_np[:, index]
+        posterior_summary[f"x_log_std_{name}"] = log_std_np[:, index]
+    posterior_summary = pd.concat([posterior_summary, theta_mean], axis=1)
+    posterior_summary.to_parquet(snap / "posterior_summary.parquet", index=False)
+
+    n_posterior_samples = (
+        1
+        if deterministic
+        else max(int(snapshot_config.get("posterior_samples", 64)), 1)
+    )
+    key, posterior_key, prior_key = jax.random.split(key, 3)
+    posterior_x = _snapshot_posterior_x(
+        posterior_key,
+        mean_np,
+        log_std_np,
+        n_samples=n_posterior_samples,
+        deterministic=deterministic,
+    )
+    posterior_samples = _snapshot_sample_frame(
+        posterior_x,
+        latent_spec,
+        row_index=row_index,
+        object_id=object_id,
+        epoch=epoch,
+        kind="posterior_mean" if deterministic else "posterior_encoder_sample",
+    )
+    posterior_samples.to_parquet(snap / "posterior_samples.parquet", index=False)
+
+    prior_sample_count = max(int(snapshot_config.get("prior_samples", 4096)), 1)
+    prior_x = np.asarray(
+        jax.device_get(model.prior.sample(prior_key, prior_sample_count)),
+        dtype=np.float32,
+    )
+    prior_samples = _theta_frame_from_x(prior_x, latent_spec, prefix="")
+    prior_samples.insert(0, "sample_id", np.arange(len(prior_samples), dtype=np.int64))
+    prior_samples.insert(0, "epoch", int(epoch))
+    prior_samples.to_parquet(snap / "prior_samples.parquet", index=False)
+
+    truth_path, truth_reason = _write_snapshot_truth_frame(
+        snap,
+        arrays=arrays,
+        order=order,
+        latent_spec=latent_spec,
+    )
+    plots = []
+    if bool(snapshot_config.get("write_corner", True)):
+        max_corner_rows = int(snapshot_config.get("max_corner_rows", 4000))
+        plots.extend(
+            _write_training_snapshot_corner_plots(
+                snap,
+                posterior_samples=posterior_samples,
+                prior_samples=prior_samples,
+                truth_path=truth_path,
+                max_rows=max_corner_rows,
+            )
+        )
+
+    if bool(snapshot_config.get("write_jacobian_lens", False)):
+        lens_dir = ensure_dir(snap / "jacobian_lens")
+        write_json(
+            lens_dir / "SKIPPED.json",
+            {
+                "reason": (
+                    "training snapshots keep Jacobian diagnostics on the dedicated "
+                    "sharded amortized-jacobian-lens-diffsky CLI path"
+                ),
+                "configured_objects": int(
+                    snapshot_config.get("jacobian_lens_objects", 32)
+                ),
+            },
+        )
+
+    summary = {
+        "epoch": int(epoch),
+        "n_validation_objects": int(n_objects),
+        "posterior_samples_per_object": int(n_posterior_samples),
+        "prior_samples": int(prior_sample_count),
+        "posterior_interpretation": (
+            "deterministic_encoder_mean"
+            if deterministic
+            else (
+                "bayesian_posterior_under_encoder_and_prior"
+                if float(kl_weight) > 0.0
+                else "encoder_distribution_not_bayesian"
+            )
+        ),
+        "kl_definition": "E_q[logq - logp_beta]",
+        "kl_direction": "q_to_p",
+        "kl_weight": float(kl_weight),
+        "prior_source": str(prior_source),
+        "prior_train_jointly": bool(prior_train_jointly),
+        "update_phase": str(update_phase),
+        "truth_theta": {
+            "path": truth_path.name if truth_path is not None else None,
+            "reason": truth_reason,
+        },
+        "plots": plots,
+        "decode_prior_flux": bool(snapshot_config.get("decode_prior_flux", False)),
+        "decode_prior_flux_note": "not run in lightweight snapshot hook",
+        "config_objective": dict((config.get("amortized", {}) or {}).get("objective", {})),
+    }
+    write_json(snap / "snapshot_metrics.json", summary)
+    write_json(
+        snap / "artifact_manifest.json",
+        {
+            "epoch": int(epoch),
+            "files": sorted(path.name for path in snap.iterdir() if path.is_file()),
+            "subdirectories": sorted(path.name for path in snap.iterdir() if path.is_dir()),
+        },
+    )
+
+
+def _snapshot_posterior_x(
+    key,
+    mean: np.ndarray,
+    log_std: np.ndarray,
+    *,
+    n_samples: int,
+    deterministic: bool,
+) -> np.ndarray:
+    if deterministic:
+        return mean[None, ...]
+    eps = np.asarray(
+        jax.device_get(
+            jax.random.normal(
+                key,
+                (int(n_samples),) + tuple(mean.shape),
+                dtype=jnp.float32,
+            )
+        ),
+        dtype=np.float32,
+    )
+    return mean[None, ...] + np.exp(log_std[None, ...]) * eps
+
+
+def _snapshot_sample_frame(
+    x_samples: np.ndarray,
+    latent_spec: LatentSpec,
+    *,
+    row_index: np.ndarray,
+    object_id: np.ndarray,
+    epoch: int,
+    kind: str,
+) -> pd.DataFrame:
+    n_samples, n_objects, latent_dim = x_samples.shape
+    flat = x_samples.reshape(n_samples * n_objects, latent_dim)
+    frame = _theta_frame_from_x(flat, latent_spec, prefix="")
+    frame.insert(0, "sample_kind", str(kind))
+    frame.insert(
+        0,
+        "sample_id",
+        np.repeat(np.arange(n_samples, dtype=np.int64), n_objects),
+    )
+    frame.insert(0, "object_id", np.tile(object_id, n_samples))
+    frame.insert(0, "row_index", np.tile(row_index, n_samples))
+    frame.insert(0, "epoch", int(epoch))
+    return frame
+
+
+def _theta_frame_from_x(
+    x: np.ndarray,
+    latent_spec: LatentSpec,
+    *,
+    prefix: str,
+) -> pd.DataFrame:
+    theta = np.asarray(
+        jax.device_get(x_to_theta(jnp.asarray(x, dtype=jnp.float32), latent_spec)),
+        dtype=np.float32,
+    )
+    return pd.DataFrame(
+        {f"{prefix}{name}": theta[:, index] for index, name in enumerate(latent_spec.names)}
+    )
+
+
+def _snapshot_row_index(arrays, order: np.ndarray) -> np.ndarray:
+    if getattr(arrays, "row_index", None) is None:
+        return np.asarray(order, dtype=np.int64)
+    return np.asarray(arrays.row_index, dtype=np.int64)[order]
+
+
+def _write_snapshot_truth_frame(
+    snap: Path,
+    *,
+    arrays,
+    order: np.ndarray,
+    latent_spec: LatentSpec,
+) -> tuple[Path | None, str]:
+    truth = getattr(arrays, "truth", None)
+    if not truth:
+        return None, "photometry arrays do not carry truth theta columns"
+    missing = [name for name in latent_spec.names if name not in truth]
+    if missing:
+        return None, "missing truth columns: " + ", ".join(missing[:8])
+    frame = pd.DataFrame(
+        {
+            "row_index": _snapshot_row_index(arrays, order),
+            "object_id": np.asarray(arrays.object_id[order]),
+        }
+    )
+    for name in latent_spec.names:
+        frame[name] = np.asarray(truth[name])[order]
+    path = snap / "truth_theta.parquet"
+    frame.to_parquet(path, index=False)
+    return path, "available"
+
+
+def _write_training_snapshot_corner_plots(
+    snap: Path,
+    *,
+    posterior_samples: pd.DataFrame,
+    prior_samples: pd.DataFrame,
+    truth_path: Path | None,
+    max_rows: int,
+) -> list[str]:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        write_json(
+            snap / "corner_plot_metadata.json",
+            {"plots": [], "reason": "matplotlib_unavailable"},
+        )
+        return []
+    truth = pd.read_parquet(truth_path) if truth_path is not None else pd.DataFrame()
+    groups = {
+        "useful": _training_snapshot_useful_columns(
+            posterior_samples,
+            prior_samples,
+            truth,
+        ),
+        "full18": _training_snapshot_full_columns(posterior_samples, prior_samples, truth),
+    }
+    plots: list[str] = []
+    metadata: list[dict[str, Any]] = []
+    for suffix, columns in groups.items():
+        if len(columns) < 2:
+            metadata.append(
+                {
+                    "plot": f"corner_prior_posterior_truth_{suffix}.png",
+                    "written": False,
+                    "reason": "fewer_than_two_finite_columns",
+                    "columns": columns,
+                }
+            )
+            continue
+        path = snap / f"corner_prior_posterior_truth_{suffix}.png"
+        _write_overlay_corner_like(
+            path,
+            plt,
+            columns=columns,
+            posterior=posterior_samples,
+            prior=prior_samples,
+            truth=truth,
+            max_rows=max_rows,
+        )
+        plots.append(path.name)
+        metadata.append(
+            {
+                "plot": path.name,
+                "written": True,
+                "columns": columns,
+                "max_rows": int(max_rows),
+            }
+        )
+        if not truth.empty:
+            truth_path_out = snap / f"corner_truth_only_{suffix}.png"
+            _write_overlay_corner_like(
+                truth_path_out,
+                plt,
+                columns=columns,
+                posterior=pd.DataFrame(),
+                prior=pd.DataFrame(),
+                truth=truth,
+                max_rows=max_rows,
+            )
+            plots.append(truth_path_out.name)
+    write_json(snap / "corner_plot_metadata.json", {"plots": metadata})
+    return plots
+
+
+def _training_snapshot_full_columns(*frames: pd.DataFrame) -> list[str]:
+    order = [
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_stellar_metallicity",
+        "dust_av",
+        "dust_delta",
+        "diffstar_lgmcrit",
+        "diffstar_lgy_at_mcrit",
+        "diffstar_indx_lo",
+        "diffstar_indx_hi",
+        "diffstar_lg_qt",
+        "diffstar_qlglgdt",
+        "diffstar_lg_drop",
+        "diffstar_lg_rejuv",
+        "diffmah_logm0",
+        "diffmah_logtc",
+        "diffmah_early_index",
+        "diffmah_late_index",
+        "diffmah_t_peak",
+    ]
+    return _finite_columns(order, frames)
+
+
+def _training_snapshot_useful_columns(*frames: pd.DataFrame) -> list[str]:
+    order = [
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_stellar_metallicity",
+        "dust_av",
+        "dust_delta",
+        "log10_sfr_at_obs",
+        "log10_ssfr_at_obs",
+        "diffstar_lgmcrit",
+        "diffstar_lgy_at_mcrit",
+        "diffmah_logm0",
+        "diffmah_t_peak",
+    ]
+    return _finite_columns(order, frames)
+
+
+def _finite_columns(order: list[str], frames: tuple[pd.DataFrame, ...]) -> list[str]:
+    columns = []
+    for column in order:
+        for frame in frames:
+            if frame.empty or column not in frame:
+                continue
+            values = frame[column].to_numpy(dtype=float)
+            finite = values[np.isfinite(values)]
+            if finite.size > 1 and np.nanmax(finite) > np.nanmin(finite):
+                columns.append(column)
+                break
+    return columns
+
+
+def _write_overlay_corner_like(
+    path: Path,
+    plt,
+    *,
+    columns: list[str],
+    posterior: pd.DataFrame,
+    prior: pd.DataFrame,
+    truth: pd.DataFrame,
+    max_rows: int,
+) -> None:
+    columns = columns[: min(len(columns), 8)]
+    n_cols = len(columns)
+    fig, axes = plt.subplots(
+        n_cols,
+        n_cols,
+        figsize=(max(4.0, 1.45 * n_cols), max(4.0, 1.45 * n_cols)),
+        squeeze=False,
+    )
+    datasets = [
+        ("truth", truth, "#202020", 0.7),
+        ("prior", prior, "#4c78a8", 0.45),
+        ("posterior", posterior, "#f58518", 0.45),
+    ]
+    for i, y_name in enumerate(columns):
+        for j, x_name in enumerate(columns):
+            ax = axes[i, j]
+            if i < j:
+                ax.axis("off")
+                continue
+            for label, frame, color, alpha in datasets:
+                if frame.empty or x_name not in frame or y_name not in frame:
+                    continue
+                sub = frame[[x_name, y_name]].replace([np.inf, -np.inf], np.nan).dropna()
+                if sub.empty:
+                    continue
+                if len(sub) > max_rows:
+                    sub = sub.sample(int(max_rows), random_state=17)
+                if i == j:
+                    ax.hist(
+                        sub[x_name].to_numpy(dtype=float),
+                        bins=32,
+                        density=True,
+                        histtype="step",
+                        color=color,
+                        alpha=min(alpha + 0.25, 1.0),
+                        label=label,
+                    )
+                else:
+                    ax.scatter(
+                        sub[x_name].to_numpy(dtype=float),
+                        sub[y_name].to_numpy(dtype=float),
+                        s=2,
+                        alpha=alpha,
+                        color=color,
+                        linewidths=0.0,
+                    )
+            if i == n_cols - 1:
+                ax.set_xlabel(x_name, fontsize=7)
+            else:
+                ax.set_xticklabels([])
+            if j == 0 and i != j:
+                ax.set_ylabel(y_name, fontsize=7)
+            elif j > 0:
+                ax.set_yticklabels([])
+            ax.tick_params(axis="both", labelsize=6, length=2)
+    handles, labels = axes[0, 0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper right", frameon=False, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
     plt.close(fig)
 
 
