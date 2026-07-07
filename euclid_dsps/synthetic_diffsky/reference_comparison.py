@@ -12,6 +12,7 @@ import pandas as pd
 
 from euclid_dsps.io import ensure_dir
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
+from euclid_dsps.photometry import fnu_cgs_to_abmag
 
 
 DEFAULT_BANDS = (
@@ -36,6 +37,19 @@ FS2_REFERENCE_ALIASES = {
     "logsfr_true": "log_sfr_true",
     "dust_av": "dust_ebv_true",
 }
+
+FS2_FNU_CGS_BANDS = (
+    "lsst_u",
+    "lsst_g",
+    "lsst_r",
+    "lsst_i",
+    "lsst_z",
+    "lsst_y",
+    "euclid_vis",
+    "euclid_nisp_y",
+    "euclid_nisp_j",
+    "euclid_nisp_h",
+)
 
 LATENT_COLUMN_PAIRS = (
     ("redshift", "redshift_true", "redshift_true"),
@@ -129,6 +143,7 @@ def compare_synthetic_closure_to_reference(
     reference = pd.read_parquet(reference_path)
     reference_kind = _infer_reference_kind(reference, reference_kind)
     reference = _standardize_reference_frame(reference, reference_kind)
+    reference_label = _reference_display_name(reference_kind)
     if max_reference is not None and int(max_reference) > 0 and len(reference) > int(max_reference):
         reference = reference.sample(n=int(max_reference), random_state=int(seed))
     reference = reference.reset_index(drop=True)
@@ -163,6 +178,7 @@ def compare_synthetic_closure_to_reference(
             distribution_metrics,
             photometry_metrics,
             plot_dir,
+            reference_label=reference_label,
         )
 
     summary = _summary_payload(
@@ -179,6 +195,7 @@ def compare_synthetic_closure_to_reference(
         proposal_metrics=proposal_metrics,
         correlation_payload=correlation_payload,
         plot_paths=plot_paths,
+        reference_label=reference_label,
     )
     summary_path = out / "comparison_summary.json"
     _write_json(summary_path, summary)
@@ -224,6 +241,15 @@ def _infer_reference_kind(reference: pd.DataFrame, requested: str) -> str:
     return "hltds"
 
 
+def _reference_display_name(reference_kind: str) -> str:
+    kind = str(reference_kind or "reference").lower()
+    if kind == "fs2":
+        return "Euclid FS2 phz1"
+    if kind == "hltds":
+        return "HLTDS z<=0.35 reference"
+    return f"{reference_kind} reference"
+
+
 def _standardize_reference_frame(
     reference: pd.DataFrame,
     reference_kind: str,
@@ -248,6 +274,17 @@ def _standardize_reference_frame(
         frame["log10_stellar_metallicity"] = (
             pd.to_numeric(frame["metallicity_true"], errors="coerce") - 10.61
         )
+    for band in FS2_FNU_CGS_BANDS:
+        if band not in frame.columns:
+            continue
+        raw_flux = pd.to_numeric(frame[band], errors="coerce").to_numpy(dtype=float)
+        if f"flux_{band}" not in frame.columns:
+            frame[f"flux_{band}"] = raw_flux
+        if f"mag_{band}" not in frame.columns:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                mag = np.asarray(fnu_cgs_to_abmag(raw_flux), dtype=float)
+            mag[~np.isfinite(raw_flux) | (raw_flux <= 0.0)] = np.nan
+            frame[f"mag_{band}"] = mag
     return frame
 
 
@@ -759,6 +796,8 @@ def _write_plots(
     distribution_metrics: pd.DataFrame,
     photometry_metrics: pd.DataFrame,
     plot_dir: Path,
+    *,
+    reference_label: str,
 ) -> list[Path]:
     try:
         import matplotlib.pyplot as plt
@@ -773,7 +812,16 @@ def _write_plots(
         ("dust_delta", "dust_delta_true", "dust_delta"),
     ]
     for label, syn_col, ref_col in selected:
-        path = _hist_plot(plt, synthetic, reference, syn_col, ref_col, label, plot_dir)
+        path = _hist_plot(
+            plt,
+            synthetic,
+            reference,
+            syn_col,
+            ref_col,
+            label,
+            plot_dir,
+            reference_label=reference_label,
+        )
         if path is not None:
             paths.append(path)
     for band in ("lsst_u", "lsst_g", "lsst_r", "lsst_i", "roman_F106", "roman_F158"):
@@ -785,6 +833,7 @@ def _write_plots(
             f"mag_{band}",
             f"mag_{band}",
             plot_dir,
+            reference_label=reference_label,
         )
         if path is not None:
             paths.append(path)
@@ -803,7 +852,13 @@ def _write_plots(
         path = _bar_plot(plt, top_phot, "delta_median", "top_mag_median_offsets", plot_dir)
         if path is not None:
             paths.append(path)
-    color_color_paths = _color_color_plots(plt, synthetic, reference, plot_dir)
+    color_color_paths = _color_color_plots(
+        plt,
+        synthetic,
+        reference,
+        plot_dir,
+        reference_label=reference_label,
+    )
     paths.extend(color_color_paths)
     plt.close("all")
     return paths
@@ -814,6 +869,8 @@ def _color_color_plots(
     synthetic: pd.DataFrame,
     reference: pd.DataFrame,
     plot_dir: Path,
+    *,
+    reference_label: str,
 ) -> list[Path]:
     paths: list[Path] = []
     rows: list[tuple[str, str, np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
@@ -844,10 +901,16 @@ def _color_color_plots(
             syn_y,
             ref_x,
             ref_y,
+            reference_label=reference_label,
         )
         if path is not None:
             paths.append(path)
-    panel = _color_color_panel_plot(plt, plot_dir, rows)
+    panel = _color_color_panel_plot(
+        plt,
+        plot_dir,
+        rows,
+        reference_label=reference_label,
+    )
     if panel is not None:
         paths.append(panel)
     return paths
@@ -881,13 +944,24 @@ def _color_color_single_plot(
     syn_y: np.ndarray,
     ref_x: np.ndarray,
     ref_y: np.ndarray,
+    *,
+    reference_label: str,
 ) -> Path | None:
     if syn_x.size < 2 or ref_x.size < 2:
         return None
     syn_x, syn_y = _sample_xy(syn_x, syn_y, max_rows=25_000, seed=260617)
     ref_x, ref_y = _sample_xy(ref_x, ref_y, max_rows=50_000, seed=260618)
     fig, ax = plt.subplots(figsize=(5.2, 4.6))
-    _draw_color_color_axes(ax, x_label, y_label, syn_x, syn_y, ref_x, ref_y)
+    _draw_color_color_axes(
+        ax,
+        x_label,
+        y_label,
+        syn_x,
+        syn_y,
+        ref_x,
+        ref_y,
+        reference_label=reference_label,
+    )
     ax.legend(frameon=False, loc="best", markerscale=2.0)
     fig.tight_layout()
     fig.savefig(path, dpi=180)
@@ -899,6 +973,8 @@ def _color_color_panel_plot(
     plt: Any,
     plot_dir: Path,
     rows: Sequence[tuple[str, str, np.ndarray, np.ndarray, np.ndarray, np.ndarray]],
+    *,
+    reference_label: str,
 ) -> Path | None:
     if not rows:
         return None
@@ -924,6 +1000,7 @@ def _color_color_panel_plot(
             ref_x,
             ref_y,
             show_legend=index == 0,
+            reference_label=reference_label,
         )
     for ax in axes_arr[len(rows):]:
         ax.axis("off")
@@ -944,6 +1021,7 @@ def _draw_color_color_axes(
     ref_y: np.ndarray,
     *,
     show_legend: bool = True,
+    reference_label: str = "reference",
 ) -> None:
     ax.scatter(
         ref_x,
@@ -953,7 +1031,7 @@ def _draw_color_color_axes(
         alpha=0.16,
         linewidths=0,
         rasterized=True,
-        label="z<=0.35 reference",
+        label=reference_label,
     )
     ax.scatter(
         syn_x,
@@ -1017,6 +1095,8 @@ def _hist_plot(
     reference_column: str,
     label: str,
     plot_dir: Path,
+    *,
+    reference_label: str,
 ) -> Path | None:
     if synthetic_column not in synthetic.columns or reference_column not in reference.columns:
         return None
@@ -1025,7 +1105,7 @@ def _hist_plot(
     if syn.size < 2 or ref.size < 2:
         return None
     fig, ax = plt.subplots(figsize=(6.0, 4.0))
-    ax.hist(ref, bins=50, density=True, alpha=0.55, label="z0.35 reference")
+    ax.hist(ref, bins=50, density=True, alpha=0.55, label=reference_label)
     ax.hist(syn, bins=min(30, max(5, syn.size // 2)), density=True, alpha=0.65, label="FENIKS closure")
     ax.set_xlabel(label)
     ax.set_ylabel("density")
@@ -1077,6 +1157,30 @@ def _top_metric_rows(
     return ok.drop(columns=["_score"]).to_dict(orient="records")
 
 
+def _reference_photometry_units(
+    reference: pd.DataFrame,
+    bands: Sequence[str],
+) -> dict[str, dict[str, Any]]:
+    payload: dict[str, dict[str, Any]] = {}
+    for band in bands:
+        mag_column = _reference_mag_column(reference, band)
+        flux_column = _reference_flux_column(reference, band)
+        if not mag_column and not flux_column:
+            continue
+        payload[band] = {
+            "mag_column": mag_column,
+            "flux_column": flux_column,
+            "mag_from_flux": bool(
+                mag_column == f"mag_{band}"
+                and flux_column == f"flux_{band}"
+                and band in reference.columns
+            ),
+            "flux_units": "fnu_cgs" if flux_column else None,
+            "mag_units": "AB" if mag_column else None,
+        }
+    return payload
+
+
 def _summary_payload(
     *,
     synthetic_path: Path,
@@ -1092,6 +1196,7 @@ def _summary_payload(
     proposal_metrics: pd.DataFrame,
     correlation_payload: dict[str, Any],
     plot_paths: Sequence[Path],
+    reference_label: str,
 ) -> dict[str, Any]:
     top_latent_ks = _top_metric_rows(distribution_metrics, "ks", n=10)
     top_latent_w1 = _top_metric_rows(distribution_metrics, "wasserstein_quantile", n=10)
@@ -1107,6 +1212,8 @@ def _summary_payload(
         "synthetic_path": str(synthetic_path),
         "reference_path": str(reference_path),
         "reference_kind": str(reference_kind),
+        "reference_label": str(reference_label),
+        "reference_photometry_units": _reference_photometry_units(reference, bands),
         "out_dir": str(out_dir),
         "n_synthetic": int(len(synthetic)),
         "n_reference_used": int(len(reference)),
@@ -1151,14 +1258,16 @@ def _summary_payload(
 
 
 def _markdown_report(summary: dict[str, Any]) -> str:
+    reference_label = str(summary.get("reference_label") or "Reference")
     lines = [
-        "# FENIKS DSPS-Closure vs z0.35 Reference Diagnostic",
+        f"# FENIKS DSPS-Closure vs {reference_label} Diagnostic",
         "",
         "## Inputs",
         "",
         f"- Synthetic catalog: `{summary['synthetic_path']}`",
         f"- Reference catalog: `{summary['reference_path']}`",
         f"- Reference kind: `{summary.get('reference_kind', 'unknown')}`",
+        f"- Reference label: {reference_label}",
         f"- Synthetic rows: {summary['n_synthetic']}",
         f"- Reference rows used: {summary['n_reference_used']}",
         "",
@@ -1167,10 +1276,20 @@ def _markdown_report(summary: dict[str, Any]) -> str:
         (
             "This report compares population and photometry distributions. It is not an "
             "exact photometric closure test, because the reference photometry is the "
-            "existing Diffsky/HLTDS photometry while the synthetic catalog uses the "
+            "external survey-product photometry while the synthetic catalog uses the "
             "euclid_dsps forward model for closure fluxes."
         ),
     ]
+    phot_units = summary.get("reference_photometry_units") or {}
+    if phot_units:
+        converted = [
+            f"{band}: {meta.get('mag_column')} from {meta.get('flux_column')}"
+            for band, meta in phot_units.items()
+            if meta.get("mag_from_flux")
+        ]
+        if converted:
+            lines.extend(["", "Reference flux-to-AB conversions:", ""])
+            lines.extend(f"- {item}" for item in converted[:12])
     if summary.get("sample_warning"):
         lines.extend(["", f"Warning: {summary['sample_warning']}"])
     lines.extend(["", "## Mass Threshold Fractions", ""])

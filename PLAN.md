@@ -1,5 +1,42 @@
 # Plan
 
+## 2026-07-07 FS2 Comparison Unit Fix
+
+- Status: completed.
+- Goal: correct the FS2 reference comparison without regenerating the FENIKS
+  closure catalogues, so LSST/Euclid color-color and magnitude diagnostics use
+  AB magnitudes derived from FS2 `fnu_cgs` flux columns.
+- Scope:
+  - Detect `reference_kind: fs2` photometry columns as `fnu_cgs` fluxes, not
+    apparent magnitudes.
+  - Materialize comparable `flux_<band>` and `mag_<band>` columns for FS2 while
+    preserving the original columns.
+  - Rename FS2 reports/output metadata so the comparison is clearly against
+    Euclid FS2 phz1, not the older z<=0.35 HLTDS reference.
+  - Add tests covering FS2 flux-to-AB conversion and color metrics.
+  - Leave Diffstar/Diffmah atom-like nuisance dimensions available to inference
+    while documenting that they should not be interpreted as smooth recovered
+    science parameters.
+- Completed:
+  - `reference_kind: fs2` now materializes `flux_<band>` and `mag_<band>` for
+    LSST and Euclid FS2 `fnu_cgs` columns before computing magnitude/color
+    metrics and plots.
+  - FS2 reports now label the reference as `Euclid FS2 phz1` and record which
+    reference bands were converted from flux to AB magnitude.
+  - The CLI help no longer describes the comparison command as HLTDS-only.
+  - Added a regression test proving that FS2 flux columns are converted to AB
+    magnitudes before magnitude and color metrics are computed.
+- Validation:
+  - `python -m compileall euclid_dsps/synthetic_diffsky/reference_comparison.py tests/test_synthetic_diffsky_closure.py`
+    passed.
+  - `python -m pytest -q tests/test_synthetic_diffsky_closure.py::test_reference_comparison_converts_fs2_flux_columns_to_ab_magnitudes tests/test_synthetic_diffsky_closure.py::test_reference_comparison_writes_population_and_photometry_tables`
+    passed with `2 passed`.
+  - `python -m compileall euclid_dsps` passed.
+  - `python -m pytest -q tests/test_synthetic_diffsky_closure.py` passed with
+    `17 passed, 2 skipped`.
+  - Corrected local FS2 comparisons were regenerated for both `survey_like` and
+    `inference_ready` outputs without rerunning Diffsky/DSPS generation.
+
 ## 2026-07-06 Survey-Like FENIKS Closure Dataset Plan
 
 - Status: completed.

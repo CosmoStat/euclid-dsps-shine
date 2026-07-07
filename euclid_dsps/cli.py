@@ -637,7 +637,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     compare_closure_reference = sub.add_parser(
         "diffsky-compare-dsps-closure-reference",
-        help="Compare a synthetic DSPS closure catalog to the current z<=0.35 reference.",
+        help="Compare a synthetic DSPS closure catalog to HLTDS or Euclid FS2 phz1.",
     )
     compare_closure_reference.add_argument(
         "--synthetic",
@@ -650,7 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Data/diffsky/processed/"
             "hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet"
         ),
-        help="Reference z<=0.35 Diffsky HLTDS parquet.",
+        help="Reference parquet; supports HLTDS or Euclid FS2 phz1 with --reference-kind.",
     )
     compare_closure_reference.add_argument(
         "--out",

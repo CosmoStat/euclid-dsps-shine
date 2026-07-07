@@ -11,6 +11,7 @@ import pytest
 from euclid_dsps.config import normalize_config
 from euclid_dsps.diffsky_forward_closure import build_trueparam_theta
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
+from euclid_dsps.photometry import abmag_to_fnu_cgs
 from euclid_dsps.prior_learning.schema import build_truth_schema
 from euclid_dsps.synthetic_diffsky import (
     generate_dsps_closure_dataset,
@@ -453,7 +454,7 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
     )
 
 
-def test_reference_comparison_supports_fs2_magnitude_columns(tmp_path) -> None:
+def test_reference_comparison_converts_fs2_flux_columns_to_ab_magnitudes(tmp_path) -> None:
     synthetic = pd.DataFrame(
         {
             "redshift_true": [0.5, 0.7, 1.0],
@@ -475,10 +476,10 @@ def test_reference_comparison_supports_fs2_magnitude_columns(tmp_path) -> None:
             "log_sfr_true": [-0.5, 0.0, 0.5],
             "dust_ebv_true": [0.05, 0.1, 0.2],
             "metallicity_true": [10.0, 10.1, 10.2],
-            "lsst_g": [24.1, 23.4, 23.1],
-            "lsst_r": [23.8, 23.1, 22.8],
-            "euclid_vis": [23.5, 22.8, 22.4],
-            "euclid_nisp_y": [23.2, 22.5, 22.1],
+            "lsst_g": abmag_to_fnu_cgs(np.asarray([24.1, 23.4, 23.1])),
+            "lsst_r": abmag_to_fnu_cgs(np.asarray([23.8, 23.1, 22.8])),
+            "euclid_vis": abmag_to_fnu_cgs(np.asarray([23.5, 22.8, 22.4])),
+            "euclid_nisp_y": abmag_to_fnu_cgs(np.asarray([23.2, 22.5, 22.1])),
         }
     )
     synthetic_path = tmp_path / "synthetic.parquet"
@@ -498,11 +499,29 @@ def test_reference_comparison_supports_fs2_magnitude_columns(tmp_path) -> None:
     summary = json.loads(outputs["summary"].read_text())
     photometry = pd.read_csv(outputs["photometry_metrics"])
     assert summary["reference_kind"] == "fs2"
+    assert summary["reference_label"] == "Euclid FS2 phz1"
+    assert summary["reference_photometry_units"]["lsst_g"]["mag_column"] == "mag_lsst_g"
+    assert summary["reference_photometry_units"]["lsst_g"]["flux_column"] == "flux_lsst_g"
+    assert summary["reference_photometry_units"]["lsst_g"]["mag_from_flux"] is True
+    mag_g = photometry[
+        (photometry["group"] == "mag_true_vs_reference_mag")
+        & (photometry["quantity"] == "lsst_g")
+    ].iloc[0]
+    assert mag_g["status"] == "ok"
+    assert mag_g["reference_column"] == "mag_lsst_g"
+    assert mag_g["reference_median"] == pytest.approx(23.4)
+    flux_g = photometry[
+        (photometry["group"] == "flux_true_vs_reference_flux")
+        & (photometry["quantity"] == "lsst_g")
+    ].iloc[0]
+    assert flux_g["reference_column"] == "flux_lsst_g"
     color = photometry[
         (photometry["group"] == "color_true_vs_reference_color")
         & (photometry["quantity"] == "euclid_vis-euclid_nisp_y")
     ].iloc[0]
     assert color["status"] == "ok"
+    assert color["reference_column"] == "mag_euclid_vis-mag_euclid_nisp_y"
+    assert color["reference_median"] == pytest.approx(0.3)
 
 
 def test_population_diagnostics_write_stats_and_proposal_metrics(tmp_path) -> None:
