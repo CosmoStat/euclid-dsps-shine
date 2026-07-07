@@ -1,0 +1,36 @@
+extends: ../amortized_diffsky_synthetic_feniks_full_gpu.yaml
+
+catalog_path: Data/diffsky/synthetic/feniks_260617_dsps_closure/train.parquet
+
+amortized:
+    data:
+        selection_mode: random
+    objective:
+        mode: stochastic_elbo
+    prior:
+        source: supervised_checkpoint
+        checkpoint: outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp/checkpoints/best.eqx
+        train_jointly: true
+        freeze_epochs: 10
+        update_schedule: alternating
+    training:
+        data_parallel: auto
+        kl_annealing_epochs: 30
+        kl_weight_max: 1.0
+    training_snapshots:
+        enabled: true
+        every_epochs: 5
+        include_epoch_zero: true
+        n_validation_objects: 256
+        posterior_samples: 64
+        prior_samples: 4096
+        write_corner: true
+        write_jacobian_lens: false
+        jacobian_lens_objects: 16
+        max_corner_rows: 4000
+        seed: 260617
+        decode_prior_flux: false
+
+calibration:
+    per_band_zero_points:
+        enabled: false

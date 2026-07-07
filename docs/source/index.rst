@@ -105,6 +105,7 @@ parameters physically.
    forward_model
    prior_learning
    amortized_inference
+   feniks_prior_ladder_jlens
    science_assessment
    ssp_compression
    catalog_columns

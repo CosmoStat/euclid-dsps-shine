@@ -1,5 +1,144 @@
 # Plan
 
+## 2026-07-07 Amortized Multi-GPU Training
+
+- Status: completed for this implementation slice.
+- Goal: add optional JAX `pmap` data-parallel training paths for amortized
+  NN+DSPS runs and supervised RealNVP prior learning, while preserving the
+  current single-GPU path as the default.
+- Design:
+  - Add `amortized.training.data_parallel` with values `single`, `auto`, and
+    `pmap`.
+  - Keep `single` as the default. `auto` uses pmap only when more than one
+    local JAX device is visible. `pmap` requires at least two local devices.
+  - Treat `batch_size` / `jax_batch_size` as global batch sizes. In pmap mode,
+    require the JAX batch size to be divisible by the local device count.
+  - Use replicated model/optimizer state, shard each batch over local devices,
+    average gradients with `jax.lax.pmean`, and write the effective parallel
+    mode/device count in logs and summaries.
+  - Do not silently drop tail batches; pad epoch order by resampling existing
+    rows with replacement and record the padded count.
+- Completed:
+  - Added `amortized.training.data_parallel` and CLI `--data-parallel` with
+    `single`, `auto`, and `pmap`.
+  - Added Equinox/JAX `filter_pmap` train steps for amortized NN+DSPS and
+    supervised RealNVP prior learning. Both replicate model and optimizer
+    state, shard the global batch across local devices, average
+    loss/metrics/gradients with `jax.lax.pmean`, and conditionally skip
+    non-finite updates without applying AdamW weight decay. The amortized path
+    also applies the existing encoder/prior/calibration gradient masks.
+  - Added epoch-order padding in pmap mode by resampling existing rows with
+    replacement, with `data_parallel_epoch_padded_rows` recorded in the
+    training log.
+  - Added data-parallel metadata to training logs, training summaries, and
+    checkpoint sidecars/config sidecars.
+  - Set the new FENIKS amortized and supervised-prior experiment overlays to
+    `data_parallel: auto`.
+  - Updated `scripts/feniks_prior_ladder_h100.slurm` to pass
+    `--data-parallel "$DATA_PARALLEL"` and documented multi-GPU launch commands
+    using `sbatch --gres=gpu:4`.
+  - Added CPU tests for mode resolution, single-device fallback, forced-pmap
+    guardrails, epoch padding, batch sharding, and CLI parsing.
+- Remaining caveat:
+  - The pmap path is implemented and unit-tested for guardrails/sharding, but
+    a real multi-H100 runtime smoke must be launched on a multi-GPU allocation.
+    The local machine exposes one CPU JAX device only.
+- Validation:
+  - `python -m compileall euclid_dsps scripts` passed.
+  - `uvx ruff check euclid_dsps/amortized/train.py euclid_dsps/amortized/config.py euclid_dsps/prior_learning/train.py euclid_dsps/cli.py tests/test_amortized_data_parallel.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py` passed.
+  - `python -m pytest -q tests/test_amortized_data_parallel.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py tests/test_amortized_diagnostics.py tests/test_cli.py tests/test_amortized_likelihood.py` passed with 30 tests and the existing two NumPy constant-column warnings.
+  - The five FENIKS amortized experiment overlays and the supervised-prior
+    overlay load with `data_parallel: auto` and per-band zero-point calibration
+    disabled.
+  - `bash -n scripts/feniks_prior_ladder_h100.slurm` passed.
+  - `python -m euclid_dsps.cli amortized-train-diffsky --help` exposes
+    `--data-parallel {single,auto,pmap}`.
+  - `uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -W --keep-going -b html docs/source docs/build/html` passed.
+  - `git diff --check` passed.
+
+## 2026-07-07 Physical Jacobian Lens + FENIKS Prior-Learning Ladder
+
+- Status: completed for this implementation slice.
+- Goal: add a focused, testable Physical Jacobian Lens for the active
+  FENIKS NN+DSPS+NF pipeline, with reusable Jacobian diagnostics, a dedicated
+  sharded CLI, lightweight training/prior snapshot hooks, 18D-aware diagnostic
+  plots, experiment configs, and a Jean-Zay runbook.
+- Initial assumptions:
+  - Latent dimensionality must come from `latent_spec_from_config` and
+    checkpoint metadata, not from hard-coded FENIKS defaults.
+  - Band count must come from loaded config/data/filter definitions, not from
+    hard-coded 14-band assumptions.
+  - The main FENIKS production-like config currently uses 14 photometric bands
+    and the 18D `diffsky_dsps_closure_full` latent.
+  - Per-band zero-point calibration remains disabled for all new experiment
+    configs in this phase.
+  - The amortized ELBO prior term remains `E_q[logq - logp_beta]`
+    (`q_to_p`); this phase adds explicit metadata/logging but does not change
+    the KL convention.
+  - Multi-GPU training is not a default requirement. The mandatory parallel
+    path is sharded J-lens/inference diagnostics with single-GPU training as
+    the safe fallback.
+- Completed:
+  - Added shared photometric effective-sigma helper so likelihood and J-lens
+    use the same error-floor/jitter convention.
+  - Added `euclid_dsps.amortized.jacobian_lens` with generic decoder/AE
+    Jacobian core, full-SVD latent directions, exact nullspace accounting,
+    physical loadings, posterior-variance summaries, prior-score projections,
+    sharded DSPS wrapper outputs, compact top-k tables, JSON manifests, and
+    summary plots.
+  - Added `amortized-jacobian-lens-diffsky` and
+    `amortized-finalize-jacobian-lens` CLI commands.
+  - Added optional amortized training snapshots for encoder summaries,
+    posterior/prior theta samples, lightweight corner-style plots, KL/prior
+    metadata, and explicit deterministic/no-KL interpretation notes.
+  - Added supervised truth-prior snapshots and epoch checkpoints through a
+    guarded epoch callback.
+  - Added 18D FENIKS full/useful diagnostic ordering, capped corner rows, and
+    plot metadata for supervised prior diagnostics.
+  - Added RealNVP identity initialization and checkpoint sidecar metadata, plus
+    latent-spec checkpoint restoration checks for raw center/scale and
+    normalization.
+  - Added explicit amortized KL metadata/logging:
+    `E_q[logq - logp_beta]`, `q_to_p`, prior source, training flag, freeze
+    epochs, update schedule, and update phase.
+  - Added six experiment overlays under `configs/experiments/`, all with
+    per-band zero-point calibration disabled.
+  - Added `scripts/feniks_prior_ladder_h100.slurm` and
+    `docs/source/feniks_prior_ladder_jlens.rst` for the Jean-Zay ladder and
+    sharded J-lens path.
+- Remaining caveats:
+  - Superseded by the later “Amortized Multi-GPU Training” slice above: this
+    J-lens slice originally kept training single-GPU and only added sharded
+    J-lens diagnostics.
+  - In-training J-lens is intentionally not run inline; when requested in the
+    snapshot config it writes a `SKIPPED.json` pointer to the dedicated sharded
+    CLI path. This avoids recompiling DSPS Jacobians inside the training loop.
+  - Full FENIKS/H100 runtime smoke commands were not run locally; validation
+    below is CPU/unit/doc oriented.
+- Validation:
+  - `python -m compileall euclid_dsps scripts` passed.
+  - `bash -n scripts/feniks_prior_ladder_h100.slurm` passed.
+  - `uvx ruff check euclid_dsps/amortized/train.py euclid_dsps/amortized/jacobian_lens.py euclid_dsps/amortized/flows.py euclid_dsps/amortized/likelihood.py euclid_dsps/amortized/diagnostics.py euclid_dsps/prior_learning/train.py euclid_dsps/prior_learning/diagnostics.py euclid_dsps/cli.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py` passed.
+  - `python -m pytest -q tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py tests/test_amortized_diagnostics.py tests/test_cli.py tests/test_amortized_likelihood.py` passed with 23 tests and two pre-existing NumPy constant-column warnings.
+  - All six new experiment configs load through `euclid_dsps.config.load_config`
+    and report 14 bands with per-band zero-point calibration disabled.
+  - `python -m euclid_dsps.cli --help` passed and lists the new J-lens
+    commands.
+  - `uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -W --keep-going -b html docs/source docs/build/html` passed.
+  - `git diff --check` passed.
+- Verification follow-up:
+  - Superseded by the later “Amortized Multi-GPU Training” slice above; pmap
+    amortized training is now available as an optional path.
+  - Rechecked that sharded J-lens uses `--num-shards` / `--shard-index` and
+    `SLURM_ARRAY_TASK_COUNT` / `SLURM_ARRAY_TASK_ID`.
+  - Re-ran config loading for all six experiment overlays; each resolves with
+    14 bands and per-band zero-point calibration disabled.
+  - Re-ran `python -m compileall euclid_dsps scripts`, targeted `uvx ruff`,
+    targeted `pytest`, `bash -n scripts/feniks_prior_ladder_h100.slurm`,
+    `python -m euclid_dsps.cli --help`, Sphinx, and `git diff --check`; all
+    passed, with only the existing NumPy constant-column warnings in the
+    supervised prior diagnostic test.
+
 ## 2026-07-07 Active FENIKS Source Tree Cleanup
 
 - Status: completed.
