@@ -1,5 +1,192 @@
 # Plan
 
+## 2026-07-07 Active FENIKS Source Tree Cleanup
+
+- Status: completed.
+- Goal: move non-essential source, configs, scripts, docs, and tests to
+  `legacy/` so the active tree focuses on FENIKS synthetic data, supervised
+  and inferred prior learning, NN+DSPS+NF training/inference, MAP under learned
+  prior, direct MCLMC baselines, FS2 comparison, and HLTDS download/preparation.
+- Scope for this phase:
+  - Keep active package code needed by `diffsky-generate-dsps-closure`,
+    `diffsky-validate-dsps-closure`, `diffsky-plan-prior-workflow`,
+    `diffsky-train-supervised-prior`, `amortized-train-diffsky`,
+    `amortized-infer-diffsky`, `diffsky-map-adam-prior`, `posterior`, FS2
+    train/infer, and HLTDS `diffsky-*` data preparation commands.
+  - Move OpenUniverse, COSMOS SED helpers, deprecated facades, old HLTDS
+    experiment configs/scripts, reconstruction dashboards, and matching tests
+    out of the active package/test/doc surface.
+  - Preserve moved files under `legacy/` for reference rather than deleting
+    them.
+  - Keep `python -m pytest -q`, CLI help, Sphinx, bash syntax, and diff hygiene
+    green after the move.
+- Completed:
+  - Moved OpenUniverse, COSMOS SED reconstruction helpers, deprecated
+    pipeline/report/workflow facades, exact forward-closure runners, HLTDS
+    experiment matrices, reconstruction/ablation diagnostics, broad benchmark
+    scripts, and matching tests/docs/configs under `legacy/`.
+  - Reduced the active config surface to FENIKS generation/validation, FENIKS
+    supervised prior, FENIKS amortized NN+DSPS+NF, FS2 comparison, and HLTDS
+    download/preparation/debug configs.
+  - Replaced legacy module dependencies with small active helpers:
+    `synthetic_diffsky.truth_theta` for the 18D truth vector and
+    `amortized.redshift_metrics` for held-out photo-z/posterior diagnostics.
+  - Removed the active `cosmos_sed` default contract and OpenUniverse band
+    presets; PopCosmos/HLTDS semantics remain only where still required by the
+    active model/debug paths.
+  - Updated README, config docs, architecture docs, API docs, run setup,
+    testing guidance, and the FENIKS workflow planner so validation uses the
+    same FENIKS generation config instead of legacy `trueparam_closure` configs.
+  - Relaxed and recorded the FENIKS DSPS recomputation tolerance to `5e-4`
+    mag/relative flux so CPU validation remains reproducible while still being
+    far below the photometric noise scale.
+- Validation:
+  - `python -m euclid_dsps.cli --help` passed.
+  - `bash -n` passed for all active H100 launchers.
+  - `uvx ruff check euclid_dsps tests scripts` passed.
+  - `python -m compileall euclid_dsps scripts tests` passed.
+  - `python -m pytest -q` passed with `279 passed, 9 skipped`.
+  - `uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -W --keep-going -b html docs/source docs/build/html` passed.
+  - `python -m euclid_dsps.cli --config configs/diffsky_synthetic_feniks_260617_50k.yaml diffsky-plan-prior-workflow --out /tmp/feniks_prior_workflow_review_clean` passed and reports the 40k/5k/5k dataset contract ready.
+  - `env JAX_PLATFORMS=cpu PYTHONPATH=. conda run -n shine python -m euclid_dsps.cli --config configs/diffsky_synthetic_feniks_260617_50k.yaml diffsky-validate-dsps-closure --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure --sample-size 16 --batch-size 16 --runtime cpu` passed.
+  - `git diff --check` passed.
+
+## 2026-07-07 FENIKS Primary Surface Cleanup
+
+- Status: completed for this cleanup slice.
+- Goal: make FENIKS the default controlled dataset/experiment across the
+  runnable prior-learning surface while keeping HLTDS and FS2 only as explicit
+  debug/reference paths.
+- Scope for this phase:
+  - Remove HLTDS defaults and implicit HLTDS dataset rebuilds from the H100
+    launchers used by the FENIKS prior-learning ladder.
+  - Keep launchers fail-fast: if a FENIKS split/checkpoint is missing, the job
+    should stop rather than synthesize a different experiment.
+  - Make README and core docs show FENIKS commands as the copy-paste surface.
+  - Remove small prior-learning duplication that obscures the train/validation
+    contract.
+  - Rename the planner readiness text so existing dataset-contract readiness
+    is not confused with downstream checkpoint availability.
+- Completed:
+  - Updated `scripts/diffsky_amortized_train_h100.slurm`,
+    `scripts/diffsky_amortized_infer_h100.slurm`,
+    `scripts/diffsky_map_adam_prior_h100.slurm`,
+    `scripts/diffsky_flat_mclmc_calibration_h100.slurm`, and
+    `scripts/diffsky_inferred_prior_h100.slurm` to default to FENIKS configs,
+    splits, output names, and checkpoints.
+  - Removed the implicit HLTDS redshift-subset rebuild path from amortized
+    inference.
+  - Added shared prior-learning split helper in
+    `euclid_dsps/prior_learning/splits.py`.
+  - Rewrote the README around the FENIKS production ladder and relabeled
+    HLTDS/FS2 as debug/reference.
+  - Updated `docs/source/index.rst`, `docs/source/prior_learning.rst`, and
+    `docs/source/amortized_inference.rst` so copy-paste examples point to
+    FENIKS and remaining HLTDS material is marked debug/reference.
+  - Updated the HLTDS config test to check direct/projected/missing truth
+    semantics rather than pretending the debug config has only a basic direct
+    truth set.
+  - Regenerated the planner in `/tmp/feniks_prior_workflow_review`; it reports
+    `Dataset contract ready: true`, 40k/5k/5k splits present, and downstream
+    prior/NN/MAP stages waiting until checkpoints exist.
+- Remaining gap:
+  - Direct MCLMC still uses the configured physical priors as a calibration
+    baseline. MAP under the learned RealNVP prior is available; true MCLMC
+    under the learned NF prior still needs a posterior-target extension.
+- Validation:
+  - `python -m compileall euclid_dsps/prior_learning euclid_dsps/cli.py scripts tests/test_prior_learning_workflow.py tests/test_cli.py tests/test_config.py` passed.
+  - `bash -n scripts/diffsky_amortized_train_h100.slurm scripts/diffsky_amortized_infer_h100.slurm scripts/diffsky_map_adam_prior_h100.slurm scripts/diffsky_flat_mclmc_calibration_h100.slurm scripts/diffsky_inferred_prior_h100.slurm` passed.
+  - `uvx ruff check euclid_dsps/prior_learning tests/test_prior_learning_workflow.py tests/test_cli.py tests/test_config.py` passed.
+  - `python -m pytest -q tests/test_prior_learning_workflow.py tests/test_cli.py tests/test_prior_learning_supervised.py tests/test_prior_learning_inferred.py` passed with `13 passed` and two NumPy constant-column warnings.
+  - `python -m pytest -q tests/test_config.py::test_diffsky_hltds_simple_config_marks_debug_truth_contract` passed.
+  - `python -m euclid_dsps.cli --config configs/diffsky_synthetic_feniks_260617_50k.yaml diffsky-plan-prior-workflow --out /tmp/feniks_prior_workflow_review` passed.
+  - `uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -W --keep-going -b html docs/source docs/build/html` passed.
+  - `python -m euclid_dsps.cli --help` passed.
+  - `python -m pytest -q` passed with `387 passed, 10 skipped`.
+  - `git diff --check` passed.
+
+## 2026-07-07 FENIKS Prior Workflow Architecture Cleanup
+
+- Status: completed for this cleanup slice; broader architecture goal remains
+  active.
+- Goal: make the new clean FENIKS/DSPS closure dataset easy to use for the
+  full inference ladder: supervised NF prior on closure truths, amortized
+  NN+DSPS+NF training, post-hoc NF priors from MAP/MCLMC, and MAP/MCLMC
+  redshift inference under a learned prior.
+- Scope for this phase:
+  - Create a dedicated branch for the cleanup work.
+  - Add a code-level workflow contract that resolves the configured FENIKS
+    dataset splits, truth schema, prior checkpoints, NN checkpoints, and
+    command recipes before expensive GPU jobs are launched.
+  - Keep the existing prior-learning, amortized, MAP-Adam, and posterior/MCLMC
+    implementations working; this phase is a discovery/orchestration cleanup,
+    not a rewrite of the science kernels.
+  - Add focused tests and docs so the entry point is understandable from the
+    CLI and production runbook.
+- Completed:
+  - Created branch `feature/feniks-prior-workflow-cleanup`.
+  - Added `diffsky-plan-prior-workflow`, backed by
+    `euclid_dsps.prior_learning.workflow`, to audit the FENIKS dataset splits,
+    18D closure truth schema, validation artifacts, expected prior/NN
+    checkpoints, and launch order before expensive GPU jobs.
+  - The planner writes `workflow_plan.md` and `workflow_plan.json` with
+    copy-paste commands for generation, validation, supervised NF prior,
+    NN+DSPS+NF training, held-out amortized inference, MAP under learned prior,
+    direct MCLMC calibration, and post-hoc inferred-prior training.
+  - Added explicit `--dataset` overrides for `amortized-train-diffsky`,
+    `amortized-infer-diffsky`, `diffsky-map-adam-prior`, and `posterior`, so
+    held-out validation/test parquets no longer require editing config files.
+  - Updated H100 launchers to pass dataset/prior-checkpoint overrides through
+    to the CLI; the MCLMC launcher can now create a small rowset from
+    `DATASET` when no rowset file is supplied.
+  - Documented the preflight in `README.md`,
+    `docs/source/production.rst`, and `docs/source/prior_learning.rst`.
+  - Ran the planner against the real local FENIKS config; it confirms the
+    40k/5k/5k dataset and validation artifacts are present and the supervised
+    prior stage is the next ready stage. The prior and amortized checkpoints
+    are not present yet, so downstream NN/MAP stages are correctly marked
+    waiting.
+- Remaining gap:
+  - Direct MCLMC still uses the configured physical priors as a calibration
+    baseline. MAP under the learned RealNVP prior is available; true MCLMC
+    under the learned NF prior still needs a posterior-target extension.
+- Validation:
+  - `python -m compileall euclid_dsps/prior_learning euclid_dsps/cli.py scripts tests/test_prior_learning_workflow.py tests/test_cli.py` passed.
+  - `python -m pytest -q tests/test_prior_learning_workflow.py tests/test_cli.py` passed with `5 passed`.
+  - `python -m pytest -q tests/test_prior_learning_supervised.py tests/test_prior_learning_inferred.py tests/test_prior_learning_workflow.py` passed with `10 passed` and two constant-column NumPy warnings.
+  - `python -m pytest -q tests/test_cli.py tests/test_map_prior_sweep.py tests/test_amortized_prior_source.py` passed with `8 passed`.
+  - `python -m pytest -q tests/test_synthetic_diffsky_closure.py tests/test_cli.py tests/test_prior_learning_workflow.py` passed with `22 passed, 2 skipped`.
+  - `bash -n scripts/diffsky_amortized_train_h100.slurm scripts/diffsky_amortized_infer_h100.slurm scripts/diffsky_map_adam_prior_h100.slurm scripts/diffsky_flat_mclmc_calibration_h100.slurm` passed.
+  - `uv run --with sphinx --with sphinx-rtd-theme python -m sphinx -W --keep-going -b html docs/source docs/build/html` passed.
+  - `git diff --check` passed.
+
+## 2026-07-07 FENIKS Diffsky Feedback Bundle
+
+- Status: completed.
+- Goal: assemble a lightweight share folder for Andrew/Kumail with the
+  FENIKS/DSPS closure generation contract, validation evidence, FS2 comparison
+  diagnostics, key plots, and a compact parquet sample, without copying the
+  full generated dataset into an email-sized package.
+- Scope:
+  - Include the exact generation/closure configs, schema, manifest, validation
+    report, population summary, FS2 comparison reports, and selected plots.
+  - Add a small sampled parquet preserving truths, weights, provenance, and
+    photometry columns for quick external inspection.
+  - Add a README explaining that Diffsky/FENIKS is used for the latent
+    population while euclid_dsps regenerates closure photometry.
+- Completed:
+  - Created `outputs/share/feniks_diffsky_feedback_20260707/` with configs,
+    metadata, validation report, population diagnostics, corrected FS2 phz1
+    comparison reports, selected plots, and two 5k-row parquet samples.
+  - Added `README.md` and `FILELIST.txt` inside the bundle so it is
+    self-describing when shared externally.
+  - Created `outputs/share/feniks_diffsky_feedback_20260707.tar.gz` as a
+    15 MB archive suitable for transfer.
+- Validation:
+  - Verified the share folder is 17 MB and the archive is 15 MB.
+  - Verified the archive file listing contains the expected configs,
+    diagnostics, plots, metadata, and samples.
+
 ## 2026-07-07 FS2 Comparison Unit Fix
 
 - Status: completed.
