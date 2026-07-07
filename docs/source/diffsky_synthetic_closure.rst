@@ -384,7 +384,7 @@ Validate the generated dataset:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
      diffsky-validate-dsps-closure \
      --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure
 
@@ -413,7 +413,7 @@ Validate the 18-band inference-ready layer mirrored at the dataset root:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure_18band.yaml \
+     --config configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml \
      diffsky-validate-dsps-closure \
      --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure_18band \
      --sample-size 512 \
@@ -451,17 +451,6 @@ In that case ``duplication_gate: warn_after_max_shards`` lets the run continue
 only if the selected-pool-size and ESS gates pass. The realized pool and final
 duplication fractions are recorded in ``manifest.yaml`` and should be reported
 with any science use.
-
-Run exact forward closure on the test set:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml \
-     diffsky-forward-closure \
-     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
-     --limit 1024 \
-     --out outputs/runs/diffsky_synthetic_feniks_trueparam_closure_smoke
 
 Train the supervised multivariate prior:
 

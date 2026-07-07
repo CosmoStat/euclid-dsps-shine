@@ -35,7 +35,7 @@ Where to Start
    * - Run amortized inference
      - :doc:`amortized_inference`
      - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
-   * - Use HLTDS reference data
+   * - Use HLTDS/FS2 debug references
      - :doc:`data_download`, :doc:`diffsky_dataset`
      - ``configs/diffsky_dataset_hltds_04_14.yaml``
 
@@ -51,8 +51,8 @@ Workflow Map
      - What it owns
      - Primary outputs
    * - Data contract
-     - Synthetic closure truth, HLTDS reference data, prepared parquet rows,
-       units, truth semantics, and error-model provenance.
+     - FENIKS closure truth, prepared parquet rows, units, truth semantics,
+       and error-model provenance. HLTDS/FS2 are debug references.
      - Manifests, schema files, inventory reports, integrity reports.
    * - Forward model
      - The DSPS boundary, filter handling, SSP assets, calibration terms, and
@@ -102,12 +102,10 @@ parameters physically.
 
    diffsky_dataset
    diffsky_synthetic_closure
-   diffsky_forward_closure
    forward_model
    prior_learning
    amortized_inference
    science_assessment
-   cosmos_sed
    ssp_compression
    catalog_columns
 

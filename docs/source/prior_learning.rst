@@ -69,62 +69,26 @@ Train the production prior after closure validation passes:
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-plan-prior-workflow \
+     --out outputs/reports/feniks_prior_workflow
+
+   python -m euclid_dsps.cli \
      --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
      diffsky-train-supervised-prior \
      --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
 
-HLTDS reference schemas
-~~~~~~~~~~~~~~~~~~~~~~~
-
-``diffsky_truth_basic`` uses the minimum available truth columns:
-
-.. code-block:: text
-
-   redshift_true        -> z_obs
-   logsm_true           -> log10_stellar_mass
-   logssfr_true         -> log10_ssfr_at_obs
-
-If ``logssfr_true`` is unavailable but ``logsfr_true`` exists, it uses:
-
-.. code-block:: text
-
-   logsfr_true          -> log10_sfr_at_obs
-
-Dust columns are included only when present:
-
-.. code-block:: text
-
-   dust_av or dust_av_true
-   dust_delta
-
-``diffsky_truth_extended`` starts from the basic schema and adds available
-``diffstar_*``, ``diffmah_*``, ``dust_*``, and ``burst_*`` generated-truth
-columns.
-
-Missing optional columns are reported. With ``missing_policy: reduce``, the
-schema is reduced to available columns. With ``missing_policy: fail``, missing
-optional generated-truth columns stop the run explicitly.
+The workflow plan is a cheap preflight. It reads the configured parquet schemas
+and row counts, verifies that ``diffsky_dsps_closure_full`` can resolve all 18
+truth parameters, and writes the expected supervised-prior, NN+DSPS+NF,
+MAP-under-prior, MCLMC-baseline, and post-hoc inferred-prior commands.
 
 Configs
 -------
 
-Production synthetic closure prior:
-
 .. code-block:: text
 
    configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml
-
-Basic supervised RealNVP prior:
-
-.. code-block:: text
-
-   configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml
-
-Extended supervised RealNVP prior:
-
-.. code-block:: text
-
-   configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml
 
 Train
 -----
@@ -132,11 +96,9 @@ Train
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
+     --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
      diffsky-train-supervised-prior \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
-     --schema diffsky_truth_basic \
-     --out outputs/runs/diffsky_supervised_prior_basic
+     --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
 
 The run writes:
 
@@ -159,11 +121,11 @@ Sample
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
+     --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
      diffsky-sample-supervised-prior \
-     --checkpoint outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx \
-     --n-samples 8192 \
-     --out outputs/runs/diffsky_supervised_prior_basic_samples
+     --checkpoint outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp/checkpoints/best.eqx \
+     --n-samples 50000 \
+     --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp_samples
 
 Report
 ------
@@ -171,10 +133,10 @@ Report
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
+     --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
      diffsky-supervised-prior-report \
-     --run outputs/runs/diffsky_supervised_prior_basic \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
+     --run outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet
 
 Diagnostics include per-parameter histogram comparisons, KS distance,
 Wasserstein distance, mean/std/median residuals, a z/logM/logSFR pair plot when

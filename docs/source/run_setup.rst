@@ -1,61 +1,47 @@
-Run the Pipeline
-================
+Run the Active Workflow
+=======================
 
-Public configs
+Scope
+-----
+
+The active source tree supports one science ladder:
+
+1. Generate the synthetic Diffsky/FENIKS DSPS-closure dataset.
+2. Validate same-parameter closure on held-out FENIKS rows.
+3. Learn a supervised RealNVP prior on the full 18D closure truth vector.
+4. Train and run NN+DSPS+NF amortized inference with that prior.
+5. Run MAP under the learned prior and small MCLMC baselines when needed.
+
+HLTDS remains only a download/preparation/debug reference. FS2 remains the
+Euclid comparison path.
+
+Active Configs
 --------------
-
-The public config surface is intentionally small. The production path is the
-synthetic Diffsky/FENIKS DSPS-closure workflow; the HLTDS low-z path is kept as
-reference and debug infrastructure.
 
 .. list-table::
    :header-rows: 1
 
    * - Config
-     - Use
-   * - ``configs/fs2_gpu.yaml``
-     - Euclid FS2 MAP/posterior baseline on GPU.
-   * - ``configs/diffsky_dataset_hltds_04_14.yaml``
-     - Diffsky HLTDS 04/14 dataset preparation and integrity-report config.
-   * - ``configs/diffsky_hltds_04_14_simple_gpu.yaml``
-     - Legacy simple Diffsky HLTDS 04/14/2026 DSPS MAP debug fit on GPU.
-   * - ``configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml``
-     - Legacy closure/debug fit with redshift fixed to ``redshift_true``.
-   * - ``configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml``
-     - Supervised RealNVP prior on basic Diffsky truth parameters.
-   * - ``configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml``
-     - Supervised RealNVP prior on available Diffstar/Diffmah/dust generated truths.
-   * - ``configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml``
-     - Same-parameter Diffsky truth-to-photometry forward closure.
+     - Role
    * - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
-     - Synthetic Diffsky/FENIKS weighted-proposal to DSPS-closure dataset
-       generation.
-   * - ``configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml``
-     - Exact true-parameter closure validation for the synthetic FENIKS
-       dataset.
+     - Generate and validate the 14-band synthetic FENIKS DSPS-closure train/validation/test splits.
+   * - ``configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml``
+     - Generate and validate the LSST+Euclid+Roman 18-band FENIKS comparison sample.
    * - ``configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml``
-     - Supervised RealNVP prior over the full 18D synthetic closure truths.
+     - Train the supervised 18D FENIKS RealNVP prior.
    * - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
-     - 18D amortized closure inference config using the supervised FENIKS
-       prior checkpoint.
+     - Train and infer with the 18D NN+DSPS+NF model.
+   * - ``configs/diffsky_dataset_hltds_04_14.yaml``
+     - Rebuild and validate the low-z HLTDS debug/reference parquet.
+   * - ``configs/diffsky_dataset_hltds_03_31_zmax335_m5depth.yaml``
+     - Rebuild the higher-redshift HLTDS truth-rich debug/reference parquet.
+   * - ``configs/fs2_gpu.yaml``
+     - Euclid FS2 MAP/posterior comparison baseline.
    * - ``configs/amortized_fs2_realnvp.yaml``
-     - FS2 amortized encoder plus learned RealNVP prior.
-   * - ``configs/amortized_diffsky_hltds_standard_normal_gpu.yaml``
-     - Diffsky amortized inference with fixed standard normal prior.
-   * - ``configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml``
-     - Diffsky amortized inference with frozen supervised RealNVP prior.
-   * - ``configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml``
-     - Diffsky amortized inference with jointly trained RealNVP prior.
+     - FS2 amortized comparison baseline.
 
-Old Diffstar, OpenUniverse fit-ready, non-GPU, and experimental ablation configs
-are not the main public path. Use :doc:`production` for the complete production
-runbook and acceptance gates.
-
-GPU runtime
------------
-
-All public fit configs request CUDA. In the ``shine`` environment, set the
-runtime explicitly before launching long jobs:
+Preflight
+---------
 
 .. code-block:: bash
 
@@ -64,27 +50,13 @@ runtime explicitly before launching long jobs:
    export XLA_PYTHON_CLIENT_PREALLOCATE=false
    export TF_GPU_ALLOCATOR=cuda_malloc_async
 
-Check the visible devices:
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-plan-prior-workflow \
+     --out outputs/reports/feniks_prior_workflow
 
-.. code-block:: bash
-
-   python -c "import jax; print(jax.default_backend()); print(jax.devices())"
-
-If this prints only CPU devices, fix the JAX/CUDA environment before launching
-fits. The configs use ``runtime.require_gpu: true`` so production commands fail
-fast instead of silently falling back to CPU.
-
-Production FENIKS/DSPS Closure
-------------------------------
-
-The production dataset is generated from independent weighted Diffsky/FENIKS
-proposal pools and then re-photometered with this repository's DSPS boundary.
-The final catalogues are strict closure catalogues: one truth column per
-``DIFFSKY_BASIC_PARAMETER_NAMES`` parameter, true DSPS fluxes, noisy fluxes,
-positive flux errors, masks, manifest, schema, diagnostics, and validation
-report.
-
-Smoke generation after code or dependency changes:
+Generate And Validate FENIKS
+----------------------------
 
 .. code-block:: bash
 
@@ -94,7 +66,14 @@ Smoke generation after code or dependency changes:
      --smoke \
      --overwrite
 
-H100 production generation and validation:
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-validate-dsps-closure \
+     --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
+     --runtime cpu \
+     --sample-size 64
+
+Jean-Zay launchers:
 
 .. code-block:: bash
 
@@ -104,19 +83,8 @@ H100 production generation and validation:
    sbatch --dependency=afterok:${GEN_JOB} --export=ALL,STAGE=validate \
      scripts/diffsky_synthetic_feniks_50k_h100.slurm
 
-Direct validation:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml \
-     diffsky-validate-dsps-closure \
-     --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
-     --sample-size 256 \
-     --batch-size 256 \
-     --runtime gpu
-
-Then train the closure prior and amortized inference model:
+Learn The Prior
+---------------
 
 .. code-block:: bash
 
@@ -125,490 +93,55 @@ Then train the closure prior and amortized inference model:
      diffsky-train-supervised-prior \
      --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
 
+The config uses ``missing_policy: fail`` and the
+``diffsky_dsps_closure_full`` schema. Missing truth columns are blockers, not
+silent reductions.
+
+Train NN+DSPS+NF
+----------------
+
+.. code-block:: bash
+
    python -m euclid_dsps.cli \
      --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
      amortized-train-diffsky \
      --out outputs/runs/amortized_diffsky_synthetic_feniks_full
 
-Use :doc:`production` for the complete diagram, data-contract explanation,
-acceptance checklist, and held-out evaluation commands.
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+     amortized-infer-diffsky \
+     --checkpoint outputs/runs/amortized_diffsky_synthetic_feniks_full/checkpoints/best.eqx \
+     --out outputs/runs/amortized_diffsky_synthetic_feniks_full_test_infer \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet
 
-Diffsky HLTDS dataset
----------------------
-
-This is a reference/debug path, not the strict 18D production closure dataset.
-Use it to rebuild HLTDS reference data, run legacy MAP checks, compare
-low-redshift distributions, and diagnose projected-truth behavior.
-
-The fast reconstruction/debug path uses the prepared low-z projected-truth file:
-
-.. code-block:: text
-
-   Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
-
-and the HLTDS SSP asset:
-
-.. code-block:: text
-
-   Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
-
-Build or refresh the low-z flux-error intermediate and its reports from the
-full 04/14 prepared source parquet with:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli diffsky-redshift-subset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet \
-     --out Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet \
-     --redshift-min 0.0 \
-     --redshift-max 0.35 \
-     --error-model m5_depth
-
-This writes ``78651`` objects in the current local build, companion
-manifest/schema/truth reports, and the redshift/truth/error distribution plots.
-The old ``*_photometry_truth_noerr.parquet`` file is a historical source
-artifact and is not the default rebuild input.
-
-Then add the DSPS projected-truth columns used by the configs and supervisor
-notebook:
-
-.. code-block:: bash
-
-   conda activate shine
-   python scripts/build_diffsky_lowz_projected_truth_dataset.py --force
-
-The final default file is
-``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet``.
-The companion
-``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.sfr_consistency.csv``
-checks catalog ``logsfr_true``/``logssfr_true`` against the projected
-PopCosmos SFR bins.
-The 20k parquet supplied for supervisor review is
-``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth_nokl_trainval20k.parquet``.
-
-The canonical truth-rich dataset for population-truth, supervised-prior, and
-projection diagnostics is:
-
-.. code-block:: text
-
-   Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet
-
-Build it from the 03/31 high-redshift source with:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli diffsky-redshift-subset \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet \
-     --out Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet \
-     --redshift-min 0.0 \
-     --redshift-max 3.35 \
-     --error-model m5_depth
-
-The local source reaches ``z = 3.0319715`` and writes ``493903`` objects in the
-current build. Use this dataset when generated Diffstar/Diffmah/dust truth is
-the scientific reference; use the low-z subset when the goal is a smaller
-continuous-redshift smoke/debug run.
-
-The H100 Slurm entry points run the low-z flux-error preflight automatically.
-If ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
-is missing on Jean-Zay but
-``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet``
-exists, they rebuild the ``z < 0.35`` subset before training or inference.
-The projected-truth parquet remains the default catalog path; rebuild it with
-``scripts/build_diffsky_lowz_projected_truth_dataset.py`` after the flux-error
-intermediate exists. If both source files are missing, copy the local projected
-truth parquet to Jean-Zay or build the full source parquet first.
-
-Supervised prior learning
--------------------------
-
-Train the basic supervised prior directly on truth parameters:
+MAP And MCLMC
+-------------
 
 .. code-block:: bash
 
    python -m euclid_dsps.cli \
-     --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
-     diffsky-train-supervised-prior \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
-     --out outputs/runs/diffsky_supervised_prior_basic
-
-Then sample and report:
-
-.. code-block:: bash
+     --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+     diffsky-map-adam-prior \
+     --checkpoint outputs/runs/amortized_diffsky_synthetic_feniks_full/checkpoints/best.eqx \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+     --out outputs/runs/map_diffsky_synthetic_feniks_under_prior
 
    python -m euclid_dsps.cli \
-     --config configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml \
-     diffsky-sample-supervised-prior \
-     --checkpoint outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
-     --out outputs/runs/diffsky_supervised_prior_basic
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     posterior \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+     --sampler mclmc \
+     --limit 4 \
+     --out outputs/runs/mclmc_diffsky_synthetic_feniks_flat
 
-Same-parameter forward closure
-------------------------------
-
-Run the gatekeeper closure before interpreting photometric posteriors as
-physical recovery:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml \
-     diffsky-forward-closure \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
-     --limit 1024 \
-     --out outputs/runs/diffsky_trueparam_forward_closure
-
-This maps Diffsky generated-truth columns into the ``diffsky_basic`` forward
-model and compares predicted magnitudes to the HLTDS photometry. Missing
-Diffstar/Diffmah columns fail clearly unless the config explicitly allows
-partial truth. Fixed nuisance metallicity is reported as fixed nuisance, not as
-truth.
-
-Diffsky HLTDS simple fit
+HLTDS And FS2 References
 ------------------------
 
-This legacy fit remains useful as a MAP smoke/debug path.
-
-Small smoke fit:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_hltds_04_14_simple_gpu.yaml \
-     fit \
-     --limit 16 \
-     --batch-size 16 \
-     --fit-maxiter 80 \
-     --sed-samples 0 \
-     --reporting-level light \
-     --out outputs/runs/diffsky_hltds_simple_smoke_n16
-
-Larger batch:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_hltds_04_14_simple_gpu.yaml \
-     fit \
-     --limit 1000 \
-     --batch-size 128 \
-     --fit-maxiter 220 \
-     --sed-samples 0 \
-     --reporting-level light \
-     --out outputs/runs/diffsky_hltds_simple_n1000
-
-Regenerate the Diffsky recovery report after a run:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli diffsky-fit-report \
-     --run outputs/runs/diffsky_hltds_simple_n1000 \
-     --config configs/diffsky_hltds_04_14_simple_gpu.yaml \
-     --label batch_fit \
-     --reporting-level light
-
-The simple config fits the HLTDS 12D PopCosmos-like proxy parameter vector:
-
-.. code-block:: text
-
-   z_obs
-   log10_stellar_mass
-   dlog10_sfr_1 ... dlog10_sfr_6
-   log10_stellar_metallicity
-   tau2
-   dust_index_n
-   tau1_over_tau2
-
-It does not fit Diffstar/Diffmah latents, AGN parameters, gas ionization, or
-gas-metallicity/gas-ionization parameters.
-
-Diffsky fixed-redshift closure
-------------------------------
-
-Use this when redshift collapse or degeneracy dominates a free-redshift run:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml \
-     fit \
-     --limit 128 \
-     --batch-size 128 \
-     --fit-maxiter 180 \
-     --sed-samples 0 \
-     --reporting-level light \
-     --out outputs/runs/diffsky_hltds_fixedz_closure_n128
-
-This config reads ``redshift_true`` as the fixed catalog redshift and fits:
-
-.. code-block:: text
-
-   log10_stellar_mass
-   dlog10_sfr_1 ... dlog10_sfr_6
-   log10_stellar_metallicity
-   tau2
-   dust_index_n
-   tau1_over_tau2
-
-It is a model/photometry closure diagnostic, not a blind photo-z experiment.
-
-Euclid FS2 Fit
---------------
-
-FS2 remains supported as the Euclid comparison and domain-shift dataset:
-
-.. code-block:: text
-
-   Data/Euclid FS2 LC galaxy catalog_phz1.parquet
-
-One-row smoke:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/fs2_gpu.yaml \
-     fit \
-     --index 0 \
-     --fit-maxiter 20 \
-     --sed-samples 1 \
-     --out outputs/runs/fs2_gpu_one_short
-
-Small batch:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/fs2_gpu.yaml \
-     fit \
-     --limit 64 \
-     --batch-size 64 \
-     --fit-maxiter 200 \
-     --sed-samples 0 \
-     --reporting-level light \
-     --out outputs/runs/fs2_gpu_n64
-
-Amortized Inference
--------------------
-
-Train the FS2 amortized model with a learned RealNVP prior:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/amortized_fs2_realnvp.yaml \
-     amortized-train-fs2 \
-     --limit 10000 \
-     --batch-size 64 \
-     --epochs 5 \
-     --n-samples 2 \
-     --out outputs/runs/amortized_fs2_realnvp_debug
-
-Run amortized inference:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/amortized_fs2_realnvp.yaml \
-     amortized-infer-fs2 \
-     --checkpoint outputs/runs/amortized_fs2_realnvp_debug/checkpoints/best.eqx \
-     --limit 10000 \
-     --batch-size 64 \
-     --posterior-samples 64 \
-     --out outputs/runs/amortized_fs2_realnvp_infer
-
-Train Diffsky amortized inference with one of the three prior sources:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_standard_normal_gpu.yaml \
-     amortized-train-diffsky \
-     --limit 10000 \
-     --batch-size 64 \
-     --epochs 10 \
-     --n-samples 2 \
-     --out outputs/runs/amortized_diffsky_standard_normal
-
-   python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml \
-     amortized-train-diffsky \
-     --limit 10000 \
-     --batch-size 64 \
-     --epochs 10 \
-     --n-samples 2 \
-     --out outputs/runs/amortized_diffsky_supervised_prior
-
-   python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
-     amortized-train-diffsky \
-     --limit 10000 \
-     --batch-size 64 \
-     --epochs 10 \
-     --n-samples 2 \
-     --out outputs/runs/amortized_diffsky_joint_realnvp
-
-The supervised-prior config expects a checkpoint produced by the supervised
-prior workflow and keeps it frozen unless ``train_jointly`` is explicitly set
-true.
-
-Historical HLTDS No-KL Autoencoder Sanity
------------------------------------------
-
-This is a legacy HLTDS diagnostic for the continuous low-z projected-truth
-dataset. It is useful when debugging encoder/decoder reconstruction, but it is
-not part of the FENIKS/DSPS production closure workflow. The KL term is
-disabled and the prior is frozen, so the relevant question is whether encoder
-plus DSPS decoder can reconstruct the input fluxes:
-
-.. code-block:: bash
-
-   sbatch --export=ALL,LIMIT=10000,EPOCHS=12,BATCH_SIZE=128,JAX_BATCH_SIZE=128 \
-     scripts/diffsky_autoencoder_nokl_h100.slurm
-
-The script trains with
-``configs/experiments/diffsky_hltds_autoencoder_nokl_h100.yaml`` and then runs
-inference on the best checkpoint. It also rebuilds the ``78651`` object
-``z < 0.35`` flux-error intermediate on Jean-Zay if that intermediate parquet
-is missing and the full source parquet exists; the final default modeling file
-is the projected-truth parquet. Inspect:
-
-.. code-block:: text
-
-   outputs/runs/<RUN_NAME>/training_log.csv
-   outputs/runs/<RUN_NAME>/feature_stats.json
-   outputs/runs/<RUN_NAME>/training_summary.json
-   outputs/runs/<RUN_NAME>_infer/posterior_predictive_residual_summary.parquet
-   outputs/runs/<RUN_NAME>_infer/posterior_predictive_normalized_residual_hist.png
-   outputs/runs/<RUN_NAME>_infer/posterior_predictive_normalized_residual_hist_by_band.png
-   outputs/runs/<RUN_NAME>_infer/posterior_predictive_residuals_by_band.png
-   outputs/runs/<RUN_NAME>_infer/posterior_predictive_normalized_residual_tails.csv
-
-The main pass/fail check is the distribution of
-``(flux_in - flux_out) / sigma_eff``. A useful first target is most median
-band residuals inside ``[-3, 3]`` without long asymmetric tails.
-
-Historical Supervisor no-KL package
------------------------------------
-
-The zip-ready supervisor bundle is written under:
-
-.. code-block:: text
-
-   outputs/supervisor_package/diffsky_nokl_lowz_baseline/
-
-It contains the full 78651-row projected-truth low-z parquet, the exact 20000
-row train/validation subset used by
-``diffsky_autoencoder_nokl_m5sys_z035_rand20k_e30_b128``, the best no-KL
-weights, feature statistics, local config with relative package paths, HLTDS
-SSP/filter assets, and
-``notebooks/diffsky_baseline_nokl_minimal.ipynb``. Open the notebook from this
-directory or set ``DIFFSKY_PACKAGE_DIR`` to the package path.
-
-Posterior Predictive Residuals On Jean-Zay
-------------------------------------------
-
-To recompute the posterior-predictive residual plots for an existing H100
-checkpoint, rerun sharded inference. Large per-sample flux and residual
-parquets are disabled by default, but compact residual summaries and plots are
-written:
-
-.. code-block:: bash
-
-   sbatch --export=ALL,TRAIN_RUN=outputs/runs/diffsky_realnvp_z035_30k_e20,LIMIT=5000,POSTERIOR_SAMPLES=128 \
-     scripts/diffsky_amortized_infer_h100.slurm
-
-Useful overrides:
-
-.. code-block:: bash
-
-   sbatch --export=ALL,CHECKPOINT=outputs/runs/<RUN>/checkpoints/epoch_0012.eqx,FEATURE_STATS=outputs/runs/<RUN>/feature_stats.json,RUN_NAME=<RUN>_infer_residuals \
-     scripts/diffsky_amortized_infer_h100.slurm
-
-The files to inspect are the same residual summary and residual plot files
-listed in the no-KL section. If only the plot aggregation was interrupted after
-all shards completed, run:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml \
-     amortized-finalize-inference \
-     --out outputs/runs/<RUN_NAME>
-
-SSP and Dust Audit
-------------------
-
-For the written note on SSP/dust consistency, generate:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli \
-     --config configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml \
-     diffsky-dust-ssp-audit \
-     --out outputs/reports/diffsky_dust_ssp_audit
-
-Inspect:
-
-.. code-block:: text
-
-   outputs/reports/diffsky_dust_ssp_audit/dust_ssp_audit.md
-   outputs/reports/diffsky_dust_ssp_audit/dust_ssp_audit.json
-   outputs/reports/diffsky_dust_ssp_audit/dust_transmission_grid.png
-
-Redshift Ablation
------------------
-
-After running inference for the standard-normal, supervised-prior, and
-joint-prior modes, compare redshift posterior calibration:
-
-.. code-block:: bash
-
-   python -m euclid_dsps.cli diffsky-redshift-ablation \
-     --dataset Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet \
-     --run standard_normal=outputs/runs/amortized_diffsky_standard_normal_infer \
-     --run supervised_prior=outputs/runs/amortized_diffsky_supervised_prior_infer \
-     --run joint_realnvp=outputs/runs/amortized_diffsky_joint_realnvp_infer \
-     --out outputs/runs/diffsky_redshift_ablation
-
-The report compares posterior median, PIT, 68/95 percent coverage, posterior
-width, RMSE, sigma MAD, bias, and outlier fraction.
-
-Historical HLTDS Reconstruction Baseline Matrix On Jean-Zay
------------------------------------------------------------
-
-The H100 wrapper ``scripts/diffsky_reconstruction_baselines_h100.slurm`` runs
-one reconstruction task at a time from a fixed rowset. Typical sequence:
-
-.. code-block:: bash
-
-   ROWSETS=$(sbatch --parsable --export=ALL,TASK=rowsets scripts/diffsky_reconstruction_baselines_h100.slurm)
-   NN=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=nn-infer,ROWSET=worst_500 scripts/diffsky_reconstruction_baselines_h100.slurm)
-   MAP=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=map,ROWSET=worst_500,MAP_BATCH_SIZE=256,MAP_MAXITER=200 scripts/diffsky_reconstruction_baselines_h100.slurm)
-   MCLMC=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=mclmc,ROWSET=worst_100,MCLMC_BATCH_SIZE=8,MCLMC_NUM_WARMUP=32,MCLMC_NUM_SAMPLES=64 scripts/diffsky_reconstruction_baselines_h100.slurm)
-   sbatch --export=ALL,TASK=compare,ROWSET=worst_100,NN_OUT=outputs/runs/diffsky_reconstruction_nn_worst_500,MAP_OUT=outputs/runs/diffsky_reconstruction_map_worst_500,MCLMC_OUT=outputs/runs/diffsky_reconstruction_mclmc_worst_100,COMPARE_OUT=outputs/runs/diffsky_reconstruction_compare_worst_100 --dependency=afterok:${NN}:${MAP}:${MCLMC} scripts/diffsky_reconstruction_baselines_h100.slurm
-   PRIOR=$(sbatch --parsable --dependency=afterok:${ROWSETS} --export=ALL,TASK=train-supervised-prior,EPOCHS=30 scripts/diffsky_reconstruction_baselines_h100.slurm)
-   sbatch --dependency=afterok:${PRIOR} --export=ALL,TASK=train-supervised-prior-nn,EPOCHS=30,TRAIN_OUT=outputs/runs/diffsky_supervised_prior_basic_nn scripts/diffsky_reconstruction_baselines_h100.slurm
-
-The wrapper defaults to the reference no-KL autoencoder run and writes rowsets
-under ``outputs/rowsets/diffsky_autoencoder_nokl_m5sys_z035_rand20k``. Override
-``REF_TRAIN_RUN``, ``REF_INFER_RUN``, ``ROWSET_DIR``, ``ROWSET``, or output
-variables to compare another reference run without changing code.
-If a dependent job starts before the rowsets exist, the wrapper now regenerates
-the rowsets under a filesystem lock before continuing.
-For MCLMC, install BlackJAX in the active Jean-Zay environment before launch:
-``python -m pip install blackjax``. The MCLMC task batches galaxies when
-``MCLMC_BATCH_SIZE`` is greater than one; start with ``MCLMC_BATCH_SIZE=4`` or
-``8`` on ``worst_50`` before scaling to ``worst_100`` or larger rowsets.
-To combine disjoint MCLMC runs from several H100 jobs, use
-``python scripts/merge_mclmc_runs.py --out MERGED_DIR RUN_DIR ...`` and pass
-``MERGED_DIR`` to ``diffsky-compare-reconstruction``.
-
-Outputs
--------
-
-MAP runs write ``normalized_config.json``, fit result tables, photometry
-comparison tables, optimizer traces, objective summaries, truth metrics when
-truth columns exist, and optional plots under the requested output directory.
-Diffsky dataset, supervised-prior, true-param closure, redshift-ablation, and
-population-realism commands each write a Markdown report plus machine-readable
-CSV/JSON summaries under the requested output directory.
+HLTDS data commands live in ``euclid_dsps.diffsky_data`` and are exposed by
+``euclid-dsps`` as ``diffsky-list-remote``, ``diffsky-download-subset``,
+``diffsky-prepare-dataset``, ``diffsky-validate-dataset``, and
+``diffsky-dataset-diagnostics``. Use the two ``diffsky_dataset_hltds_*``
+configs for that path.
+
+Use ``configs/fs2_gpu.yaml`` and ``configs/amortized_fs2_realnvp.yaml`` only
+for Euclid comparison runs.
