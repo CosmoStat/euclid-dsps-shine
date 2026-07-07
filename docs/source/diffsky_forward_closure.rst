@@ -11,7 +11,10 @@ The true-parameter forward closure tests:
    theta_true_diffsky -> DSPS/Diffstar decoder -> model photometry
 
 against the prepared HLTDS magnitudes. It is not an optimizer benchmark. It is
-the gatekeeper for physical interpretation of later amortized results.
+the HLTDS gatekeeper for physical interpretation of later HLTDS amortized
+results. For the production synthetic FENIKS/DSPS closure dataset, use
+:doc:`diffsky_synthetic_closure` and the ``diffsky-validate-dsps-closure``
+command instead.
 
 Command
 -------

@@ -37,6 +37,13 @@ Current coverage:
      - Public workflow/reporting facades and compatibility imports.
    * - ``tests/test_workflows_smoke.py``
      - Synthetic parquet schema validation, row selection, EDA artifact creation.
+   * - ``tests/test_synthetic_diffsky_closure.py``
+     - FENIKS/DSPS closure config loading, truth extraction, metallicity
+       convention, selection gates, manifest/validation behavior, and CLI
+       smoke coverage.
+   * - ``tests/test_prior_learning_supervised.py``
+     - Supervised prior schemas, bounded transforms, RealNVP training helpers,
+       and prior reporting contracts.
 
 Synthetic Fixture
 -----------------
@@ -68,7 +75,8 @@ Run the same checks as CI:
    python -m ruff check euclid_dsps scripts tests
    python -m pytest tests
    python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-   python -m sphinx -W --keep-going -b html docs/source docs/build/html
+   uv run --with sphinx --with sphinx-rtd-theme python -m sphinx \
+     -W --keep-going -b html docs/source docs/build/html
 
 Runtime Notes
 -------------
@@ -93,6 +101,24 @@ deterministic tests. Manual smoke commands should use the public GPU configs:
      fit --index 0 --fit-maxiter 20 \
      --sed-samples 1 \
      --out outputs/runs/dev_fs2_gpu_one_short
+
+Synthetic FENIKS closure smoke:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-generate-dsps-closure \
+     --smoke \
+     --overwrite
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml \
+     diffsky-validate-dsps-closure \
+     --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
+     --sample-size 24 \
+     --batch-size 24 \
+     --runtime cpu
 
 Amortized FS2 smoke commands:
 

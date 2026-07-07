@@ -1,5 +1,13 @@
-Diffsky Robust Population Prior Plan
-====================================
+:orphan:
+
+Historical Diffsky Robust Population Prior Plan
+===============================================
+
+.. warning::
+
+   This page is a historical debug plan for the HLTDS PopCosmos-style path.
+   It is not the production workflow. Use :doc:`production` for the current
+   supported FENIKS/DSPS closure runbook and acceptance gates.
 
 Goal
 ----

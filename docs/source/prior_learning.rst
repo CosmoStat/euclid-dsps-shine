@@ -4,8 +4,8 @@ Supervised Diffsky Prior Learning
 Purpose
 -------
 
-The supervised prior workflow learns a population density directly from HLTDS
-truth parameters:
+The supervised prior workflow learns a population density directly from truth
+parameters:
 
 .. math::
 
@@ -34,6 +34,47 @@ than only raw latent parameters.
 
 Schemas
 -------
+
+Production closure schema
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``diffsky_dsps_closure_full`` is the production schema for the synthetic
+FENIKS/DSPS closure dataset. It requires one truth column for every fitted
+``diffsky_basic`` parameter and uses ``missing_policy: fail`` in
+``configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml``.
+
+.. code-block:: text
+
+   redshift_true                         -> z_obs
+   logsm_true                            -> log10_stellar_mass
+   diffstar_lgmcrit_true                 -> diffstar_lgmcrit
+   diffstar_lgy_at_mcrit_true            -> diffstar_lgy_at_mcrit
+   diffstar_indx_lo_true                 -> diffstar_indx_lo
+   diffstar_indx_hi_true                 -> diffstar_indx_hi
+   diffstar_lg_qt_true                   -> diffstar_lg_qt
+   diffstar_qlglgdt_true                 -> diffstar_qlglgdt
+   diffstar_lg_drop_true                 -> diffstar_lg_drop
+   diffstar_lg_rejuv_true                -> diffstar_lg_rejuv
+   diffmah_logm0_true                    -> diffmah_logm0
+   diffmah_logtc_true                    -> diffmah_logtc
+   diffmah_early_index_true              -> diffmah_early_index
+   diffmah_late_index_true               -> diffmah_late_index
+   diffmah_t_peak_true                   -> diffmah_t_peak
+   log10_stellar_metallicity_true        -> log10_stellar_metallicity
+   dust_av_true                          -> dust_av
+   dust_delta_true                       -> dust_delta
+
+Train the production prior after closure validation passes:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
+     diffsky-train-supervised-prior \
+     --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
+
+HLTDS reference schemas
+~~~~~~~~~~~~~~~~~~~~~~~
 
 ``diffsky_truth_basic`` uses the minimum available truth columns:
 
@@ -66,6 +107,12 @@ optional generated-truth columns stop the run explicitly.
 
 Configs
 -------
+
+Production synthetic closure prior:
+
+.. code-block:: text
+
+   configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml
 
 Basic supervised RealNVP prior:
 

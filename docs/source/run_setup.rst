@@ -4,7 +4,9 @@ Run the Pipeline
 Public configs
 --------------
 
-The public config surface is intentionally small:
+The public config surface is intentionally small. The production path is the
+synthetic Diffsky/FENIKS DSPS-closure workflow; the HLTDS low-z path is kept as
+reference and debug infrastructure.
 
 .. list-table::
    :header-rows: 1
@@ -16,7 +18,7 @@ The public config surface is intentionally small:
    * - ``configs/diffsky_dataset_hltds_04_14.yaml``
      - Diffsky HLTDS 04/14 dataset preparation and integrity-report config.
    * - ``configs/diffsky_hltds_04_14_simple_gpu.yaml``
-     - Legacy simple Diffsky HLTDS 04/14/2026 DSPS MAP fit on GPU.
+     - Legacy simple Diffsky HLTDS 04/14/2026 DSPS MAP debug fit on GPU.
    * - ``configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml``
      - Legacy closure/debug fit with redshift fixed to ``redshift_true``.
    * - ``configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml``
@@ -46,8 +48,8 @@ The public config surface is intentionally small:
      - Diffsky amortized inference with jointly trained RealNVP prior.
 
 Old Diffstar, OpenUniverse fit-ready, non-GPU, and experimental ablation configs
-are not the main public path. The first-pass science path is Diffsky HLTDS for
-physical validation, with Euclid FS2 retained as the comparison dataset.
+are not the main public path. Use :doc:`production` for the complete production
+runbook and acceptance gates.
 
 GPU runtime
 -----------
@@ -72,8 +74,71 @@ If this prints only CPU devices, fix the JAX/CUDA environment before launching
 fits. The configs use ``runtime.require_gpu: true`` so production commands fail
 fast instead of silently falling back to CPU.
 
+Production FENIKS/DSPS Closure
+------------------------------
+
+The production dataset is generated from independent weighted Diffsky/FENIKS
+proposal pools and then re-photometered with this repository's DSPS boundary.
+The final catalogues are strict closure catalogues: one truth column per
+``DIFFSKY_BASIC_PARAMETER_NAMES`` parameter, true DSPS fluxes, noisy fluxes,
+positive flux errors, masks, manifest, schema, diagnostics, and validation
+report.
+
+Smoke generation after code or dependency changes:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-generate-dsps-closure \
+     --smoke \
+     --overwrite
+
+H100 production generation and validation:
+
+.. code-block:: bash
+
+   GEN_JOB=$(sbatch --parsable --export=ALL,STAGE=generate,OVERWRITE=1,RESUME=0 \
+     scripts/diffsky_synthetic_feniks_50k_h100.slurm)
+
+   sbatch --dependency=afterok:${GEN_JOB} --export=ALL,STAGE=validate \
+     scripts/diffsky_synthetic_feniks_50k_h100.slurm
+
+Direct validation:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml \
+     diffsky-validate-dsps-closure \
+     --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
+     --sample-size 256 \
+     --batch-size 256 \
+     --runtime gpu
+
+Then train the closure prior and amortized inference model:
+
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
+     diffsky-train-supervised-prior \
+     --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+     amortized-train-diffsky \
+     --out outputs/runs/amortized_diffsky_synthetic_feniks_full
+
+Use :doc:`production` for the complete diagram, data-contract explanation,
+acceptance checklist, and held-out evaluation commands.
+
 Diffsky HLTDS dataset
 ---------------------
+
+This is a reference/debug path, not the strict 18D production closure dataset.
+Use it to rebuild HLTDS reference data, run legacy MAP checks, compare
+low-redshift distributions, and diagnose projected-truth behavior.
 
 The fast reconstruction/debug path uses the prepared low-z projected-truth file:
 
@@ -386,13 +451,14 @@ The supervised-prior config expects a checkpoint produced by the supervised
 prior workflow and keeps it frozen unless ``train_jointly`` is explicitly set
 true.
 
-No-KL Autoencoder Sanity
-------------------------
+Historical HLTDS No-KL Autoencoder Sanity
+-----------------------------------------
 
-Before interpreting a RealNVP prior, run the autoencoder-only sanity check on
-the continuous low-z projected-truth dataset. This disables the KL term and
-freezes the prior, so the relevant question is whether encoder plus DSPS
-decoder can reconstruct the input fluxes:
+This is a legacy HLTDS diagnostic for the continuous low-z projected-truth
+dataset. It is useful when debugging encoder/decoder reconstruction, but it is
+not part of the FENIKS/DSPS production closure workflow. The KL term is
+disabled and the prior is frozen, so the relevant question is whether encoder
+plus DSPS decoder can reconstruct the input fluxes:
 
 .. code-block:: bash
 
@@ -421,8 +487,8 @@ The main pass/fail check is the distribution of
 ``(flux_in - flux_out) / sigma_eff``. A useful first target is most median
 band residuals inside ``[-3, 3]`` without long asymmetric tails.
 
-Supervisor no-KL package
-------------------------
+Historical Supervisor no-KL package
+-----------------------------------
 
 The zip-ready supervisor bundle is written under:
 
@@ -507,8 +573,8 @@ joint-prior modes, compare redshift posterior calibration:
 The report compares posterior median, PIT, 68/95 percent coverage, posterior
 width, RMSE, sigma MAD, bias, and outlier fraction.
 
-Reconstruction Baseline Matrix On Jean-Zay
-------------------------------------------
+Historical HLTDS Reconstruction Baseline Matrix On Jean-Zay
+-----------------------------------------------------------
 
 The H100 wrapper ``scripts/diffsky_reconstruction_baselines_h100.slurm`` runs
 one reconstruction task at a time from a fixed rowset. Typical sequence:

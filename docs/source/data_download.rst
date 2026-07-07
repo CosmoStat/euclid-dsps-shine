@@ -12,6 +12,7 @@ The current public paths are:
 .. code-block:: text
 
    Data/Euclid FS2 LC galaxy catalog_phz1.parquet
+   Data/diffsky/synthetic/feniks_260617_dsps_closure/
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/
    Data/diffsky/raw/hltds_cosmos_260215_03_31_2026/
    Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
@@ -28,7 +29,11 @@ The current public paths are:
 Diffsky HLTDS Downloader
 ------------------------
 
-The main validation dataset is:
+This section rebuilds the HLTDS reference/debug datasets. The production
+FENIKS/DSPS closure dataset is generated with
+``diffsky-generate-dsps-closure``; see :doc:`production`.
+
+The main HLTDS source dataset is:
 
 .. code-block:: text
 

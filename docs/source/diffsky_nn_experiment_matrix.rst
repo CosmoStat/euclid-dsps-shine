@@ -1,5 +1,13 @@
-Diffsky NN Experiment Matrix
-============================
+:orphan:
+
+Historical Diffsky NN Experiment Matrix
+=======================================
+
+.. warning::
+
+   This page is a historical experiment record. It is not the production
+   workflow. Use :doc:`production` for the current supported FENIKS/DSPS
+   closure runbook and acceptance gates.
 
 This runbook defines the post-initialization-fix Diffsky amortized NN
 experiments. The goal is to separate reconstruction sanity checks from

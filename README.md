@@ -1,7 +1,7 @@
 # Euclid DSPS SHINE
 
-Standalone DSPS/JAX workflows for Euclid FS2 and Diffsky HLTDS photometric
-inference experiments.
+Standalone DSPS/JAX workflows for synthetic Diffsky/FENIKS closure catalogues,
+Diffsky HLTDS reference data, and Euclid FS2 photometric inference experiments.
 
 This repository keeps the science path narrow and explicit. It prepares catalog
 photometry, calls native DSPS through a small wrapper boundary, runs MAP or
@@ -13,16 +13,18 @@ outside Python.
 | Need | Use |
 | --- | --- |
 | Install the package | `conda activate shine && python -m pip install -e .` |
-| Build or refresh HLTDS data | `configs/diffsky_dataset_hltds_04_14.yaml` |
-| Run the main Diffsky MAP fit | `configs/diffsky_hltds_04_14_simple_gpu.yaml` |
-| Check same-parameter closure | `configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml` |
-| Train a supervised truth prior | `configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml` |
-| Run amortized Diffsky inference | `configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml` |
+| Run the production FENIKS closure workflow | `docs/source/production.rst` |
+| Generate the 50k closure dataset | `configs/diffsky_synthetic_feniks_260617_50k.yaml` |
+| Validate same-parameter closure | `configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml` |
+| Train the production supervised prior | `configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml` |
+| Run production amortized inference | `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` |
+| Build or refresh HLTDS reference data | `configs/diffsky_dataset_hltds_04_14.yaml` |
 | Run the Euclid FS2 baseline | `configs/fs2_gpu.yaml` |
 
 Full workflow docs live under `docs/source/`, especially:
 
 - `docs/source/installation.rst`
+- `docs/source/production.rst`
 - `docs/source/data_download.rst`
 - `docs/source/diffsky_dataset.rst`
 - `docs/source/run_setup.rst`
@@ -33,11 +35,15 @@ Full workflow docs live under `docs/source/`, especially:
 
 | Config | Purpose |
 | --- | --- |
+| `configs/diffsky_synthetic_feniks_260617_50k.yaml` | Generate the 40k/5k/5k Diffsky/FENIKS DSPS-closure dataset. |
+| `configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml` | Strict validation for the generated closure dataset. |
+| `configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml` | Supervised RealNVP prior on the full 18D synthetic closure truths. |
+| `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` | 18D amortized closure inference with the supervised FENIKS prior checkpoint. |
 | `configs/fs2_gpu.yaml` | Euclid FS2 MAP/posterior baseline. |
 | `configs/diffsky_dataset_hltds_04_14.yaml` | Diffsky HLTDS dataset preparation and integrity reports. |
-| `configs/diffsky_hltds_04_14_simple_gpu.yaml` | Main Diffsky HLTDS simple MAP fit. |
-| `configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml` | Fixed-redshift closure/debug fit. |
-| `configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml` | Same-parameter Diffsky truth forward closure. |
+| `configs/diffsky_hltds_04_14_simple_gpu.yaml` | Legacy Diffsky HLTDS simple MAP debug fit. |
+| `configs/diffsky_hltds_04_14_fixedz_closure_gpu.yaml` | Fixed-redshift HLTDS closure/debug fit. |
+| `configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml` | Same-parameter HLTDS Diffsky truth forward closure. |
 | `configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml` | Supervised RealNVP prior on basic HLTDS truth parameters. |
 | `configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml` | Supervised RealNVP prior on available extended generated truths. |
 | `configs/amortized_fs2_realnvp.yaml` | FS2 amortized encoder plus learned RealNVP prior. |
@@ -63,6 +69,39 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TF_GPU_ALLOCATOR=cuda_malloc_async
 python -c "import jax; print(jax.default_backend()); print(jax.devices())"
 ```
+
+## Production Diffsky/FENIKS DSPS Closure
+
+The production dataset is generated from independent weighted Diffsky/FENIKS
+proposal pools and then re-photometered with this repository's DSPS boundary.
+The final learning catalog uses the recorded 18D truth vector, `flux_true_*`,
+noisy `flux_*`, `fluxerr_*`, `mask_*`, `manifest.yaml`, `schema.json`, and
+`validation_report.json`.
+
+H100 generation and validation:
+
+```bash
+GEN_JOB=$(sbatch --parsable --export=ALL,STAGE=generate,OVERWRITE=1,RESUME=0 \
+  scripts/diffsky_synthetic_feniks_50k_h100.slurm)
+
+sbatch --dependency=afterok:${GEN_JOB} --export=ALL,STAGE=validate \
+  scripts/diffsky_synthetic_feniks_50k_h100.slurm
+```
+
+Direct validation command:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml \
+  diffsky-validate-dsps-closure \
+  --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
+  --sample-size 256 \
+  --batch-size 256 \
+  --runtime gpu
+```
+
+See `docs/source/production.rst` for the full runbook, diagrams, acceptance
+gates, and scientific limits.
 
 ## Diffsky HLTDS Dataset
 

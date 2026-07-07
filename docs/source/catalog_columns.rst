@@ -4,12 +4,13 @@ Catalog Columns
 Source Context
 --------------
 
-The default dataset is a CosmoHub export from catalog 353, table
-``euclid_fs2_mock_dr_v1_1_phz``. CosmoHub is PIC's Hadoop-backed web platform
-for exploring and exporting large cosmological datasets. The Euclid Consortium
-identifies catalog 353 as the Euclid Flagship galaxy mock, and describes the
-release as a synthetic galaxy catalog containing billions of galaxies with
-hundreds of modeled physical, photometric, and halo properties.
+This page documents the Euclid FS2 comparison dataset. It is a CosmoHub export
+from catalog 353, table ``euclid_fs2_mock_dr_v1_1_phz``. CosmoHub is PIC's
+Hadoop-backed web platform for exploring and exporting large cosmological
+datasets. The Euclid Consortium identifies catalog 353 as the Euclid Flagship
+galaxy mock, and describes the release as a synthetic galaxy catalog containing
+billions of galaxies with hundreds of modeled physical, photometric, and halo
+properties.
 
 The public catalog page is:
 

@@ -12,6 +12,10 @@ The public forward-model setups are:
    * - Config
      - Dataset
      - Model role
+   * - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
+     - Synthetic FENIKS/DSPS closure
+     - Production 18D ``diffsky_basic`` closure model with local DSPS true
+       photometry.
    * - ``configs/fs2_gpu.yaml``
      - Euclid FS2
      - Full PopCosmos-like DSPS baseline with compressed stellar, gas, and AGN assets.
@@ -22,8 +26,48 @@ The public forward-model setups are:
      - Diffsky HLTDS 04/14/2026
      - Same simplified model with redshift fixed to ``redshift_true`` for closure checks.
 
-No public Diffstar config is kept. Diffstar/Diffmah columns can be inventoried
-from the dataset, but they are not part of the first-pass DSPS recovery model.
+The synthetic closure path uses Diffstar/Diffmah latent parameters through the
+``diffsky_basic`` DSPS wrapper. The HLTDS PopCosmos proxy path does not recover
+Diffstar/Diffmah latents directly; those columns are inventoried and used only
+where a matched truth schema is configured.
+
+Synthetic FENIKS Closure Model
+------------------------------
+
+The production synthetic closure config uses fourteen LSST+Roman bands:
+
+.. code-block:: text
+
+   LSST u,g,r,i,z,y + Roman F062,F087,F106,F129,F146,F158,F184,F213
+
+The free parameter vector is the 18-parameter ``diffsky_basic`` vector:
+
+.. code-block:: text
+
+   z_obs
+   log10_stellar_mass
+   diffstar_lgmcrit
+   diffstar_lgy_at_mcrit
+   diffstar_indx_lo
+   diffstar_indx_hi
+   diffstar_lg_qt
+   diffstar_qlglgdt
+   diffstar_lg_drop
+   diffstar_lg_rejuv
+   diffmah_logm0
+   diffmah_logtc
+   diffmah_early_index
+   diffmah_late_index
+   diffmah_t_peak
+   log10_stellar_metallicity
+   dust_av
+   dust_delta
+
+During generation, these truths are decoded with the local ``euclid_dsps``
+model to write ``flux_true_<band>``. The configured error model then writes
+``fluxerr_<band>`` and noisy ``flux_<band>``. Validation recomputes the true
+fluxes from the stored truth vector and checks that the saved true photometry
+is same-model consistent.
 
 FS2 Baseline
 ------------
@@ -112,13 +156,15 @@ FS2 uses local compressed FSPS assets:
    Data/popcosmos_chabrier_gas_grid_basis_k64_mixed16.h5
    Data/popcosmos_chabrier_agn_component_basis_k12_fagnlinear_coeff16.h5
 
-Diffsky HLTDS simple fits use the SSP distributed with the HLTDS sample:
+Synthetic FENIKS closure generation and Diffsky HLTDS simple fits use the SSP
+distributed with the HLTDS sample:
 
 .. code-block:: text
 
    Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
 
-The amortized HLTDS configs decode the same SSP through the compressed basis:
+The synthetic and HLTDS amortized configs decode the same SSP through the
+compressed basis:
 
 .. code-block:: text
 

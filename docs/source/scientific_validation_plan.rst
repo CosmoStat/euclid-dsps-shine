@@ -1,5 +1,13 @@
-Scientific Validation Plan
-==========================
+:orphan:
+
+Historical Scientific Validation Plan
+=====================================
+
+.. warning::
+
+   This page is a historical validation plan for the HLTDS workflow. It is not
+   the production runbook. Use :doc:`production` for the current FENIKS/DSPS
+   closure acceptance gates and production commands.
 
 Goal
 ----

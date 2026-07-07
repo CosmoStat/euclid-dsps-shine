@@ -1,6 +1,16 @@
 Diffsky HLTDS Dataset
 =====================
 
+Production status
+-----------------
+
+This page documents HLTDS reference and debug datasets. It does not define the
+production FENIKS/DSPS closure training contract; use :doc:`production` and
+:doc:`diffsky_synthetic_closure` for that path. The HLTDS projected-truth
+tables are useful for reconstruction diagnostics and low-redshift reference
+comparisons, but projected PopCosmos bins must not be presented as direct
+object-level ground truth.
+
 Dataset Choice
 --------------
 
@@ -20,9 +30,9 @@ different redshift ranges and have different error semantics.
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet``
      - ``78651`` objects from the 04/14 ``m5_depth`` prepared source
      - ``z = 0.0069 -- 0.3347``; median ``z = 0.250``
-     - Default training, no-KL autoencoder, MAP, inference, and supervisor
-       notebook dataset. It contains the materialized ``fluxerr_*`` error
-       model plus DSPS projected-truth columns.
+     - Default HLTDS reconstruction/debug, no-KL autoencoder, MAP, inference,
+       and supervisor notebook dataset. It contains the materialized
+       ``fluxerr_*`` error model plus DSPS projected-truth columns.
    * - ``hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr``
      - ``Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr.parquet``
      - ``78651`` objects from the 04/14 ``m5_depth`` prepared source
@@ -56,7 +66,7 @@ different redshift ranges and have different error semantics.
        ``synthetic_fractional_snr`` error model, so prefer the ``zmax335``
        ``m5_depth`` derivative above for current science comparisons.
 
-The continuous low-z projected-truth ``04_14`` subset is the current fast
+The continuous low-z projected-truth ``04_14`` subset is the current fast HLTDS
 public config target for reconstruction debugging. Its redshift distribution is
 continuous and easier to learn than the multi-clump full 04/14 source
 distribution, and the subset materializes both the explicit ``fluxerr_*`` error

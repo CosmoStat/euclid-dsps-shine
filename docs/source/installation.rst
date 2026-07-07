@@ -53,7 +53,8 @@ Quality checks
 
    uv run python -m compileall euclid_dsps scripts
    uv run pytest tests
-   uv run python -m sphinx -W --keep-going -b html docs/source docs/build/html
+   uv run --with sphinx --with sphinx-rtd-theme python -m sphinx \
+     -W --keep-going -b html docs/source docs/build/html
 
 GPU runtime
 -----------

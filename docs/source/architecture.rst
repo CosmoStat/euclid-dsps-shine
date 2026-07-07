@@ -10,72 +10,77 @@ assets:
 .. code-block:: text
 
    euclid_dsps/
-     assets.py       Download small DSPS smoke-test assets.
-     cli.py          Command-line parser and command dispatch.
-     config.py       YAML loading and default normalization.
-     cosmos.py       COSMOS-template proxy SED reconstruction.
-     filters.py      Euclid/LSST transmission curve loading.
-     fit.py          MAP and population optimization.
-     io.py           Parquet, row, unit, JSON, and CSV helpers.
-     jax_runtime.py  Conservative JAX runtime setup for local WSL/shine.
-     likelihood.py   Shared likelihood helpers.
-     mcmc.py         NumPyro and experimental BlackJAX posterior sampling.
-     model.py        Native DSPS boundary.
-     nebular.py      Diagnostic-only SSP emission-line tables and crossings.
-     observation_arrays.py  Batch photometry arrays for training workflows.
+     cli.py                 Command-line parser and command dispatch.
+     config.py              YAML loading, inheritance, and normalization.
+     model.py               Native DSPS boundary.
+     io.py                  Parquet rows, units, truth transforms, JSON/CSV.
+     filters.py             Euclid, LSST, Roman filter loading.
+     photometry.py          AB magnitude and Fnu flux conversions.
+     fit.py                 MAP and population optimization.
+     mcmc.py                NumPyro and experimental BlackJAX sampling.
+     posterior_target.py    Pure-JAX posterior target for samplers.
      parameter_vectors.py   Public theta-vector to DSPS JAX helper layer.
-     performance.py  Runtime, throughput, and device-cost summaries.
-     photometry.py   Central AB magnitude and Fnu flux conversions.
-     posterior_target.py  Pure-JAX posterior target for BlackJAX samplers.
-     amortized/      FS2 and Diffsky HLTDS amortized posterior workflows.
-     pipeline.py     Deprecated compatibility facade for workflow imports.
-     reports.py      Deprecated compatibility facade for reporting imports.
-     selection.py    Single-row catalog selection.
-     reporting/
-       cosmos.py     COSMOS SED diagnostic plots.
-       eda.py        EDA report exports.
-       fit.py        MAP/population report exports.
-       forward.py    Forward-model report exports.
-     posterior.py  Posterior report exports.
-     workflow.py   Composite workflow report exports.
-     core.py       Report tables and plots.
-     diffsky_data/  Remote listing, bounded download, inventory, preparation,
-                    validation, and reports for Diffsky/OpenCosmo HLTDS data.
-     workflows/
-       bayesian.py   Bayesian workflow exports.
-       cosmos.py     COSMOS SED reconstruction workflow.
-       eda.py        EDA workflow exports.
-       forward.py    Forward-model workflow exports.
-       map_fit.py    MAP workflow exports.
-       population.py Population workflow exports.
-       workflow.py   Composite workflow exports.
-       core.py       End-to-end CLI workflows.
+     observation_arrays.py  Batch photometry arrays for training workflows.
+     diffsky_data/          HLTDS listing, download, preparation, validation.
+     synthetic_diffsky/     FENIKS proposal generation, resampling, closure
+                            photometry, manifests, diagnostics, validation.
+     prior_learning/        Supervised and inferred RealNVP prior workflows.
+     amortized/             FS2, HLTDS, and synthetic-closure amortized
+                            posterior workflows.
+     openuniverse/          OpenUniverse preparation and diagnostics helpers.
+     reporting/             CSV, JSON, Markdown, and plot artifact writers.
+     workflows/             CLI orchestration entry points.
+     pipeline.py            Deprecated compatibility facade for workflows.
+     reports.py             Deprecated compatibility facade for reports.
    configs/
-     fs2_gpu.yaml                              Euclid FS2 GPU baseline.
-     diffsky_hltds_04_14_simple_gpu.yaml      Main Diffsky HLTDS simple fit.
-     diffsky_hltds_04_14_fixedz_closure_gpu.yaml
-                                               Diffsky fixed-redshift closure.
-     diffsky_hltds_04_14_trueparam_closure_gpu.yaml
-                                               Same-parameter Diffsky closure.
-     amortized_fs2_realnvp.yaml               FS2 amortized RealNVP prior.
-     amortized_diffsky_hltds_standard_normal_gpu.yaml
-                                               Diffsky amortized baseline.
-     amortized_diffsky_hltds_supervised_prior_gpu.yaml
-                                               Diffsky frozen supervised prior.
-     amortized_diffsky_hltds_joint_realnvp_gpu.yaml
-                                               Diffsky joint RealNVP prior.
+     diffsky_synthetic_feniks_260617_50k.yaml
+     diffsky_synthetic_feniks_260617_trueparam_closure.yaml
+     prior_diffsky_synthetic_feniks_full_realnvp.yaml
+     amortized_diffsky_synthetic_feniks_full_gpu.yaml
+     diffsky_dataset_hltds_04_14.yaml
+     diffsky_hltds_04_14_simple_gpu.yaml
+     fs2_gpu.yaml
    scripts/
-     generate_fsps_ssp_grid.py
-     generate_fsps_gas_grid.py
-     generate_fsps_agn_component_grid.py
+     diffsky_synthetic_feniks_50k_h100.slurm
+     diffsky_amortized_train_h100.slurm
+     diffsky_amortized_infer_h100.slurm
+     build_diffsky_lowz_projected_truth_dataset.py
      benchmark_against_fsps_prospector.py
-   Data/             Local data and DSPS assets, not source.
-   outputs/          Generated run outputs, not source.
+   Data/                    Local data and DSPS assets, not source.
+   outputs/                 Generated run outputs, not source.
 
-The active runtime path is intentionally narrow: Diffsky HLTDS MAP/closure,
-Diffsky supervised-prior and amortized posterior experiments, and Euclid FS2 as
-the comparison dataset. Generated data and spectral assets stay in ``Data/``;
-generated reports and run outputs stay in ``outputs/``.
+The active production path is intentionally narrow: synthetic
+Diffsky/FENIKS proposal pools, local DSPS closure photometry, strict closure
+validation, supervised 18D prior learning, amortized posterior inference, and
+held-out closure evaluation. HLTDS and Euclid FS2 remain supported reference
+paths. Generated data and spectral assets stay in ``Data/``; generated reports
+and run outputs stay in ``outputs/``.
+
+Production Data Flow
+--------------------
+
+.. code-block:: text
+
+   configs/*.yaml
+        |
+        v
+   cli.py
+        |
+        +--> synthetic_diffsky/
+        |       Diffsky/FENIKS proposals -> selection -> resampling
+        |       -> local DSPS true flux -> noisy closure catalogue
+        |       -> manifest/schema/diagnostics/validation_report
+        |
+        +--> prior_learning/
+        |       18D closure truths -> bounded latent transform
+        |       -> RealNVP supervised prior checkpoint
+        |
+        +--> amortized/
+        |       noisy flux/error features + fixed DSPS decoder
+        |       -> posterior samples, predictive residuals, calibration tables
+        |
+        +--> reporting/
+                Markdown reports, CSV/JSON metrics, plots
 
 Layer Responsibilities
 ----------------------
@@ -127,10 +132,24 @@ Layer Responsibilities
   Diffsky MAP fit reports. It must not silently invent unavailable truth
   columns or native photometric errors.
 
+``synthetic_diffsky/``
+  Owns the production closure dataset workflow: Diffsky/FENIKS backend imports,
+  independent proposal generation, proposal-level selection, weighted
+  resampling, metallicity convention handling, local DSPS closure photometry,
+  flux-error injection, manifest/schema writing, population diagnostics, and
+  validation gates. It must keep proposal photometry, closure truth, true
+  photometry, noisy photometry, and provenance as separate data products.
+
+``prior_learning/``
+  Owns population-density learning from truth or inferred parameters. It
+  builds bounded latent transforms from config, trains RealNVP priors, samples
+  trained priors, and writes truth-vs-prior diagnostics. It does not own
+  photometric encoders or the DSPS decoder.
+
 ``jax_runtime.py``
   Applies config/env JAX runtime choices before JAX-heavy modules are imported.
-  Auto switch between cpu if GPU not found. GPU runs are enabled by
-  changing ``runtime.jax_platforms`` and plugin autoload settings.
+  Production GPU configs should fail fast when CUDA is required. CPU or
+  auto-selection modes are for local smoke tests and import-safe diagnostics.
 
 ``fit.py``, ``mcmc.py``, and ``posterior_target.py``
   Own optimizer and sampler behavior. ``mcmc.py`` keeps the public posterior

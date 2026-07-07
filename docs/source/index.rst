@@ -3,11 +3,11 @@ Euclid DSPS SHINE
 
 .. container:: shine-hero
 
-   **Photometric inference workflows for Euclid FS2 and Diffsky HLTDS.**
+   **Synthetic Diffsky/FENIKS closure and photometric inference workflows.**
 
    Euclid DSPS SHINE wraps native ``dsps`` in a small, testable interface for
-   catalog preparation, forward photometry, MAP/posterior inference, and
-   reproducible diagnostics.
+   synthetic closure catalogue generation, catalog preparation, forward
+   photometry, MAP/posterior inference, and reproducible diagnostics.
 
 Where to Start
 --------------
@@ -23,21 +23,21 @@ Where to Start
    * - Install the package
      - :doc:`installation`
      - ``python -m pip install -e .``
-   * - Prepare HLTDS data
-     - :doc:`data_download`, :doc:`diffsky_dataset`
-     - ``configs/diffsky_dataset_hltds_04_14.yaml``
-   * - Run the pipeline
-     - :doc:`run_setup`
-     - ``python -m euclid_dsps.cli --config ...``
-   * - Check physical closure
-     - :doc:`diffsky_forward_closure`, :doc:`diffsky_synthetic_closure`
-     - ``diffsky-forward-closure``, ``diffsky-generate-dsps-closure``
+   * - Run the production workflow
+     - :doc:`production`, :doc:`diffsky_synthetic_closure`
+     - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
+   * - Validate closure data
+     - :doc:`production`, :doc:`diffsky_synthetic_closure`
+     - ``diffsky-validate-dsps-closure``
    * - Train supervised priors
      - :doc:`prior_learning`
-     - ``diffsky-train-supervised-prior``
+     - ``configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml``
    * - Run amortized inference
      - :doc:`amortized_inference`
-     - ``amortized-train-diffsky``
+     - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
+   * - Use HLTDS reference data
+     - :doc:`data_download`, :doc:`diffsky_dataset`
+     - ``configs/diffsky_dataset_hltds_04_14.yaml``
 
 Workflow Map
 ------------
@@ -51,9 +51,9 @@ Workflow Map
      - What it owns
      - Primary outputs
    * - Data contract
-     - Raw Diffsky/FS2 inputs, prepared parquet rows, units, truth semantics,
-       and error-model provenance.
-     - Manifests, inventory reports, integrity reports.
+     - Synthetic closure truth, HLTDS reference data, prepared parquet rows,
+       units, truth semantics, and error-model provenance.
+     - Manifests, schema files, inventory reports, integrity reports.
    * - Forward model
      - The DSPS boundary, filter handling, SSP assets, calibration terms, and
        photometric likelihood setup.
@@ -91,6 +91,7 @@ parameters physically.
    :caption: Getting Started
 
    installation
+   production
    data_download
    run_setup
    testing
@@ -100,14 +101,11 @@ parameters physically.
    :caption: Science Workflows
 
    diffsky_dataset
-   diffsky_forward_closure
    diffsky_synthetic_closure
+   diffsky_forward_closure
    forward_model
    prior_learning
    amortized_inference
-   diffsky_nn_experiment_matrix
-   diffsky_robust_prior_plan
-   scientific_validation_plan
    science_assessment
    cosmos_sed
    ssp_compression

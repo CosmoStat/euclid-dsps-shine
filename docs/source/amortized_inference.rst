@@ -10,13 +10,19 @@ The public configs are:
 
 .. code-block:: text
 
+   configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml
    configs/amortized_fs2_realnvp.yaml
    configs/amortized_diffsky_hltds_standard_normal_gpu.yaml
    configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml
    configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
 
-FS2 remains the Euclid comparison path. Diffsky HLTDS 04/14 is the main
-science-validation path because it has photometry plus physical truth columns.
+``amortized_diffsky_synthetic_feniks_full_gpu.yaml`` is the production closure
+config. It uses the 18D ``diffsky_dsps_closure_full`` latent schema, 14
+LSST+Roman flux bands plus 14 error inputs, a fixed DSPS decoder, and a frozen
+supervised FENIKS RealNVP prior checkpoint. FS2 remains the Euclid comparison
+path. Diffsky HLTDS 04/14 remains a reference/debug path for projected-truth
+and low-redshift reconstruction studies.
+
 Do not treat a good photometric fit as physical recovery: physical claims also
 require same-parameter forward closure, supervised prior-vs-truth diagnostics,
 posterior calibration, and comparison of derived quantities.
@@ -71,7 +77,31 @@ The posterior model is:
 
 ``x`` is the network latent vector. ``theta`` is the bounded physical
 parameter vector, including redshift. FS2 uses the 16-parameter PopCosmos-like
-schema. The active Diffsky HLTDS path uses a 12-parameter PopCosmos-bin schema:
+schema. The production FENIKS/DSPS closure path uses the 18-parameter
+``diffsky_basic`` schema:
+
+.. code-block:: text
+
+   z_obs
+   log10_stellar_mass
+   diffstar_lgmcrit
+   diffstar_lgy_at_mcrit
+   diffstar_indx_lo
+   diffstar_indx_hi
+   diffstar_lg_qt
+   diffstar_qlglgdt
+   diffstar_lg_drop
+   diffstar_lg_rejuv
+   diffmah_logm0
+   diffmah_logtc
+   diffmah_early_index
+   diffmah_late_index
+   diffmah_t_peak
+   log10_stellar_metallicity
+   dust_av
+   dust_delta
+
+The legacy Diffsky HLTDS path uses a 12-parameter PopCosmos-bin schema:
 
 .. code-block:: text
 
@@ -88,15 +118,16 @@ schema. The active Diffsky HLTDS path uses a 12-parameter PopCosmos-bin schema:
    dust_index_n
    tau1_over_tau2
 
-The active HLTDS configs set ``amortized.latent.normalization`` to
-``standardized_logit``. The encoder and RealNVP prior live in standardized
-bounded-logit coordinates. Before calling DSPS, the decoder maps
-``x_network -> x_raw_logit -> theta_physical`` using the configured parameter
-bounds, centers, and scales. DSPS receives physical values such as redshift,
-stellar mass, SFH ratios, metallicity, ``tau2``, ``dust_index_n``, and
-``tau1_over_tau2``; it does not receive normalized latent coordinates. The
-true-param closure and supervised-prior paths remain the same-parameter tests
-for Diffstar/Diffmah generated truths. ``psi`` denotes the encoder parameters.
+The HLTDS configs set ``amortized.latent.normalization`` to
+``standardized_logit``. The synthetic closure config uses configured fit bounds
+with identity latent normalization. In every case, the encoder and RealNVP
+prior live in unconstrained latent coordinates. Before calling DSPS, the
+decoder maps network coordinates to physical ``theta`` values using the
+configured parameter bounds, centers, and scales. DSPS receives physical values
+such as redshift, stellar mass, SFH parameters, metallicity, and dust
+parameters; it does not receive normalized latent coordinates. The true-param
+closure and supervised-prior paths remain the same-parameter tests for the
+generated truths. ``psi`` denotes the encoder parameters.
 ``beta`` denotes RealNVP prior parameters when a RealNVP prior is used.
 
 Implementation Architecture
@@ -148,6 +179,16 @@ Neural Components
    activation = GELU
    mean_head -> R^16
    log_std_head -> R^16
+
+The production FENIKS/DSPS closure config uses:
+
+.. code-block:: text
+
+   input_dim = 28
+   hidden_sizes = [512, 512, 512]
+   activation = GELU
+   mean_head -> R^18
+   log_std_head -> R^18
 
 The encoder posterior is diagonal Gaussian:
 
