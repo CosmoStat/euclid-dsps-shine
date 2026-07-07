@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 TABLES = (
     "batch_posterior_summary",
     "batch_posterior_predictive",

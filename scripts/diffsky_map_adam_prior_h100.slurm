@@ -18,12 +18,13 @@ REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
-CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml}"
-TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_realnvp_unsup_stable_30k_e20}"
+CONFIG="${CONFIG:-configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml}"
+DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet}"
+TRAIN_RUN="${TRAIN_RUN:-outputs/runs/amortized_diffsky_synthetic_feniks_full}"
 CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-${TRAIN_RUN}/feature_stats.json}"
 
-RUN_NAME="${RUN_NAME:-$(basename "$TRAIN_RUN")_map_limit5000}"
+RUN_NAME="${RUN_NAME:-map_diffsky_synthetic_feniks_under_prior}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
@@ -66,6 +67,7 @@ echo "[job] run_name: $RUN_NAME"
 echo "[job] out_dir: $OUT_DIR"
 echo "[job] log_file: $LOG_FILE"
 echo "[job] config: $CONFIG"
+echo "[job] dataset: ${DATASET:-<config catalog_path>}"
 echo "[job] checkpoint: $CHECKPOINT"
 echo "[job] feature_stats: $FEATURE_STATS"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
@@ -115,6 +117,14 @@ for path in "$CHECKPOINT" "$FEATURE_STATS"; do
     exit 2
   fi
 done
+if [[ -n "$DATASET" ]]; then
+  if [[ -s "$DATASET" ]]; then
+    ls -lh "$DATASET"
+  else
+    echo "[job][missing] dataset: $DATASET"
+    exit 2
+  fi
+fi
 
 cmd=(
   python -m euclid_dsps.cli
@@ -139,6 +149,9 @@ cmd=(
 
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
+fi
+if [[ -n "$DATASET" ]]; then
+  cmd+=(--dataset "$DATASET")
 fi
 if [[ -n "$ROWSET_FILE" ]]; then
   cmd+=(--row-indices-file "$ROWSET_FILE")

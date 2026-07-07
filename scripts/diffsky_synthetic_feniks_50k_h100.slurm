@@ -55,7 +55,7 @@ if [[ -z "${DIFFHALOS_REPO:-}" && -n "${WORK:-}" && -d "$WORK/diffhalos/diffhalo
 fi
 STAGE="${STAGE:-generate}"
 CONFIG="${CONFIG:-configs/diffsky_synthetic_feniks_260617_50k.yaml}"
-VALIDATION_CONFIG="${VALIDATION_CONFIG:-configs/diffsky_synthetic_feniks_260617_trueparam_closure.yaml}"
+VALIDATION_CONFIG="${VALIDATION_CONFIG:-$CONFIG}"
 DATASET_DIR="${DATASET_DIR:-Data/diffsky/synthetic/feniks_260617_dsps_closure}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/diffsky_synthetic_feniks_50k_${STAGE}_${SLURM_JOB_ID:-manual}.log}"

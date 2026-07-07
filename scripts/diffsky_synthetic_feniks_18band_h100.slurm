@@ -18,7 +18,7 @@ set -Eeuo pipefail
 # standard FENIKS H100 runner but points it at the 18-band survey-like config.
 
 export CONFIG="${CONFIG:-configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml}"
-export VALIDATION_CONFIG="${VALIDATION_CONFIG:-configs/diffsky_synthetic_feniks_260617_trueparam_closure_18band.yaml}"
+export VALIDATION_CONFIG="${VALIDATION_CONFIG:-$CONFIG}"
 export DATASET_DIR="${DATASET_DIR:-Data/diffsky/synthetic/feniks_260617_dsps_closure_18band}"
 export LOG_DIR="${LOG_DIR:-outputs/logs}"
 export LOG_FILE="${LOG_FILE:-${LOG_DIR}/diffsky_synthetic_feniks_18band_${STAGE:-generate}_${SLURM_JOB_ID:-manual}.log}"

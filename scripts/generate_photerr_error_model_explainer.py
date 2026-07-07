@@ -28,7 +28,6 @@ from euclid_dsps.photometric_uncertainty import (
 from euclid_dsps.photometry import abmag_to_fnu_cgs
 from euclid_dsps.reporting.core import configure_plot_style
 
-
 COLORS = {
     "depth": "#2F5D8C",
     "systematic": "#B85C38",
@@ -354,7 +353,6 @@ def _plot_annotated_explainer(components: dict, figure_base: Path) -> None:
     flux = components["flux"]
     f5 = float(components["f5"])
     band = str(components["band"])
-    m5 = float(components["m5"])
     floor = float(components["flux_floor_frac"])
     sys_frac = float(components["sys_frac"])
     floor_percent = 100.0 * floor

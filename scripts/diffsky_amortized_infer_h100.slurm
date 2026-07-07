@@ -15,11 +15,10 @@
 set -Eeuo pipefail
 
 # Sharded checkpoint-only amortized inference and posterior-predictive
-# normalized residual diagnostics.
+# normalized residual diagnostics for the held-out FENIKS closure split.
 #
-# Default use case: inspect a completed unsupervised joint RealNVP training
-# run. Redshift is not fixed; truth columns are used only for closure metrics
-# when available.
+# Default use case: inspect the completed FENIKS NN+DSPS+NF training run.
+# Redshift is inferred; closure truth columns are used only for diagnostics.
 #
 # Submit a 5k-object diagnostic:
 #
@@ -27,7 +26,7 @@ set -Eeuo pipefail
 #
 # Full-dataset inference after diagnostics look sane:
 #
-#   sbatch --export=ALL,LIMIT=,RUN_NAME=diffsky_realnvp_unsup_full_ps128 \
+#   sbatch --export=ALL,LIMIT=,RUN_NAME=amortized_diffsky_synthetic_feniks_full_test_infer \
 #     scripts/diffsky_amortized_infer_h100.slurm
 #
 # Switch to a specific epoch checkpoint:
@@ -53,32 +52,26 @@ if [[ -z "${MINICONDA_PATH:-}" ]]; then
 fi
 CONDA_ENV="${CONDA_ENV:-shine}"
 
-CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml}"
-DATASET="${DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet}"
-SOURCE_DATASET="${SOURCE_DATASET:-Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_photometry_truth_m5depth.parquet}"
-REDSHIFT_MIN="${REDSHIFT_MIN:-0.0}"
-REDSHIFT_MAX="${REDSHIFT_MAX:-0.35}"
-ERROR_MODEL="${ERROR_MODEL:-m5_depth}"
-ERROR_SNR="${ERROR_SNR:-50}"
-FORCE_REBUILD_DATASET="${FORCE_REBUILD_DATASET:-0}"
-TRAIN_RUN="${TRAIN_RUN:-outputs/runs/diffsky_realnvp_z035_30k_e20}"
+CONFIG="${CONFIG:-configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml}"
+DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet}"
+TRAIN_RUN="${TRAIN_RUN:-outputs/runs/amortized_diffsky_synthetic_feniks_full}"
 CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-${TRAIN_RUN}/feature_stats.json}"
 
-RUN_NAME="${RUN_NAME:-diffsky_realnvp_z035_30k_e20_infer_ps128_limit5000}"
+RUN_NAME="${RUN_NAME:-amortized_diffsky_synthetic_feniks_full_test_infer}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
 
 BATCH_SIZE="${BATCH_SIZE:-256}"
 JAX_BATCH_SIZE="${JAX_BATCH_SIZE:-256}"
-DECODER_SAMPLE_CHUNK_SIZE="${DECODER_SAMPLE_CHUNK_SIZE:-4}"
-PRIOR_PREDICTIVE_BATCH_SIZE="${PRIOR_PREDICTIVE_BATCH_SIZE:-1024}"
-POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-128}"
+DECODER_SAMPLE_CHUNK_SIZE="${DECODER_SAMPLE_CHUNK_SIZE:-1}"
+PRIOR_PREDICTIVE_BATCH_SIZE="${PRIOR_PREDICTIVE_BATCH_SIZE:-256}"
+POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-256}"
 PRIOR_SAMPLES="${PRIOR_SAMPLES:-8192}"
-SEED="${SEED:-42}"
-LIMIT="${LIMIT-5000}"
-SELECTION_MODE="${SELECTION_MODE:-random}"
+SEED="${SEED:-260717}"
+LIMIT="${LIMIT:-}"
+SELECTION_MODE="${SELECTION_MODE:-sequential}"
 STRATIFIED_STRATEGY="${STRATIFIED_STRATEGY:-balanced}"
 SELECTION_SEED="${SELECTION_SEED:-$SEED}"
 
@@ -104,10 +97,6 @@ echo "[job] out_dir: $OUT_DIR"
 echo "[job] log_file: $LOG_FILE"
 echo "[job] config: $CONFIG"
 echo "[job] dataset: $DATASET"
-echo "[job] source_dataset: $SOURCE_DATASET"
-echo "[job] redshift_range: [$REDSHIFT_MIN, $REDSHIFT_MAX]"
-echo "[job] error_model: $ERROR_MODEL snr_if_fractional=$ERROR_SNR"
-echo "[job] force_rebuild_dataset: $FORCE_REBUILD_DATASET"
 echo "[job] checkpoint: $CHECKPOINT"
 echo "[job] feature_stats: $FEATURE_STATS"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
@@ -147,47 +136,6 @@ print("[job] jax_devices:", jax.devices())
 PY
 nvidia-smi || true
 
-ensure_diffsky_dataset() {
-  case "$FORCE_REBUILD_DATASET" in
-    1|true|TRUE|yes|YES|y|Y)
-      echo "[job] force rebuild requested"
-      ;;
-    *)
-      if [[ -s "$DATASET" ]]; then
-        echo "[job] dataset exists"
-        ls -lh "$DATASET"
-        return
-      fi
-      ;;
-  esac
-  if [[ -s "$DATASET" ]]; then
-    echo "[job] rebuilding existing dataset from source subset"
-  else
-    echo "[job] dataset missing, rebuilding from source subset"
-  fi
-  if [[ ! -s "$SOURCE_DATASET" ]]; then
-    cat <<MSG
-[job][error] Missing SOURCE_DATASET.
-[job][error] DATASET=$DATASET
-[job][error] SOURCE_DATASET=$SOURCE_DATASET
-[job][hint] Either copy the local subset parquet to Jean-Zay or build the
-[job][hint] full source parquet first with diffsky-prepare-dataset.
-MSG
-    exit 2
-  fi
-  mkdir -p "$(dirname "$DATASET")"
-  python -m euclid_dsps.cli diffsky-redshift-subset \
-    --dataset "$SOURCE_DATASET" \
-    --out "$DATASET" \
-    --redshift-min "$REDSHIFT_MIN" \
-    --redshift-max "$REDSHIFT_MAX" \
-    --error-model "$ERROR_MODEL" \
-    --snr "$ERROR_SNR"
-  ls -lh "$DATASET"
-}
-
-ensure_diffsky_dataset
-
 for path in "$DATASET" "$CHECKPOINT" "$FEATURE_STATS"; do
   if [[ -s "$path" ]]; then
     ls -lh "$path"
@@ -201,6 +149,7 @@ cmd=(
   python -m euclid_dsps.cli
   --config "$CONFIG"
   amortized-infer-diffsky
+  --dataset "$DATASET"
   --checkpoint "$CHECKPOINT"
   --feature-stats "$FEATURE_STATS"
   --out "$OUT_DIR"

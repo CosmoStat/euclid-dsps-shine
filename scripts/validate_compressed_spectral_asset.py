@@ -8,8 +8,9 @@ import json
 from pathlib import Path
 
 import h5py
-
-from build_compressed_agn_component_grid import validate_compressed_grid as validate_agn_grid
+from build_compressed_agn_component_grid import (
+    validate_compressed_grid as validate_agn_grid,
+)
 from build_compressed_gas_grid import validate_compressed_grid as validate_gas_grid
 from build_compressed_ssp_grid import validate_compressed_grid as validate_ssp_grid
 from fsps_grid_common import FspsGridError, fail

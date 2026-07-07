@@ -19,9 +19,11 @@ REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
-CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_autoencoder_nokl_deterministic_h100.yaml}"
-ROWSET_FILE="${ROWSET_FILE:-outputs/rowsets/diffsky_hltds_nokl_reference/balanced20k.txt}"
-OUT_ROOT="${OUT_ROOT:-outputs/runs/diffsky_flat_mclmc_calibration}"
+CONFIG="${CONFIG:-configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml}"
+DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet}"
+ROWSET_FILE="${ROWSET_FILE:-}"
+ROWSET_LIMIT="${ROWSET_LIMIT:-64}"
+OUT_ROOT="${OUT_ROOT:-outputs/runs/mclmc_diffsky_synthetic_feniks_flat}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 SHARD_COUNT="${SHARD_COUNT:-${SLURM_ARRAY_TASK_COUNT:-4}}"
 TASK_ID="${SLURM_ARRAY_TASK_ID:-0}"
@@ -53,9 +55,36 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 echo "[mclmc] start: $(date --iso-8601=seconds)"
 echo "[mclmc] task: $TASK_ID / $SHARD_COUNT"
-echo "[mclmc] rowset: $ROWSET_FILE"
+echo "[mclmc] dataset: ${DATASET:-<config catalog_path>}"
+echo "[mclmc] rowset: ${ROWSET_FILE:-<auto from dataset>}"
+echo "[mclmc] rowset_limit: $ROWSET_LIMIT"
 echo "[mclmc] out_root: $OUT_ROOT"
 
+if [[ -n "$DATASET" && ! -s "$DATASET" ]]; then
+  echo "[mclmc][missing] dataset: $DATASET"
+  exit 2
+fi
+if [[ -z "$ROWSET_FILE" ]]; then
+  if [[ -z "$DATASET" ]]; then
+    echo "[mclmc][error] Set ROWSET_FILE or DATASET for automatic rowset creation."
+    exit 2
+  fi
+  ROWSET_FILE="$OUT_ROOT/rowset_auto_${ROWSET_LIMIT}.txt"
+  mkdir -p "$(dirname "$ROWSET_FILE")"
+  python - <<PY
+from pathlib import Path
+
+import numpy as np
+import pyarrow.parquet as pq
+
+dataset = Path("$DATASET")
+out = Path("$ROWSET_FILE")
+n_rows = pq.ParquetFile(dataset).metadata.num_rows
+limit = min(int("$ROWSET_LIMIT"), int(n_rows))
+np.savetxt(out, np.arange(limit, dtype=np.int64), fmt="%d")
+print(f"[mclmc] auto rowset rows={limit} -> {out}")
+PY
+fi
 if [[ ! -s "$ROWSET_FILE" ]]; then
   echo "[mclmc][missing] $ROWSET_FILE"
   exit 2
@@ -83,6 +112,9 @@ SHARD_FILE="$OUT_ROOT/shards/rowset_shard_$(printf '%03d' "$TASK_ID").txt"
 OUT_DIR="$OUT_ROOT/shard_$(printf '%03d' "$TASK_ID")"
 
 cmd=(python -m euclid_dsps.cli --config "$CONFIG" posterior --all --row-indices-file "$SHARD_FILE" --out "$OUT_DIR" --batch-size "$BATCH_SIZE" --sampler mclmc --num-warmup "$NUM_WARMUP" --num-samples "$NUM_SAMPLES" --num-chains "$NUM_CHAINS" --mclmc-progress-chunk-size "$MCLMC_PROGRESS_CHUNK_SIZE" --mcmc-init-strategy map_jitter)
+if [[ -n "$DATASET" ]]; then
+  cmd+=(--dataset "$DATASET")
+fi
 if [[ -n "$MCLMC_L" ]]; then
   cmd+=(--mclmc-l "$MCLMC_L")
 fi

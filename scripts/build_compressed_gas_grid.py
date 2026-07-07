@@ -28,7 +28,6 @@ from typing import Any
 
 import h5py
 import numpy as np
-
 from fsps_grid_common import FspsGridError, ensure_output_path, fail, write_attrs
 
 DEFAULT_INPUT = "Data/popcosmos_chabrier_gas_ssp_grid.h5"

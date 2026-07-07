@@ -14,7 +14,7 @@
 
 set -Eeuo pipefail
 
-# Train-only H100 job for Diffsky amortized photo-z experiments.
+# Train-only H100 job for the FENIKS NN+DSPS+NF inference run.
 # It intentionally does not run inference or full-validation reports; use
 # scripts/diffsky_amortized_infer_h100.slurm afterwards on the chosen checkpoint.
 
@@ -22,31 +22,33 @@ REPO_DIR="${REPO_DIR:-${WORK:?WORK is not set}/euclid-dsps-shine}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?WORK is not set}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 
-CONFIG="${CONFIG:-configs/experiments/diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml}"
-RUN_NAME="${RUN_NAME:-diffsky_realnvp_unsup_stable_$(date +%Y%m%d_%H%M%S)}"
+CONFIG="${CONFIG:-configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml}"
+DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_dsps_closure/train.parquet}"
+RUN_NAME="${RUN_NAME:-amortized_diffsky_synthetic_feniks_full}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 LOG_FILE="${LOG_FILE:-${LOG_DIR}/${RUN_NAME}_${SLURM_JOB_ID:-manual}.log}"
 
-BATCH_SIZE="${BATCH_SIZE:-128}"
-JAX_BATCH_SIZE="${JAX_BATCH_SIZE:-128}"
-EPOCHS="${EPOCHS:-20}"
+BATCH_SIZE="${BATCH_SIZE:-512}"
+JAX_BATCH_SIZE="${JAX_BATCH_SIZE:-512}"
+EPOCHS="${EPOCHS:-100}"
 N_SAMPLES="${N_SAMPLES:-4}"
-SEED="${SEED:-42}"
+SEED="${SEED:-260717}"
 LIMIT="${LIMIT:-}"
-KL_ANNEALING_EPOCHS="${KL_ANNEALING_EPOCHS:-15}"
-KL_WEIGHT_MAX="${KL_WEIGHT_MAX:-0.02}"
+KL_ANNEALING_EPOCHS="${KL_ANNEALING_EPOCHS:-30}"
+KL_WEIGHT_MAX="${KL_WEIGHT_MAX:-1.0}"
 VALIDATION_EVERY="${VALIDATION_EVERY:-1}"
 BEST_CHECKPOINT_MIN_EPOCH="${BEST_CHECKPOINT_MIN_EPOCH:-}"
 SELECTION_MODE="${SELECTION_MODE:-}"
 STRATIFIED_STRATEGY="${STRATIFIED_STRATEGY:-}"
-PRIOR_FREEZE_EPOCHS="${PRIOR_FREEZE_EPOCHS:-3}"
-PRIOR_UPDATE_SCHEDULE="${PRIOR_UPDATE_SCHEDULE:-alternating}"
-LIKELIHOOD_TEMPERATURE_INITIAL="${LIKELIHOOD_TEMPERATURE_INITIAL:-4.0}"
-LIKELIHOOD_TEMPERATURE_FINAL="${LIKELIHOOD_TEMPERATURE_FINAL:-1.0}"
-LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS="${LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS:-10}"
-ENTROPY_FLOOR_WEIGHT="${ENTROPY_FLOOR_WEIGHT:-0.10}"
-ENTROPY_FLOOR_MIN_LOG_STD="${ENTROPY_FLOOR_MIN_LOG_STD:--3.2}"
+PRIOR_FREEZE_EPOCHS="${PRIOR_FREEZE_EPOCHS:-}"
+PRIOR_UPDATE_SCHEDULE="${PRIOR_UPDATE_SCHEDULE:-}"
+PRIOR_CHECKPOINT="${PRIOR_CHECKPOINT:-outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp/checkpoints/best.eqx}"
+LIKELIHOOD_TEMPERATURE_INITIAL="${LIKELIHOOD_TEMPERATURE_INITIAL:-}"
+LIKELIHOOD_TEMPERATURE_FINAL="${LIKELIHOOD_TEMPERATURE_FINAL:-}"
+LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS="${LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS:-}"
+ENTROPY_FLOOR_WEIGHT="${ENTROPY_FLOOR_WEIGHT:-}"
+ENTROPY_FLOOR_MIN_LOG_STD="${ENTROPY_FLOOR_MIN_LOG_STD:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -69,6 +71,7 @@ echo "[job] run_name: $RUN_NAME"
 echo "[job] out_dir: $OUT_DIR"
 echo "[job] log_file: $LOG_FILE"
 echo "[job] config: $CONFIG"
+echo "[job] dataset: ${DATASET:-<config catalog_path>}"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
 echo "[job] batch_size: $BATCH_SIZE"
 echo "[job] jax_batch_size: $JAX_BATCH_SIZE"
@@ -79,11 +82,12 @@ echo "[job] kl_weight_max: $KL_WEIGHT_MAX"
 echo "[job] best_checkpoint_min_epoch: ${BEST_CHECKPOINT_MIN_EPOCH:-<config>}"
 echo "[job] selection_mode: ${SELECTION_MODE:-<config>}"
 echo "[job] stratified_strategy: ${STRATIFIED_STRATEGY:-<config>}"
-echo "[job] prior_freeze_epochs: $PRIOR_FREEZE_EPOCHS"
-echo "[job] prior_update_schedule: $PRIOR_UPDATE_SCHEDULE"
-echo "[job] likelihood_temperature: $LIKELIHOOD_TEMPERATURE_INITIAL -> $LIKELIHOOD_TEMPERATURE_FINAL over $LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS epochs"
-echo "[job] entropy_floor_weight: $ENTROPY_FLOOR_WEIGHT"
-echo "[job] entropy_floor_min_log_std: $ENTROPY_FLOOR_MIN_LOG_STD"
+echo "[job] prior_freeze_epochs: ${PRIOR_FREEZE_EPOCHS:-<config>}"
+echo "[job] prior_update_schedule: ${PRIOR_UPDATE_SCHEDULE:-<config>}"
+echo "[job] prior_checkpoint: ${PRIOR_CHECKPOINT:-<config>}"
+echo "[job] likelihood_temperature: ${LIKELIHOOD_TEMPERATURE_INITIAL:-<config>} -> ${LIKELIHOOD_TEMPERATURE_FINAL:-<config>} over ${LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS:-<config>} epochs"
+echo "[job] entropy_floor_weight: ${ENTROPY_FLOOR_WEIGHT:-<config>}"
+echo "[job] entropy_floor_min_log_std: ${ENTROPY_FLOOR_MIN_LOG_STD:-<config>}"
 echo "[job] seed: $SEED"
 
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
@@ -125,27 +129,58 @@ cmd=(
   --kl-annealing-epochs "$KL_ANNEALING_EPOCHS"
   --kl-weight-max "$KL_WEIGHT_MAX"
   --validation-every "$VALIDATION_EVERY"
-  --prior-freeze-epochs "$PRIOR_FREEZE_EPOCHS"
-  --prior-update-schedule "$PRIOR_UPDATE_SCHEDULE"
-  --likelihood-temperature-initial "$LIKELIHOOD_TEMPERATURE_INITIAL"
-  --likelihood-temperature-final "$LIKELIHOOD_TEMPERATURE_FINAL"
-  --likelihood-temperature-annealing-epochs "$LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS"
-  --entropy-floor-weight "$ENTROPY_FLOOR_WEIGHT"
-  --entropy-floor-min-log-std "$ENTROPY_FLOOR_MIN_LOG_STD"
   --seed "$SEED"
 )
 
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
 fi
+if [[ -n "$DATASET" ]]; then
+  if [[ ! -s "$DATASET" ]]; then
+    echo "[job][missing] dataset: $DATASET"
+    exit 2
+  fi
+  cmd+=(--dataset "$DATASET")
+fi
 if [[ -n "$BEST_CHECKPOINT_MIN_EPOCH" ]]; then
   cmd+=(--best-checkpoint-min-epoch "$BEST_CHECKPOINT_MIN_EPOCH")
+fi
+if [[ -n "$PRIOR_FREEZE_EPOCHS" ]]; then
+  cmd+=(--prior-freeze-epochs "$PRIOR_FREEZE_EPOCHS")
+fi
+if [[ -n "$PRIOR_UPDATE_SCHEDULE" ]]; then
+  cmd+=(--prior-update-schedule "$PRIOR_UPDATE_SCHEDULE")
+fi
+if [[ -n "$PRIOR_CHECKPOINT" ]]; then
+  if [[ ! -s "$PRIOR_CHECKPOINT" ]]; then
+    echo "[job][missing] prior checkpoint: $PRIOR_CHECKPOINT"
+    exit 2
+  fi
+  cmd+=(--prior-checkpoint "$PRIOR_CHECKPOINT")
 fi
 if [[ -n "$SELECTION_MODE" ]]; then
   cmd+=(--selection-mode "$SELECTION_MODE")
 fi
 if [[ -n "$STRATIFIED_STRATEGY" ]]; then
   cmd+=(--stratified-strategy "$STRATIFIED_STRATEGY")
+fi
+if [[ -n "$LIKELIHOOD_TEMPERATURE_INITIAL" ]]; then
+  cmd+=(--likelihood-temperature-initial "$LIKELIHOOD_TEMPERATURE_INITIAL")
+fi
+if [[ -n "$LIKELIHOOD_TEMPERATURE_FINAL" ]]; then
+  cmd+=(--likelihood-temperature-final "$LIKELIHOOD_TEMPERATURE_FINAL")
+fi
+if [[ -n "$LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS" ]]; then
+  cmd+=(
+    --likelihood-temperature-annealing-epochs
+    "$LIKELIHOOD_TEMPERATURE_ANNEALING_EPOCHS"
+  )
+fi
+if [[ -n "$ENTROPY_FLOOR_WEIGHT" ]]; then
+  cmd+=(--entropy-floor-weight "$ENTROPY_FLOOR_WEIGHT")
+fi
+if [[ -n "$ENTROPY_FLOOR_MIN_LOG_STD" ]]; then
+  cmd+=(--entropy-floor-min-log-std "$ENTROPY_FLOOR_MIN_LOG_STD")
 fi
 
 echo "[job] command:"

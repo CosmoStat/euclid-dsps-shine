@@ -27,7 +27,6 @@ from typing import Any
 
 import h5py
 import numpy as np
-
 from fsps_grid_common import FspsGridError, ensure_output_path, fail, write_attrs
 
 DEFAULT_INPUT = "Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5"
