@@ -19,7 +19,6 @@ from euclid_dsps.calibration import (
     global_sed_scale_config,
     per_band_flux_calibration_config,
 )
-from euclid_dsps.diffsky_redshift_ablation import write_redshift_metrics_for_run
 from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, write_json
 from euclid_dsps.model import DERIVED_QUANTITY_NAMES, dynamic_model_args, load_context
@@ -54,6 +53,7 @@ from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
 from .latent import latent_spec_from_config, x_to_theta
 from .likelihood import photometric_loglike
+from .redshift_metrics import write_redshift_metrics_for_run
 from .train import (
     _effective_jax_batch_size,
     _per_band_flux_calibration_summary,

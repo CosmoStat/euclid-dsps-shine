@@ -1,4 +1,5 @@
 """DSPS closure photometry for synthetic Diffsky proposal rows."""
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -19,7 +20,6 @@ from euclid_dsps.parameter_vectors import model_mags_from_theta_matrix_jax
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
 from euclid_dsps.photometric_uncertainty import flux_error_from_model
 from euclid_dsps.photometry import abmag_to_fnu_cgs
-
 
 GROUND_TRUTH_COLUMNS = {
     "z_obs": "redshift_true",

@@ -6,7 +6,7 @@ import hashlib
 import importlib.metadata
 import json
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -113,7 +113,7 @@ def base_manifest(
     """Return manifest fields common to every generation run."""
     model = config.get("model", {}) or {}
     return {
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(UTC).isoformat(),
         "repo_git_sha": repo_git_sha(),
         "diffsky_version": package_version("diffsky"),
         "diffsky_git_sha": package_git_sha("diffsky"),

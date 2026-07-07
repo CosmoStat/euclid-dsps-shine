@@ -17,6 +17,7 @@ from euclid_dsps.io import ensure_dir, write_json
 from .data import TruthDataset, prior_samples_frame
 from .diagnostics import write_supervised_prior_diagnostics
 from .schema import ParameterSpec, TruthSchema
+from .splits import train_validation_split as _train_validation_split
 from .train import (
     fit_realnvp_to_x,
     prior_learning_config,
@@ -219,23 +220,6 @@ def _read_table(path: Path) -> pd.DataFrame:
     if path.suffix == ".csv":
         return pd.read_csv(path)
     return pd.read_parquet(path)
-
-
-def _train_validation_split(
-    n_rows: int,
-    *,
-    validation_fraction: float,
-    seed: int,
-) -> dict[str, np.ndarray]:
-    order = np.arange(int(n_rows), dtype=np.int64)
-    rng = np.random.default_rng(int(seed))
-    rng.shuffle(order)
-    validation_fraction = min(max(float(validation_fraction), 0.0), 0.9)
-    if validation_fraction <= 0.0 or n_rows < 2:
-        return {"train": order, "validation": np.asarray([], dtype=np.int64)}
-    n_val = int(round(validation_fraction * n_rows))
-    n_val = min(max(n_val, 1), n_rows - 1)
-    return {"train": order[n_val:], "validation": order[:n_val]}
 
 
 def _log(verbose: bool, message: str) -> None:

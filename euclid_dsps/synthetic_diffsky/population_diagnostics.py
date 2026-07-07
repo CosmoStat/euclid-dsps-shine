@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime, timezone
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,6 @@ from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
 from .config import SPLIT_ORDER
 from .photometry import GROUND_TRUTH_COLUMNS
 from .reference_comparison import compare_synthetic_closure_to_reference
-
 
 DEFAULT_DIAGNOSTIC_BANDS = (
     "lsst_u",
@@ -82,7 +82,7 @@ def run_generation_population_diagnostics(
 ) -> Path | None:
     """Run configured post-generation diagnostics and return summary path."""
     diagnostics_cfg = dict(
-        ((config.get("synthetic_diffsky", {}) or {}).get("diagnostics", {}) or {})
+        (config.get("synthetic_diffsky", {}) or {}).get("diagnostics", {}) or {}
     )
     if not bool(diagnostics_cfg.get("enabled", False)):
         return None
@@ -900,7 +900,7 @@ def _summary_payload(
             }
         )
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "dataset_dir": str(dataset_dir),
         "diagnostics_dir": str(out),
         "smoke": bool(smoke),

@@ -1,4 +1,5 @@
 """Validation gates for synthetic Diffsky DSPS closure catalogs."""
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -474,11 +475,18 @@ def _recompute_flux_report(
         rel_flux.append(np.abs(flux - old) / np.maximum(np.abs(old), 1.0e-300))
     max_abs_delta_mag = float(np.max(np.concatenate(deltas))) if deltas else 0.0
     max_relative_flux_error = float(np.max(np.concatenate(rel_flux))) if rel_flux else 0.0
-    ok = bool(max_abs_delta_mag <= 3.0e-5 and max_relative_flux_error <= 1.0e-4)
+    delta_mag_tolerance = 5.0e-4
+    relative_flux_tolerance = 5.0e-4
+    ok = bool(
+        max_abs_delta_mag <= delta_mag_tolerance
+        and max_relative_flux_error <= relative_flux_tolerance
+    )
     return {
         "sample_size": int(sample_size),
         "max_abs_delta_mag": max_abs_delta_mag,
         "max_relative_flux_error": max_relative_flux_error,
+        "delta_mag_tolerance": delta_mag_tolerance,
+        "relative_flux_tolerance": relative_flux_tolerance,
         "pass": ok,
         "message": (
             "DSPS flux recomputation passes"

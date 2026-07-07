@@ -27,21 +27,13 @@ def build_parser() -> argparse.ArgumentParser:
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
             "amortized-train-diffsky,amortized-infer-diffsky,"
             "amortized-finalize-inference,diffsky-map-adam-prior,"
-            "diffsky-latent-prior-geometry,"
-            "diffsky-closure-optimum-diagnostics,"
-            "diffsky-map-prior-sweep,diffsky-finalize-map-prior-sweep,"
-            "amortized-prior-overlap-diffsky,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-train-inferred-prior,"
+            "diffsky-plan-prior-workflow,"
             "diffsky-supervised-prior-report,"
-            "diffsky-forward-closure,diffsky-popcosmos-proxy-closure,"
             "diffsky-generate-dsps-closure,diffsky-validate-dsps-closure,"
             "diffsky-evaluate-dsps-closure-inference,"
             "diffsky-compare-dsps-closure-reference,"
-            "diffsky-redshift-ablation,diffsky-dust-ssp-audit,"
-            "diffsky-build-reconstruction-rowsets,"
-            "diffsky-compare-reconstruction,"
-            "diffsky-run-full-validation,"
             "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
             "diffsky-inventory-local,diffsky-prepare-dataset,"
             "diffsky-dataset-diagnostics,diffsky-redshift-subset,"
@@ -60,11 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser(
         "check",
-        help="Run EDA, forward sanity checks, or standalone COSMOS SED checks.",
+        help="Run EDA or forward sanity checks.",
     )
     check.add_argument(
         "--kind",
-        choices=("forward", "eda", "cosmos"),
+        choices=("forward", "eda"),
         default="forward",
         help="Check type.",
     )
@@ -86,11 +78,6 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument(
         "--row-indices-file",
         help="CSV/TXT file containing one catalog row_index per line.",
-    )
-    check.add_argument(
-        "--plot-samples",
-        type=int,
-        help="Number of COSMOS SEDs to overlay for check --kind cosmos.",
     )
     add_output_overrides(check, show_advanced=False)
     add_sed_diagnostic_overrides(check)
@@ -132,6 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     posterior.add_argument(
         "--out", default="outputs/runs/posterior", help="Output directory."
     )
+    posterior.add_argument("--dataset", help="Override config catalog_path.")
     posterior.add_argument("--index", type=int, help="Catalog row index to sample.")
     posterior.add_argument(
         "--limit", type=int, default=5, help="Maximum catalog rows to sample."
@@ -156,42 +144,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_fit_overrides(posterior)
     add_sample_overrides(posterior)
-
-    ou_prepare = sub.add_parser(
-        "openuniverse-prepare",
-        help=argparse.SUPPRESS,
-    )
-    _hide_subparser_from_help(sub, "openuniverse-prepare")
-    ou_prepare.add_argument(
-        "--input-root",
-        help="Directory or URI containing galaxy_<hpix> and galaxy_flux_<hpix> files.",
-    )
-    ou_prepare.add_argument(
-        "--hpix",
-        nargs="+",
-        type=int,
-        help="One or more nside=32 HEALPix ids to process.",
-    )
-    ou_prepare.add_argument(
-        "--limit",
-        type=int,
-        help="Maximum joined rows to write across the selected HEALPix ids.",
-    )
-    ou_prepare.add_argument(
-        "--min-flux-valid-bands",
-        type=int,
-        help="Minimum finite positive truth-flux bands required per object.",
-    )
-    ou_prepare.add_argument(
-        "--noise-snr",
-        type=float,
-        help="Override fractional SNR for the default noise model.",
-    )
-    ou_prepare.add_argument("--seed", type=int, help="Noise RNG seed.")
-    ou_prepare.add_argument(
-        "--out",
-        help="Output normalized parquet path.",
-    )
 
     synthetic = sub.add_parser(
         "amortized-synthetic-smoke",
@@ -323,15 +275,6 @@ def build_parser() -> argparse.ArgumentParser:
         default_out="outputs/runs/dev_amortized_diffsky_infer",
     )
 
-    overlap = sub.add_parser(
-        "amortized-prior-overlap-diffsky",
-        help="Compare Diffsky truth, posterior aggregate, and learned RealNVP prior.",
-    )
-    overlap.add_argument("--run", required=True, help="Inference output directory.")
-    overlap.add_argument("--dataset", help="Prepared Diffsky parquet override.")
-    overlap.add_argument("--out", help="Output report directory.")
-    overlap.add_argument("--max-objects", type=int)
-
     finalize = sub.add_parser(
         "amortized-finalize-inference",
         help="Combine sharded amortized inference outputs and write diagnostics.",
@@ -350,6 +293,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fit free-redshift MAP DSPS estimates under a learned RealNVP prior.",
     )
     map_prior.add_argument("--out", default="outputs/runs/dev_diffsky_map_prior")
+    map_prior.add_argument("--dataset", help="Override config catalog_path.")
     map_prior.add_argument("--checkpoint", required=True)
     map_prior.add_argument("--feature-stats")
     map_prior.add_argument("--limit", type=int)
@@ -398,119 +342,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     map_prior.add_argument("--quiet", action="store_true")
 
-    latent_geometry = sub.add_parser(
-        "diffsky-latent-prior-geometry",
-        help="Write diagnostics for the physical prior induced by x~N(0,1).",
-    )
-    latent_geometry.add_argument(
-        "--out",
-        default="outputs/reports/diffsky_latent_prior_geometry",
-    )
-    latent_geometry.add_argument("--n-samples", type=int, default=200_000)
-    latent_geometry.add_argument("--seed", type=int, default=42)
-
-    closure_optimum = sub.add_parser(
-        "diffsky-closure-optimum-diagnostics",
-        help="Compare projected truth, NN median, and flat MAP in the DSPS likelihood.",
-    )
-    closure_optimum.add_argument(
-        "--out",
-        default="outputs/runs/diffsky_closure_optimum_diagnostics",
-    )
-    closure_optimum.add_argument("--checkpoint", required=True)
-    closure_optimum.add_argument("--feature-stats")
-    closure_optimum.add_argument("--nn-run")
-    closure_optimum.add_argument("--row-indices-file")
-    closure_optimum.add_argument("--limit", type=int)
-    closure_optimum.add_argument("--batch-size", type=int, default=128)
-    closure_optimum.add_argument("--map-n-starts", type=int, default=8)
-    closure_optimum.add_argument("--map-maxiter", type=int, default=160)
-    closure_optimum.add_argument("--map-learning-rate", type=float, default=0.015)
-    closure_optimum.add_argument(
-        "--map-start-mode",
-        choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
-        default="mixed",
-    )
-    closure_optimum.add_argument("--map-start-chunk-size", type=int, default=4)
-    closure_optimum.add_argument(
-        "--map-prior-density-space",
-        choices=["x", "theta"],
-        default="x",
-    )
-    closure_optimum.add_argument(
-        "--selection-mode",
-        choices=["sequential", "random", "stratified_redshift"],
-    )
-    closure_optimum.add_argument(
-        "--stratified-strategy",
-        choices=["balanced", "proportional"],
-    )
-    closure_optimum.add_argument("--selection-seed", type=int)
-    closure_optimum.add_argument("--redshift-profile-count", type=int, default=24)
-    closure_optimum.add_argument("--redshift-grid-size", type=int, default=96)
-    closure_optimum.add_argument(
-        "--redshift-profile-source",
-        choices=["truth_projected", "nn_median", "map_flat"],
-        default="truth_projected",
-    )
-    closure_optimum.add_argument(
-        "--skip-map",
-        action="store_true",
-        help="Only evaluate truth/NN tables; do not run the flat-prior MAP stage.",
-    )
-    closure_optimum.add_argument("--quiet", action="store_true")
-
-    map_sweep = sub.add_parser(
-        "diffsky-map-prior-sweep",
-        help="Run a compact MAP sweep over learned-prior weights.",
-    )
-    map_sweep.add_argument("--out", default="outputs/runs/diffsky_map_prior_sweep")
-    map_sweep.add_argument("--checkpoint", required=True)
-    map_sweep.add_argument("--feature-stats")
-    map_sweep.add_argument(
-        "--weights",
-        default="0,0.03,0.1,0.3,1.0",
-        help="Comma-separated prior weights.",
-    )
-    map_sweep.add_argument("--row-indices-file")
-    map_sweep.add_argument("--limit", type=int)
-    map_sweep.add_argument("--batch-size", type=int, default=128)
-    map_sweep.add_argument("--n-starts", type=int, default=8)
-    map_sweep.add_argument("--maxiter", type=int, default=160)
-    map_sweep.add_argument("--learning-rate", type=float, default=0.015)
-    map_sweep.add_argument(
-        "--start-mode",
-        choices=["encoder", "prior", "z_grid", "lowz_grid", "latin_hypercube", "mixed"],
-        default="mixed",
-    )
-    map_sweep.add_argument("--start-chunk-size", type=int, default=4)
-    map_sweep.add_argument(
-        "--prior-density-space",
-        choices=["x", "theta"],
-        default="x",
-    )
-    map_sweep.add_argument(
-        "--selection-mode",
-        choices=["sequential", "random", "stratified_redshift"],
-    )
-    map_sweep.add_argument(
-        "--stratified-strategy",
-        choices=["balanced", "proportional"],
-    )
-    map_sweep.add_argument("--selection-seed", type=int)
-    map_sweep.add_argument("--seed", type=int, default=42)
-    map_sweep.add_argument("--quiet", action="store_true")
-
-    finalize_map_sweep = sub.add_parser(
-        "diffsky-finalize-map-prior-sweep",
-        help="Combine sharded MAP-prior sweep outputs and write summary plots.",
-    )
-    finalize_map_sweep.add_argument(
-        "--out",
-        default="outputs/runs/diffsky_map_prior_sweep",
-    )
-    finalize_map_sweep.add_argument("--quiet", action="store_true")
-
     train_prior = sub.add_parser(
         "diffsky-train-supervised-prior",
         help="Train a supervised RealNVP prior directly on Diffsky truth parameters.",
@@ -531,6 +362,60 @@ def build_parser() -> argparse.ArgumentParser:
     )
     train_prior.add_argument("--quiet", action="store_true")
     train_prior.add_argument("--no-progress", action="store_true")
+
+    workflow_plan = sub.add_parser(
+        "diffsky-plan-prior-workflow",
+        help="Audit and write the FENIKS prior-learning workflow plan.",
+    )
+    workflow_plan.add_argument(
+        "--validation-config",
+        default="configs/diffsky_synthetic_feniks_260617_50k.yaml",
+        help="Validation config used for closure gates.",
+    )
+    workflow_plan.add_argument(
+        "--prior-config",
+        default="configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml",
+        help="Supervised NF-prior config.",
+    )
+    workflow_plan.add_argument(
+        "--amortized-config",
+        default="configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml",
+        help="Amortized NN+DSPS+NF config.",
+    )
+    workflow_plan.add_argument(
+        "--out",
+        default="outputs/reports/feniks_prior_workflow",
+        help="Directory for workflow_plan.md and workflow_plan.json.",
+    )
+    workflow_plan.add_argument(
+        "--prior-out",
+        default="outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp",
+    )
+    workflow_plan.add_argument(
+        "--amortized-out",
+        default="outputs/runs/amortized_diffsky_synthetic_feniks_full",
+    )
+    workflow_plan.add_argument(
+        "--inference-out",
+        default="outputs/runs/amortized_diffsky_synthetic_feniks_full_test_infer",
+    )
+    workflow_plan.add_argument(
+        "--map-out",
+        default="outputs/runs/map_diffsky_synthetic_feniks_under_prior",
+    )
+    workflow_plan.add_argument(
+        "--mclmc-out",
+        default="outputs/runs/mclmc_diffsky_synthetic_feniks_flat",
+    )
+    workflow_plan.add_argument(
+        "--inferred-prior-out",
+        default="outputs/runs/prior_diffsky_synthetic_feniks_from_inferred",
+    )
+    workflow_plan.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when the preflight finds blocking missing inputs.",
+    )
 
     train_inferred_prior = sub.add_parser(
         "diffsky-train-inferred-prior",
@@ -573,18 +458,6 @@ def build_parser() -> argparse.ArgumentParser:
     report_prior.add_argument("--schema")
     report_prior.add_argument("--out")
     report_prior.add_argument("--max-truth", type=int)
-
-    forward_closure = sub.add_parser(
-        "diffsky-forward-closure",
-        help="Run true-parameter Diffsky forward closure against prepared photometry.",
-    )
-    forward_closure.add_argument("--dataset", required=True)
-    forward_closure.add_argument("--limit", type=int)
-    forward_closure.add_argument("--batch-size", type=int, default=64)
-    forward_closure.add_argument(
-        "--out",
-        default="outputs/runs/diffsky_trueparam_forward_closure",
-    )
 
     generate_closure = sub.add_parser(
         "diffsky-generate-dsps-closure",
@@ -678,278 +551,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip optional matplotlib plots and write only tables/JSON/report.",
     )
 
-    proxy_closure = sub.add_parser(
-        "diffsky-popcosmos-proxy-closure",
-        help="Run PopCosmos proxy-truth closure for the amortized decoder.",
-    )
-    proxy_closure.add_argument("--dataset", required=True)
-    proxy_closure.add_argument("--limit", type=int)
-    proxy_closure.add_argument("--batch-size", type=int, default=64)
-    proxy_closure.add_argument(
-        "--out",
-        default="outputs/runs/diffsky_popcosmos_proxy_truth_closure",
-    )
-
-    redshift_ablation = sub.add_parser(
-        "diffsky-redshift-ablation",
-        help="Compare redshift posterior metrics across Diffsky inference runs.",
-    )
-    redshift_ablation.add_argument("--dataset", required=True)
-    redshift_ablation.add_argument(
-        "--run",
-        action="append",
-        default=[],
-        help="Run directory, optionally as label=path. Repeat for each method.",
-    )
-    redshift_ablation.add_argument(
-        "--out",
-        default="outputs/reports/diffsky_redshift_ablation",
-    )
-
-    rowsets = sub.add_parser(
-        "diffsky-build-reconstruction-rowsets",
-        help="Build reproducible Diffsky reconstruction rowsets from a reference run.",
-    )
-    rowsets.add_argument("--train-run", required=True)
-    rowsets.add_argument("--infer-run", required=True)
-    rowsets.add_argument(
-        "--out",
-        default="outputs/rowsets/diffsky_reconstruction_reference",
-    )
-    rowsets.add_argument(
-        "--worst-size",
-        action="append",
-        type=int,
-        default=[],
-        help="Worst-N rowset size to write. Repeatable; defaults to 500 and 1000.",
-    )
-    rowsets.add_argument(
-        "--metric",
-        default="median_abs_sigma",
-        help="Object ranking metric from the residual summary aggregation.",
-    )
-    rowsets.add_argument(
-        "--balanced-size",
-        type=int,
-        default=20000,
-        help=(
-            "Balanced diagnostic rowset size stratified by redshift and "
-            "photometric quality; use 0 to disable."
-        ),
-    )
-    rowsets.add_argument(
-        "--balanced-seed",
-        type=int,
-        default=42,
-        help="Random seed for the balanced diagnostic rowset.",
-    )
-
-    compare_reconstruction = sub.add_parser(
-        "diffsky-compare-reconstruction",
-        help="Compare NN, MAP, and MCLMC reconstruction residual summaries.",
-    )
-    compare_reconstruction.add_argument("--out", required=True)
-    compare_reconstruction.add_argument(
-        "--run",
-        action="append",
-        default=[],
-        help="Run directory as label=path. Repeat for each method.",
-    )
-    compare_reconstruction.add_argument(
-        "--rowset",
-        help="Optional row-index file used to restrict the comparison.",
-    )
-
-    dust_audit = sub.add_parser(
-        "diffsky-dust-ssp-audit",
-        help="Audit PopCosmos dust parameters against the configured SSP assets.",
-    )
-    dust_audit.add_argument("--out", default="outputs/reports/diffsky_dust_ssp_audit")
-
-    full_validation = sub.add_parser(
-        "diffsky-run-full-validation",
-        help="Run or aggregate the full Diffsky physical-validation workflow.",
-    )
-    full_validation.add_argument("--dataset")
-    full_validation.add_argument(
-        "--out",
-        default="outputs/runs/diffsky_full_validation",
-    )
-    full_validation.add_argument("--limit", type=int)
-    full_validation.add_argument("--batch-size", type=int)
-    full_validation.add_argument("--epochs", type=int)
-    full_validation.add_argument("--n-samples", type=int)
-    full_validation.add_argument(
-        "--jax-batch-size",
-        type=int,
-        help="Override amortized JAX/DSPS compiled batch cap for full validation stages.",
-    )
-    full_validation.add_argument(
-        "--decoder-sample-chunk-size",
-        type=int,
-        help="Override posterior/prior decoder sample chunk size for amortized inference.",
-    )
-    full_validation.add_argument(
-        "--prior-predictive-batch-size",
-        type=int,
-        help="Override learned-prior predictive DSPS batch size.",
-    )
-    full_validation.add_argument("--posterior-samples", type=int)
-    full_validation.add_argument("--prior-samples", type=int)
-    full_validation.add_argument("--seed", type=int)
-    full_validation.add_argument(
-        "--report-only",
-        action="store_true",
-        help="Only aggregate existing stage outputs and write the final report.",
-    )
-    full_validation.add_argument(
-        "--run",
-        action="append",
-        default=[],
-        help="Existing inference run, optionally as label=path. Repeatable.",
-    )
-    full_validation.add_argument("--closure-run")
-    full_validation.add_argument("--quiet", action="store_true")
-    full_validation.add_argument("--no-progress", action="store_true")
-
-    inr_train = sub.add_parser(
-        "experimental-ssp-inr-train",
-        help=argparse.SUPPRESS,
-    )
-    _hide_subparser_from_help(sub, "experimental-ssp-inr-train")
-    add_experimental_ssp_inr_common(inr_train)
-    inr_train.add_argument(
-        "--model",
-        choices=(
-            "direct_fourier_mlp",
-            "direct_siren",
-            "latent_basis_mlp",
-            "compressed_coeff_mlp",
-        ),
-        required=True,
-        help="Experimental compression model to train.",
-    )
-    inr_train.add_argument("--steps", type=int)
-    inr_train.add_argument("--batch-size", type=int, default=4096)
-    inr_train.add_argument("--learning-rate", type=float, default=1.0e-3)
-    inr_train.add_argument("--hidden-width", type=int, default=64)
-    inr_train.add_argument("--hidden-layers", type=int, default=3)
-    inr_train.add_argument("--fourier-features", type=int, default=6)
-    inr_train.add_argument("--basis-k", type=int, default=32)
-    inr_train.add_argument(
-        "--latent-loss",
-        choices=("log_flux", "coeff"),
-        default="log_flux",
-        help="Latent model objective. log_flux trains reconstruction end-to-end.",
-    )
-    inr_train.add_argument(
-        "--loss-kind",
-        choices=("huber", "mse"),
-        default="huber",
-        help="Pointwise loss for --latent-loss log_flux.",
-    )
-    inr_train.add_argument("--huber-delta", type=float, default=0.05)
-    inr_train.add_argument(
-        "--flux-weight-floor-frac",
-        type=float,
-        default=1.0e-4,
-        help="Train/evaluate emphasis mask: flux must exceed this fraction of each curve peak.",
-    )
-    inr_train.add_argument(
-        "--residual-baseline",
-        help="Existing compressed asset; latent model learns log residual over it.",
-    )
-    inr_train.add_argument(
-        "--coeff-baseline",
-        help=(
-            "Existing compressed asset whose basis is kept and whose coefficient "
-            "table is replaced by compressed_coeff_mlp."
-        ),
-    )
-    inr_train.add_argument(
-        "--coeff-loss",
-        choices=("coeff", "log_flux", "mixed"),
-        default="mixed",
-        help="Objective for compressed_coeff_mlp.",
-    )
-    inr_train.add_argument(
-        "--coeff-log-weight",
-        type=float,
-        default=0.1,
-        help="Log-flux loss weight when --coeff-loss=mixed.",
-    )
-    inr_train.add_argument(
-        "--factor-agn-fagn",
-        action="store_true",
-        help="For agn_lnu_per_mformed, learn the fagn-factored component.",
-    )
-    inr_train.add_argument("--val-size", type=int, default=8192)
-    inr_train.add_argument("--no-progress", action="store_true")
-
-    inr_eval = sub.add_parser(
-        "experimental-ssp-inr-eval",
-        help=argparse.SUPPRESS,
-    )
-    _hide_subparser_from_help(sub, "experimental-ssp-inr-eval")
-    add_experimental_ssp_inr_common(inr_eval)
-    inr_eval.add_argument(
-        "--checkpoint",
-        action="append",
-        default=[],
-        help="Path to an experimental SSP INR model.npz. Repeat for multiple models.",
-    )
-    inr_eval.add_argument(
-        "--compressed-baseline",
-        action="append",
-        default=[],
-        help="Existing compressed SSP/gas/AGN HDF5 asset to compare. Repeatable.",
-    )
-    inr_eval.add_argument("--chunk-size", type=int, default=65536)
-    inr_eval.add_argument("--timing-repeats", type=int, default=10)
-    inr_eval.add_argument("--relative-flux-floor", type=float, default=1.0e-30)
-    inr_eval.add_argument(
-        "--peak-floor-frac",
-        action="append",
-        type=float,
-        default=[],
-        help="Add per-curve significant-flux mask threshold. Repeatable.",
-    )
-    inr_eval.add_argument(
-        "--log-svd-k",
-        action="append",
-        type=int,
-        default=[],
-        help="Add an oracle explicit log-SVD baseline rank. Repeatable.",
-    )
-
-    inr_report = sub.add_parser(
-        "experimental-ssp-inr-report",
-        help=argparse.SUPPRESS,
-    )
-    _hide_subparser_from_help(sub, "experimental-ssp-inr-report")
-    inr_report.add_argument(
-        "--metrics",
-        required=True,
-        help="metrics.json or metrics_summary.csv from experimental-ssp-inr-eval.",
-    )
-    inr_report.add_argument(
-        "--out",
-        default="outputs/ssp_inr/report.md",
-        help="Markdown report path.",
-    )
-
     from .diffsky_data.cli import add_diffsky_subcommands
 
     add_diffsky_subcommands(sub)
     return parser
-
-
-def _hide_subparser_from_help(sub: argparse._SubParsersAction, name: str) -> None:
-    sub._choices_actions = [  # type: ignore[attr-defined]
-        action
-        for action in sub._choices_actions  # type: ignore[attr-defined]
-        if getattr(action, "dest", None) != name
-    ]
 
 
 def _add_amortized_train_arguments(
@@ -958,6 +563,7 @@ def _add_amortized_train_arguments(
     default_out: str,
 ) -> None:
     parser.add_argument("--out", default=default_out)
+    parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
@@ -1066,6 +672,7 @@ def _add_amortized_infer_arguments(
     default_out: str,
 ) -> None:
     parser.add_argument("--out", default=default_out)
+    parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
@@ -1144,23 +751,13 @@ def main(argv: list[str] | None = None) -> None:
         "diffsky-train-supervised-prior",
         "diffsky-sample-supervised-prior",
         "diffsky-supervised-prior-report",
-        "diffsky-forward-closure",
         "diffsky-generate-dsps-closure",
         "diffsky-validate-dsps-closure",
         "diffsky-evaluate-dsps-closure-inference",
         "diffsky-compare-dsps-closure-reference",
-        "diffsky-popcosmos-proxy-closure",
-        "diffsky-redshift-ablation",
-        "diffsky-run-full-validation",
         "diffsky-map-adam-prior",
-        "diffsky-latent-prior-geometry",
-        "diffsky-closure-optimum-diagnostics",
-        "diffsky-map-prior-sweep",
-        "diffsky-finalize-map-prior-sweep",
         "diffsky-train-inferred-prior",
-        "diffsky-dust-ssp-audit",
-        "diffsky-build-reconstruction-rowsets",
-        "diffsky-compare-reconstruction",
+        "diffsky-plan-prior-workflow",
     }
     if args.command == "download-assets":
         from .assets import download_assets
@@ -1203,21 +800,10 @@ def main(argv: list[str] | None = None) -> None:
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
         }
-    if (
-        args.command.startswith("experimental-ssp-inr")
-        and getattr(args, "runtime", "config") != "config"
-    ):
-        runtime_config = {
-            **runtime_config,
-            **RUNTIME_PRESETS[str(args.runtime)],
-        }
     apply_jax_runtime_env(runtime_config)
 
     if args.command == "amortized-synthetic-smoke":
         _run_amortized_synthetic(config, args)
-        return
-    if args.command == "openuniverse-prepare":
-        _run_openuniverse_prepare(config, args)
         return
     if args.command == "amortized-train-fs2":
         _run_amortized_train(config, args)
@@ -1237,35 +823,20 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "diffsky-map-adam-prior":
         _run_diffsky_map_adam_prior(config, args)
         return
-    if args.command == "diffsky-latent-prior-geometry":
-        _run_diffsky_latent_prior_geometry(config, args)
-        return
-    if args.command == "diffsky-closure-optimum-diagnostics":
-        _run_diffsky_closure_optimum_diagnostics(config, args)
-        return
-    if args.command == "diffsky-map-prior-sweep":
-        _run_diffsky_map_prior_sweep(config, args)
-        return
-    if args.command == "diffsky-finalize-map-prior-sweep":
-        _run_diffsky_finalize_map_prior_sweep(config, args)
-        return
-    if args.command == "amortized-prior-overlap-diffsky":
-        _run_amortized_prior_overlap_diffsky(config, args)
-        return
     if args.command == "diffsky-train-supervised-prior":
         _run_diffsky_train_supervised_prior(config, args)
         return
     if args.command == "diffsky-train-inferred-prior":
         _run_diffsky_train_inferred_prior(config, args)
         return
+    if args.command == "diffsky-plan-prior-workflow":
+        _run_diffsky_prior_workflow_plan(config, args)
+        return
     if args.command == "diffsky-sample-supervised-prior":
         _run_diffsky_sample_supervised_prior(config, args)
         return
     if args.command == "diffsky-supervised-prior-report":
         _run_diffsky_supervised_prior_report(config, args)
-        return
-    if args.command == "diffsky-forward-closure":
-        _run_diffsky_forward_closure(config, args)
         return
     if args.command == "diffsky-generate-dsps-closure":
         _run_diffsky_generate_dsps_closure(config, args)
@@ -1279,38 +850,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "diffsky-compare-dsps-closure-reference":
         _run_diffsky_compare_dsps_closure_reference(config, args)
         return
-    if args.command == "diffsky-popcosmos-proxy-closure":
-        _run_diffsky_popcosmos_proxy_closure(config, args)
-        return
-    if args.command == "diffsky-redshift-ablation":
-        _run_diffsky_redshift_ablation(config, args)
-        return
-    if args.command == "diffsky-build-reconstruction-rowsets":
-        _run_diffsky_build_reconstruction_rowsets(config, args)
-        return
-    if args.command == "diffsky-compare-reconstruction":
-        _run_diffsky_compare_reconstruction(config, args)
-        return
-    if args.command == "diffsky-dust-ssp-audit":
-        _run_diffsky_dust_ssp_audit(config, args)
-        return
-    if args.command == "diffsky-run-full-validation":
-        _run_diffsky_full_validation(config, args)
-        return
-    if args.command == "experimental-ssp-inr-train":
-        _run_experimental_ssp_inr_train(args)
-        return
-    if args.command == "experimental-ssp-inr-eval":
-        _run_experimental_ssp_inr_eval(args)
-        return
-    if args.command == "experimental-ssp-inr-report":
-        _run_experimental_ssp_inr_report(args)
-        return
-
     from .workflows import (
         fit_batch,
         fit_one,
-        reconstruct_cosmos_seds,
         run_batch,
         run_eda,
         run_one,
@@ -1324,18 +866,6 @@ def main(argv: list[str] | None = None) -> None:
         _apply_sed_diagnostic_overrides(config, args)
         if args.kind == "eda":
             run_eda(config, Path(args.out))
-        elif args.kind == "cosmos":
-            reconstruct_cosmos_seds(
-                config,
-                Path(args.out),
-                limit=_limit_arg(args),
-                batch_size=args.batch_size,
-                index=getattr(args, "index", None),
-                compare_dsps=False,
-                fit_dsps=False,
-                population_dsps=False,
-                sample_plot_count=getattr(args, "plot_samples", None),
-            )
         elif getattr(args, "index", None) is not None:
             run_one(config, Path(args.out))
         else:
@@ -1376,6 +906,9 @@ def main(argv: list[str] | None = None) -> None:
                 start_index=getattr(args, "start_index", 0),
             )
     elif args.command == "posterior":
+        if getattr(args, "dataset", None):
+            config = dict(config)
+            config["catalog_path"] = str(args.dataset)
         _apply_selection_overrides(config, args)
         _apply_fit_overrides(config, args)
         _apply_sample_overrides(config, args)
@@ -1422,53 +955,6 @@ def _run_amortized_synthetic(config: dict, args) -> None:
         batch_size=int(args.batch_size or training.get("batch_size", 32)),
         seed=int(args.seed if args.seed is not None else training.get("seed", 42)),
         mock_decoder=bool(args.mock_decoder),
-    )
-
-
-def _run_openuniverse_prepare(config: dict, args) -> None:
-    from .openuniverse.prepare import prepare_openuniverse_lsst_roman_subset
-
-    ou_cfg = dict(config.get("openuniverse", {}) or {})
-    hpix_ids = args.hpix if args.hpix is not None else ou_cfg.get("hpix_ids")
-    if not hpix_ids:
-        raise SystemExit(
-            "openuniverse-prepare requires --hpix or openuniverse.hpix_ids. "
-            "Refusing to process an implicit large dataset."
-        )
-    input_root = args.input_root or ou_cfg.get("input_root")
-    if not input_root:
-        raise SystemExit(
-            "openuniverse-prepare requires --input-root or config input_root"
-        )
-    output_path = args.out or ou_cfg.get(
-        "output_path",
-        "Data/openuniverse/processed/ou_lsst_roman_14.parquet",
-    )
-    noise_model = dict(ou_cfg.get("noise_model", {}) or {})
-    if args.noise_snr is not None:
-        noise_model = {"type": "fractional_snr", "snr": float(args.noise_snr)}
-    if not noise_model:
-        noise_model = None
-    manifest = prepare_openuniverse_lsst_roman_subset(
-        hpix_ids=hpix_ids,
-        input_root=input_root,
-        output_path=output_path,
-        limit=args.limit if args.limit is not None else ou_cfg.get("limit"),
-        min_flux_valid_bands=int(
-            args.min_flux_valid_bands
-            if args.min_flux_valid_bands is not None
-            else ou_cfg.get("min_flux_valid_bands", 8)
-        ),
-        noise_model=noise_model,
-        seed=int(args.seed if args.seed is not None else ou_cfg.get("seed", 42)),
-    )
-    print(
-        "[openuniverse] prepared "
-        f"{manifest['number_of_rows']} rows -> {manifest['output_path']}"
-    )
-    print(
-        "[openuniverse] manifest -> "
-        f"{Path(manifest['output_path']).with_suffix('.manifest.yaml')}"
     )
 
 
@@ -1551,6 +1037,43 @@ def _run_diffsky_train_inferred_prior(config: dict, args) -> None:
     )
 
 
+def _run_diffsky_prior_workflow_plan(config: dict, args) -> None:
+    from .config import load_config
+    from .prior_learning.workflow import (
+        build_feniks_prior_workflow_plan,
+        write_feniks_prior_workflow_plan,
+    )
+
+    validation_config = load_config(args.validation_config)
+    prior_config = load_config(args.prior_config)
+    amortized_config = load_config(args.amortized_config)
+    plan = build_feniks_prior_workflow_plan(
+        config,
+        validation_config=validation_config,
+        prior_config=prior_config,
+        amortized_config=amortized_config,
+        generation_config_path=str(args.config),
+        validation_config_path=str(args.validation_config),
+        prior_config_path=str(args.prior_config),
+        amortized_config_path=str(args.amortized_config),
+        prior_out=str(args.prior_out),
+        amortized_out=str(args.amortized_out),
+        inference_out=str(args.inference_out),
+        map_out=str(args.map_out),
+        mclmc_out=str(args.mclmc_out),
+        inferred_prior_out=str(args.inferred_prior_out),
+    )
+    outputs = write_feniks_prior_workflow_plan(plan, Path(args.out))
+    print(f"[workflow] markdown -> {outputs['markdown']}")
+    print(f"[workflow] json -> {outputs['json']}")
+    if plan.blockers:
+        print("[workflow] blockers:")
+        for blocker in plan.blockers:
+            print(f"[workflow] - {blocker}")
+        if bool(getattr(args, "strict", False)):
+            raise SystemExit(2)
+
+
 def _run_diffsky_sample_supervised_prior(config: dict, args) -> None:
     try:
         from .prior_learning.infer import sample_supervised_prior
@@ -1585,19 +1108,6 @@ def _run_diffsky_supervised_prior_report(config: dict, args) -> None:
         max_truth=args.max_truth,
     )
     print(f"[prior] report -> {outputs['report']}")
-
-
-def _run_diffsky_forward_closure(config: dict, args) -> None:
-    from .diffsky_forward_closure import run_diffsky_forward_closure
-
-    report = run_diffsky_forward_closure(
-        config,
-        dataset_path=Path(args.dataset),
-        out_dir=Path(args.out),
-        limit=args.limit,
-        batch_size=int(args.batch_size),
-    )
-    print(f"[diffsky] forward closure report -> {report}")
 
 
 def _run_diffsky_generate_dsps_closure(config: dict, args) -> None:
@@ -1659,109 +1169,10 @@ def _run_diffsky_compare_dsps_closure_reference(config: dict, args) -> None:
     print(f"[diffsky] synthetic-vs-reference report -> {outputs['report']}")
 
 
-def _run_diffsky_popcosmos_proxy_closure(config: dict, args) -> None:
-    from .diffsky_forward_closure import run_popcosmos_proxy_truth_closure
-
-    report = run_popcosmos_proxy_truth_closure(
-        config,
-        dataset_path=Path(args.dataset),
-        out_dir=Path(args.out),
-        limit=args.limit,
-        batch_size=int(args.batch_size),
-    )
-    print(f"[diffsky] PopCosmos proxy closure report -> {report}")
-
-
-def _run_diffsky_redshift_ablation(config: dict, args) -> None:
-    del config
-    from .diffsky_redshift_ablation import parse_run_specs, run_redshift_ablation
-
-    if not args.run:
-        raise SystemExit("diffsky-redshift-ablation requires at least one --run")
-    report = run_redshift_ablation(
-        dataset_path=Path(args.dataset),
-        runs=parse_run_specs(args.run),
-        out_dir=Path(args.out),
-    )
-    print(f"[diffsky] redshift ablation report -> {report}")
-
-
-def _run_diffsky_build_reconstruction_rowsets(config: dict, args) -> None:
-    from .reconstruction_experiments import build_reconstruction_rowsets
-
-    redshift_bins = (
-        ((config.get("amortized", {}) or {}).get("data", {}) or {}).get(
-            "redshift_bins",
-            None,
-        )
-    )
-    outputs = build_reconstruction_rowsets(
-        train_run=Path(args.train_run),
-        infer_run=Path(args.infer_run),
-        out_dir=Path(args.out),
-        worst_sizes=tuple(args.worst_size or [500, 1000]),
-        metric=str(args.metric),
-        balanced_size=int(args.balanced_size),
-        balanced_seed=int(args.balanced_seed),
-        redshift_bins=redshift_bins,
-    )
-    print(f"[diffsky] rowsets manifest -> {outputs['manifest']}")
-
-
-def _run_diffsky_compare_reconstruction(config: dict, args) -> None:
-    del config
-    from .diffsky_redshift_ablation import parse_run_specs
-    from .reconstruction_experiments import compare_reconstruction_runs
-
-    if not args.run:
-        raise SystemExit("diffsky-compare-reconstruction requires at least one --run")
-    outputs = compare_reconstruction_runs(
-        out_dir=Path(args.out),
-        runs=parse_run_specs(args.run),
-        rowset_path=Path(args.rowset) if args.rowset else None,
-    )
-    print(f"[diffsky] reconstruction report -> {outputs['report']}")
-
-
-def _run_diffsky_dust_ssp_audit(config: dict, args) -> None:
-    from .dust_ssp_audit import write_dust_ssp_audit
-
-    payload = write_dust_ssp_audit(config, args.out)
-    print(
-        "[diffsky] dust/SSP audit -> "
-        f"{args.out} ({payload.get('dust_model')}, {payload.get('ssp_path')})"
-    )
-
-
-def _run_diffsky_full_validation(config: dict, args) -> None:
-    from .diffsky_full_validation import run_diffsky_full_validation
-    from .diffsky_redshift_ablation import parse_run_specs
-
-    report = run_diffsky_full_validation(
-        config,
-        out_dir=Path(args.out),
-        dataset_path=Path(args.dataset) if args.dataset else None,
-        limit=args.limit,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        n_samples=args.n_samples,
-        jax_batch_size=args.jax_batch_size,
-        decoder_sample_chunk_size=args.decoder_sample_chunk_size,
-        prior_predictive_batch_size=args.prior_predictive_batch_size,
-        posterior_samples=args.posterior_samples,
-        prior_samples=args.prior_samples,
-        seed=args.seed,
-        report_only=bool(args.report_only),
-        runs=parse_run_specs(args.run),
-        closure_run=Path(args.closure_run) if args.closure_run else None,
-        verbose=not bool(args.quiet),
-        progress=not bool(args.no_progress),
-    )
-    print(f"[diffsky] full validation report -> {report}")
-
-
 def _apply_amortized_train_overrides(config: dict, args) -> dict:
     config = dict(config)
+    if getattr(args, "dataset", None):
+        config["catalog_path"] = str(args.dataset)
     amortized = dict(config.get("amortized", {}) or {})
     data = dict(amortized.get("data", {}) or {})
     training = dict(amortized.get("training", {}) or {})
@@ -1841,6 +1252,9 @@ def _run_amortized_infer(
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
 
+    if getattr(args, "dataset", None):
+        config = dict(config)
+        config["catalog_path"] = str(args.dataset)
     if getattr(args, "jax_batch_size", None) is not None:
         config = dict(config)
         amortized = dict(config.get("amortized", {}) or {})
@@ -1921,6 +1335,9 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
     except ImportError as exc:
         raise SystemExit(str(exc)) from exc
 
+    if getattr(args, "dataset", None):
+        config = dict(config)
+        config["catalog_path"] = str(args.dataset)
     cfg = amortized_config(config)
     training = cfg["training"]
     map_cfg = dict(cfg.get("map_adam", {}) or {})
@@ -1966,267 +1383,6 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
     )
     print(f"[map-prior] summary -> {Path(args.out) / 'map_summary.json'}")
     print(f"[map-prior] objects -> {summary['n_objects']}")
-
-
-def _run_diffsky_latent_prior_geometry(config: dict, args) -> None:
-    from .amortized.latent import write_latent_prior_geometry
-
-    payload = write_latent_prior_geometry(
-        config,
-        Path(args.out),
-        n_samples=int(args.n_samples),
-        seed=int(args.seed),
-    )
-    print(f"[diffsky] latent prior geometry -> {Path(args.out)}")
-    print(
-        "[diffsky] max near-bound fraction -> "
-        f"{payload.get('max_frac_within_either_5pct')}"
-    )
-
-
-def _run_diffsky_closure_optimum_diagnostics(config: dict, args) -> None:
-    from .amortized.closure_optimum import run_closure_optimum_diagnostics
-
-    summary = run_closure_optimum_diagnostics(
-        config,
-        Path(args.out),
-        checkpoint=Path(args.checkpoint),
-        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
-        nn_run=Path(args.nn_run) if args.nn_run else None,
-        row_indices_file=Path(args.row_indices_file) if args.row_indices_file else None,
-        limit=args.limit,
-        batch_size=int(args.batch_size),
-        map_n_starts=int(args.map_n_starts),
-        map_maxiter=int(args.map_maxiter),
-        map_learning_rate=float(args.map_learning_rate),
-        map_start_mode=str(args.map_start_mode),
-        map_start_chunk_size=int(args.map_start_chunk_size),
-        map_prior_density_space=str(args.map_prior_density_space),
-        selection_mode=getattr(args, "selection_mode", None),
-        stratified_strategy=getattr(args, "stratified_strategy", None),
-        selection_seed=getattr(args, "selection_seed", None),
-        redshift_profile_count=int(args.redshift_profile_count),
-        redshift_grid_size=int(args.redshift_grid_size),
-        redshift_profile_source=str(args.redshift_profile_source),
-        run_map=not bool(args.skip_map),
-        verbose=not bool(getattr(args, "quiet", False)),
-    )
-    print(f"[closure] summary -> {Path(args.out) / 'closure_optimum_summary.json'}")
-    print(f"[closure] objects -> {summary['n_objects']}")
-
-
-def _run_diffsky_map_prior_sweep(config: dict, args) -> None:
-    from .amortized.map_prior_sweep import run_map_prior_weight_sweep
-
-    weights = tuple(
-        float(item)
-        for item in str(args.weights).replace(";", ",").split(",")
-        if item.strip()
-    )
-    summary = run_map_prior_weight_sweep(
-        config,
-        Path(args.out),
-        checkpoint=Path(args.checkpoint),
-        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
-        weights=weights,
-        row_indices_file=Path(args.row_indices_file) if args.row_indices_file else None,
-        limit=args.limit,
-        batch_size=int(args.batch_size),
-        n_starts=int(args.n_starts),
-        maxiter=int(args.maxiter),
-        learning_rate=float(args.learning_rate),
-        start_mode=str(args.start_mode),
-        start_chunk_size=int(args.start_chunk_size),
-        prior_density_space=str(args.prior_density_space),
-        selection_mode=getattr(args, "selection_mode", None),
-        stratified_strategy=getattr(args, "stratified_strategy", None),
-        selection_seed=getattr(args, "selection_seed", None),
-        seed=int(args.seed),
-        verbose=not bool(getattr(args, "quiet", False)),
-    )
-    print(f"[map-sweep] summary -> {Path(args.out) / summary['summary']}")
-
-
-def _run_diffsky_finalize_map_prior_sweep(config: dict, args) -> None:
-    del config
-    from .amortized.map_prior_sweep import finalize_map_prior_weight_sweep
-
-    summary = finalize_map_prior_weight_sweep(
-        Path(args.out),
-        verbose=not bool(getattr(args, "quiet", False)),
-    )
-    print(f"[map-sweep] summary -> {Path(args.out) / summary['summary']}")
-
-
-def _run_amortized_prior_overlap_diffsky(config: dict, args) -> None:
-    from .amortized.prior_overlap import write_diffsky_prior_overlap_report
-
-    run_dir = Path(args.run)
-    dataset_path = Path(args.dataset) if args.dataset else Path(config["catalog_path"])
-    out_dir = Path(args.out) if args.out else run_dir / "prior_overlap"
-    report = write_diffsky_prior_overlap_report(
-        dataset_path=dataset_path,
-        run_dir=run_dir,
-        out_dir=out_dir,
-        config=config,
-        max_objects=args.max_objects,
-    )
-    print(f"[amortized] prior overlap -> {report}")
-
-
-def _run_experimental_ssp_inr_train(args) -> None:
-    try:
-        from .experimental.ssp_inr.train import train_experiment
-
-        result = train_experiment(
-            asset=args.asset,
-            dataset=args.dataset,
-            model=args.model,
-            out=args.out,
-            quick=bool(args.quick),
-            max_curves=args.max_curves,
-            max_wave=args.max_wave,
-            max_elements=int(args.max_elements),
-            allow_large_load=bool(args.allow_large_load),
-            seed=int(args.seed),
-            steps=args.steps,
-            batch_size=int(args.batch_size),
-            learning_rate=float(args.learning_rate),
-            hidden_width=int(args.hidden_width),
-            hidden_layers=int(args.hidden_layers),
-            fourier_features=int(args.fourier_features),
-            basis_k=int(args.basis_k),
-            eps=float(args.eps),
-            val_size=int(args.val_size),
-            plot_examples=int(args.plot_examples),
-            progress=not bool(args.no_progress),
-            latent_loss=str(args.latent_loss),
-            loss_kind=str(args.loss_kind),
-            huber_delta=float(args.huber_delta),
-            wave_min=float(args.wave_min),
-            wave_max=float(args.wave_max),
-            flux_weight_floor_frac=float(args.flux_weight_floor_frac),
-            residual_baseline=args.residual_baseline,
-            coeff_baseline=args.coeff_baseline,
-            coeff_loss=str(args.coeff_loss),
-            coeff_log_weight=float(args.coeff_log_weight),
-            factor_agn_fagn=bool(args.factor_agn_fagn),
-        )
-    except RuntimeError as exc:
-        if "JAX could not initialize the requested GPU backend" in str(exc):
-            raise SystemExit(str(exc)) from exc
-        raise
-    print(f"[ssp-inr] wrote checkpoint -> {result['checkpoint']}")
-    for plot in result.get("plots", []):
-        print(f"[ssp-inr] wrote plot -> {plot}")
-
-
-def _run_experimental_ssp_inr_eval(args) -> None:
-    try:
-        from .experimental.ssp_inr.evaluate import evaluate_experiment
-
-        result = evaluate_experiment(
-            asset=args.asset,
-            dataset=args.dataset,
-            out=args.out,
-            checkpoints=list(args.checkpoint or []),
-            compressed_baselines=list(args.compressed_baseline or []),
-            quick=bool(args.quick),
-            max_curves=args.max_curves,
-            max_wave=args.max_wave,
-            max_elements=int(args.max_elements),
-            allow_large_load=bool(args.allow_large_load),
-            seed=int(args.seed),
-            eps=float(args.eps),
-            relative_flux_floor=float(args.relative_flux_floor),
-            chunk_size=int(args.chunk_size),
-            timing_repeats=int(args.timing_repeats),
-            plot_examples=int(args.plot_examples),
-            wave_min=float(args.wave_min),
-            wave_max=float(args.wave_max),
-            peak_floor_fracs=tuple(args.peak_floor_frac or [1.0e-4, 1.0e-6]),
-            log_svd_k=list(args.log_svd_k or []),
-        )
-    except RuntimeError as exc:
-        if "JAX could not initialize the requested GPU backend" in str(exc):
-            raise SystemExit(str(exc)) from exc
-        raise
-    outputs = result["outputs"]
-    print(f"[ssp-inr] wrote metrics -> {outputs['metrics_json']}")
-    print(f"[ssp-inr] wrote summary -> {outputs['metrics_csv']}")
-    print(f"[ssp-inr] wrote report -> {outputs['report']}")
-
-
-def _run_experimental_ssp_inr_report(args) -> None:
-    from .experimental.ssp_inr.report import write_report
-
-    path = write_report(metrics_path=args.metrics, out=args.out)
-    print(f"[ssp-inr] wrote report -> {path}")
-
-
-def add_experimental_ssp_inr_common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--asset",
-        default="Data/fsps_v0.4.7_mist_c3k_a_chabrier_noNE.h5",
-        help="Dense HDF5 spectral asset.",
-    )
-    parser.add_argument(
-        "--dataset",
-        default="ssp_flux",
-        help="Dense spectral dataset inside --asset.",
-    )
-    parser.add_argument(
-        "--out",
-        default="outputs/ssp_inr/run",
-        help="Output directory.",
-    )
-    parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="Use a small curve/wavelength subset and shorter default training.",
-    )
-    parser.add_argument(
-        "--max-curves",
-        type=int,
-        help="Maximum number of curve-axis samples to load.",
-    )
-    parser.add_argument(
-        "--max-wave",
-        type=int,
-        help="Maximum number of wavelength samples to load.",
-    )
-    parser.add_argument(
-        "--max-elements",
-        type=int,
-        default=20_000_000,
-        help="Safety cap for loaded curve*wavelength elements.",
-    )
-    parser.add_argument(
-        "--allow-large-load",
-        action="store_true",
-        help="Allow loading more than --max-elements values.",
-    )
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--eps", type=float, default=1.0e-30)
-    parser.add_argument("--plot-examples", type=int, default=4)
-    parser.add_argument(
-        "--wave-min",
-        type=float,
-        default=900.0,
-        help="Lower Angstrom bound for useful-wave metrics and zoom plots.",
-    )
-    parser.add_argument(
-        "--wave-max",
-        type=float,
-        default=50000.0,
-        help="Upper Angstrom bound for useful-wave metrics and zoom plots.",
-    )
-    parser.add_argument(
-        "--runtime",
-        choices=("config", "auto", "cpu", "gpu"),
-        default="cpu",
-        help="Runtime override for this experimental JAX command.",
-    )
 
 
 def add_sample_overrides(parser: argparse.ArgumentParser) -> None:
@@ -2440,7 +1596,7 @@ def add_sed_diagnostic_overrides(parser: argparse.ArgumentParser) -> None:
         "--plot-ground-truth",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Overlay COSMOS proxy SED when local columns/resources are available.",
+        help="Reserved legacy ground-truth SED overlay; disabled in active workflows.",
     )
 
 

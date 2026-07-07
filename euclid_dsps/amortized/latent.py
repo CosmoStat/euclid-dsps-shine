@@ -42,6 +42,7 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         names = POPCOSMOS_PARAMETER_NAMES
     elif schema in {
         "config_free_parameters",
+        "diffsky_dsps_closure_full",
         "diffsky_hltds_prior_v1",
         "diffsky_truth_basic",
     }:
@@ -55,8 +56,8 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
     else:
         raise ValueError(
             "Unsupported amortized latent schema. Use 'popcosmos_16', "
-            "'config_free_parameters', 'diffsky_hltds_prior_v1', or "
-            "'diffsky_truth_basic'."
+            "'config_free_parameters', 'diffsky_dsps_closure_full', "
+            "'diffsky_hltds_prior_v1', or 'diffsky_truth_basic'."
         )
     lower, upper = free_parameter_bounds_from_config(config, names)
     raw_center, raw_scale, normalization = _latent_normalization_from_config(

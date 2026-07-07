@@ -1550,36 +1550,14 @@ def _load_ssp_surviving_mstar(
 def _load_cosmos_dust_grid(
     ssp: Any, cosmos_config: dict[str, Any] | None
 ) -> tuple[np.ndarray | None, tuple[str, ...]]:
+    del ssp
     if not cosmos_config or not bool(cosmos_config.get("use_cosmos_dust_in_dsps")):
         return None, ()
-
-    from .cosmos import load_extinction_curves
-
-    mapping, curves, _ = load_extinction_curves(cosmos_config)
-    if not mapping:
-        return None, ()
-    max_code = max(int(code) for code in mapping)
-    wave = np.asarray(ssp.ssp_wave, dtype=float)
-    k_by_code = np.zeros((max_code + 1, len(wave)), dtype=float)
-    names: list[str] = []
-    for code in range(max_code + 1):
-        curve_name = mapping.get(code, "none")
-        names.append(curve_name)
-        if curve_name == "none":
-            continue
-        curve = curves.get(curve_name)
-        if curve is None:
-            raise ValueError(
-                f"COSMOS extinction curve {curve_name!r} is configured but not loaded."
-            )
-        k_by_code[code] = np.interp(
-            wave,
-            curve.wave_angstrom,
-            curve.k_lambda,
-            left=curve.k_lambda[0],
-            right=curve.k_lambda[-1],
-        )
-    return k_by_code, tuple(names)
+    raise RuntimeError(
+        "COSMOS dust-in-DSPS support has been moved to legacy/. "
+        "Active FENIKS/FS2/HLTDS-debug workflows should not set "
+        "cosmos_sed.use_cosmos_dust_in_dsps=true."
+    )
 
 
 def parameters_for_row(

@@ -323,7 +323,7 @@ def _sample_one_galaxy_mclmc(
         min(0.10, 1.0 / np.sqrt(float(dim))),
     )
     inverse_mass_matrix = _mclmc_batch_inverse_mass_matrix(
-        sample_config, n_galaxies, len(free_names)
+        sample_config, 1, dim
     )
 
     algorithm = blackjax.mclmc(

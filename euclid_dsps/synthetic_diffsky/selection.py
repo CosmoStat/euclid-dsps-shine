@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-
 DEFAULT_SELECTION: dict[str, Any] = {
     "min_logsm": None,
     "max_logsm": None,

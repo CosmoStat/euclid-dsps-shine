@@ -9,13 +9,13 @@ from typing import Any
 
 import yaml
 
-from .photometric_uncertainty import default_m5_depth_error_model
 from .parameters import (
     DIFFSKY_BASIC_PARAMETER_NAMES,
     DIFFSKY_TRUTH_BASIC_PARAMETER_NAMES,
     DIFFSTAR_REDUCED6_PARAMETER_NAMES,
     POPCOSMOS_PARAMETER_NAMES,
 )
+from .photometric_uncertainty import default_m5_depth_error_model
 
 
 @dataclass(frozen=True)
@@ -107,14 +107,6 @@ SUPPORTED_PRIOR_TYPES = {
     "normal",
     "truncated_normal",
     "scaled_beta",
-}
-SUPPORTED_FILTER_RESPONSE_KINDS = {"photon", "energy"}
-SUPPORTED_COMPONENT_FRACTION_POLICIES = {"strict", "equal_if_missing"}
-SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS = {
-    "continuum_internal_dust",
-    "emission_lines_internal_dust",
-    "emission_lines_internal_dust_mw",
-    "noisy_observation",
 }
 SUPPORTED_REPORTING_LEVELS = {"full", "light", "none"}
 SUPPORTED_OUTPUT_FORMATS = {"csv", "parquet", "both"}
@@ -426,171 +418,7 @@ BAND_PRESETS = {
             },
         },
     ],
-    "openuniverse_lsst_roman_14": [
-        {
-            "name": "lsst_u",
-            "column": "flux_lsst_u",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_lsst_u",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 3200.0, "wave_max": 4000.0},
-        },
-        {
-            "name": "lsst_g",
-            "column": "flux_lsst_g",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_lsst_g",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 4000.0, "wave_max": 5500.0},
-        },
-        {
-            "name": "lsst_r",
-            "column": "flux_lsst_r",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_lsst_r",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 5500.0, "wave_max": 7000.0},
-        },
-        {
-            "name": "lsst_i",
-            "column": "flux_lsst_i",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_lsst_i",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 6900.0, "wave_max": 8200.0},
-        },
-        {
-            "name": "lsst_z",
-            "column": "flux_lsst_z",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_lsst_z",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 8200.0, "wave_max": 9300.0},
-        },
-        {
-            "name": "lsst_y",
-            "column": "flux_lsst_y",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_lsst_y",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 9500.0, "wave_max": 10500.0},
-        },
-        {
-            "name": "roman_W146",
-            "column": "flux_roman_W146",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_W146",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 9300.0, "wave_max": 20000.0},
-        },
-        {
-            "name": "roman_R062",
-            "column": "flux_roman_R062",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_R062",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 4800.0, "wave_max": 7600.0},
-        },
-        {
-            "name": "roman_Z087",
-            "column": "flux_roman_Z087",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_Z087",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 7600.0, "wave_max": 9770.0},
-        },
-        {
-            "name": "roman_Y106",
-            "column": "flux_roman_Y106",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_Y106",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 9270.0, "wave_max": 11920.0},
-        },
-        {
-            "name": "roman_J129",
-            "column": "flux_roman_J129",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_J129",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 11310.0, "wave_max": 14540.0},
-        },
-        {
-            "name": "roman_H158",
-            "column": "flux_roman_H158",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_H158",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 13800.0, "wave_max": 17740.0},
-        },
-        {
-            "name": "roman_F184",
-            "column": "flux_roman_F184",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_F184",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 16800.0, "wave_max": 20000.0},
-        },
-        {
-            "name": "roman_K213",
-            "column": "flux_roman_K213",
-            "units": "photon_per_sec_cm2",
-            "error_column": "fluxerr_roman_K213",
-            "error_units": "photon_per_sec_cm2",
-            "sigma_mag": 0.05,
-            "filter": {"kind": "tophat", "wave_min": 19500.0, "wave_max": 23000.0},
-        },
-    ],
 }
-
-OPENUNIVERSE_LSST_ROMAN_FILTER_PATHS = {
-    "lsst_u": "filters/LSST_LSST.u.dat",
-    "lsst_g": "filters/LSST_LSST.g.dat",
-    "lsst_r": "filters/LSST_LSST.r.dat",
-    "lsst_i": "filters/LSST_LSST.i.dat",
-    "lsst_z": "filters/LSST_LSST.z.dat",
-    "lsst_y": "filters/LSST_LSST.y.dat",
-    "roman_W146": "filters/Roman_WFI.F146.dat",
-    "roman_R062": "filters/Roman_WFI.F062.dat",
-    "roman_Z087": "filters/Roman_WFI.F087.dat",
-    "roman_Y106": "filters/Roman_WFI.F106.dat",
-    "roman_J129": "filters/Roman_WFI.F129.dat",
-    "roman_H158": "filters/Roman_WFI.F158.dat",
-    "roman_F184": "filters/Roman_WFI.F184.dat",
-    "roman_K213": "filters/Roman_WFI.F213.dat",
-}
-
-BAND_PRESETS["openuniverse_lsst_roman_14_fnu_cgs"] = [
-    {
-        **band,
-        "units": "fnu_cgs",
-        "error_units": "fnu_cgs",
-        "filter": {
-            "kind": "ascii",
-            "path": OPENUNIVERSE_LSST_ROMAN_FILTER_PATHS[band["name"]],
-            "wave_unit": "angstrom",
-        },
-    }
-    for band in BAND_PRESETS["openuniverse_lsst_roman_14"]
-]
-BAND_PRESETS["openuniverse_lsst_6_fnu_cgs"] = [
-    dict(band)
-    for band in BAND_PRESETS["openuniverse_lsst_roman_14_fnu_cgs"]
-    if str(band["name"]).startswith("lsst_")
-]
 
 DIFFSKY_HLTDS_FILTER_PATH = (
     "Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/"
@@ -843,36 +671,6 @@ DEFAULT_RUNTIME_CONFIG = {
     "jax_persistent_cache_min_compile_time_secs": 1.0,
 }
 
-DEFAULT_COSMOS_SED_CONFIG = {
-    "lephare_data_dir": "~/.cache/lephare/data",
-    "template_subdir": "sed/GAL/COSMOS_SED",
-    "template_list": "COSMOS_MOD.list",
-    "expected_template_count": 31,
-    "template_wave_unit": "angstrom",
-    "template_flux_unit": "arbitrary_flambda",
-    "value_added_data_dir": None,
-    "catalog_h": None,
-    "extinction_dir": "ext",
-    "extinction": {
-        "curves": {
-            0: "none",
-            1: "SMC_prevot",
-            2: "SB_calzetti",
-            3: "SB_calzetti_bump1",
-            4: "SB_calzetti_bump2",
-        }
-    },
-    "component_fraction_policy": "strict",
-    "filter_response_kind": "photon",
-    "comparison_wave_min_angstrom": 1000.0,
-    "comparison_wave_max_angstrom": 30000.0,
-    "sample_plot_count": 12,
-    "observed_photometry_target_sets": ["continuum_internal_dust"],
-    "normalization_bands": [],
-    "use_cosmos_dust_in_dsps": False,
-}
-
-
 class ConfigValidationError(ValueError):
     """Raised when a run configuration is internally inconsistent."""
 
@@ -897,7 +695,6 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config.setdefault("reporting", {})
     config.setdefault("output", {})
     config.setdefault("extra_columns", [])
-    config.setdefault("cosmos_sed", {})
     config.setdefault("band_calibration", {})
     config.setdefault("calibration", {})
     config.setdefault("nebular_emission", "ssp_flux")
@@ -1073,16 +870,6 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
     config["output"].setdefault("format", "both")
     config["output"].setdefault("verbose_benchmark", False)
 
-    cosmos_sed = dict(DEFAULT_COSMOS_SED_CONFIG)
-    raw_cosmos_sed = dict(config["cosmos_sed"] or {})
-    raw_extinction = raw_cosmos_sed.pop("extinction", None)
-    cosmos_sed.update(raw_cosmos_sed)
-    extinction = dict(DEFAULT_COSMOS_SED_CONFIG["extinction"])
-    if raw_extinction is not None:
-        extinction.update(dict(raw_extinction or {}))
-    cosmos_sed["extinction"] = extinction
-    config["cosmos_sed"] = cosmos_sed
-
     validate_config(config)
     return config
 
@@ -1196,25 +983,6 @@ def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
         else:
             expanded_columns.append(item)
     config["extra_columns"] = sorted(dict.fromkeys(expanded_columns))
-
-    if config.get("dust_model") == "cosmos_proxy_fixed":
-        cosmos = dict(config.get("cosmos_sed") or {})
-        cosmos["use_cosmos_dust_in_dsps"] = True
-        config["cosmos_sed"] = cosmos
-        model = dict(config.get("model") or {})
-        parameter_columns = dict(model.get("parameter_columns") or {})
-        parameter_columns.update(
-            {
-                "cosmos_ebv_1": "ebv_cosmos_1",
-                "cosmos_ebv_2": "ebv_cosmos_2",
-                "cosmos_frac_1": "frac_cosmos_1",
-                "cosmos_frac_2": "frac_cosmos_2",
-                "cosmos_ext_curve_1": "ext_curve_cosmos_1",
-                "cosmos_ext_curve_2": "ext_curve_cosmos_2",
-            }
-        )
-        model["parameter_columns"] = parameter_columns
-        config["model"] = model
 
     return config
 
@@ -1332,7 +1100,6 @@ def validate_config(config: dict[str, Any]) -> None:
     _validate_output(config.get("output", {}), errors)
     _validate_band_calibration(config.get("band_calibration", {}), errors)
     _validate_calibration(config.get("calibration", {}), errors)
-    _validate_cosmos_sed(config.get("cosmos_sed", {}), errors)
     if errors:
         detail = "\n".join(f"- {error}" for error in errors)
         raise ConfigValidationError(f"Invalid configuration:\n{detail}")
@@ -2270,106 +2037,6 @@ def _validate_calibration(calibration: dict[str, Any], errors: list[str]) -> Non
         return
     if not isinstance(per_band.get("enabled", False), bool):
         errors.append("calibration.per_band_zero_points.enabled must be a boolean")
-
-
-def _validate_cosmos_sed(cosmos_sed: dict[str, Any], errors: list[str]) -> None:
-    if not isinstance(cosmos_sed, dict):
-        errors.append("cosmos_sed must be a mapping")
-        return
-    for key in (
-        "lephare_data_dir",
-        "template_subdir",
-        "template_list",
-        "template_wave_unit",
-        "template_flux_unit",
-        "extinction_dir",
-    ):
-        if not isinstance(cosmos_sed.get(key), str) or not cosmos_sed.get(key):
-            errors.append(f"cosmos_sed.{key} must be a non-empty string")
-    _optional_string(
-        cosmos_sed.get("value_added_data_dir"),
-        "cosmos_sed.value_added_data_dir",
-        errors,
-    )
-    if cosmos_sed.get("catalog_h") is not None:
-        _positive_float(cosmos_sed.get("catalog_h"), "cosmos_sed.catalog_h", errors)
-    expected = cosmos_sed.get("expected_template_count")
-    if expected is not None:
-        _positive_int(expected, "cosmos_sed.expected_template_count", errors)
-    response = cosmos_sed.get("filter_response_kind")
-    if response not in SUPPORTED_FILTER_RESPONSE_KINDS:
-        errors.append(
-            "cosmos_sed.filter_response_kind must be one of "
-            f"{sorted(SUPPORTED_FILTER_RESPONSE_KINDS)}"
-        )
-    fraction_policy = cosmos_sed.get("component_fraction_policy")
-    if fraction_policy not in SUPPORTED_COMPONENT_FRACTION_POLICIES:
-        errors.append(
-            "cosmos_sed.component_fraction_policy must be one of "
-            f"{sorted(SUPPORTED_COMPONENT_FRACTION_POLICIES)}"
-        )
-    _finite_float(
-        cosmos_sed.get("comparison_wave_min_angstrom"),
-        "cosmos_sed.comparison_wave_min_angstrom",
-        errors,
-    )
-    _finite_float(
-        cosmos_sed.get("comparison_wave_max_angstrom"),
-        "cosmos_sed.comparison_wave_max_angstrom",
-        errors,
-    )
-    _positive_int(
-        cosmos_sed.get("sample_plot_count"), "cosmos_sed.sample_plot_count", errors
-    )
-    target_sets = cosmos_sed.get("observed_photometry_target_sets", [])
-    if not isinstance(target_sets, list):
-        errors.append("cosmos_sed.observed_photometry_target_sets must be a list")
-    elif not all(isinstance(item, str) and item for item in target_sets):
-        errors.append(
-            "cosmos_sed.observed_photometry_target_sets entries must be non-empty strings"
-        )
-    else:
-        unknown = sorted(set(target_sets) - SUPPORTED_COSMOS_PHOTOMETRY_TARGET_SETS)
-        if unknown:
-            errors.append(
-                "cosmos_sed.observed_photometry_target_sets contains unsupported "
-                f"entries: {unknown}"
-            )
-    if not isinstance(cosmos_sed.get("use_cosmos_dust_in_dsps", False), bool):
-        errors.append("cosmos_sed.use_cosmos_dust_in_dsps must be a boolean")
-    extinction = cosmos_sed.get("extinction")
-    if not isinstance(extinction, dict):
-        errors.append("cosmos_sed.extinction must be a mapping")
-    else:
-        curves = extinction.get("curves")
-        if not isinstance(curves, dict) or not curves:
-            errors.append("cosmos_sed.extinction.curves must be a non-empty mapping")
-        else:
-            for code, curve in curves.items():
-                try:
-                    int(code)
-                except (TypeError, ValueError):
-                    errors.append("cosmos_sed.extinction.curves keys must be integers")
-                if not isinstance(curve, str) or not curve:
-                    errors.append(
-                        f"cosmos_sed.extinction.curves.{code} must be a non-empty string"
-                    )
-    normalization_bands = cosmos_sed.get("normalization_bands", [])
-    if normalization_bands is None:
-        return
-    if not isinstance(normalization_bands, list):
-        errors.append("cosmos_sed.normalization_bands must be a list")
-        return
-    for index, item in enumerate(normalization_bands):
-        if not isinstance(item, dict):
-            errors.append(f"cosmos_sed.normalization_bands[{index}] must be a mapping")
-            continue
-        for key in ("band_name", "target_column"):
-            if not isinstance(item.get(key), str) or not item.get(key):
-                errors.append(
-                    f"cosmos_sed.normalization_bands[{index}].{key} "
-                    "must be a non-empty string"
-                )
 
 
 def _validate_sample_priors(

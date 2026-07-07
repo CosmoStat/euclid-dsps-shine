@@ -43,7 +43,6 @@ from .selection import (
     photometric_selection_enabled,
 )
 
-
 LAYER_OBJECT_ID_OFFSETS = {
     "inference_ready": 0,
     "survey_like": 10_000_000_000,

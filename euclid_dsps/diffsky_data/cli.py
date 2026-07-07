@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from ..photometric_uncertainty import default_m5_depth_error_model
 from .diagnostics import write_dataset_diagnostics
 from .download import download_candidate_subset
 from .inventory import inventory_local_hdf5, inventory_remote_listing
@@ -16,7 +17,6 @@ from .remote_listing import crawl_remote_tree, write_remote_listing
 from .subset import build_redshift_subset
 from .urls import HLTDS_COSMOS_20260414
 from .validation import validate_for_prior_learning, write_validation_report
-from ..photometric_uncertainty import default_m5_depth_error_model
 
 
 def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:

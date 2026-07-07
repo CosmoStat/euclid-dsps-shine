@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from collections.abc import Iterable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,7 +14,6 @@ import pandas as pd
 from euclid_dsps.io import ensure_dir
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
 from euclid_dsps.photometry import fnu_cgs_to_abmag
-
 
 DEFAULT_BANDS = (
     "lsst_u",
@@ -439,7 +439,6 @@ def _load_proposals(proposal_dir: Path) -> pd.DataFrame | None:
 def _proposal_weighted_metrics(proposals: pd.DataFrame) -> list[dict[str, Any]]:
     if "galaxy_weight" not in proposals.columns:
         return []
-    weights = _finite_numeric(proposals["galaxy_weight"])
     rows: list[dict[str, Any]] = []
     for quantity, column in (
         ("redshift", "redshift_true"),
@@ -1208,7 +1207,7 @@ def _summary_payload(
         distribution_metrics["quantity"] == "log10_stellar_metallicity"
     ]
     return {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "synthetic_path": str(synthetic_path),
         "reference_path": str(reference_path),
         "reference_kind": str(reference_kind),

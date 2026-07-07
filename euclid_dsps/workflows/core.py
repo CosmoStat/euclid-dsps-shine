@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ..amortized.diagnostics import posterior_predictive_residual_summary_frame
 from ..filters import load_filters
 from ..fit import fit_galaxy_batch_adam, fit_one_galaxy, fit_population_batch_adam
 from ..io import (
@@ -42,7 +43,6 @@ from ..performance import PerformanceRecorder, write_performance_outputs
 from ..photometric_uncertainty import flux_error_from_model
 from ..photometry import abmag_to_fnu_cgs as abmag_to_fnu_cgs_array
 from ..photometry import magerr_to_fluxerr_fnu_cgs
-from ..amortized.diagnostics import posterior_predictive_residual_summary_frame
 from ..reporting import (
     write_batch_outputs,
     write_eda_outputs,
@@ -909,9 +909,6 @@ def _write_fit_chunk_checkpoint(
         )
 
 
-_COSMOS_RESOURCE_CACHE: dict[tuple[Any, ...], Any] = {}
-
-
 def _sed_sample_limit(config: dict[str, Any]) -> int:
     reporting = config.get("reporting", {}) or {}
     return max(int(reporting.get("save_sed_samples", 0) or 0), 0)
@@ -1259,76 +1256,8 @@ def _ground_truth_sed_for_row(
 ) -> tuple[pd.DataFrame | None, str]:
     if not _plot_ground_truth(config):
         return None, "disabled"
-    try:
-        from ..cosmos import (
-            MissingCosmosColumnsError,
-            MissingCosmosResourceError,
-            flambda_10pc_to_lnu_lsun,
-            load_cosmos_sed_resources,
-            reconstruct_cosmos_proxy_sed,
-        )
-    except Exception as exc:  # pragma: no cover - defensive optional import path
-        return None, f"import_failed:{type(exc).__name__}"
-
-    cosmos_config = config.get("cosmos_sed", {}) or {}
-    cache_key = (
-        cosmos_config.get("value_added_data_dir"),
-        cosmos_config.get("lephare_data_dir"),
-        cosmos_config.get("template_subdir"),
-        cosmos_config.get("template_list"),
-    )
-    try:
-        if cache_key not in _COSMOS_RESOURCE_CACHE:
-            _COSMOS_RESOURCE_CACHE[cache_key] = load_cosmos_sed_resources(
-                cosmos_config
-            )
-        cosmos_result = reconstruct_cosmos_proxy_sed(
-            row,
-            row_index,
-            _COSMOS_RESOURCE_CACHE[cache_key],
-            filters,
-            config["bands"],
-            cosmos_config,
-        )
-    except MissingCosmosColumnsError as exc:
-        return None, f"missing_columns:{exc}"
-    except MissingCosmosResourceError as exc:
-        return None, f"missing_resource:{exc}"
-    except Exception as exc:  # pragma: no cover - report unexpected data issue
-        return None, f"failed:{type(exc).__name__}:{exc}"
-
-    rel_residual = np.asarray(
-        list(cosmos_result.relative_residuals_vs_catalog_abs.values()), dtype=float
-    )
-    finite_rel = rel_residual[np.isfinite(rel_residual)]
-    norm_bands = sorted(cosmos_result.synthetic_abs_fluxes_after)
-    return (
-        pd.DataFrame(
-            {
-                "wave_angstrom": cosmos_result.wave_angstrom,
-                "ground_truth_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
-                    cosmos_result.wave_angstrom, cosmos_result.flambda_scaled
-                ),
-                "ground_truth_unscaled_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
-                    cosmos_result.wave_angstrom, cosmos_result.flambda_unscaled
-                ),
-                "ground_truth_label": "COSMOS proxy",
-                "ground_truth_scale_factor": cosmos_result.alpha,
-                "ground_truth_normalization_bands": ",".join(norm_bands),
-                "ground_truth_norm_median_abs_rel_residual": (
-                    float(np.nanmedian(np.abs(finite_rel)))
-                    if finite_rel.size
-                    else float("nan")
-                ),
-                "ground_truth_norm_max_abs_rel_residual": (
-                    float(np.nanmax(np.abs(finite_rel)))
-                    if finite_rel.size
-                    else float("nan")
-                ),
-            }
-        ),
-        "ok",
-    )
+    del row, row_index, filters
+    return None, "legacy_cosmos_sed_disabled"
 
 
 def fit_population(
