@@ -765,7 +765,13 @@ def _resolve_data_parallel_training(
 
 
 def _make_prior_pmap_train_step(optimizer):
-    @eqx.filter_pmap(axis_name="devices", in_axes=(0, 0, 0), out_axes=(0, 0, 0, 0, 0, 0, 0, 0))
+    pmap_array_axis = eqx.if_array(0)
+
+    @eqx.filter_pmap(
+        axis_name="devices",
+        in_axes=(pmap_array_axis, pmap_array_axis, pmap_array_axis),
+        out_axes=(pmap_array_axis, pmap_array_axis, 0, 0, 0, 0, 0, 0),
+    )
     def step(prior, opt_state, batch):
         (loss, mean_log_prob), grads = eqx.filter_value_and_grad(
             _prior_nll,

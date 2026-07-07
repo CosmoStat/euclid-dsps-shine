@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
+
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -79,6 +84,65 @@ def test_replicate_tree_adds_device_axis_without_deprecated_jax_helper() -> None
 
     assert replicated["weights"].shape == (3, 2, 3)
     assert np.allclose(np.asarray(replicated["weights"][0]), np.asarray(tree["weights"]))
+
+
+def test_prior_pmap_step_handles_static_realnvp_leaves_on_fake_cpu_devices() -> None:
+    code = textwrap.dedent(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import optax
+
+        from euclid_dsps.amortized.flows import RealNVPPrior
+        from euclid_dsps.prior_learning.train import (
+            _make_prior_pmap_train_step,
+            _replicate_tree,
+            _shard_x_batch,
+        )
+
+        devices = tuple(jax.local_devices())
+        assert len(devices) == 3, devices
+        prior = RealNVPPrior(
+            jax.random.PRNGKey(0),
+            latent_dim=4,
+            n_layers=2,
+            hidden_size=8,
+            init="identity",
+            init_scale=0.0,
+        )
+        optimizer = optax.adamw(1e-3)
+        opt_state = optimizer.init(eqx.filter(prior, eqx.is_inexact_array))
+        step = _make_prior_pmap_train_step(optimizer)
+        prior_replicated = _replicate_tree(prior, devices)
+        opt_state_replicated = _replicate_tree(opt_state, devices)
+        batch = _shard_x_batch(jnp.ones((6, 4), dtype=jnp.float32), len(devices))
+        _, _, loss, mean_log_prob, grad_norm, loss_finite, grads_finite, update = step(
+            prior_replicated,
+            opt_state_replicated,
+            batch,
+        )
+        assert loss.shape == (3,)
+        assert mean_log_prob.shape == (3,)
+        assert grad_norm.shape == (3,)
+        assert bool(loss_finite[0])
+        assert bool(grads_finite[0])
+        assert bool(update[0])
+        """
+    )
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=3"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_train_parser_accepts_data_parallel_override() -> None:

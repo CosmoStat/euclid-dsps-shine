@@ -50,6 +50,15 @@
   - Added a CPU regression test for the replication helper.
   - Validated with targeted ruff, data-parallel pytest, prior/CLI pytest, and
     `python -m compileall euclid_dsps scripts`.
+- Jean-Zay pmap static-leaf fix:
+  - Updated amortized and supervised-prior `eqx.filter_pmap` axes to use
+    `eqx.if_array(0)` for replicated pytrees, so array leaves are mapped over
+    local devices while Python/static leaves such as MLP activation functions
+    remain broadcast/static.
+  - Added a fake three-device CPU pmap smoke for `RealNVPPrior`, covering the
+    `gelu` static leaf failure seen on Jean-Zay.
+  - Validated with the fake three-device CPU smoke, targeted ruff, targeted
+    pytest, `git diff --check`, and `python -m compileall euclid_dsps scripts`.
 - Validation:
   - `python -m compileall euclid_dsps scripts` passed.
   - `uvx ruff check euclid_dsps/amortized/train.py euclid_dsps/amortized/config.py euclid_dsps/prior_learning/train.py euclid_dsps/cli.py tests/test_amortized_data_parallel.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py` passed.

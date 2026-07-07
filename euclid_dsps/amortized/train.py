@@ -2238,17 +2238,18 @@ def _loss_and_grads_jit(
 
 
 def _make_pmap_train_step(optimizer):
+    pmap_array_axis = eqx.if_array(0)
     @eqx.filter_pmap(
         axis_name="devices",
         in_axes=(
-            0,
-            0,
-            0,
+            pmap_array_axis,
+            pmap_array_axis,
+            pmap_array_axis,
             None,
             None,
             None,
             None,
-            0,
+            pmap_array_axis,
             None,
             None,
             None,
@@ -2259,11 +2260,11 @@ def _make_pmap_train_step(optimizer):
             None,
         ),
         out_axes=(
+            pmap_array_axis,
+            pmap_array_axis,
             0,
-            0,
-            0,
-            0,
-            0,
+            pmap_array_axis,
+            pmap_array_axis,
             0,
             0,
             0,
