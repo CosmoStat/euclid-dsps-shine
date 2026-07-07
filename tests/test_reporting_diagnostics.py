@@ -8,6 +8,7 @@ from euclid_dsps.reporting.core import (
     fit_objective_components,
     fit_parameter_audit,
     parameter_truth_metrics,
+    plot_fit_free_parameter_distributions,
     redshift_attractor_summary,
     summarize_by_row,
 )
@@ -99,6 +100,22 @@ def test_fit_parameter_audit_flags_constant_free_parameter() -> None:
     assert audit.loc["t_obs_gyr", "source"] == "derived"
 
 
+def test_plot_fit_free_parameter_distributions_writes_png(tmp_path) -> None:
+    fits = pd.DataFrame(
+        {
+            "row_index": [0, 1, 2],
+            "fit_z_obs": [0.4, 0.5, 0.6],
+            "fit_log10_metallicity": [-2.4, -2.2, -2.0],
+        }
+    )
+    path = tmp_path / "free_params.png"
+
+    plot_fit_free_parameter_distributions(fits, _config(), path)
+
+    assert path.exists()
+    assert path.stat().st_size > 0
+
+
 def test_cosmos_proxy_dust_is_inactive_not_inferred() -> None:
     config = _cosmos_dust_config()
     fits = pd.DataFrame(
@@ -147,8 +164,35 @@ def test_fit_objective_components_writes_photometric_and_prior_terms() -> None:
     components = fit_objective_components(fits, comparison, _config())
 
     assert components.loc[0, "photometric_chi2"] == 5.0
+    assert components.loc[0, "photometric_objective"] == 5.0
     assert components.loc[0, "physical_gaussian_prior_penalty"] > 0.0
     assert components.loc[0, "approx_objective"] > 0.0
+
+
+def test_fit_objective_components_uses_saved_student_t_objective() -> None:
+    config = _config()
+    config["fit"]["photometric_likelihood"] = "student_t"
+    fits = pd.DataFrame(
+        {
+            "row_index": [0],
+            "fit_z_obs": [1.2],
+            "fit_log10_metallicity": [-2.0],
+            "photometric_likelihood": ["student_t"],
+        }
+    )
+    comparison = pd.DataFrame(
+        {
+            "row_index": [0, 0],
+            "chi_likelihood": [10.0, 2.0],
+            "photometric_objective_contribution": [11.79579055, 3.29583687],
+        }
+    )
+
+    components = fit_objective_components(fits, comparison, config)
+
+    assert components.loc[0, "photometric_chi2"] == pytest.approx(104.0)
+    assert components.loc[0, "photometric_objective"] == pytest.approx(15.09162742)
+    assert components.loc[0, "fit_quality_metric"] == "student_t_neg2loglike"
 
 
 def test_summarize_by_row_uses_flux_chi_and_dof_reduced_chi2() -> None:
@@ -172,6 +216,32 @@ def test_summarize_by_row_uses_flux_chi_and_dof_reduced_chi2() -> None:
     assert summary.loc[0, "chi2_per_band"] == 14.0 / 3.0
     assert summary.loc[0, "reduced_chi2_dof"] == 7.0
     assert summary.loc[0, "reduced_chi2"] == 7.0
+    assert summary.loc[0, "fit_quality"] == 14.0
+    assert summary.loc[0, "reduced_fit_quality"] == 7.0
+
+
+def test_summarize_by_row_uses_student_t_objective_for_fit_quality() -> None:
+    comparison = pd.DataFrame(
+        {
+            "row_index": [0, 0],
+            "band": ["u", "g"],
+            "chi_likelihood": [10.0, 2.0],
+            "photometric_objective_contribution": [11.79579055, 3.29583687],
+            "photometric_likelihood": ["student_t", "student_t"],
+            "n_valid_bands": [2, 2],
+            "n_free_effective": [1, 1],
+            "dof": [1, 1],
+            "residual_mag_model_minus_observed": [0.0, 0.0],
+            "flux_ratio_model_over_observed": [1.0, 1.0],
+        }
+    )
+
+    summary = summarize_by_row(comparison)
+
+    assert summary.loc[0, "chi2"] == pytest.approx(104.0)
+    assert summary.loc[0, "fit_quality"] == pytest.approx(15.09162742)
+    assert summary.loc[0, "reduced_fit_quality"] == pytest.approx(15.09162742)
+    assert summary.loc[0, "fit_quality_metric"] == "student_t_neg2loglike"
 
 
 def test_redshift_attractor_summary_counts_repeated_fit_modes() -> None:

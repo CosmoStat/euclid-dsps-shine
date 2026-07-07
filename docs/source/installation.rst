@@ -1,71 +1,81 @@
 Installation
 ============
 
+Python environment
+------------------
+
+Use the existing ``shine`` environment:
 
 .. code-block:: bash
 
    conda activate shine
    python -m pip install -e .
 
-Future ``uv`` workflow target:
+The codebase should still import under ``uv`` for tests and packaging checks:
 
 .. code-block:: bash
 
    uv sync
+   uv run python -m compileall euclid_dsps scripts
    uv run euclid-dsps --help
-   uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
 
-GPU JAX may require a different install command under ``uv`` than under
-``conda activate shine``. Keep the exact CPU/GPU commands documented before
-using ``uv`` for production GPU runs.
+FSPS and python-FSPS
+--------------------
 
-For documentation and quality tooling:
+The FS2 config requires generated FSPS SSP, gas, AGN component, and compressed
+runtime grids. Install FSPS and python-FSPS only in the environment used for
+asset generation:
 
 .. code-block:: bash
 
-   python -m pip install sphinx sphinx-rtd-theme
-   python -m pip install pytest ruff black
+   cd "$HOME/src"
+   export SPS_HOME="$HOME/src/fsps"
+   git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
 
-Core Checks
+   cd /home/maxime/src/DSPS
+   export SPS_HOME="$HOME/src/fsps"
+   python -m pip install fsps
+
+Check that python-FSPS sees the expected libraries:
+
+.. code-block:: bash
+
+   python -c "import fsps; sp=fsps.StellarPopulation(sfh=0); print(len(sp.wavelengths)); print(sp.isoc_library, sp.spec_library)"
+
+Expected local output for the current assets is ``11149`` wavelength samples
+with ``mist`` and ``c3k_a``. See :doc:`data_download` for the exact generation
+commands.
+
+Quality checks
+--------------
+
+.. code-block:: bash
+
+   uv run python -m compileall euclid_dsps scripts
+   uv run pytest tests
+   uv run --with sphinx --with sphinx-rtd-theme python -m sphinx \
+     -W --keep-going -b html docs/source docs/build/html
+
+GPU runtime
 -----------
 
-Run the checks used while developing:
+The public fit configs are GPU configs. For production, use a CUDA-enabled JAX
+installation and verify the backend before launching fits:
 
 .. code-block:: bash
 
-   python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-   euclid-dsps --config configs/fs2_phz1_science.yaml fit --index 0 --out outputs/runs/dev_fit_one
-   euclid-dsps --config configs/fs2_phz1_science.yaml fit --limit 20 --batch-size 5 --out outputs/runs/dev_fit_batch
+   uv sync --extra gpu
+   uv run --extra gpu python -c "import jax; print(jax.devices())"
 
-When posterior code changes, also run a tiny posterior smoke:
-
-.. code-block:: bash
-
-   euclid-dsps --config configs/fs2_phz1_science.yaml posterior --index 0 --num-warmup 10 --num-samples 10 --out outputs/runs/dev_posterior_one
-
-Documentation Build
--------------------
-
-Build Sphinx documentation locally:
+In the ``shine`` conda environment the equivalent check is:
 
 .. code-block:: bash
 
-   python -m sphinx -W --keep-going -b html docs/source docs/build/html
+   conda activate shine
+   export JAX_PLATFORMS=cuda
+   export XLA_PYTHON_CLIENT_PREALLOCATE=false
+   export TF_GPU_ALLOCATOR=cuda_malloc_async
+   python -c "import jax; print(jax.default_backend()); print(jax.devices())"
 
-Quality Tooling
----------------
-
-Run the same formatting and lint checks as CI:
-
-.. code-block:: bash
-
-   python -m black --check euclid_dsps scripts
-   python -m ruff check euclid_dsps scripts tests
-   python -m pytest tests
-
-Format code before committing:
-
-.. code-block:: bash
-
-   python -m black euclid_dsps scripts
-   python -m ruff check --fix euclid_dsps scripts tests
+If ``nvidia-smi`` works but JAX still reports only ``CpuDevice``, check that no
+stale CPU-only ``jaxlib`` install is shadowing the active environment.

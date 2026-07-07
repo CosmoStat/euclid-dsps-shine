@@ -1,0 +1,24 @@
+extends: diffsky_hltds_popcosmos_full_bounds_h100.yaml
+
+experiment:
+    name: diffsky_hltds_popcosmos_lowdim_z_mass_dust_h100
+    description: Compact-network PopCosmos diagnostic on the full 12D latent. Legacy filename kept for continuity; SFH bins are not frozen.
+
+amortized:
+    latent:
+        schema: config_free_parameters
+    encoder:
+        latent_dim: 12
+        hidden_sizes: [160, 160, 160]
+    prior:
+        n_layers: 6
+        hidden_size: 96
+    training:
+        n_samples: 4
+        kl_annealing_epochs: 12
+        kl_weight_max: 0.02
+        best_checkpoint_metric: validation_negative_loglike
+        best_checkpoint_min_epoch: 6
+    map_adam:
+        n_starts: 12
+        start_mode: mixed

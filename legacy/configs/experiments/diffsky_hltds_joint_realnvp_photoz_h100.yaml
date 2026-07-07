@@ -1,0 +1,67 @@
+extends: ../amortized_diffsky_hltds_joint_realnvp_gpu.yaml
+
+experiment:
+    name: diffsky_hltds_joint_realnvp_photoz_h100
+    description: Photo-z focused Diffsky HLTDS continuous-low-z amortized run with joint RealNVP prior and per-band flux calibration.
+
+amortized:
+    data:
+        expected_n_bands: 14
+        selection_mode: stratified_redshift
+        stratified_strategy: balanced
+        stratify_column: redshift_true
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
+        validation_fraction: 0.1
+        epoch_shuffle: true
+        catalog_batch_size: 10000
+    prior:
+        type: realnvp
+        source: joint_realnvp
+        train_jointly: true
+        n_layers: 8
+        hidden_size: 128
+        scale_clamp: 0.05
+    training:
+        epochs: 20
+        batch_size: 128
+        jax_batch_size: 128
+        n_samples: 1
+        learning_rate: 1.0e-4
+        weight_decay: 1.0e-5
+        gradient_clip_norm: 1.0
+        kl_annealing_epochs: 10
+        kl_weight_max: 0.05
+        validation_every: 1
+        best_checkpoint_metric: validation_negative_loglike
+        best_checkpoint_min_epoch: 10
+        seed: 42
+    inference:
+        posterior_samples: 128
+        prior_samples: 8192
+        selection_mode: stratified_redshift
+        stratified_strategy: balanced
+        selection_seed: 4242
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
+        jax_batch_size: 256
+        decoder_sample_chunk_size: 4
+        prior_predictive_batch_size: 1024
+        shard_outputs: true
+        resume_shards: true
+        write_posterior_predictive: false
+        write_residual_samples: false
+        combine_sample_shards: false
+        combine_summary_shards: true
+
+calibration:
+    global_sed_scale:
+        enabled: true
+        mode: learn_global
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: true
+    per_band_zero_points:
+        enabled: true
+        mode: learn_per_band
+        trainable: true
+        prior_sigma_mag: 0.05

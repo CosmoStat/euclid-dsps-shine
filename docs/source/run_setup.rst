@@ -1,146 +1,147 @@
-Run Setup
-=========
+Run the Active Workflow
+=======================
 
-Use the science preset unless you are debugging internals:
+Scope
+-----
 
-.. code-block:: text
+The active source tree supports one science ladder:
 
-   configs/fs2_phz1_science.yaml
+1. Generate the synthetic Diffsky/FENIKS DSPS-closure dataset.
+2. Validate same-parameter closure on held-out FENIKS rows.
+3. Learn a supervised RealNVP prior on the full 18D closure truth vector.
+4. Train and run NN+DSPS+NF amortized inference with that prior.
+5. Run MAP under the learned prior and small MCLMC baselines when needed.
 
-This preset expands to the full internal schema at load time. Every audited run
-writes ``normalized_config.json`` beside the outputs.
+HLTDS remains only a download/preparation/debug reference. FS2 remains the
+Euclid comparison path.
 
-Main Commands
--------------
+Active Configs
+--------------
 
-MAP fit:
+.. list-table::
+   :header-rows: 1
 
-.. code-block:: bash
+   * - Config
+     - Role
+   * - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
+     - Generate and validate the 14-band synthetic FENIKS DSPS-closure train/validation/test splits.
+   * - ``configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml``
+     - Generate and validate the LSST+Euclid+Roman 18-band FENIKS comparison sample.
+   * - ``configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml``
+     - Train the supervised 18D FENIKS RealNVP prior.
+   * - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
+     - Train and infer with the 18D NN+DSPS+NF model.
+   * - ``configs/diffsky_dataset_hltds_04_14.yaml``
+     - Rebuild and validate the low-z HLTDS debug/reference parquet.
+   * - ``configs/diffsky_dataset_hltds_03_31_zmax335_m5depth.yaml``
+     - Rebuild the higher-redshift HLTDS truth-rich debug/reference parquet.
+   * - ``configs/fs2_gpu.yaml``
+     - Euclid FS2 MAP/posterior comparison baseline.
+   * - ``configs/amortized_fs2_realnvp.yaml``
+     - FS2 amortized comparison baseline.
 
-   euclid-dsps fit \
-     --limit 1000 \
-     --batch-size 512 \
-     --sed-samples 16 \
-     --out outputs/runs/science_fit
-
-One row:
-
-.. code-block:: bash
-
-   euclid-dsps fit --index 0 --out outputs/runs/row0_fit
-
-Posterior subset:
-
-.. code-block:: bash
-
-   euclid-dsps posterior \
-     --row-indices-file outputs/rows_for_hmc.txt \
-     --num-warmup 300 \
-     --num-samples 800 \
-     --out outputs/runs/posterior_subset
-
-Checks without fitting:
-
-.. code-block:: bash
-
-   euclid-dsps check --kind eda --out outputs/check/eda
-   euclid-dsps check --index 0 --out outputs/check/row0_forward
-   euclid-dsps check --kind cosmos --limit 20 --out outputs/check/cosmos
-
-Optional reproducible wrapper:
+Preflight
+---------
 
 .. code-block:: bash
 
-   snakemake -j1
+   conda activate shine
+   export JAX_PLATFORMS=cuda
+   export XLA_PYTHON_CLIENT_PREALLOCATE=false
+   export TF_GPU_ALLOCATOR=cuda_malloc_async
 
-Override Snakemake run settings with ``--config run_dir=... limit=...``.
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-plan-prior-workflow \
+     --out outputs/reports/feniks_prior_workflow
 
-Config Shorthands
------------------
+Generate And Validate FENIKS
+----------------------------
 
-``runtime: auto``
-  Default science runtime. Lets JAX choose an available backend and clears stale
-  ``JAX_PLATFORMS=cuda`` values inside the process, so CPU-only conda installs
-  do not fail before fitting starts.
+.. code-block:: bash
 
-``runtime: gpu``
-  Expands to CUDA JAX settings with ``require_gpu: true`` and NVIDIA device
-  check. Use only when the active environment exposes CUDA JAX.
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-generate-dsps-closure \
+     --smoke \
+     --overwrite
 
-``bands: lsst_euclid_10``
-  Expands to LSST ``ugrizy`` plus Euclid VIS/Y/J/H with local passbands from
-  ``filters/`` and catalog flux-error columns for all ten bands.
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     diffsky-validate-dsps-closure \
+     --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
+     --runtime cpu \
+     --sample-size 64
 
-``bands: euclid_4``
-  Expands to Euclid VIS/Y/J/H only.
+Jean-Zay launchers:
 
-``fit.likelihood_space: flux``
-  Uses Gaussian residuals in ``Fnu`` cgs flux units for MAP and MCMC inference.
-  ``mag`` remains available for legacy comparisons.
+.. code-block:: bash
 
-``selection.nondetection_policy: gaussian_flux``
-  Keeps finite negative/non-positive flux measurements when a valid flux error
-  exists. ``drop`` is the legacy positive-flux-only behavior. ``upper_limit`` is
-  reserved and fails validation until an upper-limit likelihood exists.
+   GEN_JOB=$(sbatch --parsable --export=ALL,STAGE=generate,OVERWRITE=1,RESUME=0 \
+     scripts/diffsky_synthetic_feniks_50k_h100.slurm)
 
-``band_calibration.mode: fixed_offsets``
-  Applies fixed per-band magnitude offsets or flux multipliers to the model
-  during likelihood evaluation. Defaults are null and do not change physics.
+   sbatch --dependency=afterok:${GEN_JOB} --export=ALL,STAGE=validate \
+     scripts/diffsky_synthetic_feniks_50k_h100.slurm
 
-``column_groups``
-  Replaces long ``extra_columns`` lists. Useful groups are ``truth_basic``,
-  ``cosmos_proxy``, ``photometry_errors``, ``emission_line_diagnostics``, and
-  ``morphology_halo``. ``phz_diagnostics`` exists only for explicit audits.
-
-``dust_model: cosmos_proxy_fixed``
-  Injects COSMOS dust columns into DSPS. These values are copied from the row
-  and must not be interpreted as catalog truth. Dust can be fitted in alternate
-  configs, but catalog dust columns remain proxy-only diagnostics.
-
-``nebular_emission: ssp_flux``
-  Current default. The DSPS forward model uses the SSP ``ssp_flux`` table as
-  provided. If the SSP contains line-like features, they are already inside that
-  flux table. Separate ``ssp_emline_*`` datasets are read for diagnostics only.
-  ``none`` and ``emline_table`` are reserved config values; neither should be
-  used as a science likelihood until a no-double-count convention is defined.
-
-Science Meaning
+Learn The Prior
 ---------------
 
-The current fit infers:
+.. code-block:: bash
 
-* ``z_obs``;
-* ``log10_formed_mass_msun``;
-* lognormal SFH shape ``sfh_t_peak`` and ``sfh_tau``;
-* stellar metallicity proxy ``log10_metallicity``;
-* derived current SFR from fitted mass plus SFH shape.
+   python -m euclid_dsps.cli \
+     --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
+     diffsky-train-supervised-prior \
+     --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
 
-Truth columns are diagnostics only. The science preset fits ``z_obs`` from
-Euclid + LSST photometry with no photo-z prior and no ``phz_median``
-initialization. ``redshift.initial: fixed`` only supplies the MAP starting
-value; ``z_obs`` remains a free bounded parameter. Multi-start MAP redshift was
-removed because posterior sampling is the intended inference path.
-``phz_median`` remains available only through the optional ``phz_diagnostics``
-column group. PHZ interval priors were removed.
+The config uses ``missing_policy: fail`` and the
+``diffsky_dsps_closure_full`` schema. Missing truth columns are blockers, not
+silent reductions.
 
-``reduced_chi2`` now means ``chi2 / dof`` with
-``dof = max(n_valid_bands - n_free_effective, 1)``. The older per-band metric is
-reported separately as ``chi2_per_band``.
+Train NN+DSPS+NF
+----------------
 
-Performance outputs are written for every MAP batch:
+.. code-block:: bash
 
-* ``batch_fit_performance_summary.json`` contains wall time, seconds per
-  galaxy, throughput, backend/device metadata, and GPU-hour per galaxy when
-  JAX actually uses a GPU backend;
-* ``batch_fit_performance_by_batch.csv`` contains chunk-level throughput.
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+     amortized-train-diffsky \
+     --out outputs/runs/amortized_diffsky_synthetic_feniks_full
 
-Redshift attractor outputs are written as ``batch_fit_redshift_attractors.csv``
-and ``batch_fit_redshift_attractors.png``. They summarize repeated MAP redshift
-modes and are diagnostic only, not a global optimizer.
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+     amortized-infer-diffsky \
+     --checkpoint outputs/runs/amortized_diffsky_synthetic_feniks_full/checkpoints/best.eqx \
+     --out outputs/runs/amortized_diffsky_synthetic_feniks_full_test_infer \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet
 
-Current priors are broad ``weak_physical`` priors. They are not yet POP-COSMOS
-priors. A POP-COSMOS-like mode needs exact variable mapping and learned
-population-prior calibration before it should be used.
+MAP And MCLMC
+-------------
 
-Legacy configs live under ``configs/legacy`` as examples only. Active runs
-should start from ``fit``, ``posterior``, and ``check``.
+.. code-block:: bash
+
+   python -m euclid_dsps.cli \
+     --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+     diffsky-map-adam-prior \
+     --checkpoint outputs/runs/amortized_diffsky_synthetic_feniks_full/checkpoints/best.eqx \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+     --out outputs/runs/map_diffsky_synthetic_feniks_under_prior
+
+   python -m euclid_dsps.cli \
+     --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+     posterior \
+     --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+     --sampler mclmc \
+     --limit 4 \
+     --out outputs/runs/mclmc_diffsky_synthetic_feniks_flat
+
+HLTDS And FS2 References
+------------------------
+
+HLTDS data commands live in ``euclid_dsps.diffsky_data`` and are exposed by
+``euclid-dsps`` as ``diffsky-list-remote``, ``diffsky-download-subset``,
+``diffsky-prepare-dataset``, ``diffsky-validate-dataset``, and
+``diffsky-dataset-diagnostics``. Use the two ``diffsky_dataset_hltds_*``
+configs for that path.
+
+Use ``configs/fs2_gpu.yaml`` and ``configs/amortized_fs2_realnvp.yaml`` only
+for Euclid comparison runs.

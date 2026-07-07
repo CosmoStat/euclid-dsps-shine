@@ -1,145 +1,151 @@
 Science Assessment
 ==================
 
-Active Model
-------------
+Purpose
+-------
 
-The active science workflow is intentionally small:
+Science assessment answers one question: is a generated catalogue and trained
+inference model ready to support physical interpretation? A visually good
+photometric reconstruction is not sufficient. The production decision must use
+truth-contract checks, forward closure, posterior calibration, and population
+diagnostics together.
 
-* fit ``z_obs`` from photometry with no photo-z prior;
-* fit ``log10_formed_mass_msun`` as the SED amplitude;
-* fit lognormal SFH shape parameters ``sfh_t_peak`` and ``sfh_tau``;
-* fit scalar stellar metallicity ``log10_metallicity``;
-* derive current SFR from fitted mass plus fitted SFH shape;
-* inject COSMOS proxy dust columns when ``dust_model: cosmos_proxy_fixed`` is
-  selected;
-* use ``ssp_flux`` as the SSP spectral table, with separate SSP emission-line
-  tables used only for diagnostics.
-
-``log10_sfr`` and ``dust_av`` are not free parameters in the main science
-config. ``log10_sfr`` is only a fixed internal SFH scale before mass
-normalization. With ``dust_model: cosmos_proxy_fixed``, COSMOS dust columns
-drive attenuation and ``dust_av`` is marked inactive, not inferred.
-
-Dust catalogue columns are proxy-only. Even if a future config frees
-``dust_av``, the FS2/COSMOS dust proxy should not be plotted as ground truth.
-
-Redshift
---------
-
-The science preset does not initialize ``z_obs`` from ``phz_median`` and does
-not use a photo-z prior. ``redshift.initial: fixed`` is only the MAP starting
-value; fitted ``z_obs`` is free within configured bounds. Redshift multi-start
-MAP was removed, so posterior runs should be used when redshift degeneracy is
-scientifically important.
-
-PHZ interval priors were removed. Redshift validation must compare fitted
-``z_obs`` against ``z_true_gal``.
-
-Photometric Errors
+Assessment Diagram
 ------------------
 
-The active 10-band config uses continuum flux columns as fit targets and
-per-band catalog uncertainties from ``*_el_model3_ext_odonnell_ext_error`` for
-LSST and Euclid. Those uncertainties are converted from flux units into local
-AB-magnitude errors for reporting, but the default MAP and MCMC likelihood is
-Gaussian in ``Fnu`` cgs flux space. Set ``fit.likelihood_space: mag`` only for
-legacy diagnostics.
+.. code-block:: text
 
-Truth And Proxies
------------------
+   generated closure catalogue
+       |
+       +--> data contract checks
+       |       schema, manifest, split sizes, truth completeness
+       |
+       +--> same-parameter forward closure
+       |       theta_true -> DSPS -> flux_true_<band>
+       |
+       +--> population diagnostics
+       |       n(z), mass, SFR, dust, metallicity, colors, S/N, duplicates
+       |
+       +--> supervised prior diagnostics
+       |       truth distribution vs RealNVP samples
+       |
+       +--> amortized inference diagnostics
+               coverage, PIT, posterior width, residuals, weak directions
 
-Catalog truth columns are diagnostics, not likelihood terms.
+Production Acceptance Gates
+---------------------------
 
-``log_stellar_mass`` is converted from catalog ``h`` units for mass comparison.
-The fitted DSPS amplitude is ``log10_formed_mass_msun``. This is formed mass,
-not necessarily surviving stellar mass, so an offset relative to catalog stellar
-mass can be semantic rather than a pure conversion bug.
-``log_sfr_true`` is compared to derived current SFR. ``metallicity_true`` is
-treated as a proxy only: gas-phase oxygen abundance is not the same observable
-as DSPS stellar metallicity.
+Promote a FENIKS/DSPS closure run only when all required gates are available
+and pass:
 
-Fit-vs-catalog plots only include comparable active/free or derived
-parameters. Fixed inactive quantities such as ``dust_av`` under COSMOS proxy
-dust are audited but not plotted as inferred parameters. Dust is deliberately
-excluded from fit-vs-catalog truth metrics because the catalog value is not a
-DSPS attenuation truth.
+.. list-table::
+   :header-rows: 1
+   :widths: 24 42 34
 
-SED Diagnostics
----------------
+   * - Gate
+     - Required evidence
+     - Failure meaning
+   * - Reproducibility
+     - ``manifest.yaml`` records repo SHA, config hash, package versions, SSP
+       hash, filter hashes, calibration hash, split seeds, and parameter order.
+     - The catalogue cannot be reproduced or compared safely.
+   * - Data contract
+     - ``schema.json`` and ``validation_report.json`` confirm all 18 closure
+       truths, all flux/error/mask columns, split sizes, and disjoint ids.
+     - The run is not a strict closure dataset.
+   * - Forward closure
+     - ``validation_report.json`` reports successful DSPS flux recomputation
+       from sampled truth vectors.
+     - The stored truths and stored true fluxes are not same-model consistent.
+   * - Noise model
+     - Normalized noisy-flux residuals are centered and have approximately unit
+       standard deviation.
+     - The likelihood errors do not match the generated observations.
+   * - Selection
+     - Manifest counters and validation report confirm mass, metallicity, and
+       true-S/N gates.
+     - The final sample is not the intended observable learning catalogue.
+   * - Prior quality
+     - Supervised prior report compares RealNVP samples to truth marginals and
+       correlations.
+     - The prior may distort the training population before photometry is used.
+   * - Inference calibration
+     - Held-out evaluation reports coverage, PIT, posterior width, residuals,
+       and parameter-wise behavior.
+     - The posterior cannot be interpreted as calibrated uncertainty.
 
-COSMOS-template SED reconstruction is pseudo-ground truth. It helps inspect
-whether fitted DSPS SEDs have plausible broad-band shapes. It is not physical
-SPS truth.
+Minimum Artifacts To Keep
+-------------------------
 
-Photometric markers in SED plots are model-anchored ratios. They are visual
-residual diagnostics, not an independent rest-frame spectrum. SED diagnostics
-also include a flux-space residual panel showing
-``(F_obs - F_model) / sigma_F`` per band.
+For the dataset:
 
-Batch MAP runs split SED diagnostics between worst-fit and best-fit galaxies.
-COSMOS proxy SED CSVs and manifests include the scalar normalization factor and
-normalization-band residuals. Large COSMOS/DSPS height mismatches should be
-debugged as normalization, filter, dust, redshift, or template-unit issues
-before being interpreted as physical disagreement.
+.. code-block:: text
 
-Non-Detections And Calibration
-------------------------------
+   Data/diffsky/synthetic/feniks_260617_dsps_closure/
+       proposals/
+       train.parquet
+       validation.parquet
+       test.parquet
+       all_50k.parquet
+       manifest.yaml
+       schema.json
+       validation_report.json
+       diagnostics/population/report.md
+       diagnostics/population/*.csv
+       diagnostics/population/*.json
+       diagnostics/population/plots/*.png
 
-In flux-space mode, finite non-positive fluxes with valid errors are kept by
-``selection.nondetection_policy: gaussian_flux``. ``upper_limit`` is reserved
-but not implemented.
+For the supervised prior:
 
-``band_calibration.mode: fixed_offsets`` can test fixed per-band zero-point
-offsets. Offsets are applied to the model during likelihood evaluation, never
-to both data and model.
+.. code-block:: text
 
-Goodness Of Fit
----------------
+   outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp/
+       prior_training_log.csv
+       supervised_prior_summary.json
+       supervised_prior_vs_truth_report.md
+       prior_vs_truth_metrics.csv
+       learned_prior_samples.parquet
+       truth_theta_samples.parquet
+       checkpoints/best.eqx
 
-``reduced_chi2`` is the DOF-corrected value ``chi2 / dof``. The number of valid
-bands, effective free parameters, and DOF are written per object. The old
-``chi2 / n_bands`` diagnostic is still available as ``chi2_per_band``.
+For amortized inference and evaluation:
 
-Priors
-------
+.. code-block:: text
 
-Current named prior sets:
+   outputs/runs/amortized_diffsky_synthetic_feniks_full/
+       training_log.csv
+       training_summary.json
+       feature_stats.json
+       checkpoints/best.eqx
 
-* ``weak_physical``: broad stabilizing priors used by
-  ``configs/fs2_phz1_science.yaml``;
-* ``flat_debug``: flat priors inside configured fit bounds;
-* ``popcosmos_like``: reserved and intentionally unavailable until exact
-  POP-COSMOS parameter mapping, units, and selection treatment are implemented.
+   outputs/runs/amortized_diffsky_synthetic_feniks_full_infer/
+       inference_summary.json
+       posterior summaries and posterior-predictive residual diagnostics
 
-Current priors are not POP-COSMOS priors yet. Do not label results as
-POP-COSMOS-like until that mapping exists.
+   outputs/runs/amortized_diffsky_synthetic_feniks_full_eval/
+       closure inference evaluation metrics and plots
 
-Out Of Likelihood
------------------
-
-Emission-line catalog columns remain diagnostics only. The active fit uses
-``ssp_flux`` as the spectral table. The newer SSP asset also provides
-``ssp_emline_luminosity``, ``ssp_emline_wave``, and line names, when available.
-The pipeline reads those datasets and writes diagnostic line/filter crossings
-near fitted-redshift attractors, but it does not add the line table to the
-likelihood. Adding it naively could double-count lines already present in
-``ssp_flux``.
-
-DSPS Parameter Count
+Interpretation Rules
 --------------------
 
-The active science MAP fit has five free parameters:
+* Keep direct truth, generated closure truth, projected truth, optimizer
+  targets, and noisy observations separate in plots and text.
+* Do not present projected HLTDS PopCosmos bins as direct object-level ground
+  truth.
+* Keep negative noisy fluxes; they are valid Gaussian/Student-t likelihood
+  inputs.
+* Report proposal ESS and duplicate fraction with every science use of the
+  synthetic catalogue.
+* Compare the z<=0.35 HLTDS reference only in the overlapping low-redshift
+  interval.
+* Expect weakly constrained directions in an 18D latent space observed through
+  14 broad bands. Calibration and honest uncertainty are the target, not exact
+  per-galaxy recovery of every latent.
 
-* ``z_obs``;
-* ``log10_formed_mass_msun``;
-* ``sfh_t_peak``;
-* ``sfh_tau``;
-* ``log10_metallicity``.
+Reference and Debug Paths
+-------------------------
 
-This is not "the DSPS paper parameter count". DSPS is a differentiable SPS
-framework. The paper demonstrates differentiability through SFH, metallicity,
-dust, and nebular choices, but does not define one canonical Euclid+LSST
-photo-z fit. Any future paper-like preset must state the exact SFH model,
-metallicity model, dust model, nebular model, active parameter list, units, and
-priors.
+HLTDS MAP fits, MCLMC probes, reconstruction dashboards, and Euclid FS2 remain
+useful for diagnosis. They are not production acceptance gates for the
+FENIKS/DSPS closure model unless the runbook explicitly names them as a
+required comparison for a specific release.

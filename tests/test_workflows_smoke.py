@@ -6,9 +6,13 @@ import pandas as pd
 import pytest
 
 from euclid_dsps.config import normalize_config, validate_catalog_columns
-from euclid_dsps.io import read_catalog
+from euclid_dsps.io import load_row_indices, read_catalog
 from euclid_dsps.selection import select_galaxy_row
-from euclid_dsps.workflows.eda import run_eda
+from euclid_dsps.workflows import run_eda
+from euclid_dsps.workflows.core import (
+    _filter_padded_fit_batch_result,
+    _pad_fit_batch_to_static_size,
+)
 
 FIXTURE = Path(__file__).parent / "data" / "synthetic_catalog.parquet"
 
@@ -65,6 +69,13 @@ def test_read_catalog_derives_log10_metallicity_true() -> None:
     assert df["log10_metallicity_true"].tolist() == pytest.approx([-2.41, -2.21])
 
 
+def test_load_row_indices_accepts_optional_csv_header(tmp_path) -> None:
+    path = tmp_path / "rows.csv"
+    path.write_text("row_index\n9984\n9985\n", encoding="utf-8")
+
+    assert load_row_indices(path) == [9984, 9985]
+
+
 def test_select_galaxy_row_uses_configured_index() -> None:
     df = pd.read_parquet(FIXTURE)
 
@@ -113,3 +124,45 @@ def test_run_eda_writes_expected_outputs(tmp_path) -> None:
         "physical_parameters.png",
     }
     assert expected.issubset({item.name for item in out.iterdir()})
+
+
+def test_pad_fit_batch_to_static_size_duplicates_last_row_with_negative_index() -> None:
+    batch = pd.DataFrame({"flux": [1.0, 2.0, 3.0]}, index=[10, 11, 12])
+
+    padded, real_indices = _pad_fit_batch_to_static_size(batch, 5)
+
+    assert real_indices == {10, 11, 12}
+    assert len(padded) == 5
+    assert padded.index.tolist() == [10, 11, 12, -1_000_000_000, -1_000_000_001]
+    assert padded.iloc[-1]["flux"] == 3.0
+
+
+def test_pad_fit_batch_to_static_size_leaves_complete_batch_unchanged() -> None:
+    batch = pd.DataFrame({"flux": [1.0, 2.0]}, index=[10, 11])
+
+    padded, real_indices = _pad_fit_batch_to_static_size(batch, 2)
+
+    assert padded is batch
+    assert real_indices is None
+
+
+def test_filter_padded_fit_batch_result_keeps_only_real_row_outputs() -> None:
+    batch_result = {
+        "fit_rows": [
+            {"row_index": 10, "value": 1.0},
+            {"row_index": -1_000_000_000, "value": 3.0},
+        ],
+        "comparison_rows": [
+            {"row_index": 10, "band": "a"},
+            {"row_index": -1_000_000_000, "band": "a"},
+        ],
+        "hyper_rows": [{"chunk_index": 0}],
+        "trace_rows": [{"chunk_index": 0, "iteration": 10}],
+    }
+
+    filtered = _filter_padded_fit_batch_result(batch_result, {10})
+
+    assert filtered["fit_rows"] == [{"row_index": 10, "value": 1.0}]
+    assert filtered["comparison_rows"] == [{"row_index": 10, "band": "a"}]
+    assert filtered["hyper_rows"] == []
+    assert filtered["trace_rows"] == []

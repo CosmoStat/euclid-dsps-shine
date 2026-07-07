@@ -11,7 +11,12 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
     runtime = runtime_config or {}
     platforms = runtime.get("jax_platforms")
     if platforms:
-        os.environ["EUCLID_DSPS_JAX_PLATFORMS"] = str(platforms)
+        requested_platforms = str(platforms)
+        os.environ["EUCLID_DSPS_JAX_PLATFORMS"] = requested_platforms
+        if requested_platforms.lower() == "auto":
+            os.environ.pop("JAX_PLATFORMS", None)
+        else:
+            os.environ["JAX_PLATFORMS"] = requested_platforms
     if "disable_jax_plugin_autoload" in runtime:
         os.environ.setdefault(
             "EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD",
@@ -42,6 +47,8 @@ def apply_jax_runtime_env(runtime_config: dict[str, Any] | None) -> None:
             "EUCLID_DSPS_JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
             str(runtime["jax_persistent_cache_min_compile_time_secs"]),
         )
+    if runtime.get("tf_gpu_allocator"):
+        os.environ.setdefault("TF_GPU_ALLOCATOR", str(runtime["tf_gpu_allocator"]))
 
 
 def configure_jax_runtime() -> None:
@@ -89,7 +96,17 @@ def require_jax_gpu(expected_name: str | None = None) -> list[str]:
     """Raise if JAX did not expose an NVIDIA/CUDA-capable GPU device."""
     import jax
 
-    devices = jax.devices()
+    try:
+        devices = jax.devices()
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "JAX could not initialize the requested GPU backend. "
+            f"JAX_PLATFORMS={os.environ.get('JAX_PLATFORMS')!r}. "
+            "This usually means the installed jax/jaxlib package is CPU-only, "
+            "or the installed CUDA plugin version is incompatible with jaxlib. "
+            "Use --runtime cpu/auto for CPU runs, or reinstall matching CUDA "
+            "JAX packages in the active environment."
+        ) from exc
     gpu_devices = [
         device
         for device in devices

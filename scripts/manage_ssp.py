@@ -9,7 +9,6 @@ Usage:
 """
 
 import argparse
-import os
 from pathlib import Path
 from urllib.request import urlretrieve
 
@@ -96,6 +95,17 @@ def test_ssp(path):
         return False
 
     print(f"Testing SSP at {path}...")
+    ssp_path = Path(path)
+    if not ssp_path.exists():
+        print(f"FAILURE: SSP file does not exist: {ssp_path}")
+        if "chabrier" in ssp_path.name.lower():
+            print(
+                "Generate the PopCosmos Chabrier SSP first with:\n"
+                "  export SPS_HOME=\"$HOME/src/fsps\"\n"
+                "  python scripts/generate_fsps_ssp_grid.py "
+                f"--output {ssp_path} --overwrite"
+            )
+        return False
     try:
         # dsps.load_ssp_templates returns a NamedTuple-like object
         ssp = dsps.load_ssp_templates(fn=str(path))

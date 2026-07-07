@@ -1,0 +1,56 @@
+extends: amortized_diffsky_hltds_04_14_realnvp_gpu.yaml
+
+truth:
+    redshift_column: redshift_true
+    parameter_columns:
+        log10_stellar_mass: {column: logsm_true, kind: truth}
+        log10_ssfr_at_obs: {column: logssfr_true, kind: truth}
+        dust_av: {column: dust_av, kind: generated_truth}
+        dust_delta: {column: dust_delta, kind: generated_truth}
+
+fit:
+    free_parameters:
+        __replace__: true
+        z_obs:
+            initial: 0.25
+            bounds: [0.001, 0.35]
+        log10_stellar_mass:
+            initial: 10.0
+            bounds: [6.0, 13.5]
+        log10_ssfr_at_obs:
+            initial: -10.0
+            bounds: [-14.5, -7.0]
+        dust_av:
+            initial: 0.2
+            bounds: [0.0, 5.0]
+        dust_delta:
+            initial: 0.0
+            bounds: [-2.5, 1.0]
+
+model:
+    truth_basic_ssfr_reference: -10.0
+
+amortized:
+    latent:
+        schema: diffsky_truth_basic
+        include_redshift: true
+        use_fit_bounds: true
+        normalization: identity
+    encoder:
+        latent_dim: 5
+    prior:
+        type: realnvp
+        source: supervised_checkpoint
+        checkpoint: outputs/runs/diffsky_supervised_prior_basic/checkpoints/best.eqx
+        train_jointly: false
+
+calibration:
+    global_sed_scale:
+        enabled: true
+        mode: learn_global
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: true
+    per_band_zero_points:
+        enabled: false

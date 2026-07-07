@@ -4,12 +4,13 @@ Catalog Columns
 Source Context
 --------------
 
-The default dataset is a CosmoHub export from catalog 353, table
-``euclid_fs2_mock_dr_v1_1_phz``. CosmoHub is PIC's Hadoop-backed web platform
-for exploring and exporting large cosmological datasets. The Euclid Consortium
-identifies catalog 353 as the Euclid Flagship galaxy mock, and describes the
-release as a synthetic galaxy catalog containing billions of galaxies with
-hundreds of modeled physical, photometric, and halo properties.
+This page documents the Euclid FS2 comparison dataset. It is a CosmoHub export
+from catalog 353, table ``euclid_fs2_mock_dr_v1_1_phz``. CosmoHub is PIC's
+Hadoop-backed web platform for exploring and exporting large cosmological
+datasets. The Euclid Consortium identifies catalog 353 as the Euclid Flagship
+galaxy mock, and describes the release as a synthetic galaxy catalog containing
+billions of galaxies with hundreds of modeled physical, photometric, and halo
+properties.
 
 The public catalog page is:
 
@@ -229,14 +230,16 @@ measurement drawn from the survey-like flux plus noise model. Use them when the
 experiment should mimic measured survey photometry; use the corresponding
 ``*_error`` columns for the likelihood denominator and chi-square.
 
-The science config wires catalog flux errors for all ten LSST+Euclid bands.
-The fitted flux columns remain the continuum columns because the current DSPS
-model has continuum plus dust but not a calibrated nebular-emission likelihood;
-the ``*_el_model3_ext*`` fluxes and noisy realizations are diagnostics.
+The science config wires catalog fluxes and catalog flux errors for all ten
+LSST+Euclid bands. The current DSPS model includes stellar light, dust, raw
+FSPS/CLOUDY gas, AGN, and IGM, so the active PopCosmos-like setup uses the
+survey-like ``*_el_model3_ext_odonnell_ext`` photometry columns where configured
+by the band preset. The gas emission-line treatment is still raw FSPS/CLOUDY,
+not PopCosmos line-calibrated.
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/fs2_phz1_science.yaml fit \
+   python -m euclid_dsps.cli --config configs/fs2_gpu.yaml fit \
      --limit 32 \
      --batch-size 32 \
      --out outputs/runs/dev_fit_batch_10band
@@ -245,13 +248,13 @@ For COSMOS SED validation:
 
 .. code-block:: bash
 
-   euclid-dsps --config configs/fs2_phz1_science.yaml check \
+   python -m euclid_dsps.cli --config configs/fs2_gpu.yaml check \
      --kind cosmos \
      --limit 20 \
      --out outputs/check/cosmos
 
-The continuum-only target set is the default science target because the current
-DSPS model has continuum plus dust, but not nebular emission lines.
+Gas and AGN spectral components come from the generated FSPS assets. Noisy
+realization columns remain diagnostics unless explicitly selected in config.
 
 References
 ----------

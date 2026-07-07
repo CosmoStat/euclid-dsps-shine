@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from ..amortized.diagnostics import posterior_predictive_residual_summary_frame
 from ..filters import load_filters
 from ..fit import fit_galaxy_batch_adam, fit_one_galaxy, fit_population_batch_adam
 from ..io import (
@@ -39,6 +40,8 @@ from ..model import (
 )
 from ..nebular import write_nebular_diagnostic_outputs
 from ..performance import PerformanceRecorder, write_performance_outputs
+from ..photometric_uncertainty import flux_error_from_model
+from ..photometry import abmag_to_fnu_cgs as abmag_to_fnu_cgs_array
 from ..photometry import magerr_to_fluxerr_fnu_cgs
 from ..reporting import (
     write_batch_outputs,
@@ -104,6 +107,7 @@ def prepare_one(config: dict[str, Any]):
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     params = parameters_for_row(
         config["model"]["fixed_parameters"],
@@ -203,13 +207,14 @@ def sample_batch(
     limit: int | None = 5,
     batch_size: int = 1,
     row_indices_file: str | None = None,
+    start_index: int = 0,
 ) -> None:
-    """Sample independent galaxy posteriors with NumPyro NUTS.
+    """Sample independent galaxy posteriors.
 
-    This intentionally runs one galaxy at a time; HMC/NUTS is for posterior
-    density checks on small subsets, while Adam/MAP remains the full-catalog path.
+    NumPyro HMC/NUTS stays one object at a time. BlackJAX MCLMC can use a
+    batched-galaxy joint target when ``batch_size > 1``.
     """
-    from ..mcmc import sample_one_galaxy
+    from ..mcmc import sample_galaxy_batch_mclmc, sample_one_galaxy
 
     if limit is None and not row_indices_file:
         raise ValueError(
@@ -218,6 +223,8 @@ def sample_batch(
 
     out = ensure_dir(out_dir)
     row_indices = _load_row_indices_set(row_indices_file)
+    if row_indices is not None and int(start_index) > 0:
+        raise ValueError("--start-index cannot be combined with --row-indices-file")
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
     context = load_context(
@@ -226,15 +233,49 @@ def sample_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
 
     summary_rows = []
     predictive_rows = []
+    residual_summary_rows = []
     diagnostic_rows = []
     sample_rows = []
     save_samples = bool(config["sample"].get("save_samples", True))
+    sampler = str(config["sample"].get("sampler", "nuts")).lower()
+    use_batched_mclmc = sampler == "mclmc" and int(batch_size) > 1
+
+    def append_result_rows(
+        *,
+        row_index: int,
+        result: Any,
+        context_values: dict[str, Any],
+    ) -> None:
+        for item in result.summary:
+            summary_rows.append({"row_index": int(row_index), **item, **context_values})
+        predictive_rows.extend(
+            _posterior_predictive_rows(int(row_index), result, context_values)
+        )
+        residual_summary_rows.extend(
+            _posterior_predictive_flux_residual_summary_rows(
+                int(row_index),
+                result,
+                context_values,
+                config,
+            )
+        )
+        diagnostic_rows.append(
+            {
+                "row_index": int(row_index),
+                **result.diagnostics,
+                **context_values,
+            }
+        )
+        if save_samples:
+            sample_rows.extend(_posterior_sample_rows(int(row_index), result))
 
     total = _progress_total(config["catalog_path"], limit, row_indices)
+    chunk_index = 0
     with _make_progress_bar(
         total=total, desc="sample-batch", unit="galaxy"
     ) as progress:
@@ -244,7 +285,53 @@ def sample_batch(
             batch_size=batch_size,
             limit=limit,
             row_indices=row_indices,
+            start_index=start_index,
         ):
+            if use_batched_mclmc and len(batch) > 1:
+                observations = []
+                base_rows = []
+                context_rows = []
+                for row_index, row in batch.iterrows():
+                    observation = build_observation(
+                        int(row_index), row, config["bands"]
+                    )
+                    params = parameters_for_row(
+                        config["model"]["fixed_parameters"],
+                        config["model"].get("parameter_columns", {}),
+                        row.to_dict(),
+                        config.get("redshift", {}),
+                    )
+                    observations.append(observation)
+                    base_rows.append(params)
+                    context_rows.append(_row_context(row.to_dict(), params, config))
+                initial_rows, map_chi2 = _map_start_batch(
+                    context, batch, config, chunk_index=chunk_index
+                )
+                results = sample_galaxy_batch_mclmc(
+                    context,
+                    observations,
+                    base_rows,
+                    config["fit"],
+                    config["sample"],
+                    initial_params_rows=initial_rows,
+                )
+                for local_index, (row_index, _row) in enumerate(batch.iterrows()):
+                    context_values = {
+                        **context_rows[local_index],
+                        "hmc_initialized_from_map": (
+                            initial_rows[local_index] is not None
+                        ),
+                        "map_chi2": map_chi2[local_index],
+                    }
+                    append_result_rows(
+                        row_index=int(row_index),
+                        result=results[local_index],
+                        context_values=context_values,
+                    )
+                    _update_progress(progress, row_index=int(row_index))
+                chunk_index += 1
+                continue
+
             for row_index, row in batch.iterrows():
                 observation = build_observation(int(row_index), row, config["bands"])
                 params = parameters_for_row(
@@ -278,28 +365,28 @@ def sample_batch(
                         "hmc_initialized_from_map": False,
                         "map_chi2": None,
                     }
-                for item in result.summary:
-                    summary_rows.append(
-                        {"row_index": int(row_index), **item, **context_values}
-                    )
-                predictive_rows.extend(
-                    _posterior_predictive_rows(int(row_index), result, context_values)
+                append_result_rows(
+                    row_index=int(row_index),
+                    result=result,
+                    context_values=context_values,
                 )
-                diagnostic_rows.append(
-                    {
-                        "row_index": int(row_index),
-                        **result.diagnostics,
-                        **context_values,
-                    }
-                )
-                if save_samples:
-                    sample_rows.extend(_posterior_sample_rows(int(row_index), result))
                 _update_progress(progress, row_index=int(row_index))
+            chunk_index += 1
 
     pd.DataFrame(summary_rows).to_csv(out / "batch_posterior_summary.csv", index=False)
     pd.DataFrame(predictive_rows).to_csv(
         out / "batch_posterior_predictive.csv", index=False
     )
+    residual_summary_frame = pd.DataFrame(residual_summary_rows)
+    if not residual_summary_frame.empty:
+        residual_summary_frame.to_csv(
+            out / "batch_posterior_predictive_flux_residual_summary.csv",
+            index=False,
+        )
+        residual_summary_frame.to_parquet(
+            out / "batch_posterior_predictive_flux_residual_summary.parquet",
+            index=False,
+        )
     pd.DataFrame(diagnostic_rows).to_csv(
         out / "batch_mcmc_diagnostics.csv", index=False
     )
@@ -473,12 +560,56 @@ def _map_start(context, observation, params: dict[str, float], config: dict[str,
     return fit_one_galaxy(context, observation, params, config["fit"])
 
 
+def _map_start_batch(
+    context,
+    batch: pd.DataFrame,
+    config: dict[str, Any],
+    *,
+    chunk_index: int,
+) -> tuple[list[dict[str, float] | None], list[float | None]]:
+    if not bool(config.get("sample", {}).get("init_from_map", True)):
+        return [None] * len(batch), [None] * len(batch)
+    batch_result = _fit_dataframe_batch(
+        context,
+        batch,
+        config,
+        chunk_index=chunk_index,
+        perf=None,
+    )
+    fit_rows_by_index = {
+        int(row["row_index"]): row
+        for row in batch_result["fit_rows"]
+        if "row_index" in row
+    }
+    free_names = list(config["fit"]["free_parameters"])
+    initial_rows: list[dict[str, float] | None] = []
+    chi2_rows: list[float | None] = []
+    for row_index in batch.index:
+        fit_row = fit_rows_by_index.get(int(row_index))
+        if fit_row is None:
+            initial_rows.append(None)
+            chi2_rows.append(None)
+            continue
+        initial: dict[str, float] = {}
+        for name in free_names:
+            key = f"fit_{name}"
+            value = fit_row.get(key)
+            if value is None or not np.isfinite(value):
+                continue
+            initial[name] = float(value)
+        initial_rows.append(initial if len(initial) == len(free_names) else None)
+        chi2 = fit_row.get("chi2")
+        chi2_rows.append(float(chi2) if chi2 is not None and np.isfinite(chi2) else None)
+    return initial_rows, chi2_rows
+
+
 def run_batch(
     config: dict[str, Any],
     out_dir: str | Path,
     limit: int | None = None,
     batch_size: int = 10_000,
     row_indices_file: str | None = None,
+    start_index: int = 0,
 ) -> None:
     """Run the same configured DSPS model over many catalog rows.
 
@@ -489,6 +620,8 @@ def run_batch(
     perf = PerformanceRecorder(_verbose_benchmark(config))
     reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
+    if row_indices is not None and int(start_index) > 0:
+        raise ValueError("--start-index cannot be combined with --row-indices-file")
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
     context = load_context(
@@ -497,6 +630,7 @@ def run_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -513,6 +647,7 @@ def run_batch(
             batch_size=batch_size,
             limit=limit,
             row_indices=row_indices,
+            start_index=start_index,
         ):
             perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
             rows.extend(_forward_dataframe_batch(context, batch, config))
@@ -568,6 +703,7 @@ def run_batch(
             "limit": limit,
             "batch_size": batch_size,
             "row_indices_file": row_indices_file,
+            "start_index": int(start_index),
         },
     )
     write_performance_outputs(perf.rows, out, "batch")
@@ -579,6 +715,7 @@ def fit_batch(
     limit: int | None = 25,
     batch_size: int = 1000,
     row_indices_file: str | None = None,
+    start_index: int = 0,
 ) -> None:
     """Fit the configured free parameters for many rows.
 
@@ -588,6 +725,8 @@ def fit_batch(
     perf = PerformanceRecorder(_verbose_benchmark(config))
     reporting_level = _reporting_level(config)
     row_indices = _load_row_indices_set(row_indices_file)
+    if row_indices is not None and int(start_index) > 0:
+        raise ValueError("--start-index cannot be combined with --row-indices-file")
     columns = required_catalog_columns(config)
     filters = load_filters(config["bands"])
     context = load_context(
@@ -596,6 +735,7 @@ def fit_batch(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -612,11 +752,30 @@ def fit_batch(
             batch_size=batch_size,
             limit=limit,
             row_indices=row_indices,
+            start_index=start_index,
         ):
             perf.mark("read_chunk", chunk_index=chunk_index, n_rows=len(batch))
-            batch_result = _fit_dataframe_batch(
-                context, batch, config, chunk_index=chunk_index, perf=perf
+            fit_batch_frame, real_row_indices = _pad_fit_batch_to_static_size(
+                batch, batch_size
             )
+            if real_row_indices is not None:
+                perf.mark(
+                    "pad_final_chunk",
+                    chunk_index=chunk_index,
+                    n_rows=len(batch),
+                    padded_n_rows=len(fit_batch_frame),
+                )
+            batch_result = _fit_dataframe_batch(
+                context,
+                fit_batch_frame,
+                config,
+                chunk_index=chunk_index,
+                perf=perf,
+            )
+            if real_row_indices is not None:
+                batch_result = _filter_padded_fit_batch_result(
+                    batch_result, real_row_indices
+                )
             fit_rows.extend(batch_result["fit_rows"])
             comparison_rows.extend(batch_result["comparison_rows"])
             trace_rows.extend(batch_result["trace_rows"])
@@ -660,7 +819,13 @@ def fit_batch(
             out / "sed_diagnostics_manifest.csv", index=False
         )
     write_fit_diagnostic_outputs(fits, comparison, config, out, label="batch_fit")
-    write_nebular_diagnostic_outputs(context, fits, out, label="batch_fit")
+    write_nebular_diagnostic_outputs(
+        context,
+        fits,
+        out,
+        label="batch_fit",
+        make_plots=reporting_level == "full",
+    )
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(
@@ -670,9 +835,47 @@ def fit_batch(
             "limit": limit,
             "batch_size": batch_size,
             "row_indices_file": row_indices_file,
+            "start_index": int(start_index),
         },
     )
     write_performance_outputs(perf.rows, out, "batch_fit")
+
+
+def _pad_fit_batch_to_static_size(
+    batch: pd.DataFrame, target_size: int
+) -> tuple[pd.DataFrame, set[int] | None]:
+    """Pad a final MAP batch so JAX sees the same batch shape throughout a run."""
+    if target_size <= 0 or len(batch) == 0 or len(batch) >= target_size:
+        return batch, None
+    pad_count = target_size - len(batch)
+    real_row_indices = {int(index) for index in batch.index}
+    pad_rows = batch.iloc[[-1]].copy()
+    pad_rows = pd.concat([pad_rows] * pad_count)
+    pad_rows.index = [-1_000_000_000 - offset for offset in range(pad_count)]
+    padded = pd.concat([batch, pad_rows], axis=0)
+    return padded, real_row_indices
+
+
+def _filter_padded_fit_batch_result(
+    batch_result: dict[str, list[dict[str, Any]]], real_row_indices: set[int]
+) -> dict[str, list[dict[str, Any]]]:
+    """Drop synthetic padding rows before checkpoints and final reports."""
+
+    def keep_real_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = []
+        for row in rows:
+            if "row_index" not in row:
+                continue
+            if int(row["row_index"]) in real_row_indices:
+                kept.append(row)
+        return kept
+
+    return {
+        "fit_rows": keep_real_rows(batch_result["fit_rows"]),
+        "comparison_rows": keep_real_rows(batch_result["comparison_rows"]),
+        "hyper_rows": [],
+        "trace_rows": [],
+    }
 
 
 def _write_fit_chunk_checkpoint(
@@ -704,9 +907,6 @@ def _write_fit_chunk_checkpoint(
             f"batch_fit_trace_{suffix}",
             config,
         )
-
-
-_COSMOS_RESOURCE_CACHE: dict[tuple[Any, ...], Any] = {}
 
 
 def _sed_sample_limit(config: dict[str, Any]) -> int:
@@ -866,16 +1066,29 @@ def _ranked_fit_rows(
                 .rename(columns={"abs_residual": "median_abs_mag_residual"})
             )
             work = work.merge(by_row, on="row_index", how="left")
-    if "median_abs_mag_residual" in work:
-        score = work["median_abs_mag_residual"]
-    elif "reduced_chi2" in work:
-        score = work["reduced_chi2"]
+    score_column = next(
+        (
+            column
+            for column in (
+                "reduced_fit_quality",
+                "fit_quality_per_band",
+                "photometric_objective_per_band",
+                "reduced_chi2",
+                "median_abs_mag_residual",
+            )
+            if column in work
+        ),
+        None,
+    )
+    if score_column is not None:
+        score = pd.to_numeric(work[score_column], errors="coerce")
     else:
         score = pd.Series(np.zeros(len(work)), index=work.index)
     fill_value = -np.inf if worst else np.inf
     work["sed_diagnostic_score"] = score.replace([np.inf, -np.inf], np.nan).fillna(
         fill_value
     )
+    work["sed_diagnostic_score_metric"] = score_column or "constant_zero"
     if "reduced_chi2" not in work:
         work["reduced_chi2"] = work["sed_diagnostic_score"]
     return (
@@ -1043,76 +1256,8 @@ def _ground_truth_sed_for_row(
 ) -> tuple[pd.DataFrame | None, str]:
     if not _plot_ground_truth(config):
         return None, "disabled"
-    try:
-        from ..cosmos import (
-            MissingCosmosColumnsError,
-            MissingCosmosResourceError,
-            flambda_10pc_to_lnu_lsun,
-            load_cosmos_sed_resources,
-            reconstruct_cosmos_proxy_sed,
-        )
-    except Exception as exc:  # pragma: no cover - defensive optional import path
-        return None, f"import_failed:{type(exc).__name__}"
-
-    cosmos_config = config.get("cosmos_sed", {}) or {}
-    cache_key = (
-        cosmos_config.get("value_added_data_dir"),
-        cosmos_config.get("lephare_data_dir"),
-        cosmos_config.get("template_subdir"),
-        cosmos_config.get("template_list"),
-    )
-    try:
-        if cache_key not in _COSMOS_RESOURCE_CACHE:
-            _COSMOS_RESOURCE_CACHE[cache_key] = load_cosmos_sed_resources(
-                cosmos_config
-            )
-        cosmos_result = reconstruct_cosmos_proxy_sed(
-            row,
-            row_index,
-            _COSMOS_RESOURCE_CACHE[cache_key],
-            filters,
-            config["bands"],
-            cosmos_config,
-        )
-    except MissingCosmosColumnsError as exc:
-        return None, f"missing_columns:{exc}"
-    except MissingCosmosResourceError as exc:
-        return None, f"missing_resource:{exc}"
-    except Exception as exc:  # pragma: no cover - report unexpected data issue
-        return None, f"failed:{type(exc).__name__}:{exc}"
-
-    rel_residual = np.asarray(
-        list(cosmos_result.relative_residuals_vs_catalog_abs.values()), dtype=float
-    )
-    finite_rel = rel_residual[np.isfinite(rel_residual)]
-    norm_bands = sorted(cosmos_result.synthetic_abs_fluxes_after)
-    return (
-        pd.DataFrame(
-            {
-                "wave_angstrom": cosmos_result.wave_angstrom,
-                "ground_truth_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
-                    cosmos_result.wave_angstrom, cosmos_result.flambda_scaled
-                ),
-                "ground_truth_unscaled_lnu_lsun_per_hz": flambda_10pc_to_lnu_lsun(
-                    cosmos_result.wave_angstrom, cosmos_result.flambda_unscaled
-                ),
-                "ground_truth_label": "COSMOS proxy",
-                "ground_truth_scale_factor": cosmos_result.alpha,
-                "ground_truth_normalization_bands": ",".join(norm_bands),
-                "ground_truth_norm_median_abs_rel_residual": (
-                    float(np.nanmedian(np.abs(finite_rel)))
-                    if finite_rel.size
-                    else float("nan")
-                ),
-                "ground_truth_norm_max_abs_rel_residual": (
-                    float(np.nanmax(np.abs(finite_rel)))
-                    if finite_rel.size
-                    else float("nan")
-                ),
-            }
-        ),
-        "ok",
-    )
+    del row, row_index, filters
+    return None, "legacy_cosmos_sed_disabled"
 
 
 def fit_population(
@@ -1139,6 +1284,7 @@ def fit_population(
         n_sfh_bins=int(config["model"].get("n_sfh_bins", 96)),
         cosmos_config=config.get("cosmos_sed"),
         nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
     )
     perf.mark("load_context", n_bands=len(config["bands"]))
 
@@ -1243,7 +1389,13 @@ def fit_population(
         label="population_fit",
         hyperparameters=hyper_frame,
     )
-    write_nebular_diagnostic_outputs(context, fits, out, label="population_fit")
+    write_nebular_diagnostic_outputs(
+        context,
+        fits,
+        out,
+        label="population_fit",
+        make_plots=reporting_level == "full",
+    )
     perf.mark("write_reports")
     write_json(out / "normalized_config.json", config)
     write_json(
@@ -1295,6 +1447,42 @@ def _posterior_predictive_rows(
     return rows
 
 
+def _posterior_predictive_flux_residual_summary_rows(
+    row_index: int,
+    result,
+    context_values: dict[str, Any],
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return likelihood-normalized flux residual summaries for MCMC output."""
+    object_id = context_values.get("catalog_object_id", row_index)
+    model_flux = np.asarray(abmag_to_fnu_cgs_array(result.posterior_model_mags))
+    if model_flux.ndim == 2:
+        model_flux = model_flux[:, None, :]
+    obs_flux = np.asarray(result.observed_flux_fnu_cgs, dtype=float)[None, :]
+    obs_err = np.asarray(result.flux_error_fnu_cgs, dtype=float)[None, :]
+    mask = np.isfinite(obs_flux) & np.isfinite(obs_err) & (obs_err > 0.0)
+    fit_cfg = config.get("fit", {}) or {}
+    frame = posterior_predictive_residual_summary_frame(
+        [object_id],
+        obs_flux,
+        obs_err,
+        mask,
+        model_flux,
+        tuple(str(name) for name in result.band_names),
+        row_index=[int(row_index)],
+        likelihood_config={
+            "error_floor_frac": float(fit_cfg.get("flux_error_floor_frac", 0.0)),
+            "error_jitter": float(fit_cfg.get("flux_error_jitter", 0.0)),
+            "error_floor_reference": "observed",
+        },
+    )
+    if frame.empty:
+        return []
+    for key, value in context_values.items():
+        frame[key] = value
+    return frame.to_dict(orient="records")
+
+
 def _posterior_sample_rows(row_index: int, result) -> list[dict[str, Any]]:
     names = list(result.samples)
     n_samples = len(result.samples[names[0]]) if names else 0
@@ -1311,7 +1499,7 @@ def _posterior_sample_rows(row_index: int, result) -> list[dict[str, Any]]:
 
 
 def _posterior_truth_values(context_values: dict[str, Any]) -> dict[str, Any]:
-    return {
+    values = {
         key: value
         for key, value in context_values.items()
         if key.startswith("truth_")
@@ -1319,6 +1507,11 @@ def _posterior_truth_values(context_values: dict[str, Any]) -> dict[str, Any]:
         or key.startswith("truth_kind_")
         or key in {"redshift_truth", "redshift_truth_source", "z_obs", "z_obs_source"}
     }
+    if "redshift_truth" in values:
+        values["truth_z_obs"] = values["redshift_truth"]
+        values["truth_source_z_obs"] = values.get("redshift_truth_source")
+        values["truth_kind_z_obs"] = "direct"
+    return values
 
 
 def _row_context(
@@ -1365,11 +1558,16 @@ def _row_context(
                 )
     for column in config.get("extra_columns", []):
         if column in row and pd.notna(row[column]):
-            values[f"catalog_{column}"] = float(row[column])
+            try:
+                values[f"catalog_{column}"] = float(row[column])
+            except (TypeError, ValueError):
+                values[f"catalog_{column}"] = str(row[column])
     return values
 
 
 def _truth_kind(truth_name: str, spec: Any) -> str:
+    if isinstance(spec, dict) and spec.get("kind"):
+        return str(spec["kind"])
     if truth_name in {"dust_av", "log10_metallicity"}:
         return "proxy"
     if isinstance(spec, dict) and (
@@ -1529,6 +1727,16 @@ def _fit_dataframe_batch(
         n_free_effective = len(config["fit"]["free_parameters"])
         dof = max(n_valid_bands - n_free_effective, 1)
         chi2_value = float(fit_result.chi2[local_index])
+        photometric_objective = float(fit_result.photometric_objective[local_index])
+        photometric_likelihood = str(
+            config["fit"].get("photometric_likelihood", "gaussian")
+        )
+        student_t_dof = float(config["fit"].get("student_t_dof", 2.0))
+        fit_quality_metric = (
+            "student_t_neg2loglike"
+            if photometric_likelihood == "student_t"
+            else "gaussian_chi2"
+        )
         fit_rows.append(
             {
                 "row_index": int(row_index),
@@ -1539,6 +1747,18 @@ def _fit_dataframe_batch(
                 "chi2_per_band": chi2_value / max(n_valid_bands, 1),
                 "reduced_chi2": chi2_value / dof,
                 "reduced_chi2_dof": chi2_value / dof,
+                "gaussian_chi2": chi2_value,
+                "gaussian_chi2_per_band": chi2_value / max(n_valid_bands, 1),
+                "reduced_gaussian_chi2": chi2_value / dof,
+                "photometric_objective": photometric_objective,
+                "photometric_objective_per_band": photometric_objective
+                / max(n_valid_bands, 1),
+                "fit_quality": photometric_objective,
+                "fit_quality_per_band": photometric_objective / max(n_valid_bands, 1),
+                "reduced_fit_quality": photometric_objective / dof,
+                "fit_quality_metric": fit_quality_metric,
+                "photometric_likelihood": photometric_likelihood,
+                "student_t_dof": student_t_dof,
                 "gradient_norm": float(fit_result.gradient_norm[local_index]),
                 "n_bands": n_bands,
                 "n_valid_bands": n_valid_bands,
@@ -1571,6 +1791,37 @@ def _fit_dataframe_batch(
                 if obs_flux_error > 0
                 else float("nan")
             )
+            likelihood_space = str(config["fit"].get("likelihood_space", "flux")).lower()
+            if likelihood_space == "flux":
+                sigma_likelihood = float(
+                    np.sqrt(
+                        obs_flux_error**2
+                        + (
+                            float(config["fit"].get("flux_error_floor_frac", 0.0))
+                            * obs_flux
+                        )
+                        ** 2
+                        + float(config["fit"].get("flux_error_jitter", 0.0)) ** 2
+                    )
+                )
+                chi_likelihood = (
+                    (obs_flux - model_flux) / sigma_likelihood
+                    if sigma_likelihood > 0
+                    else float("nan")
+                )
+            else:
+                sigma_likelihood = sigma
+                chi_likelihood = residual / sigma if sigma > 0 else float("nan")
+            chi2_contribution = chi_likelihood**2
+            if photometric_likelihood == "student_t":
+                objective_contribution = (
+                    (student_t_dof + 1.0)
+                    * np.log1p(chi2_contribution / student_t_dof)
+                    if np.isfinite(chi2_contribution)
+                    else float("nan")
+                )
+            else:
+                objective_contribution = chi2_contribution
             comparison_rows.append(
                 {
                     "row_index": int(row_index),
@@ -1603,6 +1854,11 @@ def _fit_dataframe_batch(
                     "fractional_flux_residual_model_minus_observed": flux_ratio - 1.0,
                     "chi": residual / sigma if sigma > 0 else float("nan"),
                     "chi_flux": chi_flux,
+                    "chi_likelihood": chi_likelihood,
+                    "photometric_objective_contribution": objective_contribution,
+                    "likelihood_sigma": sigma_likelihood,
+                    "photometric_likelihood": photometric_likelihood,
+                    "student_t_dof": student_t_dof,
                     "filter_source": filter_curves[band_index].source,
                     **context_values,
                 }
@@ -1824,6 +2080,18 @@ def _flux_error_arrays(
         fallback = np.asarray(
             magerr_to_fluxerr_fnu_cgs(flux, sigma_mag[:, band_index]), dtype=float
         )
+        error_model = band.get("error_model") or band.get("uncertainty_model")
+        if error_model:
+            modeled = flux_error_from_model(
+                flux,
+                error_model,
+                band_name=str(band["name"]),
+            )
+            fallback = np.where(
+                np.isfinite(modeled) & (modeled > 0.0),
+                modeled,
+                fallback,
+            )
         error_column = band.get("error_column")
         if not error_column or error_column not in batch:
             columns.append(fallback)

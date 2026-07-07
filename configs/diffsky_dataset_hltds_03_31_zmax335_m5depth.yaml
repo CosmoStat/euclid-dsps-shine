@@ -1,0 +1,62 @@
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet
+ssp_path: Data/diffsky/raw/hltds_cosmos_260215_03_31_2026/diffsky_hltds_cosmos_260215_03_31_2026_ssp_data.hdf5
+
+runtime: gpu
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
+nebular_emission: ssp_flux
+
+fit:
+    photometric_likelihood: student_t
+    student_t_dof: 2.0
+
+diffsky_dataset:
+    name: hltds_cosmos_260215_03_31_2026_zmax335_m5depth
+    role: canonical_truth_dataset
+    raw_root: Data/diffsky/raw/hltds_cosmos_260215_03_31_2026
+    source_processed_path: Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_photometry_truth.parquet
+    processed_path: Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.parquet
+    manifest_path: Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.manifest.yaml
+    schema_path: Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.schema.json
+    truth_report_path: Data/diffsky/processed/hltds_cosmos_260215_03_31_2026_zmax335_m5depth.truth_report.md
+    integrity_report_path: Data/diffsky/processed/diffsky_dataset_integrity_report.md
+    redshift_subset:
+        column: redshift_true
+        min: 0.0
+        max: 3.35
+        note: The current local 03/31 source reaches z=3.0319715
+    error_model:
+        type: m5_depth
+        depth_reference: LSST 10-year coadd for lsst_*; Roman WFI one-hour point-source for roman_* with eta=0.95 synthetic source-noise mixing; PhotErr-style sigmaSys=0.005 mag systematic floor.
+        sigma_sys_mag: 0.005
+        m5:
+            lsst_u: 26.1
+            lsst_g: 27.4
+            lsst_r: 27.5
+            lsst_i: 26.8
+            lsst_z: 26.1
+            lsst_y: 24.9
+            roman_F062: 27.97
+            roman_F087: 27.63
+            roman_F106: 27.60
+            roman_F129: 27.60
+            roman_F146: 28.01
+            roman_F158: 27.52
+            roman_F184: 26.95
+            roman_F213: 25.64
+        gamma:
+            lsst_u: 0.037
+            lsst_g: 0.038
+            lsst_r: 0.039
+            lsst_i: 0.039
+            lsst_z: 0.040
+            lsst_y: 0.040
+        eta:
+            roman_F062: 0.95
+            roman_F087: 0.95
+            roman_F106: 0.95
+            roman_F129: 0.95
+            roman_F146: 0.95
+            roman_F158: 0.95
+            roman_F184: 0.95
+            roman_F213: 0.95
+        default_eta: 1.0

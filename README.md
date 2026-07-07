@@ -1,155 +1,170 @@
 # Euclid DSPS SHINE
 
-DSPS-like SED inference from Euclid + LSST photometry.
+Standalone DSPS/JAX workflows for the controlled Diffsky/FENIKS closure
+catalogue and the NN+DSPS+NF prior-learning ladder.
 
-Main goal:
+FENIKS is the primary science dataset in this checkout. HLTDS and Euclid FS2
+remain available as debug/reference paths, but they are not the default
+experiment surface.
 
-- fit simple DSPS parameters from catalog photometry;
-- compare recovered redshift, mass, SFR, and metallicity proxies to FS2 truth/proxy columns;
-- compare inferred DSPS SEDs to COSMOS-template proxy SEDs;
-- keep MAP fast for batches and keep HMC/NUTS posterior sampling for selected galaxies.
+## Start Here
 
-## Quick Start
+| Need | Use |
+| --- | --- |
+| Install the package | `conda activate shine && python -m pip install -e .` |
+| Read the production runbook | `docs/source/production.rst` |
+| Generate the controlled dataset | `configs/diffsky_synthetic_feniks_260617_50k.yaml` |
+| Validate same-parameter closure | `diffsky-validate-dsps-closure` on the generated FENIKS splits |
+| Train the supervised FENIKS prior | `configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml` |
+| Train NN+DSPS+NF inference | `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` |
+| Preflight the full ladder | `diffsky-plan-prior-workflow` |
+
+Full docs live under `docs/source/`; the most useful entry points are
+`production.rst`, `prior_learning.rst`, and `amortized_inference.rst`.
+
+## Production Configs
+
+| Config | Purpose |
+| --- | --- |
+| `configs/diffsky_synthetic_feniks_260617_50k.yaml` | Generate the 40k/5k/5k Diffsky/FENIKS DSPS-closure splits. |
+| `configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml` | Generate the LSST+Euclid+Roman 18-band FENIKS comparison sample. |
+| `configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml` | Train a supervised RealNVP prior on the full 18D closure truth vector. |
+| `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` | Train and infer with the 18D NN+DSPS model using the supervised FENIKS prior checkpoint. |
+
+Reference/debug configs:
+
+| Config | Role |
+| --- | --- |
+| `configs/diffsky_dataset_hltds_04_14.yaml` | Rebuild and validate the low-z HLTDS reference parquet. |
+| `configs/diffsky_dataset_hltds_03_31_zmax335_m5depth.yaml` | Rebuild and validate the higher-redshift HLTDS truth-rich reference parquet. |
+| `configs/fs2_gpu.yaml` | Euclid FS2 MAP/posterior comparison path. |
+| `configs/amortized_fs2_realnvp.yaml` | FS2 amortized comparison path. |
+
+Historical HLTDS MAP/amortized experiments, OpenUniverse helpers, COSMOS SED
+tools, reconstruction dashboards, and old docs/tests live under `legacy/`.
+
+## Install
 
 ```bash
 conda activate shine
 python -m pip install -e .
 ```
 
-Recommended science config:
-
-```text
-configs/fs2_phz1_science.yaml
-```
-
-Run MAP fits and save SED diagnostics:
+For GPU runs:
 
 ```bash
-euclid-dsps fit \
-  --limit 1000 \
-  --batch-size 512 \
-  --sed-samples 16 \
-  --out outputs/runs/science_fit
+export JAX_PLATFORMS=cuda
+export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export TF_GPU_ALLOCATOR=cuda_malloc_async
+python -c "import jax; print(jax.default_backend()); print(jax.devices())"
 ```
 
-Optional Snakemake wrapper:
+## FENIKS Workflow
+
+Preflight the current dataset, checkpoints, and launch order:
 
 ```bash
-snakemake -j1
+python -m euclid_dsps.cli \
+  --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+  diffsky-plan-prior-workflow \
+  --out outputs/reports/feniks_prior_workflow
 ```
 
-Run one galaxy:
+Generate and validate the controlled closure dataset on Jean-Zay:
 
 ```bash
-euclid-dsps fit --index 0 --out outputs/runs/row0_fit
+GEN_JOB=$(sbatch --parsable --export=ALL,STAGE=generate,OVERWRITE=1,RESUME=0 \
+  scripts/diffsky_synthetic_feniks_50k_h100.slurm)
+
+sbatch --dependency=afterok:${GEN_JOB} --export=ALL,STAGE=validate \
+  scripts/diffsky_synthetic_feniks_50k_h100.slurm
 ```
 
-Run HMC/NUTS posterior checks on selected rows:
+Validate directly when the splits already exist:
 
 ```bash
-euclid-dsps posterior \
-  --row-indices-file outputs/runs/science_fit/hmc_row_indices.txt \
-  --num-warmup 300 \
-  --num-samples 800 \
-  --out outputs/runs/posterior_subset
+python -m euclid_dsps.cli \
+  --config configs/diffsky_synthetic_feniks_260617_50k.yaml \
+  diffsky-validate-dsps-closure \
+  --dataset-dir Data/diffsky/synthetic/feniks_260617_dsps_closure \
+  --sample-size 256 \
+  --batch-size 256 \
+  --runtime gpu
 ```
 
-Run sanity checks without fitting:
+Train the supervised truth prior:
 
 ```bash
-euclid-dsps check --kind eda --out outputs/check/eda
-euclid-dsps check --index 0 --out outputs/check/row0_forward
-euclid-dsps check --kind cosmos --limit 20 --out outputs/check/cosmos
+python -m euclid_dsps.cli \
+  --config configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml \
+  diffsky-train-supervised-prior \
+  --out outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp
 ```
 
-## Simple CLI
-
-Public commands:
-
-- `fit`: MAP fit. Uses `--index` for one row, otherwise batch mode.
-- `posterior`: HMC/NUTS for one row or a small row list.
-- `check`: EDA, forward pass, or standalone COSMOS proxy SED checks.
-
-## Science Config
-
-`configs/fs2_phz1_science.yaml` is intentionally short. It uses:
-
-- `bands: lsst_euclid_10` for LSST `ugrizy` + Euclid VIS/Y/J/H;
-- local passbands from `filters/` and catalog flux errors from
-  `*_el_model3_ext_odonnell_ext_error`;
-- `fit.likelihood_space: flux`, so inference optimizes Gaussian residuals in
-  `Fnu` cgs flux units; AB magnitudes remain reporting/legacy diagnostics;
-- `selection.nondetection_policy: gaussian_flux`, so finite non-positive fluxes
-  with valid errors remain usable constraints in flux space;
-- `band_calibration.mode: none` by default, with optional fixed per-band offsets
-  for calibration tests;
-- `column_groups` instead of a long `extra_columns` list;
-- `dust_model: cosmos_proxy_fixed` so COSMOS dust columns are row-injected, not inferred as DSPS `dust_av`;
-- `nebular_emission: ssp_flux`, meaning current photometry uses whatever line
-  content is already present in the SSP flux table; separate SSP line tables
-  are diagnostic only;
-- `redshift.initial: fixed` only for MAP initialization; `z_obs` stays a free
-  bounded fit parameter with no `phz_median` initialization and no photo-z prior;
-- broad non-circular `weak_physical` priors for the current DSPS parameterization;
-- `plot_ground_truth: true` so SED diagnostics overlay the COSMOS proxy when local resources exist.
-
-Expanded normalized config is written in run outputs as `normalized_config.json`.
-
-## Outputs
-
-Batch MAP writes:
-
-- `batch_fit_results.*`: recovered parameters, derived SFR, truth/proxy columns, optimizer diagnostics;
-- `batch_fit_photometry_comparison.*`: observed vs model photometry;
-- `chi2_per_band` and `reduced_chi2_dof`: per-band diagnostic and
-  DOF-corrected reduced chi2 are reported separately;
-- `batch_fit_performance_summary.json` and
-  `batch_fit_performance_by_batch.csv`: wall time, seconds per galaxy,
-  throughput, backend/device metadata, and GPU-hour per galaxy when a GPU
-  backend is used;
-- `batch_fit_redshift_attractors.csv`: repeated MAP redshift modes and their
-  truth/proxy diagnostics;
-- `batch_fit_nebular_*.csv`: diagnostic-only SSP emission-line inventory and
-  line/filter crossings near fitted-redshift attractors when the SSP asset
-  exposes `ssp_emline_*`;
-- `batch_fit_parameter_audit.csv`: labels fixed, free, derived, or row-injected columns;
-- fit-vs-catalog truth/proxy plots skip inactive fixed parameters such as
-  `dust_av` under COSMOS proxy dust; dust is never treated as catalog truth;
-- `sed_diagnostics/`: best and worst DSPS SED diagnostics, COSMOS proxy SED overlays, filters, and photometry constraints for sampled rows;
-- `normalized_config.json`: exact expanded config used for audit.
-
-Posterior runs write `posterior_samples.csv`, `posterior_summary.csv`, posterior predictive photometry, and diagnostics.
-
-## Priors
-
-Current priors are `weak_physical`: broad, stabilizing, and non-circular.
-
-Do not call them POP-COSMOS priors yet. POP-COSMOS uses learned population priors from rich COSMOS photometry; matching that requires exact parameter mapping, units, and selection treatment before implementation.
-
-## Current Fit Size
-
-The science MAP fit has five active parameters:
-
-- `z_obs`;
-- `log10_formed_mass_msun`;
-- `sfh_t_peak`;
-- `sfh_tau`;
-- `log10_metallicity`.
-
-DSPS itself is a differentiable SPS framework, not one fixed photo-z fitting
-model with a canonical parameter count. A later Diffstar preset should define
-its own explicit parameter mapping and priors.
-
-## Development Checks
+Train NN+DSPS+NF inference on the train split:
 
 ```bash
-uv run python -m compileall euclid_dsps scripts/quickstart_one_galaxy.py
-uv run euclid-dsps --help
-uv run pytest
+python -m euclid_dsps.cli \
+  --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+  amortized-train-diffsky \
+  --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/train.parquet \
+  --prior-checkpoint outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp/checkpoints/best.eqx \
+  --out outputs/runs/amortized_diffsky_synthetic_feniks_full
 ```
 
-GPU JAX setup may differ between `conda shine` and `uv`. Verify long GPU runs with:
+Infer on the held-out test split:
 
 ```bash
-python scripts/check_jax_gpu.py --require-nvidia --hold-seconds 10
+python -m euclid_dsps.cli \
+  --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+  amortized-infer-diffsky \
+  --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+  --checkpoint outputs/runs/amortized_diffsky_synthetic_feniks_full/checkpoints/best.eqx \
+  --feature-stats outputs/runs/amortized_diffsky_synthetic_feniks_full/feature_stats.json \
+  --out outputs/runs/amortized_diffsky_synthetic_feniks_full_test_infer \
+  --shard-outputs
 ```
+
+Run MAP under the learned NF prior:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+  diffsky-map-adam-prior \
+  --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+  --checkpoint outputs/runs/amortized_diffsky_synthetic_feniks_full/checkpoints/best.eqx \
+  --feature-stats outputs/runs/amortized_diffsky_synthetic_feniks_full/feature_stats.json \
+  --out outputs/runs/map_diffsky_synthetic_feniks_under_prior \
+  --prior-weight 0.05 \
+  --prior-density-space x
+```
+
+Run direct MCLMC as a flat-prior posterior baseline:
+
+```bash
+python -m euclid_dsps.cli \
+  --config configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml \
+  posterior \
+  --dataset Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet \
+  --sampler mclmc \
+  --limit 16 \
+  --batch-size 4 \
+  --out outputs/runs/mclmc_diffsky_synthetic_feniks_flat
+```
+
+Direct MCLMC currently uses the configured physical priors as a calibration
+baseline. MAP under the learned RealNVP prior is implemented; MCLMC under the
+learned NF prior needs the posterior target to load and evaluate the NF density.
+
+## Scientific Guardrails
+
+The repository separates:
+
+- direct closure truth from generated/projected/reference truth;
+- supervised truth priors from post-hoc priors trained on inferred samples;
+- FENIKS production runs from HLTDS and FS2 debug/reference runs;
+- physical latent recovery from photometric reconstruction quality.
+
+A good photometric fit is not evidence of physical recovery. Physical claims
+require same-parameter forward closure, supervised prior-vs-truth diagnostics,
+posterior calibration, and derived-quantity comparisons.

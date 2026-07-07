@@ -1,0 +1,150 @@
+"""Configuration and optional-dependency helpers for amortized inference."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return the amortized config block with lightweight defaults."""
+    raw = dict(config.get("amortized", {}) or {})
+    raw.setdefault("enabled", True)
+    raw.setdefault("data", {})
+    raw.setdefault("latent", {})
+    raw.setdefault("features", {})
+    raw.setdefault("encoder", {})
+    raw.setdefault("objective", {})
+    raw.setdefault("prior", {})
+    raw.setdefault("likelihood", {})
+    raw.setdefault("posterior_regularization", {})
+    raw.setdefault("prior_predictive_diagnostics", {})
+    raw.setdefault("map_adam", {})
+    raw.setdefault("input_noise", {})
+    raw.setdefault("training", {})
+    raw.setdefault("inference", {})
+    raw.setdefault("output", {})
+    raw["data"].setdefault("expected_n_bands", 10)
+    raw["data"].setdefault("selection_mode", "stratified_redshift")
+    raw["data"].setdefault("stratified_strategy", "balanced")
+    raw["data"].setdefault("stratify_column", "z_true_gal")
+    raw["data"].setdefault(
+        "redshift_bins", [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 6.0]
+    )
+    raw["data"].setdefault("validation_fraction", 0.1)
+    raw["data"].setdefault("epoch_shuffle", True)
+    raw["data"].setdefault("catalog_batch_size", 10_000)
+    raw["latent"].setdefault("schema", "popcosmos_16")
+    raw["latent"].setdefault("include_redshift", True)
+    raw["latent"].setdefault("use_fit_bounds", True)
+    raw["latent"].setdefault("normalization", "identity")
+    raw["features"].setdefault("type", "flux_and_errors")
+    raw["features"].setdefault("n_flux_bands", 10)
+    raw["features"].setdefault("n_error_bands", 10)
+    raw["features"].setdefault("normalize_per_band", True)
+    raw["features"].setdefault("flux_transform", "asinh")
+    raw["features"].setdefault("error_transform", "log")
+    raw["encoder"].setdefault("type", "gaussian_mlp")
+    raw["encoder"].setdefault(
+        "input_dim",
+        int(raw["features"].get("n_flux_bands", 10))
+        + int(raw["features"].get("n_error_bands", 10)),
+    )
+    raw["encoder"].setdefault("latent_dim", 16)
+    raw["encoder"].setdefault("hidden_sizes", [256, 256, 256])
+    raw["encoder"].setdefault("activation", "gelu")
+    raw["encoder"].setdefault("log_std_min", -6.0)
+    raw["encoder"].setdefault("log_std_max", 2.0)
+    raw["encoder"].setdefault("initial_log_std", -1.0)
+    raw["objective"].setdefault("mode", "stochastic_elbo")
+    raw["prior"].setdefault("type", "realnvp")
+    raw["prior"].setdefault("source", "joint_realnvp")
+    raw["prior"].setdefault("checkpoint", None)
+    raw["prior"].setdefault("n_layers", 8)
+    raw["prior"].setdefault("hidden_size", 128)
+    raw["prior"].setdefault("scale_clamp", 0.05)
+    raw["prior"].setdefault("train_jointly", True)
+    raw["prior"].setdefault("update_schedule", "joint")
+    raw["prior"].setdefault("freeze_epochs", 0)
+    raw["prior"].setdefault("update_every_epochs", 1)
+    raw["likelihood"].setdefault("type", "student_t")
+    raw["likelihood"].setdefault("student_t_dof", 2.0)
+    raw["likelihood"].setdefault("error_floor_frac", 0.02)
+    raw["likelihood"].setdefault("error_jitter", 0.0)
+    raw["training"].setdefault("epochs", 10)
+    raw["training"].setdefault("batch_size", 32)
+    raw["training"].setdefault("n_samples", 2)
+    raw["training"].setdefault("learning_rate", 1.0e-4)
+    raw["training"].setdefault("weight_decay", 1.0e-5)
+    raw["training"].setdefault("gradient_clip_norm", 1.0)
+    raw["training"].setdefault("kl_annealing_epochs", 20)
+    raw["training"].setdefault("kl_weight_max", 0.5)
+    raw["training"].setdefault("validation_every", 1)
+    raw["training"].setdefault("best_checkpoint_metric", "validation_negative_loglike")
+    raw["training"].setdefault("best_checkpoint_min_epoch", None)
+    raw["training"].setdefault("likelihood_temperature_initial", 1.0)
+    raw["training"].setdefault("likelihood_temperature_final", 1.0)
+    raw["training"].setdefault("likelihood_temperature_annealing_epochs", 0)
+    raw["training"].setdefault("seed", 42)
+    raw["posterior_regularization"].setdefault("entropy_floor_enabled", False)
+    raw["posterior_regularization"].setdefault("weight", 0.0)
+    raw["posterior_regularization"].setdefault("final_weight", 0.0)
+    raw["posterior_regularization"].setdefault("anneal_epochs", 0)
+    raw["posterior_regularization"].setdefault("min_log_std", None)
+    raw["posterior_regularization"].setdefault("min_scale", 0.0)
+    raw["prior_predictive_diagnostics"].setdefault("enabled", False)
+    raw["prior_predictive_diagnostics"].setdefault("n_prior_samples", 512)
+    raw["prior_predictive_diagnostics"].setdefault("n_observed", 5000)
+    raw["prior_predictive_diagnostics"].setdefault("batch_size", 256)
+    raw["input_noise"].setdefault("enabled", False)
+    raw["input_noise"].setdefault("mode", "encoder_flux")
+    raw["input_noise"].setdefault("sigma_scale", 1.0)
+    raw["input_noise"].setdefault("apply_to", "train")
+    raw["map_adam"].setdefault("batch_size", 128)
+    raw["map_adam"].setdefault("n_starts", 4)
+    raw["map_adam"].setdefault("maxiter", 120)
+    raw["map_adam"].setdefault("learning_rate", 0.02)
+    raw["map_adam"].setdefault("prior_weight", 0.05)
+    raw["map_adam"].setdefault("prior_density_space", "x")
+    raw["map_adam"].setdefault("start_mode", "encoder")
+    raw["map_adam"].setdefault("start_chunk_size", 4)
+    raw["inference"].setdefault("posterior_samples", 32)
+    raw["inference"].setdefault("prior_samples", 8192)
+    raw["inference"].setdefault("decoder_sample_chunk_size", 1)
+    raw["inference"].setdefault("prior_predictive_batch_size", 256)
+    raw["inference"].setdefault("shard_outputs", False)
+    raw["inference"].setdefault("resume_shards", True)
+    raw["inference"].setdefault("write_posterior_predictive", True)
+    raw["inference"].setdefault("write_residual_samples", True)
+    raw["inference"].setdefault("combine_sample_shards", False)
+    raw["inference"].setdefault("combine_summary_shards", True)
+    raw["inference"].setdefault("dense_selected_batches", True)
+    raw["output"].setdefault("checkpoint_every", 1)
+    raw["output"].setdefault("diagnostics_every", 1)
+    raw["output"].setdefault("save_training_curves", True)
+    raw["output"].setdefault("save_posterior_preview", True)
+    return raw
+
+
+def require_amortized_dependencies():
+    """Import optional amortized dependencies with an actionable error."""
+    try:
+        import equinox as eqx
+        import optax
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "Amortized inference requires optional dependencies. Install with "
+            "`python -m pip install -e .[amortized]` or `uv sync --extra amortized`."
+        ) from exc
+    return eqx, optax
+
+
+def require_equinox():
+    """Import Equinox with an actionable error."""
+    try:
+        import equinox as eqx
+    except ImportError as exc:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "Amortized neural modules require Equinox. Install the "
+            "`amortized` optional dependency extra."
+        ) from exc
+    return eqx

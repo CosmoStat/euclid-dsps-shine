@@ -1,0 +1,33 @@
+extends: diffsky_hltds_popcosmos_full_bounds_h100.yaml
+
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
+
+experiment:
+    name: diffsky_hltds_continuous_lowz_h100
+    description: Continuous low-z 04_14 Diffsky HLTDS subset for first stable amortized training.
+
+dataset:
+    name: diffsky_hltds_04_14_continuous_lowz
+    id_column: object_id
+
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
+
+redshift:
+    min: 0.001
+    max: 0.35
+
+fit:
+    free_parameters:
+        z_obs:
+            initial: 0.25
+            bounds: [0.001, 0.35]
+
+amortized:
+    data:
+        selection_mode: random
+        stratified_strategy: proportional
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
+    inference:
+        selection_mode: random
+        stratified_strategy: proportional
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]

@@ -1,0 +1,245 @@
+catalog_path: Data/diffsky/synthetic/feniks_260617_dsps_closure/train.parquet
+ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
+
+dataset:
+    name: diffsky_synthetic_feniks_260617_dsps_closure
+    id_column: object_id
+
+runtime: gpu
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
+nebular_emission: ssp_flux
+
+synthetic_diffsky:
+    output_dir: Data/diffsky/synthetic/feniks_260617_dsps_closure
+    proposal_backend: diffsky
+    calibration_dir: feniks_calibrations
+    calibration_name: feniks_260617
+    diffsky_commit: null
+    split_sizes:
+        train: 40000
+        validation: 5000
+        test: 5000
+    smoke_split_sizes:
+        train: 240
+        validation: 40
+        test: 40
+    source_seeds:
+        train: 26061701
+        validation: 26061702
+        test: 26061703
+    noise_seeds:
+        train: 26062701
+        validation: 26062702
+        test: 26062703
+    resample_seeds:
+        train: 26063701
+        validation: 26063702
+        test: 26063703
+    n_host_halos_per_shard: 4096
+    max_shards: 256
+    jax_batch_size: 512
+    smoke_n_host_halos_per_shard: 128
+    smoke_max_shards: 8
+    smoke_z_phot_table_size: 8
+    smoke_pool_size_factor: 2.0
+    smoke_min_ess_fraction: 1.0
+    smoke_max_duplication_fraction: 0.5
+    # Broad LSST+Roman/OpenUniverse-like exploratory proposal range. The final
+    # learning catalog is additionally selected below so it is not dominated by
+    # uninformative low-S/N or metallicity-grid-edge objects. Reference
+    # comparisons to the current z<=0.35 HLTDS parquet are restricted to the
+    # overlapping low-redshift interval by diagnostics.reference_overlap_only.
+    z_min: 0.001
+    z_max: 5.5
+    lgmp_min: 10.5
+    lgmp_max: 15.0
+    sky_area_degsq: 10.0
+    mc_merge: 0
+    z_phot_table_size: 64
+    logmp_cutoff: 11.0
+    pool_size_factor: 4.0
+    min_ess_fraction: 2.0
+    # The weighted FENIKS proposal has a high dynamic range in galaxy weights.
+    # The z<=5.5 selected train pool reached ESS=1.04e5 after 256 shards but
+    # still had duplicate_fraction=0.154 for a 40k weighted resample. Keep 0.10
+    # as the warning threshold, continue accumulating shards while possible,
+    # then proceed after max_shards if ESS and pool-size gates are satisfied.
+    max_duplication_fraction: 0.10
+    duplication_gate: warn_after_max_shards
+    metallicity_grid_policy: clip_with_warning
+    stellar_metallicity_scatter_dex: 0.2
+    selection:
+        min_logsm: 8.0
+        require_metallicity_unclipped: true
+        max_metallicity_clipped_fraction: 0.0
+        snr_threshold: 5.0
+        min_true_snr_bands: 5
+        min_observed_snr_bands: 0
+        photometric_oversample_factor: 5.0
+    # Smoke runs are for environment/closure preflight on CPU-sized samples.
+    # They intentionally relax the production observability cuts because a
+    # 24-row smoke sample is too small to guarantee five >5-sigma bands.
+    smoke_selection:
+        min_logsm: 7.0
+        require_metallicity_unclipped: false
+        max_metallicity_clipped_fraction: null
+        min_true_snr_bands: 0
+        min_observed_snr_bands: 0
+        photometric_oversample_factor: 1.0
+    flux_error_model:
+        type: m5_depth
+        sigma_sys_mag: 0.005
+        default_eta: 1.0
+        m5:
+            lsst_u: 26.1
+            lsst_g: 27.4
+            lsst_r: 27.5
+            lsst_i: 26.8
+            lsst_z: 26.1
+            lsst_y: 24.9
+            roman_F062: 27.97
+            roman_F087: 27.63
+            roman_F106: 27.60
+            roman_F129: 27.60
+            roman_F146: 28.01
+            roman_F158: 27.52
+            roman_F184: 26.95
+            roman_F213: 25.64
+        gamma:
+            lsst_u: 0.037
+            lsst_g: 0.038
+            lsst_r: 0.039
+            lsst_i: 0.039
+            lsst_z: 0.040
+            lsst_y: 0.040
+        eta:
+            roman_F062: 0.95
+            roman_F087: 0.95
+            roman_F106: 0.95
+            roman_F129: 0.95
+            roman_F146: 0.95
+            roman_F158: 0.95
+            roman_F184: 0.95
+            roman_F213: 0.95
+    diagnostics:
+        enabled: true
+        output_subdir: diagnostics/population
+        make_plots: true
+        make_corner: true
+        make_reference_plots: true
+        max_rows: 50000
+        max_plot_rows: 20000
+        corner_max_rows: 5000
+        max_corner_parameters: 18
+        smoke_max_rows: 320
+        smoke_max_plot_rows: 320
+        smoke_corner_max_rows: 320
+        seed: 260617
+        reference_dataset: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
+        reference_overlap_only: true
+        reference_z_max: 0.35
+        reference_max_rows: 100000
+
+selection:
+    require_positive_flux: false
+    nondetection_policy: gaussian_flux
+
+redshift:
+    initial: catalog_column
+    column: redshift_true
+    truth_column: redshift_true
+    fixed_value: 0.25
+    min: 0.001
+    max: 5.5
+    seed: 42
+    prior_z:
+        mode: none
+
+truth:
+    schema: diffsky_dsps_closure_full
+    redshift_column: redshift_true
+    parameter_columns:
+        log10_stellar_mass: {column: logsm_true, kind: closure_ground_truth}
+        log10_stellar_metallicity: {column: log10_stellar_metallicity_true, kind: closure_ground_truth}
+
+model:
+    n_sfh_bins: 80
+    sfh_model: diffsky_basic
+    ssp_model: compressed_basis
+    compressed_ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_basis_k64_coeff16.hdf5
+    compressed_ssp_runtime_dtype: float32
+    stellar_metallicity_model: lognormal_mdf_fixed_scatter
+    stellar_metallicity_scatter_dex: 0.2
+    dust_model: prospector_fsps
+    igm_model: fsps_madau95
+    nebular_model: fixed_ssp
+    emission_line_corrections: none
+    agn_model: none
+    asset_metadata_policy: permissive
+    z_sun: 0.0142
+    dust_tesc_logyr: 7.0
+    dust1_index: -1.0
+    fixed_parameters: {}
+
+calibration:
+    global_sed_scale:
+        enabled: false
+        mode: disabled
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: false
+    per_band_zero_points:
+        enabled: false
+
+fit:
+    method: jax_adam
+    likelihood_space: flux
+    photometric_likelihood: student_t
+    student_t_dof: 2.0
+    flux_error_floor_frac: 0.02
+    flux_error_jitter: 0.0
+    maxiter: 1
+    free_parameters:
+        z_obs: {initial: 0.8, bounds: [0.001, 5.5]}
+        log10_stellar_mass: {initial: 10.0, bounds: [6.0, 13.5]}
+        diffstar_lgmcrit: {initial: 12.0, bounds: [9.0, 14.5]}
+        diffstar_lgy_at_mcrit: {initial: -10.0, bounds: [-13.0, -8.0]}
+        diffstar_indx_lo: {initial: 1.0, bounds: [-2.0, 6.0]}
+        diffstar_indx_hi: {initial: -1.0, bounds: [-6.0, 3.0]}
+        diffstar_lg_qt: {initial: 1.0, bounds: [-2.0, 2.5]}
+        diffstar_qlglgdt: {initial: -0.5, bounds: [-4.0, 4.0]}
+        diffstar_lg_drop: {initial: -1.0, bounds: [-4.0, 1.0]}
+        diffstar_lg_rejuv: {initial: -0.2, bounds: [-4.0, 2.0]}
+        diffmah_logm0: {initial: 12.0, bounds: [7.0, 16.0]}
+        diffmah_logtc: {initial: 0.05, bounds: [-2.5, 1.5]}
+        diffmah_early_index: {initial: 2.0, bounds: [-1.0, 6.0]}
+        diffmah_late_index: {initial: 0.2, bounds: [-1.0, 3.0]}
+        diffmah_t_peak: {initial: 10.0, bounds: [0.0, 15.0]}
+        log10_stellar_metallicity: {initial: -0.5, bounds: [-2.5, 0.5]}
+        dust_av: {initial: 0.2, bounds: [0.0, 5.0]}
+        dust_delta: {initial: 0.0, bounds: [-2.5, 1.0]}
+
+sample:
+    sampler: nuts
+    num_warmup: 10
+    num_samples: 10
+    num_chains: 1
+    chain_method: parallel
+    target_accept_prob: 0.85
+    max_tree_depth: 10
+    seed: 42
+    progress_bar: true
+    init_from_map: true
+    save_samples: true
+    priors: {}
+
+reporting:
+    level: light
+    save_sed_samples: 0
+    plot_filters: false
+    plot_ground_truth: false
+
+output:
+    format: parquet
+    verbose_benchmark: true

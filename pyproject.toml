@@ -23,6 +23,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gpu = [
+    "jax[cuda12]",
+]
+diffstar = [
+    "diffstar",
+    "diffmah",
+]
+samplers = [
+    "blackjax",
+]
+amortized = [
+    "equinox",
+    "optax",
+]
 dev = [
     "black>=24.0",
     "pytest>=8.0",
@@ -68,3 +82,6 @@ known-third-party = ["dsps"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "fsps: tests that require python-fsps and Prospector reference packages",
+]

@@ -17,7 +17,14 @@ import numpy as np
 from jax.scipy.optimize import minimize as jax_minimize
 
 from .io import GalaxyObservation
-from .model import DspsContext, ModelResult, model_mags_jax, run_dsps_model
+from .model import (
+    DspsContext,
+    ModelResult,
+    dynamic_model_args,
+    gas_metallicity_constraint_penalty_jax,
+    model_mags_jax_dynamic,
+    run_dsps_model,
+)
 from .photometry import abmag_to_fnu_cgs, abmag_to_fnu_cgs_jax, magerr_to_fluxerr_fnu_cgs
 
 
@@ -30,6 +37,7 @@ class FitResult:
     message: str
     best_parameters: dict[str, float]
     chi2: float
+    photometric_objective: float
     n_bands: int
     trace: list[dict[str, float]]
     model_result: ModelResult
@@ -44,6 +52,7 @@ class BatchFitResult:
     free_parameter_names: list[str]
     best_parameter_matrix: np.ndarray
     chi2: np.ndarray
+    photometric_objective: np.ndarray
     gradient_norm: np.ndarray
     model_mags: np.ndarray
     trace: list[dict[str, float]]
@@ -67,7 +76,7 @@ def fit_one_galaxy(
 ) -> FitResult:
     """Fit configured DSPS parameters with pure-JAX gradients."""
     method = str(fit_config.get("method", "jax_adam")).lower()
-    if method in {"jax_adam", "jax_adam_vmap"}:
+    if method == "jax_adam_vmap":
         observed_mag, sigma_mag, _ = _observation_arrays(observation)
         observed_flux, flux_error = _observation_flux_arrays(observation)
         batch = fit_galaxy_batch_adam(
@@ -89,6 +98,7 @@ def fit_one_galaxy(
             message=batch.message,
             best_parameters=best_params,
             chi2=float(batch.chi2[0]),
+            photometric_objective=float(batch.photometric_objective[0]),
             n_bands=len(observation.bands),
             trace=batch.trace,
             model_result=best_model,
@@ -131,10 +141,13 @@ def fit_one_galaxy(
     observed_fit = jnp.asarray(observed_fit[0], dtype=float)
     sigma_fit = jnp.asarray(sigma_fit[0], dtype=float)
     finite_mask = jnp.asarray(finite_mask[0])
+    model_args = dynamic_model_args(context)
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
     tolerance = float(fit_config.get("tolerance", 1.0e-5))
     patience = int(fit_config.get("patience", 12))
+    photometric_likelihood = _photometric_likelihood(fit_config)
+    student_t_dof = _student_t_dof(fit_config)
     trace: list[dict[str, float]] = []
 
     def unpack_jax(x: jnp.ndarray) -> dict[str, Any]:
@@ -144,12 +157,22 @@ def fit_one_galaxy(
         params.update({name: value for name, value in zip(names, x, strict=True)})
         return params
 
-    def objective(x: jnp.ndarray) -> jnp.ndarray:
+    def photometric_metrics(
+        x: jnp.ndarray, args: tuple[Any, ...]
+    ) -> tuple[jnp.ndarray, jnp.ndarray]:
         params = unpack_jax(x)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, args, params)
         model_values = _model_values_for_likelihood(model_mag, fit_config)
         chi = jnp.where(finite_mask, (observed_fit - model_values) / sigma_fit, 0.0)
         chi2 = jnp.sum(chi**2)
+        photometric_objective = _photometric_objective_from_chi(
+            chi, photometric_likelihood, student_t_dof
+        )
+        return photometric_objective, chi2
+
+    def objective(x: jnp.ndarray, args: tuple[Any, ...]) -> jnp.ndarray:
+        photometric_objective, _ = photometric_metrics(x, args)
+        params = unpack_jax(x)
         prior = _physical_prior_penalty(
             x,
             lower,
@@ -161,12 +184,25 @@ def fit_one_galaxy(
             prior_arrays_jax["prior_beta_alpha"],
             prior_arrays_jax["prior_beta_beta"],
         )
-        objective_value = chi2 + float(fit_config.get("prior_weight", 1.0)) * prior
+        objective_value = (
+            photometric_objective + float(fit_config.get("prior_weight", 1.0)) * prior
+            + gas_metallicity_constraint_penalty_jax(params, context.model_config)
+        )
         return jnp.nan_to_num(objective_value, nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
-    value_and_grad = jax.jit(jax.value_and_grad(objective))
+    value_and_grad_fn = jax.value_and_grad(objective, argnums=0)
+    if _should_jit_single_fit(context, fit_config):
+        compiled_value_and_grad = jax.jit(value_and_grad_fn)
+
+        def value_and_grad(x: jnp.ndarray):
+            return compiled_value_and_grad(x, model_args)
+
+    else:
+
+        def value_and_grad(x: jnp.ndarray):
+            return value_and_grad_fn(x, model_args)
     if method == "jax_adam":
-        best_x, state, best_value, best_grad_norm, success, message = _fit_bounded_adam(
+        best_x, state, _best_value, best_grad_norm, success, message = _fit_bounded_adam(
             value_and_grad=value_and_grad,
             x0=x0,
             lower=lower,
@@ -179,7 +215,7 @@ def fit_one_galaxy(
             trace=trace,
         )
     elif method == "jax_bfgs":
-        best_x, state, best_value, best_grad_norm, success, message = _fit_bounded_bfgs(
+        best_x, state, _best_value, best_grad_norm, success, message = _fit_bounded_bfgs(
             objective=objective,
             value_and_grad=value_and_grad,
             x0=x0,
@@ -195,16 +231,38 @@ def fit_one_galaxy(
 
     best_params = _unpack_numpy(best_x, names, base_params)
     best_model = run_dsps_model(context, best_params)
+    best_photometric_objective, best_chi2 = photometric_metrics(best_x, model_args)
     return FitResult(
         success=success,
         message=message,
         best_parameters=best_params,
-        chi2=float(best_value),
+        chi2=float(best_chi2),
+        photometric_objective=float(best_photometric_objective),
         n_bands=len(observation.bands),
         trace=trace,
         model_result=best_model,
         gradient_norm=float(best_grad_norm),
     )
+
+
+def _should_jit_single_fit(context: DspsContext, fit_config: dict[str, Any]) -> bool:
+    """Use JIT unless explicitly disabled.
+
+    Large context arrays are passed as dynamic arguments to compiled model calls,
+    so the gas grid size no longer needs to disable single-galaxy JIT.
+    """
+    if "jit" in fit_config:
+        return bool(fit_config["jit"])
+    return True
+
+
+def _context_gas_grid_nbytes(context: DspsContext) -> int:
+    grid = context.ssp_flux_gas_grid_jax
+    if grid is None:
+        return 0
+    shape = getattr(grid, "shape", ())
+    dtype = np.dtype(getattr(grid, "dtype", np.float32))
+    return int(np.prod(shape, dtype=np.int64)) * dtype.itemsize
 
 
 def _initial_value(
@@ -248,6 +306,41 @@ def _observation_flux_arrays(observation: GalaxyObservation) -> tuple[np.ndarray
 
 def _likelihood_space(fit_config: dict[str, Any]) -> str:
     return str(fit_config.get("likelihood_space", "flux")).lower()
+
+
+def _photometric_likelihood(fit_config: dict[str, Any]) -> str:
+    name = str(fit_config.get("photometric_likelihood", "gaussian")).lower()
+    name = name.replace("-", "_")
+    aliases = {
+        "chi2": "gaussian",
+        "gaussian_chi2": "gaussian",
+        "normal": "gaussian",
+        "student": "student_t",
+        "studentt": "student_t",
+    }
+    return aliases.get(name, name)
+
+
+def _student_t_dof(fit_config: dict[str, Any]) -> float:
+    dof = float(fit_config.get("student_t_dof", 2.0))
+    if dof <= 0.0:
+        raise ValueError("fit.student_t_dof must be positive")
+    return dof
+
+
+def _photometric_objective_from_chi(
+    chi: jnp.ndarray,
+    photometric_likelihood: str,
+    student_t_dof: float,
+) -> jnp.ndarray:
+    chi2 = chi**2
+    if photometric_likelihood == "gaussian":
+        return jnp.sum(chi2)
+    if photometric_likelihood == "student_t":
+        return jnp.sum(
+            (student_t_dof + 1.0) * jnp.log1p(chi2 / student_t_dof)
+        )
+    raise ValueError(f"Unsupported fit.photometric_likelihood: {photometric_likelihood}")
 
 
 def _fit_arrays_for_likelihood(
@@ -344,7 +437,7 @@ def _fit_bounded_adam(
     state = {"iteration": iteration, "x": x}
     success = bool(np.isfinite(best_value)) and stalled < patience
     message = (
-        f"jax_adam converged: chi2 improvement < {tolerance} for {patience} steps"
+        f"jax_adam converged: objective improvement < {tolerance} for {patience} steps"
         if success
         else f"jax_adam stopped after {state['iteration']} iterations"
     )
@@ -417,13 +510,14 @@ def _unconstrained_to_bounded(
 
 
 def _trace_entry(
-    names: list[str], x: jnp.ndarray, chi2: float, grad_norm: float, iteration: int
+    names: list[str], x: jnp.ndarray, objective: float, grad_norm: float, iteration: int
 ) -> dict[str, float]:
     entry = {
         name: float(value) for name, value in zip(names, np.asarray(x), strict=True)
     }
     entry["iteration"] = float(iteration)
-    entry["chi2"] = float(chi2)
+    entry["objective"] = float(objective)
+    entry["chi2"] = float(objective)
     entry["gradient_norm"] = float(grad_norm)
     return entry
 
@@ -467,6 +561,7 @@ def fit_galaxy_batch_adam(
     observed = jnp.asarray(observed_values, dtype=_FIT_DTYPE)
     sigma = jnp.asarray(sigma_values, dtype=_FIT_DTYPE)
     mask = jnp.asarray(valid_mask)
+    model_args = dynamic_model_args(context)
     warm_observed_mag = jnp.asarray(observed_mag, dtype=_FIT_DTYPE)
     warm_mask = jnp.isfinite(warm_observed_mag) & jnp.isfinite(
         jnp.asarray(sigma_mag, dtype=_FIT_DTYPE)
@@ -476,6 +571,14 @@ def fit_galaxy_batch_adam(
     maxiter = int(fit_config.get("maxiter", 80))
     learning_rate = float(fit_config.get("learning_rate", 0.03))
     prior_weight = float(fit_config.get("prior_weight", 1.0))
+    photometric_likelihood = _photometric_likelihood(fit_config)
+    student_t_dof = _student_t_dof(fit_config)
+    trace_mode = str(fit_config.get("trace_mode", "full")).lower()
+    trace_interval = max(1, int(fit_config.get("trace_interval", 1)))
+    scan_unroll = max(1, int(fit_config.get("scan_unroll", 1)))
+    donate_optimizer_inputs = bool(fit_config.get("donate_optimizer_inputs", False))
+    remat_model_mags = bool(fit_config.get("remat_model_mags", False))
+    batch_grad_mode = str(fit_config.get("batch_grad_mode", "per_galaxy")).lower()
     band_offsets_mag = tuple(
         float(value) for value in fit_config.get("band_calibration_offsets_mag", [])
     )
@@ -489,6 +592,14 @@ def fit_galaxy_batch_adam(
         learning_rate,
         prior_weight,
         _likelihood_space(fit_config),
+        photometric_likelihood,
+        student_t_dof,
+        trace_mode,
+        trace_interval,
+        scan_unroll,
+        donate_optimizer_inputs,
+        remat_model_mags,
+        batch_grad_mode,
         band_offsets_mag,
     )
     if cache_key not in _OPTIMIZER_CACHE:
@@ -500,11 +611,19 @@ def fit_galaxy_batch_adam(
             learning_rate=learning_rate,
             prior_weight=prior_weight,
             likelihood_space=_likelihood_space(fit_config),
+            photometric_likelihood=photometric_likelihood,
+            student_t_dof=student_t_dof,
+            trace_mode=trace_mode,
+            trace_interval=trace_interval,
+            scan_unroll=scan_unroll,
+            donate_optimizer_inputs=donate_optimizer_inputs,
+            remat_model_mags=remat_model_mags,
+            batch_grad_mode=batch_grad_mode,
             band_offsets_mag=band_offsets_mag,
         )
     optimize = _OPTIMIZER_CACHE[cache_key]
 
-    best_theta, chi2, grad_norm, model_mags, trace_arrays = optimize(
+    best_theta, chi2, photometric_objective, grad_norm, model_mags, trace_arrays = optimize(
         theta0,
         base_matrix,
         observed,
@@ -521,6 +640,7 @@ def fit_galaxy_batch_adam(
         jnp.asarray(setup["prior_beta_alpha"], dtype=_FIT_DTYPE),
         jnp.asarray(setup["prior_beta_beta"], dtype=_FIT_DTYPE),
         jnp.asarray(truth_theta_arr, dtype=_FIT_DTYPE),
+        model_args,
     )
     best_matrix = _apply_free_values(
         base_matrix, best_theta, jnp.asarray(setup["free_indices"])
@@ -529,12 +649,14 @@ def fit_galaxy_batch_adam(
         trace_arrays, setup["free_names"], include_truth_metrics=has_truth
     )
     return BatchFitResult(
-        success=np.isfinite(np.asarray(chi2)),
+        success=np.isfinite(np.asarray(chi2))
+        & np.isfinite(np.asarray(photometric_objective)),
         message=f"jax_adam_vmap maxiter={maxiter}, device={_jax_device()}",
         parameter_names=setup["parameter_names"],
         free_parameter_names=setup["free_names"],
         best_parameter_matrix=np.asarray(best_matrix),
         chi2=np.asarray(chi2),
+        photometric_objective=np.asarray(photometric_objective),
         gradient_norm=np.asarray(grad_norm),
         model_mags=np.asarray(model_mags),
         trace=trace,
@@ -570,6 +692,7 @@ def fit_population_batch_adam(
     observed = jnp.asarray(observed_values)
     sigma = jnp.asarray(sigma_values)
     mask = jnp.asarray(valid_mask)
+    model_args = dynamic_model_args(context)
     warm_observed_mag = jnp.asarray(observed_mag)
     warm_mask = jnp.isfinite(warm_observed_mag) & jnp.isfinite(jnp.asarray(sigma_mag))
     lower = jnp.asarray(setup["lower"])
@@ -582,6 +705,11 @@ def fit_population_batch_adam(
     prior_weight = float(pop.get("prior_weight", 1.0))
     hyper_mu_scale = float(pop.get("hyper_mu_scale", 5.0))
     physical_prior_weight = float(fit_config.get("prior_weight", 1.0))
+    photometric_likelihood = _photometric_likelihood(fit_config)
+    student_t_dof = _student_t_dof(fit_config)
+    trace_mode = str(fit_config.get("trace_mode", "full")).lower()
+    trace_interval = max(1, int(fit_config.get("trace_interval", 1)))
+    scan_unroll = max(1, int(fit_config.get("scan_unroll", 1)))
     band_offsets_mag = tuple(
         float(value) for value in fit_config.get("band_calibration_offsets_mag", [])
     )
@@ -598,6 +726,11 @@ def fit_population_batch_adam(
         hyper_mu_scale,
         physical_prior_weight,
         _likelihood_space(fit_config),
+        photometric_likelihood,
+        student_t_dof,
+        trace_mode,
+        trace_interval,
+        scan_unroll,
         band_offsets_mag,
         tuple(setup["population_relation_default_mask"]),
         tuple(setup["population_relation_target_pos"]),
@@ -617,6 +750,11 @@ def fit_population_batch_adam(
             hyper_mu_scale=hyper_mu_scale,
             physical_prior_weight=physical_prior_weight,
             likelihood_space=_likelihood_space(fit_config),
+            photometric_likelihood=photometric_likelihood,
+            student_t_dof=student_t_dof,
+            trace_mode=trace_mode,
+            trace_interval=trace_interval,
+            scan_unroll=scan_unroll,
             band_offsets_mag=band_offsets_mag,
             relation_default_mask=jnp.asarray(
                 setup["population_relation_default_mask"]
@@ -645,6 +783,7 @@ def fit_population_batch_adam(
         relation_sigma,
         loss,
         chi2,
+        photometric_objective,
         grad_norm,
         model_mags,
         trace_arrays,
@@ -665,17 +804,20 @@ def fit_population_batch_adam(
         jnp.asarray(setup["prior_beta_alpha"]),
         jnp.asarray(setup["prior_beta_beta"]),
         jnp.asarray(truth_theta_arr),
+        model_args,
     )
     best_matrix = _apply_free_values(
         base_matrix, best_theta, jnp.asarray(setup["free_indices"])
     )
     batch = BatchFitResult(
-        success=np.isfinite(np.asarray(chi2)),
+        success=np.isfinite(np.asarray(chi2))
+        & np.isfinite(np.asarray(photometric_objective)),
         message=f"jax_population_adam maxiter={maxiter}, device={_jax_device()}",
         parameter_names=setup["parameter_names"],
         free_parameter_names=setup["free_names"],
         best_parameter_matrix=np.asarray(best_matrix),
         chi2=np.asarray(chi2),
+        photometric_objective=np.asarray(photometric_objective),
         gradient_norm=np.asarray(grad_norm),
         model_mags=np.asarray(model_mags),
         trace=_batch_trace_from_arrays(
@@ -975,6 +1117,14 @@ def _build_independent_adam_optimizer(
     learning_rate: float,
     prior_weight: float,
     likelihood_space: str,
+    photometric_likelihood: str,
+    student_t_dof: float,
+    trace_mode: str,
+    trace_interval: int,
+    scan_unroll: int,
+    donate_optimizer_inputs: bool,
+    remat_model_mags: bool,
+    batch_grad_mode: str,
     band_offsets_mag: tuple[float, ...],
 ):
     free_indices_jax = jnp.asarray(free_indices)
@@ -984,9 +1134,16 @@ def _build_independent_adam_optimizer(
         else None
     )
 
-    def single_chi2(theta, base, observed, sigma, mask):
+    def raw_model_mags(params, model_args):
+        return model_mags_jax_dynamic(context, model_args, params)
+
+    model_mags_forward = (
+        jax.checkpoint(raw_model_mags) if remat_model_mags else raw_model_mags
+    )
+
+    def single_chi(theta, base, observed, sigma, mask, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_forward(params, model_args)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         model_values = (
@@ -994,8 +1151,22 @@ def _build_independent_adam_optimizer(
             if likelihood_space == "flux"
             else model_mag
         )
-        chi = jnp.where(mask, (observed - model_values) / sigma, 0.0)
+        return jnp.where(mask, (observed - model_values) / sigma, 0.0)
+
+    def single_chi2(theta, base, observed, sigma, mask, model_args):
+        chi = single_chi(theta, base, observed, sigma, mask, model_args)
         return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
+
+    def single_photometric_objective(theta, base, observed, sigma, mask, model_args):
+        chi = single_chi(theta, base, observed, sigma, mask, model_args)
+        return jnp.nan_to_num(
+            _photometric_objective_from_chi(
+                chi, photometric_likelihood, student_t_dof
+            ),
+            nan=1.0e30,
+            posinf=1.0e30,
+            neginf=1.0e30,
+        )
 
     def single_objective(
         theta,
@@ -1011,8 +1182,12 @@ def _build_independent_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
+        model_args,
     ):
-        chi2 = single_chi2(theta, base, observed, sigma, mask)
+        photometric_objective = single_photometric_objective(
+            theta, base, observed, sigma, mask, model_args
+        )
+        params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
         prior = _physical_prior_penalty(
             theta,
             lower,
@@ -1025,27 +1200,28 @@ def _build_independent_adam_optimizer(
             prior_beta_beta,
         )
         return jnp.nan_to_num(
-            chi2 + prior_weight * prior,
+            photometric_objective
+            + prior_weight * prior
+            + gas_metallicity_constraint_penalty_jax(params, context.model_config),
             nan=1.0e30,
             posinf=1.0e30,
             neginf=1.0e30,
         )
 
-    def single_mags(theta, base):
+    def single_mags(theta, base, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_forward(params, model_args)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         return model_mag
 
-    batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
+    batch_mags = jax.vmap(single_mags, in_axes=(0, 0, None))
     amplitude_free_pos = _free_position(
         parameter_names, free_indices, "log10_formed_mass_msun"
     )
     if amplitude_free_pos is None:
         amplitude_free_pos = _free_position(parameter_names, free_indices, "log10_sfr")
 
-    @jax.jit
     def optimize(
         theta0,
         base_matrix,
@@ -1063,7 +1239,11 @@ def _build_independent_adam_optimizer(
         prior_beta_alpha,
         prior_beta_beta,
         truth_theta,
+        model_args,
     ):
+        def batch_mags_with_args(theta, base):
+            return batch_mags(theta, base, model_args)
+
         theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
@@ -1071,7 +1251,7 @@ def _build_independent_adam_optimizer(
             warm_mask,
             lower,
             upper,
-            batch_mags,
+            batch_mags_with_args,
             amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
@@ -1109,29 +1289,84 @@ def _build_independent_adam_optimizer(
                 prior_beta_mask_i,
                 prior_beta_alpha_i,
                 prior_beta_beta_i,
+                model_args,
             )
 
-        batch_objective_y_grad = jax.vmap(
-            jax.value_and_grad(single_objective_y, argnums=0),
-            in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-        )
+        if batch_grad_mode == "sum":
+
+            def batch_objective_y_sum(
+                y_batch,
+                base_batch,
+                observed_batch,
+                sigma_batch,
+                mask_batch,
+                prior_gaussian_mask_batch,
+                prior_gaussian_loc_batch,
+                prior_gaussian_scale_batch,
+                prior_beta_mask_batch,
+                prior_beta_alpha_batch,
+                prior_beta_beta_batch,
+            ):
+                objective_vector = jax.vmap(
+                    single_objective_y,
+                    in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                )(
+                    y_batch,
+                    base_batch,
+                    observed_batch,
+                    sigma_batch,
+                    mask_batch,
+                    prior_gaussian_mask_batch,
+                    prior_gaussian_loc_batch,
+                    prior_gaussian_scale_batch,
+                    prior_beta_mask_batch,
+                    prior_beta_alpha_batch,
+                    prior_beta_beta_batch,
+                )
+                return jnp.sum(objective_vector), objective_vector
+
+            batch_objective_y_grad = jax.value_and_grad(
+                batch_objective_y_sum,
+                argnums=0,
+                has_aux=True,
+            )
+        else:
+            batch_objective_y_grad = jax.vmap(
+                jax.value_and_grad(single_objective_y, argnums=0),
+                in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+            )
 
         def step(carry, iteration):
             y, m, v, best_theta, best_objective, best_grad = carry
             theta = _unconstrained_to_bounded(y, lower, upper)
-            objective, grad = batch_objective_y_grad(
-                y,
-                base_matrix,
-                observed,
-                sigma,
-                mask,
-                prior_gaussian_mask,
-                prior_gaussian_loc,
-                prior_gaussian_scale,
-                prior_beta_mask,
-                prior_beta_alpha,
-                prior_beta_beta,
-            )
+            if batch_grad_mode == "sum":
+                (_, objective), grad = batch_objective_y_grad(
+                    y,
+                    base_matrix,
+                    observed,
+                    sigma,
+                    mask,
+                    prior_gaussian_mask,
+                    prior_gaussian_loc,
+                    prior_gaussian_scale,
+                    prior_beta_mask,
+                    prior_beta_alpha,
+                    prior_beta_beta,
+                )
+            else:
+                objective, grad = batch_objective_y_grad(
+                    y,
+                    base_matrix,
+                    observed,
+                    sigma,
+                    mask,
+                    prior_gaussian_mask,
+                    prior_gaussian_loc,
+                    prior_gaussian_scale,
+                    prior_beta_mask,
+                    prior_beta_alpha,
+                    prior_beta_beta,
+                )
             grad = jnp.nan_to_num(grad, nan=0.0, posinf=0.0, neginf=0.0)
             grad_norm = jnp.linalg.norm(grad, axis=1)
             improved = objective < best_objective
@@ -1147,31 +1382,85 @@ def _build_independent_adam_optimizer(
             y = jnp.clip(
                 y - learning_rate * m_hat / (jnp.sqrt(v_hat) + 1.0e-8), -30.0, 30.0
             )
-            chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
-                theta, base_matrix, observed, sigma, mask
-            )
-            metrics = jnp.concatenate(
-                [
+            record_trace = (iteration % trace_interval) == 0
+            if trace_mode == "full":
+
+                def trace_metrics_full(_):
+                    photometric_objective = jax.vmap(
+                        single_photometric_objective,
+                        in_axes=(0, 0, 0, 0, 0, None),
+                    )(
+                        theta, base_matrix, observed, sigma, mask, model_args
+                    )
+                    chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0, None))(
+                        theta, base_matrix, observed, sigma, mask, model_args
+                    )
+                    return jnp.asarray(
+                        [
+                            jnp.nanmean(photometric_objective),
+                            jnp.nanmedian(chi2),
+                            jnp.nanmean(grad_norm),
+                        ]
+                    )
+
+                trace_core = jax.lax.cond(
+                    record_trace,
+                    trace_metrics_full,
+                    lambda _: jnp.full((3,), jnp.nan, dtype=_FIT_DTYPE),
+                    operand=None,
+                )
+            elif trace_mode == "optimizer":
+                trace_core = jnp.where(
+                    record_trace,
                     jnp.asarray(
-                        [jnp.nanmean(chi2), jnp.nanmedian(chi2), jnp.nanmean(grad_norm)]
+                        [
+                            jnp.nanmean(objective),
+                            jnp.nan,
+                            jnp.nanmean(grad_norm),
+                        ],
+                        dtype=_FIT_DTYPE,
                     ),
-                    _truth_metric_vector(theta, truth_theta),
-                ]
+                    jnp.full((3,), jnp.nan, dtype=_FIT_DTYPE),
+                )
+            else:
+                trace_core = jnp.full((3,), jnp.nan, dtype=_FIT_DTYPE)
+            trace_truth = jnp.where(
+                record_trace,
+                _truth_metric_vector(theta, truth_theta),
+                jnp.full((3 + theta.shape[1],), jnp.nan, dtype=_FIT_DTYPE),
             )
+            metrics = jnp.concatenate([trace_core, trace_truth])
             return (y, m, v, best_theta, best_objective, best_grad), metrics
 
         (_, _, _, best_theta, _, best_grad), metrics = jax.lax.scan(
             step,
             carry0,
             jnp.arange(maxiter, dtype=jnp.int32),
+            unroll=scan_unroll,
         )
-        best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0))(
-            best_theta, base_matrix, observed, sigma, mask
+        best_chi2 = jax.vmap(single_chi2, in_axes=(0, 0, 0, 0, 0, None))(
+            best_theta, base_matrix, observed, sigma, mask, model_args
         )
-        model_mags = batch_mags(best_theta, base_matrix)
-        return best_theta, best_chi2, best_grad, model_mags, metrics
+        best_photometric_objective = jax.vmap(
+            single_photometric_objective,
+            in_axes=(0, 0, 0, 0, 0, None),
+        )(best_theta, base_matrix, observed, sigma, mask, model_args)
+        model_mags = batch_mags(best_theta, base_matrix, model_args)
+        return (
+            best_theta,
+            best_chi2,
+            best_photometric_objective,
+            best_grad,
+            model_mags,
+            metrics,
+        )
 
-    return optimize
+    donate_argnums = (
+        (0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15)
+        if donate_optimizer_inputs
+        else ()
+    )
+    return jax.jit(optimize, donate_argnums=donate_argnums)
 
 
 def _build_population_adam_optimizer(
@@ -1185,6 +1474,11 @@ def _build_population_adam_optimizer(
     hyper_mu_scale: float,
     physical_prior_weight: float,
     likelihood_space: str,
+    photometric_likelihood: str,
+    student_t_dof: float,
+    trace_mode: str,
+    trace_interval: int,
+    scan_unroll: int,
     band_offsets_mag: tuple[float, ...],
     relation_default_mask: jnp.ndarray,
     relation_target_pos: jnp.ndarray,
@@ -1203,9 +1497,9 @@ def _build_population_adam_optimizer(
         else None
     )
 
-    def single_chi2(theta, base, observed, sigma, mask):
+    def single_chi(theta, base, observed, sigma, mask, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         model_values = (
@@ -1213,12 +1507,31 @@ def _build_population_adam_optimizer(
             if likelihood_space == "flux"
             else model_mag
         )
-        chi = jnp.where(mask, (observed - model_values) / sigma, 0.0)
+        return jnp.where(mask, (observed - model_values) / sigma, 0.0)
+
+    def single_chi2(theta, base, observed, sigma, mask, model_args):
+        chi = single_chi(theta, base, observed, sigma, mask, model_args)
         return jnp.nan_to_num(jnp.sum(chi**2), nan=1.0e30, posinf=1.0e30, neginf=1.0e30)
 
     batch_chi2_grad = jax.vmap(
         single_chi2,
-        in_axes=(0, 0, 0, 0, 0),
+        in_axes=(0, 0, 0, 0, 0, None),
+    )
+
+    def single_photometric_objective(theta, base, observed, sigma, mask, model_args):
+        chi = single_chi(theta, base, observed, sigma, mask, model_args)
+        return jnp.nan_to_num(
+            _photometric_objective_from_chi(
+                chi, photometric_likelihood, student_t_dof
+            ),
+            nan=1.0e30,
+            posinf=1.0e30,
+            neginf=1.0e30,
+        )
+
+    batch_photometric_objective = jax.vmap(
+        single_photometric_objective,
+        in_axes=(0, 0, 0, 0, 0, None),
     )
 
     def loss(
@@ -1242,8 +1555,17 @@ def _build_population_adam_optimizer(
         prior_beta_mask,
         prior_beta_alpha,
         prior_beta_beta,
+        model_args,
     ):
-        chi2 = batch_chi2_grad(theta, base_matrix, observed, sigma, mask)
+        photometric_objective = batch_photometric_objective(
+            theta, base_matrix, observed, sigma, mask, model_args
+        )
+        gas_constraints = jax.vmap(
+            lambda theta_i, base_i: gas_metallicity_constraint_penalty_jax(
+                _params_from_vectors(theta_i, base_i, parameter_names, free_indices_jax),
+                context.model_config,
+            )
+        )(theta, base_matrix)
         sigma_pop = jax.nn.softplus(raw_sigma) + sigma_floor
         default_prior = 0.5 * jnp.sum(
             relation_default_mask
@@ -1279,7 +1601,8 @@ def _build_population_adam_optimizer(
             + (relation_slope / relation_slope_scale) ** 2
         )
         return (
-            0.5 * jnp.sum(chi2)
+            0.5 * jnp.sum(photometric_objective)
+            + jnp.sum(gas_constraints)
             + prior_weight * (jnp.sum(default_prior) + jnp.sum(relation_prior))
             + physical_prior_weight * jnp.sum(physical_prior)
             + hyper
@@ -1288,14 +1611,14 @@ def _build_population_adam_optimizer(
 
     value_and_grad = jax.value_and_grad(loss, argnums=(0, 1, 2, 3, 4, 5))
 
-    def single_mags(theta, base):
+    def single_mags(theta, base, model_args):
         params = _params_from_vectors(theta, base, parameter_names, free_indices_jax)
-        model_mag = model_mags_jax(context, params)
+        model_mag = model_mags_jax_dynamic(context, model_args, params)
         if band_offsets_jax is not None:
             model_mag = model_mag + band_offsets_jax
         return model_mag
 
-    batch_mags = jax.vmap(single_mags, in_axes=(0, 0))
+    batch_mags = jax.vmap(single_mags, in_axes=(0, 0, None))
     amplitude_free_pos = _free_position(
         parameter_names, free_indices, "log10_formed_mass_msun"
     )
@@ -1320,7 +1643,11 @@ def _build_population_adam_optimizer(
         prior_beta_alpha,
         prior_beta_beta,
         truth_theta,
+        model_args,
     ):
+        def batch_mags_with_args(theta, base):
+            return batch_mags(theta, base, model_args)
+
         theta0 = _warm_start_amplitude(
             theta0,
             base_matrix,
@@ -1328,7 +1655,7 @@ def _build_population_adam_optimizer(
             warm_mask,
             lower,
             upper,
-            batch_mags,
+            batch_mags_with_args,
             amplitude_free_pos,
         )
         y0 = _bounded_to_unconstrained(theta0, lower, upper)
@@ -1431,6 +1758,8 @@ def _build_population_adam_optimizer(
                 observed,
                 sigma,
                 mask,
+                warm_observed_mag,
+                warm_mask,
                 lower,
                 upper,
                 prior_gaussian_mask,
@@ -1439,6 +1768,7 @@ def _build_population_adam_optimizer(
                 prior_beta_mask,
                 prior_beta_alpha,
                 prior_beta_beta,
+                model_args,
             )
             (
                 grad_theta_direct,
@@ -1448,28 +1778,8 @@ def _build_population_adam_optimizer(
                 grad_relation_slope,
                 grad_relation_sigma,
             ) = grads
-            _, grad_y = jax.value_and_grad(
-                lambda yy: loss(
-                    _unconstrained_to_bounded(yy, lower, upper),
-                    mu,
-                    raw_sigma,
-                    relation_intercept,
-                    relation_slope,
-                    relation_raw_sigma,
-                    base_matrix,
-                    observed,
-                    sigma,
-                    mask,
-                    lower,
-                    upper,
-                    prior_gaussian_mask,
-                    prior_gaussian_loc,
-                    prior_gaussian_scale,
-                    prior_beta_mask,
-                    prior_beta_alpha,
-                    prior_beta_beta,
-                )
-            )(y)
+            sigmoid_y = jax.nn.sigmoid(y)
+            grad_y = grad_theta_direct * (upper - lower) * sigmoid_y * (1.0 - sigmoid_y)
             improved = value < best_loss
             best_theta = jnp.where(improved, theta, best_theta)
             best_mu = jnp.where(improved, mu, best_mu)
@@ -1515,22 +1825,43 @@ def _build_population_adam_optimizer(
             y = jnp.clip(y, -30.0, 30.0)
             raw_sigma = jnp.clip(raw_sigma, -8.0, 4.0)
             relation_raw_sigma = jnp.clip(relation_raw_sigma, -8.0, 4.0)
-            metrics = jnp.concatenate(
-                [
-                    jnp.asarray(
+            grad_norm = jnp.linalg.norm(grad_theta_direct, axis=1)
+            record_trace = (iteration % trace_interval) == 0
+            if trace_mode == "full":
+
+                def trace_metrics_full(_):
+                    return jnp.asarray(
                         [
                             value,
                             jnp.nanmean(
                                 batch_chi2_grad(
-                                    theta, base_matrix, observed, sigma, mask
+                                    theta, base_matrix, observed, sigma, mask, model_args
                                 )
                             ),
-                            jnp.nanmean(jnp.linalg.norm(grad_theta_direct, axis=1)),
+                            jnp.nanmean(grad_norm),
                         ]
-                    ),
-                    _truth_metric_vector(theta, truth_theta),
-                ]
+                    )
+
+                trace_core = jax.lax.cond(
+                    record_trace,
+                    trace_metrics_full,
+                    lambda _: jnp.full((3,), jnp.nan, dtype=theta.dtype),
+                    operand=None,
+                )
+            elif trace_mode == "optimizer":
+                trace_core = jnp.where(
+                    record_trace,
+                    jnp.asarray([value, jnp.nan, jnp.nanmean(grad_norm)]),
+                    jnp.full((3,), jnp.nan, dtype=theta.dtype),
+                )
+            else:
+                trace_core = jnp.full((3,), jnp.nan, dtype=theta.dtype)
+            trace_truth = jnp.where(
+                record_trace,
+                _truth_metric_vector(theta, truth_theta),
+                jnp.full((3 + theta.shape[1],), jnp.nan, dtype=theta.dtype),
             )
+            metrics = jnp.concatenate([trace_core, trace_truth])
             return (
                 y,
                 mu,
@@ -1575,14 +1906,16 @@ def _build_population_adam_optimizer(
             step,
             carry0,
             jnp.arange(maxiter, dtype=jnp.int32),
+            unroll=scan_unroll,
         )
         sigma_pop = jax.nn.softplus(best_raw_sigma) + sigma_floor
         relation_sigma = jax.nn.softplus(best_relation_raw_sigma) + sigma_floor
-        chi2, grad = jax.vmap(
-            jax.value_and_grad(single_chi2, argnums=0),
-            in_axes=(0, 0, 0, 0, 0),
-        )(best_theta, base_matrix, observed, sigma, mask)
-        model_mags = batch_mags(best_theta, base_matrix)
+        chi2 = batch_chi2_grad(best_theta, base_matrix, observed, sigma, mask, model_args)
+        photometric_objective, grad = jax.vmap(
+            jax.value_and_grad(single_photometric_objective, argnums=0),
+            in_axes=(0, 0, 0, 0, 0, None),
+        )(best_theta, base_matrix, observed, sigma, mask, model_args)
+        model_mags = batch_mags(best_theta, base_matrix, model_args)
         return (
             best_theta,
             best_mu,
@@ -1592,6 +1925,7 @@ def _build_population_adam_optimizer(
             relation_sigma,
             best_loss,
             chi2,
+            photometric_objective,
             jnp.linalg.norm(grad, axis=1),
             model_mags,
             metrics,
@@ -1715,8 +2049,11 @@ def _batch_trace_from_arrays(
     arr = np.asarray(metrics)
     rows = []
     for index, row in enumerate(arr):
+        if not np.isfinite(row[:3]).any():
+            continue
         entry = {
             "iteration": float(index + 1),
+            "mean_fit_quality": float(row[0]),
             "mean_chi2_or_loss": float(row[0]),
             "median_chi2": float(row[1]),
             "mean_gradient_norm": float(row[2]),

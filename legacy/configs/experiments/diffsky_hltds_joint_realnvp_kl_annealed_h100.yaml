@@ -1,0 +1,23 @@
+extends: diffsky_hltds_joint_realnvp_unsup_stable_h100.yaml
+
+experiment:
+    name: diffsky_hltds_joint_realnvp_kl_annealed_h100
+    description: Annealed small-KL Diffsky HLTDS joint RealNVP run on the balanced20k diagnostic rowset.
+
+amortized:
+    training:
+        epochs: 20
+        n_samples: 4
+        kl_annealing_epochs: 15
+        kl_weight_max: 0.02
+        best_checkpoint_metric: validation_loss
+        best_checkpoint_min_epoch: 8
+        likelihood_temperature_initial: 4.0
+        likelihood_temperature_final: 1.0
+        likelihood_temperature_annealing_epochs: 10
+    posterior_regularization:
+        entropy_floor_enabled: true
+        min_log_std: -3.2
+        weight: 0.10
+        final_weight: 0.02
+        anneal_epochs: 15

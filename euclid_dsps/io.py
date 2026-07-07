@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from .photometric_uncertainty import flux_error_from_model
 from .photometry import (
     abmag_to_fnu_cgs,
     fluxerr_fnu_cgs_to_magerr,
@@ -174,14 +175,17 @@ def iter_catalog_batches(
     batch_size: int = 10_000,
     limit: int | None = None,
     row_indices: set[int] | None = None,
+    start_index: int = 0,
 ) -> Iterable[pd.DataFrame]:
     """Yield catalog batches without loading the full parquet into memory."""
     import pyarrow.parquet as pq
 
     yielded = 0
     seen = 0
+    start_index = max(int(start_index), 0)
     max_row_index = max(row_indices) if row_indices else None
     parquet = pq.ParquetFile(path)
+    pending_rowset_batches: list[pd.DataFrame] = []
 
     actual_columns = list(columns) if columns else None
     if actual_columns and "log10_metallicity_true" in actual_columns:
@@ -197,20 +201,66 @@ def iter_catalog_batches(
         ):
             df["log10_metallicity_true"] = df["metallicity_true"] - 10.61
         raw_len = len(df)
-        df.index = range(seen, seen + raw_len)
-        seen += raw_len
+        batch_start = seen
+        batch_end = seen + raw_len
+        seen = batch_end
+        if batch_end <= start_index:
+            continue
+        df.index = range(batch_start, batch_end)
+        if start_index > batch_start:
+            df = df.loc[df.index >= start_index]
         if row_indices is not None:
             df = df.loc[df.index.isin(row_indices)]
+            if len(df):
+                pending_rowset_batches.append(df)
+            if pending_rowset_batches:
+                pending = (
+                    pd.concat(pending_rowset_batches)
+                    if len(pending_rowset_batches) > 1
+                    else pending_rowset_batches[0]
+                )
+                target_size = batch_size
+                if limit is not None:
+                    remaining = limit - yielded
+                    if remaining <= 0:
+                        return
+                    target_size = min(target_size, remaining)
+                while target_size > 0 and len(pending) >= target_size:
+                    output = pending.iloc[:target_size]
+                    yielded += len(output)
+                    yield output
+                    pending = pending.iloc[target_size:]
+                    target_size = batch_size
+                    if limit is not None:
+                        remaining = limit - yielded
+                        if remaining <= 0:
+                            return
+                        target_size = min(target_size, remaining)
+                pending_rowset_batches = [pending] if len(pending) else []
+        else:
+            if limit is not None:
+                remaining = limit - yielded
+                if remaining <= 0:
+                    break
+                df = df.head(remaining)
+            if len(df):
+                yielded += len(df)
+                yield df
+        if max_row_index is not None and seen > max_row_index:
+            break
+    if row_indices is not None and pending_rowset_batches:
+        pending = (
+            pd.concat(pending_rowset_batches)
+            if len(pending_rowset_batches) > 1
+            else pending_rowset_batches[0]
+        )
         if limit is not None:
             remaining = limit - yielded
             if remaining <= 0:
-                break
-            df = df.head(remaining)
-        if len(df):
-            yielded += len(df)
-            yield df
-        if max_row_index is not None and seen > max_row_index:
-            break
+                return
+            pending = pending.head(remaining)
+        if len(pending):
+            yield pending
 
 
 def load_row_indices(path: str | Path) -> list[int]:
@@ -218,8 +268,9 @@ def load_row_indices(path: str | Path) -> list[int]:
     rows = pd.read_csv(path, comment="#", header=None)
     if rows.empty:
         return []
+    values = pd.to_numeric(rows.iloc[:, 0], errors="coerce").dropna()
     return sorted(
-        {int(value) for value in rows.iloc[:, 0].dropna().astype(int).tolist()}
+        {int(value) for value in values.astype(int).tolist()}
     )
 
 
@@ -286,8 +337,27 @@ def build_observation(
                 f"Unsupported photometry units for {band['name']}: {units}"
             )
         error_column = band.get("error_column")
+        error_model = band.get("error_model") or band.get("uncertainty_model")
         flux_error = None
         sigma_mag = float(band.get("sigma_mag", 0.05))
+        if error_model:
+            modeled_error = float(
+                flux_error_from_model(
+                    flux_fnu_cgs,
+                    error_model,
+                    band_name=str(band["name"]),
+                )
+            )
+            if np.isfinite(modeled_error) and modeled_error > 0.0:
+                flux_error = modeled_error
+                converted = flux_error_to_sigma_mag(
+                    flux_fnu_cgs,
+                    flux_error,
+                    floor=band.get("sigma_mag_floor"),
+                    ceiling=band.get("sigma_mag_ceiling"),
+                )
+                if np.isfinite(converted):
+                    sigma_mag = converted
         if error_column and error_column in row and pd.notna(row[error_column]):
             raw_error = float(row[error_column])
             error_units = band.get("error_units", units)

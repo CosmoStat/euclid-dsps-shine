@@ -1,0 +1,170 @@
+extends: diffsky_synthetic_feniks_260617_50k.yaml
+
+catalog_path: Data/diffsky/synthetic/feniks_260617_dsps_closure_18band/train.parquet
+bands: diffsky_hltds_lsst_euclid_roman_18_fnu_cgs
+
+synthetic_diffsky:
+    output_dir: Data/diffsky/synthetic/feniks_260617_dsps_closure_18band
+    # Proposal-space cuts are deliberately minimal. The final survey-like and
+    # inference-ready samples are selected in observable space after DSPS
+    # photometry has been generated.
+    selection:
+        min_logsm:
+        require_metallicity_unclipped: true
+        max_metallicity_clipped_fraction: 0.0
+        snr_threshold: 5.0
+        min_true_snr_bands: 0
+        min_observed_snr_bands: 0
+        magnitude_limits: {}
+        min_magnitude_limit_bands: 0
+        required_magnitude_limit_bands: []
+        photometric_oversample_factor: 1.0
+    output_layers:
+        enabled: true
+        raw_weighted:
+            enabled: true
+            directory: proposals
+        survey_like:
+            enabled: true
+            directory: survey_like
+            size_factor: 2.0
+            allow_smaller: false
+            mirror_to_root: false
+            selection:
+                snr_threshold: 5.0
+                min_true_snr_bands: 1
+                min_observed_snr_bands: 0
+                magnitude_limits:
+                    lsst_u: 26.1
+                    lsst_g: 27.4
+                    lsst_r: 27.5
+                    lsst_i: 26.8
+                    lsst_z: 26.1
+                    lsst_y: 24.9
+                    euclid_vis: 26.2
+                    euclid_nisp_y: 24.5
+                    euclid_nisp_j: 24.5
+                    euclid_nisp_h: 24.5
+                    roman_F062: 27.97
+                    roman_F087: 27.63
+                    roman_F106: 27.60
+                    roman_F129: 27.60
+                    roman_F146: 28.01
+                    roman_F158: 27.52
+                    roman_F184: 26.95
+                    roman_F213: 25.64
+                min_magnitude_limit_bands: 1
+                required_magnitude_limit_bands: []
+                photometric_oversample_factor: 2.5
+        inference_ready:
+            enabled: true
+            directory: inference_ready
+            size_factor: 1.0
+            allow_smaller: false
+            mirror_to_root: true
+            selection:
+                snr_threshold: 5.0
+                min_true_snr_bands: 5
+                min_observed_snr_bands: 0
+                magnitude_limits:
+                    lsst_u: 26.1
+                    lsst_g: 27.4
+                    lsst_r: 27.5
+                    lsst_i: 26.8
+                    lsst_z: 26.1
+                    lsst_y: 24.9
+                    euclid_vis: 26.2
+                    euclid_nisp_y: 24.5
+                    euclid_nisp_j: 24.5
+                    euclid_nisp_h: 24.5
+                    roman_F062: 27.97
+                    roman_F087: 27.63
+                    roman_F106: 27.60
+                    roman_F129: 27.60
+                    roman_F146: 28.01
+                    roman_F158: 27.52
+                    roman_F184: 26.95
+                    roman_F213: 25.64
+                min_magnitude_limit_bands: 2
+                required_magnitude_limit_bands: []
+                photometric_oversample_factor: 5.0
+    smoke_output_layers:
+        survey_like:
+            size_factor: 1.0
+            selection:
+                min_true_snr_bands: 0
+                min_magnitude_limit_bands: 0
+                magnitude_limits: {}
+                photometric_oversample_factor: 1.0
+        inference_ready:
+            selection:
+                min_true_snr_bands: 0
+                min_magnitude_limit_bands: 0
+                magnitude_limits: {}
+                photometric_oversample_factor: 1.0
+    flux_error_model:
+        type: m5_depth
+        sigma_sys_mag: 0.005
+        default_eta: 1.0
+        m5:
+            lsst_u: 26.1
+            lsst_g: 27.4
+            lsst_r: 27.5
+            lsst_i: 26.8
+            lsst_z: 26.1
+            lsst_y: 24.9
+            euclid_vis: 26.2
+            euclid_nisp_y: 24.5
+            euclid_nisp_j: 24.5
+            euclid_nisp_h: 24.5
+            roman_F062: 27.97
+            roman_F087: 27.63
+            roman_F106: 27.60
+            roman_F129: 27.60
+            roman_F146: 28.01
+            roman_F158: 27.52
+            roman_F184: 26.95
+            roman_F213: 25.64
+        gamma:
+            lsst_u: 0.037
+            lsst_g: 0.038
+            lsst_r: 0.039
+            lsst_i: 0.039
+            lsst_z: 0.040
+            lsst_y: 0.040
+        eta:
+            euclid_vis: 0.95
+            euclid_nisp_y: 0.95
+            euclid_nisp_j: 0.95
+            euclid_nisp_h: 0.95
+            roman_F062: 0.95
+            roman_F087: 0.95
+            roman_F106: 0.95
+            roman_F129: 0.95
+            roman_F146: 0.95
+            roman_F158: 0.95
+            roman_F184: 0.95
+            roman_F213: 0.95
+    diagnostics:
+        reference_datasets:
+            - name: fs2
+              path: Data/Euclid FS2 LC galaxy catalog_phz1.parquet
+              reference_kind: fs2
+              reference_overlap_only: false
+              reference_max_rows: 100000
+              bands:
+                  - lsst_u
+                  - lsst_g
+                  - lsst_r
+                  - lsst_i
+                  - lsst_z
+                  - lsst_y
+                  - euclid_vis
+                  - euclid_nisp_y
+                  - euclid_nisp_j
+                  - euclid_nisp_h
+
+model:
+    sfh_model: diffsky_basic
+    stellar_metallicity_model: lognormal_mdf_fixed_scatter
+    stellar_metallicity_scatter_dex: 0.2

@@ -1,0 +1,44 @@
+extends: diffsky_synthetic_feniks_260617_50k.yaml
+
+prior_learning:
+    train_dataset: Data/diffsky/synthetic/feniks_260617_dsps_closure/train.parquet
+    validation_dataset: Data/diffsky/synthetic/feniks_260617_dsps_closure/validation.parquet
+    test_dataset: Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parquet
+    schema: diffsky_dsps_closure_full
+    missing_policy: fail
+    bounds:
+        z_obs: [0.001, 5.5]
+        log10_stellar_mass: [6.0, 13.5]
+        diffstar_lgmcrit: [9.0, 14.5]
+        diffstar_lgy_at_mcrit: [-13.0, -8.0]
+        diffstar_indx_lo: [-2.0, 6.0]
+        diffstar_indx_hi: [-6.0, 3.0]
+        diffstar_lg_qt: [-2.0, 2.5]
+        diffstar_qlglgdt: [-4.0, 4.0]
+        diffstar_lg_drop: [-4.0, 1.0]
+        diffstar_lg_rejuv: [-4.0, 2.0]
+        diffmah_logm0: [7.0, 16.0]
+        diffmah_logtc: [-2.5, 1.5]
+        diffmah_early_index: [-1.0, 6.0]
+        diffmah_late_index: [-1.0, 3.0]
+        diffmah_t_peak: [0.0, 15.0]
+        log10_stellar_metallicity: [-2.5, 0.5]
+        dust_av: [0.0, 5.0]
+        dust_delta: [-2.5, 1.0]
+    flow:
+        type: realnvp
+        n_layers: 12
+        hidden_size: 256
+        scale_clamp: 0.05
+    training:
+        epochs: 80
+        batch_size: 1024
+        learning_rate: 5.0e-4
+        weight_decay: 1.0e-5
+        gradient_clip_norm: 1.0
+        validation_fraction: 0.0
+        seed: 260617
+        epoch_shuffle: true
+    output:
+        prior_samples: 50000
+        truth_sample_limit: 50000

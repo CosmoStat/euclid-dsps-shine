@@ -1,0 +1,36 @@
+extends: diffsky_hltds_continuous_lowz_h100.yaml
+
+experiment:
+    name: diffsky_hltds_autoencoder_nokl_h100
+    description: No-KL autoencoder sanity check for Diffsky HLTDS flux reconstruction before learned-prior interpretation.
+
+amortized:
+    prior:
+        source: standard_normal
+        train_jointly: false
+        update_schedule: frozen
+        freeze_epochs: 999999
+    training:
+        epochs: 12
+        n_samples: 1
+        kl_annealing_epochs: 1
+        kl_weight_max: 0.0
+        best_checkpoint_metric: validation_negative_loglike
+        best_checkpoint_min_epoch: 2
+        likelihood_temperature_initial: 1.0
+        likelihood_temperature_final: 1.0
+        likelihood_temperature_annealing_epochs: 0
+    posterior_regularization:
+        entropy_floor_enabled: false
+        weight: 0.0
+        final_weight: 0.0
+    prior_predictive_diagnostics:
+        enabled: false
+    inference:
+        posterior_samples: 64
+        prior_samples: 512
+        write_posterior_predictive: false
+        write_residual_samples: false
+        combine_summary_shards: true
+    map_adam:
+        prior_weight: 0.0

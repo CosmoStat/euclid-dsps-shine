@@ -1,0 +1,246 @@
+catalog_path: Data/diffsky/processed/hltds_cosmos_260215_04_14_2026_continuous_lowz_fluxerr_projected_truth.parquet
+ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_data.hdf5
+
+dataset:
+    name: diffsky_hltds_04_14_continuous_lowz
+    id_column: object_id
+
+runtime: gpu
+bands: diffsky_hltds_lsst_roman_14_fnu_cgs
+nebular_emission: ssp_flux
+
+selection:
+    index: 0
+    require_positive_flux: false
+    nondetection_policy: gaussian_flux
+    sort_by_flux:
+
+redshift:
+    initial: random_uniform
+    column:
+    truth_column: redshift_true
+    fixed_value: 0.25
+    min: 0.001
+    max: 0.35
+    seed: 42
+    prior_z:
+        mode: none
+
+truth:
+    redshift_column: redshift_true
+    parameter_columns:
+        z_obs: { column: z_obs, kind: direct_truth }
+        log10_stellar_mass: { column: log10_stellar_mass, kind: direct_truth }
+        log10_sfr_at_obs: { column: log10_sfr_at_obs, kind: direct_truth }
+        log10_ssfr_at_obs: { column: log10_ssfr_at_obs, kind: direct_truth }
+        dlog10_sfr_1: { column: dlog10_sfr_1, kind: projected_generated_truth }
+        dlog10_sfr_2: { column: dlog10_sfr_2, kind: projected_generated_truth }
+        dlog10_sfr_3: { column: dlog10_sfr_3, kind: projected_generated_truth }
+        dlog10_sfr_4: { column: dlog10_sfr_4, kind: projected_generated_truth }
+        dlog10_sfr_5: { column: dlog10_sfr_5, kind: projected_generated_truth }
+        dlog10_sfr_6: { column: dlog10_sfr_6, kind: projected_generated_truth }
+        tau2: { column: tau2, kind: projected_generated_truth }
+        dust_index_n: { column: dust_index_n, kind: projected_generated_truth }
+        log10_stellar_metallicity:
+            { column: log10_stellar_metallicity, kind: missing }
+        tau1_over_tau2: { column: tau1_over_tau2, kind: missing }
+
+extra_columns:
+    - object_id
+    - redshift_true
+    - logsm_true
+    - logssfr_true
+    - logsfr_true
+    - logmp_true
+    - logmp_host_true
+    - central_true
+    - r50_disk_true
+    - r50_bulge_true
+
+model:
+    n_sfh_bins: 80
+    sfh_model: popcosmos_bins
+    sfh_time_grid: prospector_step
+    ssp_model: compressed_basis
+    compressed_ssp_path: Data/diffsky/raw/hltds_cosmos_260215_04_14_2026/diffsky_hltds_cosmos_260215_04_14_2026_ssp_basis_k64_coeff16.hdf5
+    compressed_ssp_runtime_dtype: float32
+    stellar_metallicity_model: single
+    dust_model: prospector_fsps
+    igm_model: fsps_madau95
+    nebular_model: fixed_ssp
+    emission_line_corrections: none
+    agn_model: none
+    asset_metadata_policy: permissive
+    z_sun: 0.0142
+    dust_tesc_logyr: 7.0
+    dust1_index: -1.0
+
+fit:
+    method: jax_adam
+    likelihood_space: flux
+    photometric_likelihood: student_t
+    student_t_dof: 2.0
+    flux_error_floor_frac: 0.02
+    flux_error_jitter: 0.0
+    maxiter: 200
+    learning_rate: 0.02
+    tolerance: 1.0e-5
+    patience: 40
+    prior_weight: 1.0
+    trace_mode: optimizer
+    trace_interval: 20
+    scan_unroll: 1
+    batch_grad_mode: per_galaxy
+    free_parameters:
+        z_obs:
+            initial: 0.25
+            bounds: [0.001, 0.35]
+        log10_stellar_mass:
+            initial: 10.0
+            bounds: [7.5, 12.5]
+        dlog10_sfr_1:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_2:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_3:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_4:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_5:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        dlog10_sfr_6:
+            initial: 0.0
+            bounds: [-3.0, 3.0]
+        log10_stellar_metallicity:
+            initial: -0.2
+            bounds: [-2.5, 0.3]
+        tau2:
+            initial: 0.3
+            bounds: [0.0, 4.0]
+        dust_index_n:
+            initial: -0.7
+            bounds: [-2.0, 0.5]
+        tau1_over_tau2:
+            initial: 0.5
+            bounds: [0.0, 3.0]
+
+sample:
+    sampler: nuts
+    num_warmup: 100
+    num_samples: 200
+    num_chains: 1
+    chain_method: parallel
+    target_accept_prob: 0.85
+    max_tree_depth: 10
+    num_steps: 8
+    dense_mass: false
+    seed: 42
+    progress_bar: true
+    init_from_map: true
+    save_samples: true
+    priors: {}
+
+reporting:
+    level: light
+    save_sed_samples: 0
+    plot_filters: false
+    plot_ground_truth: false
+
+output:
+    format: parquet
+    verbose_benchmark: true
+
+amortized:
+    enabled: true
+    data:
+        expected_n_bands: 14
+        selection_mode: stratified_redshift
+        stratified_strategy: proportional
+        stratify_column: redshift_true
+        redshift_bins: [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35]
+        validation_fraction: 0.1
+        epoch_shuffle: true
+        catalog_batch_size: 10000
+    latent:
+        schema: diffsky_hltds_prior_v1
+        include_redshift: true
+        use_fit_bounds: true
+        normalization: standardized_logit
+        physical_scales:
+            z_obs: 0.20
+            log10_stellar_mass: 0.50
+            dlog10_sfr_1: 0.50
+            dlog10_sfr_2: 0.50
+            dlog10_sfr_3: 0.50
+            dlog10_sfr_4: 0.50
+            dlog10_sfr_5: 0.50
+            dlog10_sfr_6: 0.50
+            log10_stellar_metallicity: 0.35
+            tau2: 0.40
+            dust_index_n: 0.30
+            tau1_over_tau2: 0.35
+    features:
+        type: flux_and_errors
+        n_flux_bands: 14
+        n_error_bands: 14
+        normalize_per_band: true
+        flux_transform: asinh
+        error_transform: log
+    encoder:
+        type: gaussian_mlp
+        input_dim: 28
+        latent_dim: 12
+        hidden_sizes: [192, 192, 192]
+        activation: gelu
+        log_std_min: -6.0
+        log_std_max: 2.0
+        initial_log_std: -1.0
+    prior:
+        type: realnvp
+        n_layers: 8
+        hidden_size: 128
+        scale_clamp: 0.05
+        train_jointly: true
+    likelihood:
+        type: student_t
+        student_t_dof: 2.0
+        error_floor_frac: 0.02
+        error_jitter: 0.0
+    training:
+        epochs: 10
+        batch_size: 64
+        jax_batch_size: 4
+        n_samples: 2
+        learning_rate: 1.0e-4
+        weight_decay: 1.0e-5
+        gradient_clip_norm: 1.0
+        kl_annealing_epochs: 10
+        kl_weight_max: 0.5
+        validation_every: 1
+        seed: 42
+    inference:
+        posterior_samples: 64
+        prior_samples: 8192
+        jax_batch_size: 4
+        decoder_sample_chunk_size: 1
+    output:
+        checkpoint_every: 1
+        diagnostics_every: 1
+        save_training_curves: true
+        save_posterior_preview: true
+
+calibration:
+    global_sed_scale:
+        enabled: true
+        mode: learn_global
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: true
+    per_band_zero_points:
+        enabled: false

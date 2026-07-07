@@ -1,0 +1,17 @@
+extends: diffsky_hltds_joint_realnvp_photoz_h100.yaml
+
+experiment:
+    name: diffsky_hltds_popcosmos_proxy_truth_closure_h100
+    description: Forward-only closure for the same PopCosmos decoder used by the amortized Diffsky runs.
+
+calibration:
+    global_sed_scale:
+        enabled: true
+        mode: fit_global
+        parameterization: log_alpha
+        initial_log_alpha: 0.0
+        prior_sigma_log_alpha: 0.10
+        trainable: false
+    per_band_zero_points:
+        enabled: false
+        trainable: false

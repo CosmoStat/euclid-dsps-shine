@@ -1,4 +1,4 @@
-__pycache__/
+is __pycache__/
 .venv/
 *.py[cod]
 *.egg-info/
@@ -10,6 +10,7 @@ htmlcov/
 build/
 dist/
 docs/build/
+docs/_build/
 outputs/
 
 # Local data and generated asset manifests.
@@ -17,6 +18,7 @@ Data/*
 !Data/.gitkeep
 !tests/data/*.parquet
 *.Zone.Identifier
+*:Zone.Identifier
 filters/converted/
 
 # Local tool config and cloned helper repositories are not project source.
