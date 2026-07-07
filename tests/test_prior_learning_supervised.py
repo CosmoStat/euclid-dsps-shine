@@ -217,6 +217,15 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
                 "validation_fraction": 0.25,
                 "seed": 1,
             },
+            "snapshots": {
+                "enabled": True,
+                "every_epochs": 1,
+                "include_epoch_zero": True,
+                "prior_samples": 8,
+                "truth_sample_limit": 8,
+                "max_corner_rows": 8,
+                "checkpoint_every": 1,
+            },
             "output": {"prior_samples": 16},
         },
     }
@@ -231,11 +240,20 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     assert (out / "supervised_prior_summary.json").exists()
     assert (out / "supervised_prior_vs_truth_report.md").exists()
     assert (out / "checkpoints" / "best.eqx").exists()
+    assert (out / "checkpoints" / "epoch_0001.eqx").exists()
+    assert (out / "snapshots" / "epoch_0000" / "prior_samples.parquet").exists()
+    assert (out / "snapshots" / "epoch_0001" / "truth_samples.parquet").exists()
+    assert (out / "snapshots" / "epoch_0002" / "snapshot_summary.json").exists()
 
     sidecar_path = out / "checkpoints" / "best.eqx.json"
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert sidecar["architecture"]["parameter_dtype"] == "float32"
-    load_prior_checkpoint(out / "checkpoints" / "best.eqx")
+    _prior, _sidecar, latent_spec, _schema = load_prior_checkpoint(
+        out / "checkpoints" / "best.eqx"
+    )
+    assert latent_spec.normalization == "identity"
+    assert np.allclose(np.asarray(latent_spec.raw_center), 0.0)
+    assert np.allclose(np.asarray(latent_spec.raw_scale), 1.0)
 
     sidecar["architecture"].pop("parameter_dtype")
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
