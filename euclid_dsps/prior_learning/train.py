@@ -833,7 +833,15 @@ def _shard_x_batch(batch: jnp.ndarray, n_devices: int) -> jnp.ndarray:
 
 
 def _replicate_tree(tree, devices: tuple[Any, ...]):
-    return jax.device_put_replicated(tree, devices)
+    n_devices = len(tuple(devices))
+
+    def replicate_leaf(leaf):
+        if eqx.is_array(leaf):
+            value = jnp.asarray(leaf)
+            return jnp.broadcast_to(value, (n_devices, *value.shape))
+        return leaf
+
+    return jax.tree_util.tree_map(replicate_leaf, tree)
 
 
 def _unreplicate_tree(tree):

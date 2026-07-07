@@ -43,6 +43,13 @@
   - The pmap path is implemented and unit-tested for guardrails/sharding, but
     a real multi-H100 runtime smoke must be launched on a multi-GPU allocation.
     The local machine exposes one CPU JAX device only.
+- Jean-Zay smoke fix:
+  - Replaced removed `jax.device_put_replicated` usage in both pmap training
+    paths with explicit leading-axis replication via `jnp.broadcast_to`, which
+    is compatible with `eqx.filter_pmap` inputs on recent JAX.
+  - Added a CPU regression test for the replication helper.
+  - Validated with targeted ruff, data-parallel pytest, prior/CLI pytest, and
+    `python -m compileall euclid_dsps scripts`.
 - Validation:
   - `python -m compileall euclid_dsps scripts` passed.
   - `uvx ruff check euclid_dsps/amortized/train.py euclid_dsps/amortized/config.py euclid_dsps/prior_learning/train.py euclid_dsps/cli.py tests/test_amortized_data_parallel.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py` passed.

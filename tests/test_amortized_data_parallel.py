@@ -7,6 +7,7 @@ import pytest
 from euclid_dsps.amortized.train import (
     LossBatch,
     _pad_epoch_order_for_data_parallel,
+    _replicate_tree,
     _resolve_data_parallel_training,
     _shard_loss_batch,
 )
@@ -68,6 +69,16 @@ def test_shard_loss_batch_splits_leading_axis() -> None:
     assert sharded.flux_err.shape == (4, 2, 3)
     assert sharded.mask.shape == (4, 2, 3)
     assert sharded.features.shape == (4, 2, 6)
+
+
+def test_replicate_tree_adds_device_axis_without_deprecated_jax_helper() -> None:
+    devices = tuple(range(3))
+    tree = {"weights": jnp.arange(6, dtype=jnp.float32).reshape(2, 3)}
+
+    replicated = _replicate_tree(tree, devices)
+
+    assert replicated["weights"].shape == (3, 2, 3)
+    assert np.allclose(np.asarray(replicated["weights"][0]), np.asarray(tree["weights"]))
 
 
 def test_train_parser_accepts_data_parallel_override() -> None:
