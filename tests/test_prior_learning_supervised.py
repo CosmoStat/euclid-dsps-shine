@@ -146,6 +146,41 @@ def test_supervised_prior_diagnostics_skip_constant_corner_columns(tmp_path: Pat
     assert skipped["parameters"] == ["constant_truth"]
 
 
+def test_supervised_prior_diagnostics_handles_one_sided_constant_corner_column(
+    tmp_path: Path,
+) -> None:
+    truth = pd.DataFrame(
+        {
+            "z_obs": np.linspace(0.1, 0.5, 64),
+            "log10_stellar_mass": np.linspace(9.0, 10.0, 64),
+            "dust_av": np.linspace(0.0, 1.0, 64),
+        }
+    )
+    prior = pd.DataFrame(
+        {
+            "z_obs": np.linspace(0.12, 0.52, 64),
+            "log10_stellar_mass": np.full(64, 9.5),
+            "dust_av": np.linspace(0.1, 0.8, 64),
+        }
+    )
+
+    outputs = write_supervised_prior_diagnostics(
+        truth=truth,
+        prior=prior,
+        parameter_names=("z_obs", "log10_stellar_mass", "dust_av"),
+        out_dir=tmp_path,
+        summary={"schema": "toy"},
+        max_corner_rows=32,
+    )
+
+    assert Path(outputs["corner"]).exists()
+    assert Path(outputs["corner_plot_metadata"]).exists()
+    metadata = pd.read_csv(outputs["corner_plot_metadata"])
+    legacy = metadata.loc[metadata["kind"] == "legacy_first8"].iloc[0]
+    assert bool(legacy["written"]) is True
+    assert "log10_stellar_mass" in legacy["plotted_columns"]
+
+
 @pytest.mark.skipif(
     not HAS_EQUINOX,
     reason="Equinox optional dependency is not installed",

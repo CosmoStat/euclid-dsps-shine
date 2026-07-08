@@ -380,52 +380,20 @@ def _write_plots(
         fig.savefig(path, dpi=150)
         plt.close(fig)
         outputs["pair_z_logm_logsfr"] = str(path)
-    try:
-        import corner
-    except Exception:
-        return outputs
     corner_metadata: list[dict[str, Any]] = []
-    corner_names = [
-        name
-        for name in names
-        if _has_dynamic_range(truth[name]) and _has_dynamic_range(prior[name])
-    ][: min(len(names), 8)]
-    if len(corner_names) >= 2:
-        truth_values = _cap_matrix_rows(
-            truth[corner_names].to_numpy(dtype=float),
-            max_rows=max_corner_rows,
-        )
-        prior_values = _cap_matrix_rows(
-            prior[corner_names].to_numpy(dtype=float),
-            max_rows=max_corner_rows,
-        )
-        fig = corner.corner(
-            truth_values,
-            labels=corner_names,
-            color="C0",
-            hist_kwargs={"density": True},
-        )
-        corner.corner(
-            prior_values,
-            fig=fig,
-            labels=corner_names,
-            color="C1",
-            hist_kwargs={"density": True},
-        )
-        path = out_dir / "truth_vs_prior_corner.png"
-        fig.savefig(path, dpi=150)
-        plt.close(fig)
+    path, metadata = _write_truth_prior_corner(
+        plt,
+        truth=truth,
+        prior=prior,
+        wanted=names[: min(len(names), 8)],
+        out_dir=out_dir,
+        filename="truth_vs_prior_corner.png",
+        kind="legacy_first8",
+        max_rows=max_corner_rows,
+    )
+    corner_metadata.append(metadata)
+    if path is not None:
         outputs["corner"] = str(path)
-        corner_metadata.append(
-            {
-                "plot": path.name,
-                "kind": "legacy_first8",
-                "plotted_columns": ",".join(corner_names),
-                "n_columns": int(len(corner_names)),
-                "written": True,
-                "reason": "",
-            }
-        )
     for kind, wanted, filename in [
         (
             "full18",
@@ -439,7 +407,7 @@ def _write_plots(
         ),
     ]:
         path, metadata = _write_truth_prior_corner(
-            corner,
+            plt,
             truth=truth,
             prior=prior,
             wanted=wanted,
@@ -459,7 +427,7 @@ def _write_plots(
 
 
 def _write_truth_prior_corner(
-    corner,
+    plt,
     *,
     truth: pd.DataFrame,
     prior: pd.DataFrame,
@@ -469,15 +437,17 @@ def _write_truth_prior_corner(
     kind: str,
     max_rows: int,
 ) -> tuple[Path | None, dict[str, Any]]:
-    names = [
-        name
-        for name in wanted
-        if name in truth
-        and name in prior
-        and _has_dynamic_range(truth[name])
-        and _has_dynamic_range(prior[name])
-    ]
-    skipped = [name for name in wanted if name not in names]
+    available = [name for name in wanted if name in truth and name in prior]
+    missing = [name for name in wanted if name not in available]
+    names, values_truth, values_prior, ranges, skipped_dynamic = (
+        _prepare_truth_prior_corner_values(
+            truth=truth,
+            prior=prior,
+            names=available,
+            max_rows=max_rows,
+        )
+    )
+    skipped = missing + skipped_dynamic
     if len(names) < 2:
         return None, {
             "plot": filename,
@@ -488,8 +458,6 @@ def _write_truth_prior_corner(
             "written": False,
             "reason": "fewer_than_two_dynamic_columns",
         }
-    values_truth = _cap_matrix_rows(_finite_matrix(truth[names]), max_rows=max_rows)
-    values_prior = _cap_matrix_rows(_finite_matrix(prior[names]), max_rows=max_rows)
     if len(values_truth) == 0 or len(values_prior) == 0:
         return None, {
             "plot": filename,
@@ -500,27 +468,16 @@ def _write_truth_prior_corner(
             "written": False,
             "reason": "no_finite_rows",
         }
-    fig = corner.corner(
-        values_truth,
-        labels=names,
-        color="C0",
-        hist_kwargs={"density": True},
-    )
-    corner.corner(
-        values_prior,
-        fig=fig,
-        labels=names,
-        color="C1",
-        hist_kwargs={"density": True},
+    fig = _truth_prior_corner_like_figure(
+        plt,
+        truth_values=values_truth,
+        prior_values=values_prior,
+        names=names,
+        ranges=ranges,
     )
     path = out_dir / filename
     fig.savefig(path, dpi=150)
-    try:
-        import matplotlib.pyplot as plt
-
-        plt.close(fig)
-    except Exception:
-        pass
+    plt.close(fig)
     return path, {
         "plot": filename,
         "kind": kind,
@@ -533,6 +490,165 @@ def _write_truth_prior_corner(
         "written": True,
         "reason": "",
     }
+
+
+def _prepare_truth_prior_corner_values(
+    *,
+    truth: pd.DataFrame,
+    prior: pd.DataFrame,
+    names: list[str],
+    max_rows: int,
+) -> tuple[list[str], np.ndarray, np.ndarray, list[tuple[float, float]], list[str]]:
+    """Return finite/capped matrices and plot ranges for robust corner-like plots."""
+    if not names:
+        return [], np.empty((0, 0)), np.empty((0, 0)), [], []
+    values_truth = _cap_matrix_rows(_finite_matrix(truth[names]), max_rows=max_rows)
+    values_prior = _cap_matrix_rows(_finite_matrix(prior[names]), max_rows=max_rows)
+    if len(values_truth) == 0 or len(values_prior) == 0:
+        return names, values_truth, values_prior, [], []
+
+    kept: list[str] = []
+    kept_indices: list[int] = []
+    ranges: list[tuple[float, float]] = []
+    skipped: list[str] = []
+    for index, name in enumerate(names):
+        merged = np.concatenate([values_truth[:, index], values_prior[:, index]])
+        merged = merged[np.isfinite(merged)]
+        if merged.size < 2 or not bool(np.nanmax(merged) > np.nanmin(merged)):
+            skipped.append(name)
+            continue
+        lo, hi = np.nanquantile(merged, [0.005, 0.995])
+        if not np.isfinite(lo) or not np.isfinite(hi) or lo >= hi:
+            lo = float(np.nanmin(merged))
+            hi = float(np.nanmax(merged))
+        if lo >= hi:
+            skipped.append(name)
+            continue
+        pad = max(0.05 * (hi - lo), 1.0e-6)
+        kept.append(name)
+        kept_indices.append(index)
+        ranges.append((float(lo - pad), float(hi + pad)))
+
+    if not kept_indices:
+        return [], values_truth[:, :0], values_prior[:, :0], [], skipped
+    return (
+        kept,
+        values_truth[:, kept_indices],
+        values_prior[:, kept_indices],
+        ranges,
+        skipped,
+    )
+
+
+def _truth_prior_corner_like_figure(
+    plt,
+    *,
+    truth_values: np.ndarray,
+    prior_values: np.ndarray,
+    names: list[str],
+    ranges: list[tuple[float, float]],
+):
+    n_columns = len(names)
+    figsize = max(5.0, 1.45 * n_columns)
+    fig, axes = plt.subplots(n_columns, n_columns, figsize=(figsize, figsize))
+    axes_arr = np.asarray(axes).reshape(n_columns, n_columns)
+    truth_plot = _subsample_rows_for_plot(np.asarray(truth_values, dtype=float))
+    prior_plot = _subsample_rows_for_plot(np.asarray(prior_values, dtype=float))
+    point_size = 1.5 if n_columns > 10 else 3.0
+    alpha = 0.12 if n_columns > 10 else 0.20
+
+    for row, y_name in enumerate(names):
+        for col, x_name in enumerate(names):
+            ax = axes_arr[row, col]
+            if row < col:
+                ax.axis("off")
+                continue
+            x_range = ranges[col]
+            if row == col:
+                _plot_distribution_hist(
+                    ax,
+                    truth_values[:, col],
+                    value_range=x_range,
+                    color="C0",
+                    label="truth" if row == 0 else "",
+                )
+                _plot_distribution_hist(
+                    ax,
+                    prior_values[:, col],
+                    value_range=x_range,
+                    color="C1",
+                    label="prior" if row == 0 else "",
+                    linestyle="--",
+                )
+            else:
+                ax.scatter(
+                    truth_plot[:, col],
+                    truth_plot[:, row],
+                    s=point_size,
+                    alpha=alpha,
+                    color="C0",
+                    rasterized=True,
+                    linewidths=0,
+                )
+                ax.scatter(
+                    prior_plot[:, col],
+                    prior_plot[:, row],
+                    s=point_size,
+                    alpha=alpha,
+                    color="C1",
+                    rasterized=True,
+                    linewidths=0,
+                )
+                ax.set_xlim(x_range)
+                ax.set_ylim(ranges[row])
+            if row == n_columns - 1:
+                ax.set_xlabel(x_name, fontsize=6)
+            else:
+                ax.set_xticklabels([])
+            if col == 0 and row > 0:
+                ax.set_ylabel(y_name, fontsize=6)
+            elif col != 0:
+                ax.set_yticklabels([])
+            ax.tick_params(axis="both", labelsize=5, length=2)
+    if n_columns:
+        axes_arr[0, 0].legend(frameon=False, fontsize=6)
+    fig.tight_layout(pad=0.15)
+    return fig
+
+
+def _plot_distribution_hist(
+    ax,
+    values,
+    *,
+    value_range: tuple[float, float],
+    color: str,
+    label: str,
+    linestyle: str = "-",
+) -> None:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0:
+        return
+    ax.hist(
+        arr,
+        bins=36,
+        range=value_range,
+        density=True,
+        histtype="step",
+        color=color,
+        linestyle=linestyle,
+        linewidth=1.0,
+        label=label,
+    )
+
+
+def _subsample_rows_for_plot(values: np.ndarray, max_rows: int = 1500) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if len(values) <= int(max_rows):
+        return values
+    rng = np.random.default_rng(260617)
+    indices = np.sort(rng.choice(len(values), size=int(max_rows), replace=False))
+    return values[indices]
 
 
 def _pair_plot_names(names: list[str]) -> list[str]:

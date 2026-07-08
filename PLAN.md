@@ -59,6 +59,18 @@
     `gelu` static leaf failure seen on Jean-Zay.
   - Validated with the fake three-device CPU smoke, targeted ruff, targeted
     pytest, `git diff --check`, and `python -m compileall euclid_dsps scripts`.
+- Jean-Zay supervised-prior report plotting fix:
+  - Made supervised prior report/snapshot diagnostics robust
+    when prior/truth columns are constant or nearly constant after finite-row
+    filtering, and avoid Matplotlib/corner histogram color crashes.
+  - Replaced supervised prior `corner.corner` calls with an internal
+    corner-like Matplotlib plotter that computes explicit ranges after finite
+    filtering, handles one-sided constant distributions, caps plotted rows, and
+    preserves corner metadata.
+  - Added a regression test for a prior column that is constant while truth is
+    dynamic, matching the report failure mode seen on Jean-Zay.
+  - Validated with supervised-prior diagnostics tests, pmap/CLI tests, targeted
+    ruff, `git diff --check`, and `python -m compileall euclid_dsps scripts`.
 - Validation:
   - `python -m compileall euclid_dsps scripts` passed.
   - `uvx ruff check euclid_dsps/amortized/train.py euclid_dsps/amortized/config.py euclid_dsps/prior_learning/train.py euclid_dsps/cli.py tests/test_amortized_data_parallel.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py` passed.
