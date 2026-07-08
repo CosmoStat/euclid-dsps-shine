@@ -7,6 +7,7 @@ import textwrap
 
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 
 from euclid_dsps.amortized.train import (
@@ -15,6 +16,7 @@ from euclid_dsps.amortized.train import (
     _replicate_tree,
     _resolve_data_parallel_training,
     _shard_loss_batch,
+    _write_overlay_corner_like,
 )
 from euclid_dsps.cli import build_parser
 from euclid_dsps.prior_learning.train import (
@@ -143,6 +145,33 @@ def test_prior_pmap_step_handles_static_realnvp_leaves_on_fake_cpu_devices() -> 
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_training_snapshot_corner_like_handles_diagonal_histograms(tmp_path) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    frame = pd.DataFrame(
+        {
+            "z_obs": np.linspace(0.1, 0.5, 32),
+            "log10_stellar_mass": np.linspace(9.0, 10.0, 32),
+        }
+    )
+    path = tmp_path / "corner.png"
+
+    _write_overlay_corner_like(
+        path,
+        plt,
+        columns=["z_obs", "log10_stellar_mass"],
+        posterior=frame,
+        prior=frame,
+        truth=frame,
+        max_rows=16,
+    )
+
+    assert path.exists()
 
 
 def test_train_parser_accepts_data_parallel_override() -> None:

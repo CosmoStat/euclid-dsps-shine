@@ -71,6 +71,15 @@
     dynamic, matching the report failure mode seen on Jean-Zay.
   - Validated with supervised-prior diagnostics tests, pmap/CLI tests, targeted
     ruff, `git diff --check`, and `python -m compileall euclid_dsps scripts`.
+- Jean-Zay amortized snapshot plotting fix:
+  - Fixed the amortized training snapshot corner-like diagonal
+    histograms, which built duplicate `[x_name, x_name]` dataframes and caused
+    Matplotlib to see two datasets with one color during `supervised_frozen_train`.
+  - Added a regression test that writes the training snapshot corner-like plot
+    with truth/prior/posterior overlays and verifies the diagonal histogram
+    path no longer crashes.
+  - Validated with data-parallel tests, supervised-prior/CLI tests, targeted
+    ruff, `git diff --check`, and `python -m compileall euclid_dsps scripts`.
 - Validation:
   - `python -m compileall euclid_dsps scripts` passed.
   - `uvx ruff check euclid_dsps/amortized/train.py euclid_dsps/amortized/config.py euclid_dsps/prior_learning/train.py euclid_dsps/cli.py tests/test_amortized_data_parallel.py tests/test_amortized_jacobian_lens.py tests/test_amortized_jacobian_lens_cli.py tests/test_amortized_flows.py tests/test_prior_learning_supervised.py` passed.

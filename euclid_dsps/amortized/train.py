@@ -3635,14 +3635,12 @@ def _write_overlay_corner_like(
             for label, frame, color, alpha in datasets:
                 if frame.empty or x_name not in frame or y_name not in frame:
                     continue
-                sub = frame[[x_name, y_name]].replace([np.inf, -np.inf], np.nan).dropna()
-                if sub.empty:
-                    continue
-                if len(sub) > max_rows:
-                    sub = sub.sample(int(max_rows), random_state=17)
                 if i == j:
+                    values = _snapshot_plot_values(frame, x_name, max_rows=max_rows)
+                    if values.size == 0:
+                        continue
                     ax.hist(
-                        sub[x_name].to_numpy(dtype=float),
+                        values,
                         bins=32,
                         density=True,
                         histtype="step",
@@ -3651,6 +3649,15 @@ def _write_overlay_corner_like(
                         label=label,
                     )
                 else:
+                    sub = (
+                        frame[[x_name, y_name]]
+                        .replace([np.inf, -np.inf], np.nan)
+                        .dropna()
+                    )
+                    if sub.empty:
+                        continue
+                    if len(sub) > max_rows:
+                        sub = sub.sample(int(max_rows), random_state=17)
                     ax.scatter(
                         sub[x_name].to_numpy(dtype=float),
                         sub[y_name].to_numpy(dtype=float),
@@ -3674,6 +3681,21 @@ def _write_overlay_corner_like(
     fig.tight_layout()
     fig.savefig(path, dpi=150)
     plt.close(fig)
+
+
+def _snapshot_plot_values(
+    frame: pd.DataFrame,
+    column: str,
+    *,
+    max_rows: int,
+) -> np.ndarray:
+    values = pd.to_numeric(frame[column], errors="coerce").to_numpy(dtype=float)
+    values = values[np.isfinite(values)]
+    if len(values) > int(max_rows):
+        rng = np.random.default_rng(17)
+        indices = np.sort(rng.choice(len(values), size=int(max_rows), replace=False))
+        values = values[indices]
+    return values
 
 
 def _training_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
