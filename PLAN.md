@@ -1,5 +1,140 @@
 # Plan
 
+## 2026-07-08 Supervised RealNVP Prior Failure Investigation
+
+- Status: completed for root-cause isolation and code fix.
+- Goal: identify why the supervised truth-prior RealNVP reports good NLL on
+  truth latents but generates samples that saturate physical bounds and have
+  very poor self log-probability.
+- Findings:
+  - Root cause: RealNVP coupling masks were stored as float arrays, so
+    `eqx.is_inexact_array` included them in trainable Optax leaves. AdamW
+    changed masks from binary `0/1` to values around `-2` and `3`, breaking the
+    coupling-layer bijection and invalidating `forward`/`inverse` consistency.
+  - The broken supervised truth-prior checkpoint maps truth latents into a tiny
+    base-space ball with high apparent NLL, but `prior.sample()` produces
+    latents around `1e5`-`1e7`; `inverse(forward(u))` then loses `u` by
+    catastrophic float32 cancellation and `x_to_theta` saturates all physical
+    bounds.
+  - The same RealNVP mask bug contaminates the existing joint RealNVP amortized
+    checkpoints and supervised-prior-dependent amortized checkpoints. Treat old
+    RealNVP checkpoints from this ladder as non-scientific and retrain them.
+  - Fixed `euclid_dsps/amortized/flows.py` so masks are boolean topology leaves,
+    not inexact trainable leaves. Added clear load-time errors for old
+    float-mask checkpoints and regression tests for mask immutability and
+    round-trip sampling.
+
+## 2026-07-08 FENIKS Infer/J-Lens Log Triage
+
+- Status: completed for the copied-log triage.
+- Goal: analyze the newly copied FENIKS infer and J-lens logs to determine
+  which stages completed, which failed, and what should be launched or copied
+  next.
+- Assumptions:
+  - The user has copied logs first; result artifacts may still need a separate
+    rsync before numeric analysis.
+  - J-lens shard/finalize status should be inferred from both `outputs/logs`
+    and Slurm `out/err` files, because `outputs/logs` can miss individual array
+    elements depending on how the launcher names log files.
+- Findings:
+  - Parsed the copied logs into
+    `outputs/jeanzay_feniks_ladder/log_analysis/feniks_infer_jlens_log_status.csv`
+    and JSON for follow-up inspection.
+  - All five J-lens runs completed all four shards and finalization, writing
+    1024 objects per run according to the logs. The next local step is to rsync
+    the `outputs/runs/*_jlens/` artifact directories before numeric analysis.
+  - All five amortized inference jobs failed with a JAX GPU OOM during the
+    prior-predictive stage after the posterior batches had run. The failing
+    allocation was 36.41 GiB in DSPS derived/prior-predictive decoding with
+    `prior_samples=8192` and `prior_predictive_batch_size=256`.
+  - No training or J-lens relaunch is needed from these logs. Relaunch only the
+    inference stages with a smaller memory profile: smaller batch/JAX batch,
+    fewer posterior/prior samples, and an explicit low
+    `--prior-predictive-batch-size`.
+
+## 2026-07-08 FENIKS Ladder Local Log Audit And Output Cleanup
+
+- Status: completed for this cleanup slice.
+- Goal: analyze the Jean-Zay FENIKS prior-ladder logs that were copied back
+  locally, identify exactly which run artifacts still need to be rsynced for
+  full analysis, and move non-FENIKS generated outputs under `outputs/legacy`
+  so the active FENIKS workspace is easy to inspect.
+- Assumptions:
+  - The active copied logs live under `outputs/jeanzay_feniks_ladder/logs/`.
+  - The active FENIKS production artifacts should remain directly visible under
+    `outputs/`, while older HLTDS/Diffsky smoke/dev outputs can be archived.
+  - No generated outputs should be deleted during cleanup; only moves are
+    allowed.
+- Completed:
+  - Parsed the copied Slurm logs and wrote
+    `outputs/jeanzay_feniks_ladder/log_analysis/feniks_prior_ladder_log_summary.csv`
+    plus JSON.
+  - Confirmed successful training/report jobs for the supervised truth prior,
+    AE baseline, fixed-KL joint RealNVP, annealed-KL joint RealNVP, frozen
+    supervised prior amortized run, and supervised-prior fine-tune run. The old
+    `1558720` frozen-prior attempt is the known pre-fix snapshot histogram
+    failure.
+  - Recorded that the fine-tune run completed but skipped many non-finite
+    updates, so it should be treated as an experimental/diagnostic comparison,
+    not the main prior result.
+  - Moved 79 non-FENIKS generated output entries into `outputs/legacy/` and
+    wrote
+    `outputs/jeanzay_feniks_ladder/log_analysis/outputs_legacy_move_manifest_20260708_175404.json`.
+  - Added
+    `outputs/jeanzay_feniks_ladder/log_analysis/rsync_feniks_ladder_artifacts.sh`
+    to pull all current remote FENIKS runs, logs, configs, Slurm script, and
+    runbook snapshot through the user’s CEA jump-host SSH route.
+  - Re-analyzed the later copied `outputs/logs` payload: 131 logs total, 14
+    FENIKS ladder logs relevant to the current experiment sequence, with the
+    same successful final runs and the expected pre-fix failures.
+  - Wrote
+    `outputs/jeanzay_feniks_ladder/log_analysis/outputs_logs_summary.csv` and
+    `outputs/jeanzay_feniks_ladder/log_analysis/feniks_ladder_outputs_logs_summary.csv`.
+  - Moved 106 newly copied non-FENIKS logs into
+    `outputs/legacy/logs/outputs_logs/`, keeping only FENIKS ladder/generation
+    logs in the active `outputs/jeanzay_feniks_ladder/logs/outputs_logs/`
+    folder.
+  - Added
+    `outputs/jeanzay_feniks_ladder/log_analysis/rsync_feniks_ladder_analysis_artifacts.sh`
+    for the preferred artifact pull: plots, summaries, manifests, parquet/csv
+    tables, configs, logs, and only `best`/`last` checkpoints, explicitly
+    excluding epoch checkpoints and per-epoch training snapshot directories.
+
+## 2026-07-08 FENIKS Results Readiness Audit
+
+- Status: completed for the current local-readiness audit.
+- Goal: determine which FENIKS artifacts are actually available locally after
+  the log/artifact pulls, whether inference/J-lens/corner outputs have been
+  produced, and whether the FENIKS synthetic closure is validated well enough
+  to proceed with detailed analysis.
+- Assumptions:
+  - Training logs alone are not enough for posterior/corner analysis; dedicated
+    inference and J-lens stages must exist or be launched.
+  - Closure status should be inferred from FENIKS generation/validation logs and
+    manifest/report artifacts, not from NN training loss alone.
+- Findings:
+  - The main 14-band FENIKS synthetic closure dataset is locally present and
+    validated: `validation_report.json` passes gates for 40k/5k/5k
+    train/validation/test rows, 18 truth columns, normalized noise residuals,
+    metallicity checks, photometric S/N selection, and DSPS flux recomputation.
+  - The five amortized ladder checkpoints are present with `best.eqx` and
+    feature stats. AE, joint fixed-KL, joint annealed-KL, and frozen supervised
+    prior runs completed with no skipped updates; supervised-prior fine-tune
+    completed but skipped 908 non-finite updates and should remain a secondary
+    diagnostic run.
+  - No amortized inference outputs or J-lens outputs were found locally:
+    `posterior_summary.parquet`, `posterior_samples.parquet`,
+    `inference_summary.json`, `jacobian_lens_summary.json`, and lens object
+    tables are absent. The next required stages are the `*_infer` and
+    `*_jlens` ladder stages.
+  - The supervised RealNVP truth-prior checkpoint is not scientifically usable
+    as a generative prior in its current form. Its NLL improves, but
+    truth-vs-prior diagnostics show very large KS/Wasserstein distances, and
+    direct latent samples from the checkpoint have amplitudes around
+    `1e5`-`1e6` instead of order-unity truth `x` values. Treat the frozen and
+    fine-tune supervised-prior amortized runs as suspect until the supervised
+    prior is fixed or replaced.
+
 ## 2026-07-07 Amortized Multi-GPU Training
 
 - Status: completed for this implementation slice.

@@ -186,6 +186,9 @@ def test_supervised_prior_diagnostics_handles_one_sided_constant_corner_column(
     reason="Equinox optional dependency is not installed",
 )
 def test_realnvp_supervised_prior_learns_toy_distribution() -> None:
+    import jax
+    import jax.numpy as jnp
+
     from euclid_dsps.prior_learning.train import fit_realnvp_to_x
 
     rng = np.random.default_rng(0)
@@ -210,6 +213,13 @@ def test_realnvp_supervised_prior_learns_toy_distribution() -> None:
 
     final_loss = float(result.training_log["loss"].tail(2).mean())
     assert final_loss < result.initial_train_nll
+    for layer in result.prior.layers:
+        assert layer.mask.dtype == jnp.bool_
+        assert np.all(np.asarray((layer.mask == 0) | (layer.mask == 1)))
+    samples = result.prior.sample(jax.random.PRNGKey(11), 128)
+    recovered, _ = result.prior.inverse(samples)
+    roundtrip, _ = result.prior.forward(recovered)
+    assert np.max(np.abs(np.asarray(roundtrip - samples))) < 1.0e-3
 
 
 @pytest.mark.skipif(
@@ -286,6 +296,8 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     _prior, _sidecar, latent_spec, _schema = load_prior_checkpoint(
         out / "checkpoints" / "best.eqx"
     )
+    for layer in _prior.layers:
+        assert layer.mask.dtype.name == "bool"
     assert latent_spec.normalization == "identity"
     assert np.allclose(np.asarray(latent_spec.raw_center), 0.0)
     assert np.allclose(np.asarray(latent_spec.raw_scale), 1.0)

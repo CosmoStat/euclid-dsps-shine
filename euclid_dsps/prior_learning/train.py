@@ -647,7 +647,10 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         template,
         _jax_dtype_from_name(str(arch.get("parameter_dtype", "float32"))),
     )
-    prior = eqx.tree_deserialise_leaves(path, template)
+    try:
+        prior = eqx.tree_deserialise_leaves(path, template)
+    except RuntimeError as exc:
+        _raise_realnvp_mask_checkpoint_error(path, exc)
     latent = sidecar["latent_spec"]
     latent_spec = LatentSpec(
         names=tuple(latent["names"]),
@@ -680,6 +683,17 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         reduced=bool(schema_payload.get("reduced", False)),
     )
     return prior, sidecar, latent_spec, schema
+
+
+def _raise_realnvp_mask_checkpoint_error(path: Path, exc: RuntimeError):
+    message = str(exc)
+    if "mask" in message and "changed dtype from bool" in message:
+        raise RuntimeError(
+            "This RealNVP prior checkpoint contains float coupling masks from "
+            "an older buggy training path where masks were trainable. It is not "
+            f"scientifically usable and must be retrained with the fixed code: {path}"
+        ) from exc
+    raise exc
 
 
 def _cast_inexact_arrays(tree, dtype):

@@ -1286,9 +1286,25 @@ def load_checkpoint(
     config: dict[str, Any],
 ) -> AmortizedModel:
     """Load an amortized model checkpoint using the active config architecture."""
+    path = Path(path)
     key = jax.random.PRNGKey(int(amortized_config(config)["training"].get("seed", 42)))
     template = build_amortized_model(config, key)
-    return eqx.tree_deserialise_leaves(path, template)
+    try:
+        return eqx.tree_deserialise_leaves(path, template)
+    except RuntimeError as exc:
+        _raise_realnvp_mask_checkpoint_error(path, exc)
+
+
+def _raise_realnvp_mask_checkpoint_error(path: Path, exc: RuntimeError):
+    message = str(exc)
+    if "mask" in message and "changed dtype from bool" in message:
+        raise RuntimeError(
+            "This amortized checkpoint contains a RealNVP prior with float "
+            "coupling masks from an older buggy training path where masks were "
+            "trainable. It is not scientifically usable and must be retrained "
+            f"with the fixed code: {path}"
+        ) from exc
+    raise exc
 
 
 def _per_band_flux_calibration_summary(

@@ -37,6 +37,22 @@ def test_realnvp_roundtrip_logprob_and_sample_shape() -> None:
     assert jnp.allclose(recovered, u, atol=1.0e-5)
 
 
+def test_realnvp_coupling_masks_are_not_trainable() -> None:
+    import equinox as eqx
+
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(0),
+        latent_dim=4,
+        n_layers=4,
+        hidden_size=8,
+    )
+
+    for layer in prior.layers:
+        assert layer.mask.dtype == jnp.bool_
+        assert not eqx.is_inexact_array(layer.mask)
+        assert jnp.all((layer.mask == 0) | (layer.mask == 1))
+
+
 def test_realnvp_input_gradients_are_finite() -> None:
     prior = RealNVPPrior(
         jax.random.PRNGKey(0),

@@ -28,7 +28,9 @@ class _CouplingLayer(eqx.Module):
         init_scale: float = 1.0,
     ):
         k_scale, k_shift = jax.random.split(key)
-        self.mask = jnp.asarray(mask, dtype=jnp.float32)
+        # Keep masks boolean so Equinox/Optax filters do not train them as
+        # inexact arrays. Coupling masks are part of the flow topology.
+        self.mask = jnp.asarray(mask, dtype=jnp.bool_)
         self.scale_net = eqx.nn.MLP(
             in_size=int(latent_dim),
             out_size=int(latent_dim),
@@ -51,24 +53,30 @@ class _CouplingLayer(eqx.Module):
         self.scale_clamp = float(scale_clamp)
 
     def forward(self, x):
-        x_masked = x * self.mask
+        mask = _mask_as_float(self.mask, x)
+        active = 1.0 - mask
+        x_masked = x * mask
         log_scale, shift = self._scale_shift(x_masked)
-        y = x_masked + (1.0 - self.mask) * (x * jnp.exp(log_scale) + shift)
+        y = x_masked + active * (x * jnp.exp(log_scale) + shift)
         logdet = jnp.sum(log_scale, axis=-1)
         return y, logdet
 
     def inverse(self, y):
-        y_masked = y * self.mask
+        mask = _mask_as_float(self.mask, y)
+        active = 1.0 - mask
+        y_masked = y * mask
         log_scale, shift = self._scale_shift(y_masked)
-        x = y_masked + (1.0 - self.mask) * ((y - shift) * jnp.exp(-log_scale))
+        x = y_masked + active * ((y - shift) * jnp.exp(-log_scale))
         logdet = -jnp.sum(log_scale, axis=-1)
         return x, logdet
 
     def _scale_shift(self, masked):
+        mask = _mask_as_float(self.mask, masked)
+        active = 1.0 - mask
         scale = _apply_net(self.scale_net, masked)
         shift = _apply_net(self.shift_net, masked)
-        log_scale = self.scale_clamp * jnp.tanh(scale) * (1.0 - self.mask)
-        shift = shift * (1.0 - self.mask)
+        log_scale = self.scale_clamp * jnp.tanh(scale) * active
+        shift = shift * active
         return log_scale, shift
 
 
@@ -176,6 +184,10 @@ def _apply_net(net, value):
     return out.reshape(leading + (out.shape[-1],))
 
 
+def _mask_as_float(mask, reference):
+    return jnp.asarray(mask, dtype=jnp.asarray(reference).dtype)
+
+
 def _scale_last_linear(net, scale: float):
     """Scale the final MLP affine layer for near-identity flow initialization."""
     final = net.layers[-1]
@@ -191,5 +203,5 @@ def _scale_last_linear(net, scale: float):
 
 
 def _alternating_masks(latent_dim: int, n_layers: int) -> tuple[jnp.ndarray, ...]:
-    base = (jnp.arange(latent_dim) % 2).astype(jnp.float32)
-    return tuple(base if index % 2 == 0 else 1.0 - base for index in range(n_layers))
+    base = (jnp.arange(latent_dim) % 2).astype(jnp.bool_)
+    return tuple(base if index % 2 == 0 else jnp.logical_not(base) for index in range(n_layers))
