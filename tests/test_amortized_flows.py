@@ -86,6 +86,32 @@ def test_realnvp_integrity_diagnostics_reject_float_masks() -> None:
         assert_realnvp_integrity(broken, context="test", sample_count=16)
 
 
+def test_realnvp_roundtrip_integrity_has_warn_and_fail_thresholds() -> None:
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(0),
+        latent_dim=4,
+        n_layers=4,
+        hidden_size=8,
+    )
+
+    diagnostics = realnvp_integrity_diagnostics(
+        prior,
+        sample_count=16,
+        roundtrip_atol=-1.0,
+        roundtrip_fail_atol=1.0,
+    )
+
+    assert diagnostics["status"] == "WARN"
+    check = next(
+        item
+        for item in diagnostics["checks"]
+        if item["name"] == "forward_inverse_roundtrip_max_abs"
+    )
+    assert check["status"] == "WARN"
+    assert check["warn"] == -1.0
+    assert check["fail"] == 1.0
+
+
 def test_realnvp_input_gradients_are_finite() -> None:
     prior = RealNVPPrior(
         jax.random.PRNGKey(0),

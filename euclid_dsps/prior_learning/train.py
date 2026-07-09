@@ -141,7 +141,6 @@ def train_supervised_prior(
     progress: bool = True,
 ) -> None:
     """Train ``p_beta(theta_true)`` directly from prepared truth columns."""
-    del progress
     out = ensure_dir(out_dir)
     cfg = prior_learning_config(config)
     explicit_train_dataset = cfg.get("train_dataset")
@@ -236,6 +235,13 @@ def train_supervised_prior(
     start = time.time()
     ckpt_dir = ensure_dir(out / "checkpoints")
     snapshot_cfg = dict(cfg.get("snapshots", {}) or {})
+    progress_callback = _supervised_prior_progress_callback(
+        out,
+        verbose=verbose,
+        progress=bool(progress),
+        total_epochs=int(training_cfg.get("epochs", 20)),
+        start_time=start,
+    )
     epoch_callback = _supervised_prior_epoch_callback(
         out,
         config=config,
@@ -253,6 +259,7 @@ def train_supervised_prior(
         training_config=training_cfg,
         seed=int(training_cfg.get("seed", 42)),
         epoch_callback=epoch_callback,
+        progress_callback=progress_callback,
     )
     result.training_log.to_csv(out / "prior_training_log.csv", index=False)
     result.validation_log.to_csv(out / "prior_validation_loglike.csv", index=False)
@@ -405,6 +412,50 @@ def _should_write_supervised_prior_snapshot(
     return every_epochs > 0 and int(epoch) % every_epochs == 0
 
 
+def _supervised_prior_progress_callback(
+    out: Path,
+    *,
+    verbose: bool,
+    progress: bool,
+    total_epochs: int,
+    start_time: float,
+) -> Callable[[dict[str, Any]], None]:
+    path = out / "prior_training_progress.json"
+    rows: list[dict[str, Any]] = []
+
+    def callback(record: dict[str, Any]) -> None:
+        rows.append(dict(record))
+        payload = {
+            "total_epochs": int(total_epochs),
+            "completed_epochs": int(record["epoch"]),
+            "fraction_complete": float(int(record["epoch"]) / max(int(total_epochs), 1)),
+            "elapsed_time_s": float(time.time() - start_time),
+            "best_epoch": int(record["best_epoch"]),
+            "best_metric": float(record["best_metric"]),
+            "last": record,
+            "epochs": rows,
+        }
+        write_json(path, payload)
+        if verbose and progress:
+            _log(verbose, _prior_epoch_progress_line(record, int(total_epochs)))
+
+    return callback
+
+
+def _prior_epoch_progress_line(record: dict[str, Any], total_epochs: int) -> str:
+    val = record.get("validation_negative_mean_log_prob")
+    val_text = "nan" if val is None else f"{float(val):.6g}"
+    return (
+        "[prior] "
+        f"epoch={int(record['epoch'])}/{int(total_epochs)} "
+        f"train_nll={float(record['train_negative_mean_log_prob']):.6g} "
+        f"val_nll={val_text} "
+        f"best={float(record['best_metric']):.6g}@{int(record['best_epoch'])} "
+        f"grad={float(record['mean_grad_norm']):.3g} "
+        f"updates={float(record['update_fraction']):.3f}"
+    )
+
+
 def _write_supervised_prior_snapshot(
     out: Path,
     *,
@@ -481,6 +532,7 @@ def fit_realnvp_to_x(
     training_config: dict[str, Any],
     seed: int,
     epoch_callback: Callable[[int, RealNVPPrior], None] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> PriorTrainingResult:
     """Fit a RealNVP prior to an unconstrained truth matrix."""
     x_train = np.asarray(x_train, dtype=np.float32)
@@ -539,6 +591,8 @@ def fit_realnvp_to_x(
             rng=rng,
         )
         epoch_losses = []
+        epoch_grad_norms = []
+        epoch_updates = []
         for batch_index, start in enumerate(range(0, len(order), batch_size)):
             batch = jnp.asarray(x_train[order[start : start + batch_size]])
             if bool(data_parallel["enabled"]):
@@ -588,6 +642,8 @@ def fit_realnvp_to_x(
                     )
                     prior = eqx.apply_updates(prior, updates)
             epoch_losses.append(float(loss))
+            epoch_grad_norms.append(float(grad_norm))
+            epoch_updates.append(float(update_applied))
             rows.append(
                 {
                     "epoch": int(epoch),
@@ -632,6 +688,24 @@ def fit_realnvp_to_x(
             best_metric = float(metric)
             best_epoch = int(epoch)
             best_prior = prior
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "epoch": int(epoch),
+                    "train_negative_mean_log_prob": float(train_metric),
+                    "validation_negative_mean_log_prob": (
+                        None if x_validation is None else float(val_metric)
+                    ),
+                    "metric": float(metric),
+                    "best_metric": float(best_metric),
+                    "best_epoch": int(best_epoch),
+                    "mean_grad_norm": float(np.nanmean(epoch_grad_norms)),
+                    "update_fraction": float(np.nanmean(epoch_updates)),
+                    "padded_rows": int(padded_rows),
+                    "data_parallel_mode": str(data_parallel["effective"]),
+                    "data_parallel_devices": int(data_parallel["n_devices"]),
+                }
+            )
         if epoch_callback is not None:
             epoch_callback(epoch, prior)
     return PriorTrainingResult(

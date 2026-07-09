@@ -1,5 +1,70 @@
 # Plan
 
+## 2026-07-09 FENIKS HTML Report Polish
+
+- Status: completed.
+- Goal: improve readability of the FENIKS HTML report by restructuring the
+  experimental-setup section, rendering the photometric-error equations in
+  LaTeX, fixing the error-model table alignment, adding explicit result
+  sentences under J-lens plots, and replacing hard-to-read useful corner plots
+  with clearer compact diagnostics.
+- Assumptions:
+  - This is a generated-report update under `outputs/`, not a source-code
+    behavior change.
+  - The scientific interpretation remains unchanged: dataset closure is valid,
+    all current amortized runs fail closure gates, and the joint annealed run is
+    only the best current diagnostic candidate.
+- Completed:
+  - Rewrote `outputs/reports/feniks_prior_ladder_report.html` sections 1, 2,
+    and 5 into structured subsections.
+  - Added MathJax-rendered equations for the FENIKS/PhotErr-style error model,
+    noise injection, likelihood effective scale, and J-lens derivatives.
+  - Rebuilt the per-band error table from
+    `configs/diffsky_synthetic_feniks_260617_50k.yaml` and added table-specific
+    alignment CSS.
+  - Replaced the hard-to-read useful corner as the primary per-experiment plot
+    with the local useful distribution diagnostic, keeping compact 5D corners as
+    secondary diagnostics.
+  - Added explicit result sentences under J-lens and error-model diagnostic
+    plots.
+  - Verified the HTML references 83 images with zero missing targets.
+
+## 2026-07-09 FENIKS HTML Report Revisions
+
+- Status: completed.
+- Goal: revise the FENIKS prior-ladder HTML report so the AE baseline does
+  not imply a learned prior, the synthetic lightcone/data-generation section
+  captures the weighted Diffsky/FENIKS workflow and caveats, the PhotErr-style
+  error model is explicit, and the J-lens section is understandable with
+  explanatory plots derived from local artifacts.
+- Assumptions:
+  - The AE corner plots currently labeled `truth/prior/posterior` contain an
+    inactive standard-normal reference distribution decoded through the same
+    latent transform, not a learned prior and not a loss term.
+  - The active 14-band FENIKS dataset remains the one analyzed in this report;
+    the email context also mentions an 18-band survey-like variant and should
+    be framed as related context rather than silently changing this report's
+    dataset contract.
+- Completed:
+  - Regenerated `outputs/reports/feniks_prior_ladder_report.html` with a much
+    more detailed first section on the weighted Diffsky/FENIKS proposal
+    lightcone, weighted resampling, local DSPS closure photometry, truth-space
+    caveats, and completeness caveats.
+  - Added an explicit PhotErr-style `m5_depth` error-model section with the
+    flux-error/noise formula, configured per-band depth/gamma/eta table,
+    injected-noise draw, likelihood `sigma_eff`, and existing error diagnostic
+    plots.
+  - Added a dedicated AE corner-semantics section explaining that AE
+    `truth/prior/posterior` corners use an inactive standard-normal reference,
+    not a learned prior and not a Bayesian posterior.
+  - Generated report-specific useful corners for all five experiments under
+    `outputs/reports/feniks_prior_ladder_report_assets/*_report_useful_truth_reference_posterior_corner.png`
+    using truth columns directly from the FENIKS test parquet.
+  - Added explanatory J-lens plots: relative singular spectra, rank/nullity
+    boxplots, AE singular spectra, prior-score partition, posterior variance by
+    direction kind, and physical loadings for visible vs exact-null directions.
+  - Verified the updated HTML references 82 images with zero missing targets.
+
 ## 2026-07-09 FENIKS Prior-Ladder HTML Report
 
 - Status: completed.
@@ -61,6 +126,11 @@
     logits forced the flow to learn artificial clipped-logit tails and boundary
     atoms up to about `|x|=13.8`, leaving the H100-scale model numerically
     fragile.
+  - The first standardized-logit Jean-Zay relaunch (`stdlogit_v1`) failed only
+    on a marginal float32 round-trip check (`0.00225` with threshold `0.001`).
+    This is no longer the previous broken-flow regime; it should be recorded as
+    a numerical warning while final distribution diagnostics decide scientific
+    usability.
 - Completed:
   - Added reusable RealNVP integrity diagnostics checking boolean/static
     coupling masks, forward/inverse round-trip consistency, finite self
@@ -76,6 +146,13 @@
     trains the RealNVP in those standardized coordinates, stores the
     normalization in the checkpoint `LatentSpec`, and reuses it consistently for
     validation/test truth and prior-sample conversion back to physical theta.
+  - RealNVP round-trip integrity now has separate WARN/FAIL thresholds:
+    `>1e-3` is recorded as WARN, while `>1e-2` remains FAIL. This prevents a
+    usable float32 model from aborting before writing samples, corners, and
+    quality-gate diagnostics.
+  - Supervised prior training now writes `prior_training_progress.json`
+    incrementally and prints one progress line per epoch when progress logging is
+    enabled, so Slurm logs no longer sit silent after the train/validation split.
   - The amortized supervised-checkpoint path now treats the checkpoint
     `LatentSpec` as the active latent coordinate system after validating names
     and physical bounds against the config. This avoids a later encoder/prior

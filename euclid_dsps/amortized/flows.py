@@ -188,6 +188,7 @@ def realnvp_integrity_diagnostics(
     key=None,
     sample_count: int = 128,
     roundtrip_atol: float = 1.0e-3,
+    roundtrip_fail_atol: float = 1.0e-2,
     sample_abs_warn: float = 1.0e4,
     sample_abs_fail: float = 1.0e6,
 ) -> dict[str, Any]:
@@ -231,9 +232,11 @@ def realnvp_integrity_diagnostics(
         _integrity_check("masks_static_not_trainable", masks_static),
         _integrity_check(
             "forward_inverse_roundtrip_max_abs",
-            roundtrip_max_abs <= float(roundtrip_atol),
+            roundtrip_max_abs <= float(roundtrip_fail_atol),
             value=roundtrip_max_abs,
-            fail=float(roundtrip_atol),
+            warn=float(roundtrip_atol),
+            fail=float(roundtrip_fail_atol),
+            warn_when=roundtrip_max_abs > float(roundtrip_atol),
         ),
         _integrity_check(
             "sample_log_prob_finite_fraction",

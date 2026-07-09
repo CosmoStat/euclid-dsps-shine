@@ -9,7 +9,7 @@ amortized:
         mode: stochastic_elbo
     prior:
         source: supervised_checkpoint
-        checkpoint: outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v1/checkpoints/best.eqx
+        checkpoint: outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v2/checkpoints/best.eqx
         train_jointly: true
         freeze_epochs: 10
         update_schedule: alternating

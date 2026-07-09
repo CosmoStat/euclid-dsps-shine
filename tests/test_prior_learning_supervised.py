@@ -387,6 +387,7 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
 
     assert (out / "prior_training_log.csv").exists()
     assert (out / "prior_validation_loglike.csv").exists()
+    assert (out / "prior_training_progress.json").exists()
     assert (out / "learned_prior_samples.parquet").exists()
     assert (out / "truth_theta_samples.parquet").exists()
     assert (out / "supervised_prior_summary.json").exists()
@@ -398,6 +399,9 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     assert (out / "snapshots" / "epoch_0002" / "snapshot_summary.json").exists()
 
     sidecar_path = out / "checkpoints" / "best.eqx.json"
+    progress = json.loads((out / "prior_training_progress.json").read_text(encoding="utf-8"))
+    assert progress["completed_epochs"] == 2
+    assert progress["last"]["best_epoch"] >= 1
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert sidecar["architecture"]["parameter_dtype"] == "float32"
     assert sidecar["architecture"]["shift_clamp"] == 5.0

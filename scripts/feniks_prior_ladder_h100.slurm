@@ -55,7 +55,7 @@ POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-256}"
 PRIOR_SAMPLES="${PRIOR_SAMPLES:-8192}"
 KL_WEIGHT_MAX="${KL_WEIGHT_MAX:-}"
 KL_ANNEALING_EPOCHS="${KL_ANNEALING_EPOCHS:-}"
-PRIOR_CHECKPOINT="${PRIOR_CHECKPOINT:-outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v1/checkpoints/best.eqx}"
+PRIOR_CHECKPOINT="${PRIOR_CHECKPOINT:-outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v2/checkpoints/best.eqx}"
 JLENS_BATCH_SIZE="${JLENS_BATCH_SIZE:-8}"
 JLENS_NUM_SHARDS="${JLENS_NUM_SHARDS:-${SLURM_ARRAY_TASK_COUNT:-1}}"
 JLENS_SHARD_INDEX="${JLENS_SHARD_INDEX:-${SLURM_ARRAY_TASK_ID:-0}}"
@@ -81,7 +81,7 @@ case "$STAGE" in
     ;;
   supervised_prior_train|supervised_prior_report)
     CONFIG="${CONFIG:-configs/experiments/feniks_supervised_truth_realnvp_18d_h100.yaml}"
-    RUN_NAME="${RUN_NAME:-prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v1}"
+    RUN_NAME="${RUN_NAME:-prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v2}"
     ;;
   supervised_frozen_train|supervised_frozen_infer|supervised_frozen_jlens)
     CONFIG="${CONFIG:-configs/experiments/feniks_amortized_supervised_prior_frozen_kl_annealed_18d_h100.yaml}"
