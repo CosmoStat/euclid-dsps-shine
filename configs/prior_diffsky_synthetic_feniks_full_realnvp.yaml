@@ -31,6 +31,10 @@ prior_learning:
         hidden_size: 256
         scale_clamp: 0.05
         shift_clamp: 5.0
+    latent:
+        normalization: truth_standardized_logit
+        min_raw_scale: 0.1
+        max_raw_scale: 10.0
     training:
         epochs: 80
         batch_size: 1024

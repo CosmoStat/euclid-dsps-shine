@@ -133,17 +133,24 @@ class _StaticArg:
         return f"_StaticArg({type(self.value).__name__})"
 
 
-def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
+def build_amortized_model(
+    config: dict[str, Any],
+    key,
+    *,
+    latent_spec: LatentSpec | None = None,
+) -> AmortizedModel:
     """Instantiate encoder and RealNVP prior from config."""
     cfg = amortized_config(config)
     k_encoder, k_prior = jax.random.split(key)
     encoder_cfg = cfg["encoder"]
     input_dim = int(encoder_cfg.get("input_dim", 20))
     latent_dim = int(encoder_cfg.get("latent_dim", 16))
-    try:
-        expected_latent_dim = len(latent_spec_from_config(config).names)
-    except (KeyError, ValueError):
-        expected_latent_dim = latent_dim
+    if latent_spec is None:
+        try:
+            latent_spec = _latent_spec_for_amortized_config(config)
+        except (KeyError, ValueError):
+            latent_spec = None
+    expected_latent_dim = latent_dim if latent_spec is None else len(latent_spec.names)
     if latent_dim != expected_latent_dim:
         raise ValueError(
             "amortized.encoder.latent_dim must match configured free parameters: "
@@ -161,8 +168,13 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
         log_std_max=float(encoder_cfg.get("log_std_max", 2.0)),
         initial_log_std=float(encoder_cfg.get("initial_log_std", -1.0)),
     )
-    encoder = _initialize_encoder_mean_if_possible(config, encoder)
-    prior = build_prior_from_config(config, k_prior, latent_dim=latent_dim)
+    encoder = _initialize_encoder_mean_if_possible(config, encoder, latent_spec=latent_spec)
+    prior = build_prior_from_config(
+        config,
+        k_prior,
+        latent_dim=latent_dim,
+        active_spec=latent_spec,
+    )
     sed_scale = make_global_sed_scale_state(config)
     band_names = tuple(str(band["name"]) for band in config.get("bands", []))
     band_calibration = make_per_band_flux_calibration_state(config, band_names)
@@ -174,7 +186,13 @@ def build_amortized_model(config: dict[str, Any], key) -> AmortizedModel:
     )
 
 
-def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
+def build_prior_from_config(
+    config: dict[str, Any],
+    key,
+    *,
+    latent_dim: int,
+    active_spec: LatentSpec | None = None,
+):
     """Build or load the configured amortized prior source."""
     cfg = amortized_config(config)
     prior_cfg = cfg["prior"]
@@ -202,7 +220,7 @@ def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
         from euclid_dsps.prior_learning.train import load_prior_checkpoint
 
         prior, _sidecar, prior_spec, _schema = load_prior_checkpoint(checkpoint)
-        active_spec = latent_spec_from_config(config)
+        active_spec = active_spec or latent_spec_from_config(config)
         _validate_loaded_prior_spec(active_spec, prior_spec)
         return prior
     raise ValueError(
@@ -211,7 +229,29 @@ def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
     )
 
 
-def _validate_loaded_prior_spec(active: LatentSpec, loaded: LatentSpec) -> None:
+def _latent_spec_for_amortized_config(config: dict[str, Any]) -> LatentSpec:
+    active_spec = latent_spec_from_config(config)
+    cfg = amortized_config(config)
+    prior_cfg = cfg["prior"]
+    source = str(prior_cfg.get("source", "joint_realnvp"))
+    if source != "supervised_checkpoint":
+        return active_spec
+    checkpoint = prior_cfg.get("checkpoint")
+    if not checkpoint:
+        return active_spec
+    from euclid_dsps.prior_learning.train import load_prior_checkpoint
+
+    _prior, _sidecar, prior_spec, _schema = load_prior_checkpoint(checkpoint)
+    _validate_loaded_prior_spec(active_spec, prior_spec, require_normalization=False)
+    return prior_spec
+
+
+def _validate_loaded_prior_spec(
+    active: LatentSpec,
+    loaded: LatentSpec,
+    *,
+    require_normalization: bool = True,
+) -> None:
     if active.names != loaded.names:
         raise ValueError(
             "Supervised prior latent names do not match amortized config: "
@@ -231,6 +271,8 @@ def _validate_loaded_prior_spec(active: LatentSpec, loaded: LatentSpec) -> None:
         atol=1.0e-6,
     ):
         raise ValueError("Supervised prior upper bounds do not match amortized config")
+    if not require_normalization:
+        return
     if active.normalization != loaded.normalization:
         raise ValueError(
             "Supervised prior latent normalization does not match amortized config: "
@@ -259,10 +301,12 @@ def _validate_loaded_prior_spec(active: LatentSpec, loaded: LatentSpec) -> None:
 def _initialize_encoder_mean_if_possible(
     config: dict[str, Any],
     encoder: GaussianEncoder,
+    *,
+    latent_spec: LatentSpec | None = None,
 ) -> GaussianEncoder:
     """Start the encoder from the configured physical initialization."""
     try:
-        spec = latent_spec_from_config(config)
+        spec = latent_spec or latent_spec_from_config(config)
     except (KeyError, ValueError):
         return encoder
     theta0 = jnp.asarray(
@@ -537,7 +581,7 @@ def train_amortized_fs2(
         f"{len(filters)} filters, n_sfh_bins={context.n_sfh_bins}, "
         f"model={context.model_config}",
     )
-    latent_spec = latent_spec_from_config(config)
+    latent_spec = _latent_spec_for_amortized_config(config)
     jit_latent_spec = JitLatentSpec(
         names=latent_spec.names,
         lower=latent_spec.lower,
@@ -578,7 +622,7 @@ def train_amortized_fs2(
         )
     key = jax.random.PRNGKey(int(seed))
     key, model_key = jax.random.split(key)
-    model = build_amortized_model(config, model_key)
+    model = build_amortized_model(config, model_key, latent_spec=latent_spec)
     train_prior = _train_prior_jointly(cfg["prior"])
     prior_update_schedule = _prior_update_schedule(cfg["prior"])
     calibration_runtime_config = {"calibration": config.get("calibration", {}) or {}}

@@ -1,9 +1,47 @@
 # Plan
 
+## 2026-07-09 FENIKS Prior-Ladder HTML Report
+
+- Status: completed.
+- Goal: build an English HTML report from the locally copied FENIKS training,
+  inference, and J-lens artifacts, including dataset-generation context,
+  caveats, per-experiment loss/residual/corner/J-lens plots, and cross-model
+  interpretation.
+- Assumptions:
+  - The report is a generated artifact and belongs under `outputs/`.
+  - Local `*_infer_lowmem` outputs are the currently usable inference products;
+    original `*_infer` jobs may be incomplete because prior-predictive decoding
+    previously ran out of GPU memory.
+  - Existing RealNVP prior-ladder artifacts must be interpreted with the known
+    pre-hardening caveat unless a post-mask/shift-clamp retrain is explicitly
+    identified in the run metadata.
+- Completed:
+  - Wrote `outputs/reports/feniks_prior_ladder_report.html`, an English HTML
+    report with FENIKS dataset-generation context, model-ladder explanation,
+    caveats, per-experiment loss/residual/corner/J-lens plots, and
+    cross-experiment interpretation.
+  - Wrote comparison plots under
+    `outputs/reports/feniks_prior_ladder_report_assets/` for validation
+    negative log-likelihood, photo-z metrics, normalized residuals,
+    posterior-vs-truth RMSE, prior-vs-truth overlap, and J-lens rank/noise
+    summaries.
+  - Wrote analysis tables:
+    `feniks_report_experiment_summary.csv`,
+    `feniks_report_posterior_vs_truth_metrics_long.csv`,
+    `feniks_report_residual_tails_by_band_long.csv`,
+    `feniks_report_jlens_summary.csv`, and
+    `feniks_report_image_inventory.csv`.
+  - Verified the HTML references 75 images with zero missing local targets.
+  - Main conclusion recorded in the report: the FENIKS synthetic closure
+    dataset is validated, but all five current amortized inference runs fail
+    the posterior/prior closure gate; the joint annealed RealNVP run is the
+    best current diagnostic candidate, while supervised-prior-dependent runs
+    remain caveated by the known RealNVP prior issue.
+
 ## 2026-07-09 RealNVP Prior Fit Hardening
 
-- Status: completed for code hardening, shift stabilization, and local
-  validation.
+- Status: completed for code hardening, shift stabilization, standardized-logit
+  prior training, and local validation.
 - Goal: make the RealNVP prior path fail explicitly when the flow topology or
   generated prior samples are invalid, and report whether the learned prior is
   scientifically usable rather than relying on truth NLL alone.
@@ -18,6 +56,11 @@
     writing an intermediate checkpoint: boolean masks were fixed, but the
     RealNVP affine shifts were still unbounded and made `forward/inverse`
     numerically inconsistent on generated samples.
+  - The `shiftclamp_v1` Jean-Zay relaunch still failed strict final integrity:
+    shifts were bounded, but fitting the 18D RealNVP directly on raw bounded
+    logits forced the flow to learn artificial clipped-logit tails and boundary
+    atoms up to about `|x|=13.8`, leaving the H100-scale model numerically
+    fragile.
 - Completed:
   - Added reusable RealNVP integrity diagnostics checking boolean/static
     coupling masks, forward/inverse round-trip consistency, finite self
@@ -28,6 +71,15 @@
     runaway samples while preserving enough range for the 18D truth latents.
   - Intermediate epoch checkpoints now record integrity diagnostics without
     aborting the whole run; final/best checkpoints remain strict.
+  - Added `prior_learning.latent.normalization: truth_standardized_logit`.
+    Supervised prior training now computes train-set raw-logit mean/std,
+    trains the RealNVP in those standardized coordinates, stores the
+    normalization in the checkpoint `LatentSpec`, and reuses it consistently for
+    validation/test truth and prior-sample conversion back to physical theta.
+  - The amortized supervised-checkpoint path now treats the checkpoint
+    `LatentSpec` as the active latent coordinate system after validating names
+    and physical bounds against the config. This avoids a later encoder/prior
+    mismatch when the supervised prior uses standardized logits.
   - Checkpoint save/load for supervised and amortized RealNVP paths now refuses
     invalid flows instead of allowing downstream inference/J-lens to proceed.
   - Supervised-prior diagnostics now write `prior_quality_gate` and
@@ -38,6 +90,9 @@
   - Validation: local FENIKS 18D prior smokes with `shift_clamp=5.0` kept
     round-trip error near `1e-6` and generated latent samples at order-unity to
     low-teen scale instead of `1e5+`.
+  - Validation: standardized-logit FENIKS 18D smokes pass strict RealNVP
+    integrity. The full 12-layer/256-hidden architecture smoke has round-trip
+    max error `1.43e-6` and generated standardized latent max `4.36`.
   - Validation commands: `python -m compileall euclid_dsps scripts`,
     `python -m pytest -q tests/test_amortized_flows.py
     tests/test_prior_learning_supervised.py`,

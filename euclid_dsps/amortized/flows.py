@@ -280,7 +280,7 @@ def assert_realnvp_integrity(
     )
     if diagnostics["status"] == "FAIL":
         failed = [
-            check["name"]
+            _format_failed_integrity_check(check)
             for check in diagnostics["checks"]
             if check["status"] == "FAIL"
         ]
@@ -290,6 +290,17 @@ def assert_realnvp_integrity(
             "Do not use this checkpoint as a scientific prior."
         )
     return diagnostics
+
+
+def _format_failed_integrity_check(check: dict[str, Any]) -> str:
+    name = str(check.get("name", "unknown"))
+    if "value" not in check:
+        return name
+    value = check.get("value")
+    fail = check.get("fail")
+    if fail is None:
+        return f"{name}={value}"
+    return f"{name}={value} fail_threshold={fail}"
 
 
 def _apply_net(net, value):

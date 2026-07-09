@@ -8,7 +8,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from euclid_dsps.prior_learning.data import load_truth_dataset
+from euclid_dsps.prior_learning.data import (
+    load_truth_dataset,
+    load_truth_dataset_with_schema,
+    truth_dataset_with_latent_spec,
+    truth_standardized_latent_spec,
+)
 from euclid_dsps.prior_learning.diagnostics import (
     prior_quality_gate,
     write_supervised_prior_diagnostics,
@@ -114,6 +119,54 @@ def test_load_truth_dataset_accepts_row_indices_file(tmp_path: Path) -> None:
 
     assert truth.object_id.tolist() == [10, 12]
     assert truth.source_rows.tolist() == [0, 2]
+
+
+def test_truth_standardized_latent_spec_reuses_train_coordinates(
+    tmp_path: Path,
+) -> None:
+    train_path = tmp_path / "train.parquet"
+    validation_path = tmp_path / "validation.parquet"
+    train = pd.DataFrame(
+        {
+            "object_id": np.arange(6),
+            "redshift_true": [0.001, 0.1, 0.2, 0.4, 0.8, 0.999],
+            "logsm_true": [8.0, 8.2, 8.8, 9.4, 10.5, 11.0],
+            "logsfr_true": [-2.0, -1.8, -1.0, -0.3, 0.2, 1.0],
+        }
+    )
+    validation = pd.DataFrame(
+        {
+            "object_id": [20, 21],
+            "redshift_true": [0.15, 0.7],
+            "logsm_true": [8.6, 10.2],
+            "logsfr_true": [-1.5, 0.4],
+        }
+    )
+    train.to_parquet(train_path)
+    validation.to_parquet(validation_path)
+    truth = load_truth_dataset(
+        train_path,
+        schema_name="diffsky_truth_basic",
+        bounds={
+            "z_obs": [0.0, 1.0],
+            "log10_stellar_mass": [8.0, 11.0],
+            "log10_sfr_at_obs": [-2.0, 1.0],
+        },
+    )
+
+    latent_spec, payload = truth_standardized_latent_spec(truth, min_raw_scale=0.1)
+    normalized = truth_dataset_with_latent_spec(truth, latent_spec)
+    validation_truth = load_truth_dataset_with_schema(
+        validation_path,
+        schema=truth.schema,
+        latent_spec=latent_spec,
+    )
+
+    assert latent_spec.normalization == "truth_standardized_logit"
+    assert payload["n_raw_scale_clipped_low"] >= 0
+    assert np.all(np.isfinite(normalized.x))
+    assert np.all(np.isfinite(validation_truth.x))
+    assert np.allclose(np.mean(normalized.x, axis=0), 0.0, atol=1.0e-5)
 
 
 def test_supervised_prior_diagnostics_skip_constant_corner_columns(tmp_path: Path) -> None:

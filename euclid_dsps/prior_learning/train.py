@@ -23,6 +23,8 @@ from .data import (
     load_truth_dataset,
     load_truth_dataset_with_schema,
     prior_samples_frame,
+    truth_dataset_with_latent_spec,
+    truth_standardized_latent_spec,
 )
 from .diagnostics import write_supervised_prior_diagnostics
 from .flows import RealNVPPrior, assert_realnvp_integrity, realnvp_integrity_diagnostics
@@ -55,6 +57,7 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw.setdefault("missing_policy", "reduce")
     raw.setdefault("bounds", {})
     raw.setdefault("flow", {})
+    raw.setdefault("latent", {})
     raw.setdefault("training", {})
     raw.setdefault("snapshots", {})
     raw.setdefault("output", {})
@@ -64,6 +67,9 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["flow"].setdefault("shift_clamp", 5.0)
     raw["flow"].setdefault("init", "default")
     raw["flow"].setdefault("init_scale", 1.0)
+    raw["latent"].setdefault("normalization", "identity")
+    raw["latent"].setdefault("min_raw_scale", 0.1)
+    raw["latent"].setdefault("max_raw_scale", 10.0)
     raw["training"].setdefault("epochs", 20)
     raw["training"].setdefault("batch_size", 256)
     raw["training"].setdefault("learning_rate", 1.0e-3)
@@ -84,6 +90,38 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["output"].setdefault("prior_samples", 8192)
     raw["output"].setdefault("truth_sample_limit", 200_000)
     return raw
+
+
+def _normalize_supervised_prior_truth(
+    truth: TruthDataset,
+    latent_config: dict[str, Any] | None,
+) -> tuple[TruthDataset, dict[str, Any]]:
+    cfg = dict(latent_config or {})
+    mode = str(cfg.get("normalization", "identity")).strip().lower()
+    if mode in {"identity", "none", "raw_logit", "raw_logit_identity"}:
+        return truth, latent_spec_to_jsonable(truth.latent_spec)
+    if mode not in {
+        "truth_standardized",
+        "truth_standardized_logit",
+        "standardized_truth_logit",
+    }:
+        raise ValueError(
+            "prior_learning.latent.normalization must be 'identity' or "
+            "'truth_standardized_logit'"
+        )
+    latent_spec, payload = truth_standardized_latent_spec(
+        truth,
+        min_raw_scale=float(cfg.get("min_raw_scale", 0.1)),
+        max_raw_scale=float(cfg.get("max_raw_scale", 10.0)),
+    )
+    normalized = truth_dataset_with_latent_spec(truth, latent_spec)
+    payload.update(
+        {
+            "network_x_abs_q99": float(np.quantile(np.abs(normalized.x).reshape(-1), 0.99)),
+            "network_x_abs_max": float(np.max(np.abs(normalized.x))),
+        }
+    )
+    return normalized, payload
 
 
 def train_supervised_prior(
@@ -133,11 +171,16 @@ def train_supervised_prior(
         limit=limit,
         row_indices_file=row_indices_file,
     )
+    truth, latent_normalization = _normalize_supervised_prior_truth(
+        truth,
+        cfg.get("latent", {}),
+    )
     validation_truth = (
         load_truth_dataset_with_schema(
             cfg["validation_dataset"],
             schema=truth.schema,
             limit=limit,
+            latent_spec=truth.latent_spec,
         )
         if cfg.get("validation_dataset")
         else None
@@ -147,6 +190,7 @@ def train_supervised_prior(
             cfg["test_dataset"],
             schema=truth.schema,
             limit=limit,
+            latent_spec=truth.latent_spec,
         )
         if cfg.get("test_dataset")
         else None
@@ -259,6 +303,7 @@ def train_supervised_prior(
         "test_dataset": str(cfg.get("test_dataset") or ""),
         "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "schema": truth.schema.to_dict(),
+        "latent_normalization": latent_normalization,
         "parameter_names": list(truth.parameter_names),
         "n_truth_rows": int(truth.theta.shape[0]),
         "dropped_nonfinite_rows": int(truth.dropped_rows),
