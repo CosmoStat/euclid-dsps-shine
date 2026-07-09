@@ -13,7 +13,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 if HAS_EQUINOX:
-    from euclid_dsps.amortized.flows import RealNVPPrior, StandardNormalPrior
+    from euclid_dsps.amortized.flows import (
+        RealNVPPrior,
+        StandardNormalPrior,
+        assert_realnvp_integrity,
+        realnvp_integrity_diagnostics,
+    )
 
 
 def test_realnvp_roundtrip_logprob_and_sample_shape() -> None:
@@ -51,6 +56,34 @@ def test_realnvp_coupling_masks_are_not_trainable() -> None:
         assert layer.mask.dtype == jnp.bool_
         assert not eqx.is_inexact_array(layer.mask)
         assert jnp.all((layer.mask == 0) | (layer.mask == 1))
+
+
+def test_realnvp_integrity_diagnostics_reject_float_masks() -> None:
+    import equinox as eqx
+
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(0),
+        latent_dim=4,
+        n_layers=4,
+        hidden_size=8,
+    )
+
+    diagnostics = realnvp_integrity_diagnostics(prior, sample_count=16)
+    assert diagnostics["status"] == "PASS"
+
+    broken = eqx.tree_at(
+        lambda item: item.layers[0].mask,
+        prior,
+        prior.layers[0].mask.astype(jnp.float32),
+    )
+    diagnostics = realnvp_integrity_diagnostics(broken, sample_count=16)
+    assert diagnostics["status"] == "FAIL"
+    assert any(
+        check["name"] == "masks_bool" and check["status"] == "FAIL"
+        for check in diagnostics["checks"]
+    )
+    with pytest.raises(RuntimeError, match="RealNVP integrity check failed"):
+        assert_realnvp_integrity(broken, context="test", sample_count=16)
 
 
 def test_realnvp_input_gradients_are_finite() -> None:

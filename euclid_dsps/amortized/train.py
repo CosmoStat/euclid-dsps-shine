@@ -57,7 +57,7 @@ from .features import (
     make_encoder_features,
     write_feature_stats,
 )
-from .flows import RealNVPPrior, StandardNormalPrior
+from .flows import RealNVPPrior, StandardNormalPrior, assert_realnvp_integrity
 from .latent import (
     LatentSpec,
     initial_theta_from_config,
@@ -188,6 +188,7 @@ def build_prior_from_config(config: dict[str, Any], key, *, latent_dim: int):
             n_layers=int(prior_cfg.get("n_layers", 8)),
             hidden_size=int(prior_cfg.get("hidden_size", 128)),
             scale_clamp=float(prior_cfg.get("scale_clamp", 0.05)),
+            shift_clamp=float(prior_cfg.get("shift_clamp", 5.0)),
             init=str(prior_cfg.get("init", "default")),
             init_scale=float(prior_cfg.get("init_scale", 1.0)),
         )
@@ -1290,9 +1291,16 @@ def load_checkpoint(
     key = jax.random.PRNGKey(int(amortized_config(config)["training"].get("seed", 42)))
     template = build_amortized_model(config, key)
     try:
-        return eqx.tree_deserialise_leaves(path, template)
+        model = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
         _raise_realnvp_mask_checkpoint_error(path, exc)
+    if isinstance(model.prior, RealNVPPrior):
+        assert_realnvp_integrity(
+            model.prior,
+            context=f"amortized checkpoint load {path}",
+            sample_count=64,
+        )
+    return model
 
 
 def _raise_realnvp_mask_checkpoint_error(path: Path, exc: RuntimeError):
@@ -2771,6 +2779,7 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "n_layers": int(cfg["prior"].get("n_layers", 8)),
             "hidden_size": int(cfg["prior"].get("hidden_size", 128)),
             "scale_clamp": float(cfg["prior"].get("scale_clamp", 0.05)),
+            "shift_clamp": float(cfg["prior"].get("shift_clamp", 5.0)),
             "init": str(cfg["prior"].get("init", "default")),
             "init_scale": float(cfg["prior"].get("init_scale", 1.0)),
             "density": "exact_change_of_variables",

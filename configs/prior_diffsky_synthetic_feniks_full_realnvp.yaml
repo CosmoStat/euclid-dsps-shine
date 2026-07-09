@@ -30,6 +30,7 @@ prior_learning:
         n_layers: 12
         hidden_size: 256
         scale_clamp: 0.05
+        shift_clamp: 5.0
     training:
         epochs: 80
         batch_size: 1024

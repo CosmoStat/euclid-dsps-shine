@@ -63,6 +63,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["prior"].setdefault("n_layers", 8)
     raw["prior"].setdefault("hidden_size", 128)
     raw["prior"].setdefault("scale_clamp", 0.05)
+    raw["prior"].setdefault("shift_clamp", 5.0)
     raw["prior"].setdefault("init", "default")
     raw["prior"].setdefault("init_scale", 1.0)
     raw["prior"].setdefault("train_jointly", True)

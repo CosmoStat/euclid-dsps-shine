@@ -1,5 +1,49 @@
 # Plan
 
+## 2026-07-09 RealNVP Prior Fit Hardening
+
+- Status: completed for code hardening, shift stabilization, and local
+  validation.
+- Goal: make the RealNVP prior path fail explicitly when the flow topology or
+  generated prior samples are invalid, and report whether the learned prior is
+  scientifically usable rather than relying on truth NLL alone.
+- Current findings:
+  - Locally copied `*_maskfix` prior artifacts still deserialize as old
+    float-mask RealNVP checkpoints, so they were not produced with the local
+    boolean-mask code despite the run name.
+  - Training/inference scalar losses can look finite while prior samples are
+    stuck on physical bounds. The next run must write integrity and quality
+    gates that make this condition visible in JSON/Markdown summaries.
+  - The first strict-integrity Jean-Zay relaunch failed at epoch 45 while
+    writing an intermediate checkpoint: boolean masks were fixed, but the
+    RealNVP affine shifts were still unbounded and made `forward/inverse`
+    numerically inconsistent on generated samples.
+- Completed:
+  - Added reusable RealNVP integrity diagnostics checking boolean/static
+    coupling masks, forward/inverse round-trip consistency, finite self
+    log-probability, and pathological generated-sample scale.
+  - Added `shift_clamp` to RealNVP coupling layers, prior-learning defaults,
+    amortized-prior defaults, checkpoint sidecars, and the FENIKS supervised
+    prior config. Shifts are now `shift_clamp * tanh(raw_shift)`, preventing
+    runaway samples while preserving enough range for the 18D truth latents.
+  - Intermediate epoch checkpoints now record integrity diagnostics without
+    aborting the whole run; final/best checkpoints remain strict.
+  - Checkpoint save/load for supervised and amortized RealNVP paths now refuses
+    invalid flows instead of allowing downstream inference/J-lens to proceed.
+  - Supervised-prior diagnostics now write `prior_quality_gate` and
+    `prior_quality_gate_status` into `supervised_prior_summary.json`, plus a
+    dedicated Markdown section explaining failed distribution checks.
+  - Added regression tests for float-mask rejection, checkpoint sidecar
+    integrity metadata, and quality-gate FAIL/PASS behavior.
+  - Validation: local FENIKS 18D prior smokes with `shift_clamp=5.0` kept
+    round-trip error near `1e-6` and generated latent samples at order-unity to
+    low-teen scale instead of `1e5+`.
+  - Validation commands: `python -m compileall euclid_dsps scripts`,
+    `python -m pytest -q tests/test_amortized_flows.py
+    tests/test_prior_learning_supervised.py`,
+    `python -m pytest -q tests/test_amortized_data_parallel.py
+    tests/test_cli.py`, and targeted `uvx ruff check` all pass.
+
 ## 2026-07-08 Supervised RealNVP Prior Failure Investigation
 
 - Status: completed for root-cause isolation and code fix.

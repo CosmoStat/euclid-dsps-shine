@@ -25,7 +25,7 @@ from .data import (
     prior_samples_frame,
 )
 from .diagnostics import write_supervised_prior_diagnostics
-from .flows import RealNVPPrior
+from .flows import RealNVPPrior, assert_realnvp_integrity, realnvp_integrity_diagnostics
 from .schema import ParameterSpec, TruthSchema
 from .splits import train_validation_split as _train_validation_split
 
@@ -61,6 +61,7 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["flow"].setdefault("n_layers", 8)
     raw["flow"].setdefault("hidden_size", 128)
     raw["flow"].setdefault("scale_clamp", 0.05)
+    raw["flow"].setdefault("shift_clamp", 5.0)
     raw["flow"].setdefault("init", "default")
     raw["flow"].setdefault("init_scale", 1.0)
     raw["training"].setdefault("epochs", 20)
@@ -211,6 +212,11 @@ def train_supervised_prior(
     )
     result.training_log.to_csv(out / "prior_training_log.csv", index=False)
     result.validation_log.to_csv(out / "prior_validation_loglike.csv", index=False)
+    integrity = assert_realnvp_integrity(
+        result.prior,
+        context=f"supervised prior training output {out}",
+        key=jax.random.PRNGKey(int(training_cfg.get("seed", 42)) + 97),
+    )
     save_prior_checkpoint(
         ckpt_dir / "best.eqx",
         result.prior,
@@ -283,6 +289,7 @@ def train_supervised_prior(
         "equivalent_kl_note": (
             "minimizes KL(p_truth || p_beta) up to the entropy of p_truth"
         ),
+        "realnvp_integrity": integrity,
         "snapshots": {
             "enabled": bool(snapshot_cfg.get("enabled", False)),
             "every_epochs": int(snapshot_cfg.get("every_epochs", 5)),
@@ -335,6 +342,7 @@ def _supervised_prior_epoch_callback(
                 flow_config=flow_config,
                 epoch=int(epoch),
                 metric=float(_prior_nll_jit(prior, jnp.asarray(truth.x))),
+                strict_integrity=False,
             )
 
     return callback
@@ -445,6 +453,7 @@ def fit_realnvp_to_x(
         n_layers=int(flow_config.get("n_layers", 8)),
         hidden_size=int(flow_config.get("hidden_size", 128)),
         scale_clamp=float(flow_config.get("scale_clamp", 0.05)),
+        shift_clamp=float(flow_config.get("shift_clamp", 5.0)),
         init=str(flow_config.get("init", "default")),
         init_scale=float(flow_config.get("init_scale", 1.0)),
     )
@@ -601,21 +610,29 @@ def save_prior_checkpoint(
     flow_config: dict[str, Any],
     epoch: int,
     metric: float,
+    strict_integrity: bool = True,
 ) -> None:
     """Serialize a supervised RealNVP prior and its truth schema."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     prior = _cast_inexact_arrays(prior, jnp.float32)
+    integrity = _checkpoint_integrity_payload(
+        prior,
+        path=path,
+        strict=bool(strict_integrity),
+    )
     eqx.tree_serialise_leaves(path, prior)
     sidecar = {
         "epoch": int(epoch),
         "metric": float(metric),
+        "realnvp_integrity": integrity,
         "architecture": {
             "type": "realnvp",
             "latent_dim": int(prior.latent_dim),
             "n_layers": int(flow_config.get("n_layers", 8)),
             "hidden_size": int(flow_config.get("hidden_size", 128)),
             "scale_clamp": float(flow_config.get("scale_clamp", 0.05)),
+            "shift_clamp": float(flow_config.get("shift_clamp", 5.0)),
             "init": str(flow_config.get("init", "default")),
             "init_scale": float(flow_config.get("init_scale", 1.0)),
             "parameter_dtype": "float32",
@@ -626,6 +643,32 @@ def save_prior_checkpoint(
         "prior_learning": prior_learning_config(config),
     }
     write_json(path.with_suffix(path.suffix + ".json"), sidecar)
+
+
+def _checkpoint_integrity_payload(
+    prior: RealNVPPrior,
+    *,
+    path: Path,
+    strict: bool,
+) -> dict[str, Any]:
+    context = f"prior checkpoint save {path}"
+    if strict:
+        return assert_realnvp_integrity(
+            prior,
+            context=context,
+            sample_count=64,
+        )
+    diagnostics = realnvp_integrity_diagnostics(prior, sample_count=64)
+    if diagnostics["status"] == "FAIL":
+        diagnostics = {
+            **diagnostics,
+            "strict": False,
+            "warning": (
+                "Intermediate checkpoint failed RealNVP integrity diagnostics. "
+                "It is kept for debugging and will be rejected by strict loaders."
+            ),
+        }
+    return diagnostics
 
 
 def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any], LatentSpec, TruthSchema]:
@@ -640,6 +683,7 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         n_layers=int(arch["n_layers"]),
         hidden_size=int(arch["hidden_size"]),
         scale_clamp=float(arch["scale_clamp"]),
+        shift_clamp=float(arch.get("shift_clamp", 5.0)),
         init=str(arch.get("init", "default")),
         init_scale=float(arch.get("init_scale", 1.0)),
     )
@@ -651,6 +695,11 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         prior = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
         _raise_realnvp_mask_checkpoint_error(path, exc)
+    assert_realnvp_integrity(
+        prior,
+        context=f"prior checkpoint load {path}",
+        sample_count=64,
+    )
     latent = sidecar["latent_spec"]
     latent_spec = LatentSpec(
         names=tuple(latent["names"]),

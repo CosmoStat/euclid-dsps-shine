@@ -9,7 +9,10 @@ import pandas as pd
 import pytest
 
 from euclid_dsps.prior_learning.data import load_truth_dataset
-from euclid_dsps.prior_learning.diagnostics import write_supervised_prior_diagnostics
+from euclid_dsps.prior_learning.diagnostics import (
+    prior_quality_gate,
+    write_supervised_prior_diagnostics,
+)
 from euclid_dsps.prior_learning.schema import build_truth_schema
 
 HAS_EQUINOX = importlib.util.find_spec("equinox") is not None
@@ -181,6 +184,57 @@ def test_supervised_prior_diagnostics_handles_one_sided_constant_corner_column(
     assert "log10_stellar_mass" in legacy["plotted_columns"]
 
 
+def test_supervised_prior_diagnostics_quality_gate_flags_bad_prior(
+    tmp_path: Path,
+) -> None:
+    truth = pd.DataFrame(
+        {
+            "z_obs": np.linspace(0.1, 1.0, 128),
+            "log10_stellar_mass": np.linspace(8.5, 10.5, 128),
+        }
+    )
+    prior = pd.DataFrame(
+        {
+            "z_obs": np.full(128, 5.5),
+            "log10_stellar_mass": np.full(128, 6.0),
+        }
+    )
+
+    outputs = write_supervised_prior_diagnostics(
+        truth=truth,
+        prior=prior,
+        parameter_names=("z_obs", "log10_stellar_mass"),
+        out_dir=tmp_path,
+        summary={"schema": "toy"},
+        max_corner_rows=32,
+    )
+
+    summary = json.loads(Path(outputs["summary"]).read_text(encoding="utf-8"))
+    assert summary["prior_quality_gate_status"] == "FAIL"
+    assert summary["prior_quality_gate"]["worst_ks_parameters"]
+    report = Path(outputs["report"]).read_text(encoding="utf-8")
+    assert "Prior Quality Gate" in report
+
+
+def test_prior_quality_gate_passes_close_population() -> None:
+    truth = pd.DataFrame(
+        {
+            "parameter": ["z_obs", "log10_stellar_mass"],
+            "ks_distance": [0.02, 0.03],
+            "wasserstein_distance": [0.01, 0.02],
+            "median_residual": [0.01, -0.02],
+        }
+    )
+
+    gate = prior_quality_gate(
+        metrics=truth,
+        correlation_payload={"frobenius_error": 0.1},
+        multivariate={"sliced_wasserstein_distance": 0.02, "energy_distance": 0.03},
+    )
+
+    assert gate["status"] == "PASS"
+
+
 @pytest.mark.skipif(
     not HAS_EQUINOX,
     reason="Equinox optional dependency is not installed",
@@ -293,6 +347,8 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     sidecar_path = out / "checkpoints" / "best.eqx.json"
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert sidecar["architecture"]["parameter_dtype"] == "float32"
+    assert sidecar["architecture"]["shift_clamp"] == 5.0
+    assert sidecar["realnvp_integrity"]["status"] == "PASS"
     _prior, _sidecar, latent_spec, _schema = load_prior_checkpoint(
         out / "checkpoints" / "best.eqx"
     )

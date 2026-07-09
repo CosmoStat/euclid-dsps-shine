@@ -101,6 +101,11 @@ def write_supervised_prior_diagnostics(
     conditional_path = out / "prior_vs_truth_conditional_metrics.csv"
     conditional.to_csv(conditional_path, index=False)
     multivariate = multivariate_distance_metrics(truth, prior, parameter_names)
+    quality_gate = prior_quality_gate(
+        metrics=metrics,
+        correlation_payload=corr_payload,
+        multivariate=multivariate,
+    )
     payload = {
         **summary,
         "n_parameters": int(len(parameter_names)),
@@ -110,6 +115,8 @@ def write_supervised_prior_diagnostics(
         "correlation_max_abs_error": corr_payload["max_abs_error"],
         "sliced_wasserstein_distance": multivariate["sliced_wasserstein_distance"],
         "energy_distance": multivariate["energy_distance"],
+        "prior_quality_gate": quality_gate,
+        "prior_quality_gate_status": quality_gate["status"],
         "prior_evaluated_after_physical_resampling": True,
     }
     write_json(out / "supervised_prior_summary.json", payload)
@@ -156,7 +163,42 @@ def write_supervised_prior_report(
         "",
     ]
     for key in sorted(summary):
+        if key == "prior_quality_gate":
+            continue
         lines.append(f"- `{key}`: {summary[key]}")
+    gate = summary.get("prior_quality_gate")
+    if isinstance(gate, dict):
+        lines.extend(["", "## Prior Quality Gate", ""])
+        lines.append(f"- `status`: {gate.get('status')}")
+        bad_checks = [
+            check
+            for check in gate.get("checks", [])
+            if isinstance(check, dict) and check.get("status") != "PASS"
+        ]
+        if bad_checks:
+            lines.extend(
+                [
+                    "",
+                    "| check | status | value | warn | fail |",
+                    "| --- | --- | ---: | ---: | ---: |",
+                ]
+            )
+            for check in bad_checks:
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            str(check.get("name")),
+                            str(check.get("status")),
+                            _markdown_cell(check.get("value")),
+                            _markdown_cell(check.get("warn")),
+                            _markdown_cell(check.get("fail")),
+                        ]
+                    )
+                    + " |"
+                )
+        else:
+            lines.append("- All quality checks passed.")
     lines.extend(["", "## Distribution Metrics", ""])
     if metrics.empty:
         lines.append("_No metrics were computed._")
@@ -168,6 +210,8 @@ def write_supervised_prior_report(
             "## Interpretation",
             "",
             "- A good prior match is a population diagnostic, not a photometric fit.",
+            "- The NLL on truth latents is not sufficient: generated samples must "
+            "also match the truth population after mapping back to physical parameters.",
             "- Physical recovery claims still require same-parameter forward closure and posterior calibration.",
         ]
     )
@@ -271,6 +315,106 @@ def multivariate_distance_metrics(
     return {
         "sliced_wasserstein_distance": float(np.mean(sw)),
         "energy_distance": float(_energy_distance(tz, pz)),
+    }
+
+
+def prior_quality_gate(
+    *,
+    metrics: pd.DataFrame,
+    correlation_payload: dict[str, Any],
+    multivariate: dict[str, float | None],
+) -> dict[str, Any]:
+    """Return a conservative pass/warn/fail gate for truth-vs-prior samples."""
+    if metrics.empty:
+        checks = [
+            _quality_check(
+                "metrics_nonempty",
+                "FAIL",
+                value=0,
+                fail=1,
+                message="No comparable truth/prior parameters were found.",
+            )
+        ]
+        return {
+            "status": "FAIL",
+            "checks": checks,
+            "interpretation": _quality_gate_interpretation("FAIL"),
+        }
+
+    ks = pd.to_numeric(metrics["ks_distance"], errors="coerce").dropna()
+    wasserstein = pd.to_numeric(
+        metrics["wasserstein_distance"],
+        errors="coerce",
+    ).dropna()
+    n_params = max(int(len(ks)), 1)
+    frac_ks_gt_0p5 = float((ks > 0.5).sum() / n_params) if len(ks) else float("nan")
+    frac_ks_gt_0p8 = float((ks > 0.8).sum() / n_params) if len(ks) else float("nan")
+    max_abs_median_delta = float(
+        pd.to_numeric(metrics["median_residual"], errors="coerce").abs().max()
+    )
+    checks = [
+        _threshold_check(
+            "median_ks_distance",
+            float(ks.median()) if len(ks) else float("nan"),
+            warn=0.2,
+            fail=0.5,
+        ),
+        _threshold_check(
+            "max_ks_distance",
+            float(ks.max()) if len(ks) else float("nan"),
+            warn=0.4,
+            fail=0.8,
+        ),
+        _threshold_check(
+            "fraction_parameters_ks_gt_0p5",
+            frac_ks_gt_0p5,
+            warn=0.2,
+            fail=0.5,
+        ),
+        _threshold_check(
+            "fraction_parameters_ks_gt_0p8",
+            frac_ks_gt_0p8,
+            warn=0.05,
+            fail=0.25,
+        ),
+        _threshold_check(
+            "max_abs_median_residual",
+            max_abs_median_delta,
+            warn=1.0,
+            fail=3.0,
+        ),
+    ]
+    corr_frob = correlation_payload.get("frobenius_error")
+    if corr_frob is not None:
+        checks.append(
+            _threshold_check(
+                "correlation_frobenius_error",
+                float(corr_frob),
+                warn=1.0,
+                fail=3.0,
+            )
+        )
+    if len(wasserstein):
+        checks.append(
+            _threshold_check(
+                "median_wasserstein_distance",
+                float(wasserstein.median()),
+                warn=0.5,
+                fail=2.0,
+            )
+        )
+    status = _quality_status(checks)
+    return {
+        "status": status,
+        "checks": checks,
+        "n_parameters_checked": int(len(ks)),
+        "worst_ks_parameters": metrics.sort_values("ks_distance", ascending=False)
+        .head(5)["parameter"]
+        .astype(str)
+        .tolist(),
+        "sliced_wasserstein_distance": multivariate.get("sliced_wasserstein_distance"),
+        "energy_distance": multivariate.get("energy_distance"),
+        "interpretation": _quality_gate_interpretation(status),
     }
 
 
@@ -732,6 +876,67 @@ def _safe_median(values) -> float | None:
     if arr.size == 0:
         return None
     return float(np.median(arr))
+
+
+def _threshold_check(
+    name: str,
+    value: float,
+    *,
+    warn: float,
+    fail: float,
+) -> dict[str, Any]:
+    if not np.isfinite(value):
+        return _quality_check(name, "FAIL", value=value, warn=warn, fail=fail)
+    if value >= fail:
+        status = "FAIL"
+    elif value >= warn:
+        status = "WARN"
+    else:
+        status = "PASS"
+    return _quality_check(name, status, value=value, warn=warn, fail=fail)
+
+
+def _quality_check(
+    name: str,
+    status: str,
+    *,
+    value: float | int | None = None,
+    warn: float | None = None,
+    fail: float | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "name": name,
+        "status": status,
+        "value": value,
+        "warn": warn,
+        "fail": fail,
+    }
+    if message:
+        payload["message"] = message
+    return payload
+
+
+def _quality_status(checks: list[dict[str, Any]]) -> str:
+    if any(check["status"] == "FAIL" for check in checks):
+        return "FAIL"
+    if any(check["status"] == "WARN" for check in checks):
+        return "WARN"
+    return "PASS"
+
+
+def _quality_gate_interpretation(status: str) -> str:
+    if status == "PASS":
+        return "Prior samples broadly match the held-out truth population diagnostics."
+    if status == "WARN":
+        return (
+            "Prior samples show measurable population mismatch; inspect plots before "
+            "using this checkpoint downstream."
+        )
+    return (
+        "Prior samples do not match the truth population well enough for downstream "
+        "scientific inference, even if the truth-latent NLL improved."
+    )
 
 
 def _frame_to_markdown(frame: pd.DataFrame, max_rows: int = 80) -> str:
