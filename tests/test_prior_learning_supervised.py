@@ -333,6 +333,80 @@ def test_realnvp_supervised_prior_learns_toy_distribution() -> None:
     not HAS_EQUINOX,
     reason="Equinox optional dependency is not installed",
 )
+def test_rq_spline_train_supervised_prior_checkpoint_roundtrip(tmp_path: Path) -> None:
+    import jax
+
+    from euclid_dsps.prior_learning.flows import RQSplineCouplingPrior
+    from euclid_dsps.prior_learning.train import (
+        load_prior_checkpoint,
+        train_supervised_prior,
+    )
+
+    dataset = tmp_path / "truth.parquet"
+    pd.DataFrame(
+        {
+            "object_id": np.arange(32),
+            "redshift_true": np.linspace(0.1, 0.5, 32),
+            "logsm_true": np.linspace(9.0, 10.0, 32),
+            "logsfr_true": np.linspace(-1.0, 0.5, 32),
+            "dust_av": np.linspace(0.1, 0.4, 32),
+        }
+    ).to_parquet(dataset)
+
+    config = {
+        "catalog_path": str(dataset),
+        "prior_learning": {
+            "dataset": str(dataset),
+            "schema": "diffsky_truth_basic",
+            "bounds": {
+                "z_obs": [0.0, 1.0],
+                "log10_stellar_mass": [8.0, 11.0],
+                "log10_sfr_at_obs": [-2.0, 1.0],
+                "dust_av": [0.0, 1.0],
+            },
+            "flow": {
+                "type": "rq_spline_coupling",
+                "n_layers": 2,
+                "hidden_size": 8,
+                "n_bins": 4,
+                "tail_bound": 4.0,
+                "init": "identity",
+                "init_scale": 0.0,
+            },
+            "training": {
+                "epochs": 1,
+                "batch_size": 16,
+                "learning_rate": 1.0e-3,
+                "validation_fraction": 0.25,
+                "seed": 1,
+            },
+            "snapshots": {"enabled": False, "checkpoint_every": 0},
+            "output": {"prior_samples": 8, "truth_sample_limit": 16},
+        },
+    }
+    out = tmp_path / "spline_run"
+
+    train_supervised_prior(config, out, verbose=False, progress=False)
+
+    sidecar = json.loads(
+        (out / "checkpoints" / "best.eqx.json").read_text(encoding="utf-8")
+    )
+    assert sidecar["architecture"]["type"] == "rq_spline_coupling"
+    assert sidecar["flow_integrity"]["status"] == "PASS"
+    prior, _sidecar, latent_spec, _schema = load_prior_checkpoint(
+        out / "checkpoints" / "best.eqx"
+    )
+    assert isinstance(prior, RQSplineCouplingPrior)
+    assert latent_spec.normalization == "identity"
+    samples = prior.sample(jax.random.PRNGKey(2), 5)
+    assert samples.shape == (5, 4)
+    assert np.all(np.isfinite(np.asarray(prior.log_prob(samples))))
+
+
+@pytest.mark.skipif(
+    not HAS_EQUINOX,
+    reason="Equinox optional dependency is not installed",
+)
 def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     from euclid_dsps.prior_learning.train import (
         load_prior_checkpoint,

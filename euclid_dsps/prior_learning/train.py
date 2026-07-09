@@ -27,17 +27,24 @@ from .data import (
     truth_standardized_latent_spec,
 )
 from .diagnostics import write_supervised_prior_diagnostics
-from .flows import RealNVPPrior, assert_realnvp_integrity, realnvp_integrity_diagnostics
+from .flows import (
+    RealNVPPrior,
+    RQSplineCouplingPrior,
+    assert_flow_integrity,
+    flow_integrity_diagnostics,
+)
 from .schema import ParameterSpec, TruthSchema
 from .splits import train_validation_split as _train_validation_split
 
 eqx, optax = require_amortized_dependencies()
 
+PriorFlow = RealNVPPrior | RQSplineCouplingPrior
+
 
 @dataclass(frozen=True)
 class PriorTrainingResult:
-    prior: RealNVPPrior
-    last_prior: RealNVPPrior
+    prior: PriorFlow
+    last_prior: PriorFlow
     training_log: pd.DataFrame
     validation_log: pd.DataFrame
     initial_train_nll: float
@@ -61,10 +68,17 @@ def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
     raw.setdefault("training", {})
     raw.setdefault("snapshots", {})
     raw.setdefault("output", {})
+    raw["flow"].setdefault("type", "realnvp")
     raw["flow"].setdefault("n_layers", 8)
     raw["flow"].setdefault("hidden_size", 128)
     raw["flow"].setdefault("scale_clamp", 0.05)
     raw["flow"].setdefault("shift_clamp", 5.0)
+    raw["flow"].setdefault("n_bins", 16)
+    raw["flow"].setdefault("tail_bound", 12.0)
+    raw["flow"].setdefault("min_bin_width", 1.0e-3)
+    raw["flow"].setdefault("min_bin_height", 1.0e-3)
+    raw["flow"].setdefault("min_derivative", 1.0e-3)
+    raw["flow"].setdefault("permutation", "roll")
     raw["flow"].setdefault("init", "default")
     raw["flow"].setdefault("init_scale", 1.0)
     raw["latent"].setdefault("normalization", "identity")
@@ -232,6 +246,32 @@ def train_supervised_prior(
         "[prior] split: "
         f"train={len(split['train'])} validation={validation_rows}",
     )
+    _log(
+        verbose,
+        "[prior] flow: "
+        f"type={cfg['flow'].get('type')} "
+        f"layers={cfg['flow'].get('n_layers')} "
+        f"hidden={cfg['flow'].get('hidden_size')} "
+        f"init={cfg['flow'].get('init')}",
+    )
+    _log(
+        verbose,
+        "[prior] training: "
+        f"epochs={training_cfg.get('epochs')} "
+        f"batch_size={training_cfg.get('batch_size')} "
+        f"data_parallel={training_cfg.get('data_parallel')} "
+        "first epoch includes JAX compilation",
+    )
+    write_json(
+        out / "prior_training_progress.json",
+        {
+            "status": "starting",
+            "completed_epochs": 0,
+            "total_epochs": int(training_cfg.get("epochs", 20)),
+            "flow": dict(cfg["flow"]),
+            "data_parallel_requested": str(training_cfg.get("data_parallel", "single")),
+        },
+    )
     start = time.time()
     ckpt_dir = ensure_dir(out / "checkpoints")
     snapshot_cfg = dict(cfg.get("snapshots", {}) or {})
@@ -263,7 +303,7 @@ def train_supervised_prior(
     )
     result.training_log.to_csv(out / "prior_training_log.csv", index=False)
     result.validation_log.to_csv(out / "prior_validation_loglike.csv", index=False)
-    integrity = assert_realnvp_integrity(
+    integrity = assert_flow_integrity(
         result.prior,
         context=f"supervised prior training output {out}",
         key=jax.random.PRNGKey(int(training_cfg.get("seed", 42)) + 97),
@@ -341,7 +381,8 @@ def train_supervised_prior(
         "equivalent_kl_note": (
             "minimizes KL(p_truth || p_beta) up to the entropy of p_truth"
         ),
-        "realnvp_integrity": integrity,
+        "flow_integrity": integrity,
+        "realnvp_integrity": integrity if isinstance(result.prior, RealNVPPrior) else None,
         "snapshots": {
             "enabled": bool(snapshot_cfg.get("enabled", False)),
             "every_epochs": int(snapshot_cfg.get("every_epochs", 5)),
@@ -369,13 +410,13 @@ def _supervised_prior_epoch_callback(
     snapshot_config: dict[str, Any],
     seed: int,
     checkpoint_dir: Path,
-) -> Callable[[int, RealNVPPrior], None] | None:
+) -> Callable[[int, PriorFlow], None] | None:
     enabled = bool(snapshot_config.get("enabled", False))
     checkpoint_every = int(snapshot_config.get("checkpoint_every", 0) or 0)
     if not enabled and checkpoint_every <= 0:
         return None
 
-    def callback(epoch: int, prior: RealNVPPrior) -> None:
+    def callback(epoch: int, prior: PriorFlow) -> None:
         if _should_write_supervised_prior_snapshot(snapshot_config, epoch):
             _write_supervised_prior_snapshot(
                 out,
@@ -460,7 +501,7 @@ def _write_supervised_prior_snapshot(
     out: Path,
     *,
     epoch: int,
-    prior: RealNVPPrior,
+    prior: PriorFlow,
     truth: TruthDataset,
     snapshot_config: dict[str, Any],
     seed: int,
@@ -531,10 +572,10 @@ def fit_realnvp_to_x(
     flow_config: dict[str, Any],
     training_config: dict[str, Any],
     seed: int,
-    epoch_callback: Callable[[int, RealNVPPrior], None] | None = None,
+    epoch_callback: Callable[[int, PriorFlow], None] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> PriorTrainingResult:
-    """Fit a RealNVP prior to an unconstrained truth matrix."""
+    """Fit the configured exact flow prior to an unconstrained truth matrix."""
     x_train = np.asarray(x_train, dtype=np.float32)
     if x_train.ndim != 2 or x_train.shape[1] != int(latent_dim):
         raise ValueError("x_train must have shape [n, latent_dim]")
@@ -544,15 +585,10 @@ def fit_realnvp_to_x(
         else np.asarray(x_validation, dtype=np.float32)
     )
     key = jax.random.PRNGKey(int(seed))
-    prior = RealNVPPrior(
+    prior = _build_prior_from_flow_config(
         key,
         latent_dim=int(latent_dim),
-        n_layers=int(flow_config.get("n_layers", 8)),
-        hidden_size=int(flow_config.get("hidden_size", 128)),
-        scale_clamp=float(flow_config.get("scale_clamp", 0.05)),
-        shift_clamp=float(flow_config.get("shift_clamp", 5.0)),
-        init=str(flow_config.get("init", "default")),
-        init_scale=float(flow_config.get("init_scale", 1.0)),
+        flow_config=flow_config,
     )
     prior = _cast_inexact_arrays(prior, jnp.float32)
     optimizer = _make_optimizer(training_config)
@@ -720,9 +756,129 @@ def fit_realnvp_to_x(
     )
 
 
+def _build_prior_from_flow_config(
+    key,
+    *,
+    latent_dim: int,
+    flow_config: dict[str, Any],
+) -> PriorFlow:
+    flow_type = _normalize_flow_type(flow_config.get("type", "realnvp"))
+    if flow_type == "realnvp":
+        return RealNVPPrior(
+            key,
+            latent_dim=int(latent_dim),
+            n_layers=int(flow_config.get("n_layers", 8)),
+            hidden_size=int(flow_config.get("hidden_size", 128)),
+            scale_clamp=float(flow_config.get("scale_clamp", 0.05)),
+            shift_clamp=float(flow_config.get("shift_clamp", 5.0)),
+            init=str(flow_config.get("init", "default")),
+            init_scale=float(flow_config.get("init_scale", 1.0)),
+        )
+    if flow_type == "rq_spline_coupling":
+        return RQSplineCouplingPrior(
+            key,
+            latent_dim=int(latent_dim),
+            n_layers=int(flow_config.get("n_layers", 12)),
+            hidden_size=int(flow_config.get("hidden_size", 256)),
+            n_bins=int(flow_config.get("n_bins", 16)),
+            tail_bound=float(flow_config.get("tail_bound", 12.0)),
+            min_bin_width=float(flow_config.get("min_bin_width", 1.0e-3)),
+            min_bin_height=float(flow_config.get("min_bin_height", 1.0e-3)),
+            min_derivative=float(flow_config.get("min_derivative", 1.0e-3)),
+            permutation=str(flow_config.get("permutation", "roll")),
+            init=str(flow_config.get("init", "default")),
+            init_scale=float(flow_config.get("init_scale", 1.0)),
+        )
+    raise ValueError(
+        "prior_learning.flow.type must be one of: realnvp, rq_spline_coupling"
+    )
+
+
+def _prior_architecture_payload(
+    prior: PriorFlow,
+    flow_config: dict[str, Any],
+) -> dict[str, Any]:
+    if isinstance(prior, RealNVPPrior):
+        return {
+            "type": "realnvp",
+            "latent_dim": int(prior.latent_dim),
+            "n_layers": int(flow_config.get("n_layers", len(prior.layers))),
+            "hidden_size": int(flow_config.get("hidden_size", 128)),
+            "scale_clamp": float(flow_config.get("scale_clamp", 0.05)),
+            "shift_clamp": float(flow_config.get("shift_clamp", 5.0)),
+            "init": str(flow_config.get("init", "default")),
+            "init_scale": float(flow_config.get("init_scale", 1.0)),
+            "parameter_dtype": "float32",
+        }
+    if isinstance(prior, RQSplineCouplingPrior):
+        return {
+            "type": "rq_spline_coupling",
+            "latent_dim": int(prior.latent_dim),
+            "n_layers": int(flow_config.get("n_layers", len(prior.layers))),
+            "hidden_size": int(flow_config.get("hidden_size", 256)),
+            "n_bins": int(prior.n_bins),
+            "tail_bound": float(prior.tail_bound),
+            "min_bin_width": float(prior.min_bin_width),
+            "min_bin_height": float(prior.min_bin_height),
+            "min_derivative": float(prior.min_derivative),
+            "permutation": str(prior.permutation),
+            "init": str(flow_config.get("init", "default")),
+            "init_scale": float(flow_config.get("init_scale", 1.0)),
+            "parameter_dtype": "float32",
+        }
+    raise TypeError(f"Unsupported prior checkpoint type: {type(prior)!r}")
+
+
+def _prior_template_from_architecture(arch: dict[str, Any]) -> PriorFlow:
+    flow_type = _normalize_flow_type(arch.get("type", "realnvp"))
+    if flow_type == "realnvp":
+        return RealNVPPrior(
+            jax.random.PRNGKey(0),
+            latent_dim=int(arch["latent_dim"]),
+            n_layers=int(arch["n_layers"]),
+            hidden_size=int(arch["hidden_size"]),
+            scale_clamp=float(arch["scale_clamp"]),
+            shift_clamp=float(arch.get("shift_clamp", 5.0)),
+            init=str(arch.get("init", "default")),
+            init_scale=float(arch.get("init_scale", 1.0)),
+        )
+    if flow_type == "rq_spline_coupling":
+        return RQSplineCouplingPrior(
+            jax.random.PRNGKey(0),
+            latent_dim=int(arch["latent_dim"]),
+            n_layers=int(arch["n_layers"]),
+            hidden_size=int(arch["hidden_size"]),
+            n_bins=int(arch.get("n_bins", 16)),
+            tail_bound=float(arch.get("tail_bound", 12.0)),
+            min_bin_width=float(arch.get("min_bin_width", 1.0e-3)),
+            min_bin_height=float(arch.get("min_bin_height", 1.0e-3)),
+            min_derivative=float(arch.get("min_derivative", 1.0e-3)),
+            permutation=str(arch.get("permutation", "roll")),
+            init=str(arch.get("init", "default")),
+            init_scale=float(arch.get("init_scale", 1.0)),
+        )
+    raise ValueError(f"Unsupported prior checkpoint architecture type: {arch.get('type')}")
+
+
+def _normalize_flow_type(value: Any) -> str:
+    normalized = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "real_nvp": "realnvp",
+        "nvp": "realnvp",
+        "spline": "rq_spline_coupling",
+        "neural_spline": "rq_spline_coupling",
+        "neural_spline_flow": "rq_spline_coupling",
+        "rqspline": "rq_spline_coupling",
+        "rq_spline": "rq_spline_coupling",
+        "rq_spline_coupling": "rq_spline_coupling",
+        "rational_quadratic_spline": "rq_spline_coupling",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def save_prior_checkpoint(
     path: str | Path,
-    prior: RealNVPPrior,
+    prior: PriorFlow,
     *,
     config: dict[str, Any],
     truth: TruthDataset,
@@ -731,7 +887,7 @@ def save_prior_checkpoint(
     metric: float,
     strict_integrity: bool = True,
 ) -> None:
-    """Serialize a supervised RealNVP prior and its truth schema."""
+    """Serialize a supervised exact flow prior and its truth schema."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     prior = _cast_inexact_arrays(prior, jnp.float32)
@@ -744,18 +900,9 @@ def save_prior_checkpoint(
     sidecar = {
         "epoch": int(epoch),
         "metric": float(metric),
+        "flow_integrity": integrity,
         "realnvp_integrity": integrity,
-        "architecture": {
-            "type": "realnvp",
-            "latent_dim": int(prior.latent_dim),
-            "n_layers": int(flow_config.get("n_layers", 8)),
-            "hidden_size": int(flow_config.get("hidden_size", 128)),
-            "scale_clamp": float(flow_config.get("scale_clamp", 0.05)),
-            "shift_clamp": float(flow_config.get("shift_clamp", 5.0)),
-            "init": str(flow_config.get("init", "default")),
-            "init_scale": float(flow_config.get("init_scale", 1.0)),
-            "parameter_dtype": "float32",
-        },
+        "architecture": _prior_architecture_payload(prior, flow_config),
         "latent_spec": latent_spec_to_jsonable(truth.latent_spec),
         "schema": truth.schema.to_dict(),
         "source_dataset": truth.dataset_path,
@@ -765,47 +912,40 @@ def save_prior_checkpoint(
 
 
 def _checkpoint_integrity_payload(
-    prior: RealNVPPrior,
+    prior: PriorFlow,
     *,
     path: Path,
     strict: bool,
 ) -> dict[str, Any]:
     context = f"prior checkpoint save {path}"
     if strict:
-        return assert_realnvp_integrity(
+        return assert_flow_integrity(
             prior,
             context=context,
             sample_count=64,
         )
-    diagnostics = realnvp_integrity_diagnostics(prior, sample_count=64)
+    diagnostics = flow_integrity_diagnostics(prior, sample_count=64)
     if diagnostics["status"] == "FAIL":
         diagnostics = {
             **diagnostics,
             "strict": False,
             "warning": (
-                "Intermediate checkpoint failed RealNVP integrity diagnostics. "
+                "Intermediate checkpoint failed flow integrity diagnostics. "
                 "It is kept for debugging and will be rejected by strict loaders."
             ),
         }
     return diagnostics
 
 
-def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any], LatentSpec, TruthSchema]:
+def load_prior_checkpoint(
+    path: str | Path,
+) -> tuple[PriorFlow, dict[str, Any], LatentSpec, TruthSchema]:
     """Load a supervised prior checkpoint plus schema metadata."""
     path = Path(path)
     sidecar_path = path.with_suffix(path.suffix + ".json")
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     arch = sidecar["architecture"]
-    template = RealNVPPrior(
-        jax.random.PRNGKey(0),
-        latent_dim=int(arch["latent_dim"]),
-        n_layers=int(arch["n_layers"]),
-        hidden_size=int(arch["hidden_size"]),
-        scale_clamp=float(arch["scale_clamp"]),
-        shift_clamp=float(arch.get("shift_clamp", 5.0)),
-        init=str(arch.get("init", "default")),
-        init_scale=float(arch.get("init_scale", 1.0)),
-    )
+    template = _prior_template_from_architecture(arch)
     template = _cast_inexact_arrays(
         template,
         _jax_dtype_from_name(str(arch.get("parameter_dtype", "float32"))),
@@ -814,7 +954,7 @@ def load_prior_checkpoint(path: str | Path) -> tuple[RealNVPPrior, dict[str, Any
         prior = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
         _raise_realnvp_mask_checkpoint_error(path, exc)
-    assert_realnvp_integrity(
+    assert_flow_integrity(
         prior,
         context=f"prior checkpoint load {path}",
         sample_count=64,
@@ -1055,12 +1195,12 @@ def _unreplicate_bool(value) -> bool:
     return bool(arr)
 
 
-def _prior_nll(prior: RealNVPPrior, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+def _prior_nll(prior: PriorFlow, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
     log_prob = prior.log_prob(x)
     return -jnp.mean(log_prob), jnp.mean(log_prob)
 
 
-def _prior_nll_scalar(prior: RealNVPPrior, x: jnp.ndarray) -> jnp.ndarray:
+def _prior_nll_scalar(prior: PriorFlow, x: jnp.ndarray) -> jnp.ndarray:
     return _prior_nll(prior, x)[0]
 
 
@@ -1123,4 +1263,4 @@ def _tree_l2_norm(tree) -> float:
 
 def _log(verbose: bool, message: str) -> None:
     if verbose:
-        print(message)
+        print(message, flush=True)

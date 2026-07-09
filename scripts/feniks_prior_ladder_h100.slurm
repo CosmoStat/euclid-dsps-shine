@@ -83,6 +83,10 @@ case "$STAGE" in
     CONFIG="${CONFIG:-configs/experiments/feniks_supervised_truth_realnvp_18d_h100.yaml}"
     RUN_NAME="${RUN_NAME:-prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v2}"
     ;;
+  supervised_spline_prior_train|supervised_spline_prior_report)
+    CONFIG="${CONFIG:-configs/experiments/feniks_supervised_truth_rqspline_18d_h100.yaml}"
+    RUN_NAME="${RUN_NAME:-prior_diffsky_synthetic_feniks_full_rqspline_v1}"
+    ;;
   supervised_frozen_train|supervised_frozen_infer|supervised_frozen_jlens)
     CONFIG="${CONFIG:-configs/experiments/feniks_amortized_supervised_prior_frozen_kl_annealed_18d_h100.yaml}"
     RUN_NAME="${RUN_NAME:-feniks_amortized_supervised_prior_frozen_kl_annealed_18d_h100}"
@@ -312,10 +316,10 @@ case "$STAGE" in
   ae_jlens|joint_fixed_jlens|joint_annealed_jlens|supervised_frozen_jlens|supervised_finetune_jlens)
     run_jlens
     ;;
-  supervised_prior_train)
+  supervised_prior_train|supervised_spline_prior_train)
     train_supervised_prior
     ;;
-  supervised_prior_report)
+  supervised_prior_report|supervised_spline_prior_report)
     report_supervised_prior
     ;;
 esac

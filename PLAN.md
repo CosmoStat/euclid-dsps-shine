@@ -1,5 +1,30 @@
 # Plan
 
+## 2026-07-09 RQ Spline Prior For FENIKS 18D
+
+- Status: completed locally; ready for Jean-Zay launch.
+- Goal: replace the failing supervised RealNVP truth-prior experiment with a
+  more expressive rational-quadratic spline coupling flow that can be trained
+  directly on the 18D FENIKS/Diffsky closure truth distribution, produce the
+  same diagnostics/corner plots, and load as a supervised prior in downstream
+  amortized training.
+- Assumptions:
+  - The main benchmark truth space remains the native 18D Diffsky/DSPS closure
+    latent space; SFH-derived views remain diagnostics rather than the primary
+    prior-learning target.
+  - No new dependency should be required for Jean-Zay; the spline transform is
+    implemented with JAX/Equinox already used by the project.
+- Completed:
+  - Add an RQ spline coupling prior with exact `sample`, `inverse`, and
+    `log_prob` methods.
+  - Generalize supervised prior checkpoints and integrity checks beyond
+    RealNVP while preserving backward compatibility for existing checkpoints.
+  - Add a Jean-Zay H100 experiment config and focused tests.
+  - Added Slurm stages `supervised_spline_prior_train` and
+    `supervised_spline_prior_report`.
+  - Verified locally with `compileall`, flow/prior/amortized prior-source/data
+    parallel/CLI tests, ruff, and config-load smoke.
+
 ## 2026-07-09 FENIKS HTML Report Polish
 
 - Status: completed.

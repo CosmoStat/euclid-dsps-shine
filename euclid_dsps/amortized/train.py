@@ -57,7 +57,12 @@ from .features import (
     make_encoder_features,
     write_feature_stats,
 )
-from .flows import RealNVPPrior, StandardNormalPrior, assert_realnvp_integrity
+from .flows import (
+    RealNVPPrior,
+    RQSplineCouplingPrior,
+    StandardNormalPrior,
+    assert_flow_integrity,
+)
 from .latent import (
     LatentSpec,
     initial_theta_from_config,
@@ -139,7 +144,7 @@ def build_amortized_model(
     *,
     latent_spec: LatentSpec | None = None,
 ) -> AmortizedModel:
-    """Instantiate encoder and RealNVP prior from config."""
+    """Instantiate encoder and configured prior from config."""
     cfg = amortized_config(config)
     k_encoder, k_prior = jax.random.split(key)
     encoder_cfg = cfg["encoder"]
@@ -210,6 +215,27 @@ def build_prior_from_config(
             init=str(prior_cfg.get("init", "default")),
             init_scale=float(prior_cfg.get("init_scale", 1.0)),
         )
+    if source in {
+        "joint_rq_spline",
+        "rq_spline",
+        "rq_spline_coupling",
+        "neural_spline",
+        "neural_spline_flow",
+    }:
+        return RQSplineCouplingPrior(
+            key,
+            latent_dim=int(latent_dim),
+            n_layers=int(prior_cfg.get("n_layers", 12)),
+            hidden_size=int(prior_cfg.get("hidden_size", 256)),
+            n_bins=int(prior_cfg.get("n_bins", 16)),
+            tail_bound=float(prior_cfg.get("tail_bound", 12.0)),
+            min_bin_width=float(prior_cfg.get("min_bin_width", 1.0e-3)),
+            min_bin_height=float(prior_cfg.get("min_bin_height", 1.0e-3)),
+            min_derivative=float(prior_cfg.get("min_derivative", 1.0e-3)),
+            permutation=str(prior_cfg.get("permutation", "roll")),
+            init=str(prior_cfg.get("init", "default")),
+            init_scale=float(prior_cfg.get("init_scale", 1.0)),
+        )
     if source == "supervised_checkpoint":
         checkpoint = prior_cfg.get("checkpoint")
         if not checkpoint:
@@ -225,7 +251,8 @@ def build_prior_from_config(
         return prior
     raise ValueError(
         "amortized.prior.source must be one of "
-        "'standard_normal', 'supervised_checkpoint', or 'joint_realnvp'"
+        "'standard_normal', 'supervised_checkpoint', 'joint_realnvp', or "
+        "'rq_spline_coupling'"
     )
 
 
@@ -638,8 +665,8 @@ def train_amortized_fs2(
         verbose,
         "[amortized] model built: "
         f"encoder_hidden={cfg['encoder'].get('hidden_sizes')} "
-        f"realnvp_layers={cfg['prior'].get('n_layers')} "
-        f"realnvp_hidden={cfg['prior'].get('hidden_size')} "
+        f"prior_layers={cfg['prior'].get('n_layers')} "
+        f"prior_hidden={cfg['prior'].get('hidden_size')} "
         f"prior_source={cfg['prior'].get('source')} "
         f"train_prior={train_prior} "
         f"prior_update_schedule={prior_update_schedule['mode']} "
@@ -1231,6 +1258,7 @@ def train_amortized_fs2(
         ),
         "joint_training": {
             "encoder": True,
+            "flow_prior": bool(train_prior),
             "realnvp_prior": bool(train_prior),
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
             "prior_update_schedule": _prior_update_schedule(cfg["prior"]),
@@ -1338,8 +1366,8 @@ def load_checkpoint(
         model = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
         _raise_realnvp_mask_checkpoint_error(path, exc)
-    if isinstance(model.prior, RealNVPPrior):
-        assert_realnvp_integrity(
+    if isinstance(model.prior, (RealNVPPrior, RQSplineCouplingPrior)):
+        assert_flow_integrity(
             model.prior,
             context=f"amortized checkpoint load {path}",
             sample_count=64,
@@ -2633,7 +2661,16 @@ def _train_prior_jointly(prior_cfg: dict[str, Any]) -> bool:
     source = str(prior_cfg.get("source", "joint_realnvp"))
     if source == "standard_normal":
         return False
-    return bool(prior_cfg.get("train_jointly", source == "joint_realnvp"))
+    joint_sources = {
+        "joint_realnvp",
+        "realnvp",
+        "joint_rq_spline",
+        "rq_spline",
+        "rq_spline_coupling",
+        "neural_spline",
+        "neural_spline_flow",
+    }
+    return bool(prior_cfg.get("train_jointly", source in joint_sources))
 
 
 def _log_prior_safety_messages(
@@ -2646,11 +2683,24 @@ def _log_prior_safety_messages(
     if not enabled:
         return
     source = str(prior_cfg.get("source", "joint_realnvp"))
-    if source == "joint_realnvp" and not train_prior and float(kl_weight_max) > 0.0:
+    if (
+        source
+        in {
+            "joint_realnvp",
+            "realnvp",
+            "joint_rq_spline",
+            "rq_spline",
+            "rq_spline_coupling",
+            "neural_spline",
+            "neural_spline_flow",
+        }
+        and not train_prior
+        and float(kl_weight_max) > 0.0
+    ):
         _log(
             True,
-            "[amortized] WARNING: joint_realnvp prior is fixed while KL is "
-            "enabled. This is a random fixed NF prior unless a checkpoint was "
+            "[amortized] WARNING: joint flow prior is fixed while KL is "
+            "enabled. This is a random fixed flow prior unless a checkpoint was "
             "loaded explicitly.",
         )
     if source == "standard_normal" and float(kl_weight_max) > 0.0:
@@ -2661,13 +2711,13 @@ def _log_prior_safety_messages(
     if source == "supervised_checkpoint" and not train_prior:
         _log(
             True,
-            "[amortized] supervised RealNVP prior is frozen: KL updates the "
-            "encoder but does not update NF weights.",
+            "[amortized] supervised flow prior is frozen: KL updates the encoder "
+            "but does not update flow weights.",
         )
     if source == "supervised_checkpoint" and train_prior:
         _log(
             True,
-            "[amortized] supervised RealNVP prior is being fine-tuned jointly; "
+            "[amortized] supervised flow prior is being fine-tuned jointly; "
             "compare against truth-overlap diagnostics.",
         )
 
@@ -2794,7 +2844,8 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
     band_cfg = per_band_flux_calibration_config(config)
     optimized = ["encoder"]
     if train_prior:
-        optimized.append("realnvp_prior")
+        source = str(cfg["prior"].get("source", "joint_realnvp"))
+        optimized.append("realnvp_prior" if "realnvp" in source else "flow_prior")
     if scale_cfg.enabled and scale_cfg.trainable:
         optimized.append("global_log_alpha_sed")
     if band_cfg.enabled and band_cfg.trainable:
@@ -2824,6 +2875,12 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "hidden_size": int(cfg["prior"].get("hidden_size", 128)),
             "scale_clamp": float(cfg["prior"].get("scale_clamp", 0.05)),
             "shift_clamp": float(cfg["prior"].get("shift_clamp", 5.0)),
+            "n_bins": int(cfg["prior"].get("n_bins", 16)),
+            "tail_bound": float(cfg["prior"].get("tail_bound", 12.0)),
+            "min_bin_width": float(cfg["prior"].get("min_bin_width", 1.0e-3)),
+            "min_bin_height": float(cfg["prior"].get("min_bin_height", 1.0e-3)),
+            "min_derivative": float(cfg["prior"].get("min_derivative", 1.0e-3)),
+            "permutation": str(cfg["prior"].get("permutation", "roll")),
             "init": str(cfg["prior"].get("init", "default")),
             "init_scale": float(cfg["prior"].get("init_scale", 1.0)),
             "density": "exact_change_of_variables",

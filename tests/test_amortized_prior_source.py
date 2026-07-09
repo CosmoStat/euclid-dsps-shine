@@ -20,8 +20,16 @@ if HAS_DEPS:
     import optax
 
     from euclid_dsps.amortized.elbo import AmortizedModel
-    from euclid_dsps.amortized.flows import RealNVPPrior, StandardNormalPrior
-    from euclid_dsps.amortized.train import architecture_summary, zero_prior_grads
+    from euclid_dsps.amortized.flows import (
+        RealNVPPrior,
+        RQSplineCouplingPrior,
+        StandardNormalPrior,
+    )
+    from euclid_dsps.amortized.train import (
+        architecture_summary,
+        build_prior_from_config,
+        zero_prior_grads,
+    )
     from euclid_dsps.calibration import make_global_sed_scale_state
 
 
@@ -85,6 +93,33 @@ def test_joint_realnvp_prior_gradients_are_nonzero() -> None:
     norm = sum(jnp.sum(leaf**2) for leaf in _tree_leaves(grads))
 
     assert norm > 0.0
+
+
+def test_build_joint_rq_spline_prior_from_config() -> None:
+    config = {
+        "amortized": {
+            "encoder": {"latent_dim": 3},
+            "features": {"n_flux_bands": 1, "n_error_bands": 1},
+            "prior": {
+                "source": "rq_spline_coupling",
+                "n_layers": 2,
+                "hidden_size": 8,
+                "n_bins": 4,
+                "tail_bound": 4.0,
+                "init": "identity",
+                "init_scale": 0.0,
+            },
+        }
+    }
+
+    prior = build_prior_from_config(
+        config,
+        jax.random.PRNGKey(0),
+        latent_dim=3,
+    )
+
+    assert isinstance(prior, RQSplineCouplingPrior)
+    assert prior.sample(jax.random.PRNGKey(1), 5).shape == (5, 3)
 
 
 def test_architecture_summary_lists_only_trainable_joint_components() -> None:
