@@ -30,8 +30,8 @@ Where to Start
      - :doc:`production`, :doc:`diffsky_synthetic_closure`
      - ``diffsky-validate-dsps-closure``
    * - Train supervised priors
-     - :doc:`prior_learning`
-     - ``configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml``
+     - :doc:`spline15d_realnvp`, :doc:`prior_learning`
+     - ``configs/prior_feniks_spline15d_realnvp.yaml``
    * - Run amortized inference
      - :doc:`amortized_inference`
      - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
@@ -104,6 +104,7 @@ parameters physically.
    diffsky_synthetic_closure
    forward_model
    prior_learning
+   spline15d_realnvp
    amortized_inference
    feniks_prior_ladder_jlens
    science_assessment

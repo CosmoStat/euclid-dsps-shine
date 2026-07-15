@@ -12,6 +12,10 @@ science dataset; HLTDS and FS2 are reference/debug paths.
   inference-ready splits.
 - `prior_diffsky_synthetic_feniks_full_realnvp.yaml`: train the supervised
   RealNVP prior on the full 18D `diffsky_dsps_closure_full` truth vector.
+- `feniks_spline15d_postprocess.yaml`: project existing Diffsky splits into the
+  fixed 11-node/10-contrast spline-SFH 15D contract in a separate run.
+- `prior_feniks_spline15d_realnvp.yaml`: fit train-only analytic `asinh`
+  transforms and train the production supervised RealNVP directly on 15D.
 - `amortized_diffsky_synthetic_feniks_full_gpu.yaml`: train and run the 18D
   NN+DSPS+NF inference model with the supervised FENIKS prior checkpoint.
 
