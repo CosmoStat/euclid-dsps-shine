@@ -46,9 +46,7 @@ DEFAULT_NORMALIZED_LOG_TIME_NODES = np.asarray(
     ],
     dtype=np.float64,
 )
-DEFAULT_NORMALIZED_LOG_TIME_NODES_JAX = jnp.asarray(
-    DEFAULT_NORMALIZED_LOG_TIME_NODES
-)
+DEFAULT_NORMALIZED_LOG_TIME_NODES_JAX = jnp.asarray(DEFAULT_NORMALIZED_LOG_TIME_NODES)
 GAUSSIAN_SCORE_PROBABILITIES = np.linspace(0.005, 0.995, 199)
 GAUSSIAN_SCORE_TARGET = np.asarray(
     [NormalDist().inv_cdf(float(value)) for value in GAUSSIAN_SCORE_PROBABILITIES]
@@ -100,10 +98,7 @@ def project_diffsky_frame_to_spline15d(
         for name in PHYSICAL_PARAMETER_NAMES
     }
     latent_payload.update(
-        {
-            name: contrasts[:, index]
-            for index, name in enumerate(SFH_CONTRAST_NAMES)
-        }
+        {name: contrasts[:, index] for index, name in enumerate(SFH_CONTRAST_NAMES)}
     )
     latent = pd.DataFrame(latent_payload)
     audit = pd.DataFrame(
@@ -197,6 +192,49 @@ def fit_asinh_transforms(
     return transforms
 
 
+def fit_shifted_asinh_transforms(
+    values: np.ndarray,
+    names: tuple[str, ...] = SPLINE15D_PARAMETER_NAMES,
+    *,
+    lower_quantile: float = 0.15865525393145707,
+    upper_quantile: float = 0.8413447460685429,
+    minimum_lambda: float = 1.0e-6,
+) -> dict[str, dict[str, Any]]:
+    """Fit a robust shifted-asinh transform without marginal Gaussianization."""
+    matrix = _validate_matrix(values, names)
+    if not 0.0 < float(lower_quantile) < float(upper_quantile) < 1.0:
+        raise ValueError("Shifted-asinh quantiles must satisfy 0 < lower < upper < 1")
+    if float(minimum_lambda) <= 0.0:
+        raise ValueError("minimum_lambda must be positive")
+    transforms: dict[str, dict[str, Any]] = {}
+    for index, name in enumerate(names):
+        column = matrix[:, index]
+        location = float(np.median(column))
+        q_low, q_high = np.quantile(
+            column, [float(lower_quantile), float(upper_quantile)]
+        )
+        robust_scale = 0.5 * float(q_high - q_low)
+        fallback_scale = max(float(np.std(column)), float(minimum_lambda))
+        lam = max(robust_scale, fallback_scale * 1.0e-6, float(minimum_lambda))
+        raw = np.arcsinh((column - location) / lam)
+        center = float(np.mean(raw))
+        scale = max(float(np.std(raw)), 1.0e-12)
+        normalized = (raw - center) / scale
+        transforms[name] = {
+            "family": "shifted_asinh",
+            "location": location,
+            "lambda": float(lam),
+            "center": center,
+            "scale": scale,
+            "lower_quantile": float(lower_quantile),
+            "upper_quantile": float(upper_quantile),
+            "train_q_low": float(q_low),
+            "train_q_high": float(q_high),
+            "train_gaussian_qrmse": gaussian_quantile_rmse(normalized),
+        }
+    return transforms
+
+
 def forward_asinh_matrix(
     values: np.ndarray,
     transforms: dict[str, dict[str, Any]],
@@ -204,17 +242,22 @@ def forward_asinh_matrix(
 ) -> np.ndarray:
     """Apply fitted asinh transforms to a matrix."""
     matrix = _validate_matrix(values, names)
-    result = np.column_stack(
-        [
-            (
-                transforms[name]["lambda"]
-                * np.arcsinh(matrix[:, index] / transforms[name]["lambda"])
-                - transforms[name]["center"]
+    columns = []
+    for index, name in enumerate(names):
+        transform = transforms[name]
+        family = str(transform.get("family", "asinh"))
+        if family == "shifted_asinh":
+            raw = np.arcsinh(
+                (matrix[:, index] - float(transform["location"]))
+                / float(transform["lambda"])
             )
-            / transforms[name]["scale"]
-            for index, name in enumerate(names)
-        ]
-    )
+        elif family == "asinh":
+            lam = float(transform["lambda"])
+            raw = lam * np.arcsinh(matrix[:, index] / lam)
+        else:
+            raise ValueError(f"Unsupported spline15d marginal transform: {family}")
+        columns.append((raw - float(transform["center"])) / float(transform["scale"]))
+    result = np.column_stack(columns)
     if not np.isfinite(result).all():
         raise ValueError("asinh normalization produced non-finite values")
     return result
@@ -227,22 +270,63 @@ def inverse_asinh_matrix(
 ) -> np.ndarray:
     """Invert fitted asinh transforms."""
     matrix = _validate_matrix(values, names)
-    result = np.column_stack(
-        [
-            transforms[name]["lambda"]
-            * np.sinh(
-                (
-                    transforms[name]["center"]
-                    + transforms[name]["scale"] * matrix[:, index]
-                )
-                / transforms[name]["lambda"]
-            )
-            for index, name in enumerate(names)
-        ]
-    )
+    arguments = inverse_asinh_arguments_matrix(matrix, transforms, names)
+    columns = []
+    for index, name in enumerate(names):
+        transform = transforms[name]
+        family = str(transform.get("family", "asinh"))
+        if family == "shifted_asinh":
+            physical = float(transform["location"]) + float(
+                transform["lambda"]
+            ) * np.sinh(arguments[:, index])
+        elif family == "asinh":
+            physical = float(transform["lambda"]) * np.sinh(arguments[:, index])
+        else:
+            raise ValueError(f"Unsupported spline15d marginal transform: {family}")
+        columns.append(physical)
+    result = np.column_stack(columns)
     if not np.isfinite(result).all():
         raise ValueError("inverse asinh normalization produced non-finite values")
     return result
+
+
+def inverse_asinh_arguments_matrix(
+    values: np.ndarray,
+    transforms: dict[str, dict[str, Any]],
+    names: tuple[str, ...] = SPLINE15D_PARAMETER_NAMES,
+) -> np.ndarray:
+    """Return the dimensionless arguments passed to sinh by the inverse."""
+    matrix = _validate_matrix(values, names)
+    columns = []
+    for index, name in enumerate(names):
+        transform = transforms[name]
+        raw = float(transform["center"]) + float(transform["scale"]) * matrix[:, index]
+        family = str(transform.get("family", "asinh"))
+        if family == "asinh":
+            raw = raw / float(transform["lambda"])
+        elif family != "shifted_asinh":
+            raise ValueError(f"Unsupported spline15d marginal transform: {family}")
+        columns.append(raw)
+    result = np.column_stack(columns)
+    if not np.isfinite(result).all():
+        raise ValueError("inverse asinh arguments contain non-finite values")
+    return result
+
+
+def normalized_physical_zero(
+    transform: dict[str, Any],
+) -> float:
+    """Return the marginal-normalized coordinate corresponding to physical zero."""
+    family = str(transform.get("family", "asinh"))
+    if family == "shifted_asinh":
+        raw_zero = np.arcsinh(
+            -float(transform["location"]) / float(transform["lambda"])
+        )
+    elif family == "asinh":
+        raw_zero = 0.0
+    else:
+        raise ValueError(f"Unsupported spline15d marginal transform: {family}")
+    return (float(raw_zero) - float(transform["center"])) / float(transform["scale"])
 
 
 def dequantize_normalized_zero_atoms(
@@ -342,7 +426,7 @@ def inverse_spline15d_flow_coordinates(
         for name in SFH_CONTRAST_NAMES:
             index = SPLINE15D_PARAMETER_NAMES.index(name)
             transform = transforms[name]
-            zero_normalized = -float(transform["center"]) / float(transform["scale"])
+            zero_normalized = normalized_physical_zero(transform)
             mask = np.abs(asinh_values[:, index] - zero_normalized) <= float(
                 atom_half_width
             )
@@ -352,7 +436,9 @@ def inverse_spline15d_flow_coordinates(
 
 def gaussian_quantile_rmse(values: np.ndarray) -> float:
     """Return marginal quantile RMSE to a standard normal."""
-    quantiles = np.quantile(np.asarray(values, dtype=float), GAUSSIAN_SCORE_PROBABILITIES)
+    quantiles = np.quantile(
+        np.asarray(values, dtype=float), GAUSSIAN_SCORE_PROBABILITIES
+    )
     return float(np.sqrt(np.mean((quantiles - GAUSSIAN_SCORE_TARGET) ** 2)))
 
 
@@ -447,12 +533,8 @@ def _pchip_slopes_jax(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
         weight_left / safe_left + weight_right / safe_right
     )
     interior = jnp.where(same_sign, interior, 0.0)
-    first = _pchip_endpoint_slope_jax(
-        widths[0], widths[1], deltas[0], deltas[1]
-    )
-    last = _pchip_endpoint_slope_jax(
-        widths[-1], widths[-2], deltas[-1], deltas[-2]
-    )
+    first = _pchip_endpoint_slope_jax(widths[0], widths[1], deltas[0], deltas[1])
+    last = _pchip_endpoint_slope_jax(widths[-1], widths[-2], deltas[-1], deltas[-2])
     return jnp.concatenate((first[None], interior, last[None]))
 
 

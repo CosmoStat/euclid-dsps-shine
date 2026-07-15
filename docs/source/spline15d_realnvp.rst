@@ -126,3 +126,54 @@ After the smoke job succeeds, launch the single production job:
 
 All three output paths must be absent. This prevents accidental mixing of an
 old grouped split, an old spline projection, and a new checkpoint.
+
+V4 shifted-asinh recovery run
+-----------------------------
+
+The v4 recovery run reuses the already projected grouped dataset at
+``Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3``. It does not
+regenerate Diffsky and does not rerun the spline projection. Its train-only
+marginal transform is
+
+.. math::
+
+   u_j = \operatorname{asinh}\left(\frac{x_j-m_j}{\lambda_j}\right),
+   \qquad
+   \lambda_j = \frac{Q_{0.8413}(x_j)-Q_{0.1587}(x_j)}{2},
+
+where ``m`` is the median. ``u`` is centered and standardized before the same
+Cholesky whitening used by v3. This removes the Gaussian-QRMSE lambda scan and
+prevents already logarithmic coordinates such as stellar mass from receiving
+near-zero lambdas. The transform remains analytic and exactly invertible.
+
+``configs/prior_feniks_spline15d_realnvp_shifted_v4.yaml`` trains the same
+12-layer, width-256 RealNVP at learning rate ``2e-5`` for all 80 epochs. The
+objective is pure maximum likelihood. Checkpoint selection uses validation NLL
+only; epoch zero is an audit baseline and is never made artificially eligible.
+There is no truth-derived penalty, generated-sample gate, temperature fit, or
+early stopping.
+
+The directory ``snapshots/epoch_NNN`` is written for epoch zero and every
+trained epoch. Each snapshot contains the RealNVP checkpoint, fixed-seed
+validation samples in normalized and physical coordinates, the 15-by-2
+truth/prior overlay, four correlation matrices, marginal KS/quantile metrics,
+and the fraction and maximum of the inverse shifted-asinh ``sinh`` arguments.
+These diagnostics do not enter the loss or checkpoint selection.
+
+Run a short smoke test without rebuilding the dataset:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,SMOKE=1,\
+OUT_DIR=outputs/runs/feniks_spline15d_realnvp_shifted_v4_smoke \
+     scripts/feniks_spline15d_shifted_realnvp_h100.slurm
+
+Then run production:
+
+.. code-block:: bash
+
+   sbatch scripts/feniks_spline15d_shifted_realnvp_h100.slurm
+
+The production output is
+``outputs/runs/feniks_spline15d_realnvp_shifted_v4``. Both launch modes abort
+when the requested output directory already exists.

@@ -13,10 +13,12 @@ from euclid_dsps.prior_learning.spline15d import (
     dequantize_spline_contrast_atoms,
     fit_affine_whitening,
     fit_asinh_transforms,
+    fit_shifted_asinh_transforms,
     forward_affine_whitening,
     forward_asinh_matrix,
     inverse_asinh_matrix,
     inverse_spline15d_flow_coordinates,
+    normalized_physical_zero,
     reconstruct_relative_sfh_jax,
     spline_knot_times_jax,
     validate_normalized_log_time_nodes,
@@ -63,6 +65,52 @@ def test_asinh_transform_roundtrip() -> None:
     np.testing.assert_allclose(recovered, matrix, rtol=1.0e-11, atol=1.0e-11)
     assert np.isfinite(normalized).all()
     assert all(payload["lambda"] > 0.0 for payload in transforms.values())
+
+
+def test_shifted_asinh_uses_robust_location_scale_and_roundtrips() -> None:
+    rng = np.random.default_rng(41)
+    matrix = rng.standard_t(df=3, size=(2000, len(SPLINE15D_PARAMETER_NAMES)))
+    matrix[:, 0] = 9.5 + 0.3 * rng.normal(size=len(matrix))
+    matrix[:, 3] = rng.exponential(scale=0.2, size=len(matrix))
+    transforms = fit_shifted_asinh_transforms(matrix)
+    normalized = forward_asinh_matrix(matrix, transforms)
+    recovered = inverse_asinh_matrix(normalized, transforms)
+
+    np.testing.assert_allclose(recovered, matrix, rtol=1.0e-11, atol=1.0e-11)
+    for index, name in enumerate(SPLINE15D_PARAMETER_NAMES):
+        transform = transforms[name]
+        assert transform["family"] == "shifted_asinh"
+        assert transform["lambda"] >= 1.0e-6
+        assert transform["location"] == pytest.approx(np.median(matrix[:, index]))
+    assert transforms["log10_stellar_mass"]["lambda"] > 0.1
+
+
+def test_shifted_asinh_zero_coordinate_is_reclipped_after_whitening() -> None:
+    rng = np.random.default_rng(42)
+    physical = rng.normal(size=(2000, len(SPLINE15D_PARAMETER_NAMES)))
+    physical[:, 0] += 2.0
+    atom_index = SPLINE15D_PARAMETER_NAMES.index(SFH_CONTRAST_NAMES[4])
+    physical[:600, atom_index] = 0.0
+    transforms = fit_shifted_asinh_transforms(physical)
+    marginal = forward_asinh_matrix(physical, transforms)
+    dequantized, _counts = dequantize_normalized_zero_atoms(
+        marginal,
+        physical,
+        half_width=0.05,
+        seed=43,
+    )
+    whitening = fit_affine_whitening(dequantized)
+    flow_values = forward_affine_whitening(dequantized, whitening)
+    recovered = inverse_spline15d_flow_coordinates(
+        flow_values,
+        transforms=transforms,
+        whitening=whitening,
+        atom_half_width=0.05,
+    )
+
+    zero_normalized = normalized_physical_zero(transforms[SFH_CONTRAST_NAMES[4]])
+    assert np.all(np.abs(dequantized[:600, atom_index] - zero_normalized) <= 0.05)
+    np.testing.assert_array_equal(recovered[:600, atom_index], 0.0)
 
 
 def test_normalized_atom_dequantization_whitening_and_scientific_inverse() -> None:

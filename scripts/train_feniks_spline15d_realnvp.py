@@ -27,9 +27,12 @@ from euclid_dsps.prior_learning.spline15d import (
     dequantize_normalized_zero_atoms,
     fit_affine_whitening,
     fit_asinh_transforms,
+    fit_shifted_asinh_transforms,
     forward_affine_whitening,
     forward_asinh_matrix,
     gaussian_quantile_rmse,
+    inverse_affine_whitening,
+    inverse_asinh_arguments_matrix,
     inverse_asinh_matrix,
     inverse_spline15d_flow_coordinates,
 )
@@ -66,6 +69,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--evaluation-every", type=int)
     parser.add_argument("--evaluation-samples", type=int)
+    parser.add_argument("--snapshot-samples", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--data-parallel", choices=("single", "auto", "pmap"))
     return parser.parse_args()
@@ -199,9 +203,17 @@ def _plot_normalization(
         )
         right.plot(grid, gaussian, color="black", lw=1.2, label="N(0,1)")
         transform = transforms[name]
-        stage = "after asinh + whitening" if whitening_enabled else "after asinh"
+        family = str(transform.get("family", "asinh"))
+        stage = (
+            f"after {family} + whitening" if whitening_enabled else f"after {family}"
+        )
+        location_text = (
+            f" | location={transform['location']:.4g}"
+            if family == "shifted_asinh"
+            else ""
+        )
         right.set_title(
-            f"{stage} | lambda={transform['lambda']:.4g} | "
+            f"{stage} | lambda={transform['lambda']:.4g}{location_text} | "
             f"test QRMSE={gaussian_quantile_rmse(test_x[:, index]):.3f}",
             fontsize=9,
         )
@@ -209,9 +221,10 @@ def _plot_normalization(
         if index == 0:
             left.legend(fontsize=8)
             right.legend(fontsize=8, ncol=2)
+    family = str(next(iter(transforms.values())).get("family", "asinh"))
     suffix = " + Cholesky whitening" if whitening_enabled else ""
     fig.suptitle(
-        f"Spline-15D marginals before/after train-fitted asinh{suffix}",
+        f"Spline-15D marginals before/after train-fitted {family}{suffix}",
         fontsize=14,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.995))
@@ -250,6 +263,165 @@ def _plot_history(training: pd.DataFrame, validation: pd.DataFrame, path: Path) 
     plt.close(fig)
 
 
+def _marginal_snapshot_frame(
+    truth: np.ndarray,
+    prior: np.ndarray,
+    *,
+    space: str,
+) -> pd.DataFrame:
+    rows = []
+    quantile_grid = np.linspace(0.001, 0.999, 999)
+    for index, name in enumerate(SPLINE15D_PARAMETER_NAMES):
+        truth_values = np.asarray(truth[:, index], dtype=np.float64)
+        prior_values = np.asarray(prior[:, index], dtype=np.float64)
+        truth_values = truth_values[np.isfinite(truth_values)]
+        prior_values = prior_values[np.isfinite(prior_values)]
+        if not len(truth_values) or not len(prior_values):
+            rows.append({"space": space, "parameter": name, "finite": False})
+            continue
+        combined = np.sort(np.concatenate((truth_values, prior_values)))
+        truth_cdf = np.searchsorted(
+            np.sort(truth_values), combined, side="right"
+        ) / len(truth_values)
+        prior_cdf = np.searchsorted(
+            np.sort(prior_values), combined, side="right"
+        ) / len(prior_values)
+        truth_quantiles = np.quantile(truth_values, quantile_grid)
+        prior_quantiles = np.quantile(prior_values, quantile_grid)
+        rows.append(
+            {
+                "space": space,
+                "parameter": name,
+                "finite": True,
+                "ks": float(np.max(np.abs(truth_cdf - prior_cdf))),
+                "quantile_wasserstein": float(
+                    np.mean(np.abs(truth_quantiles - prior_quantiles))
+                ),
+                "truth_mean": float(np.mean(truth_values)),
+                "prior_mean": float(np.mean(prior_values)),
+                "truth_std": float(np.std(truth_values)),
+                "prior_std": float(np.std(prior_values)),
+                "truth_q001": float(np.quantile(truth_values, 0.001)),
+                "prior_q001": float(np.quantile(prior_values, 0.001)),
+                "truth_q999": float(np.quantile(truth_values, 0.999)),
+                "prior_q999": float(np.quantile(prior_values, 0.999)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _write_correlation_matrix(path: Path, values: np.ndarray) -> None:
+    matrix = np.asarray(values, dtype=np.float64)
+    correlation = np.corrcoef(matrix, rowvar=False)
+    pd.DataFrame(
+        correlation,
+        index=SPLINE15D_PARAMETER_NAMES,
+        columns=SPLINE15D_PARAMETER_NAMES,
+    ).to_csv(path)
+
+
+def _write_epoch_snapshot(
+    snapshot_root: Path,
+    *,
+    epoch: int,
+    prior: RealNVPPrior,
+    validation_theta: np.ndarray,
+    validation_x: np.ndarray,
+    transforms: dict[str, dict[str, Any]],
+    whitening: dict[str, Any] | None,
+    atom_half_width: float | None,
+    sample_count: int,
+    seed: int,
+    flow_config: dict[str, Any],
+    normalization: dict[str, Any],
+    dataset_dir: Path,
+    save_samples: bool,
+    save_checkpoint: bool,
+) -> dict[str, Any]:
+    snapshot = ensure_dir(snapshot_root / f"epoch_{int(epoch):03d}")
+    validation_nll = _flow_nll(prior, validation_x)
+    metrics, prior_theta, prior_x = evaluate_generated_prior(
+        prior,
+        truth_theta=validation_theta,
+        truth_x=validation_x,
+        transforms=transforms,
+        sample_count=sample_count,
+        seed=seed,
+        whitening=whitening,
+        atom_half_width=atom_half_width,
+    )
+    if save_checkpoint:
+        _save_checkpoint(
+            snapshot / "checkpoint.eqx",
+            prior,
+            flow_config=flow_config,
+            normalization=normalization,
+            dataset_dir=dataset_dir,
+            epoch=epoch,
+            metric=validation_nll,
+            selection={"criterion": "validation_nll"},
+        )
+    if save_samples:
+        pd.DataFrame(prior_x, columns=SPLINE15D_PARAMETER_NAMES).to_parquet(
+            snapshot / "prior_samples_normalized.parquet", index=False
+        )
+        pd.DataFrame(prior_theta, columns=SPLINE15D_PARAMETER_NAMES).to_parquet(
+            snapshot / "prior_samples_physical.parquet", index=False
+        )
+    plot_truth_prior_physical_normalized(
+        truth_theta=validation_theta,
+        prior_theta=prior_theta,
+        truth_x=validation_x,
+        prior_x=prior_x,
+        path=str(snapshot / "truth_vs_prior.png"),
+        title_suffix=f"validation snapshot epoch {int(epoch)}",
+    )
+    marginal = pd.concat(
+        [
+            _marginal_snapshot_frame(validation_theta, prior_theta, space="physical"),
+            _marginal_snapshot_frame(validation_x, prior_x, space="normalized"),
+        ],
+        ignore_index=True,
+    )
+    marginal.to_csv(snapshot / "marginal_metrics.csv", index=False)
+    for label, values in (
+        ("physical_truth", validation_theta),
+        ("physical_prior", prior_theta),
+        ("normalized_truth", validation_x),
+        ("normalized_prior", prior_x),
+    ):
+        _write_correlation_matrix(snapshot / f"correlation_{label}.csv", values)
+    truth_marginal = (
+        validation_x
+        if whitening is None
+        else inverse_affine_whitening(validation_x, whitening)
+    )
+    prior_marginal = (
+        prior_x if whitening is None else inverse_affine_whitening(prior_x, whitening)
+    )
+    truth_arguments = inverse_asinh_arguments_matrix(truth_marginal, transforms)
+    prior_arguments = inverse_asinh_arguments_matrix(prior_marginal, transforms)
+    tail_diagnostics = {
+        "truth_sinh_argument_abs_gt5_fraction": float(
+            np.mean(np.abs(truth_arguments) > 5.0)
+        ),
+        "prior_sinh_argument_abs_gt5_fraction": float(
+            np.mean(np.abs(prior_arguments) > 5.0)
+        ),
+        "truth_sinh_argument_max_abs": float(np.max(np.abs(truth_arguments))),
+        "prior_sinh_argument_max_abs": float(np.max(np.abs(prior_arguments))),
+    }
+    payload = {
+        "epoch": int(epoch),
+        "selection_criterion": "validation_nll",
+        "validation_nll": float(validation_nll),
+        **metrics,
+        **tail_diagnostics,
+    }
+    write_json(snapshot / "metrics.json", payload)
+    return payload
+
+
 def main() -> None:
     args = _parse_args()
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
@@ -262,8 +434,11 @@ def main() -> None:
     evaluation_cfg = dict(cfg.get("evaluation", {}) or {})
     norm_cfg = dict(cfg.get("normalization", {}) or {})
     preprocessing_cfg = dict(cfg.get("preprocessing", {}) or {})
-    if str(norm_cfg.get("family", "asinh")).lower() != "asinh":
-        raise ValueError("This production command supports asinh normalization only")
+    normalization_family = str(norm_cfg.get("family", "asinh")).lower()
+    if normalization_family not in {"asinh", "shifted_asinh"}:
+        raise ValueError(
+            "This production command supports asinh or shifted_asinh normalization"
+        )
     overrides = {
         "epochs": args.epochs,
         "batch_size": args.batch_size,
@@ -283,6 +458,9 @@ def main() -> None:
         evaluation_cfg["every_epochs"] = args.evaluation_every
     if args.evaluation_samples is not None:
         evaluation_cfg["sample_count"] = args.evaluation_samples
+    snapshot_cfg = dict(cfg.get("snapshots", {}) or {})
+    if args.snapshot_samples is not None:
+        snapshot_cfg["sample_count"] = args.snapshot_samples
 
     dataset_dir = Path(args.dataset_dir or cfg["dataset_dir"])
     out = args.out
@@ -300,6 +478,7 @@ def main() -> None:
                 "flow": flow_cfg,
                 "training": training_cfg,
                 "evaluation": evaluation_cfg,
+                "snapshots": snapshot_cfg,
                 "output": output_cfg,
             }
         },
@@ -363,12 +542,20 @@ def main() -> None:
         split: frame.loc[:, SPLINE15D_PARAMETER_NAMES].to_numpy(dtype=np.float64)
         for split, frame in target_frames.items()
     }
-    transforms = fit_asinh_transforms(
-        matrices["train"],
-        log10_lambda_min=float(norm_cfg.get("log10_lambda_min", -8.0)),
-        log10_lambda_max=float(norm_cfg.get("log10_lambda_max", 8.0)),
-        grid_size=int(norm_cfg.get("grid_size", 257)),
-    )
+    if normalization_family == "shifted_asinh":
+        transforms = fit_shifted_asinh_transforms(
+            matrices["train"],
+            lower_quantile=float(norm_cfg.get("lower_quantile", 0.1586552539)),
+            upper_quantile=float(norm_cfg.get("upper_quantile", 0.8413447461)),
+            minimum_lambda=float(norm_cfg.get("minimum_lambda", 1.0e-6)),
+        )
+    else:
+        transforms = fit_asinh_transforms(
+            matrices["train"],
+            log10_lambda_min=float(norm_cfg.get("log10_lambda_min", -8.0)),
+            log10_lambda_max=float(norm_cfg.get("log10_lambda_max", 8.0)),
+            grid_size=int(norm_cfg.get("grid_size", 257)),
+        )
     asinh_normalized = {
         split: forward_asinh_matrix(matrix, transforms)
         for split, matrix in matrices.items()
@@ -411,12 +598,15 @@ def main() -> None:
         asinh_normalized["test"], transforms
     )
     norm_payload = {
-        "version": 1,
-        "family": "asinh",
+        "version": 2 if normalization_family == "shifted_asinh" else 1,
+        "family": normalization_family,
         "fit_split": "train",
         "fit_rows": len(matrices["train"]),
         "parameter_names": SPLINE15D_PARAMETER_NAMES,
-        "formula": "asinh marginal transform followed by optional Cholesky whitening",
+        "formula": (
+            f"{normalization_family} marginal transform followed by optional "
+            "Cholesky whitening"
+        ),
         "inverse_formula": "inverse whitening, inverse asinh, atom reclipping",
         "transforms": transforms,
         "whitening": whitening,
@@ -431,7 +621,9 @@ def main() -> None:
         "test_scientific_reclip_max_abs": float(
             np.max(np.abs(scientific_roundtrip - matrices["test"]))
         ),
-        "train_flow_mean_abs_max": float(np.max(np.abs(np.mean(normalized["train"], axis=0)))),
+        "train_flow_mean_abs_max": float(
+            np.max(np.abs(np.mean(normalized["train"], axis=0)))
+        ),
         "train_flow_covariance_frobenius": float(
             np.linalg.norm(
                 np.cov(normalized["train"], rowvar=False)
@@ -490,6 +682,13 @@ def main() -> None:
     }
     validation_generative_rows: list[dict[str, Any]] = []
     epoch_zero_selection: dict[str, Any] = {}
+    checkpoint_selection = str(
+        evaluation_cfg.get("checkpoint_selection", "generative_gates")
+    ).lower()
+    if checkpoint_selection not in {"validation_nll", "generative_gates"}:
+        raise ValueError(
+            "evaluation.checkpoint_selection must be validation_nll or generative_gates"
+        )
 
     def _select_checkpoint(
         epoch: int,
@@ -551,6 +750,39 @@ def main() -> None:
         validation_generative_rows.append({"epoch": int(epoch), **payload})
         return payload
 
+    snapshot_enabled = bool(snapshot_cfg.get("enabled", False))
+    snapshot_every = max(int(snapshot_cfg.get("every_epochs", 1)), 1)
+    snapshot_samples = max(int(snapshot_cfg.get("sample_count", 10000)), 256)
+    snapshot_rows: list[dict[str, Any]] = []
+    snapshot_root = ensure_dir(out / "snapshots") if snapshot_enabled else None
+
+    def _snapshot_callback(epoch: int, prior: RealNVPPrior) -> None:
+        if not snapshot_enabled or snapshot_root is None:
+            return
+        if epoch not in {0, epochs} and epoch % snapshot_every:
+            return
+        payload = _write_epoch_snapshot(
+            snapshot_root,
+            epoch=epoch,
+            prior=prior,
+            validation_theta=matrices["validation"],
+            validation_x=normalized["validation"],
+            transforms=transforms,
+            whitening=whitening,
+            atom_half_width=atom_half_width or None,
+            sample_count=snapshot_samples,
+            seed=seed + 20_000,
+            flow_config=flow_cfg,
+            normalization=norm_payload,
+            dataset_dir=dataset_dir,
+            save_samples=bool(snapshot_cfg.get("save_samples", True)),
+            save_checkpoint=bool(snapshot_cfg.get("save_checkpoints", True)),
+        )
+        snapshot_rows.append(payload)
+        pd.DataFrame(snapshot_rows).to_csv(
+            out / "epoch_snapshot_history.csv", index=False
+        )
+
     result = fit_realnvp_to_x(
         normalized["train"],
         normalized["validation"],
@@ -558,8 +790,11 @@ def main() -> None:
         flow_config=flow_cfg,
         training_config=training_cfg,
         seed=seed,
+        epoch_callback=_snapshot_callback,
         progress_callback=_progress(out, epochs),
-        selection_callback=_select_checkpoint,
+        selection_callback=(
+            None if checkpoint_selection == "validation_nll" else _select_checkpoint
+        ),
     )
     if not isinstance(result.prior, RealNVPPrior):
         raise TypeError("Training returned a non-RealNVP model")
@@ -791,7 +1026,9 @@ def main() -> None:
         summary={
             "model": "RealNVP",
             "latent_dim": 15,
-            "normalization": "train-fitted asinh plus Cholesky whitening",
+            "normalization": (
+                f"train-fitted {normalization_family} plus Cholesky whitening"
+            ),
             "nll": nll,
             "best_epoch": result.best_epoch,
             "best_validation_nll": best_validation_nll,
@@ -807,7 +1044,9 @@ def main() -> None:
         summary={
             "model": "RealNVP",
             "latent_dim": 15,
-            "normalization": "train-fitted asinh plus Cholesky whitening",
+            "normalization": (
+                f"train-fitted {normalization_family} plus Cholesky whitening"
+            ),
             "nll": calibrated_nll,
             "best_epoch": result.best_epoch,
             "base_temperature": selected_temperature,
@@ -829,6 +1068,8 @@ def main() -> None:
         "best_selection_metric": result.best_metric,
         "best_selection_eligible": result.best_selection_eligible,
         "best_selection_diagnostics": result.best_selection_diagnostics,
+        "checkpoint_selection": checkpoint_selection,
+        "epoch_snapshots": len(snapshot_rows),
         "epoch_zero_selection": epoch_zero_selection,
         "validation_novel_nll": novel_nll["validation"],
         "test_novel_nll": novel_nll["test"],
