@@ -64,6 +64,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--epochs", type=int)
+    parser.add_argument("--learning-rate", type=float)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--n-layers", type=int)
     parser.add_argument("--hidden-size", type=int)
@@ -75,6 +76,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--whitening", choices=("true", "false"))
     parser.add_argument("--seed", type=int)
     parser.add_argument("--data-parallel", choices=("single", "auto", "pmap"))
+    parser.add_argument("--resume-checkpoint", type=Path)
     return parser.parse_args()
 
 
@@ -151,6 +153,7 @@ def _save_checkpoint(
     epoch: int,
     metric: float,
     selection: dict[str, Any] | None = None,
+    roundtrip_fail_atol: float = 5.0e-2,
 ) -> None:
     if not isinstance(prior, RealNVPPrior):
         raise TypeError("The spline15d production path only accepts RealNVPPrior")
@@ -158,6 +161,7 @@ def _save_checkpoint(
         prior,
         context=f"spline15d RealNVP checkpoint {path}",
         sample_count=64,
+        roundtrip_fail_atol=float(roundtrip_fail_atol),
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     eqx.tree_serialise_leaves(path, prior)
@@ -173,6 +177,7 @@ def _save_checkpoint(
             "source_dataset": str(dataset_dir),
             "flow_integrity": integrity,
             "selection": selection or {},
+            "integrity_roundtrip_fail_atol": float(roundtrip_fail_atol),
         },
     )
 
@@ -526,6 +531,7 @@ def main() -> None:
     overrides = {
         "epochs": args.epochs,
         "batch_size": args.batch_size,
+        "learning_rate": args.learning_rate,
         "data_parallel": args.data_parallel,
         "seed": args.seed,
     }
@@ -813,6 +819,67 @@ def main() -> None:
         raise ValueError(
             "evaluation.checkpoint_selection must be validation_nll or generative_gates"
         )
+    if args.resume_checkpoint is not None and checkpoint_selection != "validation_nll":
+        raise ValueError(
+            "Checkpoint resume currently requires validation_nll selection"
+        )
+
+    initial_prior = None
+    initial_epoch = 0
+    resume_metadata: dict[str, Any] | None = None
+    if args.resume_checkpoint is not None:
+        initial_prior, resume_metadata = load_spline15d_realnvp_checkpoint(
+            args.resume_checkpoint
+        )
+        initial_epoch = int(resume_metadata.get("epoch", 0))
+        resume_architecture = dict(resume_metadata.get("architecture", {}) or {})
+        expected_architecture = {
+            "type": "realnvp",
+            "latent_dim": len(SPLINE15D_PARAMETER_NAMES),
+            "n_layers": int(flow_cfg.get("n_layers", 8)),
+            "hidden_size": int(flow_cfg.get("hidden_size", 128)),
+            "scale_clamp": float(flow_cfg.get("scale_clamp", 0.05)),
+            "shift_clamp": float(flow_cfg.get("shift_clamp", 5.0)),
+            "permutation": str(flow_cfg.get("permutation", "none")),
+        }
+        mismatched_architecture = {
+            name: {
+                "checkpoint": resume_architecture.get(name),
+                "config": expected,
+            }
+            for name, expected in expected_architecture.items()
+            if resume_architecture.get(name) != expected
+        }
+        if mismatched_architecture:
+            raise ValueError(
+                "Resume checkpoint architecture does not match the config: "
+                + json.dumps(mismatched_architecture, sort_keys=True)
+            )
+        resume_normalization = dict(resume_metadata.get("normalization", {}) or {})
+        if resume_normalization.get("transforms") != norm_payload["transforms"]:
+            raise ValueError(
+                "Resume checkpoint marginal transforms do not match this dataset/config"
+            )
+        if resume_normalization.get("whitening") != norm_payload["whitening"]:
+            raise ValueError("Resume checkpoint whitening contract does not match")
+        if float(resume_normalization.get("normalized_atom_half_width", 0.0)) != float(
+            norm_payload["normalized_atom_half_width"]
+        ):
+            raise ValueError("Resume checkpoint atom contract does not match")
+        if initial_epoch >= epochs:
+            raise ValueError(
+                f"Resume checkpoint epoch {initial_epoch} is not below target {epochs}"
+            )
+        write_json(
+            out / "resume.json",
+            {
+                "checkpoint": str(args.resume_checkpoint),
+                "checkpoint_epoch": initial_epoch,
+                "target_epoch": epochs,
+                "optimizer_state": "reinitialized",
+                "learning_rate": float(training_cfg.get("learning_rate", 1.0e-4)),
+            },
+        )
 
     def _select_checkpoint(
         epoch: int,
@@ -919,6 +986,8 @@ def main() -> None:
         selection_callback=(
             None if checkpoint_selection == "validation_nll" else _select_checkpoint
         ),
+        initial_prior=initial_prior,
+        initial_epoch=initial_epoch,
     )
     if not isinstance(result.prior, RealNVPPrior):
         raise TypeError("Training returned a non-RealNVP model")

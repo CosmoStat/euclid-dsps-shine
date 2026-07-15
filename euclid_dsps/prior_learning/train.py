@@ -580,6 +580,8 @@ def fit_realnvp_to_x(
         [int, PriorFlow, float], dict[str, Any] | None
     ]
     | None = None,
+    initial_prior: PriorFlow | None = None,
+    initial_epoch: int = 0,
 ) -> PriorTrainingResult:
     """Fit the configured exact flow prior to an unconstrained truth matrix."""
     x_train = np.asarray(x_train, dtype=np.float32)
@@ -590,17 +592,28 @@ def fit_realnvp_to_x(
         if x_validation is None or len(x_validation) == 0
         else np.asarray(x_validation, dtype=np.float32)
     )
+    initial_epoch = int(initial_epoch)
+    if initial_epoch < 0:
+        raise ValueError("initial_epoch must be non-negative")
     key = jax.random.PRNGKey(int(seed))
-    prior = _build_prior_from_flow_config(
-        key,
-        latent_dim=int(latent_dim),
-        flow_config=flow_config,
+    prior = (
+        _build_prior_from_flow_config(
+            key,
+            latent_dim=int(latent_dim),
+            flow_config=flow_config,
+        )
+        if initial_prior is None
+        else initial_prior
     )
+    if int(prior.latent_dim) != int(latent_dim):
+        raise ValueError("initial_prior has the wrong latent dimension")
     prior = _cast_inexact_arrays(prior, jnp.float32)
     optimizer = _make_optimizer(training_config)
     opt_state = optimizer.init(eqx.filter(prior, eqx.is_inexact_array))
     batch_size = max(int(training_config.get("batch_size", 256)), 1)
     epochs = max(int(training_config.get("epochs", 20)), 1)
+    if initial_epoch >= epochs:
+        raise ValueError("initial_epoch must be smaller than the target epochs")
     epoch_shuffle = bool(training_config.get("epoch_shuffle", True))
     base_moment_weight = float(training_config.get("base_moment_weight", 0.0))
     training_jitter_std = float(training_config.get("training_jitter_std", 0.0))
@@ -623,7 +636,7 @@ def fit_realnvp_to_x(
         )
         prior_replicated = _replicate_tree(prior, data_parallel["devices"])
         opt_state_replicated = _replicate_tree(opt_state, data_parallel["devices"])
-    rng = np.random.default_rng(int(seed) + 100)
+    rng = np.random.default_rng(int(seed) + 100 + initial_epoch)
     initial_train_nll = float(_prior_nll_jit(prior, jnp.asarray(x_train)))
     best_metric = float("inf")
     best_epoch = 0
@@ -633,7 +646,7 @@ def fit_realnvp_to_x(
     rows: list[dict[str, float | int | str]] = []
     val_rows: list[dict[str, float | int | str]] = []
     if epoch_callback is not None:
-        epoch_callback(0, prior)
+        epoch_callback(initial_epoch, prior)
     evaluations_since_best = 0
     if selection_callback is not None:
         initial_validation_nll = (
@@ -641,20 +654,22 @@ def fit_realnvp_to_x(
             if x_validation is None
             else float(_prior_nll_jit(prior, jnp.asarray(x_validation)))
         )
-        initial_selection = selection_callback(0, prior, initial_validation_nll)
+        initial_selection = selection_callback(
+            initial_epoch, prior, initial_validation_nll
+        )
         if initial_selection is not None:
             initial_diagnostics = dict(initial_selection)
             initial_metric = float(initial_diagnostics.pop("metric"))
             initial_eligible = bool(initial_diagnostics.pop("eligible", False))
             best_metric = initial_metric
-            best_epoch = 0
+            best_epoch = initial_epoch
             best_prior = prior
             best_selection_eligible = initial_eligible
             best_selection_diagnostics = dict(initial_diagnostics)
             if x_validation is not None:
                 val_rows.append(
                     {
-                        "epoch": 0,
+                        "epoch": initial_epoch,
                         "split": "validation",
                         "mean_log_prob": -initial_validation_nll,
                         "negative_mean_log_prob": initial_validation_nll,
@@ -665,7 +680,31 @@ def fit_realnvp_to_x(
                         **initial_diagnostics,
                     }
                 )
-    for epoch in range(1, epochs + 1):
+    elif initial_prior is not None:
+        initial_validation_nll = (
+            initial_train_nll
+            if x_validation is None
+            else float(_prior_nll_jit(prior, jnp.asarray(x_validation)))
+        )
+        best_metric = initial_validation_nll
+        best_epoch = initial_epoch
+        best_prior = prior
+        best_selection_eligible = True
+        if x_validation is not None:
+            val_rows.append(
+                {
+                    "epoch": initial_epoch,
+                    "split": "validation",
+                    "mean_log_prob": -initial_validation_nll,
+                    "negative_mean_log_prob": initial_validation_nll,
+                    "n_objects": int(len(x_validation)),
+                    "selection_evaluated": True,
+                    "selection_eligible": True,
+                    "selection_metric": initial_validation_nll,
+                    "resumed_checkpoint": True,
+                }
+            )
+    for epoch in range(initial_epoch + 1, epochs + 1):
         order = np.arange(len(x_train))
         if epoch_shuffle:
             rng.shuffle(order)

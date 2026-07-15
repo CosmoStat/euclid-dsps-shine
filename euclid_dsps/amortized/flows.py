@@ -529,12 +529,16 @@ def assert_flow_integrity(
     context: str,
     key=None,
     sample_count: int = 128,
+    roundtrip_atol: float = 1.0e-3,
+    roundtrip_fail_atol: float = 1.0e-2,
 ) -> dict[str, Any]:
     """Raise if an exact flow prior fails structural/numerical integrity checks."""
     diagnostics = flow_integrity_diagnostics(
         prior,
         key=key,
         sample_count=sample_count,
+        roundtrip_atol=roundtrip_atol,
+        roundtrip_fail_atol=roundtrip_fail_atol,
     )
     if diagnostics["status"] == "FAIL":
         failed = [

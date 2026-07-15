@@ -333,6 +333,47 @@ def test_realnvp_supervised_prior_learns_toy_distribution() -> None:
     not HAS_EQUINOX,
     reason="Equinox optional dependency is not installed",
 )
+def test_realnvp_training_can_resume_from_prior_and_epoch() -> None:
+    from euclid_dsps.prior_learning.train import fit_realnvp_to_x
+
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=(32, 2)).astype(np.float32)
+    flow_config = {"n_layers": 2, "hidden_size": 8, "scale_clamp": 0.2}
+    training_config = {
+        "epochs": 1,
+        "batch_size": 16,
+        "learning_rate": 1.0e-3,
+        "weight_decay": 0.0,
+        "gradient_clip_norm": 5.0,
+    }
+    first = fit_realnvp_to_x(
+        x,
+        x,
+        latent_dim=2,
+        flow_config=flow_config,
+        training_config=training_config,
+        seed=3,
+    )
+    resumed = fit_realnvp_to_x(
+        x,
+        x,
+        latent_dim=2,
+        flow_config=flow_config,
+        training_config={**training_config, "epochs": 2},
+        seed=3,
+        initial_prior=first.last_prior,
+        initial_epoch=1,
+    )
+
+    assert resumed.training_log["epoch"].unique().tolist() == [2]
+    assert resumed.validation_log["epoch"].tolist()[0] == 1
+    assert bool(resumed.validation_log.iloc[0]["resumed_checkpoint"])
+
+
+@pytest.mark.skipif(
+    not HAS_EQUINOX,
+    reason="Equinox optional dependency is not installed",
+)
 def test_rq_spline_train_supervised_prior_checkpoint_roundtrip(tmp_path: Path) -> None:
     import jax
 

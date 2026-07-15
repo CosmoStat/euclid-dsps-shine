@@ -62,5 +62,6 @@ def load_spline15d_realnvp_checkpoint(
         prior,
         context=f"spline15d RealNVP checkpoint load {checkpoint}",
         sample_count=64,
+        roundtrip_fail_atol=float(sidecar.get("integrity_roundtrip_fail_atol", 1.0e-2)),
     )
     return prior, sidecar

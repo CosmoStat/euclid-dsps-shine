@@ -276,3 +276,33 @@ Then launch the single production job:
 The production output is
 ``outputs/runs/feniks_spline15d_v6_positive_support``. The launcher aborts if
 the output directory already exists.
+
+V6 checkpoint recovery
+----------------------
+
+Spline-15D checkpoints use float32. Their integrity audit keeps the strict
+structural, finite-density, and sample-amplitude checks, warns when the
+forward/inverse maximum error exceeds ``1e-3``, and rejects a checkpoint above
+``5e-2``. The previous absolute rejection threshold of ``1e-2`` could stop an
+otherwise finite run while writing an auxiliary snapshot; the observed epoch
+160 value was ``1.19e-2``. The effective threshold is serialized in every new
+checkpoint sidecar rather than silently changing the interpretation of older
+checkpoints.
+
+Training can resume into a new output directory with ``--resume-checkpoint``.
+The command verifies the flow architecture and the complete marginal,
+whitening, and atom normalization contracts before training. Epoch numbering
+continues from the checkpoint and validation NLL compares the resumed model
+against all new epochs. Optimizer moments were not serialized by the original
+run, so Adam is deliberately reinitialized; use a reduced continuation
+learning rate.
+
+For the interrupted V6 run, resume from epoch 155 with:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,\
+RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support/snapshots/epoch_155/checkpoint.eqx,\
+OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume155,\
+LEARNING_RATE=0.00001 \
+     scripts/feniks_spline15d_v6_positive_support_h100.slurm

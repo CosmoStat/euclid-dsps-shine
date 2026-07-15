@@ -27,6 +27,8 @@ SPLINE_DATASET_DIR="${SPLINE_DATASET_DIR:-Data/diffsky/synthetic/feniks_260617_s
 OUT_DIR="${OUT_DIR:-outputs/runs/feniks_spline15d_v6_positive_support}"
 PRIOR_CONFIG="${PRIOR_CONFIG:-configs/prior_feniks_spline15d_realnvp_v6_positive_support.yaml}"
 SMOKE="${SMOKE:-0}"
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
+LEARNING_RATE="${LEARNING_RATE:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -63,6 +65,15 @@ print("[job] backend/devices:", jax.default_backend(), jax.devices())
 PY
 
 training_args=(--data-parallel single)
+if [[ -n "$RESUME_CHECKPOINT" ]]; then
+  test -s "$RESUME_CHECKPOINT" || {
+    echo "[job][error] missing resume checkpoint: $RESUME_CHECKPOINT"; exit 2;
+  }
+  training_args+=(--resume-checkpoint "$RESUME_CHECKPOINT")
+fi
+if [[ -n "$LEARNING_RATE" ]]; then
+  training_args+=(--learning-rate "$LEARNING_RATE")
+fi
 if [[ "$SMOKE" == "1" ]]; then
   training_args+=(--limit "${LIMIT:-1000}" --epochs "${EPOCHS:-2}"
     --batch-size "${BATCH_SIZE:-256}" --n-layers "${N_LAYERS:-2}"
@@ -73,6 +84,7 @@ fi
 
 echo "[job] step=realnvp_v6 start=$(date --iso-8601=seconds)"
 echo "[job] dataset=$SPLINE_DATASET_DIR output=$OUT_DIR smoke=$SMOKE"
+echo "[job] resume=${RESUME_CHECKPOINT:-none} learning_rate=${LEARNING_RATE:-config}"
 python scripts/train_feniks_spline15d_realnvp.py \
   --config "$PRIOR_CONFIG" \
   --dataset-dir "$SPLINE_DATASET_DIR" \
