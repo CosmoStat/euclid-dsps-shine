@@ -70,6 +70,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--evaluation-every", type=int)
     parser.add_argument("--evaluation-samples", type=int)
     parser.add_argument("--snapshot-samples", type=int)
+    parser.add_argument("--atom-half-width", type=float)
+    parser.add_argument("--whitening", choices=("true", "false"))
     parser.add_argument("--seed", type=int)
     parser.add_argument("--data-parallel", choices=("single", "auto", "pmap"))
     return parser.parse_args()
@@ -320,6 +322,17 @@ def _write_correlation_matrix(path: Path, values: np.ndarray) -> None:
     ).to_csv(path)
 
 
+def _spearman_correlation(values: np.ndarray) -> np.ndarray:
+    ranks = pd.DataFrame(np.asarray(values, dtype=np.float64)).rank(
+        method="average", axis=0
+    )
+    return ranks.corr(method="pearson").to_numpy(dtype=np.float64)
+
+
+def _correlation_frobenius(left: np.ndarray, right: np.ndarray) -> float:
+    return float(np.linalg.norm(np.asarray(left) - np.asarray(right), ord="fro"))
+
+
 def _write_epoch_snapshot(
     snapshot_root: Path,
     *,
@@ -401,6 +414,39 @@ def _write_epoch_snapshot(
     )
     truth_arguments = inverse_asinh_arguments_matrix(truth_marginal, transforms)
     prior_arguments = inverse_asinh_arguments_matrix(prior_marginal, transforms)
+    argument_rows = []
+    for index, name in enumerate(SPLINE15D_PARAMETER_NAMES):
+        argument_rows.append(
+            {
+                "parameter": name,
+                "truth_abs_gt4_fraction": float(
+                    np.mean(np.abs(truth_arguments[:, index]) > 4.0)
+                ),
+                "prior_abs_gt4_fraction": float(
+                    np.mean(np.abs(prior_arguments[:, index]) > 4.0)
+                ),
+                "truth_abs_gt5_fraction": float(
+                    np.mean(np.abs(truth_arguments[:, index]) > 5.0)
+                ),
+                "prior_abs_gt5_fraction": float(
+                    np.mean(np.abs(prior_arguments[:, index]) > 5.0)
+                ),
+                "truth_max_abs": float(np.max(np.abs(truth_arguments[:, index]))),
+                "prior_max_abs": float(np.max(np.abs(prior_arguments[:, index]))),
+                "truth_exact_zero_fraction": float(
+                    np.mean(validation_theta[:, index] == 0.0)
+                ),
+                "prior_exact_zero_fraction": float(
+                    np.mean(prior_theta[:, index] == 0.0)
+                ),
+            }
+        )
+    pd.DataFrame(argument_rows).to_csv(
+        snapshot / "sinh_argument_and_atom_metrics.csv", index=False
+    )
+    truth_central = np.all(np.abs(truth_arguments) <= 4.0, axis=1)
+    prior_central = np.all(np.abs(prior_arguments) <= 4.0, axis=1)
+    physical_marginal = marginal.loc[marginal["space"] == "physical"]
     tail_diagnostics = {
         "truth_sinh_argument_abs_gt5_fraction": float(
             np.mean(np.abs(truth_arguments) > 5.0)
@@ -410,6 +456,28 @@ def _write_epoch_snapshot(
         ),
         "truth_sinh_argument_max_abs": float(np.max(np.abs(truth_arguments))),
         "prior_sinh_argument_max_abs": float(np.max(np.abs(prior_arguments))),
+        "truth_central_abs_sinh_le4_fraction": float(np.mean(truth_central)),
+        "prior_central_abs_sinh_le4_fraction": float(np.mean(prior_central)),
+        "median_ks_physical": float(physical_marginal["ks"].median()),
+        "max_ks_physical": float(physical_marginal["ks"].max()),
+        "median_quantile_wasserstein_physical": float(
+            physical_marginal["quantile_wasserstein"].median()
+        ),
+        "max_quantile_wasserstein_physical": float(
+            physical_marginal["quantile_wasserstein"].max()
+        ),
+        "correlation_frobenius_physical_spearman": _correlation_frobenius(
+            _spearman_correlation(validation_theta),
+            _spearman_correlation(prior_theta),
+        ),
+        "correlation_frobenius_physical_central_abs_sinh_le4": (
+            _correlation_frobenius(
+                np.corrcoef(validation_theta[truth_central], rowvar=False),
+                np.corrcoef(prior_theta[prior_central], rowvar=False),
+            )
+            if np.sum(truth_central) > 2 and np.sum(prior_central) > 2
+            else float("nan")
+        ),
     }
     payload = {
         "epoch": int(epoch),
@@ -434,6 +502,10 @@ def main() -> None:
     evaluation_cfg = dict(cfg.get("evaluation", {}) or {})
     norm_cfg = dict(cfg.get("normalization", {}) or {})
     preprocessing_cfg = dict(cfg.get("preprocessing", {}) or {})
+    if args.atom_half_width is not None:
+        preprocessing_cfg["normalized_atom_half_width"] = args.atom_half_width
+    if args.whitening is not None:
+        preprocessing_cfg["whitening"] = args.whitening == "true"
     normalization_family = str(norm_cfg.get("family", "asinh")).lower()
     if normalization_family not in {"asinh", "shifted_asinh"}:
         raise ValueError(
@@ -535,9 +607,17 @@ def main() -> None:
             )
     atom_half_width = float(preprocessing_cfg.get("normalized_atom_half_width", 0.0))
     whitening_enabled = bool(preprocessing_cfg.get("whitening", False))
-    target_frames = (
-        exact_frames if (atom_half_width > 0.0 or whitening_enabled) else frames
-    )
+    target_table = str(preprocessing_cfg.get("target_table", "auto")).lower()
+    if target_table == "exact":
+        target_frames = exact_frames
+    elif target_table == "projected":
+        target_frames = frames
+    elif target_table == "auto":
+        target_frames = (
+            exact_frames if (atom_half_width > 0.0 or whitening_enabled) else frames
+        )
+    else:
+        raise ValueError("preprocessing.target_table must be exact, projected, or auto")
     matrices = {
         split: frame.loc[:, SPLINE15D_PARAMETER_NAMES].to_numpy(dtype=np.float64)
         for split, frame in target_frames.items()
@@ -611,6 +691,7 @@ def main() -> None:
         "transforms": transforms,
         "whitening": whitening,
         "normalized_atom_half_width": atom_half_width,
+        "target_table": target_table,
         "normalized_atom_counts": atom_counts,
         "test_roundtrip_max_abs": float(
             np.max(np.abs(continuous_roundtrip - dequantized_physical_test))

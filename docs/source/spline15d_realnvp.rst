@@ -177,3 +177,58 @@ Then run production:
 The production output is
 ``outputs/runs/feniks_spline15d_realnvp_shifted_v4``. Both launch modes abort
 when the requested output directory already exists.
+
+V5 minimality array
+-------------------
+
+The v5 ablation keeps the grouped 50k dataset, shifted-asinh marginals,
+12-by-256 RealNVP, seed, optimizer, and 200-epoch training contract fixed. A
+four-task array changes only normalized exact-zero atom dequantization and
+joint Cholesky whitening:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Task
+     - Atom handling
+     - Whitening
+     - Output
+   * - 0
+     - exact zeros
+     - off
+     - ``feniks_spline15d_v5_a_raw_no_whitening``
+   * - 1
+     - ``+-0.05`` dequant/reclip
+     - off
+     - ``feniks_spline15d_v5_b_dequant_no_whitening``
+   * - 2
+     - exact zeros
+     - Cholesky
+     - ``feniks_spline15d_v5_c_raw_cholesky``
+   * - 3
+     - ``+-0.05`` dequant/reclip
+     - Cholesky
+     - ``feniks_spline15d_v5_d_dequant_cholesky``
+
+Every task explicitly reads ``<split>_exact.parquet``. This matters for task
+zero: the backward-compatible ``<split>.parquet`` contains the projector's
+historical physical-space atom jitter and is not an exact-Dirac control.
+
+Snapshots are written at epoch zero and every five epochs. In addition to the
+two-column physical/normalized overlays, they contain physical marginal KS and
+quantile-Wasserstein summaries, Spearman and central Pearson correlation
+errors, per-dimension inverse-sinh tails, and exact-zero truth/prior fractions.
+These are diagnostics only; all checkpoints are selected by validation NLL.
+
+Launch all four production tasks with one H100 per task:
+
+.. code-block:: bash
+
+   sbatch scripts/feniks_spline15d_v5_ablation_h100.slurm
+
+For a two-epoch integration smoke, use separate ``_smoke`` output names:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,SMOKE=1 \
+     scripts/feniks_spline15d_v5_ablation_h100.slurm
