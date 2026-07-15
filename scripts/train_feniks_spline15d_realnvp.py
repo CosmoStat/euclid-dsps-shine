@@ -24,10 +24,14 @@ from euclid_dsps.prior_learning.diagnostics import (
 from euclid_dsps.prior_learning.flows import RealNVPPrior, assert_flow_integrity
 from euclid_dsps.prior_learning.spline15d import (
     SPLINE15D_PARAMETER_NAMES,
+    dequantize_normalized_zero_atoms,
+    fit_affine_whitening,
     fit_asinh_transforms,
+    forward_affine_whitening,
     forward_asinh_matrix,
     gaussian_quantile_rmse,
     inverse_asinh_matrix,
+    inverse_spline15d_flow_coordinates,
 )
 from euclid_dsps.prior_learning.spline15d_checkpoint import (
     load_spline15d_realnvp_checkpoint,
@@ -175,6 +179,8 @@ def _plot_normalization(
     test_x: np.ndarray,
     transforms: dict[str, dict[str, Any]],
     path: Path,
+    *,
+    whitening_enabled: bool,
 ) -> None:
     fig, axes = plt.subplots(len(SPLINE15D_PARAMETER_NAMES), 2, figsize=(13, 42))
     grid = np.linspace(-5.0, 5.0, 600)
@@ -188,11 +194,14 @@ def _plot_normalization(
         right.hist(
             validation_x[:, index], bins=70, density=True, histtype="step", label="val"
         )
-        right.hist(test_x[:, index], bins=70, density=True, histtype="step", label="test")
+        right.hist(
+            test_x[:, index], bins=70, density=True, histtype="step", label="test"
+        )
         right.plot(grid, gaussian, color="black", lw=1.2, label="N(0,1)")
         transform = transforms[name]
+        stage = "after asinh + whitening" if whitening_enabled else "after asinh"
         right.set_title(
-            f"after asinh | lambda={transform['lambda']:.4g} | "
+            f"{stage} | lambda={transform['lambda']:.4g} | "
             f"test QRMSE={gaussian_quantile_rmse(test_x[:, index]):.3f}",
             fontsize=9,
         )
@@ -200,7 +209,11 @@ def _plot_normalization(
         if index == 0:
             left.legend(fontsize=8)
             right.legend(fontsize=8, ncol=2)
-    fig.suptitle("Spline-15D marginals before/after train-fitted asinh", fontsize=14)
+    suffix = " + Cholesky whitening" if whitening_enabled else ""
+    fig.suptitle(
+        f"Spline-15D marginals before/after train-fitted asinh{suffix}",
+        fontsize=14,
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.995))
     fig.savefig(path, dpi=150)
     plt.close(fig)
@@ -216,9 +229,7 @@ def _plot_history(training: pd.DataFrame, validation: pd.DataFrame, path: Path) 
         train_epoch["negative_mean_log_prob"],
         label="train NLL",
     )
-    if not np.allclose(
-        train_epoch["negative_mean_log_prob"], train_epoch["loss"]
-    ):
+    if not np.allclose(train_epoch["negative_mean_log_prob"], train_epoch["loss"]):
         axis.plot(
             train_epoch["epoch"],
             train_epoch["loss"],
@@ -227,7 +238,8 @@ def _plot_history(training: pd.DataFrame, validation: pd.DataFrame, path: Path) 
         )
     if not validation.empty:
         axis.plot(
-            validation["epoch"], validation["negative_mean_log_prob"],
+            validation["epoch"],
+            validation["negative_mean_log_prob"],
             label="validation NLL",
         )
     axis.set_xlabel("epoch")
@@ -249,6 +261,7 @@ def main() -> None:
     output_cfg = dict(cfg.get("output", {}) or {})
     evaluation_cfg = dict(cfg.get("evaluation", {}) or {})
     norm_cfg = dict(cfg.get("normalization", {}) or {})
+    preprocessing_cfg = dict(cfg.get("preprocessing", {}) or {})
     if str(norm_cfg.get("family", "asinh")).lower() != "asinh":
         raise ValueError("This production command supports asinh normalization only")
     overrides = {
@@ -257,7 +270,9 @@ def main() -> None:
         "data_parallel": args.data_parallel,
         "seed": args.seed,
     }
-    training_cfg.update({key: value for key, value in overrides.items() if value is not None})
+    training_cfg.update(
+        {key: value for key, value in overrides.items() if value is not None}
+    )
     if args.n_layers is not None:
         flow_cfg["n_layers"] = args.n_layers
     if args.hidden_size is not None:
@@ -275,11 +290,20 @@ def main() -> None:
         raise FileExistsError(f"Output directory is not empty: {out}")
     ensure_dir(out)
     started = time.time()
-    write_json(out / "resolved_config.json", {"spline15d_prior": {
-        "dataset_dir": str(dataset_dir), "normalization": norm_cfg,
-        "flow": flow_cfg, "training": training_cfg, "evaluation": evaluation_cfg,
-        "output": output_cfg,
-    }})
+    write_json(
+        out / "resolved_config.json",
+        {
+            "spline15d_prior": {
+                "dataset_dir": str(dataset_dir),
+                "normalization": norm_cfg,
+                "preprocessing": preprocessing_cfg,
+                "flow": flow_cfg,
+                "training": training_cfg,
+                "evaluation": evaluation_cfg,
+                "output": output_cfg,
+            }
+        },
+    )
     contract_path = dataset_dir / "spline15d_contract.json"
     if not contract_path.exists():
         raise FileNotFoundError(f"Missing projection contract: {contract_path}")
@@ -303,7 +327,9 @@ def main() -> None:
         split: {
             "rows": int(len(exact_frames[split])),
             "unique_exact_truth_rows": int(
-                len(exact_frames[split].drop_duplicates(list(SPLINE15D_PARAMETER_NAMES)))
+                len(
+                    exact_frames[split].drop_duplicates(list(SPLINE15D_PARAMETER_NAMES))
+                )
             ),
             "novel_vs_train_rows": (
                 None if split == "train" else int(np.sum(novel_masks[split]))
@@ -317,9 +343,25 @@ def main() -> None:
         for split in ("train", "validation", "test")
     }
     write_json(out / "dataset_overlap_audit.json", overlap_audit)
+    if bool(preprocessing_cfg.get("require_zero_exact_overlap", False)):
+        leaking_splits = [
+            split
+            for split in ("validation", "test")
+            if int(overlap_audit[split]["exact_train_overlap_rows"] or 0) > 0
+        ]
+        if leaking_splits:
+            raise ValueError(
+                "Exact spline-15D truth leakage remains after grouped repartition: "
+                + ", ".join(leaking_splits)
+            )
+    atom_half_width = float(preprocessing_cfg.get("normalized_atom_half_width", 0.0))
+    whitening_enabled = bool(preprocessing_cfg.get("whitening", False))
+    target_frames = (
+        exact_frames if (atom_half_width > 0.0 or whitening_enabled) else frames
+    )
     matrices = {
         split: frame.loc[:, SPLINE15D_PARAMETER_NAMES].to_numpy(dtype=np.float64)
-        for split, frame in frames.items()
+        for split, frame in target_frames.items()
     }
     transforms = fit_asinh_transforms(
         matrices["train"],
@@ -327,21 +369,76 @@ def main() -> None:
         log10_lambda_max=float(norm_cfg.get("log10_lambda_max", 8.0)),
         grid_size=int(norm_cfg.get("grid_size", 257)),
     )
-    normalized = {
+    asinh_normalized = {
         split: forward_asinh_matrix(matrix, transforms)
         for split, matrix in matrices.items()
     }
-    roundtrip = inverse_asinh_matrix(normalized["test"], transforms)
+    atom_counts: dict[str, dict[str, int]] = {}
+    if atom_half_width > 0.0:
+        for split_index, split in enumerate(("train", "validation", "test")):
+            asinh_normalized[split], atom_counts[split] = (
+                dequantize_normalized_zero_atoms(
+                    asinh_normalized[split],
+                    matrices[split],
+                    half_width=atom_half_width,
+                    seed=int(preprocessing_cfg.get("atom_seed", 260716)) + split_index,
+                )
+            )
+    whitening = None
+    if whitening_enabled:
+        whitening = fit_affine_whitening(
+            asinh_normalized["train"],
+            covariance_jitter=float(preprocessing_cfg.get("covariance_jitter", 1.0e-5)),
+        )
+        normalized = {
+            split: forward_affine_whitening(value, whitening)
+            for split, value in asinh_normalized.items()
+        }
+    else:
+        normalized = asinh_normalized
+    continuous_roundtrip = inverse_spline15d_flow_coordinates(
+        normalized["test"],
+        transforms=transforms,
+        whitening=whitening,
+    )
+    scientific_roundtrip = inverse_spline15d_flow_coordinates(
+        normalized["test"],
+        transforms=transforms,
+        whitening=whitening,
+        atom_half_width=atom_half_width or None,
+    )
+    dequantized_physical_test = inverse_asinh_matrix(
+        asinh_normalized["test"], transforms
+    )
     norm_payload = {
         "version": 1,
         "family": "asinh",
         "fit_split": "train",
         "fit_rows": len(matrices["train"]),
         "parameter_names": SPLINE15D_PARAMETER_NAMES,
-        "formula": "x_norm=(lambda*asinh(x/lambda)-center)/scale",
-        "inverse_formula": "x=lambda*sinh((center+scale*x_norm)/lambda)",
+        "formula": "asinh marginal transform followed by optional Cholesky whitening",
+        "inverse_formula": "inverse whitening, inverse asinh, atom reclipping",
         "transforms": transforms,
-        "test_roundtrip_max_abs": float(np.max(np.abs(roundtrip - matrices["test"]))),
+        "whitening": whitening,
+        "normalized_atom_half_width": atom_half_width,
+        "normalized_atom_counts": atom_counts,
+        "test_roundtrip_max_abs": float(
+            np.max(np.abs(continuous_roundtrip - dequantized_physical_test))
+        ),
+        "test_dequantization_physical_max_abs": float(
+            np.max(np.abs(dequantized_physical_test - matrices["test"]))
+        ),
+        "test_scientific_reclip_max_abs": float(
+            np.max(np.abs(scientific_roundtrip - matrices["test"]))
+        ),
+        "train_flow_mean_abs_max": float(np.max(np.abs(np.mean(normalized["train"], axis=0)))),
+        "train_flow_covariance_frobenius": float(
+            np.linalg.norm(
+                np.cov(normalized["train"], rowvar=False)
+                - np.eye(len(SPLINE15D_PARAMETER_NAMES)),
+                ord="fro",
+            )
+        ),
         "gaussian_qrmse": {
             split: {
                 name: gaussian_quantile_rmse(normalized[split][:, index])
@@ -355,9 +452,15 @@ def main() -> None:
         out / "normalization_parameters.csv"
     )
     _plot_normalization(
-        matrices["train"], matrices["validation"], matrices["test"],
-        normalized["train"], normalized["validation"], normalized["test"],
-        transforms, out / "normalization_before_after.png",
+        matrices["train"],
+        matrices["validation"],
+        matrices["test"],
+        normalized["train"],
+        normalized["validation"],
+        normalized["test"],
+        transforms,
+        out / "normalization_before_after.png",
+        whitening_enabled=whitening_enabled,
     )
 
     seed = int(training_cfg.get("seed", 260715))
@@ -378,15 +481,22 @@ def main() -> None:
         "max_negative_fraction": float(
             evaluation_cfg.get("max_negative_fraction", 0.001)
         ),
+        "max_scale_saturation_fraction": float(
+            evaluation_cfg.get("max_scale_saturation_fraction", 0.20)
+        ),
+        "max_sliced_wasserstein": float(
+            evaluation_cfg.get("max_sliced_wasserstein", 0.25)
+        ),
     }
     validation_generative_rows: list[dict[str, Any]] = []
+    epoch_zero_selection: dict[str, Any] = {}
 
     def _select_checkpoint(
         epoch: int,
         prior: RealNVPPrior,
         validation_nll: float,
     ) -> dict[str, Any] | None:
-        if epoch != 1 and epoch != epochs and epoch % evaluation_every:
+        if epoch not in {0, epochs} and epoch % evaluation_every:
             return None
         metrics, _prior_theta, _prior_x = evaluate_generated_prior(
             prior,
@@ -395,8 +505,42 @@ def main() -> None:
             transforms=transforms,
             sample_count=evaluation_samples,
             seed=seed + 10_000,
+            whitening=whitening,
+            atom_half_width=atom_half_width or None,
         )
         payload = selection_payload(metrics, thresholds=thresholds)
+        if epoch == 0:
+            payload["quality_gates_eligible"] = bool(payload["eligible"])
+            payload["eligible"] = True
+            payload["is_epoch_zero_baseline"] = True
+            epoch_zero_selection.update(payload)
+        else:
+            median_tolerance = float(
+                evaluation_cfg.get("baseline_median_ks_tolerance", 0.01)
+            )
+            sw_tolerance = float(
+                evaluation_cfg.get("baseline_sliced_wasserstein_tolerance", 0.02)
+            )
+            score_improvement = float(
+                evaluation_cfg.get("baseline_score_min_improvement", 0.005)
+            )
+            relative_checks = {
+                "beats_epoch_zero_score": float(payload["metric"])
+                <= float(epoch_zero_selection["metric"]) - score_improvement,
+                "preserves_epoch_zero_median_ks": float(payload["median_ks_normalized"])
+                <= float(epoch_zero_selection["median_ks_normalized"])
+                + median_tolerance,
+                "preserves_epoch_zero_sliced_wasserstein": float(
+                    payload["sliced_wasserstein_normalized"]
+                )
+                <= float(epoch_zero_selection["sliced_wasserstein_normalized"])
+                + sw_tolerance,
+            }
+            payload["eligible"] = bool(
+                payload["eligible"] and all(relative_checks.values())
+            )
+            payload["is_epoch_zero_baseline"] = False
+            payload.update(relative_checks)
         novel = novel_masks["validation"]
         payload["validation_nll"] = float(validation_nll)
         payload["validation_novel_nll"] = (
@@ -408,9 +552,12 @@ def main() -> None:
         return payload
 
     result = fit_realnvp_to_x(
-        normalized["train"], normalized["validation"],
-        latent_dim=len(SPLINE15D_PARAMETER_NAMES), flow_config=flow_cfg,
-        training_config=training_cfg, seed=seed,
+        normalized["train"],
+        normalized["validation"],
+        latent_dim=len(SPLINE15D_PARAMETER_NAMES),
+        flow_config=flow_cfg,
+        training_config=training_cfg,
+        seed=seed,
         progress_callback=_progress(out, epochs),
         selection_callback=_select_checkpoint,
     )
@@ -421,21 +568,34 @@ def main() -> None:
     pd.DataFrame(validation_generative_rows).to_csv(
         out / "validation_generative_history.csv", index=False
     )
-    _plot_history(result.training_log, result.validation_log, out / "training_history.png")
+    _plot_history(
+        result.training_log, result.validation_log, out / "training_history.png"
+    )
     checkpoints = ensure_dir(out / "checkpoints")
     _save_checkpoint(
-        checkpoints / "best.eqx", result.prior, flow_config=flow_cfg,
-        normalization=norm_payload, dataset_dir=dataset_dir,
-        epoch=result.best_epoch, metric=result.best_metric,
+        checkpoints / "best.eqx",
+        result.prior,
+        flow_config=flow_cfg,
+        normalization=norm_payload,
+        dataset_dir=dataset_dir,
+        epoch=result.best_epoch,
+        metric=result.best_metric,
         selection={
             "eligible": result.best_selection_eligible,
             **result.best_selection_diagnostics,
         },
     )
+    last_epoch = (
+        int(result.training_log["epoch"].max()) if not result.training_log.empty else 0
+    )
     _save_checkpoint(
-        checkpoints / "last.eqx", result.last_prior, flow_config=flow_cfg,
-        normalization=norm_payload, dataset_dir=dataset_dir,
-        epoch=epochs, metric=_flow_nll(result.last_prior, normalized["validation"]),
+        checkpoints / "last.eqx",
+        result.last_prior,
+        flow_config=flow_cfg,
+        normalization=norm_payload,
+        dataset_dir=dataset_dir,
+        epoch=last_epoch,
+        metric=_flow_nll(result.last_prior, normalized["validation"]),
     )
 
     n_samples = int(output_cfg.get("prior_samples", 50000))
@@ -446,13 +606,22 @@ def main() -> None:
         jax.device_get(loaded_prior.sample(jax.random.PRNGKey(seed + 1), n_samples)),
         dtype=np.float64,
     )
-    prior_theta = inverse_asinh_matrix(prior_x, transforms)
+    prior_theta = inverse_spline15d_flow_coordinates(
+        prior_x,
+        transforms=transforms,
+        whitening=whitening,
+        atom_half_width=atom_half_width or None,
+    )
     prior_x_frame = pd.DataFrame(prior_x, columns=SPLINE15D_PARAMETER_NAMES)
     prior_theta_frame = pd.DataFrame(prior_theta, columns=SPLINE15D_PARAMETER_NAMES)
-    prior_x_frame.to_parquet(out / "learned_prior_samples_normalized.parquet", index=False)
+    prior_x_frame.to_parquet(
+        out / "learned_prior_samples_normalized.parquet", index=False
+    )
     prior_theta_frame.to_parquet(out / "learned_prior_samples.parquet", index=False)
-    truth_limit = int(output_cfg.get("truth_sample_limit", len(frames["test"])))
-    truth_frame = frames["test"].loc[:, SPLINE15D_PARAMETER_NAMES].head(truth_limit)
+    truth_limit = int(output_cfg.get("truth_sample_limit", len(exact_frames["test"])))
+    truth_frame = (
+        exact_frames["test"].loc[:, SPLINE15D_PARAMETER_NAMES].head(truth_limit)
+    )
     truth_frame.to_parquet(out / "heldout_test_truth.parquet", index=False)
     truth_theta = truth_frame.to_numpy(dtype=float)
     truth_x = normalized["test"][: len(truth_frame)]
@@ -472,6 +641,8 @@ def main() -> None:
         transforms=transforms,
         sample_count=n_samples,
         seed=seed + 1,
+        whitening=whitening,
+        atom_half_width=atom_half_width or None,
     )
 
     temperature_min = float(evaluation_cfg.get("temperature_min", 0.08))
@@ -495,6 +666,8 @@ def main() -> None:
         sample_count=evaluation_samples,
         seed=seed + 20_000,
         thresholds=thresholds,
+        whitening=whitening,
+        atom_half_width=atom_half_width or None,
     )
     temperature_scan.to_csv(out / "validation_temperature_scan.csv", index=False)
     selected_temperature_row = select_temperature(temperature_scan)
@@ -524,10 +697,13 @@ def main() -> None:
         ),
         dtype=np.float64,
     )
-    calibrated_theta = inverse_asinh_matrix(calibrated_x, transforms)
-    calibrated_x_frame = pd.DataFrame(
-        calibrated_x, columns=SPLINE15D_PARAMETER_NAMES
+    calibrated_theta = inverse_spline15d_flow_coordinates(
+        calibrated_x,
+        transforms=transforms,
+        whitening=whitening,
+        atom_half_width=atom_half_width or None,
     )
+    calibrated_x_frame = pd.DataFrame(calibrated_x, columns=SPLINE15D_PARAMETER_NAMES)
     calibrated_theta_frame = pd.DataFrame(
         calibrated_theta, columns=SPLINE15D_PARAMETER_NAMES
     )
@@ -555,12 +731,19 @@ def main() -> None:
             sample_count=n_samples,
             seed=seed + 2,
             temperature=selected_temperature,
+            whitening=whitening,
+            atom_half_width=atom_half_width or None,
         )
     )
 
     baseline_rng = np.random.default_rng(seed + 3)
     baseline_x = baseline_rng.normal(size=(n_samples, len(SPLINE15D_PARAMETER_NAMES)))
-    baseline_theta = inverse_asinh_matrix(baseline_x, transforms)
+    baseline_theta = inverse_spline15d_flow_coordinates(
+        baseline_x,
+        transforms=transforms,
+        whitening=whitening,
+        atom_half_width=atom_half_width or None,
+    )
     baseline_metrics = evaluate_sample_pair(
         truth_theta=matrices["test"],
         truth_x=normalized["test"],
@@ -569,14 +752,20 @@ def main() -> None:
     )
     comparison_rows = []
     for model_name, temperature, metrics in (
-        ("independent_normal", 1.0, baseline_metrics),
+        ("affine_gaussian_epoch0_baseline", 1.0, baseline_metrics),
         ("realnvp_unit_temperature", 1.0, test_unit_metrics),
-        ("realnvp_validation_calibrated", selected_temperature, test_calibrated_metrics),
+        (
+            "realnvp_validation_calibrated",
+            selected_temperature,
+            test_calibrated_metrics,
+        ),
     ):
         comparison_rows.append(
             {"model": model_name, "base_temperature": temperature, **metrics}
         )
-    pd.DataFrame(comparison_rows).to_csv(out / "test_baseline_comparison.csv", index=False)
+    pd.DataFrame(comparison_rows).to_csv(
+        out / "test_baseline_comparison.csv", index=False
+    )
 
     novel_nll = {
         split: (
@@ -593,15 +782,17 @@ def main() -> None:
     best_validation_row = result.validation_log.loc[
         result.validation_log["epoch"] == result.best_epoch
     ]
-    best_validation_nll = float(
-        best_validation_row.iloc[-1]["negative_mean_log_prob"]
-    )
+    best_validation_nll = float(best_validation_row.iloc[-1]["negative_mean_log_prob"])
     diagnostics = write_supervised_prior_diagnostics(
-        truth=truth_frame, prior=prior_theta_frame,
-        parameter_names=SPLINE15D_PARAMETER_NAMES, out_dir=out / "diagnostics",
+        truth=truth_frame,
+        prior=prior_theta_frame,
+        parameter_names=SPLINE15D_PARAMETER_NAMES,
+        out_dir=out / "diagnostics",
         summary={
-            "model": "RealNVP", "latent_dim": 15,
-            "normalization": "train-fitted marginal asinh", "nll": nll,
+            "model": "RealNVP",
+            "latent_dim": 15,
+            "normalization": "train-fitted asinh plus Cholesky whitening",
+            "nll": nll,
             "best_epoch": result.best_epoch,
             "best_validation_nll": best_validation_nll,
             "base_temperature": 1.0,
@@ -616,7 +807,7 @@ def main() -> None:
         summary={
             "model": "RealNVP",
             "latent_dim": 15,
-            "normalization": "train-fitted marginal asinh",
+            "normalization": "train-fitted asinh plus Cholesky whitening",
             "nll": calibrated_nll,
             "best_epoch": result.best_epoch,
             "base_temperature": selected_temperature,
@@ -625,15 +816,20 @@ def main() -> None:
         max_corner_rows=int(output_cfg.get("max_corner_rows", 4000)),
     )
     summary = {
-        "status": "complete", "model": "RealNVP", "latent_dim": 15,
-        "dataset_dir": str(dataset_dir), "rows": {key: len(value) for key, value in frames.items()},
-        "normalization_path": str(out / "normalization.json"), "nll": nll,
+        "status": "complete",
+        "model": "RealNVP",
+        "latent_dim": 15,
+        "dataset_dir": str(dataset_dir),
+        "rows": {key: len(value) for key, value in frames.items()},
+        "normalization_path": str(out / "normalization.json"),
+        "nll": nll,
         "initial_train_nll": result.initial_train_nll,
         "best_epoch": result.best_epoch,
         "best_validation_nll": best_validation_nll,
         "best_selection_metric": result.best_metric,
         "best_selection_eligible": result.best_selection_eligible,
         "best_selection_diagnostics": result.best_selection_diagnostics,
+        "epoch_zero_selection": epoch_zero_selection,
         "validation_novel_nll": novel_nll["validation"],
         "test_novel_nll": novel_nll["test"],
         "test_unit_temperature_metrics": test_unit_metrics,

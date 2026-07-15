@@ -22,25 +22,30 @@ are reconstructed. The projection also stores the eleven absolute native
 ``logSFR`` node values for scientific auditing, but these are not additional
 RealNVP dimensions.
 
-Separate post-processing
-------------------------
+Leakage-free post-processing
+----------------------------
 
-Run ``scripts/build_feniks_spline15d_dataset.py`` only after the Diffsky
-train/validation/test parquets exist. For every split it writes:
+The recovery pipeline never generates new Diffsky galaxies. It pools the
+existing 50k rows, canonicalizes ``source_proposal_id`` using the effective
+backend key ``source_seed + shard_index``, and assigns every complete proposal
+group to exactly one split. ``grouped_split_audit.json`` records split sizes,
+multiplicities, and zero cross-split group overlap. The v3 spline projector
+refuses a source without this audit and embeds it in its own contract. It then
+writes for every new split:
 
 * ``<split>_exact.parquet``: the scientific 15D projection;
-* ``<split>.parquet``: the continuous flow target, with exact-zero SFH
-  contrasts uniformly dequantized within ``+-1e-4 dex``;
+* ``<split>.parquet``: a backward-compatible projected target;
 * ``<split>_spline_nodes.parquet``: object IDs, eleven node times, and eleven
   absolute native ``logSFR`` values;
 * ``spline15d_contract.json``: node placement, column order, seeds, atom counts,
   source paths, and runtime provenance.
 
-The object order and IDs are preserved. The command never generates Diffsky
-galaxies and never reads an analysis artifact under ``outputs/``.
+The original object IDs and split labels remain as audit columns in the grouped
+dataset. New IDs are unique by split. Training aborts if an exact 15D truth row
+still occurs in train and validation or train and test.
 
-Asinh normalization
--------------------
+Asinh, atom dequantization, and whitening
+-----------------------------------------
 
 The prior command fits one analytic transform per coordinate using the train
 split only:
@@ -54,7 +59,17 @@ RMSE. The center and scale are then frozen. The inverse is analytic, and the
 same serialized transform is used for validation, test, checkpoint sampling,
 and later inference. This is deliberately lower capacity than an empirical
 quantile transform: only three scalars are stored per dimension and no
-data-dependent knot table is learned.
+data-dependent knot table is learned. Exact-zero SFH contrasts are then
+dequantized uniformly within ``+-0.05`` in normalized asinh coordinates. This
+turns the discrete atoms into explicit narrow continuous intervals. Sampling
+applies the exact inverse rule and clips those intervals back to zero.
+
+Finally, a train-fitted affine Cholesky transform whitens the full 15D
+covariance. A standard normal in the resulting coordinates is therefore the
+full-covariance Gaussian baseline in asinh space, not fifteen independent
+physical marginals. The serialized inverse is:
+
+``flow coordinates -> inverse whitening -> inverse asinh -> atom reclipping``.
 
 RealNVP training and outputs
 ----------------------------
@@ -64,7 +79,7 @@ than ``realnvp``. The production configuration does not expose an RQ-spline NF.
 The generic historical flow classes remain in the repository for checkpoint
 compatibility, but they are not part of this pipeline.
 
-The v2 run writes ``normalization.json``, a 15-row normalization parameter CSV,
+The v3 run writes ``normalization.json``, a 15-row normalization parameter CSV,
 the requested 15-by-2 before/after plot with Gaussian overlays and lambdas,
 training/validation logs and history, strict ``best.eqx`` and ``last.eqx``
 checkpoints, physical and normalized prior samples, held-out NLL values, and
@@ -73,71 +88,41 @@ one physical-space and one normalized-space column per parameter. The best
 checkpoint is reloaded from disk before final sampling, which tests the saved
 contract.
 
-Checkpoint selection is not based on NLL alone. At fixed epochs the command
+The RealNVP is initialized exactly at the identity (``init_scale: 0``), so
+epoch 0 is the affine Gaussian baseline. Checkpoint selection is not based on
+NLL alone. At every epoch the command
 generates validation samples and combines marginal KS, physical correlation,
-base-space moments, normalized tails, and invalid physical samples. Test data
-are never used for checkpoint or temperature selection. Exact truth hashes are
-also compared against train, and validation/test NLL are reported separately on
-the subset not exactly present in train.
+base-space moments, sliced Wasserstein distance, clamp saturation, normalized
+tails, and invalid physical samples. A trained checkpoint must beat epoch 0 by
+a configured minimum score margin and
+preserve its marginal KS and sliced Wasserstein within configured tolerances.
+Early stopping is driven by this generative score. Test data are never used
+until the checkpoint is frozen.
 
-The command scans an isotropic base temperature on validation after selecting
-the checkpoint. It keeps both the unit-temperature output and a separately
-named validation-calibrated output. ``test_baseline_comparison.csv`` compares
-these against the independent-normal baseline in normalized space. Temperature
-calibration is therefore explicit metadata, not an implicit change to the
-asinh normalization or the RealNVP checkpoint.
-
-The v2 architecture adds deterministic ``roll`` permutations between coupling
-layers and supports a small base-moment penalty. The controlled ablation uses:
-
-* ``a_control``: the v1 architecture with the new diagnostics;
-* ``b_permutation``: permutation only;
-* ``c_conservative``: permutation and tighter scale/shift clamps;
-* ``d_regularized``: the conservative model plus base-moment regularization.
+Production fixes the base temperature to one. The run still writes the legacy
+temperature-named outputs for compatibility, but no calibration is performed.
+``test_baseline_comparison.csv`` reports the epoch-0 affine Gaussian and the
+selected unit-temperature RealNVP side by side.
 
 Jean-Zay launch
 ---------------
 
-First run a small end-to-end smoke test in separate output directories:
+One sequential job performs regrouping, spline projection, and training. A
+small end-to-end smoke test uses separate output directories:
 
 .. code-block:: bash
 
-   PROJ_SMOKE=$(sbatch --parsable \
-     --export=ALL,SMOKE=1,OVERWRITE=1,SOURCE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_dsps_closure_18band,SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d_smoke \
-     scripts/feniks_spline15d_project_h100.slurm)
+   sbatch --export=ALL,SMOKE=1,\
+GROUPED_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_grouped_v3_smoke,\
+SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3_smoke,\
+OUT_DIR=outputs/runs/feniks_spline15d_realnvp_whitened_v3_smoke \
+     scripts/feniks_spline15d_whitened_realnvp_h100.slurm
 
-   sbatch --dependency=afterok:${PROJ_SMOKE} \
-     --export=ALL,SMOKE=1,SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d_smoke,OUT_DIR=outputs/runs/feniks_spline15d_realnvp_smoke \
-     scripts/feniks_spline15d_realnvp_h100.slurm
-
-The spline dataset is already present on Jean-Zay, so the v2 ablation can be
-submitted directly. First run the four short smoke jobs:
+After the smoke job succeeds, launch the single production job:
 
 .. code-block:: bash
 
-   SMOKE_JOB=$(sbatch --parsable \
-     --export=ALL,SMOKE=1,SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d,RUN_PREFIX=feniks_spline15d_realnvp_v2_smoke \
-     scripts/feniks_spline15d_realnvp_ablation_h100.slurm)
+   sbatch scripts/feniks_spline15d_whitened_realnvp_h100.slurm
 
-   echo "smoke_array=${SMOKE_JOB}"
-
-After inspecting the smoke jobs, submit the production ablation and rank runs
-only after every array task succeeds:
-
-.. code-block:: bash
-
-   PRIOR_JOB=$(sbatch --parsable \
-     --export=ALL,SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d,RUN_PREFIX=feniks_spline15d_realnvp_v2 \
-     scripts/feniks_spline15d_realnvp_ablation_h100.slurm)
-
-   echo "prior_array=${PRIOR_JOB}"
-
-   # Run only once squeue no longer lists the array and all four runs completed.
-   python scripts/compare_feniks_spline15d_realnvp_ablation.py \
-     --runs-root outputs/runs \
-     --pattern 'feniks_spline15d_realnvp_v2_[abcd]*' \
-     --out outputs/reports/spline15d_realnvp_v2
-
-Do not use ``OVERWRITE=1`` on an existing production spline directory unless
-the replacement is intentional. The training job always refuses a non-empty
-output directory.
+All three output paths must be absent. This prevents accidental mixing of an
+old grouped split, an old spline projection, and a new checkpoint.

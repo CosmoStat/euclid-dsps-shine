@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import platform
 from pathlib import Path
 
@@ -46,6 +47,17 @@ def main() -> None:
     batch_size = int(args.batch_size or cfg.get("batch_size", 2048))
     half_width = float(cfg.get("dequantization_half_width_dex", 1.0e-4))
     seed = int(cfg.get("seed", 260715))
+    grouped_audit_path = source / "grouped_split_audit.json"
+    grouped_audit = None
+    if grouped_audit_path.exists():
+        grouped_audit = json.loads(grouped_audit_path.read_text(encoding="utf-8"))
+        overlaps = grouped_audit.get("effective_proposal_overlap", {})
+        if any(int(value) != 0 for value in overlaps.values()):
+            raise ValueError("Grouped source audit reports effective proposal leakage")
+    elif bool(cfg.get("require_grouped_source_audit", False)):
+        raise FileNotFoundError(
+            f"Missing required grouped source audit: {grouped_audit_path}"
+        )
     split_records = {}
 
     for split_index, split in enumerate(splits):
@@ -120,6 +132,7 @@ def main() -> None:
             },
             "seed": seed,
             "config": str(args.config),
+            "grouped_source_audit": grouped_audit,
             "runtime": {
                 "python": platform.python_version(),
                 "jax": jax.__version__,

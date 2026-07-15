@@ -9,10 +9,14 @@ from euclid_dsps.prior_learning.spline15d import (
     DEFAULT_NORMALIZED_LOG_TIME_NODES,
     SFH_CONTRAST_NAMES,
     SPLINE15D_PARAMETER_NAMES,
+    dequantize_normalized_zero_atoms,
     dequantize_spline_contrast_atoms,
+    fit_affine_whitening,
     fit_asinh_transforms,
+    forward_affine_whitening,
     forward_asinh_matrix,
     inverse_asinh_matrix,
+    inverse_spline15d_flow_coordinates,
     reconstruct_relative_sfh_jax,
     spline_knot_times_jax,
     validate_normalized_log_time_nodes,
@@ -59,6 +63,44 @@ def test_asinh_transform_roundtrip() -> None:
     np.testing.assert_allclose(recovered, matrix, rtol=1.0e-11, atol=1.0e-11)
     assert np.isfinite(normalized).all()
     assert all(payload["lambda"] > 0.0 for payload in transforms.values())
+
+
+def test_normalized_atom_dequantization_whitening_and_scientific_inverse() -> None:
+    rng = np.random.default_rng(14)
+    physical = rng.normal(size=(2000, len(SPLINE15D_PARAMETER_NAMES)))
+    physical[:, 0] = rng.uniform(0.01, 5.0, len(physical))
+    physical[:, 3] = rng.uniform(0.0, 2.0, len(physical))
+    atom_index = SPLINE15D_PARAMETER_NAMES.index(SFH_CONTRAST_NAMES[2])
+    physical[:500, atom_index] = 0.0
+    transforms = fit_asinh_transforms(physical, grid_size=33)
+    asinh_values = forward_asinh_matrix(physical, transforms)
+    dequantized, counts = dequantize_normalized_zero_atoms(
+        asinh_values,
+        physical,
+        half_width=0.05,
+        seed=17,
+    )
+    assert counts[SFH_CONTRAST_NAMES[2]] == 500
+    whitening = fit_affine_whitening(dequantized, covariance_jitter=1.0e-5)
+    flow_values = forward_affine_whitening(dequantized, whitening)
+    recovered = inverse_spline15d_flow_coordinates(
+        flow_values,
+        transforms=transforms,
+        whitening=whitening,
+        atom_half_width=0.05,
+    )
+    expected = physical.copy()
+    for name in SFH_CONTRAST_NAMES:
+        index = SPLINE15D_PARAMETER_NAMES.index(name)
+        zero_normalized = -transforms[name]["center"] / transforms[name]["scale"]
+        expected[
+            np.abs(dequantized[:, index] - zero_normalized) <= 0.05,
+            index,
+        ] = 0.0
+    np.testing.assert_allclose(recovered, expected, rtol=1e-9, atol=1e-9)
+    np.testing.assert_array_equal(recovered[:500, atom_index], 0.0)
+    covariance = np.cov(flow_values, rowvar=False)
+    np.testing.assert_allclose(covariance, np.eye(15), atol=2.0e-3)
 
 
 def test_relative_sfh_interpolates_all_knot_values() -> None:

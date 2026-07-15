@@ -245,6 +245,111 @@ def inverse_asinh_matrix(
     return result
 
 
+def dequantize_normalized_zero_atoms(
+    normalized: np.ndarray,
+    exact_physical: np.ndarray,
+    *,
+    half_width: float,
+    seed: int,
+    names: tuple[str, ...] = SPLINE15D_PARAMETER_NAMES,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Dequantize exact-zero SFH contrasts in normalized coordinates."""
+    values = _validate_matrix(normalized, names).copy()
+    physical = _validate_matrix(exact_physical, names)
+    if float(half_width) <= 0.0:
+        raise ValueError("Normalized atom half-width must be positive")
+    rng = np.random.default_rng(int(seed))
+    counts: dict[str, int] = {}
+    for name in SFH_CONTRAST_NAMES:
+        index = names.index(name)
+        mask = physical[:, index] == 0.0
+        count = int(np.sum(mask))
+        if count:
+            values[mask, index] += rng.uniform(-half_width, half_width, count)
+        counts[name] = count
+    return values, counts
+
+
+def fit_affine_whitening(
+    values: np.ndarray,
+    *,
+    covariance_jitter: float = 1.0e-5,
+) -> dict[str, Any]:
+    """Fit a full-covariance affine whitening transform."""
+    matrix = _validate_matrix(values, SPLINE15D_PARAMETER_NAMES)
+    if float(covariance_jitter) <= 0.0:
+        raise ValueError("covariance_jitter must be positive")
+    mean = np.mean(matrix, axis=0)
+    covariance = np.cov(matrix, rowvar=False)
+    regularized = covariance + float(covariance_jitter) * np.eye(matrix.shape[1])
+    cholesky = np.linalg.cholesky(regularized)
+    eigenvalues = np.linalg.eigvalsh(covariance)
+    return {
+        "family": "cholesky_whitening",
+        "fit_split": "train",
+        "mean": mean.tolist(),
+        "cholesky": cholesky.tolist(),
+        "covariance_jitter": float(covariance_jitter),
+        "covariance_eigenvalue_min": float(np.min(eigenvalues)),
+        "covariance_eigenvalue_max": float(np.max(eigenvalues)),
+        "covariance_condition": float(np.max(eigenvalues) / np.min(eigenvalues)),
+    }
+
+
+def forward_affine_whitening(
+    values: np.ndarray,
+    whitening: dict[str, Any],
+) -> np.ndarray:
+    """Apply a fitted Cholesky whitening transform."""
+    matrix = _validate_matrix(values, SPLINE15D_PARAMETER_NAMES)
+    mean = np.asarray(whitening["mean"], dtype=np.float64)
+    cholesky = np.asarray(whitening["cholesky"], dtype=np.float64)
+    result = np.linalg.solve(cholesky, (matrix - mean).T).T
+    if not np.isfinite(result).all():
+        raise ValueError("Whitening produced non-finite values")
+    return result
+
+
+def inverse_affine_whitening(
+    values: np.ndarray,
+    whitening: dict[str, Any],
+) -> np.ndarray:
+    """Invert a fitted Cholesky whitening transform."""
+    matrix = _validate_matrix(values, SPLINE15D_PARAMETER_NAMES)
+    mean = np.asarray(whitening["mean"], dtype=np.float64)
+    cholesky = np.asarray(whitening["cholesky"], dtype=np.float64)
+    result = matrix @ cholesky.T + mean
+    if not np.isfinite(result).all():
+        raise ValueError("Inverse whitening produced non-finite values")
+    return result
+
+
+def inverse_spline15d_flow_coordinates(
+    values: np.ndarray,
+    *,
+    transforms: dict[str, dict[str, Any]],
+    whitening: dict[str, Any] | None = None,
+    atom_half_width: float | None = None,
+) -> np.ndarray:
+    """Map internal flow coordinates back to exact scientific coordinates."""
+    asinh_values = (
+        np.asarray(values, dtype=np.float64)
+        if whitening is None
+        else inverse_affine_whitening(values, whitening)
+    )
+    physical = inverse_asinh_matrix(asinh_values, transforms)
+    if atom_half_width is not None and float(atom_half_width) > 0.0:
+        for name in SFH_CONTRAST_NAMES:
+            index = SPLINE15D_PARAMETER_NAMES.index(name)
+            transform = transforms[name]
+            zero_normalized = -float(transform["center"]) / float(transform["scale"])
+            mask = np.abs(asinh_values[:, index] - zero_normalized) <= float(
+                atom_half_width
+            )
+            physical[mask, index] = 0.0
+    return physical
+
+
 def gaussian_quantile_rmse(values: np.ndarray) -> float:
     """Return marginal quantile RMSE to a standard normal."""
     quantiles = np.quantile(np.asarray(values, dtype=float), GAUSSIAN_SCORE_PROBABILITIES)

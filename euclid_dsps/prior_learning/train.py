@@ -603,6 +603,12 @@ def fit_realnvp_to_x(
     epochs = max(int(training_config.get("epochs", 20)), 1)
     epoch_shuffle = bool(training_config.get("epoch_shuffle", True))
     base_moment_weight = float(training_config.get("base_moment_weight", 0.0))
+    training_jitter_std = float(training_config.get("training_jitter_std", 0.0))
+    early_stopping_patience = int(training_config.get("early_stopping_patience", 0))
+    if training_jitter_std < 0.0:
+        raise ValueError("training_jitter_std must be non-negative")
+    if early_stopping_patience < 0:
+        raise ValueError("early_stopping_patience must be non-negative")
     data_parallel = _resolve_data_parallel_training(
         training_config,
         batch_size=batch_size,
@@ -628,6 +634,37 @@ def fit_realnvp_to_x(
     val_rows: list[dict[str, float | int | str]] = []
     if epoch_callback is not None:
         epoch_callback(0, prior)
+    evaluations_since_best = 0
+    if selection_callback is not None:
+        initial_validation_nll = (
+            initial_train_nll
+            if x_validation is None
+            else float(_prior_nll_jit(prior, jnp.asarray(x_validation)))
+        )
+        initial_selection = selection_callback(0, prior, initial_validation_nll)
+        if initial_selection is not None:
+            initial_diagnostics = dict(initial_selection)
+            initial_metric = float(initial_diagnostics.pop("metric"))
+            initial_eligible = bool(initial_diagnostics.pop("eligible", False))
+            best_metric = initial_metric
+            best_epoch = 0
+            best_prior = prior
+            best_selection_eligible = initial_eligible
+            best_selection_diagnostics = dict(initial_diagnostics)
+            if x_validation is not None:
+                val_rows.append(
+                    {
+                        "epoch": 0,
+                        "split": "validation",
+                        "mean_log_prob": -initial_validation_nll,
+                        "negative_mean_log_prob": initial_validation_nll,
+                        "n_objects": int(len(x_validation)),
+                        "selection_evaluated": True,
+                        "selection_eligible": initial_eligible,
+                        "selection_metric": initial_metric,
+                        **initial_diagnostics,
+                    }
+                )
     for epoch in range(1, epochs + 1):
         order = np.arange(len(x_train))
         if epoch_shuffle:
@@ -644,7 +681,13 @@ def fit_realnvp_to_x(
         epoch_grad_norms = []
         epoch_updates = []
         for batch_index, start in enumerate(range(0, len(order), batch_size)):
-            batch = jnp.asarray(x_train[order[start : start + batch_size]])
+            batch_values = x_train[order[start : start + batch_size]]
+            if training_jitter_std > 0.0:
+                batch_values = batch_values + rng.normal(
+                    scale=training_jitter_std,
+                    size=batch_values.shape,
+                ).astype(np.float32)
+            batch = jnp.asarray(batch_values)
             if bool(data_parallel["enabled"]):
                 if (
                     pmap_train_step is None
@@ -767,12 +810,18 @@ def fit_realnvp_to_x(
             )
         candidate_rank = (0 if selection_eligible else 1, float(metric))
         best_rank = (0 if best_selection_eligible else 1, float(best_metric))
-        if selection_evaluated and np.isfinite(metric) and candidate_rank < best_rank:
+        improved = bool(
+            selection_evaluated and np.isfinite(metric) and candidate_rank < best_rank
+        )
+        if improved:
             best_metric = float(metric)
             best_epoch = int(epoch)
             best_prior = prior
             best_selection_eligible = bool(selection_eligible)
             best_selection_diagnostics = dict(selection_diagnostics)
+            evaluations_since_best = 0
+        elif selection_evaluated:
+            evaluations_since_best += 1
         if progress_callback is not None:
             progress_callback(
                 {
@@ -799,6 +848,11 @@ def fit_realnvp_to_x(
             )
         if epoch_callback is not None:
             epoch_callback(epoch, prior)
+        if (
+            early_stopping_patience > 0
+            and evaluations_since_best >= early_stopping_patience
+        ):
+            break
     return PriorTrainingResult(
         prior=best_prior,
         last_prior=prior,

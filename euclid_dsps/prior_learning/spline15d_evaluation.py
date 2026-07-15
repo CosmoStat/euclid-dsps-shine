@@ -10,7 +10,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .spline15d import SPLINE15D_PARAMETER_NAMES, inverse_asinh_matrix
+from .spline15d import (
+    SPLINE15D_PARAMETER_NAMES,
+    inverse_spline15d_flow_coordinates,
+)
 
 
 def exact_truth_hashes(frame: pd.DataFrame) -> np.ndarray:
@@ -39,6 +42,8 @@ def evaluate_generated_prior(
     sample_count: int,
     seed: int,
     temperature: float = 1.0,
+    whitening: dict[str, Any] | None = None,
+    atom_half_width: float | None = None,
 ) -> tuple[dict[str, float], np.ndarray, np.ndarray]:
     """Evaluate generated samples and base typicality against validation truth."""
     count = max(int(sample_count), 256)
@@ -54,7 +59,12 @@ def evaluate_generated_prior(
         dtype=np.float64,
     )
     try:
-        prior_theta = inverse_asinh_matrix(prior_x, transforms)
+        prior_theta = inverse_spline15d_flow_coordinates(
+            prior_x,
+            transforms=transforms,
+            whitening=whitening,
+            atom_half_width=atom_half_width,
+        )
     except ValueError:
         prior_theta = np.full_like(prior_x, np.nan)
     truth_u, _logdet = prior.inverse(jnp.asarray(truth_x, dtype=jnp.float32))
@@ -67,6 +77,7 @@ def evaluate_generated_prior(
         prior_x=prior_x,
     )
     metrics["base_temperature"] = float(temperature)
+    metrics.update(realnvp_saturation_metrics(prior, truth_x))
     return metrics, prior_theta, prior_x
 
 
@@ -108,6 +119,8 @@ def selection_payload(
         + 2.0 * tail_excess
         + float(metrics["negative_z_fraction"])
         + float(metrics["negative_dust_av_fraction"])
+        + float(metrics["sliced_wasserstein_normalized"])
+        + float(metrics.get("scale_saturation_fraction", 0.0))
     )
     checks = {
         "median_ks": float(metrics["median_ks_normalized"])
@@ -126,6 +139,10 @@ def selection_payload(
         <= float(thresholds["max_negative_fraction"]),
         "negative_dust_av": float(metrics["negative_dust_av_fraction"])
         <= float(thresholds["max_negative_fraction"]),
+        "scale_saturation": float(metrics.get("scale_saturation_fraction", 0.0))
+        <= float(thresholds.get("max_scale_saturation_fraction", 1.0)),
+        "sliced_wasserstein": float(metrics["sliced_wasserstein_normalized"])
+        <= float(thresholds.get("max_sliced_wasserstein", float("inf"))),
     }
     return {
         "metric": float(score),
@@ -146,6 +163,8 @@ def temperature_scan_frame(
     sample_count: int,
     seed: int,
     thresholds: dict[str, float],
+    whitening: dict[str, Any] | None = None,
+    atom_half_width: float | None = None,
 ) -> pd.DataFrame:
     """Scan base temperature using validation data only."""
     rows = []
@@ -158,6 +177,8 @@ def temperature_scan_frame(
             sample_count=sample_count,
             seed=seed,
             temperature=float(temperature),
+            whitening=whitening,
+            atom_half_width=atom_half_width,
         )
         rows.append(selection_payload(metrics, thresholds=thresholds))
     return pd.DataFrame(rows).sort_values("base_temperature").reset_index(drop=True)
@@ -267,14 +288,14 @@ def _sample_metrics(
         "base_correlation_frobenius": float(
             np.linalg.norm(base_correlation - identity, ord="fro")
         ),
-        "truth_normalized_tail_fraction_abs_gt5": float(
-            np.mean(np.abs(truth_x) > 5.0)
-        ),
-        "prior_normalized_tail_fraction_abs_gt5": float(
-            np.mean(np.abs(prior_x) > 5.0)
-        ),
+        "truth_normalized_tail_fraction_abs_gt5": float(np.mean(np.abs(truth_x) > 5.0)),
+        "prior_normalized_tail_fraction_abs_gt5": float(np.mean(np.abs(prior_x) > 5.0)),
         "negative_z_fraction": float(np.mean(prior_theta[:, 0] < 0.0)),
         "negative_dust_av_fraction": float(np.mean(prior_theta[:, 3] < 0.0)),
+        "sliced_wasserstein_normalized": _sliced_wasserstein(
+            truth_x,
+            prior_x,
+        ),
     }
 
 
@@ -294,7 +315,55 @@ def _failed_metrics() -> dict[str, float]:
         "prior_normalized_tail_fraction_abs_gt5": 1.0,
         "negative_z_fraction": 1.0,
         "negative_dust_av_fraction": 1.0,
+        "sliced_wasserstein_normalized": float("inf"),
     }
+
+
+def realnvp_saturation_metrics(prior, values: np.ndarray) -> dict[str, float]:
+    """Measure clamp saturation while mapping validation truths to the base."""
+    import jax.numpy as jnp
+
+    from euclid_dsps.amortized.flows import _flow_permutation
+
+    value = jnp.asarray(values, dtype=jnp.float32)
+    scale_flags = []
+    shift_flags = []
+    for index, layer in reversed(tuple(enumerate(prior.layers))):
+        permutation = _flow_permutation(prior.latent_dim, index, prior.permutation)
+        value = jnp.take(value, jnp.argsort(permutation), axis=-1)
+        mask = layer.mask.astype(value.dtype)
+        active = np.asarray(1.0 - mask, dtype=bool)
+        log_scale, shift = layer._scale_shift(value * mask)
+        log_scale = np.asarray(jax.device_get(log_scale))[:, active]
+        shift = np.asarray(jax.device_get(shift))[:, active]
+        scale_flags.append(
+            (np.abs(log_scale) > 0.9 * float(layer.scale_clamp)).reshape(-1)
+        )
+        shift_flags.append(
+            (np.abs(shift) > 0.9 * float(layer.shift_clamp)).reshape(-1)
+        )
+        value, _logdet = layer.inverse(value)
+    return {
+        "scale_saturation_fraction": float(np.mean(np.concatenate(scale_flags))),
+        "shift_saturation_fraction": float(np.mean(np.concatenate(shift_flags))),
+    }
+
+
+def _sliced_wasserstein(
+    truth: np.ndarray,
+    prior: np.ndarray,
+    *,
+    n_projections: int = 64,
+) -> float:
+    rng = np.random.default_rng(1729)
+    directions = rng.normal(size=(truth.shape[1], int(n_projections)))
+    directions /= np.linalg.norm(directions, axis=0, keepdims=True)
+    truth_projection = np.asarray(truth) @ directions
+    prior_projection = np.asarray(prior) @ directions
+    probabilities = np.linspace(0.005, 0.995, 200)
+    truth_quantiles = np.quantile(truth_projection, probabilities, axis=0)
+    prior_quantiles = np.quantile(prior_projection, probabilities, axis=0)
+    return float(np.mean(np.abs(truth_quantiles - prior_quantiles)))
 
 
 def _shared_histogram(axis, truth: np.ndarray, prior: np.ndarray) -> None:
