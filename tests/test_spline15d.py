@@ -13,6 +13,7 @@ from euclid_dsps.prior_learning.spline15d import (
     dequantize_spline_contrast_atoms,
     fit_affine_whitening,
     fit_asinh_transforms,
+    fit_log_transforms,
     fit_shifted_asinh_transforms,
     forward_affine_whitening,
     forward_asinh_matrix,
@@ -83,6 +84,35 @@ def test_shifted_asinh_uses_robust_location_scale_and_roundtrips() -> None:
         assert transform["lambda"] >= 1.0e-6
         assert transform["location"] == pytest.approx(np.median(matrix[:, index]))
     assert transforms["log10_stellar_mass"]["lambda"] > 0.1
+
+
+def test_mixed_log_shifted_asinh_roundtrips_with_positive_support() -> None:
+    rng = np.random.default_rng(44)
+    matrix = rng.standard_t(df=3, size=(2000, len(SPLINE15D_PARAMETER_NAMES)))
+    matrix[:, 0] = rng.lognormal(mean=-0.2, sigma=0.8, size=len(matrix))
+    matrix[:, 3] = rng.lognormal(mean=-2.0, sigma=1.1, size=len(matrix))
+    transforms = fit_shifted_asinh_transforms(matrix)
+    positive_names = ("z_obs", "dust_av")
+    positive_indices = [
+        SPLINE15D_PARAMETER_NAMES.index(name) for name in positive_names
+    ]
+    transforms.update(fit_log_transforms(matrix[:, positive_indices], positive_names))
+
+    normalized = forward_asinh_matrix(matrix, transforms)
+    recovered = inverse_asinh_matrix(normalized, transforms)
+    extrapolated = inverse_asinh_matrix(normalized + 2.0, transforms)
+
+    np.testing.assert_allclose(recovered, matrix, rtol=1.0e-11, atol=1.0e-11)
+    assert transforms["z_obs"]["family"] == "log"
+    assert transforms["dust_av"]["family"] == "log"
+    assert np.all(extrapolated[:, 0] > 0.0)
+    assert np.all(extrapolated[:, 3] > 0.0)
+
+
+def test_log_transform_rejects_non_positive_values() -> None:
+    values = np.asarray([[0.1], [0.0], [1.0]])
+    with pytest.raises(ValueError, match="strictly positive z_obs"):
+        fit_log_transforms(values, ("z_obs",))
 
 
 def test_shifted_asinh_zero_coordinate_is_reclipped_after_whitening() -> None:

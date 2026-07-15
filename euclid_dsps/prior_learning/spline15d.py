@@ -235,12 +235,41 @@ def fit_shifted_asinh_transforms(
     return transforms
 
 
+def fit_log_transforms(
+    values: np.ndarray,
+    names: tuple[str, ...],
+) -> dict[str, dict[str, Any]]:
+    """Fit standardized log transforms for strictly positive coordinates."""
+    matrix = _validate_matrix(values, names)
+    transforms: dict[str, dict[str, Any]] = {}
+    for index, name in enumerate(names):
+        column = matrix[:, index]
+        if np.any(column <= 0.0):
+            minimum = float(np.min(column))
+            raise ValueError(
+                f"Log transform requires strictly positive {name}; minimum={minimum}"
+            )
+        raw = np.log(column)
+        center = float(np.mean(raw))
+        scale = max(float(np.std(raw)), 1.0e-12)
+        normalized = (raw - center) / scale
+        transforms[name] = {
+            "family": "log",
+            "center": center,
+            "scale": scale,
+            "train_min": float(np.min(column)),
+            "train_max": float(np.max(column)),
+            "train_gaussian_qrmse": gaussian_quantile_rmse(normalized),
+        }
+    return transforms
+
+
 def forward_asinh_matrix(
     values: np.ndarray,
     transforms: dict[str, dict[str, Any]],
     names: tuple[str, ...] = SPLINE15D_PARAMETER_NAMES,
 ) -> np.ndarray:
-    """Apply fitted asinh transforms to a matrix."""
+    """Apply fitted spline-15D marginal transforms to a matrix."""
     matrix = _validate_matrix(values, names)
     columns = []
     for index, name in enumerate(names):
@@ -254,6 +283,14 @@ def forward_asinh_matrix(
         elif family == "asinh":
             lam = float(transform["lambda"])
             raw = lam * np.arcsinh(matrix[:, index] / lam)
+        elif family == "log":
+            if np.any(matrix[:, index] <= 0.0):
+                minimum = float(np.min(matrix[:, index]))
+                raise ValueError(
+                    f"Log transform requires strictly positive {name}; "
+                    f"minimum={minimum}"
+                )
+            raw = np.log(matrix[:, index])
         else:
             raise ValueError(f"Unsupported spline15d marginal transform: {family}")
         columns.append((raw - float(transform["center"])) / float(transform["scale"]))
@@ -268,7 +305,7 @@ def inverse_asinh_matrix(
     transforms: dict[str, dict[str, Any]],
     names: tuple[str, ...] = SPLINE15D_PARAMETER_NAMES,
 ) -> np.ndarray:
-    """Invert fitted asinh transforms."""
+    """Invert fitted spline-15D marginal transforms."""
     matrix = _validate_matrix(values, names)
     arguments = inverse_asinh_arguments_matrix(matrix, transforms, names)
     columns = []
@@ -281,6 +318,8 @@ def inverse_asinh_matrix(
             ) * np.sinh(arguments[:, index])
         elif family == "asinh":
             physical = float(transform["lambda"]) * np.sinh(arguments[:, index])
+        elif family == "log":
+            physical = np.exp(arguments[:, index])
         else:
             raise ValueError(f"Unsupported spline15d marginal transform: {family}")
         columns.append(physical)
@@ -295,7 +334,7 @@ def inverse_asinh_arguments_matrix(
     transforms: dict[str, dict[str, Any]],
     names: tuple[str, ...] = SPLINE15D_PARAMETER_NAMES,
 ) -> np.ndarray:
-    """Return the dimensionless arguments passed to sinh by the inverse."""
+    """Return the nonlinear inverse arguments before sinh or exp."""
     matrix = _validate_matrix(values, names)
     columns = []
     for index, name in enumerate(names):
@@ -304,7 +343,7 @@ def inverse_asinh_arguments_matrix(
         family = str(transform.get("family", "asinh"))
         if family == "asinh":
             raw = raw / float(transform["lambda"])
-        elif family != "shifted_asinh":
+        elif family not in {"shifted_asinh", "log"}:
             raise ValueError(f"Unsupported spline15d marginal transform: {family}")
         columns.append(raw)
     result = np.column_stack(columns)

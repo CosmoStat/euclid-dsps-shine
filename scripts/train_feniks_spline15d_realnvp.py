@@ -27,6 +27,7 @@ from euclid_dsps.prior_learning.spline15d import (
     dequantize_normalized_zero_atoms,
     fit_affine_whitening,
     fit_asinh_transforms,
+    fit_log_transforms,
     fit_shifted_asinh_transforms,
     forward_affine_whitening,
     forward_asinh_matrix,
@@ -209,13 +210,16 @@ def _plot_normalization(
         stage = (
             f"after {family} + whitening" if whitening_enabled else f"after {family}"
         )
-        location_text = (
-            f" | location={transform['location']:.4g}"
-            if family == "shifted_asinh"
-            else ""
-        )
+        parameter_text = ""
+        if family == "shifted_asinh":
+            parameter_text = (
+                f" | lambda={transform['lambda']:.4g}"
+                f" | location={transform['location']:.4g}"
+            )
+        elif family == "asinh":
+            parameter_text = f" | lambda={transform['lambda']:.4g}"
         right.set_title(
-            f"{stage} | lambda={transform['lambda']:.4g}{location_text} | "
+            f"{stage}{parameter_text} | "
             f"test QRMSE={gaussian_quantile_rmse(test_x[:, index]):.3f}",
             fontsize=9,
         )
@@ -223,7 +227,10 @@ def _plot_normalization(
         if index == 0:
             left.legend(fontsize=8)
             right.legend(fontsize=8, ncol=2)
-    family = str(next(iter(transforms.values())).get("family", "asinh"))
+    families = sorted(
+        {str(transform.get("family", "asinh")) for transform in transforms.values()}
+    )
+    family = " + ".join(families)
     suffix = " + Cholesky whitening" if whitening_enabled else ""
     fig.suptitle(
         f"Spline-15D marginals before/after train-fitted {family}{suffix}",
@@ -507,9 +514,14 @@ def main() -> None:
     if args.whitening is not None:
         preprocessing_cfg["whitening"] = args.whitening == "true"
     normalization_family = str(norm_cfg.get("family", "asinh")).lower()
-    if normalization_family not in {"asinh", "shifted_asinh"}:
+    if normalization_family not in {
+        "asinh",
+        "shifted_asinh",
+        "mixed_log_shifted_asinh",
+    }:
         raise ValueError(
-            "This production command supports asinh or shifted_asinh normalization"
+            "This production command supports asinh, shifted_asinh, or "
+            "mixed_log_shifted_asinh normalization"
         )
     overrides = {
         "epochs": args.epochs,
@@ -622,13 +634,36 @@ def main() -> None:
         split: frame.loc[:, SPLINE15D_PARAMETER_NAMES].to_numpy(dtype=np.float64)
         for split, frame in target_frames.items()
     }
-    if normalization_family == "shifted_asinh":
+    if normalization_family in {"shifted_asinh", "mixed_log_shifted_asinh"}:
         transforms = fit_shifted_asinh_transforms(
             matrices["train"],
             lower_quantile=float(norm_cfg.get("lower_quantile", 0.1586552539)),
             upper_quantile=float(norm_cfg.get("upper_quantile", 0.8413447461)),
             minimum_lambda=float(norm_cfg.get("minimum_lambda", 1.0e-6)),
         )
+        if normalization_family == "mixed_log_shifted_asinh":
+            positive_names = tuple(
+                str(name)
+                for name in norm_cfg.get(
+                    "positive_log_parameters", ("z_obs", "dust_av")
+                )
+            )
+            unknown = set(positive_names).difference(SPLINE15D_PARAMETER_NAMES)
+            if unknown:
+                raise ValueError(
+                    "Unknown positive-log spline15d parameters: "
+                    + ", ".join(sorted(unknown))
+                )
+            if not positive_names:
+                raise ValueError("positive_log_parameters must not be empty")
+            positive_indices = [
+                SPLINE15D_PARAMETER_NAMES.index(name) for name in positive_names
+            ]
+            transforms.update(
+                fit_log_transforms(
+                    matrices["train"][:, positive_indices], positive_names
+                )
+            )
     else:
         transforms = fit_asinh_transforms(
             matrices["train"],
@@ -678,7 +713,13 @@ def main() -> None:
         asinh_normalized["test"], transforms
     )
     norm_payload = {
-        "version": 2 if normalization_family == "shifted_asinh" else 1,
+        "version": (
+            3
+            if normalization_family == "mixed_log_shifted_asinh"
+            else 2
+            if normalization_family == "shifted_asinh"
+            else 1
+        ),
         "family": normalization_family,
         "fit_split": "train",
         "fit_rows": len(matrices["train"]),
@@ -687,7 +728,9 @@ def main() -> None:
             f"{normalization_family} marginal transform followed by optional "
             "Cholesky whitening"
         ),
-        "inverse_formula": "inverse whitening, inverse asinh, atom reclipping",
+        "inverse_formula": (
+            "inverse whitening, inverse marginal transforms, atom reclipping"
+        ),
         "transforms": transforms,
         "whitening": whitening,
         "normalized_atom_half_width": atom_half_width,
@@ -1099,6 +1142,9 @@ def main() -> None:
         result.validation_log["epoch"] == result.best_epoch
     ]
     best_validation_nll = float(best_validation_row.iloc[-1]["negative_mean_log_prob"])
+    normalization_description = f"train-fitted {normalization_family}" + (
+        " plus Cholesky whitening" if whitening_enabled else ", no whitening"
+    )
     diagnostics = write_supervised_prior_diagnostics(
         truth=truth_frame,
         prior=prior_theta_frame,
@@ -1107,9 +1153,7 @@ def main() -> None:
         summary={
             "model": "RealNVP",
             "latent_dim": 15,
-            "normalization": (
-                f"train-fitted {normalization_family} plus Cholesky whitening"
-            ),
+            "normalization": normalization_description,
             "nll": nll,
             "best_epoch": result.best_epoch,
             "best_validation_nll": best_validation_nll,
@@ -1125,9 +1169,7 @@ def main() -> None:
         summary={
             "model": "RealNVP",
             "latent_dim": 15,
-            "normalization": (
-                f"train-fitted {normalization_family} plus Cholesky whitening"
-            ),
+            "normalization": normalization_description,
             "nll": calibrated_nll,
             "best_epoch": result.best_epoch,
             "base_temperature": selected_temperature,

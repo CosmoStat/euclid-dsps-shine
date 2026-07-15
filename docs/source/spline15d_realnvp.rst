@@ -232,3 +232,47 @@ For a two-epoch integration smoke, use separate ``_smoke`` output names:
 
    sbatch --export=ALL,SMOKE=1 \
      scripts/feniks_spline15d_v5_ablation_h100.slurm
+
+V6 positive-support production run
+----------------------------------
+
+The V5 comparison showed no useful gain from atom dequantization and better
+bulk fidelity without Cholesky whitening. V6 therefore keeps the minimal V5-A
+data contract: it reads the existing grouped ``*_exact.parquet`` tables, keeps
+the SFH zero atoms unchanged, and does not whiten the joint latent space.
+
+The only normalization change addresses an actual physical support constraint.
+``z_obs`` and ``dust_av`` are strictly positive in the grouped dataset and use
+
+.. math::
+
+   y_j = \frac{\log(x_j)-c_j}{s_j},
+
+so their inverse is always positive. The remaining 13 coordinates retain the
+V4/V5 robust shifted-asinh transform. This is not a learned quantile mapping:
+the log support is fixed from the parameter semantics, while only the train
+mean and standard deviation are stored for numerical conditioning.
+
+``configs/prior_feniks_spline15d_realnvp_v6_positive_support.yaml`` preserves
+the V5 12-by-256 RealNVP, pure maximum-likelihood objective, learning rate, and
+seed, and extends training to 400 epochs. Validation NLL selects the checkpoint.
+The deterministic 10k-sample physical/normalized snapshots remain diagnostic
+only and are written every five epochs.
+
+Run a two-epoch integration smoke without rebuilding the dataset:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,SMOKE=1,\
+OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_smoke \
+     scripts/feniks_spline15d_v6_positive_support_h100.slurm
+
+Then launch the single production job:
+
+.. code-block:: bash
+
+   sbatch scripts/feniks_spline15d_v6_positive_support_h100.slurm
+
+The production output is
+``outputs/runs/feniks_spline15d_v6_positive_support``. The launcher aborts if
+the output directory already exists.

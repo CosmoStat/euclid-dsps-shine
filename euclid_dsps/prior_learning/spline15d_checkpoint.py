@@ -18,7 +18,7 @@ from .spline15d import SPLINE15D_PARAMETER_NAMES
 def load_spline15d_realnvp_checkpoint(
     path: str | Path,
 ) -> tuple[RealNVPPrior, dict[str, Any]]:
-    """Load a spline-15D RealNVP and its embedded asinh transform contract."""
+    """Load a spline-15D RealNVP and its embedded marginal transform contract."""
     eqx, _optax = require_amortized_dependencies()
     checkpoint = Path(path)
     sidecar = json.loads(
@@ -32,8 +32,14 @@ def load_spline15d_realnvp_checkpoint(
     if tuple(sidecar.get("parameter_names", ())) != SPLINE15D_PARAMETER_NAMES:
         raise ValueError("Spline-15D checkpoint has the wrong parameter order")
     normalization_family = sidecar.get("normalization", {}).get("family")
-    if normalization_family not in {"asinh", "shifted_asinh"}:
-        raise ValueError("Spline-15D checkpoint is missing a supported asinh transform")
+    if normalization_family not in {
+        "asinh",
+        "shifted_asinh",
+        "mixed_log_shifted_asinh",
+    }:
+        raise ValueError(
+            "Spline-15D checkpoint is missing a supported marginal transform"
+        )
     template = RealNVPPrior(
         jax.random.PRNGKey(0),
         latent_dim=int(architecture["latent_dim"]),
