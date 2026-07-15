@@ -17,6 +17,12 @@ from euclid_dsps.prior_learning.spline15d import (
     spline_knot_times_jax,
     validate_normalized_log_time_nodes,
 )
+from euclid_dsps.prior_learning.spline15d_evaluation import (
+    evaluate_sample_pair,
+    novel_truth_mask,
+    select_temperature,
+    selection_payload,
+)
 
 
 def test_spline_node_validation() -> None:
@@ -65,3 +71,48 @@ def test_relative_sfh_interpolates_all_knot_values() -> None:
     expected = 10 ** jnp.concatenate((jnp.zeros(1), jnp.cumsum(contrasts)))
     np.testing.assert_allclose(reconstructed, expected, rtol=2.0e-5, atol=2.0e-5)
     assert bool(jnp.all(reconstructed > 0.0))
+
+
+def test_novel_truth_mask_uses_fixed_15d_contract() -> None:
+    train = pd.DataFrame(
+        np.arange(45, dtype=float).reshape(3, 15),
+        columns=SPLINE15D_PARAMETER_NAMES,
+    )
+    candidate = pd.concat(
+        [train.iloc[[1]], train.iloc[[2]].assign(z_obs=-100.0)],
+        ignore_index=True,
+    )
+
+    np.testing.assert_array_equal(novel_truth_mask(train, candidate), [False, True])
+
+
+def test_selection_and_temperature_prefer_eligible_validation_candidate() -> None:
+    rng = np.random.default_rng(8)
+    truth = rng.normal(size=(1000, 15))
+    metrics = evaluate_sample_pair(
+        truth_theta=truth,
+        truth_x=truth,
+        prior_theta=truth.copy(),
+        prior_x=truth.copy(),
+    )
+    payload = selection_payload(
+        metrics,
+        thresholds={
+            "max_median_ks": 0.10,
+            "max_max_ks": 0.20,
+            "max_correlation_frobenius": 1.5,
+            "min_base_std_mean": 0.8,
+            "max_base_std_mean": 1.2,
+            "max_normalized_tail_fraction": 0.002,
+            "max_negative_fraction": 1.0,
+        },
+    )
+    assert payload["eligible"]
+    scan = pd.DataFrame(
+        {
+            "base_temperature": [0.1, 0.2],
+            "eligible": [False, True],
+            "metric": [0.01, 0.2],
+        }
+    )
+    assert float(select_temperature(scan)["base_temperature"]) == 0.2

@@ -51,6 +51,8 @@ class PriorTrainingResult:
     best_metric: float
     best_epoch: int
     data_parallel: dict[str, Any]
+    best_selection_eligible: bool
+    best_selection_diagnostics: dict[str, Any]
 
 
 def prior_learning_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -574,6 +576,10 @@ def fit_realnvp_to_x(
     seed: int,
     epoch_callback: Callable[[int, PriorFlow], None] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    selection_callback: Callable[
+        [int, PriorFlow, float], dict[str, Any] | None
+    ]
+    | None = None,
 ) -> PriorTrainingResult:
     """Fit the configured exact flow prior to an unconstrained truth matrix."""
     x_train = np.asarray(x_train, dtype=np.float32)
@@ -596,6 +602,7 @@ def fit_realnvp_to_x(
     batch_size = max(int(training_config.get("batch_size", 256)), 1)
     epochs = max(int(training_config.get("epochs", 20)), 1)
     epoch_shuffle = bool(training_config.get("epoch_shuffle", True))
+    base_moment_weight = float(training_config.get("base_moment_weight", 0.0))
     data_parallel = _resolve_data_parallel_training(
         training_config,
         batch_size=batch_size,
@@ -604,7 +611,10 @@ def fit_realnvp_to_x(
     prior_replicated = None
     opt_state_replicated = None
     if bool(data_parallel["enabled"]):
-        pmap_train_step = _make_prior_pmap_train_step(optimizer)
+        pmap_train_step = _make_prior_pmap_train_step(
+            optimizer,
+            base_moment_weight=base_moment_weight,
+        )
         prior_replicated = _replicate_tree(prior, data_parallel["devices"])
         opt_state_replicated = _replicate_tree(opt_state, data_parallel["devices"])
     rng = np.random.default_rng(int(seed) + 100)
@@ -612,6 +622,8 @@ def fit_realnvp_to_x(
     best_metric = float("inf")
     best_epoch = 0
     best_prior = prior
+    best_selection_eligible = False
+    best_selection_diagnostics: dict[str, Any] = {}
     rows: list[dict[str, float | int | str]] = []
     val_rows: list[dict[str, float | int | str]] = []
     if epoch_callback is not None:
@@ -627,6 +639,8 @@ def fit_realnvp_to_x(
             rng=rng,
         )
         epoch_losses = []
+        epoch_nlls = []
+        epoch_base_penalties = []
         epoch_grad_norms = []
         epoch_updates = []
         for batch_index, start in enumerate(range(0, len(order), batch_size)):
@@ -644,6 +658,7 @@ def fit_realnvp_to_x(
                     opt_state_replicated,
                     loss_value,
                     mean_log_prob_value,
+                    base_penalty_value,
                     grad_norm_value,
                     loss_finite_value,
                     grads_finite_value,
@@ -655,17 +670,21 @@ def fit_realnvp_to_x(
                 )
                 loss = _unreplicate_scalar(loss_value)
                 mean_log_prob = _unreplicate_scalar(mean_log_prob_value)
+                base_penalty = _unreplicate_scalar(base_penalty_value)
                 grad_norm = _unreplicate_scalar(grad_norm_value)
                 loss_finite = _unreplicate_bool(loss_finite_value)
                 grads_finite = _unreplicate_bool(grads_finite_value)
                 update_applied = _unreplicate_bool(update_applied_value)
             else:
-                (loss_raw, mean_log_prob_raw), grads = _loss_and_grads_jit(
+                (loss_raw, aux_raw), grads = _loss_and_grads_jit(
                     prior,
                     batch,
+                    jnp.asarray(base_moment_weight, dtype=batch.dtype),
                 )
+                mean_log_prob_raw, base_penalty_raw = aux_raw
                 loss = float(loss_raw)
                 mean_log_prob = float(mean_log_prob_raw)
+                base_penalty = float(base_penalty_raw)
                 loss_finite = bool(np.isfinite(loss))
                 grads_finite = _tree_all_finite(grads)
                 update_applied = bool(loss_finite and grads_finite)
@@ -678,6 +697,8 @@ def fit_realnvp_to_x(
                     )
                     prior = eqx.apply_updates(prior, updates)
             epoch_losses.append(float(loss))
+            epoch_nlls.append(float(-mean_log_prob))
+            epoch_base_penalties.append(float(base_penalty))
             epoch_grad_norms.append(float(grad_norm))
             epoch_updates.append(float(update_applied))
             rows.append(
@@ -687,6 +708,9 @@ def fit_realnvp_to_x(
                     "split": "train",
                     "loss": float(loss),
                     "mean_log_prob": float(mean_log_prob),
+                    "negative_mean_log_prob": float(-mean_log_prob),
+                    "base_moment_penalty": float(base_penalty),
+                    "base_moment_weight": float(base_moment_weight),
                     "n_objects": int(batch.shape[0]),
                     "data_parallel_mode": str(data_parallel["effective"]),
                     "data_parallel_devices": int(data_parallel["n_devices"]),
@@ -702,12 +726,30 @@ def fit_realnvp_to_x(
             )
         if bool(data_parallel["enabled"]):
             prior = _unreplicate_tree(prior_replicated)
-        train_metric = float(np.nanmean(epoch_losses))
+        train_metric = float(np.nanmean(epoch_nlls))
         if x_validation is not None:
             val_log_prob = float(
                 np.mean(np.asarray(prior.log_prob(jnp.asarray(x_validation))))
             )
             val_metric = -val_log_prob
+            metric = val_metric
+        else:
+            metric = train_metric
+        selection_diagnostics: dict[str, Any] = {}
+        selection_eligible = True
+        selection_evaluated = selection_callback is None
+        if selection_callback is not None:
+            selection = selection_callback(epoch, prior, float(metric))
+            if selection is not None:
+                selection_diagnostics = dict(selection)
+                metric = float(selection_diagnostics.pop("metric"))
+                selection_eligible = bool(
+                    selection_diagnostics.pop("eligible", False)
+                )
+                selection_evaluated = True
+            else:
+                selection_eligible = False
+        if x_validation is not None:
             val_rows.append(
                 {
                     "epoch": int(epoch),
@@ -715,15 +757,22 @@ def fit_realnvp_to_x(
                     "mean_log_prob": float(val_log_prob),
                     "negative_mean_log_prob": float(val_metric),
                     "n_objects": int(len(x_validation)),
+                    "selection_evaluated": bool(selection_evaluated),
+                    "selection_eligible": bool(selection_eligible),
+                    "selection_metric": (
+                        float(metric) if selection_evaluated else np.nan
+                    ),
+                    **selection_diagnostics,
                 }
             )
-            metric = val_metric
-        else:
-            metric = train_metric
-        if np.isfinite(metric) and metric < best_metric:
+        candidate_rank = (0 if selection_eligible else 1, float(metric))
+        best_rank = (0 if best_selection_eligible else 1, float(best_metric))
+        if selection_evaluated and np.isfinite(metric) and candidate_rank < best_rank:
             best_metric = float(metric)
             best_epoch = int(epoch)
             best_prior = prior
+            best_selection_eligible = bool(selection_eligible)
+            best_selection_diagnostics = dict(selection_diagnostics)
         if progress_callback is not None:
             progress_callback(
                 {
@@ -736,6 +785,12 @@ def fit_realnvp_to_x(
                     "best_metric": float(best_metric),
                     "best_epoch": int(best_epoch),
                     "mean_grad_norm": float(np.nanmean(epoch_grad_norms)),
+                    "mean_base_moment_penalty": float(
+                        np.nanmean(epoch_base_penalties)
+                    ),
+                    "selection_evaluated": bool(selection_evaluated),
+                    "selection_eligible": bool(selection_eligible),
+                    **selection_diagnostics,
                     "update_fraction": float(np.nanmean(epoch_updates)),
                     "padded_rows": int(padded_rows),
                     "data_parallel_mode": str(data_parallel["effective"]),
@@ -753,6 +808,8 @@ def fit_realnvp_to_x(
         best_metric=best_metric,
         best_epoch=best_epoch,
         data_parallel=data_parallel,
+        best_selection_eligible=best_selection_eligible,
+        best_selection_diagnostics=best_selection_diagnostics,
     )
 
 
@@ -771,6 +828,7 @@ def _build_prior_from_flow_config(
             hidden_size=int(flow_config.get("hidden_size", 128)),
             scale_clamp=float(flow_config.get("scale_clamp", 0.05)),
             shift_clamp=float(flow_config.get("shift_clamp", 5.0)),
+            permutation=str(flow_config.get("permutation", "none")),
             init=str(flow_config.get("init", "default")),
             init_scale=float(flow_config.get("init_scale", 1.0)),
         )
@@ -806,6 +864,7 @@ def _prior_architecture_payload(
             "hidden_size": int(flow_config.get("hidden_size", 128)),
             "scale_clamp": float(flow_config.get("scale_clamp", 0.05)),
             "shift_clamp": float(flow_config.get("shift_clamp", 5.0)),
+            "permutation": str(getattr(prior, "permutation", "none")),
             "init": str(flow_config.get("init", "default")),
             "init_scale": float(flow_config.get("init_scale", 1.0)),
             "parameter_dtype": "float32",
@@ -839,6 +898,7 @@ def _prior_template_from_architecture(arch: dict[str, Any]) -> PriorFlow:
             hidden_size=int(arch["hidden_size"]),
             scale_clamp=float(arch["scale_clamp"]),
             shift_clamp=float(arch.get("shift_clamp", 5.0)),
+            permutation=str(arch.get("permutation", "none")),
             init=str(arch.get("init", "default")),
             init_scale=float(arch.get("init_scale", 1.0)),
         )
@@ -1086,22 +1146,24 @@ def _resolve_data_parallel_training(
     }
 
 
-def _make_prior_pmap_train_step(optimizer):
+def _make_prior_pmap_train_step(optimizer, *, base_moment_weight: float = 0.0):
     pmap_array_axis = eqx.if_array(0)
 
     @eqx.filter_pmap(
         axis_name="devices",
         in_axes=(pmap_array_axis, pmap_array_axis, pmap_array_axis),
-        out_axes=(pmap_array_axis, pmap_array_axis, 0, 0, 0, 0, 0, 0),
+        out_axes=(pmap_array_axis, pmap_array_axis, 0, 0, 0, 0, 0, 0, 0),
     )
     def step(prior, opt_state, batch):
-        (loss, mean_log_prob), grads = eqx.filter_value_and_grad(
-            _prior_nll,
+        (loss, aux), grads = eqx.filter_value_and_grad(
+            _prior_objective,
             has_aux=True,
-        )(prior, batch)
+        )(prior, batch, jnp.asarray(base_moment_weight, dtype=batch.dtype))
+        mean_log_prob, base_penalty = aux
         grads = jax.lax.pmean(grads, axis_name="devices")
         loss = jax.lax.pmean(loss, axis_name="devices")
         mean_log_prob = jax.lax.pmean(mean_log_prob, axis_name="devices")
+        base_penalty = jax.lax.pmean(base_penalty, axis_name="devices")
         grad_norm = _tree_l2_norm_jax(grads)
         loss_finite = jnp.isfinite(loss)
         grads_finite = _tree_all_finite_jax(grads)
@@ -1123,6 +1185,7 @@ def _make_prior_pmap_train_step(optimizer):
             opt_state,
             loss,
             mean_log_prob,
+            base_penalty,
             grad_norm,
             loss_finite,
             grads_finite,
@@ -1200,11 +1263,34 @@ def _prior_nll(prior: PriorFlow, x: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarr
     return -jnp.mean(log_prob), jnp.mean(log_prob)
 
 
+def _prior_objective(
+    prior: PriorFlow,
+    x: jnp.ndarray,
+    base_moment_weight: jnp.ndarray,
+) -> tuple[jnp.ndarray, tuple[jnp.ndarray, jnp.ndarray]]:
+    nll, mean_log_prob = _prior_nll(prior, x)
+    u, _logdet = prior.inverse(x)
+    center = jnp.mean(u, axis=0)
+    centered = u - center
+    std = jnp.sqrt(jnp.mean(centered**2, axis=0) + 1.0e-6)
+    covariance = centered.T @ centered / jnp.maximum(centered.shape[0], 1)
+    off_diagonal = covariance - jnp.diag(jnp.diag(covariance))
+    base_penalty = (
+        jnp.sum(center**2)
+        + jnp.sum((std - 1.0) ** 2)
+        + jnp.sum(off_diagonal**2) / u.shape[-1]
+    )
+    loss = nll + base_moment_weight * base_penalty
+    return loss, (mean_log_prob, base_penalty)
+
+
 def _prior_nll_scalar(prior: PriorFlow, x: jnp.ndarray) -> jnp.ndarray:
     return _prior_nll(prior, x)[0]
 
 
-_loss_and_grads_jit = eqx.filter_jit(eqx.filter_value_and_grad(_prior_nll, has_aux=True))
+_loss_and_grads_jit = eqx.filter_jit(
+    eqx.filter_value_and_grad(_prior_objective, has_aux=True)
+)
 _prior_nll_jit = eqx.filter_jit(_prior_nll_scalar)
 
 

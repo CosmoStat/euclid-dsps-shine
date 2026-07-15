@@ -91,6 +91,7 @@ class RealNVPPrior(eqx.Module):
 
     layers: tuple
     latent_dim: int = eqx.field(static=True)
+    permutation: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -101,6 +102,7 @@ class RealNVPPrior(eqx.Module):
         hidden_size: int = 128,
         scale_clamp: float = 0.05,
         shift_clamp: float = 5.0,
+        permutation: str = "none",
         init: str = "default",
         init_scale: float = 1.0,
     ) -> None:
@@ -123,13 +125,19 @@ class RealNVPPrior(eqx.Module):
             for index in range(int(n_layers))
         )
         self.latent_dim = int(latent_dim)
+        self.permutation = _validate_flow_permutation(permutation)
 
     def forward(self, u):
         """Map base ``u`` to latent ``x`` and return forward log-det."""
         value = jnp.asarray(u, dtype=jnp.float32)
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
-        for layer in self.layers:
+        for index, layer in enumerate(self.layers):
             value, layer_logdet = layer.forward(value)
+            value = jnp.take(
+                value,
+                _flow_permutation(self.latent_dim, index, self.permutation),
+                axis=-1,
+            )
             logdet = logdet + layer_logdet
         return value, logdet
 
@@ -137,7 +145,13 @@ class RealNVPPrior(eqx.Module):
         """Map latent ``x`` to base ``u`` and return inverse log-det."""
         value = jnp.asarray(x, dtype=jnp.float32)
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
-        for layer in reversed(self.layers):
+        for index, layer in reversed(tuple(enumerate(self.layers))):
+            permutation = _flow_permutation(
+                self.latent_dim,
+                index,
+                self.permutation,
+            )
+            value = jnp.take(value, jnp.argsort(permutation), axis=-1)
             value, layer_logdet = layer.inverse(value)
             logdet = logdet + layer_logdet
         return value, logdet
@@ -155,6 +169,34 @@ class RealNVPPrior(eqx.Module):
         u = jax.random.normal(key, tuple(shape) + (self.latent_dim,), dtype=jnp.float32)
         x, _logdet = self.forward(u)
         return x
+
+    def sample_with_temperature(self, key, shape=(), *, temperature: float = 1.0):
+        """Sample using a calibrated isotropic Gaussian base temperature."""
+        if float(temperature) <= 0.0:
+            raise ValueError("Base temperature must be positive")
+        if isinstance(shape, int):
+            shape = (shape,)
+        u = float(temperature) * jax.random.normal(
+            key,
+            tuple(shape) + (self.latent_dim,),
+            dtype=jnp.float32,
+        )
+        x, _logdet = self.forward(u)
+        return x
+
+    def log_prob_with_temperature(self, x, *, temperature: float = 1.0):
+        """Evaluate exact density under an isotropic base temperature."""
+        if float(temperature) <= 0.0:
+            raise ValueError("Base temperature must be positive")
+        u, logdet = self.inverse(x)
+        temperature_array = jnp.asarray(temperature, dtype=u.dtype)
+        base = -0.5 * jnp.sum(
+            (u / temperature_array) ** 2
+            + jnp.log(2.0 * jnp.pi)
+            + 2.0 * jnp.log(temperature_array),
+            axis=-1,
+        )
+        return base + logdet
 
 
 class _RQSplineCouplingLayer(eqx.Module):
@@ -600,14 +642,23 @@ def _mask_as_float(mask, reference):
 
 def _flow_permutation(latent_dim: int, index: int, mode: str) -> jnp.ndarray:
     indices = jnp.arange(int(latent_dim), dtype=jnp.int32)
-    normalized = str(mode).strip().lower()
+    normalized = _validate_flow_permutation(mode)
     if normalized in {"none", "identity", "false"}:
         return indices
     if normalized == "reverse":
         return indices[::-1]
     if normalized == "roll":
         return jnp.roll(indices, shift=(int(index) + 1) % int(latent_dim))
-    raise ValueError("RQSplineCouplingPrior permutation must be 'roll', 'reverse', or 'none'")
+    raise AssertionError(f"Unhandled flow permutation: {normalized}")
+
+
+def _validate_flow_permutation(mode: str) -> str:
+    normalized = str(mode).strip().lower()
+    aliases = {"identity": "none", "false": "none"}
+    normalized = aliases.get(normalized, normalized)
+    if normalized not in {"roll", "reverse", "none"}:
+        raise ValueError("Flow permutation must be 'roll', 'reverse', or 'none'")
+    return normalized
 
 
 def _rational_quadratic_spline(

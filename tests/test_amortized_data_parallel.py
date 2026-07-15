@@ -119,13 +119,13 @@ def test_prior_pmap_step_handles_static_realnvp_leaves_on_fake_cpu_devices() -> 
         prior_replicated = _replicate_tree(prior, devices)
         opt_state_replicated = _replicate_tree(opt_state, devices)
         batch = _shard_x_batch(jnp.ones((6, 4), dtype=jnp.float32), len(devices))
-        _, _, loss, mean_log_prob, grad_norm, loss_finite, grads_finite, update = step(
-            prior_replicated,
-            opt_state_replicated,
-            batch,
-        )
+        (
+            _, _, loss, mean_log_prob, base_penalty, grad_norm,
+            loss_finite, grads_finite, update,
+        ) = step(prior_replicated, opt_state_replicated, batch)
         assert loss.shape == (3,)
         assert mean_log_prob.shape == (3,)
+        assert base_penalty.shape == (3,)
         assert grad_norm.shape == (3,)
         assert bool(loss_finite[0])
         assert bool(grads_finite[0])

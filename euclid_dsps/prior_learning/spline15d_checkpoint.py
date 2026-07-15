@@ -42,6 +42,7 @@ def load_spline15d_realnvp_checkpoint(
         hidden_size=int(architecture["hidden_size"]),
         scale_clamp=float(architecture["scale_clamp"]),
         shift_clamp=float(architecture["shift_clamp"]),
+        permutation=str(architecture.get("permutation", "none")),
         init=str(architecture.get("init", "default")),
         init_scale=float(architecture.get("init_scale", 1.0)),
     )

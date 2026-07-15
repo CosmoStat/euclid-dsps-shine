@@ -46,6 +46,39 @@ def test_realnvp_roundtrip_logprob_and_sample_shape() -> None:
     assert jnp.allclose(recovered, u, atol=1.0e-5)
 
 
+@pytest.mark.parametrize("permutation", ["roll", "reverse"])
+def test_realnvp_permuted_roundtrip_and_temperature(permutation: str) -> None:
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(0),
+        latent_dim=5,
+        n_layers=5,
+        hidden_size=8,
+        permutation=permutation,
+    )
+    u = jnp.arange(20, dtype=jnp.float32).reshape(4, 5) / 20.0
+
+    x, _ = prior.forward(u)
+    recovered, _ = prior.inverse(x)
+    samples = prior.sample_with_temperature(
+        jax.random.PRNGKey(1), 7, temperature=0.2
+    )
+    logp = prior.log_prob_with_temperature(x, temperature=0.2)
+
+    assert jnp.allclose(recovered, u, atol=1.0e-5)
+    assert samples.shape == (7, 5)
+    assert logp.shape == (4,)
+    assert jnp.all(jnp.isfinite(logp))
+
+
+def test_realnvp_rejects_invalid_temperature() -> None:
+    prior = RealNVPPrior(jax.random.PRNGKey(0), latent_dim=4, n_layers=2)
+
+    with pytest.raises(ValueError, match="positive"):
+        prior.sample_with_temperature(jax.random.PRNGKey(1), 2, temperature=0.0)
+    with pytest.raises(ValueError, match="positive"):
+        prior.log_prob_with_temperature(jnp.zeros((2, 4)), temperature=-1.0)
+
+
 def test_realnvp_coupling_masks_are_not_trainable() -> None:
     import equinox as eqx
 
