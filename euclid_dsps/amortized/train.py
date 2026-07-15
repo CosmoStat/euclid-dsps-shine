@@ -118,6 +118,9 @@ class JitLatentSpec(NamedTuple):
     raw_center: jnp.ndarray | None = None
     raw_scale: jnp.ndarray | None = None
     normalization: str = "identity"
+    transform_family: jnp.ndarray | None = None
+    transform_location: jnp.ndarray | None = None
+    transform_lambda: jnp.ndarray | None = None
 
 
 class _StaticArg:
@@ -249,10 +252,20 @@ def build_prior_from_config(
         active_spec = active_spec or latent_spec_from_config(config)
         _validate_loaded_prior_spec(active_spec, prior_spec)
         return prior
+    if source == "spline15d_checkpoint":
+        checkpoint = prior_cfg.get("checkpoint")
+        if not checkpoint:
+            raise ValueError(
+                "amortized.prior.source='spline15d_checkpoint' requires "
+                "amortized.prior.checkpoint"
+            )
+        prior, prior_spec = _load_spline15d_prior(checkpoint, active_spec)
+        _validate_loaded_prior_spec(active_spec or prior_spec, prior_spec)
+        return prior
     raise ValueError(
         "amortized.prior.source must be one of "
-        "'standard_normal', 'supervised_checkpoint', 'joint_realnvp', or "
-        "'rq_spline_coupling'"
+        "'standard_normal', 'supervised_checkpoint', 'spline15d_checkpoint', "
+        "'joint_realnvp', or 'rq_spline_coupling'"
     )
 
 
@@ -261,16 +274,80 @@ def _latent_spec_for_amortized_config(config: dict[str, Any]) -> LatentSpec:
     cfg = amortized_config(config)
     prior_cfg = cfg["prior"]
     source = str(prior_cfg.get("source", "joint_realnvp"))
-    if source != "supervised_checkpoint":
+    if source not in {"supervised_checkpoint", "spline15d_checkpoint"}:
         return active_spec
     checkpoint = prior_cfg.get("checkpoint")
     if not checkpoint:
         return active_spec
+    if source == "spline15d_checkpoint":
+        _prior, prior_spec = _load_spline15d_prior(checkpoint, active_spec)
+        _validate_loaded_prior_spec(active_spec, prior_spec, require_normalization=False)
+        return prior_spec
+
     from euclid_dsps.prior_learning.train import load_prior_checkpoint
 
     _prior, _sidecar, prior_spec, _schema = load_prior_checkpoint(checkpoint)
     _validate_loaded_prior_spec(active_spec, prior_spec, require_normalization=False)
     return prior_spec
+
+
+def _load_spline15d_prior(
+    checkpoint: str | Path,
+    active_spec: LatentSpec | None,
+) -> tuple[RealNVPPrior, LatentSpec]:
+    """Load the spline-15D flow and expose its exact JAX marginal transform."""
+    if active_spec is None:
+        raise ValueError("spline15d_checkpoint requires an active latent spec")
+    from euclid_dsps.prior_learning.spline15d import SPLINE15D_PARAMETER_NAMES
+    from euclid_dsps.prior_learning.spline15d_checkpoint import (
+        load_spline15d_realnvp_checkpoint,
+    )
+
+    prior, sidecar = load_spline15d_realnvp_checkpoint(checkpoint)
+    if active_spec.names != SPLINE15D_PARAMETER_NAMES:
+        raise ValueError(
+            "Spline-15D active parameter order does not match the prior contract"
+        )
+    normalization = dict(sidecar.get("normalization", {}) or {})
+    transforms = dict(normalization.get("transforms", {}) or {})
+    if normalization.get("whitening") is not None:
+        raise ValueError("Amortized spline-15D currently requires no whitening")
+    if float(normalization.get("normalized_atom_half_width", 0.0)) != 0.0:
+        raise ValueError("Amortized spline-15D currently requires exact atoms")
+    family = []
+    center = []
+    scale = []
+    location = []
+    lam = []
+    for name in SPLINE15D_PARAMETER_NAMES:
+        transform = dict(transforms.get(name, {}) or {})
+        transform_family = str(transform.get("family", ""))
+        if transform_family == "log":
+            family.append(1)
+            location.append(0.0)
+            lam.append(1.0)
+        elif transform_family == "shifted_asinh":
+            family.append(0)
+            location.append(float(transform["location"]))
+            lam.append(float(transform["lambda"]))
+        else:
+            raise ValueError(
+                f"Unsupported spline-15D transform for {name}: {transform_family}"
+            )
+        center.append(float(transform["center"]))
+        scale.append(float(transform["scale"]))
+    spec = LatentSpec(
+        names=SPLINE15D_PARAMETER_NAMES,
+        lower=active_spec.lower,
+        upper=active_spec.upper,
+        raw_center=jnp.asarray(center, dtype=jnp.float32),
+        raw_scale=jnp.asarray(scale, dtype=jnp.float32),
+        normalization="spline15d_mixed",
+        transform_family=jnp.asarray(family, dtype=jnp.int32),
+        transform_location=jnp.asarray(location, dtype=jnp.float32),
+        transform_lambda=jnp.asarray(lam, dtype=jnp.float32),
+    )
+    return prior, spec
 
 
 def _validate_loaded_prior_spec(
@@ -305,6 +382,15 @@ def _validate_loaded_prior_spec(
             "Supervised prior latent normalization does not match amortized config: "
             f"checkpoint={loaded.normalization}, config={active.normalization}"
         )
+    for field in ("transform_family", "transform_location", "transform_lambda"):
+        active_value = getattr(active, field, None)
+        loaded_value = getattr(loaded, field, None)
+        if (active_value is None) != (loaded_value is None):
+            raise ValueError(f"Supervised prior latent {field} does not match")
+        if active_value is not None and not np.allclose(
+            np.asarray(active_value), np.asarray(loaded_value), rtol=0.0, atol=1.0e-6
+        ):
+            raise ValueError(f"Supervised prior latent {field} does not match")
     if not np.allclose(
         np.asarray(active.raw_center),
         np.asarray(loaded.raw_center),
@@ -616,6 +702,9 @@ def train_amortized_fs2(
         raw_center=latent_spec.raw_center,
         raw_scale=latent_spec.raw_scale,
         normalization=latent_spec.normalization,
+        transform_family=latent_spec.transform_family,
+        transform_location=latent_spec.transform_location,
+        transform_lambda=latent_spec.transform_lambda,
     )
     _log(
         verbose,
@@ -1697,6 +1786,9 @@ def evaluate_validation_epoch(
             raw_center=latent_spec.raw_center,
             raw_scale=latent_spec.raw_scale,
             normalization=latent_spec.normalization,
+            transform_family=latent_spec.transform_family,
+            transform_location=latent_spec.transform_location,
+            transform_lambda=latent_spec.transform_lambda,
         )
     )
     with _progress_bar(
@@ -2708,7 +2800,7 @@ def _log_prior_safety_messages(
             True,
             "[amortized] KL prior is the fixed standard normal reference prior.",
         )
-    if source == "supervised_checkpoint" and not train_prior:
+    if source in {"supervised_checkpoint", "spline15d_checkpoint"} and not train_prior:
         _log(
             True,
             "[amortized] supervised flow prior is frozen: KL updates the encoder "

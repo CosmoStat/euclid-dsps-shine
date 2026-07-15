@@ -581,6 +581,12 @@ def _add_amortized_train_arguments(
     *,
     default_out: str,
 ) -> None:
+    parser.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime for training or local smoke tests.",
+    )
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--limit", type=int)
@@ -866,6 +872,13 @@ def main(argv: list[str] | None = None) -> None:
             "require_gpu": False,
         }
     if args.command == "diffsky-validate-dsps-closure" and getattr(
+        args, "runtime", "config"
+    ) != "config":
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
+        }
+    if args.command.startswith("amortized-train-") and getattr(
         args, "runtime", "config"
     ) != "config":
         runtime_config = {

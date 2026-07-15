@@ -1709,6 +1709,8 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
         return run_diffstar_reduced6_model_jax(context, params)
     if str(model_config.get("sfh_model", "lognormal")) == "diffsky_basic":
         return run_diffsky_basic_model_jax(context, params)
+    if str(model_config.get("sfh_model", "lognormal")) == "spline15d":
+        return run_spline15d_model_jax(context, params)
     return run_lognormal_model_jax(context, params)
 
 
@@ -1722,6 +1724,8 @@ def run_dsps_model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp
         return run_diffstar_reduced6_model_mags_jax(context, params)
     if sfh_model == "diffsky_basic":
         return run_diffsky_basic_model_mags_jax(context, params)
+    if sfh_model == "spline15d":
+        return run_spline15d_model_jax(context, params).model_mags
     return run_lognormal_model_jax(context, params).model_mags
 
 
@@ -2275,6 +2279,8 @@ def run_diffsky_basic_model_jax(
     lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
         params["log10_stellar_metallicity"], context.z_sun
     )
+
+
     frac_surviving_by_age = _diffsky_basic_surviving_mstar_by_age_jax(
         context, model_config, lgmet_abs
     )
@@ -2291,6 +2297,94 @@ def run_diffsky_basic_model_jax(
         gal_sfr_table,
         ssp_lg_age_gyr,
         t_obs,
+    )
+    ssp_flux_z = diffsky_basic_ssp_flux_by_age_jax(context, model_config, lgmet_abs)
+    sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass
+    intrinsic_sed = jnp.nan_to_num(
+        sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    tau2, dust_index_n, tau1_over_tau2 = diffsky_basic_dust_params_jax(params)
+    wave = _context_ssp_wave(context)
+    dusted_by_age = apply_popcosmos_dust_by_age_jax(
+        wave,
+        ssp_lg_age_gyr,
+        sed_by_age,
+        tau2,
+        dust_index_n,
+        tau1_over_tau2,
+        model_config,
+    )
+    dusted_sed = jnp.nan_to_num(
+        dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
+    )
+    pre_igm_sed, post_igm_sed = combine_agn_and_igm_jax(
+        wave,
+        dusted_sed,
+        jnp.zeros_like(dusted_sed),
+        z_obs,
+        model_config,
+    )
+    model_mags = predict_mags_jax(context, wave, post_igm_sed, z_obs)
+    return JaxModelResult(
+        wave=wave,
+        rest_sed=intrinsic_sed,
+        dusted_rest_sed=post_igm_sed,
+        model_mags=model_mags,
+        t_obs_gyr=t_obs,
+        formed_mass_msun=formed_mass,
+        surviving_stellar_mass_msun=surviving_mass,
+        sfr_at_obs_msun_per_yr=gal_sfr_table[-1],
+        sfr_bins_msun_per_yr=project_sfh_to_popcosmos_sfr_bins_jax(
+            gal_t_table, gal_sfr_table, t_obs
+        ),
+        lookback_bin_edges_gyr=build_popcosmos_lookback_bin_edges_jax(t_obs),
+        stellar_intrinsic_sed=intrinsic_sed,
+        stellar_dusted_sed=dusted_sed,
+        gas_sed=jnp.zeros_like(dusted_sed),
+        agn_sed=jnp.zeros_like(dusted_sed),
+        pre_igm_sed=pre_igm_sed,
+        post_igm_sed=post_igm_sed,
+    )
+
+
+def run_spline15d_model_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> JaxModelResult:
+    """DSPS forward model for five physical plus ten spline-SFH parameters."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    from euclid_dsps.prior_learning.spline15d import (
+        SFH_CONTRAST_NAMES,
+        reconstruct_relative_sfh_jax,
+    )
+
+    model_config = _normalized_model_config(context.model_config)
+    _validate_diffsky_basic_metallicity_model(model_config)
+    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
+    gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
+    contrasts = jnp.stack(
+        [jnp.asarray(params[name], dtype=jnp.float32) for name in SFH_CONTRAST_NAMES]
+    )
+    raw_sfr_table = reconstruct_relative_sfh_jax(gal_t_table, contrasts)
+    ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    frac_surviving_by_age = _diffsky_basic_surviving_mstar_by_age_jax(
+        context, model_config, lgmet_abs
+    )
+    gal_sfr_table, formed_mass, surviving_mass = normalize_sfh_to_stellar_mass_jax(
+        gal_t_table,
+        raw_sfr_table,
+        ssp_lg_age_gyr,
+        t_obs,
+        params["log10_stellar_mass"],
+        frac_surviving_by_age,
+    )
+    age_weights = calc_age_weights_from_sfh_table(
+        gal_t_table, gal_sfr_table, ssp_lg_age_gyr, t_obs
     )
     ssp_flux_z = diffsky_basic_ssp_flux_by_age_jax(context, model_config, lgmet_abs)
     sed_by_age = jnp.clip(ssp_flux_z, 0.0, jnp.inf) * age_weights[:, None] * formed_mass

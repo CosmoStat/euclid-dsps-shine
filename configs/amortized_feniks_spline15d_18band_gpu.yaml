@@ -1,0 +1,109 @@
+extends: diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml
+
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3/amortized/train.parquet
+
+truth:
+    schema: feniks_spline15d
+    redshift_column: z_obs
+    parameter_columns:
+        __replace__: true
+        z_obs: {column: z_obs, kind: exact_spline_truth}
+        log10_stellar_mass: {column: log10_stellar_mass, kind: exact_spline_truth}
+        log10_stellar_metallicity: {column: log10_stellar_metallicity, kind: exact_spline_truth}
+        dust_av: {column: dust_av, kind: exact_spline_truth}
+        dust_delta: {column: dust_delta, kind: exact_spline_truth}
+        sfh_dlog_sfr_01: {column: sfh_dlog_sfr_01, kind: exact_spline_truth}
+        sfh_dlog_sfr_02: {column: sfh_dlog_sfr_02, kind: exact_spline_truth}
+        sfh_dlog_sfr_03: {column: sfh_dlog_sfr_03, kind: exact_spline_truth}
+        sfh_dlog_sfr_04: {column: sfh_dlog_sfr_04, kind: exact_spline_truth}
+        sfh_dlog_sfr_05: {column: sfh_dlog_sfr_05, kind: exact_spline_truth}
+        sfh_dlog_sfr_06: {column: sfh_dlog_sfr_06, kind: exact_spline_truth}
+        sfh_dlog_sfr_07: {column: sfh_dlog_sfr_07, kind: exact_spline_truth}
+        sfh_dlog_sfr_08: {column: sfh_dlog_sfr_08, kind: exact_spline_truth}
+        sfh_dlog_sfr_09: {column: sfh_dlog_sfr_09, kind: exact_spline_truth}
+        sfh_dlog_sfr_10: {column: sfh_dlog_sfr_10, kind: exact_spline_truth}
+
+model:
+    sfh_model: spline15d
+    n_sfh_bins: 80
+    stellar_metallicity_model: lognormal_mdf_fixed_scatter
+    stellar_metallicity_scatter_dex: 0.2
+    dust_model: prospector_fsps
+    igm_model: fsps_madau95
+    nebular_model: fixed_ssp
+    agn_model: none
+
+fit:
+    free_parameters:
+        __replace__: true
+        z_obs: {initial: 1.0, bounds: [0.001, 5.5]}
+        log10_stellar_mass: {initial: 9.0, bounds: [6.0, 13.5]}
+        log10_stellar_metallicity: {initial: -1.0, bounds: [-2.5, 0.5]}
+        dust_av: {initial: 0.2, bounds: [0.000001, 6.0]}
+        dust_delta: {initial: -0.5, bounds: [-2.5, 1.0]}
+        sfh_dlog_sfr_01: {initial: 0.8, bounds: [-4.0, 15.0]}
+        sfh_dlog_sfr_02: {initial: 0.5, bounds: [-4.0, 15.0]}
+        sfh_dlog_sfr_03: {initial: 0.7, bounds: [-4.0, 15.0]}
+        sfh_dlog_sfr_04: {initial: 0.5, bounds: [-4.0, 15.0]}
+        sfh_dlog_sfr_05: {initial: 0.5, bounds: [-4.0, 15.0]}
+        sfh_dlog_sfr_06: {initial: 0.3, bounds: [-4.0, 6.0]}
+        sfh_dlog_sfr_07: {initial: 0.1, bounds: [-4.0, 3.0]}
+        sfh_dlog_sfr_08: {initial: 0.1, bounds: [-4.0, 3.0]}
+        sfh_dlog_sfr_09: {initial: 0.05, bounds: [-4.0, 3.0]}
+        sfh_dlog_sfr_10: {initial: 0.03, bounds: [-4.0, 3.0]}
+
+amortized:
+    data:
+        expected_n_bands: 18
+        selection_mode: sequential
+        validation_fraction: 0.1
+        catalog_batch_size: 10000
+    latent:
+        schema: feniks_spline15d
+        include_redshift: true
+        use_fit_bounds: true
+        # Replaced at runtime by the exact mixed transform saved with the prior.
+        normalization: identity
+    features:
+        type: flux_and_errors
+        n_flux_bands: 18
+        n_error_bands: 18
+        normalize_per_band: true
+        flux_transform: asinh
+        error_transform: log
+    encoder:
+        type: gaussian_mlp
+        input_dim: 36
+        latent_dim: 15
+        hidden_sizes: [512, 512, 512]
+        activation: gelu
+        log_std_min: -8.0
+        log_std_max: 3.0
+        initial_log_std: -1.0
+    prior:
+        type: realnvp
+        source: spline15d_checkpoint
+        checkpoint: outputs/runs/feniks_spline15d_v6_positive_support_resume400_to800/checkpoints/best.eqx
+        train_jointly: false
+    likelihood:
+        type: student_t
+        student_t_dof: 2.0
+        error_floor_frac: 0.02
+        error_jitter: 0.0
+    training:
+        epochs: 120
+        batch_size: 256
+        jax_batch_size: 128
+        n_samples: 2
+        learning_rate: 1.0e-4
+        weight_decay: 1.0e-5
+        gradient_clip_norm: 1.0
+        kl_annealing_epochs: 40
+        kl_weight_max: 1.0
+        validation_every: 1
+        seed: 260720
+    inference:
+        posterior_samples: 256
+        prior_samples: 8192
+        decoder_sample_chunk_size: 1
+        prior_predictive_batch_size: 128

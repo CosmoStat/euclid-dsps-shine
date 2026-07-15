@@ -118,6 +118,7 @@ SUPPORTED_SFH_MODELS = {
     "popcosmos_bins",
     "diffstar_reduced6",
     "diffsky_basic",
+    "spline15d",
 }
 SUPPORTED_SSP_MODELS = {"dense", "compressed_basis"}
 SUPPORTED_STELLAR_METALLICITY_MODELS = {
@@ -938,7 +939,12 @@ def _normalize_model_dust_model(value: Any) -> str:
 
 
 def _is_popcosmos_like_sfh(sfh_model: Any) -> bool:
-    return str(sfh_model) in {"popcosmos_bins", "diffstar_reduced6", "diffsky_basic"}
+    return str(sfh_model) in {
+        "popcosmos_bins",
+        "diffstar_reduced6",
+        "diffsky_basic",
+        "spline15d",
+    }
 
 
 def _expand_config_shorthands(config: dict[str, Any]) -> dict[str, Any]:
@@ -1451,6 +1457,8 @@ def _validate_model_fit_contract(
         _validate_diffstar_free_parameters(model, free_names, errors)
     elif sfh_model == "diffsky_basic":
         _validate_diffsky_basic_free_parameters(model, free_names, errors)
+    elif sfh_model == "spline15d":
+        _validate_spline15d_free_parameters(model, free_names, errors)
     elif sfh_model == "lognormal":
         _validate_lognormal_free_parameters(free_names, errors)
 
@@ -1640,6 +1648,42 @@ def _validate_diffsky_basic_free_parameters(
                 f"fit.free_parameters.{name} is not used by "
                 "model.sfh_model='diffsky_basic'"
             )
+
+
+def _validate_spline15d_free_parameters(
+    model: dict[str, Any], free_names: set[str], errors: list[str]
+) -> None:
+    expected = {
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_stellar_metallicity",
+        "dust_av",
+        "dust_delta",
+        *(f"sfh_dlog_sfr_{index:02d}" for index in range(1, 11)),
+    }
+    missing = sorted(expected - free_names)
+    unknown = sorted(free_names - expected)
+    if missing:
+        errors.append(
+            "model.sfh_model='spline15d' requires all 15 parameters; missing "
+            + ", ".join(missing)
+        )
+    for name in unknown:
+        errors.append(
+            f"fit.free_parameters.{name} is not used by "
+            "model.sfh_model='spline15d'"
+        )
+    metallicity_model = str(model.get("stellar_metallicity_model", "single"))
+    if metallicity_model not in {"single", "lognormal_mdf_fixed_scatter"}:
+        errors.append(
+            "model.sfh_model='spline15d' requires "
+            "model.stellar_metallicity_model='single' or "
+            "'lognormal_mdf_fixed_scatter'"
+        )
+    if str(model.get("nebular_model", "fixed_ssp")) != "fixed_ssp":
+        errors.append("model.sfh_model='spline15d' currently requires fixed_ssp")
+    if str(model.get("agn_model", "none")) != "none":
+        errors.append("model.sfh_model='spline15d' currently requires agn_model=none")
 
 
 def _validate_lognormal_free_parameters(

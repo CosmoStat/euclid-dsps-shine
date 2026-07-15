@@ -24,6 +24,9 @@ class LatentSpec:
     raw_center: jnp.ndarray | None = None
     raw_scale: jnp.ndarray | None = None
     normalization: str = "identity"
+    transform_family: jnp.ndarray | None = None
+    transform_location: jnp.ndarray | None = None
+    transform_lambda: jnp.ndarray | None = None
 
 
 def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
@@ -45,6 +48,7 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         "diffsky_dsps_closure_full",
         "diffsky_hltds_prior_v1",
         "diffsky_truth_basic",
+        "feniks_spline15d",
     }:
         names = configured_names
         if not names:
@@ -57,7 +61,8 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         raise ValueError(
             "Unsupported amortized latent schema. Use 'popcosmos_16', "
             "'config_free_parameters', 'diffsky_dsps_closure_full', "
-            "'diffsky_hltds_prior_v1', or 'diffsky_truth_basic'."
+            "'diffsky_hltds_prior_v1', 'diffsky_truth_basic', or "
+            "'feniks_spline15d'."
         )
     lower, upper = free_parameter_bounds_from_config(config, names)
     raw_center, raw_scale, normalization = _latent_normalization_from_config(
@@ -79,6 +84,14 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
 def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map network latent ``x`` to bounded physical ``theta``."""
     x = _validate_last_dim(jnp.asarray(x, dtype=jnp.float32), spec)
+    if str(spec.normalization) == "spline15d_mixed":
+        raw = network_x_to_raw_x(x, spec)
+        family = _spline15d_transform_family(spec)
+        location = _spline15d_transform_location(spec)
+        lam = _spline15d_transform_lambda(spec)
+        shifted = location + lam * jnp.sinh(raw)
+        logged = jnp.exp(jnp.clip(raw, -30.0, 30.0))
+        return jnp.where(family == 1, logged, shifted)
     raw_x = network_x_to_raw_x(x, spec)
     theta = spec.lower + (spec.upper - spec.lower) * jax.nn.sigmoid(raw_x)
     constraint = _gas_metallicity_indices(spec.names)
@@ -99,6 +112,14 @@ def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
 def theta_to_x(theta: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map bounded physical ``theta`` to network latent ``x``."""
     theta = _validate_last_dim(jnp.asarray(theta, dtype=jnp.float32), spec)
+    if str(spec.normalization) == "spline15d_mixed":
+        family = _spline15d_transform_family(spec)
+        location = _spline15d_transform_location(spec)
+        lam = _spline15d_transform_lambda(spec)
+        shifted_raw = jnp.arcsinh((theta - location) / lam)
+        log_raw = jnp.log(jnp.maximum(theta, 1.0e-30))
+        raw = jnp.where(family == 1, log_raw, shifted_raw)
+        return raw_x_to_network_x(raw, spec)
     eps = jnp.asarray(1.0e-6, dtype=theta.dtype)
     scaled = _safe_unit_interval((theta - spec.lower) / (spec.upper - spec.lower), eps)
     raw_x = _logit(scaled)
@@ -181,7 +202,34 @@ def latent_spec_to_jsonable(spec: LatentSpec) -> dict[str, Any]:
         "raw_center": np.asarray(_latent_center(spec)).astype(float).tolist(),
         "raw_scale": np.asarray(_latent_scale(spec)).astype(float).tolist(),
         "normalization": str(spec.normalization),
+        "transform_family": _optional_array_to_list(spec.transform_family),
+        "transform_location": _optional_array_to_list(spec.transform_location),
+        "transform_lambda": _optional_array_to_list(spec.transform_lambda),
     }
+
+
+def _optional_array_to_list(value: jnp.ndarray | None) -> list[float] | None:
+    if value is None:
+        return None
+    return np.asarray(value).astype(float).tolist()
+
+
+def _spline15d_transform_family(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_family is None:
+        raise ValueError("spline15d_mixed requires transform_family")
+    return jnp.asarray(spec.transform_family, dtype=jnp.int32)
+
+
+def _spline15d_transform_location(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_location is None:
+        raise ValueError("spline15d_mixed requires transform_location")
+    return jnp.asarray(spec.transform_location, dtype=jnp.float32)
+
+
+def _spline15d_transform_lambda(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_lambda is None:
+        raise ValueError("spline15d_mixed requires transform_lambda")
+    return jnp.maximum(jnp.asarray(spec.transform_lambda, dtype=jnp.float32), 1.0e-12)
 
 
 def _latent_center(spec: LatentSpec) -> jnp.ndarray:

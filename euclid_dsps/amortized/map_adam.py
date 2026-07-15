@@ -701,6 +701,9 @@ def _jit_latent_spec(latent_spec) -> JitLatentSpec:
         raw_center=latent_spec.raw_center,
         raw_scale=latent_spec.raw_scale,
         normalization=latent_spec.normalization,
+        transform_family=latent_spec.transform_family,
+        transform_location=latent_spec.transform_location,
+        transform_lambda=latent_spec.transform_lambda,
     )
 
 
