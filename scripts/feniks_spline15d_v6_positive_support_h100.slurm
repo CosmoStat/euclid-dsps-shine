@@ -29,6 +29,7 @@ PRIOR_CONFIG="${PRIOR_CONFIG:-configs/prior_feniks_spline15d_realnvp_v6_positive
 SMOKE="${SMOKE:-0}"
 RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-}"
 LEARNING_RATE="${LEARNING_RATE:-}"
+TARGET_EPOCHS="${TARGET_EPOCHS:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -74,6 +75,9 @@ fi
 if [[ -n "$LEARNING_RATE" ]]; then
   training_args+=(--learning-rate "$LEARNING_RATE")
 fi
+if [[ -n "$TARGET_EPOCHS" ]]; then
+  training_args+=(--epochs "$TARGET_EPOCHS")
+fi
 if [[ "$SMOKE" == "1" ]]; then
   training_args+=(--limit "${LIMIT:-1000}" --epochs "${EPOCHS:-2}"
     --batch-size "${BATCH_SIZE:-256}" --n-layers "${N_LAYERS:-2}"
@@ -84,7 +88,7 @@ fi
 
 echo "[job] step=realnvp_v6 start=$(date --iso-8601=seconds)"
 echo "[job] dataset=$SPLINE_DATASET_DIR output=$OUT_DIR smoke=$SMOKE"
-echo "[job] resume=${RESUME_CHECKPOINT:-none} learning_rate=${LEARNING_RATE:-config}"
+echo "[job] resume=${RESUME_CHECKPOINT:-none} learning_rate=${LEARNING_RATE:-config} target_epochs=${TARGET_EPOCHS:-config}"
 python scripts/train_feniks_spline15d_realnvp.py \
   --config "$PRIOR_CONFIG" \
   --dataset-dir "$SPLINE_DATASET_DIR" \

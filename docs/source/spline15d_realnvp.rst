@@ -306,3 +306,16 @@ RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support/snapshots/ep
 OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume155,\
 LEARNING_RATE=0.00001 \
      scripts/feniks_spline15d_v6_positive_support_h100.slurm
+
+If validation NLL is still improving at the target epoch, ``TARGET_EPOCHS``
+extends the same checkpoint continuation without changing the YAML. For
+example, resume the completed epoch-400 checkpoint to epoch 800 with a reduced
+learning rate:
+
+.. code-block:: bash
+
+   sbatch --export=ALL,\
+RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support_resume155/checkpoints/best.eqx,\
+OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume400_to800,\
+LEARNING_RATE=0.000005,TARGET_EPOCHS=800 \
+     scripts/feniks_spline15d_v6_positive_support_h100.slurm
