@@ -579,6 +579,15 @@ def main() -> None:
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     if tuple(contract["parameter_names"]) != SPLINE15D_PARAMETER_NAMES:
         raise ValueError("Dataset parameter order does not match spline15d contract")
+    expected_sfh_type = "jax_cosmo_not_a_knot_cubic_log_sfr_contrasts"
+    actual_sfh_type = str(
+        contract.get("sfh_parameterization", {}).get("type", "")
+    )
+    if int(contract.get("version", 0)) < 2 or actual_sfh_type != expected_sfh_type:
+        raise ValueError(
+            "Prior training requires a spline15d v2 JAX-COSMO dataset contract; "
+            f"found version={contract.get('version')} type={actual_sfh_type!r}"
+        )
 
     frames = {
         split: _read_split(dataset_dir / f"{split}.parquet", args.limit)

@@ -109,7 +109,7 @@ def main() -> None:
     write_json(
         out / "spline15d_contract.json",
         {
-            "version": 1,
+            "version": 2,
             "source_is_pre_generated_diffsky": True,
             "source_dataset_dir": str(source),
             "output_dataset_dir": str(out),
@@ -117,7 +117,12 @@ def main() -> None:
             "parameter_names": SPLINE15D_PARAMETER_NAMES,
             "physical_parameter_names": PHYSICAL_PARAMETER_NAMES,
             "sfh_parameterization": {
-                "type": "pchip_log_sfr_contrasts",
+                "type": "jax_cosmo_not_a_knot_cubic_log_sfr_contrasts",
+                "implementation": (
+                    "jax_cosmo.scipy.interpolate.InterpolatedUnivariateSpline"
+                ),
+                "degree": 3,
+                "endpoints": "not-a-knot",
                 "node_count": len(nodes),
                 "contrast_count": len(SFH_CONTRAST_NAMES),
                 "normalized_log_time_nodes": nodes,

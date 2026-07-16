@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 import pytest
+from scipy.interpolate import CubicSpline
 
 from euclid_dsps.prior_learning.spline15d import (
     DEFAULT_NORMALIZED_LOG_TIME_NODES,
     SFH_CONTRAST_NAMES,
     SPLINE15D_PARAMETER_NAMES,
+    cubic_spline_interpolate_jax,
     dequantize_normalized_zero_atoms,
     dequantize_spline_contrast_atoms,
     fit_affine_whitening,
@@ -191,6 +194,35 @@ def test_relative_sfh_interpolates_all_knot_values() -> None:
     expected = 10 ** jnp.concatenate((jnp.zeros(1), jnp.cumsum(contrasts)))
     np.testing.assert_allclose(reconstructed, expected, rtol=2.0e-5, atol=2.0e-5)
     assert bool(jnp.all(reconstructed > 0.0))
+
+
+def test_jax_cosmo_cubic_matches_scipy_not_a_knot_and_jit() -> None:
+    x = jnp.asarray([0.0, 0.1, 0.28, 0.5, 0.7, 0.83, 1.0])
+    y = jnp.asarray([-1.0, -0.2, 0.4, 0.1, 0.1, -0.3, 0.2])
+    x_new = jnp.linspace(0.0, 1.0, 101)
+
+    eager = cubic_spline_interpolate_jax(x, y, x_new)
+    compiled = jax.jit(cubic_spline_interpolate_jax)(x, y, x_new)
+    expected = CubicSpline(
+        np.asarray(x), np.asarray(y), bc_type="not-a-knot"
+    )(np.asarray(x_new))
+
+    np.testing.assert_allclose(eager, expected, rtol=2.0e-5, atol=2.0e-5)
+    np.testing.assert_allclose(compiled, eager, rtol=2.0e-6, atol=2.0e-6)
+
+
+def test_jax_cosmo_cubic_has_finite_contrast_gradients() -> None:
+    time = jnp.geomspace(0.05, 12.0, 80)
+    contrasts = jnp.asarray(
+        [0.3, -0.2, 0.4, 0.0, 0.0, -0.3, 0.1, 0.2, -0.1, 0.05]
+    )
+
+    gradient = jax.grad(
+        lambda values: jnp.sum(reconstruct_relative_sfh_jax(time, values))
+    )(contrasts)
+
+    assert gradient.shape == contrasts.shape
+    assert bool(jnp.all(jnp.isfinite(gradient)))
 
 
 def test_novel_truth_mask_uses_fixed_15d_contract() -> None:

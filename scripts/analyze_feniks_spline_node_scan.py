@@ -15,9 +15,6 @@ import numpy as np
 import pandas as pd
 
 matplotlib.use("Agg")
-from build_feniks_forward_explorer import (  # noqa: E402
-    pchip_interpolate_jax,
-)
 from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z  # noqa: E402
 from dsps.sed.stellar_age_weights import (  # noqa: E402
     calc_age_weights_from_sfh_table,
@@ -28,6 +25,9 @@ from euclid_dsps import model as dsps_model  # noqa: E402
 from euclid_dsps.config import load_config  # noqa: E402
 from euclid_dsps.filters import load_filters  # noqa: E402
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES  # noqa: E402
+from euclid_dsps.prior_learning.spline15d import (  # noqa: E402
+    cubic_spline_interpolate_jax,
+)
 from euclid_dsps.synthetic_diffsky.photometry import (  # noqa: E402
     GROUND_TRUTH_COLUMNS,
     theta_from_truth_frame,
@@ -312,7 +312,9 @@ def _build_spline_approximator(n_nodes: int, grid_strategy: str):
             knot_log_time = jnp.log10(jnp.maximum(knot_time, 1.0e-6))
         log_sfr = jnp.log10(jnp.maximum(sfr, 1.0e-30))
         knot_log_sfr = jnp.interp(knot_log_time, log_time, log_sfr)
-        spline_log_sfr = pchip_interpolate_jax(knot_log_time, knot_log_sfr, log_time)
+        spline_log_sfr = cubic_spline_interpolate_jax(
+            knot_log_time, knot_log_sfr, log_time
+        )
         return 10**spline_log_sfr
 
     return jax.jit(jax.vmap(single, in_axes=(0, 0)))
@@ -902,7 +904,8 @@ for every galaxy.
 ## Method
 
 - K values: `{list(K_VALUES)}`.
-- Knot grids: `{list(GRID_STRATEGIES)}`, all evaluated by the JAX PCHIP kernel
+- Knot grids: `{list(GRID_STRATEGIES)}`, all evaluated by the JAX-COSMO
+  not-a-knot cubic kernel
   in log cosmic time and log SFR.
 - SFH windows: recent `<0.1 Gyr`, intermediate `0.1-1 Gyr`, old `>1 Gyr`.
 - Photometric noise metric: `sqrt(mean_band((f_spline-f_native)^2/sigma_f^2))`.
@@ -1117,7 +1120,10 @@ def main() -> None:
                 "mass_quartile_edges": mass_edges,
                 "min_group_size": args.min_group_size,
                 "node_grids": list(GRID_STRATEGIES),
-                "interpolator": "JAX PCHIP in log cosmic time and log SFR",
+                "interpolator": (
+                    "JAX-COSMO InterpolatedUnivariateSpline k=3 not-a-knot "
+                    "in log cosmic time and log SFR"
+                ),
                 "bursty_state_available": False,
                 "bursty_limitation": (
                     "Current parquet omits mc_sfh_type and the realized bursty SFH. "

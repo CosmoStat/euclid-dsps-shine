@@ -27,9 +27,6 @@ from analyze_feniks_spline_node_scan import (  # noqa: E402
     _quantile_labels,
     _summarize_metrics,
 )
-from build_feniks_forward_explorer import (  # noqa: E402
-    pchip_interpolate_jax,
-)
 from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z  # noqa: E402
 from dsps.sed.stellar_age_weights import (  # noqa: E402
     calc_age_weights_from_sfh_table,
@@ -39,6 +36,9 @@ from matplotlib import pyplot as plt  # noqa: E402
 from euclid_dsps import model as dsps_model  # noqa: E402
 from euclid_dsps.config import load_config  # noqa: E402
 from euclid_dsps.filters import load_filters  # noqa: E402
+from euclid_dsps.prior_learning.spline15d import (  # noqa: E402
+    cubic_spline_interpolate_jax,
+)
 from euclid_dsps.synthetic_diffsky.photometry import (  # noqa: E402
     GROUND_TRUTH_COLUMNS,
     theta_from_truth_frame,
@@ -201,7 +201,9 @@ def _build_approximator(placement: str, optimized_u: np.ndarray | None = None) -
         knot_log_time = jnp.log10(jnp.maximum(knot_time, 1.0e-6))
         log_sfr = jnp.log10(jnp.maximum(sfr, 1.0e-30))
         knot_log_sfr = jnp.interp(knot_log_time, log_time, log_sfr)
-        spline_log_sfr = pchip_interpolate_jax(knot_log_time, knot_log_sfr, log_time)
+        spline_log_sfr = cubic_spline_interpolate_jax(
+            knot_log_time, knot_log_sfr, log_time
+        )
         contrasts = jnp.diff(knot_log_sfr)
         return 10**spline_log_sfr, contrasts, knot_log_sfr, knot_time
 
@@ -218,7 +220,9 @@ def _build_contrast_reconstructor(
         knot_log_time = jnp.log10(jnp.maximum(knot_time, 1.0e-6))
         log_time = jnp.log10(jnp.maximum(time, 1.0e-6))
         knot_log_sfr = jnp.concatenate((jnp.zeros(1), jnp.cumsum(contrasts)))
-        return 10 ** pchip_interpolate_jax(knot_log_time, knot_log_sfr, log_time)
+        return 10 ** cubic_spline_interpolate_jax(
+            knot_log_time, knot_log_sfr, log_time
+        )
 
     return jax.jit(jax.vmap(single, in_axes=(0, 0)))
 
@@ -373,7 +377,9 @@ def _build_placement_objective(
             knot_log_time = log_time[0] + u * (log_time[-1] - log_time[0])
             log_sfr = jnp.log10(jnp.maximum(sfr, 1.0e-30))
             knot_log_sfr = jnp.interp(knot_log_time, log_time, log_sfr)
-            return 10 ** pchip_interpolate_jax(knot_log_time, knot_log_sfr, log_time)
+            return 10 ** cubic_spline_interpolate_jax(
+                knot_log_time, knot_log_sfr, log_time
+            )
 
         return jax.vmap(single)(time_jax, raw_jax)
 
@@ -969,7 +975,7 @@ def _write_report(
 The exact latent is
 `[z_obs, log10_stellar_mass, log10_stellar_metallicity, dust_av, dust_delta, q01..q10]`.
 The ten `q` coordinates are adjacent log-SFR contrasts across eleven shared
-PCHIP nodes. Stellar mass supplies the discarded common amplitude.
+JAX-COSMO cubic nodes. Stellar mass supplies the discarded common amplitude.
 
 **Placement selected without using the test closure: `{selected_placement}`.**
 It {closure_status}. The held-out population p95 is `{population_mag:.5g}` mag
@@ -1460,7 +1466,10 @@ def main() -> None:
             "columns": list(LATENT_NAMES),
             "physical_parameters": list(PHYSICAL_PARAMETERS),
             "sfh_parameterization": {
-                "interpolator": "JAX PCHIP in log cosmic time and log SFR",
+                "interpolator": (
+                    "JAX-COSMO InterpolatedUnivariateSpline k=3 not-a-knot "
+                    "in log cosmic time and log SFR"
+                ),
                 "node_count": N_NODES,
                 "independent_shape_contrasts": N_SHAPE,
                 "contrast_definition": "q_i = logSFR(t_{i+1}) - logSFR(t_i)",

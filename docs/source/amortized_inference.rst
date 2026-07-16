@@ -153,7 +153,7 @@ fully differentiable path:
 .. code-block:: text
 
    encoder x -> inverse prior normalization -> 15 physical parameters
-             -> PCHIP spline SFH -> stellar-mass normalization
+             -> JAX-COSMO not-a-knot cubic SFH -> stellar-mass normalization
              -> DSPS age weights, MDF, dust and IGM -> 18-band photometry
 
 The source Diffsky dataset is not regenerated. The helper below joins the

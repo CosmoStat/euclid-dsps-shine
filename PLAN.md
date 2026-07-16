@@ -1,5 +1,147 @@
 # Plan
 
+## 2026-07-16 FENIKS Explorer Spline and Normalization Detail
+
+- Status: completed.
+- Expanded the JAX-COSMO spline tab with the exact normalized-node to cosmic
+  time map, the ten-contrast to eleven-height cumulative reconstruction, the
+  interval cubic polynomial, C1/C2 knot continuity, not-a-knot endpoint
+  conditions, log-time/log-SFR evaluation, and DSPS surviving-mass amplitude
+  recovery.
+- Kept the interactive native-versus-spline SFH, age-weight, photometry, node,
+  and closure diagnostics after the method explanation.
+- Added a dedicated Normalization tab showing the full physical-to-flow path,
+  exact train-only shifted-asinh and positive-log formulas, analytic inverses,
+  support semantics, numerical floors, non-goals, roundtrip requirements, and
+  checkpoint contract.
+- Added the complete 15-row serialized transform table, including family,
+  location, train q16/q84, lambda, center, and scale.
+- Preserved the prominent distinction between the historical PCHIP checkpoint
+  parameters/results and the pending JAX-COSMO retraining.
+- Regenerated the standalone report. Ruff, compileall, `git diff --check`, and
+  jsdom checks pass: zero JavaScript errors, exactly one visible panel across
+  all 13 tabs, 15 normalization rows, a non-empty embedded normalization image,
+  and five spline formulas.
+
+## 2026-07-16 FENIKS Explorer JAX-COSMO Presentation Audit
+
+- Status: completed; JAX-COSMO method presentation is current, end-to-end
+  JAX-COSMO training results remain pending.
+- Verified that the active report forward uses
+  `jax_cosmo.scipy.interpolate.InterpolatedUnivariateSpline` with `k=3` and
+  the not-a-knot endpoint condition in log cosmic time and log SFR.
+- Switched the embedded generic K scan from the July 10 PCHIP artifact to the
+  July 16 JAX-COSMO held-out scan.
+- Found that the optimized 11-node projection, epoch-645 RealNVP, and 80-epoch
+  amortized encoder artifacts still derive from the serialized version-1
+  `pchip_log_sfr_contrasts` dataset contract.
+- Added prominent overview, latent-contract, and Results notices separating
+  the current JAX-COSMO method from historical PCHIP training evidence. The
+  report now explicitly forbids presenting those losses and distributions as
+  final JAX-COSMO performance.
+- Regenerated the standalone report. Ruff, compileall, `git diff --check`, and
+  focused jsdom navigation/content checks pass with zero JavaScript errors.
+- Required production sequence before a final JAX-COSMO results presentation:
+  recompute the optimized 15D projection, retrain the flow prior, retrain the
+  frozen-prior encoder, and rerun corrected held-out inference.
+
+## 2026-07-16 FENIKS Explorer Navigation Regression Fix
+
+- Status: completed.
+- Reproduced navigation across all 12 tabs and found that a broad translation
+  replacement had corrupted CSS/SVG keyword `none` into invalid `noe` values.
+  Inactive stage panels therefore remained visible even though their active
+  classes changed correctly.
+- Restored every affected CSS, JavaScript, and SVG keyword, including
+  `display`, `pointer-events`, list styling, path fills, and
+  `non-scaling-stroke`.
+- Made tab visibility redundant and robust: `setStage` now updates both the
+  active class and the native `hidden` attribute, plus `aria-selected`; CSS
+  enforces hidden panels with `display: none !important`.
+- Raised and isolated the sticky navigation layer, constrained the original
+  forward graph to its scroll container, and made its SVG responsive within a
+  readable minimum width.
+- Added a build-time navigation-contract check so report regeneration fails if
+  the critical panel-hiding rules disappear.
+- Regenerated the standalone HTML. Ruff, compileall, `git diff --check`, and a
+  jsdom regression over all 12 tabs pass with zero JavaScript errors and
+  exactly one visible stage after every click.
+
+## 2026-07-16 Spline-15D JAX-COSMO Cubic Migration
+
+- Status: completed locally; production amortized retraining and held-out
+  inference rerun remain to be launched on Jean-Zay.
+- Replace the production PCHIP SFH decoder with
+  `jax_cosmo.scipy.interpolate.InterpolatedUnivariateSpline`, using cubic
+  `not-a-knot` interpolation in log cosmic time and log SFR.
+- Preserve the existing 11-node/10-contrast latent and stellar-mass
+  normalization contracts while versioning the changed interpolation model.
+- Add focused knot, JIT, gradient, SciPy-equivalence, and non-finite tests.
+- Add a reproducible held-out benchmark comparing the legacy PCHIP and new
+  JAX-COSMO decoder through SFH and full 18-band DSPS closure metrics.
+- Replaced the production decoder and both spline-selection analysis paths with
+  the JAX-COSMO degree-3 `not-a-knot` interpolator. The 11-node/10-contrast
+  latent order and mass normalization are unchanged.
+- Added `jax-cosmo` plus its required `setuptools<81` compatibility bound,
+  versioned new projection contracts as v2, and documented the implementation,
+  degree, and endpoint condition.
+- Added SciPy-equivalence, eager/JIT agreement, knot interpolation, positivity,
+  and finite-gradient tests. Ruff, compileall, `git diff --check`, and 24 focused
+  spline/amortized-latent tests pass.
+- Recomputed the full 388-object balanced held-out node scan under
+  `outputs/analysis/feniks_jax_cosmo_spline_node_scan_20260716/`. No scanned
+  generic grid passes every worst-group gate; `uniform_log_time, K=20` is the
+  least-bad generic scan point. This does not supersede the active optimized
+  11-node placement, which was not one of the three generic scan grids.
+- Added an isolated production chain using
+  `feniks_260617_spline15d_grouped_jaxcosmo_v1`: grouped projection, 800-epoch
+  positive-support prior training with snapshots and final diagnostics,
+  four-H100 frozen-prior amortized training, and held-out inference. The submit
+  helper wires every stage with `afterok` and refuses existing outputs.
+- Prior training now rejects legacy or mislabeled spline datasets unless the
+  contract is v2 with the exact JAX-COSMO cubic type. A 16-row projection plus
+  two-epoch RealNVP smoke completed with the new contract and diagnostics path.
+
+## 2026-07-16 FENIKS Forward Explorer English Spline-15D Results Expansion
+
+- Status: completed.
+- Translate the complete standalone forward-model explorer to English and make
+  the opening pipeline diagram easier to read.
+- Add a before/after pipeline view showing how the spline-SFH representation
+  bypasses the Diffstar parameterization and reduces inference to a 15D latent
+  space feeding the DSPS-only forward path.
+- Document the shape-preserving spline contract, serialized knot parameters,
+  stellar-mass normalization, and the reduction from spline knots to ten SFH
+  contrast coordinates.
+- Add a results section grounded in local artifacts: raw 15D distributions,
+  failed-flow example, shifted-asinh normalization and per-column parameters,
+  full prior-flow convergence, atom/Dirac limitations, and normalized/physical
+  prior recovery.
+- Add frozen-prior encoder/decoder training convergence and KL diagnostics,
+  clearly separating valid training evidence from invalidated pre-fix physical
+  inference diagnostics.
+- Regenerate the standalone HTML, run source checks, and inspect desktop and
+  mobile screenshots before marking the phase complete.
+- Translated all static and dynamically rendered report text to English,
+  including parameter metadata, tooltips, tables, audit notices, and plot
+  labels.
+- Added a first-viewport before/after comparison: the original 18D
+  Diffmah/Diffstar/DSPS chain versus the reduced 15D spline/DSPS chain.
+- Added the exact 11-knot PCHIP and ten adjacent log-SFR contrast contract,
+  mass normalization, inverse reconstruction, and serialized marginal
+  normalization table.
+- Added an artifact-backed Results tab containing raw target distributions, a
+  failed-flow example, shifted-asinh before/after normalization, the complete
+  epoch 0--645 prior trajectory, epoch-645 normalized/physical recovery,
+  atom-aware next steps, and the 80-epoch frozen-prior encoder/KL history.
+- Regenerated the 7.9 MB standalone report and its JSON payload. Ruff,
+  compileall, `git diff --check`, and a jsdom execution check pass; jsdom
+  reports zero JavaScript errors, 15 normalization rows, two rendered SVG
+  charts, and five non-empty embedded Results images.
+- Playwright screenshot inspection is blocked by missing host libraries
+  (`libnspr4`, `libnss3`, and `libasound2t64`), not by the report. The report
+  remains standalone and opens directly from disk.
+
 ## 2026-07-16 Spline-15D End-to-End Result Audit
 
 - Status: completed from the locally retrieved supervised-prior, amortized

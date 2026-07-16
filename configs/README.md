@@ -14,6 +14,13 @@ science dataset; HLTDS and FS2 are reference/debug paths.
   RealNVP prior on the full 18D `diffsky_dsps_closure_full` truth vector.
 - `feniks_spline15d_postprocess.yaml`: project existing Diffsky splits into the
   fixed 11-node/10-contrast spline-SFH 15D contract in a separate run.
+- `feniks_spline15d_grouped_jaxcosmo_v1.yaml`: build the isolated grouped
+  JAX-COSMO v2 spline contract from the leakage-audited 18-band source splits.
+- `prior_feniks_spline15d_jaxcosmo_v1.yaml`: train the production positive-
+  support RealNVP for 800 epochs with five-epoch snapshots and final prior
+  diagnostics on the grouped JAX-COSMO dataset.
+- `amortized_feniks_spline15d_jaxcosmo_v1_gpu.yaml`: train and infer with the
+  frozen JAX-COSMO spline prior and the matching joined 18-band catalog.
 - `prior_feniks_spline15d_realnvp.yaml`: fit train-only analytic `asinh`
   transforms and train the production supervised RealNVP directly on 15D.
 - `amortized_diffsky_synthetic_feniks_full_gpu.yaml`: train and run the 18D

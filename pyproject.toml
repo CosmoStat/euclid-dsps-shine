@@ -13,12 +13,15 @@ dependencies = [
     "dsps",
     "h5py",
     "jax",
+    "jax-cosmo",
     "matplotlib",
     "numpy",
     "numpyro",
     "pandas",
     "pyarrow",
     "pyyaml",
+    # jax-cosmo 0.1.0 imports the legacy pkg_resources API at runtime.
+    "setuptools<81",
     "tqdm",
 ]
 

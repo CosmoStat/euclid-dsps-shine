@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+from jax_cosmo.scipy.interpolate import InterpolatedUnivariateSpline
 
 from euclid_dsps import model as dsps_model
 from euclid_dsps.parameters import DIFFSKY_BASIC_PARAMETER_NAMES
@@ -499,30 +500,24 @@ def reconstruct_relative_sfh_jax(
     """Reconstruct relative SFH shape; stellar mass supplies its amplitude."""
     knot_time = spline_knot_times_jax(time_gyr, normalized_log_time_nodes)
     knot_log_sfr = jnp.concatenate((jnp.zeros(1), jnp.cumsum(contrasts)))
-    log_sfr = pchip_interpolate_jax(
+    log_sfr = cubic_spline_interpolate_jax(
         jnp.log10(knot_time), knot_log_sfr, jnp.log10(time_gyr)
     )
     return 10**log_sfr
 
 
-def pchip_interpolate_jax(
+def cubic_spline_interpolate_jax(
     x: jnp.ndarray,
     y: jnp.ndarray,
     x_new: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Evaluate a shape-preserving cubic Hermite spline in JAX."""
-    slopes = _pchip_slopes_jax(x, y)
-    segment = jnp.clip(jnp.searchsorted(x, x_new, side="right") - 1, 0, x.size - 2)
-    x0, x1 = x[segment], x[segment + 1]
-    y0, y1 = y[segment], y[segment + 1]
-    m0, m1 = slopes[segment], slopes[segment + 1]
-    width = x1 - x0
-    unit = (x_new - x0) / width
-    h00 = 2.0 * unit**3 - 3.0 * unit**2 + 1.0
-    h10 = unit**3 - 2.0 * unit**2 + unit
-    h01 = -2.0 * unit**3 + 3.0 * unit**2
-    h11 = unit**3 - unit**2
-    return h00 * y0 + h10 * width * m0 + h01 * y1 + h11 * width * m1
+    """Evaluate the production JAX-COSMO not-a-knot cubic spline."""
+    return InterpolatedUnivariateSpline(
+        x,
+        y,
+        k=3,
+        endpoints="not-a-knot",
+    )(x_new)
 
 
 def _projection_kernel(n_sfh_bins: int, nodes: tuple[float, ...]):
@@ -544,37 +539,6 @@ def _projection_kernel(n_sfh_bins: int, nodes: tuple[float, ...]):
         return knot_time, knot_log_sfr
 
     return jax.jit(jax.vmap(single, in_axes=0))
-
-
-def _pchip_endpoint_slope_jax(
-    h0: jnp.ndarray,
-    h1: jnp.ndarray,
-    delta0: jnp.ndarray,
-    delta1: jnp.ndarray,
-) -> jnp.ndarray:
-    slope = ((2.0 * h0 + h1) * delta0 - h0 * delta1) / (h0 + h1)
-    slope = jnp.where(jnp.sign(slope) != jnp.sign(delta0), 0.0, slope)
-    limited = (jnp.sign(delta0) != jnp.sign(delta1)) & (
-        jnp.abs(slope) > 3.0 * jnp.abs(delta0)
-    )
-    return jnp.where(limited, 3.0 * delta0, slope)
-
-
-def _pchip_slopes_jax(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-    widths = jnp.diff(x)
-    deltas = jnp.diff(y) / widths
-    same_sign = deltas[:-1] * deltas[1:] > 0.0
-    weight_left = 2.0 * widths[1:] + widths[:-1]
-    weight_right = widths[1:] + 2.0 * widths[:-1]
-    safe_left = jnp.where(same_sign, deltas[:-1], 1.0)
-    safe_right = jnp.where(same_sign, deltas[1:], 1.0)
-    interior = (weight_left + weight_right) / (
-        weight_left / safe_left + weight_right / safe_right
-    )
-    interior = jnp.where(same_sign, interior, 0.0)
-    first = _pchip_endpoint_slope_jax(widths[0], widths[1], deltas[0], deltas[1])
-    last = _pchip_endpoint_slope_jax(widths[-1], widths[-2], deltas[-1], deltas[-2])
-    return jnp.concatenate((first[None], interior, last[None]))
 
 
 def _validate_matrix(values: np.ndarray, names: tuple[str, ...]) -> np.ndarray:

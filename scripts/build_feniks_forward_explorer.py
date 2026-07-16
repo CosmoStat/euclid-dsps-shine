@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a standalone interactive explorer of the FENIKS 18D forward model."""
+"""Build a standalone interactive explorer of the FENIKS forward model."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ from euclid_dsps.photometric_uncertainty import (
     normalize_flux_error_model,
 )
 from euclid_dsps.photometry import abmag_to_fnu_cgs
+from euclid_dsps.prior_learning.spline15d import cubic_spline_interpolate_jax
 from euclid_dsps.synthetic_diffsky.photometry import (
     GROUND_TRUTH_COLUMNS,
     theta_from_truth_frame,
@@ -38,130 +39,144 @@ from euclid_dsps.synthetic_diffsky.photometry import (
 PARAMETER_META: dict[str, dict[str, str]] = {
     "z_obs": {
         "group": "Observation",
-        "label": "Redshift observe",
-        "unit": "sans dimension",
-        "meaning": "Epoque, age cosmique, distance de luminosite et redshift spectral.",
-        "code_role": "age_at_z, IGM et calc_obs_mag",
+        "label": "Observed redshift",
+        "unit": "dimensionless",
+        "meaning": "Epoch, cosmic age, luminosity distance, and spectral redshift.",
+        "code_role": "age_at_z, IGM, and calc_obs_mag",
     },
     "log10_stellar_mass": {
-        "group": "Population stellaire",
-        "label": "Log masse stellaire survivante",
+        "group": "Stellar population",
+        "label": "Log surviving stellar mass",
         "unit": "log10(Mstar/Msun)",
-        "meaning": "Masse encore presente dans les etoiles a l'observation.",
-        "code_role": "Cible exacte de la renormalisation globale de la SFH",
+        "meaning": "Mass still locked in stars at observation.",
+        "code_role": "Exact target of the global SFH normalization",
     },
     "diffstar_lgmcrit": {
-        "group": "Diffstar sequence principale",
-        "label": "Masse de halo pivot",
+        "group": "Diffstar main sequence",
+        "label": "Pivot halo mass",
         "unit": "log10(Mhalo/Msun)",
-        "meaning": "Centre de la transition entre les pentes basse et haute masse.",
-        "code_role": "Centre de beta(logMh), k fixe a 9",
+        "meaning": "Center of the transition between low- and high-mass slopes.",
+        "code_role": "Center of beta(logMh), k fixed to 9",
     },
     "diffstar_lgy_at_mcrit": {
-        "group": "Diffstar sequence principale",
-        "label": "Amplitude brute a Mcrit",
-        "unit": "log10(1/an)",
-        "meaning": "SFR brute par unite de masse baryonique au pivot.",
-        "code_role": "Facteur global ensuite annule par la normalisation a Mstar",
+        "group": "Diffstar main sequence",
+        "label": "Raw amplitude at Mcrit",
+        "unit": "log10(1/yr)",
+        "meaning": "Raw SFR per unit baryonic mass at the pivot.",
+        "code_role": "Global factor later removed by Mstar normalization",
     },
     "diffstar_indx_lo": {
-        "group": "Diffstar sequence principale",
-        "label": "Pente basse masse",
-        "unit": "sans dimension",
-        "meaning": "Variation de log y sous la masse pivot.",
-        "code_role": "Asymptote basse de beta(logMh)",
+        "group": "Diffstar main sequence",
+        "label": "Low-mass slope",
+        "unit": "dimensionless",
+        "meaning": "Change in log y below the pivot mass.",
+        "code_role": "Low-mass asymptote of beta(logMh)",
     },
     "diffstar_indx_hi": {
-        "group": "Diffstar sequence principale",
-        "label": "Pente haute masse",
-        "unit": "sans dimension",
-        "meaning": "Variation de log y au-dessus de la masse pivot.",
-        "code_role": "Asymptote haute de beta(logMh)",
+        "group": "Diffstar main sequence",
+        "label": "High-mass slope",
+        "unit": "dimensionless",
+        "meaning": "Change in log y above the pivot mass.",
+        "code_role": "High-mass asymptote of beta(logMh)",
     },
     "diffstar_lg_qt": {
         "group": "Diffstar quenching",
-        "label": "Temps du minimum de SFR",
+        "label": "Time of minimum SFR",
         "unit": "log10(Gyr)",
-        "meaning": "Temps cosmique ou le quenching atteint sa profondeur maximale.",
+        "meaning": "Cosmic time of maximum quenching depth.",
         "code_role": "tq = 10^lg_qt",
     },
     "diffstar_qlglgdt": {
         "group": "Diffstar quenching",
-        "label": "Largeur du quenching",
-        "unit": "log10(dex de temps)",
-        "meaning": "Controle la duree totale de la transition en log temps.",
+        "label": "Quenching width",
+        "unit": "log10(time dex)",
+        "meaning": "Controls the total transition duration in log time.",
         "code_role": "Delta log10(t) = 10^qlglgdt",
     },
     "diffstar_lg_drop": {
         "group": "Diffstar quenching",
-        "label": "Profondeur du quenching",
+        "label": "Quenching depth",
         "unit": "log10 facteur SFR",
-        "meaning": "Facteur multiplicatif minimal applique a la sequence principale.",
+        "meaning": "Minimum multiplicative factor applied to the main sequence.",
         "code_role": "Qmin = 10^lg_drop",
     },
     "diffstar_lg_rejuv": {
         "group": "Diffstar quenching",
-        "label": "Niveau apres rejuvenation",
+        "label": "Post-rejuvenation level",
         "unit": "log10 facteur SFR",
-        "meaning": "Niveau asymptotique de SFR apres l'episode de quenching.",
+        "meaning": "Asymptotic SFR level after quenching.",
         "code_role": "Qfinal = 10^lg_rejuv",
     },
     "diffmah_logm0": {
         "group": "Diffmah halo",
-        "label": "Normalisation de masse du halo",
+        "label": "Halo-mass normalization",
         "unit": "log10(Mhalo/Msun)",
-        "meaning": "Parametre d'ancrage de l'histoire de masse Diffmah.",
-        "code_role": "Dans ce wrapper, lgt0=log10(t_obs), pas l'age a z=0",
+        "meaning": "Anchor parameter of the Diffmah mass history.",
+        "code_role": "In this wrapper, lgt0=log10(t_obs), not the age at z=0",
     },
     "diffmah_logtc": {
         "group": "Diffmah halo",
-        "label": "Temps de transition du halo",
+        "label": "Halo transition time",
         "unit": "log10(Gyr)",
-        "meaning": "Passage du regime de croissance rapide au regime lent.",
-        "code_role": "Centre de alpha(log t), k fixe a 3.5",
+        "meaning": "Transition from rapid to slow growth.",
+        "code_role": "Center of alpha(log t), k fixed to 3.5",
     },
     "diffmah_early_index": {
         "group": "Diffmah halo",
-        "label": "Indice de croissance precoce",
-        "unit": "sans dimension",
-        "meaning": "Exposant asymptotique de la croissance aux temps precoces.",
-        "code_role": "Asymptote precoce de alpha(log t)",
+        "label": "Early growth index",
+        "unit": "dimensionless",
+        "meaning": "Asymptotic early-time growth exponent.",
+        "code_role": "Early-time asymptote of alpha(log t)",
     },
     "diffmah_late_index": {
         "group": "Diffmah halo",
-        "label": "Indice de croissance tardive",
-        "unit": "sans dimension",
-        "meaning": "Exposant asymptotique de la croissance tardive.",
-        "code_role": "Asymptote tardive de alpha(log t)",
+        "label": "Late growth index",
+        "unit": "dimensionless",
+        "meaning": "Asymptotic late-time growth exponent.",
+        "code_role": "Late-time asymptote of alpha(log t)",
     },
     "diffmah_t_peak": {
         "group": "Diffmah halo",
-        "label": "Temps de masse maximale",
+        "label": "Time of maximum mass",
         "unit": "Gyr",
-        "meaning": "Temps cosmique apres lequel la masse du halo est gelee.",
-        "code_role": "dMh/dt=0 et Mh=Mh(t_peak) apres t_peak",
+        "meaning": "Cosmic time after which halo mass is frozen.",
+        "code_role": "dMh/dt=0 and Mh=Mh(t_peak) after t_peak",
     },
     "log10_stellar_metallicity": {
-        "group": "Population stellaire",
-        "label": "Metallicite stellaire mediane",
+        "group": "Stellar population",
+        "label": "Median stellar metallicity",
         "unit": "log10(Zstar/Zsun)",
-        "meaning": "Mediane de la distribution de metallicite des populations.",
-        "code_role": "MDF lognormale, scatter fixe a 0.2 dex, Zsun=0.0142",
+        "meaning": "Median of the population metallicity distribution.",
+        "code_role": "MDF lognormal, scatter fixed to 0.2 dex, Zsun=0.0142",
     },
     "dust_av": {
-        "group": "Poussiere",
-        "label": "Attenuation en bande V",
+        "group": "Dust",
+        "label": "V-band attenuation",
         "unit": "mag",
-        "meaning": "Amplitude de l'attenuation diffuse de la lumiere stellaire.",
+        "meaning": "Amplitude of diffuse stellar-light attenuation.",
         "code_role": "tau2 = A_V / 1.086",
     },
     "dust_delta": {
-        "group": "Poussiere",
-        "label": "Pente de la loi de poussiere",
-        "unit": "sans dimension",
-        "meaning": "Incline la courbe UV-optique et change le bump a 2175 A.",
-        "code_role": "dust_index_n de la loi Prospector/FSPS",
+        "group": "Dust",
+        "label": "Dust-law slope",
+        "unit": "dimensionless",
+        "meaning": "Tilts the UV-optical curve and changes the 2175 A bump.",
+        "code_role": "dust_index_n in the Prospector/FSPS law",
     },
+}
+
+RESULT_RUNS = {
+    "failed_flow": Path("outputs/runs/feniks_spline15d_realnvp_v2_a_control"),
+    "prior_initial": Path("outputs/runs/feniks_spline15d_v6_positive_support"),
+    "prior_resume_155": Path(
+        "outputs/runs/feniks_spline15d_v6_positive_support_resume155"
+    ),
+    "prior_resume_400": Path(
+        "outputs/runs/feniks_spline15d_v6_positive_support_resume400_to800"
+    ),
+    "encoder": Path(
+        "outputs/runs/feniks_spline15d_amortized_epoch645_4xh100_b2048_v4"
+    ),
 }
 
 
@@ -207,7 +222,7 @@ def parse_args() -> argparse.Namespace:
         "--spline-nodes",
         type=int,
         default=20,
-        help="Number of log-time/log-SFR PCHIP nodes used by the JAX spline study.",
+        help="Number of log-time/log-SFR JAX-COSMO cubic nodes used by the study.",
     )
     parser.add_argument(
         "--spline-grid",
@@ -219,7 +234,7 @@ def parse_args() -> argparse.Namespace:
         "--spline-scan",
         type=Path,
         default=Path(
-            "outputs/analysis/feniks_spline_node_scan_20260710/"
+            "outputs/analysis/feniks_jax_cosmo_spline_node_scan_20260716/"
             "spline_k_scan_payload.json"
         ),
         help="Optional node-count scan payload embedded in the standalone report.",
@@ -327,22 +342,22 @@ def _representative_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]
     distance = np.sqrt(np.mean(((truth_matrix - median) / scale) ** 2, axis=1))
     typical = _select_nearest(distance, 0.0, allowed=atom, used=used)
     definitions.append(
-        ("typical", "Galaxie proche des medianes 18D, branche non quenchee", typical)
+        ("typical", "Galaxy near the 18D medians, unquenched branch", typical)
     )
 
     z = frame[GROUND_TRUTH_COLUMNS["z_obs"]].to_numpy(float)
     nearby = _select_nearest(z, np.quantile(z, 0.03), allowed=finite, used=used)
-    definitions.append(("nearby", "Exemple a faible redshift", nearby))
+    definitions.append(("nearby", "Low-redshift example", nearby))
     high_z = _select_nearest(z, np.quantile(z, 0.985), allowed=finite, used=used)
-    definitions.append(("high_z", "Exemple dans la queue haute en redshift", high_z))
+    definitions.append(("high_z", "Example in the high-redshift tail", high_z))
 
     logm = frame[GROUND_TRUTH_COLUMNS["log10_stellar_mass"]].to_numpy(float)
     massive = _select_nearest(logm, np.quantile(logm, 0.995), allowed=finite, used=used)
-    definitions.append(("massive", "Galaxie stellaire massive", massive))
+    definitions.append(("massive", "Massive stellar galaxy", massive))
 
     dust = frame[GROUND_TRUTH_COLUMNS["dust_av"]].to_numpy(float)
     dusty = _select_nearest(dust, np.quantile(dust, 0.997), allowed=finite, used=used)
-    definitions.append(("dusty", "Galaxie fortement attenuee", dusty))
+    definitions.append(("dusty", "Strongly attenuated galaxy", dusty))
 
     q_rank = np.argsort(q_obs)
     quenched = next(int(index) for index in q_rank if continuous[int(index)])
@@ -359,7 +374,7 @@ def _representative_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]
         used=used,
     )
     definitions.append(
-        ("star_forming", "Galaxie a forte sSFR dans le catalogue", star_forming)
+        ("star_forming", "High-sSFR galaxy in the catalog", star_forming)
     )
 
     rows = frame.iloc[[item[2] for item in definitions]].copy()
@@ -369,66 +384,13 @@ def _representative_rows(frame: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray]
     return rows.reset_index(drop=True), q_obs
 
 
-def _pchip_endpoint_slope_jax(
-    h0: jnp.ndarray,
-    h1: jnp.ndarray,
-    delta0: jnp.ndarray,
-    delta1: jnp.ndarray,
-) -> jnp.ndarray:
-    """Return one shape-preserving PCHIP endpoint derivative."""
-    slope = ((2.0 * h0 + h1) * delta0 - h0 * delta1) / (h0 + h1)
-    slope = jnp.where(jnp.sign(slope) != jnp.sign(delta0), 0.0, slope)
-    limited = (jnp.sign(delta0) != jnp.sign(delta1)) & (
-        jnp.abs(slope) > 3.0 * jnp.abs(delta0)
-    )
-    return jnp.where(limited, 3.0 * delta0, slope)
-
-
-def _pchip_slopes_jax(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
-    """Return Fritsch-Butland derivatives for monotone cubic Hermite segments."""
-    h = jnp.diff(x)
-    delta = jnp.diff(y) / h
-    same_sign = delta[:-1] * delta[1:] > 0.0
-    w1 = 2.0 * h[1:] + h[:-1]
-    w2 = h[1:] + 2.0 * h[:-1]
-    safe_delta_left = jnp.where(same_sign, delta[:-1], 1.0)
-    safe_delta_right = jnp.where(same_sign, delta[1:], 1.0)
-    denominator = w1 / safe_delta_left + w2 / safe_delta_right
-    interior = (w1 + w2) / denominator
-    interior = jnp.where(same_sign, interior, 0.0)
-    first = _pchip_endpoint_slope_jax(h[0], h[1], delta[0], delta[1])
-    last = _pchip_endpoint_slope_jax(h[-1], h[-2], delta[-1], delta[-2])
-    return jnp.concatenate((first[None], interior, last[None]))
-
-
-def pchip_interpolate_jax(
-    x: jnp.ndarray, y: jnp.ndarray, x_new: jnp.ndarray
-) -> jnp.ndarray:
-    """Evaluate a one-dimensional shape-preserving cubic Hermite spline in JAX."""
-    slopes = _pchip_slopes_jax(x, y)
-    segment = jnp.clip(jnp.searchsorted(x, x_new, side="right") - 1, 0, x.size - 2)
-    x0 = x[segment]
-    x1 = x[segment + 1]
-    y0 = y[segment]
-    y1 = y[segment + 1]
-    m0 = slopes[segment]
-    m1 = slopes[segment + 1]
-    h = x1 - x0
-    u = (x_new - x0) / h
-    h00 = 2.0 * u**3 - 3.0 * u**2 + 1.0
-    h10 = u**3 - 2.0 * u**2 + u
-    h01 = -2.0 * u**3 + 3.0 * u**2
-    h11 = u**3 - u**2
-    return h00 * y0 + h10 * h * m0 + h01 * y1 + h11 * h * m1
-
-
-def _validate_jax_pchip() -> float:
+def _validate_jax_cosmo_cubic() -> float:
     """Return eager/JIT agreement for the interpolation kernel."""
     x = jnp.asarray([0.0, 0.2, 0.55, 0.8, 1.0], dtype=jnp.float32)
     y = jnp.asarray([-2.0, -0.7, 0.2, -0.1, 0.5], dtype=jnp.float32)
     x_new = jnp.linspace(0.0, 1.0, 97)
-    eager = pchip_interpolate_jax(x, y, x_new)
-    compiled = jax.jit(pchip_interpolate_jax)(x, y, x_new)
+    eager = cubic_spline_interpolate_jax(x, y, x_new)
+    compiled = jax.jit(cubic_spline_interpolate_jax)(x, y, x_new)
     return float(jnp.max(jnp.abs(eager - compiled)))
 
 
@@ -550,7 +512,7 @@ def _forward_batch(
         spline_knot_log_sfr_raw = jnp.interp(
             spline_knot_log_time, log_time, raw_log_sfr
         )
-        spline_raw_sfr = 10 ** pchip_interpolate_jax(
+        spline_raw_sfr = 10 ** cubic_spline_interpolate_jax(
             spline_knot_log_time, spline_knot_log_sfr_raw, log_time
         )
         spline_sfr, spline_formed_mass, spline_surviving_mass = (
@@ -958,7 +920,7 @@ def _build_payload(
                 "spline": {
                     "n_nodes": int(args.spline_nodes),
                     "coordinate": str(args.spline_grid),
-                    "interpolator": "JAX Fritsch-Butland PCHIP in log10(SFR)",
+                    "interpolator": "JAX-COSMO cubic not-a-knot in log10(SFR)",
                     "knot_time_gyr": forward["spline_knot_time_gyr"][index].tolist(),
                     "knot_log_sfr": forward["spline_knot_log_sfr"][index].tolist(),
                     "sfr_normalized": spline_sfr.tolist(),
@@ -1050,7 +1012,7 @@ def _build_payload(
                     "n_nodes": int(args.spline_nodes),
                     "node_coordinate": str(args.spline_grid),
                     "value_coordinate": "log10 SFR",
-                    "interpolator": "JAX Fritsch-Butland shape-preserving cubic Hermite",
+                    "interpolator": "JAX-COSMO InterpolatedUnivariateSpline k=3 not-a-knot",
                     "mass_normalization": "same surviving-stellar-mass constraint as native SFH",
                     "eager_jit_max_abs_error": float(spline_jit_max_abs_error),
                 },
@@ -1155,11 +1117,71 @@ def _load_spline_prior(path: Path) -> dict[str, Any] | None:
     return payload
 
 
+def _image_data_url(path: Path) -> str:
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _load_results() -> dict[str, Any]:
+    required_images = {
+        "failed_flow": RESULT_RUNS["failed_flow"] / "learned_prior_vs_truth.png",
+        "normalization": RESULT_RUNS["prior_resume_400"]
+        / "normalization_before_after.png",
+        "prior_recovery": RESULT_RUNS["prior_resume_400"]
+        / "snapshots/epoch_645/truth_vs_prior.png",
+        "encoder_overview": RESULT_RUNS["encoder"] / "training_history_overview.png",
+    }
+    missing = [str(path) for path in required_images.values() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing explorer result figures: {missing}")
+
+    histories = []
+    for key in ("prior_initial", "prior_resume_155", "prior_resume_400"):
+        path = RESULT_RUNS[key] / "epoch_snapshot_history.csv"
+        if path.exists():
+            histories.append(pd.read_csv(path))
+    prior_history = (
+        pd.concat(histories, ignore_index=True)
+        .sort_values("epoch")
+        .drop_duplicates("epoch", keep="last")
+    )
+    prior_history = prior_history[prior_history["epoch"] <= 645]
+
+    normalization = pd.read_csv(
+        RESULT_RUNS["prior_resume_400"] / "normalization_parameters.csv"
+    ).replace({np.nan: None})
+    encoder_log = pd.read_csv(RESULT_RUNS["encoder"] / "training_log.csv")
+    encoder_epochs = (
+        encoder_log.groupby(["split", "epoch"], as_index=False)
+        .agg(
+            loss=("loss", "mean"),
+            negative_loglike=("negative_loglike", "mean"),
+            kl_mc_mean=("kl_mc_mean", "mean"),
+            kl_weight=("kl_weight", "mean"),
+            posterior_median_log_std=("posterior_median_log_std", "mean"),
+            encoder_grad_norm=("encoder_grad_norm", "mean"),
+            prior_grad_norm=("prior_grad_norm", "mean"),
+        )
+        .sort_values(["split", "epoch"])
+    )
+    summary = json.loads(
+        (RESULT_RUNS["encoder"] / "training_summary.json").read_text(encoding="utf-8")
+    )
+    return {
+        "figures": {key: _image_data_url(path) for key, path in required_images.items()},
+        "prior_history": prior_history.to_dict(orient="records"),
+        "normalization_parameters": normalization.to_dict(orient="records"),
+        "encoder_history": encoder_epochs.to_dict(orient="records"),
+        "encoder_summary": summary,
+        "prior_checkpoint_epoch": 645,
+    }
+
+
 def main() -> None:
     args = parse_args()
     if args.spline_nodes < 3:
         raise ValueError("--spline-nodes must be at least 3")
-    spline_jit_max_abs_error = _validate_jax_pchip()
+    spline_jit_max_abs_error = _validate_jax_cosmo_cubic()
     config = load_config(args.config)
     manifest = yaml.safe_load(args.manifest.read_text(encoding="utf-8")) or {}
     frame = pd.read_parquet(args.dataset)
@@ -1190,6 +1212,7 @@ def main() -> None:
 
     spline_scan = _load_spline_scan(args.spline_scan)
     spline_prior = _load_spline_prior(args.spline_prior)
+    results = _load_results()
     payload = _clean_json(
         _build_payload(
             frame,
@@ -1206,6 +1229,7 @@ def main() -> None:
             spline_prior,
         )
     )
+    payload["results"] = _clean_json(results)
     payload_text = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     args.payload_out.parent.mkdir(parents=True, exist_ok=True)
     args.payload_out.write_text(
@@ -1215,6 +1239,19 @@ def main() -> None:
     template = args.template.read_text(encoding="utf-8")
     if "__FENIKS_PAYLOAD__" not in template:
         raise ValueError(f"Missing __FENIKS_PAYLOAD__ marker in {args.template}")
+    required_navigation_contract = (
+        ".stage-panel { display: none; }",
+        ".stage-panel[hidden] { display: none !important; }",
+        "panel.hidden = !active;",
+    )
+    missing_navigation = [
+        marker for marker in required_navigation_contract if marker not in template
+    ]
+    if missing_navigation:
+        raise ValueError(
+            "Explorer navigation contract is incomplete: "
+            + ", ".join(missing_navigation)
+        )
     html = template.replace("__FENIKS_PAYLOAD__", payload_text.replace("</", "<\\/"))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(html, encoding="utf-8")
@@ -1222,7 +1259,7 @@ def main() -> None:
     print(f"Wrote {args.payload_out} ({args.payload_out.stat().st_size:,} bytes)")
     print(f"Examples: {', '.join(examples['explorer_key'])}")
     print(f"Max raw-kernel decomposition relative error: {max_kernel_error:.3e}")
-    print(f"JAX PCHIP eager/JIT max abs error: {spline_jit_max_abs_error:.3e}")
+    print(f"JAX-COSMO cubic eager/JIT max abs error: {spline_jit_max_abs_error:.3e}")
 
 
 if __name__ == "__main__":
