@@ -51,11 +51,12 @@ from .diagnostics import (
 )
 from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
-from .latent import latent_spec_from_config, x_to_theta
+from .latent import x_to_theta
 from .likelihood import photometric_loglike
 from .redshift_metrics import write_redshift_metrics_for_run
 from .train import (
     _effective_jax_batch_size,
+    _latent_spec_for_amortized_config,
     _per_band_flux_calibration_summary,
     load_checkpoint,
     write_per_band_flux_calibration_artifacts,
@@ -274,7 +275,10 @@ def infer_amortized_fs2(
             f"mode={band_calibration_cfg.mode} "
             f"trainable={band_calibration_cfg.trainable}"
         )
-    latent_spec = latent_spec_from_config(config)
+    # A checkpoint-backed spline15d prior carries the exact marginal transform
+    # used during supervised prior learning.  Reuse the same resolved spec as
+    # training; the YAML placeholder is intentionally only an identity schema.
+    latent_spec = _latent_spec_for_amortized_config(config)
     likelihood_cfg = cfg["likelihood"]
     key = jax.random.PRNGKey(int(seed))
 
@@ -736,6 +740,10 @@ def infer_amortized_fs2(
         index=False,
     )
     write_json(out / "normalized_config.json", config)
+    write_json(
+        out / "effective_latent_spec.json",
+        _effective_latent_spec_payload(latent_spec, config),
+    )
     global_sed_scale_payload = alpha_metadata(
         log_alpha_sed,
         scale_cfg.prior_sigma_log_alpha,
@@ -856,6 +864,30 @@ def infer_amortized_fs2(
     if verbose:
         print("[amortized] inference complete")
         print(f"[amortized] summary: {out / 'inference_summary.json'}")
+
+
+def _effective_latent_spec_payload(latent_spec, config: dict[str, Any]) -> dict[str, Any]:
+    """Serialize the transform actually used by the encoder, prior, and DSPS."""
+    prior = ((config.get("amortized", {}) or {}).get("prior", {}) or {})
+
+    def optional_array(value):
+        if value is None:
+            return None
+        return np.asarray(value).tolist()
+
+    return {
+        "names": list(latent_spec.names),
+        "normalization": str(latent_spec.normalization),
+        "lower": np.asarray(latent_spec.lower).tolist(),
+        "upper": np.asarray(latent_spec.upper).tolist(),
+        "raw_center": np.asarray(latent_spec.raw_center).tolist(),
+        "raw_scale": np.asarray(latent_spec.raw_scale).tolist(),
+        "transform_family": optional_array(latent_spec.transform_family),
+        "transform_location": optional_array(latent_spec.transform_location),
+        "transform_lambda": optional_array(latent_spec.transform_lambda),
+        "prior_source": str(prior.get("source", "")),
+        "prior_checkpoint": str(prior.get("checkpoint", "")),
+    }
 
 
 def finalize_amortized_inference(

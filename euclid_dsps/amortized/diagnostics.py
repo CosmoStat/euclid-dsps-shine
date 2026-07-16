@@ -746,6 +746,7 @@ def summarize_inference_outputs(
     out = Path(out_dir)
     if not summary_path.exists():
         return
+    _remove_redundant_corner_artifacts(out)
     frame = pd.read_parquet(summary_path)
     residual_summary = _write_residual_summary(out)
     top_chi2 = _write_top_chi2(frame, residual_summary, out)
@@ -811,36 +812,22 @@ def summarize_inference_outputs(
     write_json(Path(out_dir) / "posterior_diagnostics_summary.json", payload)
 
 
-def _write_full_latent_posterior_median_corner(
-    summary: pd.DataFrame,
-    out: Path,
-    plt,
-    *,
-    config: dict[str, Any] | None,
-) -> Path | None:
-    frame = _posterior_median_parameter_frame(summary, config=config)
-    if frame.empty:
-        return None
-    prior = _read_learned_prior(out)
-    comparison = None
-    title = "Full latent posterior medians"
-    if prior is not None and not prior.empty:
-        shared = [column for column in _corner_columns(frame) if column in prior]
-        if len(shared) >= 2:
-            comparison = prior
-            title = "Full latent posterior medians vs learned prior"
-    return _write_corner_plot(
-        frame,
-        out,
-        plt,
-        comparison=comparison,
-        filename="corner_full_latent_posterior_medians.png",
-        title=title,
-        color="#2a9fd6",
-        label="posterior median per galaxy",
-        comparison_color="#ef476f",
-        comparison_label="learned prior samples",
-    )
+_REDUNDANT_CORNER_ARTIFACTS = (
+    "corner_full_latent_posterior_medians.png",
+    "corner_full_latent_posterior_medians_columns.csv",
+    "corner_truth_prior_posterior_map.png",
+    "posterior_corner.png",
+    "learned_prior_corner.png",
+    "posterior_vs_learned_prior_corner.png",
+)
+
+
+def _remove_redundant_corner_artifacts(out: Path) -> None:
+    """Keep one canonical 15D truth/prior/posterior corner per inference run."""
+    for name in _REDUNDANT_CORNER_ARTIFACTS:
+        path = out / name
+        if path.exists():
+            path.unlink()
 
 
 def _write_full_latent_truth_prior_posterior_corner(
@@ -850,11 +837,7 @@ def _write_full_latent_truth_prior_posterior_corner(
     *,
     config: dict[str, Any] | None,
 ) -> Path | None:
-    posterior, posterior_label = _full_latent_posterior_frame(
-        summary,
-        out,
-        config=config,
-    )
+    posterior, posterior_label = _full_latent_posterior_frame(out, config=config)
     if posterior.empty:
         return None
     truth = _truth_parameter_frame(summary, out, config=config)
@@ -873,48 +856,44 @@ def _write_full_latent_truth_prior_posterior_corner(
 
 
 def _full_latent_posterior_frame(
-    summary: pd.DataFrame,
     out: Path,
     *,
     config: dict[str, Any] | None,
 ) -> tuple[pd.DataFrame, str]:
-    samples_path = out / "posterior_samples.parquet"
-    if samples_path.exists():
-        samples = pd.read_parquet(samples_path)
+    samples = _read_posterior_samples_for_corner(out)
+    if not samples.empty:
         columns = _corner_columns_for_config(samples, config)
         if len(columns) >= 2:
-            return samples[columns], "posterior samples"
-    medians = _posterior_median_parameter_frame(summary, config=config)
-    return medians, "posterior medians"
+            return samples[columns], "aggregate posterior samples"
+    return pd.DataFrame(), "posterior samples unavailable"
 
 
-def _posterior_median_parameter_frame(
-    summary: pd.DataFrame,
+def _read_posterior_samples_for_corner(
+    out: Path,
     *,
-    config: dict[str, Any] | None,
+    max_rows: int = 50_000,
 ) -> pd.DataFrame:
-    if summary.empty:
+    """Read a deterministic population sample from dense or sharded outputs."""
+    dense = out / "posterior_samples.parquet"
+    if dense.exists():
+        frame = pd.read_parquet(dense)
+        if len(frame) > max_rows:
+            frame = frame.sample(n=max_rows, random_state=0)
+        return frame
+    shards = sorted((out / "posterior_samples").glob("batch_*.parquet"))
+    if not shards:
         return pd.DataFrame()
-    configured = []
-    if config is not None:
-        configured = list(
-            (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
-        )
-    candidates = configured or [
-        column[: -len("_median")]
-        for column in summary.columns
-        if column.endswith("_median")
-    ]
-    columns = []
-    rename = {}
-    for name in candidates:
-        median_column = f"{name}_median"
-        if median_column in summary:
-            columns.append(median_column)
-            rename[median_column] = str(name)
-    if len(columns) < 2:
-        return pd.DataFrame()
-    return summary[columns].rename(columns=rename)
+    rows_per_shard = max(1, int(np.ceil(max_rows / len(shards))))
+    frames = []
+    for index, path in enumerate(shards):
+        frame = pd.read_parquet(path)
+        if len(frame) > rows_per_shard:
+            frame = frame.sample(n=rows_per_shard, random_state=index)
+        frames.append(frame)
+    combined = pd.concat(frames, ignore_index=True)
+    if len(combined) > max_rows:
+        combined = combined.sample(n=max_rows, random_state=0)
+    return combined
 
 
 def _truth_parameter_frame(
@@ -1533,9 +1512,6 @@ def _write_inference_plots(
     )
     if path is not None:
         written.append(path.name)
-    path = _write_full_latent_posterior_median_corner(summary, out, plt, config=config)
-    if path is not None:
-        written.append(path.name)
     if not residual_summary.empty:
         residual_column = _residual_value_column(residual_summary)
         if residual_column is None:
@@ -1694,44 +1670,8 @@ def _write_inference_plots(
     if samples_path.exists():
         samples = pd.read_parquet(samples_path)
         prior = _read_learned_prior(out)
-        path = _write_corner_plot(
-            samples,
-            out,
-            plt,
-            filename="posterior_corner.png",
-            title="Aggregate amortized posterior",
-            color="#2a9fd6",
-            label="posterior q_psi",
-        )
-        if path is not None:
-            written.append(path.name)
         if prior is not None and not prior.empty:
             path = _write_learned_prior_logprob_plot(prior, out, plt)
-            if path is not None:
-                written.append(path.name)
-            path = _write_corner_plot(
-                prior,
-                out,
-                plt,
-                filename="learned_prior_corner.png",
-                title="Learned RealNVP prior",
-                color="#ef476f",
-                label="learned prior p_beta",
-            )
-            if path is not None:
-                written.append(path.name)
-            path = _write_corner_plot(
-                samples,
-                out,
-                plt,
-                comparison=prior,
-                filename="posterior_vs_learned_prior_corner.png",
-                title="Aggregate posterior vs learned RealNVP prior",
-                color="#2a9fd6",
-                comparison_color="#ef476f",
-                label="posterior q_psi",
-                comparison_label="learned prior p_beta",
-            )
             if path is not None:
                 written.append(path.name)
         path = _write_redshift_distribution_plot(samples, redshift, prior, out, plt)

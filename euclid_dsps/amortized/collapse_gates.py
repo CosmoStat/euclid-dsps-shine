@@ -232,9 +232,19 @@ def _add_training_log_checks(log: pd.DataFrame, checks: list[dict[str, Any]]) ->
             )
         )
     if "encoder_grad_norm" in log:
-        values = pd.to_numeric(log["encoder_grad_norm"], errors="coerce").to_numpy(
-            float
-        )
+        gradient_rows = log
+        if "split" in gradient_rows:
+            gradient_rows = gradient_rows.loc[
+                gradient_rows["split"].astype(str).str.lower() == "train"
+            ]
+        if "update_applied" in gradient_rows:
+            applied = pd.to_numeric(
+                gradient_rows["update_applied"], errors="coerce"
+            ).fillna(0.0)
+            gradient_rows = gradient_rows.loc[applied > 0.0]
+        values = pd.to_numeric(
+            gradient_rows["encoder_grad_norm"], errors="coerce"
+        ).to_numpy(float)
         latest = values[np.isfinite(values)]
         if latest.size:
             checks.append(

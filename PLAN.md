@@ -1,5 +1,1021 @@
 # Plan
 
+## 2026-07-16 Spline-15D End-to-End Result Audit
+
+- Status: completed from the locally retrieved supervised-prior, amortized
+  training, and held-out inference artifacts; corrected inference rerun pending.
+- Verified that the epoch-645 RealNVP and the frozen prior serialized inside the
+  amortized checkpoint are bitwise identical across all 144 parameter leaves.
+- Found a blocking inference-contract bug: training resolved the exact
+  checkpoint-backed `spline15d_mixed` transform, while inference used the YAML
+  placeholder `identity` transform. This invalidated every physical posterior,
+  prior-predictive, derived-SFH, and DSPS diagnostic in the retrieved inference
+  directory.
+- Fixed inference to use `_latent_spec_for_amortized_config`, matching training.
+  Focused inference/prior tests pass (`10 passed`), along with Ruff, compileall,
+  and `git diff --check`.
+- Recovered the original latent coordinates from the legacy physical outputs
+  and regenerated latent-only diagnostics without rerunning Jean-Zay. The
+  corrected prior remains faithful (median/max KS `0.067/0.116`), but the
+  encoder posterior remains strongly under-dispersed (median 68/95 percent
+  coverage `0.127/0.246`).
+- The corrected encoder recovers stellar-mass and metallicity ordering
+  (`r=0.867/0.940`) but only weakly recovers redshift (`r=0.413`) and does not
+  recover individual SFH spline contrasts (most correlations near zero).
+- Training itself was finite with 1,440/1,440 updates and exactly zero prior
+  gradient, but every raw encoder gradient exceeded the clipping threshold;
+  validation likelihood was still improving at epoch 80 and the posterior
+  median log-standard-deviation had contracted to about `-2.16`.
+- The old held-out photometric residuals and photo-z metrics must not be used:
+  they were computed by DSPS from incorrectly decoded physical parameters.
+  Rerun inference only after syncing the transform fix; retraining is not
+  required to obtain a valid first evaluation of the existing encoder.
+- Reproducible corrected latent audit and plots are under
+  `outputs/reports/feniks_spline15d_end_to_end_audit_20260716/`.
+- Consolidated inference diagnostics to one canonical 15D
+  `truth / prior / aggregate posterior samples` corner. Removed the posterior
+  median, prior-only, posterior-only, pairwise, and reduced MAP corner variants.
+- The canonical corner now samples sharded posterior parquet outputs directly;
+  it no longer silently falls back to the narrower distribution of per-object
+  posterior medians when `combine_sample_shards=false`.
+- Added `effective_latent_spec.json` to every inference run, recording the exact
+  names, ordering, normalization, marginal transforms, scales, and prior
+  checkpoint actually used by the encoder, flow, and DSPS decoder.
+
+## 2026-07-15 Spline-15D Amortized DSPS Inference
+
+- Status: implementation completed; Jean-Zay launch pending completion of the
+  spline-15D prior continuation.
+- Add a differentiable JAX path from the learned spline-15D flow coordinates
+  through the mixed marginal inverse, spline SFH reconstruction, stellar-mass
+  normalization, and the fixed DSPS photometric forward model.
+- Load the completed spline-15D RealNVP as a frozen amortized prior, with strict
+  checkpoint, parameter-order, normalization, and dataset-contract checks.
+- Train the photometric encoder on the existing grouped Diffsky/FENIKS source
+  catalog; join spline truths by `object_id` only for closure diagnostics.
+- Add a dedicated 18-band configuration, H100 launcher, smoke tests,
+  documentation, and a Slurm `afterok` launch command tied to the current prior
+  job.
+- Implemented the exact checkpoint transform contract, including positive log
+  coordinates and shifted-asinh coordinates, without whitening or atom noise.
+- Implemented the JAX spline-SFH DSPS decoder and a non-destructive catalog join
+  that combines the existing 18-band photometry with exact spline truths.
+- Added the frozen-prior configuration and H100 launcher. Local validation
+  passed: Ruff, compileall, shell syntax, 18 focused tests, and an eight-object
+  encoder-to-DSPS training smoke with zero prior gradient.
+- The first single-H100 production epoch required about 652 seconds with an
+  effective JAX batch of 128 and two Monte Carlo samples. Exposed the existing
+  pmap path in the spline launcher so the retry can use four H100s, a global
+  batch of 1024, one Monte Carlo sample, and less frequent validation.
+- Made newline-based per-batch logging the launcher default on Slurm so `.out`
+  files show loss, likelihood, KL, gradient norms, and update status without
+  carriage-return progress-bar artifacts.
+- The four-H100 retry completed 80 epochs with all 18 updates applied in the
+  final epoch. Added an explicit frozen-flow checkpoint override to the
+  held-out inference launcher so deserialization uses the same epoch-645 prior
+  template as training.
+- The first held-out inference completed all 5,000 galaxy shards but exhausted
+  one H100 while deriving DSPS quantities for all 8,192 prior samples at once.
+  Reused `prior_predictive_batch_size` to chunk those derived forwards, while
+  retaining resumable shard discovery so galaxy inference is not repeated.
+
+## 2026-07-15 Spline-15D V6 Positive-Support RealNVP
+
+- Status: implementation completed; production launch pending on Jean-Zay.
+- Build one minimal production run from exact atoms with no dequantization and
+  no joint whitening.
+- Preserve the V5-A RealNVP architecture and optimizer, but use fixed-support
+  log transforms for strictly positive `z_obs` and `dust_av`; keep robust
+  shifted-asinh marginals for the remaining 13 dimensions.
+- Train for 400 epochs with validation-NLL selection and the existing physical,
+  normalized, dependence, and inverse-tail snapshots every five epochs.
+- Deliver a backward-compatible mixed normalization contract, focused tests,
+  one H100 launcher, documentation, and exact Jean-Zay commands.
+- Added normalization contract version 3: standardized log transforms for
+  strictly positive `z_obs` and `dust_av`, with an explicit error for nonpositive
+  inputs, plus robust shifted-asinh for the other 13 coordinates.
+- Added
+  `configs/prior_feniks_spline15d_realnvp_v6_positive_support.yaml` and the
+  single-GPU launcher `scripts/feniks_spline15d_v6_positive_support_h100.slurm`.
+- Local verification passed: Ruff, compileall, 11 focused tests, shell syntax,
+  and a one-epoch real-parquet end-to-end smoke. Its serialized transform
+  roundtrip error is exactly zero and all 256 sampled `z_obs`/`dust_av` values
+  are strictly positive.
+- The first Jean-Zay run reached epoch 160, then stopped while saving the
+  auxiliary snapshot because its float32 forward/inverse maximum error was
+  `0.0119`, just above the old absolute failure threshold `0.01`.
+- Added continuation from a serialized checkpoint with strict architecture and
+  normalization-contract checks. The original Adam state was not serialized,
+  so continuation explicitly reinitializes it and uses a lower `1e-5` learning
+  rate from the valid epoch-155 checkpoint.
+- Kept the integrity warning at `1e-3` and finite/structural/amplitude checks,
+  but set the spline-15D hard roundtrip threshold to `0.05`, serialized per
+  checkpoint. Resume smoke from epoch 1 to 2 passed end to end.
+- The epoch-155 continuation completed at epoch 400, but validation NLL still
+  improved at the final epoch (`-12.8428`, best at 400). Added the launcher
+  override `TARGET_EPOCHS` for a second continuation from 400 to 800 at a
+  reduced `5e-6` learning rate.
+
+## 2026-07-15 Spline-15D V5 Four-Run Result Audit
+
+- Status: completed on all locally available artifacts; B and C require a
+  second rsync for their final 45 and 35 epochs respectively.
+- Compare convergence and numerical stability across the exact-atom versus
+  dequantized and no-whitening versus Cholesky 2x2 design.
+- Audit before/after normalization, normalized and physical marginal fidelity,
+  joint dependence, exact-zero behavior, inverse-sinh tails, invalid physical
+  samples, and comparison with the v4 80-epoch reference.
+- Produce a compact local comparison artifact and recommend the simplest
+  configuration supported by held-out physical diagnostics rather than NLL
+  alone.
+- Matched epoch-150 result: dequantization has no material effect. A/B and C/D
+  curves are nearly identical across physical KS, rank/central correlations,
+  inverse-sinh tails, invalid samples, and saturation. Reclip atom fractions do
+  not match the exact truth atoms reliably.
+- Bulk result: no-whitening A is best. At epoch 200 it reaches median/max
+  physical KS `0.051/0.118` and physical Spearman error `0.625`, versus
+  `0.058/0.139/0.755` for complete Cholesky run D.
+- Tail result: Cholesky controls but does not eliminate rare invalid samples.
+  D has inverse-sinh `|a|>5` fraction/max `0.00085/15.5`, negative z/dust
+  `1.31%/5.75%`; A has `0.00261/26.2` and `1.74%/11.13%`. A's largest physical
+  quantile-Wasserstein error is `229.8`, dominated by a few exponential SFH
+  outliers, versus `0.296` for D.
+- Optimization result: validation NLL still improves at epoch 200, but every
+  late batch is gradient-clipped and scale saturation reaches `40.4%` for A
+  and `25.2%` for D. NLL-only selection no longer tracks all physical quality
+  metrics monotonically.
+- Decision: exact atoms plus no whitening is the preferred minimal and
+  transferable architecture for the distribution bulk; atom-aware
+  dequantization is rejected by the ablation. This candidate is not yet a
+  production prior because support/tail behavior remains unacceptable.
+- Follow-up decision: do not rerun the interrupted B/C tasks; their matched
+  trajectories already isolate both factors. A is not converged at epoch 200:
+  over epochs 180--200 its validation NLL slope is `-0.029/epoch`, maximum KS
+  improves `0.1205 -> 0.1182`, Spearman error `0.665 -> 0.625`, and inverse-sinh
+  tail fraction/max `0.00320/33.6 -> 0.00261/26.2`. However negative dust mass
+  rises to `11.1%` and scale saturation reaches `40.4%`, so a longer run alone
+  cannot establish a physically valid prior.
+- Recommended next single-run baseline: retain exact atoms, no joint whitening,
+  and the current RealNVP; add only physically defined positive-support
+  transforms for redshift and dust attenuation, then train long enough to
+  observe a plateau. This remains transferable to unsupervised learning because
+  the support is known from the parameter semantics, not estimated from latent
+  population distributions.
+- Artifacts: trajectory plot, matched and last-available CSV summaries, and
+  report under `outputs/analysis/feniks_spline15d_v5_ablation_20260715/`.
+
+## 2026-07-15 Spline-15D V5 Minimality Ablation Proposal
+
+- Status: implemented and locally validated; ready for Jean-Zay.
+- Goal: identify the simplest transferable RealNVP prior by isolating the two
+  preprocessing choices that use latent-population structure: exact-zero atom
+  dequantization and joint Cholesky whitening.
+- Run one four-task H100 array with an exact 2x2 factorial design, identical
+  grouped 50k splits, shifted-asinh marginals, RealNVP architecture, optimizer,
+  seed, 200 epochs, and validation-NLL selection:
+  - A: exact atoms retained, no whitening;
+  - B: normalized zero-atom dequantization/reclipping, no whitening;
+  - C: exact atoms retained, Cholesky whitening;
+  - D: normalized zero-atom dequantization/reclipping plus Cholesky whitening.
+- Do not add ZCA, learned penalties, temperature calibration, alternative flow
+  architecture, or data regeneration: each would confound the two questions.
+- Compare runs in physical sample space rather than raw normalized NLL across
+  incompatible coordinate systems. Audit per-dimension physical KS, atom mass,
+  Spearman and central Pearson correlation errors, invalid redshift/dust rates,
+  inverse-sinh tails, and train/validation convergence.
+- Selection rule: retain the least complex configuration whose physical sample
+  diagnostics are statistically indistinguishable from the best configuration;
+  whitening and atom handling must each demonstrate a material held-out benefit
+  to remain in the production architecture.
+- Implementation details:
+  - added CLI overrides for the two array factors and an explicit
+    `target_table: exact` contract, preventing the raw/no-whitening control from
+    silently reading the projector's historically dequantized parquet;
+  - added physical KS/Wasserstein aggregates, physical Spearman, central
+    Pearson, per-dimension inverse-sinh tails, and exact-zero mass to snapshots;
+  - added one shared 200-epoch configuration and a documented four-task Slurm
+    array with one H100 per task and unambiguous output names;
+  - reduced full snapshot cadence to every five epochs to preserve trajectory
+    diagnostics without multiplying the v4 storage footprint by ten.
+- Validation: all four one-epoch variants completed end to end on exact local
+  spline tables, wrote the intended normalization contracts and extended
+  diagnostics, and produced exact zero prior mass only in dequant/reclip tasks.
+  Focused suite `9 passed`; Ruff, compileall, `bash -n`, and `git diff --check`
+  pass.
+
+## 2026-07-15 Spline-15D RealNVP V4 Production Result Audit
+
+- Status: completed on retrieved run
+  `outputs/runs/feniks_spline15d_realnvp_shifted_v4`.
+- Determine whether epoch 80 is still improving or already trading sample
+  quality for likelihood by auditing the complete epoch snapshot history.
+- Compare epoch 0, intermediate checkpoints, best validation-NLL checkpoint,
+  and final checkpoint in normalized and physical coordinates.
+- Report marginal fidelity, joint correlations, inverse shifted-asinh tails,
+  train/validation convergence, and the concrete next training decision.
+- Result: the optimization is healthy and unfinished. Validation NLL decreases
+  from `21.14` at epoch 0 to its run minimum `4.11` at epoch 80, with a
+  still-negative last-10-epoch slope of about `-0.046` per epoch and a negligible
+  epoch-80 train/validation gap (`4.107/4.110`).
+- Normalized samples are substantially improved: median/max KS reach
+  `0.069/0.145` on the fixed validation snapshot, versus `0.121/0.360` at epoch
+  0. The maximum KS is still improving at the final epoch.
+- The learned central dependence also improves late in training. Physical
+  Spearman correlation Frobenius error decreases from `1.45` at epoch 20 to
+  `0.92` at epoch 80; after excluding samples with any inverse-sinh argument
+  above four, Pearson correlation error decreases from `1.76` to `1.04`.
+- The remaining raw physical Pearson error (`3.22`) is dominated by rare joint
+  tails, not by the bulk. At epoch 80, `0.186%` of marginal inverse-sinh
+  arguments exceed five and the maximum is `20.64`, versus no truth argument
+  above five and a truth maximum of `4.68`. The exponential inverse then creates
+  SFH contrasts up to roughly `1e7` and invalid negative redshift/dust samples.
+- The physical marginal shapes remain imperfect despite good whitened marginal
+  KS because inverse whitening mixes all dimensions: worst physical KS values
+  are `0.162` for `dust_delta`, `0.152` for metallicity, `0.140` for stellar
+  mass, and `0.139` for dust attenuation.
+- Decision: v4 is a real recovery and materially better than the failed
+  checkpoint-selection runs, but is not yet a valid production prior. Continue
+  beyond 80 epochs because both likelihood and central dependence are still
+  improving; separately treat joint-tail support as an acceptance criterion,
+  since maximum likelihood alone may not eliminate unobserved tail combinations.
+
+## 2026-07-15 Spline-15D RealNVP V4 Shifted-Asinh Recovery
+
+- Status: implemented and locally validated.
+- Reuse the existing grouped 50k spline dataset; do not regenerate Diffsky or
+  rerun the spline projection.
+- Replace the Gaussian-QRMSE lambda scan with a train-only robust shifted-asinh:
+  median location, half the q84-q16 interval as lambda, analytic inverse, then
+  the existing atom dequantization and Cholesky whitening.
+- Train the same identity-initialized 12x256 RealNVP with pure validation NLL
+  checkpoint selection, learning rate `2e-5`, 80 complete epochs, and no
+  truth-derived loss, checkpoint gate, temperature correction, or early stop.
+- Save an epoch-0 baseline and every trained epoch with checkpoint, generated
+  samples, physical/normalized truth overlays, correlation matrices, marginal
+  metrics, and inverse-transform tail diagnostics.
+- Deliver a dedicated v4 config, Jean-Zay H100 launcher, focused tests, and an
+  updated runbook with exact launch/retrieval commands.
+- Completed implementation:
+  - added a versioned robust shifted-asinh transform while retaining exact
+    compatibility with v1-v3 unshifted-asinh checkpoints;
+  - changed the v4 selection contract to validation NLL only and disabled
+    early stopping, weight decay, training jitter, temperature fitting, and
+    all generated-truth checkpoint gates;
+  - added fixed-seed epoch-0 and per-epoch snapshot bundles with checkpoints,
+    physical/normalized samples and overlays, marginal tables, four correlation
+    matrices, and pre-sinh tail diagnostics;
+  - added the standalone v4 H100 job consuming the existing grouped-v3 spline
+    dataset, without repartitioning, projection, or Diffsky generation.
+- Validation: focused suite `9 passed`; Ruff, compileall, `bash -n`, and
+  `git diff --check` pass. A one-epoch CPU smoke on 256 real local dataset rows
+  completed, selected epoch 1 by validation NLL, reloaded the checkpoint, and
+  wrote the complete epoch-0/epoch-1 snapshot contract.
+
+## 2026-07-15 Spline-15D RealNVP Production Run Analysis
+
+- Status: completed from the retrieved Jean-Zay run
+  `outputs/runs/feniks_spline15d_realnvp_v1`.
+- Numerical result: training converged without conventional overfitting; the
+  best checkpoint is epoch 116 with train/validation/test NLL
+  `9.549/9.620/9.629`, and strict forward/inverse integrity passes.
+- Scientific result: the checkpoint is not ready as a prior. Its quality gate
+  fails with median/max marginal KS `0.302/0.471`, correlation Frobenius error
+  `3.76`, and large physical-space tails including `4.48%` negative redshifts
+  and `11.89%` negative dust attenuation samples.
+- Root diagnostic: held-out truth maps through the learned inverse flow to a
+  base with mean coordinate standard deviation `0.209`, not the required unit
+  Gaussian, while samples correctly map back to unit width. Forward sampling
+  compounds coupling translations and grows aggregate normalized width from
+  `1.0` to `2.79`; `6.70%` of generated normalized coordinates exceed `|x|=5`
+  versus `0.10%` for held-out truth.
+- Control: sampling the independent unit Gaussian before inverse `asinh`
+  already gives median KS `0.059`, substantially better than the trained
+  RealNVP, although it misses correlations. The RealNVP only reduces
+  correlation Frobenius error from `4.77` to `3.76` while destroying marginals.
+- Diagnostic-only temperature scan: using the learned flow with base
+  temperature `T=0.15` gives median/max KS `0.102/0.125`, correlation error
+  `1.61`, and combined negative-redshift plus negative-dust rate `0.62%`.
+  `T=0.20` minimizes the inspected correlation error (`1.48`). These values
+  were inspected on test and must not be adopted directly; temperature and
+  checkpoint selection need to use validation data.
+- Next production iteration: keep the train-fitted analytic `asinh`, add
+  validation-time base typicality and generated-sample gates, calibrate a base
+  temperature on validation, reduce `shift_clamp`, add fixed permutations, and
+  select checkpoints by generated population quality rather than NLL alone.
+- V2 implementation completed locally:
+  - RealNVP now supports checkpoint-compatible fixed `roll`/`reverse`
+    permutations, explicit base-temperature sampling/density, conservative
+    clamps, and optional base mean/std/covariance regularization.
+  - Checkpoints are selected from validation-only generated-sample metrics;
+    the final test split is used only after model and temperature selection.
+  - Added exact-truth train-overlap/novel-subset auditing, an independent-normal
+    baseline, unit-temperature and validation-calibrated samples, and separate
+    full/novel validation/test NLL reporting.
+  - The truth-versus-prior diagnostic is now 15 rows by two columns, with
+    physical space on the left and normalized space plus `N(0,1)` on the right.
+  - Added a four-run Jean-Zay H100 ablation and a validation-only comparison
+    command. Local two-epoch end-to-end smoke completed and reloaded the saved
+    checkpoint, produced both diagnostic suites, and selected temperature from
+    validation metadata.
+
+### V2 four-run postmortem
+
+- Status: all four Jean-Zay runs retrieved and audited; none is acceptable as
+  a production prior.
+- In every run, validation NLL improves while generated-sample quality degrades.
+  The selected checkpoint is epoch 1 for all four models. By epoch 120 the
+  truth-to-base mean standard deviation has collapsed to about `0.21--0.24`
+  for A/B and `0.22--0.23` for C/D instead of one.
+- The comparison script selected D using the pre-temperature checkpoint score.
+  This is the wrong cross-run contract: temperature is calibrated only after
+  checkpoint selection. B is the only run whose calibrated validation sample
+  passes the configured gates and is the least-bad retrieved model, but it
+  still visibly misses `dust_delta`, `sfh_dlog_sfr_02`, and
+  `sfh_dlog_sfr_03`.
+- A full-covariance Gaussian in train-fitted `asinh` space dominates every
+  RealNVP: on the current test it obtains median/max marginal KS
+  `0.059/0.153` and physical correlation Frobenius error `0.905`, versus
+  `0.095/0.167/1.205` for calibrated B.
+- The source dataset has a hard split-leakage bug. Split source seeds are
+  consecutive while each shard key is `source_seed + shard_index`; therefore
+  adjacent split/shard pairs reuse identical JAX keys. There are 1,367 unique
+  effective proposals shared by train/validation and 1,386 by train/test.
+  Exact 15D overlap affects 1,658/5,000 validation rows and 1,661/5,000 test
+  rows. The current validation/test NLL values are not independent estimates.
+- Weighted resampling with replacement additionally leaves only 32,543 unique
+  train proposals among 40,000 rows. This is a valid abundance representation
+  for histograms, but a poor continuous-density training table without a
+  weighted-unique likelihood or broader dequantization.
+- C and D show that tightening `scale_clamp` from `0.05` to `0.02` was the
+  wrong direction: their final validation NLL is about `12.4` rather than
+  `9.6--9.7`, and they do not improve samples. The D moment penalty contributes
+  only about `0.1` to the objective and is empirically indistinguishable from C.
+- Internal layer audit rules out a basic invertibility/NaN failure: checkpoint
+  round trips pass at a few `1e-6` and all logged updates are finite. It instead
+  shows architectural/optimization saturation. At epoch 120, `99.9%` or more
+  of active RealNVP `log_scale` outputs sit above 90% of their clamp, while
+  100% of minibatches in every run have raw gradient norm above the configured
+  clipping threshold of one.
+- Asinh remains a reasonable tail/skew preconditioner, not a Gaussianizer: its
+  train marginal Gaussian-QRMSE ranges from `0.019` to `0.346`, with the worst
+  dimensions being `dust_delta` and the early SFH contrasts. A monotonic asinh
+  cannot remove their U shapes or multimodality. The success of the affine
+  full-covariance Gaussian baseline shows that abandoning asinh is not the
+  first action; adding joint whitening and then testing residual non-Gaussian
+  structure is.
+- Required next order: fix split key construction and regenerate independent
+  data; train on unique weighted proposals or a straight-MC lightcone; add the
+  full-covariance Gaussian as a hard acceptance baseline; use analytic asinh
+  followed by train-only affine whitening; evaluate epoch 0 and calibrated
+  generated quality during checkpoint selection; then retest RealNVP with a
+  materially larger scale range and lower learning rate.
+- Proposed attack ladder, to be implemented only after review:
+  1. Add synthetic recovery tests in 15D: standard normal, correlated Gaussian,
+     nonlinear banana, then two-mode/U-shaped marginals. This separates code,
+     optimizer, affine-coupling capacity, and real-data problems.
+  2. Add dataset preflight gates for unique effective RNG keys, group-disjoint
+     splits, duplicate/atom fractions, covariance spectrum, and local intrinsic
+     dimension. Abort training on leakage.
+  3. Benchmark identity Gaussian, diagonal Gaussian, full-covariance Gaussian,
+     and optionally a small Gaussian mixture using validation-only metrics.
+  4. Define the target as `physical -> asinh -> affine whitening`; initialize
+     RealNVP at identity and require epoch zero to reproduce the full-covariance
+     Gaussian baseline exactly.
+  5. Run one-factor ablations over scale range, learning rate, gradient clip,
+     depth, and permutation. Log clamp saturation, per-coordinate base moments,
+     log-det, and generated metrics every epoch.
+  6. Select checkpoint and any temperature jointly on validation, with hard
+     per-dimension rather than only aggregate gates. Test remains sealed until
+     a candidate beats the affine Gaussian baseline.
+- Refined implementation constraint: do not regenerate Diffsky. Pool the
+  existing 50k source rows, derive a canonical effective-proposal group from
+  `source_seed + shard_index` and proposal row, and repartition whole groups
+  into new 40k/5k/5k splits. Preserve multiplicities, rebuild only the spline
+  projection/normalization products, and require zero group or exact-truth
+  overlap across splits.
+- Single-run recovery design: retain the scientific 15D exact truths; use
+  train-fitted analytic asinh followed by Cholesky whitening as the internal
+  flow coordinates; broaden normalized zero-atom dequantization; initialize
+  the RealNVP exactly at identity; use `roll`, `scale_clamp=0.5`,
+  `shift_clamp=2`, learning rate `1e-4`, gradient clip `5`, and no base-moment
+  penalty or production temperature correction. Evaluate epoch 0 and every
+  epoch against the affine-Gaussian baseline, then launch one Jean-Zay job only.
+- Recovery implementation completed:
+  - grouped the existing 50k into exact 40k/5k/5k splits with zero effective
+    proposal overlap while preserving within-split resampling multiplicities;
+  - added normalized atom dequantization, train-only Cholesky whitening, exact
+    scientific inverse/reclipping, and a zero exact-truth-overlap preflight;
+  - made the identity epoch-0 Gaussian a strict fallback and require a minimum
+    generative-score improvement before accepting a trained checkpoint;
+  - added saturation and sliced-Wasserstein diagnostics, training jitter,
+    generative early stopping, focused tests, documentation, and one sequential
+    H100 job for regrouping, spline projection, and training;
+  - full 50k regroup audit and two local end-to-end CPU smokes passed.
+
+## 2026-07-15 Jean-Zay Spline-15D RealNVP Production Pipeline
+
+- Status: completed locally; ready for Jean-Zay smoke then production launch.
+- Goal: provide a documented, restartable Jean-Zay workflow that consumes an
+  already-generated Diffsky/FENIKS dataset, projects native SFHs to the fixed
+  spline-15D truth contract in a separate post-processing job, fits a simple
+  invertible `asinh` normalization on train only, and trains/evaluates one
+  supervised RealNVP prior.
+- Active contract:
+  - Never regenerate Diffsky inside spline projection or prior training.
+  - Export exact and dequantized 15D train/validation/test parquets with shared
+    fixed spline-node placement and stored metadata sufficient to reconstruct
+    the SFH.
+  - Fit all `asinh` lambdas/centers/scales from the projected train split only;
+    freeze and serialize them for validation, test, sampling, and inference.
+  - Train only RealNVP in this production path. Do not expose the alternative
+    RQ-spline flow in its configs or launch scripts.
+  - During the prior run, write two-column before/after marginal plots annotated
+    with lambda, learned-sample versus truth overlays, checkpoint metadata,
+    NLL/history, generated samples in normalized and physical 15D spaces, and
+    reconstruction-ready normalization metadata.
+  - Provide separate Slurm jobs and exact Jean-Zay commands for projection and
+    prior training, with no dependency on local generated analysis artifacts.
+- Deliverables: reusable production modules, CLIs/configs, Slurm scripts, tests,
+  documentation, and smoke-tested local outputs.
+- Completed:
+  - Added the separate post-generation projector
+    `scripts/build_feniks_spline15d_dataset.py`. It consumes existing Diffsky
+    train/validation/test parquets and writes exact 15D truth, dequantized flow
+    targets, absolute node audits, and a versioned `spline15d_contract.json`.
+  - Versioned the eleven optimized normalized-log-time node positions and the
+    minimum-distortion `+/-1e-4 dex` exact-zero dequantization in
+    `configs/feniks_spline15d_postprocess.yaml`.
+  - Added the dedicated `scripts/train_feniks_spline15d_realnvp.py` path. It
+    fits per-coordinate analytic `asinh` lambdas on train only, serializes the
+    exact inverse, hard-rejects non-RealNVP flows, trains directly in 15D, and
+    reloads the best checkpoint before drawing final samples.
+  - The training run writes the requested 15-by-2 before/after normalization
+    figure with lambda annotations and Gaussian overlays, training history,
+    train/validation/test NLL, learned-prior versus held-out-truth overlays,
+    correlation/distribution metrics, normalized and physical samples, and
+    strict best/last checkpoints with complete normalization metadata.
+  - Added a reusable strict checkpoint loader, focused unit tests, two H100
+    Slurm jobs, production/smoke YAML configs, and the standalone runbook
+    `docs/source/spline15d_realnvp.rst`.
+  - Local CPU smoke projected 64 rows per split, trained a 2-layer RealNVP for
+    two epochs, reloaded both checkpoint topology and the embedded `asinh`
+    contract, generated all plots/tables, and completed with an inverse
+    round-trip maximum error of `1.78e-14`.
+  - Validation: targeted suite `11 passed`; full suite `324 passed, 1 skipped`
+    plus one pre-existing deterministic failure in the tiny Diffsky generator
+    metallicity-trend gate. The failing test does not import or execute the new
+    spline/RealNVP code. Ruff, compileall, `bash -n`, `git diff --check`, and a
+    warning-as-error Sphinx build pass.
+
+## 2026-07-15 FENIKS 15D Prior Normalization Audit
+
+- Status: completed locally on 2026-07-15, including the base / `asinh` /
+  shifted-`asinh` comparison.
+- Goal: determine whether the new five-physical-plus-ten-SFH-contrast latent
+  distribution is suitable for continuous normalizing-flow training and define
+  a leakage-safe invertible normalization.
+- Active contract:
+  - Fit every normalization on a deterministic subset of the 40,000-row train
+    table, select it on a disjoint train-validation subset, and evaluate it once
+    on the untouched 5,000-row test table.
+  - Compare the physical/dequantized distributions before normalization with
+    affine scaling, nonlinear marginal Gaussianization, and optional joint
+    whitening.
+  - Audit atoms and near-atoms, tails, train/test drift, marginal Gaussianity,
+    correlations, covariance conditioning, random projections, extrapolation,
+    and numerical inverse accuracy.
+  - Keep the exact 15D table as scientific truth and use the dequantized table
+    only as the continuous flow target.
+- Deliverables: normalized train/test parquets, an invertible machine-readable
+  transform, metric tables, before/after figures, and an HTML/Markdown report
+  under `outputs/analysis/feniks_spline_15d_normalization_20260715/`.
+- Completed:
+  - Added `scripts/analyze_feniks_spline_15d_normalization.py` with a grouped
+    exact-truth train/validation split: 31,986 fit rows and 8,014 validation
+    rows. No identical exact 15D truth crosses that normalization split.
+  - Compared affine, optimized `asinh`, and 257-knot invertible quantile-spline
+    marginals. Validation selects quantile splines for 14 coordinates and an
+    `asinh` transform for `dust_av`.
+  - On the full IID test sample, the maximum marginal Gaussian quantile RMSE
+    drops from `0.6671` after affine standardization to `0.0354`; the mean drops
+    from `0.3496` to `0.0220`. The normalized test tail fraction beyond
+    `|x| > 5` is `2.67e-5`, with maximum `|x| = 5.21`.
+  - Evaluated full covariance whitening as an ablation. It reduces the test
+    covariance condition number from `321.7` to `1.51`, but worsens maximum
+    marginal QRMSE to `0.530`, creates a `0.4%` tail beyond `|x| > 5`, and
+    reaches `|x| = 21.3`. Fixed whitening is therefore not recommended; the NF
+    should learn joint mixing after marginal normalization.
+  - Found a provenance limitation independent of normalization: exact truth has
+    7,457 duplicate excess rows in train and 1,661/5,000 exact test truths also
+    occur in train. Dequantization reduces these to 7,222 and 1,605 but cannot
+    remove resampling multiplicities. Full-test IID metrics and a conservative
+    3,339-row novel-truth audit are both reported.
+  - Exported marginal-normalized and whitening-ablation train/test parquets,
+    transform/inverse JSON, split and overlap masks, metric CSVs, five figures,
+    and standalone Markdown/HTML reports. Full test round-trip error is
+    `2.53e-14`.
+  - Ruff, compileall, `git diff --check`, parquet shape/finite checks, transform
+    invariants, JSON contract checks, PNG decoding, and visual inspection of
+    the marginal and correlation figures pass.
+- Remaining NF benchmark: train matched NF architectures on affine versus
+  marginal-normalized inputs and compare held-out NLL, generated marginals,
+  correlations, and population diagnostics. This should follow a production
+  data split by unique proposal identifiers before resampling.
+- All-`asinh` comparison completed:
+  - Exported optimized analytic `asinh` transforms and normalized 40,000-row
+    train / 5,000-row test parquets alongside the selected hybrid tables.
+  - Regenerated the physical and ten-SFH-coordinate plots with four columns:
+    exact truth, dequantized flow target, all-`asinh`, and selected hybrid.
+    Updated the score and correlation plots with the all-`asinh` branch.
+  - On full IID test, all-`asinh` improves maximum marginal QRMSE from the affine
+    `0.6671` to `0.3446`, but the selected hybrid reaches `0.0354`. Mean marginal
+    QRMSE is `0.1572` versus `0.0220`.
+  - All-`asinh` gives a lower covariance condition number (`151.2` versus
+    `321.7`) but retains a `0.1%` tail beyond `|x| > 5` and reaches `|x| = 25.96`;
+    the selected hybrid has a `2.67e-5` tail and maximum `|x| = 5.21`.
+  - The report, metrics, JSON transform contract, and matched Parquet inputs now
+    support a direct NF ablation between analytic `asinh` and quantile-based
+    marginal preprocessing.
+- Simple-transform comparison completed:
+  - Fitted a deterministic shifted-`asinh` transform on each of the 15 fit
+    coordinates and exported analytic transform/inverse specifications plus
+    normalized train/test parquets.
+  - Added dedicated physical and SFH marginal plots, a validation-QRMSE plot,
+    and a correlation plot containing only affine base, optimized `asinh`, and
+    optimized shifted-`asinh`.
+  - On full IID test, mean/max marginal QRMSE is `0.3496/0.6671` for affine,
+    `0.1572/0.3446` for `asinh`, and `0.08388/0.2861` for shifted-`asinh`.
+    Shifted-`asinh` reduces the tail beyond `|x| > 5` to `2.93e-4` and maximum
+    `|x|` to `8.73`, versus `1e-3` and `25.96` for ordinary `asinh`.
+  - Shifted-`asinh` does not solve the U-shaped `dust_delta` distribution and
+    retains the secondary modes of `q2/q3`. Its full-test covariance condition
+    number is `453.2`, worse than affine `302.0` and ordinary `asinh` `151.2`.
+  - The stellar-mass shifted-`asinh` optimum is flagged tail-fragile because it
+    combines a small lambda with a shift close to the observed support. It must
+    be constrained or replaced by ordinary `asinh` in a production simple
+    hybrid.
+
+## 2026-07-10 FENIKS 15D Spline Prior Contract
+
+- Status: completed locally on 2026-07-15.
+- Goal: evaluate the exact 15-dimensional prior target composed of
+  `z_obs`, stellar mass, stellar metallicity, two dust parameters, and ten
+  independent SFH shape coordinates.
+- Active contract:
+  - Represent ten independent SFH contrasts with eleven PCHIP ordinates on a
+    shared redshift-aware time grid. The common log-SFR offset is removed and
+    stellar mass supplies the absolute normalization.
+  - Compare uniform-log-time, recent-lookback, hybrid, and train-optimized
+    shared node placements at fixed latent dimension.
+  - Optimize placement only on a balanced training subset; select and report
+    closure on the untouched held-out test sample.
+  - Recompute native/spline SFHs, 107 age weights, SEDs, and 18-band DSPS
+    photometry, with p95/p99 diagnostics by state, redshift, mass, and high-sSFR
+    tail.
+  - Audit the ten contrast distributions for atoms, scale, correlations, and
+    effective rank before recommending them for normalizing-flow training.
+- Deliverables: a standalone analysis report, closure and latent-coordinate
+  tables/figures, a machine-readable 15D contract, and projected train/test
+  latent parquet files under `outputs/analysis/`.
+- Completed and validated before pause:
+  - Implemented the exact 15D contract with five physical coordinates and ten
+    adjacent log-SFR contrasts defining eleven shared PCHIP nodes.
+  - Optimized the nine independent shared node positions on a balanced train
+    subset and selected `optimized_balanced` on a separate train-validation
+    proxy. The normalized log-time nodes are `[0, 0.21079, 0.31848, 0.47244,
+    0.58562, 0.71219, 0.79838, 0.86010, 0.91243, 0.95883, 1]`.
+  - On the untouched balanced test diagnostic, prevalence-weighted population
+    p95 closure is `0.00339 mag` and `0.0952 sigma`; main-sequence p95 is
+    `0.00260 mag` and `0.0716 sigma`. Quenched tails remain above target at
+    `0.0396 mag` and `1.14 sigma`.
+  - Exported exact 40,000-row train and 5,000-row test 15D parquets, node-value
+    audit tables, closure tables, four figures, and a standalone report under
+    `outputs/analysis/feniks_spline_15d_prior_20260710/`.
+  - Found exact plateau atoms in the contrast representation: 5,731 exact
+    zeros in train, with the largest marginal atom `q10 = 0` at `7.8625%`.
+    The exact table is therefore not ready for an unmodified continuous flow.
+  - An exploratory test-side dequantization scan showed that uniform jitter up
+    to `+/-0.002 dex` removes exact zeros while retaining the population p95
+    targets. This is not yet a leakage-safe production choice.
+  - Made the shared JAX PCHIP slope calculation safe for gradients through flat
+    segments; the position gradient changed from NaN to finite without changing
+    the closure interpolation path.
+- Finalized on 2026-07-15:
+  - Completed the leakage-safe dequantization-width scan on balanced train
+    validation. No tested width passes the validation `p95 noise RMS < 0.1`
+    gate; the minimum-distortion `+/-1e-4 dex` width is retained, with validation
+    p95 `0.00326 mag` and `0.1013 sigma`.
+  - Evaluated that preselected width once on the untouched test diagnostic. It
+    gives population p95 `0.00339 mag` and `0.0885 sigma`; the exact spline gives
+    `0.00339 mag` and `0.0952 sigma`. Quenched closure remains the limiting case
+    at `0.0396 mag` and `1.14 sigma` p95.
+  - Regenerated exact and dequantized 15D train/test parquets, node audits,
+    validation/test width scans, contract JSON, payload, static report, figures,
+    and closure tables. The dequantized 40,000-row train table contains no exact
+    zero among its ten SFH contrasts; the exact truth table retains 5,731 for
+    scientific audit.
+  - Added a standalone `Prior 15D` view to
+    `outputs/reports/feniks_forward_model_explorer.html`, including the placement,
+    state closure, width selection, contrast distributions, and correlation
+    diagnostics. The explorer now has eleven validated stages and embeds all
+    four 15D figures.
+  - Ruff, Ruff format, compileall, `git diff --check`, 15D parquet/contract
+    invariants, exact node-to-contrast reconstruction, PNG decoding, embedded
+    payload checks, JavaScript syntax, and DOM ID/stage checks pass. The PCHIP
+    agrees with SciPy to `4.44e-16`, eager/JIT to `2.22e-16`, and has finite
+    gradients with respect to both node values and positions.
+  - No Playwright/browser engine is installed, so full-page screenshot rendering
+    was not available; figures were previously inspected and the standalone
+    HTML/JavaScript/DOM contracts were checked directly.
+
+## 2026-07-10 FENIKS JAX Spline Node-Count Selection
+
+- Status: completed locally.
+- Goal: select the smallest spline node count in `6, 8, 10, 12, 16, 20`
+  whose representation error is negligible for SFH summaries, DSPS age
+  weights/SED/photometry, and the configured photometric uncertainties.
+- Active contract:
+  - Use the held-out 5,000-row test split, all available continuous/quenched
+    rows, and an equal-size random main-sequence sample. Report both balanced
+    state metrics and prevalence-weighted population metrics.
+  - Use a JAX-native PCHIP in log cosmic time with knots placed at geometric
+    normalized-lookback fractions, concentrating resolution near observation.
+  - Scan SFH mass-fraction and mean-SFR errors in recent, intermediate, and old
+    windows; log-SFH RMSE; DSPS age-weight L1; SED relative L1; per-band and
+    maximum magnitude errors; and RMS flux residual in units of `fluxerr`.
+  - Aggregate median, p95, p99, and maximum by quenching state, redshift
+    quartile, stellar-mass quartile, high-sSFR tail, and population weighting.
+  - Select the smallest K passing every predeclared p95/p99 gate in every group
+    with adequate sample count. Do not force a selection when no K passes.
+  - The current parquet has no `mc_sfh_type`, burst parameters, or bursty SFH
+    realization. High-sSFR robustness can be measured, but a true Diffsky
+    bursty-state result must be marked unavailable rather than inferred from a
+    proxy label.
+- Deliverables: machine-readable object/summary/band/gate tables, diagnostic
+  PNGs and Markdown/HTML analysis under `outputs/analysis/`, plus an interactive
+  node-scan tab in `outputs/reports/feniks_forward_model_explorer.html`.
+- Completed:
+  - Added `scripts/analyze_feniks_spline_node_scan.py`, which evaluates all
+    `K = 6, 8, 10, 12, 16, 20` configurations on 388 held-out galaxies: every
+    available continuous/quenched object and a matched main-sequence sample.
+    The scan recomputes the JAX SFH, surviving-mass normalization, 107 DSPS age
+    weights, SED, dust, IGM, and 18-band photometry for every configuration.
+  - Compared uniform-log-time, recent-lookback, and hybrid node grids. A grid
+    concentrated only near the observation loses too much early SFH structure;
+    the hybrid grid gives the best overall tail fidelity.
+  - No scanned configuration passes all 14 predeclared p95/p99 gates. The best
+    candidate is hybrid `K=20`, but it still fails nine gates, mainly because
+    quenched and low-redshift tails have large noise-normalized, age-weight,
+    and magnitude residuals. Thus the scan deliberately returns no strict K.
+  - For a less stringent `p95(max |delta mag|) < 0.01 mag` criterion, hybrid
+    `K=16` is sufficient for the prevalence-weighted population and the main
+    sequence. The high-sSFR tail already satisfies this photometric criterion
+    and `p95(RMS residual / sigma) < 0.1` at `K=12`. Quenched galaxies satisfy
+    neither criterion for any `K <= 20`, so they require more or adaptively
+    placed nodes rather than a larger global latent vector for every galaxy.
+  - Reported median/p95/p99/max by state, high-sSFR tail, redshift quartile,
+    stellar-mass quartile, and weighted population. A true bursty-state result
+    remains unavailable because the current parquet does not store its label
+    or realized burst component.
+  - Wrote the object, aggregate, per-band, gate, sample, and JSON payloads plus
+    four diagnostic figures and Markdown/HTML reports under
+    `outputs/analysis/feniks_spline_node_scan_20260710/`. Added a tenth
+    interactive `Choix de K` tab to the standalone forward-model explorer.
+  - Ruff, Ruff format, compileall, `git diff --check`, payload finiteness and
+    shape checks, PNG decoding, embedded-image checks, JavaScript syntax, and
+    ten-stage DOM contract checks pass. Figures were inspected directly; no
+    browser engine was installed for a rendered full-page screenshot test.
+
+## 2026-07-10 JAX Spline SFH Forward Explorer Study
+
+- Status: completed locally.
+- Goal: extend `outputs/reports/feniks_forward_model_explorer.html` with a
+  per-galaxy comparison of the native Diffstar SFH and a differentiable spline
+  surrogate, including DSPS age weights and 18-band photometry.
+- Active contract:
+  - Reuse the seven representative train galaxies and the current local DSPS
+    runtime already embedded in the explorer.
+  - Use fixed-count spline nodes, a deterministic redshift-aware time grid, and
+    a JAX-native shape-preserving cubic Hermite interpolation in log-time and
+    log-SFR; no SciPy interpolation in the forward path.
+  - Renormalize the spline SFH with the same surviving-stellar-mass constraint
+    as the native path before computing age weights, SEDs, dust, IGM, and
+    magnitudes.
+  - Display native versus spline SFH, 107 age weights, 18 magnitudes and
+    residuals, node locations, and numerical reconstruction metrics for every
+    selectable example.
+- Completed:
+  - Added a 20-node JAX-native Fritsch-Butland PCHIP in log cosmic time and
+    log SFR. The spline passes through its knots exactly, agrees with SciPy to
+    `1.22e-15`, has eager/JIT disagreement of only `2.22e-16`, and has finite
+    JIT-compiled gradients with respect to every node value.
+  - Renormalized every spline SFH with the same surviving-stellar-mass target
+    as the native Diffstar path, then recomputed all 107 DSPS age weights and
+    the full MDF, dust, IGM, and 18-band forward using JAX.
+  - Added a dedicated interactive Spline tab with native/spline SFHs and knot
+    markers, native/spline age weights, native/spline magnitudes, per-band
+    residuals, all knot values, per-example metrics, and a seven-galaxy summary
+    table.
+  - The seven representative examples have maximum spline/native magnitude
+    error `0.00815` mag. The quenched example has the largest age-weight L1
+    (`0.0622`) and log-SFH RMSE (`0.0338` dex); the massive example has the
+    largest magnitude error. All spline age weights sum to unity and surviving
+    mass closes within `3e-8` dex.
+  - Regenerated `outputs/reports/feniks_forward_model_explorer.html` and its
+    JSON payload. Ruff, Ruff format, compileall, payload shape/finite checks,
+    JavaScript syntax, nine-stage DOM ID checks, and `git diff --check` pass.
+    No browser engine or jsdom installation was available for screenshot-based
+    rendering validation; the standalone HTML and JavaScript/DOM contracts were
+    validated directly instead.
+
+## 2026-07-10 FENIKS Explorer Provenance and Graph Revision
+
+- Status: completed locally.
+- Goal: remove ambiguity between generation-time noiseless magnitudes, current
+  runtime noiseless magnitudes, noisy observations, generative `true +/- sigma`
+  intervals, and conventional `observed +/- sigma` measurement bars; replace
+  the linear overview with a detailed, branched, Mermaid-like interactive graph.
+- Completed:
+  - Split the magnitude view into generation-time noiseless truth, current
+    runtime noiseless forward, and noisy observed AB magnitude when the stored
+    observed flux is positive; labels and tooltips now state each provenance.
+  - Displayed both uncertainty conventions in the flux view: blue
+    `flux_true +/- fluxerr`, black `flux_observed +/- fluxerr`, the orange
+    realized-noise segment, and the green current-runtime forward point.
+  - Added the Gaussian coverage explanation and measured the full training-set
+    tail rate: `31.66%` of draws have `|noise / fluxerr| > 1`, consistent with
+    the `31.73%` expected outside a one-sigma interval.
+  - Replaced the eight-box overview with a four-region, nineteen-node branched
+    SVG graph. It exposes all 18 raw names and selected values, halo assembly,
+    quenching/rejuvenation, SFH normalization, SSP/MDF synthesis, dust, IGM,
+    filter integration, generation forward, error construction, and noise.
+  - Regenerated the standalone HTML and payload; Ruff, format, compileall,
+    JavaScript syntax, `git diff --check`, and jsdom checks pass for seven
+    examples, eighteen parameters, eighteen bands, and all page views.
+
+## 2026-07-10 FENIKS Explorer Spectral, Filter, and Error Revision
+
+- Status: completed locally.
+- Goal: extend the interactive forward explorer with rest-frame filter
+  overlays, physically converted `L_lambda` per Angstrom SEDs, explicit
+  photometric error bars and noise draws, a dedicated error-model tab, and a
+  single clickable graph spanning raw parameters through observed photometry.
+- Contract: retain the same 18-band train parquet, generation manifest, current
+  local forward, and stored-vs-current runtime distinction.
+- Completed:
+  - Converted the displayed spectra from the native `Lnu` in `Lsun/Hz` to
+    `Llambda` in `Lsun/Angstrom` using `Llambda = Lnu * c / lambda^2`, and
+    changed the spectral axis to rest-frame Angstroms over 300--59,624 A.
+  - Embedded 3,240 downsampled throughput points for all 18 filters. The SED
+    panel overlays each observed-frame throughput at
+    `lambda_rest = lambda_observed / (1 + z)` on a separate transmission axis;
+    all 18 filters overlap the plotted SED for every representative example.
+  - Replaced the overview tiles with one clickable eight-node SVG graph from
+    raw parameters through halo, SFH, mass normalization, SED, filters, error
+    model, and observed photometry.
+  - Added a dedicated Errors tab with the exact `m5_depth` variance formula,
+    per-band `m5` and effective `gamma`, source/background/systematic sigma
+    components, all-band and selected-band pull distributions, and the stored
+    Gaussian noise realization.
+  - Added a photometric flux graph with true and current-model points, observed
+    points, explicit `+/- fluxerr` bars, and the true-to-observed noise segment.
+    The table now includes noise in nJy and `(flux - flux_true) / fluxerr`.
+  - Validation: the 720,000 stored noise pulls have mean `-0.00158` and standard
+    deviation `0.9987`; decomposed sigma values reproduce stored `fluxerr` to
+    `2.22e-16` relative error; pull identities agree to `4.44e-16`; Ruff,
+    format, compileall, JavaScript syntax, `git diff --check`, payload coverage,
+    and jsdom navigation checks pass across all eight page views.
+
+## 2026-07-10 Interactive FENIKS Forward-Model Explorer
+
+- Status: completed locally.
+- Goal: generate a standalone interactive webpage that traces representative
+  galaxies from the 18 raw FENIKS truth columns through the exact local
+  Diffmah, Diffstar, DSPS, dust, IGM, filter, and noise stages, while showing
+  the population distribution of every truth coordinate.
+- Active contract:
+  - Dataset: `Data/diffsky/synthetic/feniks_260617_dsps_closure_18band/train.parquet`.
+  - Config: `configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml`.
+  - Output: `outputs/reports/feniks_forward_model_explorer.html` plus a compact
+    machine-readable payload.
+- Completed:
+  - Added `scripts/build_feniks_forward_explorer.py` and the self-contained
+    `scripts/templates/feniks_forward_explorer.html` template. The page uses
+    embedded SVG renderers and has no CDN or server dependency.
+  - Embedded train-population histograms for all 18 truth coordinates and all
+    18 stored magnitudes, plus seven exact representative galaxies: typical,
+    nearby, high-redshift, massive, dusty, actively quenched, and high-sSFR.
+  - Exposed the actual intermediate arrays for each example: `alpha(t)`,
+    `Mh(t)`, `dMh/dt`, `log y`, `Q(t)`, main-sequence/raw/renormalized SFH,
+    cumulative formed mass, 107 SSP age weights, intrinsic/dusted/post-IGM SED,
+    current model magnitudes, and stored true/noisy fluxes.
+  - Made two non-obvious local behaviors explicit in the interface: the local
+    wrapper passes `lgt0=log10(t_obs)` to Diffmah, and normalization to surviving
+    stellar mass cancels the global `diffstar_lgy_at_mcrit` amplitude.
+  - Kept generation-time and current-runtime predictions separate. The dataset
+    manifest records commit `5a41c67`, Diffstar 1.0.3, DSPS 0.4.8, and JAX
+    0.10.2; the current local runtime differs and produces example-level maximum
+    magnitude drifts from `0.0277` to `0.740` mag.
+  - Validation: the explicit Diffstar kernel decomposition matches the wrapper
+    to `3.33e-06` relative error; SSP age weights sum to unity; surviving mass
+    matches the requested truth to `2.03e-08` dex; Ruff, format, compileall,
+    `git diff --check`, JavaScript syntax, JSON contract, and jsdom interaction
+    checks pass across all six interactive stages.
+
+## 2026-07-10 FENIKS Dirac / SFH Representation Decision Study
+
+- Status: completed locally.
+- Goal: determine whether the exact Diffstar atoms should be modeled as a
+  discrete state, remapped, fixed, or replaced by an SED-native SFH
+  representation, using quantitative SFH and DSPS-photometry reconstruction
+  diagnostics rather than marginal-shape arguments alone.
+- Completed:
+  - Added `scripts/analyze_feniks_dirac_sfh_options.py` and generated the
+    standalone Markdown/HTML study under
+    `outputs/analysis/feniks_dirac_sfh_options_20260710/`, with seven inspected
+    figures and CSV/JSON evidence tables.
+  - Proved that the four 96.493% Diffstar atoms have identical row masks: they
+    encode one shared main-sequence/no-quenching state. The train split has
+    38,597 atom rows and only 1,403 continuous quenched rows; validation and
+    test continuous counts are 152 and 194.
+  - Traced the local generator and forward contracts. The current parquet
+    stores the compact Diffstar/Diffmah coordinates but drops the generator's
+    explicit `mc_sfh_type`, SFH table, burstiness realization, and SSP weights.
+    The local DSPS closure can instead be reconstructed exactly from formed
+    mass, 107 age weights, redshift, metallicity, and dust under the fixed
+    global model settings.
+  - Benchmarked direct age weights, seven PopCosmos bins, 16 mass-conserving
+    lookback bins, and 12/20-knot log-time PCHIP SFHs on 192 held-out objects
+    balanced by state. Direct age weights are exact; the 16-bin representation
+    has the best worst-state p95 maximum magnitude error (`0.00943` mag) among
+    the tested compact variants. The 20-knot spline has lower population p95
+    (`0.00231` mag) but a `0.0521` mag quenched-state p95 tail.
+  - Rejected atom clipping as a standalone normalization: the nearest observed
+    joint continuous proxy gives a `1.78` mag p95 maximum 18-band change for
+    atom rows. Forcing continuous rows to the atom gives `3.76` mag p95. Both
+    require the same missing discrete state to restore exact values.
+  - Recommended one explicit Bernoulli quenching state plus branch-specific
+    continuous models for the native 18D prior, together with a separate
+    SED-native age-weight product for exact closure.
+  - Found a reproducibility blocker: the current local `shine` forward differs
+    from the stored 18-band parquet by up to `0.792` mag in per-band p95 on the
+    balanced sample, despite the generation-time report passing at commit
+    `5a41c67` with JAX 0.10.2. Freeze the runtime and hash the compressed SSP
+    asset before regenerating the next production dataset.
+  - Validation: seven targeted normalization tests pass; Ruff, compileall,
+    `git diff --check`, JSON/CSV loading, and all seven HTML image references
+    pass.
+
+## 2026-07-10 Jean-Zay Hybrid vs Dirac-Preserving Prior Benchmark
+
+- Status: completed locally; ready for the Jean-Zay smoke array.
+- Goal: make both normalization designs trainable with RealNVP and
+  rational-quadratic spline priors, then provide reproducible Jean-Zay launch
+  commands for the four-way comparison.
+- Completed:
+  - Added reusable, train-fitted heterogeneous marginal transforms with
+    float64 forward/inverse checks and checked-in hybrid and Dirac-preserved
+    specifications for the 18-band train split.
+  - Added a benchmark trainer that fits one 18D continuous flow for the
+    Dirac-preserved version, or the statistically explicit hybrid likelihood:
+    one empirical Bernoulli atom state, a 14D atom-branch flow, and an 18D
+    continuous-branch flow. Hybrid samples restore all four atom values exactly.
+  - Added four H100 experiment configs covering hybrid/Dirac-preserved crossed
+    with RealNVP/RQ-spline, plus a four-task Jean-Zay Slurm launcher and a
+    physical-space comparison table generator. NLL is explicitly restricted to
+    within-normalization comparisons because the two versions use different
+    reference measures.
+  - Kept smoke and production run directories separate, rejected accidental
+    reuse of existing output directories, and documented the dependency-based
+    train/compare commands in `docs/source/prior_learning.rst`.
+  - Ran one local training epoch for all four combinations. Both hybrid flows
+    generated exact shared-atom rows; both single-vector continuous flows
+    generated zero exact atoms, as expected. Transform round trips were at most
+    `1.34e-14` after retaining float64 normalization calculations.
+  - Validation: `19 passed` across the new transform/config tests and existing
+    supervised-prior suite; Ruff, compileall, `bash -n`, and `git diff --check`
+    pass. The one-epoch smoke quality gates fail by construction and are not
+    scientific results.
+
+## 2026-07-10 Final Hybrid vs Dirac-Preserving Normalization Report
+
+- Status: completed.
+- Goal: deliver two explicit invertible normalization designs, final holdout
+  diagnostics, before/after PNGs, and a standalone HTML report with formulas,
+  fitted values, and parameter-by-parameter computation details.
+- Completed:
+  - Added `scripts/build_final_normalization_report.py` and generated two full
+    18D before/after PNGs: the recommended shared-indicator hybrid model and a
+    simpler single-vector design retaining each exact atom at normalized zero.
+  - Generated a standalone HTML report with 18 parameter sections. Each
+    version records the forward/inverse formula, fitted numerical values,
+    train-only computation method, test metrics, and full spline knots.
+  - Added an atom-centered asinh normalization whose scale is the conditional
+    train RMS around the atom. This keeps both atom and continuous minority at
+    order-unity magnitude while remaining analytically invertible.
+  - Final test-split robustness review rejected the fragile log-like stellar-mass transform
+    after a plausible test value produced `|x|=7.70`; the monotone spline now
+    gives test RMSE `0.031` and max `|x|=4.29` without clipping.
+  - Verified all 18 HTML sections and image references, maximum test round-trip
+    error `1.69e-14`, and maximum transformed test amplitude `|x|=4.29` for
+    both designs.
+  - Recorded that the test split influenced the final stellar-mass family
+    choice (but not fitted transform values), so reported test scores are now
+    descriptive robustness metrics rather than an untouched final holdout.
+
+## 2026-07-10 Invertible Marginal Normalization Selection
+
+- Status: completed.
+- Goal: select a scientifically defensible, invertible marginal transform for
+  every FENIKS prior coordinate, favoring simple affine/asinh transforms and
+  escalating only structurally non-Gaussian marginals to a monotone spline or
+  mixed discrete/continuous treatment.
+- Completed:
+  - Added `scripts/analyze_invertible_prior_normalizations.py` to compare
+    affine, widened-bound logit, unshifted asinh, shifted asinh, and monotone
+    quantile-spline transforms on train and independent validation data.
+  - Selected two unshifted asinh transforms (`z_obs`, `dust_av`), five shifted
+    asinh transforms, one widened-bound logit (`diffmah_logtc`), six monotone
+    quantile splines, and four atom-preserving mixed specifications whose
+    continuous minority uses shifted asinh.
+  - Wrote full/useful selected-transform figures, family-score comparisons,
+    CSV summaries, a Markdown report, and complete JSON transform parameters
+    including spline knots and analytic inverse metadata.
+  - Verified maximum train and validation forward/inverse round-trip errors
+    below `2e-14`. All selected validation coordinates stay below `|x|=5`, so
+    no non-invertible hard clipping is needed.
+  - Validation quantile RMSE is about `0.02-0.12` for ordinary continuous
+    dimensions. Conditional atom-minority scores reach `0.19` because only 152
+    non-atom validation rows are available, while the exact atom is preserved
+    separately without modification.
+
+## 2026-07-10 Per-Parameter Asinh Normalization Study
+
+- Status: completed.
+- Goal: distinguish narrow continuous distributions from true discrete atoms,
+  then test a separate `lambda * asinh(theta / lambda)` compression for every
+  FENIKS prior coordinate.
+- Completed:
+  - Added a `+/-0.5` residual zoom for all four quenching coordinates, showing
+    the exact dominant value separately from the continuous minority. Each has
+    the same 38,597/40,000 (`96.493%`) exact atom; only `qlglgdt` has minority
+    values within 0.5 of that atom.
+  - Scanned 161 lambda values per coordinate for
+    `lambda * asinh(theta / lambda)`, independently standardized every result,
+    and minimized empirical-to-standard-normal quantile RMSE.
+  - Wrote full-18D and useful-only physical/current/asinh comparison figures,
+    lambda scans, a per-parameter transform table, atom statistics, and a
+    Markdown interpretation in the RealNVP run directory.
+  - Finite asinh compression is strongly useful for `z_obs` (`lambda=0.292`),
+    `diffstar_indx_hi` (`lambda=2.02`), and `dust_av` (`lambda=0.0216`). Five
+    coordinates prefer the log-like limit and ten prefer the linear limit.
+  - Recorded that monotone preprocessing cannot Gaussianize the four 96.493%
+    atoms; these require a discrete/continuous mixture, explicit quenching-state
+    conditioning, or removal from the continuous flow.
+- Follow-up completed: revised the Dirac zoom so both panels retain every row
+  in the same `+/-0.5` window around the dominant value. The left panel uses
+  linear counts and the right uses log counts, directly distinguishing exact
+  repetitions from nearby continuous values without removing the atom.
+- Follow-up completed: draw the exact-value atom as an explicit black Dirac
+  stem in both panels, with its physical value, count, and fraction in the
+  legend. The histogram remains present behind the stem.
+- Follow-up completed: replace the stem with a simpler global-distribution and
+  atom-zoom pair, annotated directly with the exact value and row count.
+
+## 2026-07-10 FENIKS RealNVP Normalization Diagnostics
+
+- Status: completed.
+- Goal: document the current `truth_standardized_logit` transform used by the
+  supervised 18D FENIKS RealNVP, with readable physical parameter labels and
+  one-dimensional truth distributions before and after normalization.
+- Completed:
+  - Added `scripts/plot_realnvp_normalization_diagnostics.py`, which labels the
+    18 parameters physically and applies the exact stored checkpoint transform:
+    bounded logistic logit followed by checkpoint train-set centering/scaling.
+  - Wrote physical-vs-network and raw-logit 1D histograms, a readable
+    parameter glossary, normalization metadata, and per-parameter statistics
+    to `outputs/runs/prior_diffsky_synthetic_feniks_full_realnvp_stdlogit_v2/`.
+  - Confirmed that the supplied 18-band train parquet is not the parquet used
+    by this checkpoint despite shared object IDs; the diagnostics explicitly
+    apply the old checkpoint normalization to the supplied distribution.
+  - Recorded the main numerical risks: the quenching-transition logit scale is
+    floored at `0.1`, several dimensions contain sharp atoms, and rare bounded
+    logit tails reach `|x|=48.78` (`diffmah_late_index`) and `45.40`
+    (`diffmah_logm0`) while 99% remain below about 3.5.
+- Completed follow-up:
+  - Updated all plot labels and the glossary to English. Each parameter now
+    has an explicit role and a one-line physical description; Diffstar is
+    identified as SFH and Diffmah as halo assembly.
+  - Added `realnvp_useful_1d_before_after_normalization.png` for the nine
+    useful coordinates present in the 18D learned prior.
+  - Added `configs/prior_diffsky_synthetic_feniks_18band_realnvp_widebounds.yaml`
+    for a clean 18-band retraining. It widens the bounds consistently in the
+    inference model and prior: `z_obs` to 6, `logm0` to 17, early/late halo
+    indices to 12/6, `t_peak` to 20 Gyr, and `dust_av` to 7 mag.
+  - The new bounds cover every finite train value, notably 4,372/40,000
+    `diffmah_early_index` values above the prior upper bound of 6 in the old
+    setup.
+
 ## 2026-07-09 RQ Spline Prior For FENIKS 18D
 
 - Status: completed locally; ready for Jean-Zay launch.

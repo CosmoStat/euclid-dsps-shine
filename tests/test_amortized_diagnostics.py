@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from euclid_dsps.amortized.diagnostics import (
+    _read_posterior_samples_for_corner,
     _truth_parameter_frame,
     feature_diagnostics_frame,
     posterior_predictive_residual_frame,
@@ -80,6 +81,7 @@ def test_posterior_predictive_residual_diagnostics(tmp_path) -> None:
         }
     ).to_parquet(tmp_path / "learned_prior_samples.parquet")
     summary.to_parquet(tmp_path / "posterior_summary.parquet")
+    (tmp_path / "corner_truth_prior_posterior_map.png").write_bytes(b"stale")
 
     summarize_inference_outputs(tmp_path / "posterior_summary.parquet", tmp_path)
 
@@ -97,10 +99,28 @@ def test_posterior_predictive_residual_diagnostics(tmp_path) -> None:
     assert "worst_band" in top.columns
     assert (tmp_path / "learned_prior_summary.json").exists()
     assert (tmp_path / "learned_prior_logprob_hist.png").exists()
-    assert (tmp_path / "posterior_corner.png").exists()
-    assert (tmp_path / "learned_prior_corner.png").exists()
-    assert (tmp_path / "posterior_vs_learned_prior_corner.png").exists()
+    assert (tmp_path / "corner_full_latent_truth_prior_posterior.png").exists()
+    assert not (tmp_path / "posterior_corner.png").exists()
+    assert not (tmp_path / "learned_prior_corner.png").exists()
+    assert not (tmp_path / "posterior_vs_learned_prior_corner.png").exists()
+    assert not (tmp_path / "corner_truth_prior_posterior_map.png").exists()
     assert (tmp_path / "redshift_distribution_comparison.png").exists()
+
+
+def test_corner_population_reads_sharded_posterior_samples(tmp_path) -> None:
+    shard_dir = tmp_path / "posterior_samples"
+    shard_dir.mkdir()
+    pd.DataFrame({"object_id": [1, 2], "z_obs": [0.1, 0.2]}).to_parquet(
+        shard_dir / "batch_000001.parquet"
+    )
+    pd.DataFrame({"object_id": [3, 4], "z_obs": [0.3, 0.4]}).to_parquet(
+        shard_dir / "batch_000002.parquet"
+    )
+
+    frame = _read_posterior_samples_for_corner(tmp_path, max_rows=4)
+
+    assert len(frame) == 4
+    assert set(frame["object_id"]) == {1, 2, 3, 4}
 
 
 def test_catalog_proxy_diagnostics(tmp_path) -> None:

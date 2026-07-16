@@ -1,0 +1,20 @@
+extends: prior_diffsky_synthetic_feniks_18band_realnvp_widebounds.yaml
+
+normalization_benchmark:
+    version: dirac_preserved
+    specs: configs/normalizations/feniks_18band_dirac_preserved_v1.json
+
+prior_learning:
+    training:
+        epochs: 80
+        batch_size: 1024
+        learning_rate: 5.0e-4
+        weight_decay: 1.0e-5
+        gradient_clip_norm: 1.0
+        validation_fraction: 0.0
+        seed: 260617
+        epoch_shuffle: true
+        data_parallel: auto
+    output:
+        prior_samples: 50000
+        truth_sample_limit: 50000

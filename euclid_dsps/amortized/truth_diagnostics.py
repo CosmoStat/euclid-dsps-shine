@@ -437,77 +437,7 @@ def _write_population_overlay_plots(
         fig.savefig(path, dpi=160)
         plt.close(fig)
         paths.append(path)
-    paths.extend(_write_corner_population_plot(population_columns, out))
     return paths
-
-
-def _write_corner_population_plot(
-    population_columns: dict[str, dict[str, np.ndarray]],
-    out: Path,
-) -> list[Path]:
-    if len(population_columns) < 2:
-        return []
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        return []
-    names = list(population_columns)[:6]
-    labels = ("truth", "posterior", "map", "prior")
-    colors = {
-        "truth": "black",
-        "posterior": "tab:blue",
-        "map": "tab:orange",
-        "prior": "tab:green",
-    }
-    n = len(names)
-    fig, axes = plt.subplots(n, n, figsize=(2.4 * n, 2.4 * n))
-    if n == 1:
-        axes = np.asarray([[axes]])
-    for row, y_name in enumerate(names):
-        for col, x_name in enumerate(names):
-            ax = axes[row, col]
-            if row == col:
-                for label in labels:
-                    values = population_columns[x_name].get(label)
-                    if values is not None and values.size:
-                        ax.hist(
-                            values,
-                            bins=30,
-                            density=True,
-                            histtype="step",
-                            color=colors[label],
-                            lw=1.0,
-                            label=label if row == 0 and col == 0 else None,
-                        )
-            elif row > col:
-                for label in labels:
-                    x = population_columns[x_name].get(label)
-                    y = population_columns[y_name].get(label)
-                    if x is None or y is None or x.size == 0 or y.size == 0:
-                        continue
-                    size = min(x.size, y.size, 1000)
-                    ax.scatter(
-                        x[:size],
-                        y[:size],
-                        s=4,
-                        alpha=0.25,
-                        color=colors[label],
-                    )
-            else:
-                ax.axis("off")
-            if row == n - 1:
-                ax.set_xlabel(x_name)
-            if col == 0:
-                ax.set_ylabel(y_name)
-    handles, legend_labels = axes[0, 0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, legend_labels, loc="upper right")
-    fig.suptitle("Truth / posterior / MAP / prior population")
-    fig.tight_layout()
-    path = out / "corner_truth_prior_posterior_map.png"
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return [path]
 
 
 def _finite_values(series: pd.Series) -> np.ndarray:
