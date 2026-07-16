@@ -34,6 +34,8 @@ BATCH_SIZE="${BATCH_SIZE:-256}"
 JAX_BATCH_SIZE="${JAX_BATCH_SIZE:-128}"
 EPOCHS="${EPOCHS:-120}"
 N_SAMPLES="${N_SAMPLES:-2}"
+DATA_PARALLEL="${DATA_PARALLEL:-single}"
+VALIDATION_EVERY="${VALIDATION_EVERY:-1}"
 LIMIT="${LIMIT:-}"
 
 export PYTHONUNBUFFERED=1
@@ -43,6 +45,7 @@ export JAX_PLATFORMS="${JAX_PLATFORMS:-cuda}"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib-${USER:-user}-${SLURM_JOB_ID:-manual}}"
 export PIP_NO_INDEX=1
+export DATA_PARALLEL
 
 cd "$REPO_DIR"
 mkdir -p outputs/logs "$MPLCONFIGDIR"
@@ -70,9 +73,14 @@ if [[ ! -s "$CATALOG_DIR/amortized_catalog_contract.json" ]]; then
 fi
 
 python - <<'PY'
+import os
+
 import equinox, euclid_dsps, jax, optax
+
 print("[job] packages:", equinox.__version__, optax.__version__, euclid_dsps.__file__)
 print("[job] backend/devices:", jax.default_backend(), jax.devices())
+if os.environ["DATA_PARALLEL"] == "pmap" and len(jax.local_devices()) < 2:
+    raise SystemExit("[job][error] DATA_PARALLEL=pmap requires at least two GPUs")
 PY
 
 if [[ "$SMOKE" == "1" ]]; then
@@ -98,6 +106,8 @@ cmd=(
   --jax-batch-size "$JAX_BATCH_SIZE"
   --epochs "$EPOCHS"
   --n-samples "$N_SAMPLES"
+  --data-parallel "$DATA_PARALLEL"
+  --validation-every "$VALIDATION_EVERY"
 )
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
@@ -105,6 +115,7 @@ fi
 
 echo "[job] start=$(date --iso-8601=seconds)"
 echo "[job] prior=$PRIOR_CHECKPOINT catalog=$CATALOG_DIR out=$OUT_DIR"
+echo "[job] batch=$BATCH_SIZE jax_batch=$JAX_BATCH_SIZE samples=$N_SAMPLES data_parallel=$DATA_PARALLEL validation_every=$VALIDATION_EVERY"
 printf '[job] command:'; printf ' %q' "${cmd[@]}"; echo
 "${cmd[@]}"
 echo "[job] done=$(date --iso-8601=seconds)"
