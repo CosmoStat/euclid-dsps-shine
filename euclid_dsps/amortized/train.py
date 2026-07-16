@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -1456,12 +1457,27 @@ def load_checkpoint(
     except RuntimeError as exc:
         _raise_realnvp_mask_checkpoint_error(path, exc)
     if isinstance(model.prior, (RealNVPPrior, RQSplineCouplingPrior)):
+        roundtrip_fail_atol = _checkpoint_prior_roundtrip_fail_atol(config)
         assert_flow_integrity(
             model.prior,
             context=f"amortized checkpoint load {path}",
             sample_count=64,
+            roundtrip_fail_atol=roundtrip_fail_atol,
         )
     return model
+
+
+def _checkpoint_prior_roundtrip_fail_atol(config: dict[str, Any]) -> float:
+    """Use the serialized spline-flow tolerance when rebuilding its template."""
+    prior_cfg = amortized_config(config)["prior"]
+    if str(prior_cfg.get("source", "")) != "spline15d_checkpoint":
+        return 1.0e-2
+    checkpoint = prior_cfg.get("checkpoint")
+    if not checkpoint:
+        return 1.0e-2
+    sidecar = Path(checkpoint).with_suffix(Path(checkpoint).suffix + ".json")
+    payload = json.loads(sidecar.read_text(encoding="utf-8"))
+    return float(payload.get("integrity_roundtrip_fail_atol", 1.0e-2))
 
 
 def _raise_realnvp_mask_checkpoint_error(path: Path, exc: RuntimeError):
