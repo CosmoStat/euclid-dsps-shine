@@ -36,6 +36,7 @@ EPOCHS="${EPOCHS:-120}"
 N_SAMPLES="${N_SAMPLES:-2}"
 DATA_PARALLEL="${DATA_PARALLEL:-single}"
 VALIDATION_EVERY="${VALIDATION_EVERY:-1}"
+NO_PROGRESS="${NO_PROGRESS:-1}"
 LIMIT="${LIMIT:-}"
 
 export PYTHONUNBUFFERED=1
@@ -112,10 +113,13 @@ cmd=(
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
 fi
+if [[ "$NO_PROGRESS" == "1" ]]; then
+  cmd+=(--no-progress)
+fi
 
 echo "[job] start=$(date --iso-8601=seconds)"
 echo "[job] prior=$PRIOR_CHECKPOINT catalog=$CATALOG_DIR out=$OUT_DIR"
-echo "[job] batch=$BATCH_SIZE jax_batch=$JAX_BATCH_SIZE samples=$N_SAMPLES data_parallel=$DATA_PARALLEL validation_every=$VALIDATION_EVERY"
+echo "[job] batch=$BATCH_SIZE jax_batch=$JAX_BATCH_SIZE samples=$N_SAMPLES data_parallel=$DATA_PARALLEL validation_every=$VALIDATION_EVERY no_progress=$NO_PROGRESS"
 printf '[job] command:'; printf ' %q' "${cmd[@]}"; echo
 "${cmd[@]}"
 echo "[job] done=$(date --iso-8601=seconds)"
