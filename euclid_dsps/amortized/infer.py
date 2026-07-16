@@ -668,6 +668,7 @@ def infer_amortized_fs2(
             latent_spec.names,
             alpha_sed=alpha_sed,
             summary=False,
+            batch_size=int(prior_predictive_batch_size),
         ),
         log_alpha_sed=log_alpha_sed,
         alpha_sed=alpha_sed,
@@ -1360,10 +1361,32 @@ def _derived_columns_from_theta(
     *,
     alpha_sed: float,
     summary: bool,
+    batch_size: int | None = None,
 ) -> dict[str, np.ndarray]:
     theta = np.asarray(theta, dtype=float)
     if theta.size == 0:
         return {}
+    if batch_size is not None:
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError("derived batch_size must be positive")
+        if len(theta) > batch_size:
+            chunks = [
+                _derived_columns_from_theta(
+                    context,
+                    model_args,
+                    theta[start : start + batch_size],
+                    parameter_names,
+                    alpha_sed=alpha_sed,
+                    summary=summary,
+                    batch_size=None,
+                )
+                for start in range(0, len(theta), batch_size)
+            ]
+            return {
+                name: np.concatenate([chunk[name] for chunk in chunks])
+                for name in chunks[0]
+            }
     derived_values = np.asarray(
         jax.device_get(
             derived_from_theta_matrix_jax(
