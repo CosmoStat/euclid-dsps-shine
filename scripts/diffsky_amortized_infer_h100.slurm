@@ -57,6 +57,7 @@ DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_dsps_closure/test.parqu
 TRAIN_RUN="${TRAIN_RUN:-outputs/runs/amortized_diffsky_synthetic_feniks_full}"
 CHECKPOINT="${CHECKPOINT:-${TRAIN_RUN}/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-${TRAIN_RUN}/feature_stats.json}"
+FLOW_PRIOR_CHECKPOINT="${FLOW_PRIOR_CHECKPOINT:-}"
 
 RUN_NAME="${RUN_NAME:-amortized_diffsky_synthetic_feniks_full_test_infer}"
 OUT_DIR="${OUT_DIR:-outputs/runs/${RUN_NAME}}"
@@ -99,6 +100,7 @@ echo "[job] config: $CONFIG"
 echo "[job] dataset: $DATASET"
 echo "[job] checkpoint: $CHECKPOINT"
 echo "[job] feature_stats: $FEATURE_STATS"
+echo "[job] frozen flow prior: ${FLOW_PRIOR_CHECKPOINT:-<config>}"
 echo "[job] limit: ${LIMIT:-<full dataset>}"
 echo "[job] batch_size: $BATCH_SIZE"
 echo "[job] jax_batch_size: $JAX_BATCH_SIZE"
@@ -144,6 +146,10 @@ for path in "$DATASET" "$CHECKPOINT" "$FEATURE_STATS"; do
     exit 2
   fi
 done
+if [[ -n "$FLOW_PRIOR_CHECKPOINT" && ! -s "$FLOW_PRIOR_CHECKPOINT" ]]; then
+  echo "[job][missing] frozen flow prior: $FLOW_PRIOR_CHECKPOINT"
+  exit 2
+fi
 
 cmd=(
   python -m euclid_dsps.cli
@@ -170,6 +176,9 @@ cmd=(
 
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
+fi
+if [[ -n "$FLOW_PRIOR_CHECKPOINT" ]]; then
+  cmd+=(--prior-checkpoint "$FLOW_PRIOR_CHECKPOINT")
 fi
 
 echo "[job] command:"

@@ -704,6 +704,10 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--prior-checkpoint",
+        help="Override the frozen flow checkpoint used to rebuild the model template.",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
@@ -1357,6 +1361,13 @@ def _run_amortized_infer(
     if getattr(args, "dataset", None):
         config = dict(config)
         config["catalog_path"] = str(args.dataset)
+    if getattr(args, "prior_checkpoint", None):
+        config = dict(config)
+        amortized = dict(config.get("amortized", {}) or {})
+        prior = dict(amortized.get("prior", {}) or {})
+        prior["checkpoint"] = str(args.prior_checkpoint)
+        amortized["prior"] = prior
+        config["amortized"] = amortized
     if getattr(args, "jax_batch_size", None) is not None:
         config = dict(config)
         amortized = dict(config.get("amortized", {}) or {})
