@@ -1,5 +1,58 @@
 # Plan
 
+## 2026-07-17 Amortized Warm-Restart Support
+
+- Status: completed.
+- Added explicit `--initial-checkpoint` and `--start-epoch` options to
+  amortized training and exposed them through the H100 Slurm wrapper.
+- The continuation uses the serialized model but intentionally initializes a
+  fresh AdamW state; existing checkpoints do not contain optimizer state.
+- Continuations write to a new run directory and retain absolute epoch numbers,
+  so KL and objective schedules continue at the requested epoch without
+  overwriting the interrupted run.
+
+## 2026-07-16 JAX-COSMO 15D Normalization Regeneration
+
+- Status: completed.
+- Fitted the mixed marginal transforms directly on the new 40,000-row
+  JAX-COSMO cubic-spline training projection and applied them unchanged to the
+  5,000 held-out test rows.
+- Regenerated the full 15-coordinate before/after distribution figure, with
+  train/test overlays, standard-normal references, transform families, robust
+  shifted-asinh parameters, and held-out Gaussian quantile errors.
+- Serialized the exact parameters to `normalization_parameters.csv` and the
+  complete contract to `normalization.json`; the held-out forward/inverse
+  roundtrip maximum absolute error is `3.553e-15`.
+- Rewired both the `Normalization` and `Results` tabs to these current
+  JAX-COSMO artifacts. Historical PCHIP flow and encoder curves remain clearly
+  marked as comparison results pending retraining.
+
+## 2026-07-16 JAX-COSMO 15D Distribution Regeneration
+
+- Status: completed.
+- Confirmed that the report previously contained no raw 15D distribution plot
+  from the new spline: only the generic JAX-COSMO K scan was current, while the
+  embedded contrast/correlation figures still came from the PCHIP projection.
+- Reran the complete 15D analysis with the JAX-COSMO cubic not-a-knot decoder
+  under `outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716/`.
+- Reoptimized the shared 11-node placement on train/validation. The selected
+  normalized nodes are `[0, 0.21580, 0.33724, 0.46995, 0.58117, 0.71003,
+  0.80182, 0.87237, 0.92358, 0.96582, 1]`.
+- Projected all 40,000 train and 5,000 test galaxies and regenerated the ten
+  contrast distributions, full 15D correlation, node-placement examples,
+  closure comparison, parquet projections, dequantization scan, metrics,
+  contract, payload, and HTML/Markdown report.
+- Visually inspected the new contrast-distribution and correlation figures;
+  both are nonblank, legible, and consistent with the new latent ordering.
+- Switched the explorer's default 15D payload to the JAX-COSMO directory. The
+  `15D latent` tab and the first raw-distribution figure in `Results` now embed
+  the new plots; downstream flow/normalization/encoder plots remain explicitly
+  labeled as historical PCHIP artifacts pending retraining.
+- Regenerated the standalone explorer. Ruff, compileall, `git diff --check`,
+  and jsdom contract checks pass with zero JavaScript errors; the embedded
+  contract reports JAX-COSMO `k=3` not-a-knot and the Results raw figure is
+  byte-identical to the new latent-tab figure.
+
 ## 2026-07-16 FENIKS Explorer Spline and Normalization Detail
 
 - Status: completed.

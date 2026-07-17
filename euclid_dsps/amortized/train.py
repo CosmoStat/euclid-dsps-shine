@@ -575,6 +575,8 @@ def train_amortized_fs2(
     row_indices_file: str | Path | None = None,
     train_indices_file: str | Path | None = None,
     validation_indices_file: str | Path | None = None,
+    initial_checkpoint: str | Path | None = None,
+    start_epoch: int = 1,
 ) -> None:
     """Train encoder and RealNVP prior jointly on configured photometry."""
     out = ensure_dir(out_dir)
@@ -740,6 +742,27 @@ def train_amortized_fs2(
     key = jax.random.PRNGKey(int(seed))
     key, model_key = jax.random.split(key)
     model = build_amortized_model(config, model_key, latent_spec=latent_spec)
+    start_epoch = int(start_epoch)
+    if start_epoch < 1 or start_epoch > int(epochs):
+        raise ValueError(
+            f"start_epoch must satisfy 1 <= start_epoch <= epochs; "
+            f"got {start_epoch} and {epochs}"
+        )
+    if initial_checkpoint is not None:
+        initial_checkpoint = Path(initial_checkpoint)
+        if not initial_checkpoint.exists():
+            raise FileNotFoundError(
+                f"Missing amortized initial checkpoint: {initial_checkpoint}"
+            )
+        model = eqx.tree_deserialise_leaves(initial_checkpoint, model)
+        _log(
+            verbose,
+            "[amortized] warm restart: "
+            f"checkpoint={initial_checkpoint} start_epoch={start_epoch} "
+            "optimizer_state=reinitialized",
+        )
+    elif start_epoch != 1:
+        raise ValueError("--start-epoch requires --initial-checkpoint")
     train_prior = _train_prior_jointly(cfg["prior"])
     prior_update_schedule = _prior_update_schedule(cfg["prior"])
     calibration_runtime_config = {"calibration": config.get("calibration", {}) or {}}
@@ -786,13 +809,14 @@ def train_amortized_fs2(
         opt_state_replicated = _replicate_tree(opt_state, data_parallel["devices"])
 
     ckpt_dir = ensure_dir(out / "checkpoints")
+    initial_epoch = start_epoch - 1
     save_checkpoint(
-        ckpt_dir / "epoch_0000.eqx",
+        ckpt_dir / f"epoch_{initial_epoch:04d}.eqx",
         model,
         config=config,
         latent_spec=latent_spec,
         feature_stats=feature_stats,
-        epoch=0,
+        epoch=initial_epoch,
         metric=0.0,
         metric_name="initial",
     )
@@ -804,7 +828,7 @@ def train_amortized_fs2(
         key, snapshot_key = jax.random.split(key)
         _write_training_snapshot(
             out,
-            epoch=0,
+            epoch=initial_epoch,
             model=model,
             arrays=snapshot_arrays,
             feature_stats=feature_stats,
@@ -812,7 +836,11 @@ def train_amortized_fs2(
             key=snapshot_key,
             snapshot_config=snapshot_cfg,
             config=config,
-            kl_weight=0.0,
+            kl_weight=_kl_weight(
+                initial_epoch,
+                int(cfg["training"].get("kl_annealing_epochs", 5)),
+                max_weight=float(cfg["training"].get("kl_weight_max", 1.0)),
+            ),
             prior_source=str(cfg["prior"].get("source", "joint_realnvp")),
             prior_train_jointly=bool(train_prior),
             update_phase="initial",
@@ -865,7 +893,7 @@ def train_amortized_fs2(
         "[amortized] training start: "
         "first batch includes JAX/DSPS compilation and can be noticeably slower.",
     )
-    for epoch in range(1, int(epochs) + 1):
+    for epoch in range(start_epoch, int(epochs) + 1):
         kl_weight = _kl_weight(
             epoch,
             int(cfg["training"].get("kl_annealing_epochs", 5)),
@@ -1280,6 +1308,11 @@ def train_amortized_fs2(
 
     summary = {
         "epochs": int(epochs),
+        "start_epoch": int(start_epoch),
+        "initial_checkpoint": (
+            str(initial_checkpoint) if initial_checkpoint is not None else None
+        ),
+        "optimizer_state_resumed": False,
         "batch_size": int(batch_size),
         "jax_batch_size": int(jax_batch_size),
         "data_parallel": {
@@ -1318,7 +1351,7 @@ def train_amortized_fs2(
         "elapsed_time_s": float(time.time() - start_time),
         "checkpoint_best": "checkpoints/best.eqx",
         "checkpoint_last": "checkpoints/last.eqx",
-        "checkpoint_initial": "checkpoints/epoch_0000.eqx",
+        "checkpoint_initial": f"checkpoints/epoch_{initial_epoch:04d}.eqx",
         "checkpoint_every": checkpoint_every,
         "diagnostics_every": diagnostics_every,
         "input_noise": input_noise_cfg,

@@ -178,6 +178,9 @@ RESULT_RUNS = {
         "outputs/runs/feniks_spline15d_amortized_epoch645_4xh100_b2048_v4"
     ),
 }
+JAX_COSMO_SPLINE15D_ANALYSIS = Path(
+    "outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -243,7 +246,7 @@ def parse_args() -> argparse.Namespace:
         "--spline-prior",
         type=Path,
         default=Path(
-            "outputs/analysis/feniks_spline_15d_prior_20260710/"
+            "outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716/"
             "spline_15d_scan_payload.json"
         ),
         help="Optional 15D spline-prior payload embedded in the standalone report.",
@@ -1125,7 +1128,7 @@ def _image_data_url(path: Path) -> str:
 def _load_results() -> dict[str, Any]:
     required_images = {
         "failed_flow": RESULT_RUNS["failed_flow"] / "learned_prior_vs_truth.png",
-        "normalization": RESULT_RUNS["prior_resume_400"]
+        "normalization": JAX_COSMO_SPLINE15D_ANALYSIS
         / "normalization_before_after.png",
         "prior_recovery": RESULT_RUNS["prior_resume_400"]
         / "snapshots/epoch_645/truth_vs_prior.png",
@@ -1148,8 +1151,13 @@ def _load_results() -> dict[str, Any]:
     prior_history = prior_history[prior_history["epoch"] <= 645]
 
     normalization = pd.read_csv(
-        RESULT_RUNS["prior_resume_400"] / "normalization_parameters.csv"
+        JAX_COSMO_SPLINE15D_ANALYSIS / "normalization_parameters.csv"
     ).replace({np.nan: None})
+    normalization_contract = json.loads(
+        (JAX_COSMO_SPLINE15D_ANALYSIS / "normalization.json").read_text(
+            encoding="utf-8"
+        )
+    )
     encoder_log = pd.read_csv(RESULT_RUNS["encoder"] / "training_log.csv")
     encoder_epochs = (
         encoder_log.groupby(["split", "epoch"], as_index=False)
@@ -1171,6 +1179,7 @@ def _load_results() -> dict[str, Any]:
         "figures": {key: _image_data_url(path) for key, path in required_images.items()},
         "prior_history": prior_history.to_dict(orient="records"),
         "normalization_parameters": normalization.to_dict(orient="records"),
+        "normalization_contract": normalization_contract,
         "encoder_history": encoder_epochs.to_dict(orient="records"),
         "encoder_summary": summary,
         "prior_checkpoint_epoch": 645,

@@ -36,6 +36,8 @@ EPOCHS="${EPOCHS:-120}"
 N_SAMPLES="${N_SAMPLES:-2}"
 DATA_PARALLEL="${DATA_PARALLEL:-single}"
 VALIDATION_EVERY="${VALIDATION_EVERY:-1}"
+INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
+START_EPOCH="${START_EPOCH:-1}"
 NO_PROGRESS="${NO_PROGRESS:-1}"
 LIMIT="${LIMIT:-}"
 
@@ -109,7 +111,14 @@ cmd=(
   --n-samples "$N_SAMPLES"
   --data-parallel "$DATA_PARALLEL"
   --validation-every "$VALIDATION_EVERY"
+  --start-epoch "$START_EPOCH"
 )
+if [[ -n "$INITIAL_CHECKPOINT" ]]; then
+  test -s "$INITIAL_CHECKPOINT" || {
+    echo "[job][error] missing initial checkpoint: $INITIAL_CHECKPOINT"; exit 2;
+  }
+  cmd+=(--initial-checkpoint "$INITIAL_CHECKPOINT")
+fi
 if [[ -n "$LIMIT" ]]; then
   cmd+=(--limit "$LIMIT")
 fi
@@ -120,6 +129,7 @@ fi
 echo "[job] start=$(date --iso-8601=seconds)"
 echo "[job] prior=$PRIOR_CHECKPOINT catalog=$CATALOG_DIR out=$OUT_DIR"
 echo "[job] batch=$BATCH_SIZE jax_batch=$JAX_BATCH_SIZE samples=$N_SAMPLES data_parallel=$DATA_PARALLEL validation_every=$VALIDATION_EVERY no_progress=$NO_PROGRESS"
+echo "[job] initial_checkpoint=${INITIAL_CHECKPOINT:-none} start_epoch=$START_EPOCH optimizer_state_resumed=0"
 printf '[job] command:'; printf ' %q' "${cmd[@]}"; echo
 "${cmd[@]}"
 echo "[job] done=$(date --iso-8601=seconds)"

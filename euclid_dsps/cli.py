@@ -593,6 +593,19 @@ def _add_amortized_train_arguments(
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
     parser.add_argument("--epochs", type=int)
+    parser.add_argument(
+        "--initial-checkpoint",
+        help=(
+            "Warm-start the model from an amortized checkpoint. The optimizer "
+            "state is reinitialized."
+        ),
+    )
+    parser.add_argument(
+        "--start-epoch",
+        type=int,
+        default=1,
+        help="First epoch number to run when warm-starting (default: 1).",
+    )
     parser.add_argument("--n-samples", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--row-indices-file")
@@ -1082,6 +1095,8 @@ def _run_amortized_train(
         row_indices_file=getattr(args, "row_indices_file", None),
         train_indices_file=getattr(args, "train_indices_file", None),
         validation_indices_file=getattr(args, "validation_indices_file", None),
+        initial_checkpoint=getattr(args, "initial_checkpoint", None),
+        start_epoch=int(getattr(args, "start_epoch", 1)),
     )
 
 
