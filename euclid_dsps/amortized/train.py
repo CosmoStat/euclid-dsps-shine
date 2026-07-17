@@ -74,6 +74,12 @@ from .latent import (
     x_to_theta,
 )
 from .likelihood import photometric_loglike, photometric_normalized_residual
+from .posterior import (
+    ConditionalFlowEncoder,
+    PriorTransportGaussianEncoder,
+    posterior_log_prob,
+    sample_posterior,
+)
 
 eqx, optax = require_amortized_dependencies()
 
@@ -108,6 +114,7 @@ class LossBatch(NamedTuple):
     flux_err: jnp.ndarray
     mask: jnp.ndarray
     features: jnp.ndarray
+    truth_theta: jnp.ndarray
 
 
 class JitLatentSpec(NamedTuple):
@@ -165,19 +172,43 @@ def build_amortized_model(
             "amortized.encoder.latent_dim must match configured free parameters: "
             f"latent_dim={latent_dim}, expected={expected_latent_dim}"
         )
-    encoder = GaussianEncoder(
-        k_encoder,
-        input_dim=input_dim,
-        latent_dim=latent_dim,
-        hidden_sizes=tuple(
+    encoder_kwargs = {
+        "input_dim": input_dim,
+        "latent_dim": latent_dim,
+        "hidden_sizes": tuple(
             int(v) for v in encoder_cfg.get("hidden_sizes", [256, 256, 256])
         ),
-        activation=str(encoder_cfg.get("activation", "gelu")),
-        log_std_min=float(encoder_cfg.get("log_std_min", -6.0)),
-        log_std_max=float(encoder_cfg.get("log_std_max", 2.0)),
-        initial_log_std=float(encoder_cfg.get("initial_log_std", -1.0)),
+        "activation": str(encoder_cfg.get("activation", "gelu")),
+        "log_std_min": float(encoder_cfg.get("log_std_min", -6.0)),
+        "log_std_max": float(encoder_cfg.get("log_std_max", 2.0)),
+        "initial_log_std": float(encoder_cfg.get("initial_log_std", -1.0)),
+    }
+    encoder_type = str(encoder_cfg.get("type", "gaussian_mlp")).strip().lower()
+    if encoder_type == "gaussian_mlp":
+        encoder = GaussianEncoder(k_encoder, **encoder_kwargs)
+    elif encoder_type in {"prior_transport_gaussian", "transport_gaussian"}:
+        encoder = PriorTransportGaussianEncoder(k_encoder, **encoder_kwargs)
+    elif encoder_type in {"conditional_flow", "conditional_normalizing_flow"}:
+        encoder = ConditionalFlowEncoder(
+            k_encoder,
+            **encoder_kwargs,
+            family=str(encoder_cfg.get("flow_family", "realnvp")),
+            n_layers=int(encoder_cfg.get("flow_layers", 4)),
+            hidden_size=int(encoder_cfg.get("flow_hidden_size", 128)),
+            n_bins=int(encoder_cfg.get("flow_bins", 8)),
+            scale_clamp=float(encoder_cfg.get("flow_scale_clamp", 0.5)),
+            shift_clamp=float(encoder_cfg.get("flow_shift_clamp", 3.0)),
+            tail_bound=float(encoder_cfg.get("flow_tail_bound", 8.0)),
+            min_bin_width=float(encoder_cfg.get("flow_min_bin_width", 1.0e-3)),
+            min_bin_height=float(encoder_cfg.get("flow_min_bin_height", 1.0e-3)),
+            min_derivative=float(encoder_cfg.get("flow_min_derivative", 1.0e-3)),
+            init_scale=float(encoder_cfg.get("flow_init_scale", 0.0)),
+        )
+    else:
+        raise ValueError(f"Unsupported amortized encoder type: {encoder_type}")
+    encoder = _initialize_encoder_mean_if_possible(
+        config, encoder, latent_spec=latent_spec
     )
-    encoder = _initialize_encoder_mean_if_possible(config, encoder, latent_spec=latent_spec)
     prior = build_prior_from_config(
         config,
         k_prior,
@@ -282,7 +313,9 @@ def _latent_spec_for_amortized_config(config: dict[str, Any]) -> LatentSpec:
         return active_spec
     if source == "spline15d_checkpoint":
         _prior, prior_spec = _load_spline15d_prior(checkpoint, active_spec)
-        _validate_loaded_prior_spec(active_spec, prior_spec, require_normalization=False)
+        _validate_loaded_prior_spec(
+            active_spec, prior_spec, require_normalization=False
+        )
         return prior_spec
 
     from euclid_dsps.prior_learning.train import load_prior_checkpoint
@@ -416,10 +449,10 @@ def _validate_loaded_prior_spec(
 
 def _initialize_encoder_mean_if_possible(
     config: dict[str, Any],
-    encoder: GaussianEncoder,
+    encoder,
     *,
     latent_spec: LatentSpec | None = None,
-) -> GaussianEncoder:
+) -> object:
     """Start the encoder from the configured physical initialization."""
     try:
         spec = latent_spec or latent_spec_from_config(config)
@@ -434,25 +467,33 @@ def _initialize_encoder_mean_if_possible(
         ),
         dtype=jnp.float32,
     )
-    x0 = theta_to_x(theta0, spec)
-    zero_mean_weight = jnp.zeros_like(encoder.mean_head.weight)
-    zero_log_std_weight = jnp.zeros_like(encoder.log_std_head.weight)
-    zero_log_std_bias = jnp.zeros_like(encoder.log_std_head.bias)
-    return eqx.tree_at(
+    base = encoder if isinstance(encoder, GaussianEncoder) else encoder.base
+    target = (
+        theta_to_x(theta0, spec)
+        if isinstance(encoder, GaussianEncoder)
+        else jnp.zeros_like(theta0)
+    )
+    zero_mean_weight = jnp.zeros_like(base.mean_head.weight)
+    zero_log_std_weight = jnp.zeros_like(base.log_std_head.weight)
+    zero_log_std_bias = jnp.zeros_like(base.log_std_head.bias)
+    updated = eqx.tree_at(
         lambda enc: (
             enc.mean_head.weight,
             enc.mean_head.bias,
             enc.log_std_head.weight,
             enc.log_std_head.bias,
         ),
-        encoder,
+        base,
         (
             zero_mean_weight,
-            x0,
+            target,
             zero_log_std_weight,
             zero_log_std_bias,
         ),
     )
+    if isinstance(encoder, GaussianEncoder):
+        return updated
+    return eqx.tree_at(lambda enc: enc.base, encoder, updated)
 
 
 def _initial_theta_diagnostics_payload(
@@ -468,14 +509,12 @@ def _initial_theta_diagnostics_payload(
     distance_upper = upper - theta0
     nearest_boundary_fraction = np.minimum(unit_position, 1.0 - unit_position)
     threshold = float(
-        (
-            (config.get("amortized", {}) or {}).get("encoder", {}) or {}
-        ).get("initial_boundary_warning_fraction", 1.0e-3)
+        ((config.get("amortized", {}) or {}).get("encoder", {}) or {}).get(
+            "initial_boundary_warning_fraction", 1.0e-3
+        )
     )
     x0 = np.asarray(
-        jax.device_get(
-            theta_to_x(jnp.asarray(theta0, dtype=jnp.float32), latent_spec)
-        ),
+        jax.device_get(theta_to_x(jnp.asarray(theta0, dtype=jnp.float32), latent_spec)),
         dtype=float,
     )
     free = (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
@@ -823,7 +862,9 @@ def train_amortized_fs2(
         metric_name="initial",
     )
     snapshot_cfg = dict(cfg.get("training_snapshots", {}) or {})
-    snapshot_arrays = validation_arrays if validation_arrays is not None else train_arrays
+    snapshot_arrays = (
+        validation_arrays if validation_arrays is not None else train_arrays
+    )
     if bool(snapshot_cfg.get("enabled", False)) and bool(
         snapshot_cfg.get("include_epoch_zero", True)
     ):
@@ -937,6 +978,11 @@ def train_amortized_fs2(
             batch_size=int(jax_batch_size),
             feature_stats=feature_stats,
             order=train_order,
+            truth_names=(
+                latent_spec.names
+                if objective_mode_name == "neural_posterior_estimation"
+                else None
+            ),
         )
         with _progress_bar(
             enabled=bool(progress),
@@ -1853,6 +1899,11 @@ def evaluate_validation_epoch(
                 arrays,
                 batch_size=batch_size,
                 feature_stats=feature_stats,
+                truth_names=(
+                    latent_spec.names
+                    if objective_mode(objective_config) == "neural_posterior_estimation"
+                    else None
+                ),
             )
         ):
             key, batch_key = jax.random.split(key)
@@ -1933,17 +1984,38 @@ def _evaluation_metrics(
     objective_config,
 ):
     objective_config = objective_config or {}
+    if objective_mode(objective_config) == "neural_posterior_estimation":
+        _loss, metrics = _loss_with_metrics(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            n_samples,
+            kl_weight,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+        )
+        truth_x = theta_to_x(batch.truth_theta, latent_spec)
+        object_nll = -posterior_log_prob(model, batch.features, truth_x)
+        zeros = jnp.zeros_like(object_nll)
+        return metrics, {
+            "loss": object_nll,
+            "negative_loglike": object_nll,
+            "kl_mc_mean": zeros,
+            "posterior_predictive_chi2": zeros,
+        }
     deterministic = is_deterministic_reconstruction(objective_config)
     mean, log_std = model.encoder(batch.features)
     if deterministic:
         x_samples = mean[None, ...]
         logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
     else:
-        x_samples, logq = model.encoder.sample_and_log_prob(
-            key,
-            batch.features,
-            int(n_samples),
-        )
+        posterior = sample_posterior(model, key, batch.features, int(n_samples))
+        x_samples, logq = posterior.x, posterior.logq
     model_flux_raw = model_flux_from_x(
         x_samples,
         latent_spec,
@@ -1995,11 +2067,7 @@ def _evaluation_metrics(
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
     )
-    logp = (
-        jnp.zeros_like(logq)
-        if deterministic
-        else model.prior.log_prob(x_samples)
-    )
+    logp = jnp.zeros_like(logq) if deterministic else posterior.logprior
     kl = logq - logp
     likelihood_temperature = jnp.asarray(
         max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
@@ -2050,9 +2118,7 @@ def _evaluation_metrics(
             else _diag_gaussian_entropy_train(log_std).mean()
         ),
         "posterior_min_log_std": (
-            jnp.asarray(0.0, dtype=loglike.dtype)
-            if deterministic
-            else jnp.min(log_std)
+            jnp.asarray(0.0, dtype=loglike.dtype) if deterministic else jnp.min(log_std)
         ),
         "posterior_median_log_std": (
             jnp.asarray(0.0, dtype=loglike.dtype)
@@ -2060,9 +2126,7 @@ def _evaluation_metrics(
             else jnp.median(log_std)
         ),
         "posterior_max_log_std": (
-            jnp.asarray(0.0, dtype=loglike.dtype)
-            if deterministic
-            else jnp.max(log_std)
+            jnp.asarray(0.0, dtype=loglike.dtype) if deterministic else jnp.max(log_std)
         ),
         "deterministic_reconstruction": jnp.asarray(
             1.0 if deterministic else 0.0,
@@ -2370,6 +2434,42 @@ def _loss_with_metrics(
     calibration_config,
     objective_config,
 ):
+    if objective_mode(objective_config) == "neural_posterior_estimation":
+        if batch.truth_theta.shape[-1] != len(latent_spec.names):
+            raise ValueError("NPE requires complete truth theta columns in every batch")
+        truth_x = theta_to_x(batch.truth_theta, latent_spec)
+        logq_truth = posterior_log_prob(model, batch.features, truth_x)
+        loss = -jnp.mean(logq_truth)
+        zero = jnp.asarray(0.0, dtype=loss.dtype)
+        mean, log_std = model.encoder(batch.features)
+        metrics = {
+            "loss": loss,
+            "negative_loglike": loss,
+            "loglike_mean": jnp.mean(logq_truth),
+            "logprior_mean": zero,
+            "logq_mean": jnp.mean(logq_truth),
+            "kl_mc_mean": zero,
+            "likelihood_temperature": jnp.asarray(1.0, dtype=loss.dtype),
+            "entropy_floor_penalty": zero,
+            "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
+            "posterior_min_log_std": jnp.min(log_std),
+            "posterior_median_log_std": jnp.median(log_std),
+            "posterior_max_log_std": jnp.max(log_std),
+            "deterministic_reconstruction": zero,
+            "effective_n_samples": jnp.asarray(1.0, dtype=loss.dtype),
+            "model_flux_mean": zero,
+            "mean_model_flux_raw": zero,
+            "mean_model_flux_scaled": zero,
+            "log_alpha_sed": model.sed_scale.log_alpha_sed,
+            "alpha_sed": alpha_from_log_alpha(model.sed_scale.log_alpha_sed),
+            "alpha_prior_penalty": zero,
+            "band_alpha_prior_penalty": zero,
+            "max_abs_band_delta_mag": zero,
+            "residual_rms": zero,
+            "flux_residual_rms": zero,
+            "finite_fraction": jnp.mean(jnp.isfinite(logq_truth)),
+        }
+        return loss, metrics
     return negative_elbo(
         model,
         batch,
@@ -2387,11 +2487,15 @@ def _loss_with_metrics(
 
 
 def _loss_batch(batch: PhotometryBatch) -> LossBatch:
+    truth_theta = batch.truth_theta
+    if truth_theta is None:
+        truth_theta = jnp.zeros((batch.flux.shape[0], 0), dtype=batch.flux.dtype)
     return LossBatch(
         flux=batch.flux,
         flux_err=batch.flux_err,
         mask=batch.mask,
         features=batch.features,
+        truth_theta=truth_theta,
     )
 
 
@@ -2407,10 +2511,14 @@ def _loss_batch_with_input_noise(
     if sigma_scale <= 0.0:
         return _loss_batch(batch)
     flux_err = jnp.where(jnp.isfinite(batch.flux_err), batch.flux_err, 0.0)
-    noise = sigma_scale * flux_err * jax.random.normal(
-        key,
-        shape=batch.flux.shape,
-        dtype=batch.flux.dtype,
+    noise = (
+        sigma_scale
+        * flux_err
+        * jax.random.normal(
+            key,
+            shape=batch.flux.shape,
+            dtype=batch.flux.dtype,
+        )
     )
     noisy_flux = jnp.where(batch.mask, batch.flux + noise, batch.flux)
     return LossBatch(
@@ -2418,6 +2526,11 @@ def _loss_batch_with_input_noise(
         flux_err=batch.flux_err,
         mask=batch.mask,
         features=make_encoder_features(noisy_flux, batch.flux_err, feature_stats),
+        truth_theta=(
+            batch.truth_theta
+            if batch.truth_theta is not None
+            else jnp.zeros((batch.flux.shape[0], 0), dtype=batch.flux.dtype)
+        ),
     )
 
 
@@ -2426,11 +2539,16 @@ def _input_noise_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     apply_to = str(cfg.get("apply_to", "train")).strip().lower()
     mode = str(cfg.get("mode", "encoder_flux")).strip().lower()
     sigma_scale = float(cfg.get("sigma_scale", 1.0))
-    enabled = bool(cfg.get("enabled", False)) and sigma_scale > 0.0 and apply_to in {
-        "train",
-        "training",
-        "all",
-    }
+    enabled = (
+        bool(cfg.get("enabled", False))
+        and sigma_scale > 0.0
+        and apply_to
+        in {
+            "train",
+            "training",
+            "all",
+        }
+    )
     if enabled and mode != "encoder_flux":
         raise ValueError("amortized.input_noise.mode currently supports encoder_flux")
     if sigma_scale < 0.0:
@@ -2478,6 +2596,7 @@ def _loss_and_grads_jit(
 
 def _make_pmap_train_step(optimizer):
     pmap_array_axis = eqx.if_array(0)
+
     @eqx.filter_pmap(
         axis_name="devices",
         in_axes=(
@@ -3006,7 +3125,10 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "error_transform": cfg["features"].get("error_transform", "log"),
             "hidden_sizes": list(cfg["encoder"].get("hidden_sizes", [])),
             "activation": cfg["encoder"].get("activation", "gelu"),
-            "posterior_family": "diagonal_gaussian",
+            "posterior_family": str(cfg["encoder"].get("type", "gaussian_mlp")),
+            "flow_family": cfg["encoder"].get("flow_family"),
+            "flow_layers": int(cfg["encoder"].get("flow_layers", 0)),
+            "flow_hidden_size": int(cfg["encoder"].get("flow_hidden_size", 0)),
         },
         "prior": {
             "type": cfg["prior"].get("type", "realnvp"),
@@ -3286,13 +3408,16 @@ def _shard_loss_batch(batch: LossBatch, n_devices: int) -> LossBatch:
                 "pmap training batch leading dimension must be divisible by "
                 f"device count: shape={value.shape} devices={n_devices}"
             )
-        return value.reshape((int(n_devices), value.shape[0] // int(n_devices), *value.shape[1:]))
+        return value.reshape(
+            (int(n_devices), value.shape[0] // int(n_devices), *value.shape[1:])
+        )
 
     return LossBatch(
         flux=shard_array(batch.flux),
         flux_err=shard_array(batch.flux_err),
         mask=shard_array(batch.mask),
         features=shard_array(batch.features),
+        truth_theta=shard_array(batch.truth_theta),
     )
 
 
@@ -3526,7 +3651,6 @@ def _write_training_snapshot(
     mean, log_std = model.encoder(features)
     mean_np = np.asarray(jax.device_get(mean), dtype=np.float32)
     log_std_np = np.asarray(jax.device_get(log_std), dtype=np.float32)
-    theta_mean = _theta_frame_from_x(mean_np, latent_spec, prefix="")
 
     object_id = np.asarray(arrays.object_id[order])
     row_index = _snapshot_row_index(arrays, order)
@@ -3540,22 +3664,25 @@ def _write_training_snapshot(
     for index, name in enumerate(latent_spec.names):
         posterior_summary[f"x_mean_{name}"] = mean_np[:, index]
         posterior_summary[f"x_log_std_{name}"] = log_std_np[:, index]
-    posterior_summary = pd.concat([posterior_summary, theta_mean], axis=1)
-    posterior_summary.to_parquet(snap / "posterior_summary.parquet", index=False)
-
     n_posterior_samples = (
         1
         if deterministic
         else max(int(snapshot_config.get("posterior_samples", 64)), 1)
     )
     key, posterior_key, prior_key = jax.random.split(key, 3)
-    posterior_x = _snapshot_posterior_x(
-        posterior_key,
-        mean_np,
-        log_std_np,
-        n_samples=n_posterior_samples,
-        deterministic=deterministic,
-    )
+    if deterministic:
+        posterior_x = mean_np[None, ...]
+    else:
+        posterior_x = np.asarray(
+            jax.device_get(
+                sample_posterior(model, posterior_key, features, n_posterior_samples).x
+            ),
+            dtype=np.float32,
+        )
+    posterior_median = np.median(posterior_x, axis=0)
+    theta_median = _theta_frame_from_x(posterior_median, latent_spec, prefix="")
+    posterior_summary = pd.concat([posterior_summary, theta_median], axis=1)
+    posterior_summary.to_parquet(snap / "posterior_summary.parquet", index=False)
     posterior_samples = _snapshot_sample_frame(
         posterior_x,
         latent_spec,
@@ -3637,7 +3764,9 @@ def _write_training_snapshot(
         "plots": plots,
         "decode_prior_flux": bool(snapshot_config.get("decode_prior_flux", False)),
         "decode_prior_flux_note": "not run in lightweight snapshot hook",
-        "config_objective": dict((config.get("amortized", {}) or {}).get("objective", {})),
+        "config_objective": dict(
+            (config.get("amortized", {}) or {}).get("objective", {})
+        ),
     }
     write_json(snap / "snapshot_metrics.json", summary)
     write_json(
@@ -3645,7 +3774,9 @@ def _write_training_snapshot(
         {
             "epoch": int(epoch),
             "files": sorted(path.name for path in snap.iterdir() if path.is_file()),
-            "subdirectories": sorted(path.name for path in snap.iterdir() if path.is_dir()),
+            "subdirectories": sorted(
+                path.name for path in snap.iterdir() if path.is_dir()
+            ),
         },
     )
 
@@ -3708,7 +3839,10 @@ def _theta_frame_from_x(
         dtype=np.float32,
     )
     return pd.DataFrame(
-        {f"{prefix}{name}": theta[:, index] for index, name in enumerate(latent_spec.names)}
+        {
+            f"{prefix}{name}": theta[:, index]
+            for index, name in enumerate(latent_spec.names)
+        }
     )
 
 
@@ -3767,7 +3901,9 @@ def _write_training_snapshot_corner_plots(
             prior_samples,
             truth,
         ),
-        "full18": _training_snapshot_full_columns(posterior_samples, prior_samples, truth),
+        "full18": _training_snapshot_full_columns(
+            posterior_samples, prior_samples, truth
+        ),
     }
     plots: list[str] = []
     metadata: list[dict[str, Any]] = []

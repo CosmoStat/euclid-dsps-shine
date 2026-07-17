@@ -53,6 +53,7 @@ from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
 from .latent import x_to_theta
 from .likelihood import photometric_loglike
+from .posterior import sample_posterior
 from .redshift_metrics import write_redshift_metrics_for_run
 from .train import (
     _effective_jax_batch_size,
@@ -406,11 +407,10 @@ def infer_amortized_fs2(
             x_samples = mean[None, ...]
             logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
         else:
-            x_samples, logq = model.encoder.sample_and_log_prob(
-                sample_key,
-                batch.features,
-                int(posterior_samples),
+            posterior = sample_posterior(
+                model, sample_key, batch.features, int(posterior_samples)
             )
+            x_samples, logq = posterior.x, posterior.logq
         theta = x_to_theta(x_samples, latent_spec)
         model_flux_raw = _model_flux_from_x_sample_chunks(
             x_samples,
@@ -437,9 +437,7 @@ def infer_amortized_fs2(
             else model_flux
         )
         logprior = (
-            jnp.zeros_like(logq)
-            if deterministic_reconstruction
-            else model.prior.log_prob(x_samples)
+            jnp.zeros_like(logq) if deterministic_reconstruction else posterior.logprior
         )
         loglike = photometric_loglike(
             obs_flux=batch.flux,
@@ -866,9 +864,11 @@ def infer_amortized_fs2(
         print(f"[amortized] summary: {out / 'inference_summary.json'}")
 
 
-def _effective_latent_spec_payload(latent_spec, config: dict[str, Any]) -> dict[str, Any]:
+def _effective_latent_spec_payload(
+    latent_spec, config: dict[str, Any]
+) -> dict[str, Any]:
     """Serialize the transform actually used by the encoder, prior, and DSPS."""
-    prior = ((config.get("amortized", {}) or {}).get("prior", {}) or {})
+    prior = (config.get("amortized", {}) or {}).get("prior", {}) or {}
 
     def optional_array(value):
         if value is None:
@@ -1078,8 +1078,7 @@ def _combine_inference_shard_tables(
     for name, (path_key, output_path, should_write) in table_specs.items():
         if verbose:
             print(
-                "[amortized] combine shards: "
-                f"table={name} write={bool(should_write)}"
+                f"[amortized] combine shards: table={name} write={bool(should_write)}"
             )
         paths = [
             _inference_shard_paths(out, int(record["batch"]))[path_key]
@@ -1089,17 +1088,11 @@ def _combine_inference_shard_tables(
         pieces = []
         total = len(existing)
         if verbose:
-            print(
-                "[amortized] combine shards: "
-                f"table={name} files={total}"
-            )
+            print(f"[amortized] combine shards: table={name} files={total}")
         for index, path in enumerate(existing, start=1):
             pieces.append(pd.read_parquet(path))
             if verbose and (index == 1 or index == total or index % 25 == 0):
-                print(
-                    "[amortized] combine shards: "
-                    f"table={name} read={index}/{total}"
-                )
+                print(f"[amortized] combine shards: table={name} read={index}/{total}")
         frame = pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
         frames[name] = frame
         if should_write and not frame.empty:

@@ -68,6 +68,7 @@ def test_shard_loss_batch_splits_leading_axis() -> None:
         flux_err=2.0 * jnp.ones((8, 3), dtype=jnp.float32),
         mask=jnp.ones((8, 3), dtype=bool),
         features=jnp.ones((8, 6), dtype=jnp.float32),
+        truth_theta=jnp.ones((8, 4), dtype=jnp.float32),
     )
 
     sharded = _shard_loss_batch(batch, 4)
@@ -76,6 +77,7 @@ def test_shard_loss_batch_splits_leading_axis() -> None:
     assert sharded.flux_err.shape == (4, 2, 3)
     assert sharded.mask.shape == (4, 2, 3)
     assert sharded.features.shape == (4, 2, 6)
+    assert sharded.truth_theta.shape == (4, 2, 4)
 
 
 def test_replicate_tree_adds_device_axis_without_deprecated_jax_helper() -> None:
@@ -85,7 +87,9 @@ def test_replicate_tree_adds_device_axis_without_deprecated_jax_helper() -> None
     replicated = _replicate_tree(tree, devices)
 
     assert replicated["weights"].shape == (3, 2, 3)
-    assert np.allclose(np.asarray(replicated["weights"][0]), np.asarray(tree["weights"]))
+    assert np.allclose(
+        np.asarray(replicated["weights"][0]), np.asarray(tree["weights"])
+    )
 
 
 def test_prior_pmap_step_handles_static_realnvp_leaves_on_fake_cpu_devices() -> None:

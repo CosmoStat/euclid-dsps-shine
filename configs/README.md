@@ -5,6 +5,11 @@ science dataset; HLTDS and FS2 are reference/debug paths.
 
 ## FENIKS closure and prior learning
 
+The conditional-posterior matrix is defined by
+`configs/experiments/feniks_{avi,npe}_{gaussian_x,gaussian_u,realnvp,rqspline}.yaml`.
+Use `scripts/submit_feniks_conditional_posterior_matrix.sh`; each full array task
+trains and runs the same held-out photometry/corner diagnostics.
+
 - `diffsky_synthetic_feniks_260617_50k.yaml`: generate and validate the
   14-band train/validation/test synthetic FENIKS DSPS-closure catalogues.
 - `diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml`: generate the

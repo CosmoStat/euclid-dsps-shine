@@ -1,0 +1,22 @@
+extends: ../amortized_feniks_spline15d_jaxcosmo_v1_gpu.yaml
+
+amortized:
+  prior:
+    train_jointly: false
+  training:
+    n_samples: 1
+    validation_every: 1
+    seed: 260717
+    data_parallel: pmap
+    best_checkpoint_metric: validation_negative_loglike
+  training_snapshots:
+    enabled: false
+  inference:
+    posterior_samples: 128
+    prior_samples: 8192
+    decoder_sample_chunk_size: 1
+    prior_predictive_batch_size: 256
+    shard_outputs: true
+    resume_shards: true
+    write_posterior_predictive: false
+    write_residual_samples: false

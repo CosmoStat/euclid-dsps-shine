@@ -1,0 +1,5 @@
+extends: feniks_conditional_posterior_common.yaml
+amortized:
+  objective: {mode: stochastic_elbo}
+  encoder: {type: gaussian_mlp}
+  training: {epochs: 120, learning_rate: 1.0e-4, kl_annealing_epochs: 40, kl_weight_max: 1.0}

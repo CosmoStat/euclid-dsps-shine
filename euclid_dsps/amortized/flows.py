@@ -439,6 +439,14 @@ class StandardNormalPrior(eqx.Module):
             )
         return -0.5 * jnp.sum(x**2 + jnp.log(2.0 * jnp.pi), axis=-1)
 
+    def forward(self, u):
+        value = jnp.asarray(u, dtype=jnp.float32)
+        return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
+    def inverse(self, x):
+        value = jnp.asarray(x, dtype=jnp.float32)
+        return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
     def sample(self, key, shape=()):
         if isinstance(shape, int):
             shape = (shape,)
