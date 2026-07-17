@@ -394,6 +394,34 @@ class RQSplineCouplingPrior(eqx.Module):
         x, _logdet = self.forward(u)
         return x
 
+    def sample_with_temperature(self, key, shape=(), *, temperature: float = 1.0):
+        """Sample using a calibrated isotropic Gaussian base temperature."""
+        if float(temperature) <= 0.0:
+            raise ValueError("Base temperature must be positive")
+        if isinstance(shape, int):
+            shape = (shape,)
+        u = float(temperature) * jax.random.normal(
+            key,
+            tuple(shape) + (self.latent_dim,),
+            dtype=jnp.float32,
+        )
+        x, _logdet = self.forward(u)
+        return x
+
+    def log_prob_with_temperature(self, x, *, temperature: float = 1.0):
+        """Evaluate exact density under an isotropic base temperature."""
+        if float(temperature) <= 0.0:
+            raise ValueError("Base temperature must be positive")
+        u, logdet = self.inverse(x)
+        temperature_array = jnp.asarray(temperature, dtype=u.dtype)
+        base = -0.5 * jnp.sum(
+            (u / temperature_array) ** 2
+            + jnp.log(2.0 * jnp.pi)
+            + 2.0 * jnp.log(temperature_array),
+            axis=-1,
+        )
+        return base + logdet
+
 
 class StandardNormalPrior(eqx.Module):
     """Non-trainable standard normal prior over unconstrained latent ``x``."""

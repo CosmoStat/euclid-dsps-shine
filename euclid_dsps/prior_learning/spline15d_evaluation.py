@@ -320,10 +320,16 @@ def _failed_metrics() -> dict[str, float]:
 
 
 def realnvp_saturation_metrics(prior, values: np.ndarray) -> dict[str, float]:
-    """Measure clamp saturation while mapping validation truths to the base."""
+    """Measure RealNVP clamp saturation, or mark it absent for RQ splines."""
     import jax.numpy as jnp
 
-    from euclid_dsps.amortized.flows import _flow_permutation
+    from euclid_dsps.amortized.flows import RQSplineCouplingPrior, _flow_permutation
+
+    if isinstance(prior, RQSplineCouplingPrior):
+        return {
+            "scale_saturation_fraction": 0.0,
+            "shift_saturation_fraction": 0.0,
+        }
 
     value = jnp.asarray(values, dtype=jnp.float32)
     scale_flags = []

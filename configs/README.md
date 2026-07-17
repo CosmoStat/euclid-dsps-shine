@@ -21,6 +21,14 @@ science dataset; HLTDS and FS2 are reference/debug paths.
   diagnostics on the grouped JAX-COSMO dataset.
 - `amortized_feniks_spline15d_jaxcosmo_v1_gpu.yaml`: train and infer with the
   frozen JAX-COSMO spline prior and the matching joined 18-band catalog.
+- `feniks_spline15d_grouped_jaxcosmo_dequant1e3_v1.yaml`: build the isolated
+  JAX-COSMO dataset with uniform physical dequantization of exact-zero SFH
+  contrasts in `+/-0.001 dex`, while retaining exact truth sidecars.
+- `prior_feniks_spline15d_rqspline_dequant1e3_v1.yaml`: train the continuous
+  15D rational-quadratic spline coupling prior and write epoch/final
+  diagnostics for comparison with the exact-atom RealNVP baseline.
+- `amortized_feniks_spline15d_rqspline_dequant1e3_v1_gpu.yaml`: train and infer
+  with the frozen RQ-spline prior and matching JAX-COSMO catalog.
 - `prior_feniks_spline15d_realnvp.yaml`: fit train-only analytic `asinh`
   transforms and train the production supervised RealNVP directly on 15D.
 - `amortized_diffsky_synthetic_feniks_full_gpu.yaml`: train and run the 18D

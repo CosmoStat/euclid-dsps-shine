@@ -212,6 +212,32 @@ def test_rq_spline_roundtrip_logprob_and_sample_shape() -> None:
     assert jnp.allclose(recovered, u, atol=1.0e-4)
 
 
+def test_rq_spline_temperature_and_invalid_temperature() -> None:
+    prior = RQSplineCouplingPrior(
+        jax.random.PRNGKey(0),
+        latent_dim=4,
+        n_layers=2,
+        hidden_size=8,
+        n_bins=8,
+        init="identity",
+        init_scale=0.0,
+    )
+    x = jnp.zeros((3, 4), dtype=jnp.float32)
+
+    samples = prior.sample_with_temperature(
+        jax.random.PRNGKey(1), 7, temperature=0.2
+    )
+    logp = prior.log_prob_with_temperature(x, temperature=0.2)
+
+    assert samples.shape == (7, 4)
+    assert logp.shape == (3,)
+    assert jnp.all(jnp.isfinite(logp))
+    with pytest.raises(ValueError, match="positive"):
+        prior.sample_with_temperature(jax.random.PRNGKey(2), 2, temperature=0.0)
+    with pytest.raises(ValueError, match="positive"):
+        prior.log_prob_with_temperature(x, temperature=-1.0)
+
+
 def test_rq_spline_identity_init_matches_standard_normal_log_prob() -> None:
     prior = RQSplineCouplingPrior(
         jax.random.PRNGKey(0),

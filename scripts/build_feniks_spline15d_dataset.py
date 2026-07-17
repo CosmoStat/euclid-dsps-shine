@@ -30,6 +30,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--splits", nargs="+")
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--dequantization-half-width-dex", type=float)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
@@ -45,7 +46,13 @@ def main() -> None:
     nodes = validate_normalized_log_time_nodes(cfg["normalized_log_time_nodes"])
     n_sfh_bins = int(cfg.get("n_sfh_bins", 80))
     batch_size = int(args.batch_size or cfg.get("batch_size", 2048))
-    half_width = float(cfg.get("dequantization_half_width_dex", 1.0e-4))
+    half_width = float(
+        args.dequantization_half_width_dex
+        if args.dequantization_half_width_dex is not None
+        else cfg.get("dequantization_half_width_dex", 1.0e-4)
+    )
+    if half_width < 0.0:
+        raise ValueError("dequantization half-width must be non-negative")
     seed = int(cfg.get("seed", 260715))
     grouped_audit_path = source / "grouped_split_audit.json"
     grouped_audit = None

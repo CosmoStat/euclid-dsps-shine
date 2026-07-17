@@ -295,16 +295,16 @@ def _latent_spec_for_amortized_config(config: dict[str, Any]) -> LatentSpec:
 def _load_spline15d_prior(
     checkpoint: str | Path,
     active_spec: LatentSpec | None,
-) -> tuple[RealNVPPrior, LatentSpec]:
+) -> tuple[RealNVPPrior | RQSplineCouplingPrior, LatentSpec]:
     """Load the spline-15D flow and expose its exact JAX marginal transform."""
     if active_spec is None:
         raise ValueError("spline15d_checkpoint requires an active latent spec")
     from euclid_dsps.prior_learning.spline15d import SPLINE15D_PARAMETER_NAMES
     from euclid_dsps.prior_learning.spline15d_checkpoint import (
-        load_spline15d_realnvp_checkpoint,
+        load_spline15d_flow_checkpoint,
     )
 
-    prior, sidecar = load_spline15d_realnvp_checkpoint(checkpoint)
+    prior, sidecar = load_spline15d_flow_checkpoint(checkpoint)
     if active_spec.names != SPLINE15D_PARAMETER_NAMES:
         raise ValueError(
             "Spline-15D active parameter order does not match the prior contract"
@@ -314,7 +314,9 @@ def _load_spline15d_prior(
     if normalization.get("whitening") is not None:
         raise ValueError("Amortized spline-15D currently requires no whitening")
     if float(normalization.get("normalized_atom_half_width", 0.0)) != 0.0:
-        raise ValueError("Amortized spline-15D currently requires exact atoms")
+        raise ValueError(
+            "Amortized spline-15D does not support runtime normalized atom jitter"
+        )
     family = []
     center = []
     scale = []

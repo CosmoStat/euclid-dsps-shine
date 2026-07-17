@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fit the production 15D FENIKS spline-SFH prior with RealNVP only."""
+"""Fit the production 15D FENIKS spline-SFH prior with an exact flow."""
 
 from __future__ import annotations
 
@@ -21,7 +21,11 @@ from euclid_dsps.io import ensure_dir, write_json
 from euclid_dsps.prior_learning.diagnostics import (
     write_supervised_prior_diagnostics,
 )
-from euclid_dsps.prior_learning.flows import RealNVPPrior, assert_flow_integrity
+from euclid_dsps.prior_learning.flows import (
+    RealNVPPrior,
+    RQSplineCouplingPrior,
+    assert_flow_integrity,
+)
 from euclid_dsps.prior_learning.spline15d import (
     SPLINE15D_PARAMETER_NAMES,
     dequantize_normalized_zero_atoms,
@@ -38,7 +42,7 @@ from euclid_dsps.prior_learning.spline15d import (
     inverse_spline15d_flow_coordinates,
 )
 from euclid_dsps.prior_learning.spline15d_checkpoint import (
-    load_spline15d_realnvp_checkpoint,
+    load_spline15d_flow_checkpoint,
 )
 from euclid_dsps.prior_learning.spline15d_evaluation import (
     evaluate_generated_prior,
@@ -50,6 +54,9 @@ from euclid_dsps.prior_learning.spline15d_evaluation import (
     temperature_scan_frame,
 )
 from euclid_dsps.prior_learning.train import (
+    PriorFlow,
+    _build_prior_from_flow_config,
+    _normalize_flow_type,
     _prior_architecture_payload,
     fit_realnvp_to_x,
 )
@@ -100,13 +107,13 @@ def _read_exact_split(path: Path, limit: int | None) -> pd.DataFrame:
     return frame
 
 
-def _flow_nll(prior: RealNVPPrior, matrix: np.ndarray) -> float:
+def _flow_nll(prior: PriorFlow, matrix: np.ndarray) -> float:
     values = prior.log_prob(jnp.asarray(matrix, dtype=jnp.float32))
     return -float(np.mean(np.asarray(jax.device_get(values))))
 
 
 def _tempered_flow_nll(
-    prior: RealNVPPrior,
+    prior: PriorFlow,
     matrix: np.ndarray,
     temperature: float,
 ) -> float:
@@ -145,7 +152,7 @@ def _progress(out: Path, total_epochs: int):
 
 def _save_checkpoint(
     path: Path,
-    prior: RealNVPPrior,
+    prior: PriorFlow,
     *,
     flow_config: dict[str, Any],
     normalization: dict[str, Any],
@@ -155,11 +162,11 @@ def _save_checkpoint(
     selection: dict[str, Any] | None = None,
     roundtrip_fail_atol: float = 5.0e-2,
 ) -> None:
-    if not isinstance(prior, RealNVPPrior):
-        raise TypeError("The spline15d production path only accepts RealNVPPrior")
+    if not isinstance(prior, (RealNVPPrior, RQSplineCouplingPrior)):
+        raise TypeError("The spline15d production path requires an exact flow prior")
     integrity = assert_flow_integrity(
         prior,
-        context=f"spline15d RealNVP checkpoint {path}",
+        context=f"spline15d exact-flow checkpoint {path}",
         sample_count=64,
         roundtrip_fail_atol=float(roundtrip_fail_atol),
     )
@@ -349,7 +356,7 @@ def _write_epoch_snapshot(
     snapshot_root: Path,
     *,
     epoch: int,
-    prior: RealNVPPrior,
+    prior: PriorFlow,
     validation_theta: np.ndarray,
     validation_x: np.ndarray,
     transforms: dict[str, dict[str, Any]],
@@ -507,8 +514,12 @@ def main() -> None:
     config = yaml.safe_load(args.config.read_text(encoding="utf-8"))
     cfg = dict(config.get("spline15d_prior", {}) or {})
     flow_cfg = dict(cfg.get("flow", {}) or {})
-    if str(flow_cfg.get("type", "realnvp")).lower() != "realnvp":
-        raise ValueError("This production command supports RealNVP only")
+    flow_type = _normalize_flow_type(flow_cfg.get("type", "realnvp"))
+    if flow_type not in {"realnvp", "rq_spline_coupling"}:
+        raise ValueError("This production command supports RealNVP or RQ-spline")
+    flow_cfg["type"] = flow_type
+    flow_label = "RealNVP" if flow_type == "realnvp" else "RQ-spline coupling"
+    flow_slug = "realnvp" if flow_type == "realnvp" else "rq_spline"
     training_cfg = dict(cfg.get("training", {}) or {})
     output_cfg = dict(cfg.get("output", {}) or {})
     evaluation_cfg = dict(cfg.get("evaluation", {}) or {})
@@ -588,6 +599,38 @@ def main() -> None:
             "Prior training requires a spline15d v2 JAX-COSMO dataset contract; "
             f"found version={contract.get('version')} type={actual_sfh_type!r}"
         )
+    expected_physical_half_width = preprocessing_cfg.get(
+        "expected_physical_atom_half_width_dex"
+    )
+    if expected_physical_half_width is not None:
+        flow_target = dict(contract.get("flow_target", {}) or {})
+        actual_physical_half_width = float(flow_target.get("half_width_dex", -1.0))
+        if not np.isclose(
+            actual_physical_half_width,
+            float(expected_physical_half_width),
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError(
+                "Dataset physical atom dequantization does not match the prior "
+                f"config: {actual_physical_half_width} != "
+                f"{float(expected_physical_half_width)} dex"
+            )
+        remaining = {
+            split: int(
+                sum(
+                    dict(record.get("remaining_exact_zero_counts", {}) or {}).values()
+                )
+            )
+            for split, record in dict(contract.get("splits", {}) or {}).items()
+        }
+        if set(remaining) != {"train", "validation", "test"} or any(
+            value != 0 for value in remaining.values()
+        ):
+            raise ValueError(
+                "Continuous prior requires zero-free projected splits; found "
+                + json.dumps(remaining, sort_keys=True)
+            )
 
     frames = {
         split: _read_split(dataset_dir / f"{split}.parquet", args.limit)
@@ -837,20 +880,17 @@ def main() -> None:
     initial_epoch = 0
     resume_metadata: dict[str, Any] | None = None
     if args.resume_checkpoint is not None:
-        initial_prior, resume_metadata = load_spline15d_realnvp_checkpoint(
+        initial_prior, resume_metadata = load_spline15d_flow_checkpoint(
             args.resume_checkpoint
         )
         initial_epoch = int(resume_metadata.get("epoch", 0))
         resume_architecture = dict(resume_metadata.get("architecture", {}) or {})
-        expected_architecture = {
-            "type": "realnvp",
-            "latent_dim": len(SPLINE15D_PARAMETER_NAMES),
-            "n_layers": int(flow_cfg.get("n_layers", 8)),
-            "hidden_size": int(flow_cfg.get("hidden_size", 128)),
-            "scale_clamp": float(flow_cfg.get("scale_clamp", 0.05)),
-            "shift_clamp": float(flow_cfg.get("shift_clamp", 5.0)),
-            "permutation": str(flow_cfg.get("permutation", "none")),
-        }
+        expected_prior = _build_prior_from_flow_config(
+            jax.random.PRNGKey(0),
+            latent_dim=len(SPLINE15D_PARAMETER_NAMES),
+            flow_config=flow_cfg,
+        )
+        expected_architecture = _prior_architecture_payload(expected_prior, flow_cfg)
         mismatched_architecture = {
             name: {
                 "checkpoint": resume_architecture.get(name),
@@ -892,7 +932,7 @@ def main() -> None:
 
     def _select_checkpoint(
         epoch: int,
-        prior: RealNVPPrior,
+        prior: PriorFlow,
         validation_nll: float,
     ) -> dict[str, Any] | None:
         if epoch not in {0, epochs} and epoch % evaluation_every:
@@ -956,7 +996,7 @@ def main() -> None:
     snapshot_rows: list[dict[str, Any]] = []
     snapshot_root = ensure_dir(out / "snapshots") if snapshot_enabled else None
 
-    def _snapshot_callback(epoch: int, prior: RealNVPPrior) -> None:
+    def _snapshot_callback(epoch: int, prior: PriorFlow) -> None:
         if not snapshot_enabled or snapshot_root is None:
             return
         if epoch not in {0, epochs} and epoch % snapshot_every:
@@ -998,8 +1038,8 @@ def main() -> None:
         initial_prior=initial_prior,
         initial_epoch=initial_epoch,
     )
-    if not isinstance(result.prior, RealNVPPrior):
-        raise TypeError("Training returned a non-RealNVP model")
+    if not isinstance(result.prior, (RealNVPPrior, RQSplineCouplingPrior)):
+        raise TypeError("Training returned an unsupported flow model")
     result.training_log.to_csv(out / "training_log.csv", index=False)
     result.validation_log.to_csv(out / "validation_log.csv", index=False)
     pd.DataFrame(validation_generative_rows).to_csv(
@@ -1036,7 +1076,7 @@ def main() -> None:
     )
 
     n_samples = int(output_cfg.get("prior_samples", 50000))
-    loaded_prior, _checkpoint_metadata = load_spline15d_realnvp_checkpoint(
+    loaded_prior, _checkpoint_metadata = load_spline15d_flow_checkpoint(
         checkpoints / "best.eqx"
     )
     prior_x = np.asarray(
@@ -1190,9 +1230,9 @@ def main() -> None:
     comparison_rows = []
     for model_name, temperature, metrics in (
         ("affine_gaussian_epoch0_baseline", 1.0, baseline_metrics),
-        ("realnvp_unit_temperature", 1.0, test_unit_metrics),
+        (f"{flow_slug}_unit_temperature", 1.0, test_unit_metrics),
         (
-            "realnvp_validation_calibrated",
+            f"{flow_slug}_validation_calibrated",
             selected_temperature,
             test_calibrated_metrics,
         ),
@@ -1229,7 +1269,7 @@ def main() -> None:
         parameter_names=SPLINE15D_PARAMETER_NAMES,
         out_dir=out / "diagnostics",
         summary={
-            "model": "RealNVP",
+            "model": flow_label,
             "latent_dim": 15,
             "normalization": normalization_description,
             "nll": nll,
@@ -1245,7 +1285,7 @@ def main() -> None:
         parameter_names=SPLINE15D_PARAMETER_NAMES,
         out_dir=out / "diagnostics_temperature_calibrated",
         summary={
-            "model": "RealNVP",
+            "model": flow_label,
             "latent_dim": 15,
             "normalization": normalization_description,
             "nll": calibrated_nll,
@@ -1257,7 +1297,7 @@ def main() -> None:
     )
     summary = {
         "status": "complete",
-        "model": "RealNVP",
+        "model": flow_label,
         "latent_dim": 15,
         "dataset_dir": str(dataset_dir),
         "rows": {key: len(value) for key, value in frames.items()},

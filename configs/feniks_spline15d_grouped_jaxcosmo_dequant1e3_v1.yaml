@@ -1,0 +1,21 @@
+spline15d_postprocess:
+  source_dataset_dir: Data/diffsky/synthetic/feniks_260617_dsps_closure_18band_grouped
+  output_dataset_dir: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_dequant1e3_v1
+  splits: [train, validation, test]
+  n_sfh_bins: 80
+  batch_size: 2048
+  require_grouped_source_audit: true
+  dequantization_half_width_dex: 0.001
+  seed: 260717
+  normalized_log_time_nodes:
+    - 0.0
+    - 0.21079183733299048
+    - 0.3184771392180239
+    - 0.4724391306958804
+    - 0.5856181563118241
+    - 0.7121889547787805
+    - 0.7983831964923024
+    - 0.8600970174232022
+    - 0.9124328691642022
+    - 0.9588273275857481
+    - 1.0
