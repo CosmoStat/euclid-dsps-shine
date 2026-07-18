@@ -2207,6 +2207,8 @@ def _redshift_bin_rows(
             z_min = float(bins[bin_index])
             z_max = float(bins[bin_index + 1])
             label = f"{z_min:.3g}-{z_max:.3g}"
+        z_reference = group["z_reference"].to_numpy(dtype=float)
+        finite_z_reference = z_reference[np.isfinite(z_reference)]
         rows.append(
             {
                 "epoch": int(epoch),
@@ -2222,7 +2224,11 @@ def _redshift_bin_rows(
                 "posterior_predictive_chi2": float(
                     np.nanmedian(group["posterior_predictive_chi2"])
                 ),
-                "z_reference_median": float(np.nanmedian(group["z_reference"])),
+                "z_reference_median": (
+                    float(np.median(finite_z_reference))
+                    if finite_z_reference.size
+                    else float("nan")
+                ),
             }
         )
     return rows

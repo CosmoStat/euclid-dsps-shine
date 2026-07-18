@@ -72,14 +72,14 @@ def summarize_task(
             "Missing required inference plots: " + ", ".join(missing_plots)
         )
     elapsed = float(training.get("elapsed_time_s", np.nan))
-    epochs = int(training.get("epochs", 0))
+    completed_epochs = _completed_epoch_count(training)
     payload = {
         "label": label,
         "config": str(config),
         "objective": "npe" if label.startswith("npe_") else "avi",
         "posterior_family": label.split("_", 1)[1],
         "elapsed_time_s": elapsed,
-        "seconds_per_epoch": elapsed / epochs if epochs else None,
+        "seconds_per_epoch": elapsed / completed_epochs if completed_epochs else None,
         "best_checkpoint_epoch": training.get("best_checkpoint_epoch"),
         "best_validation_metric": training.get("best_loss"),
         "updates_skipped": int(training.get("updates_skipped", 0)),
@@ -331,6 +331,12 @@ def _float(value) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if np.isfinite(result) else None
+
+
+def _completed_epoch_count(training: dict) -> int:
+    epochs = int(training.get("epochs", 0))
+    start_epoch = int(training.get("start_epoch", 1))
+    return max(0, epochs - start_epoch + 1)
 
 
 if __name__ == "__main__":
