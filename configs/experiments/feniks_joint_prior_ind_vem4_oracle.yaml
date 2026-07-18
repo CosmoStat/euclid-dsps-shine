@@ -1,0 +1,8 @@
+extends: feniks_joint_prior_ind_vem4.yaml
+
+amortized:
+  objective:
+    mode: hybrid_elbo
+    npe_weight: 50.0
+    # Synthetic-only oracle: this term is not available on real photometry.
+    prior_truth_weight: 1.0

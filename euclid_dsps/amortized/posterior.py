@@ -142,6 +142,7 @@ class ConditionalFlowEncoder(eqx.Module):
     inverse_permutations: tuple
     family: str = eqx.field(static=True)
     latent_dim: int = eqx.field(static=True)
+    output_space: str = eqx.field(static=True)
 
     def __init__(
         self,
@@ -165,6 +166,7 @@ class ConditionalFlowEncoder(eqx.Module):
         min_bin_height: float = 1.0e-3,
         min_derivative: float = 1.0e-3,
         init_scale: float = 0.0,
+        output_space: str = "prior_base",
     ) -> None:
         keys = jax.random.split(key, int(n_layers) + 1)
         self.base = GaussianEncoder(
@@ -208,6 +210,7 @@ class ConditionalFlowEncoder(eqx.Module):
         self.inverse_permutations = tuple(jnp.argsort(value) for value in permutations)
         self.family = _normalize_family(family)
         self.latent_dim = int(latent_dim)
+        self.output_space = _normalize_output_space(output_space)
 
     def __call__(self, features):
         return self.base(features)
@@ -250,6 +253,13 @@ def sample_posterior(model, key, features, n_samples: int) -> PosteriorSample:
         x = base
         logq = logq_base
         logprior = model.prior.log_prob(x)
+    elif isinstance(model.encoder, ConditionalFlowEncoder) and (
+        model.encoder.output_space == "latent_x"
+    ):
+        context = jnp.concatenate([mean, log_std], axis=-1)
+        x, residual_logdet = model.encoder.forward(base, context)
+        logq = logq_base - residual_logdet
+        logprior = model.prior.log_prob(x)
     else:
         context = jnp.concatenate([mean, log_std], axis=-1)
         u = base
@@ -267,8 +277,13 @@ def posterior_log_prob(model, features, x) -> jnp.ndarray:
     mean, log_std = model.encoder(features)
     if isinstance(model.encoder, GaussianEncoder):
         return _diag_normal_log_prob(x, mean, log_std)
-    u, prior_inverse_logdet = model.prior.inverse(x)
     context = jnp.concatenate([mean, log_std], axis=-1)
+    if isinstance(model.encoder, ConditionalFlowEncoder) and (
+        model.encoder.output_space == "latent_x"
+    ):
+        base, inverse_logdet = model.encoder.inverse(x, context)
+        return _diag_normal_log_prob(base, mean, log_std) + inverse_logdet
+    u, prior_inverse_logdet = model.prior.inverse(x)
     residual_inverse_logdet = jnp.zeros(u.shape[:-1], dtype=u.dtype)
     base = u
     if isinstance(model.encoder, ConditionalFlowEncoder):
@@ -303,3 +318,18 @@ def _normalize_family(value: str) -> str:
     if family not in aliases:
         raise ValueError("Conditional flow family must be realnvp or rq_spline")
     return aliases[family]
+
+
+def _normalize_output_space(value: str) -> str:
+    normalized = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "prior_base": "prior_base",
+        "shared_prior_transport": "prior_base",
+        "latent_x": "latent_x",
+        "independent_x": "latent_x",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "Conditional flow output_space must be prior_base or latent_x"
+        )
+    return aliases[normalized]

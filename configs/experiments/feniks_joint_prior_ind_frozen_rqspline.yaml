@@ -1,0 +1,9 @@
+extends: feniks_joint_prior_independent_common.yaml
+
+amortized:
+  prior:
+    source: spline15d_checkpoint
+    checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx
+    train_jointly: false
+    update_schedule: joint
+    mstep_only: false

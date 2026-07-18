@@ -658,8 +658,22 @@ def _add_amortized_train_arguments(
     )
     parser.add_argument(
         "--prior-update-schedule",
-        choices=["joint", "delayed_joint", "alternating", "encoder_then_prior"],
+        choices=[
+            "joint",
+            "delayed_joint",
+            "alternating",
+            "variational_em",
+            "encoder_then_prior",
+        ],
         help="Override amortized.prior.update_schedule.",
+    )
+    parser.add_argument(
+        "--prior-update-every-epochs",
+        type=int,
+        help=(
+            "Encoder epochs per prior epoch for variational_em, or phase length "
+            "for alternating updates."
+        ),
     )
     parser.add_argument(
         "--prior-checkpoint",
@@ -1320,6 +1334,10 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         prior["freeze_epochs"] = int(args.prior_freeze_epochs)
     if getattr(args, "prior_update_schedule", None) is not None:
         prior["update_schedule"] = str(args.prior_update_schedule)
+    if getattr(args, "prior_update_every_epochs", None) is not None:
+        if int(args.prior_update_every_epochs) < 1:
+            raise ValueError("--prior-update-every-epochs must be >= 1")
+        prior["update_every_epochs"] = int(args.prior_update_every_epochs)
     if getattr(args, "prior_checkpoint", None) is not None:
         prior["checkpoint"] = str(args.prior_checkpoint)
     if getattr(args, "likelihood_temperature_initial", None) is not None:

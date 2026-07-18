@@ -107,6 +107,7 @@ parameters physically.
    spline15d_realnvp
    amortized_inference
    conditional_posterior_matrix
+   joint_prior_realnvp_matrix
    feniks_prior_ladder_jlens
    science_assessment
    ssp_compression

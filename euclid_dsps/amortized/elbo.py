@@ -214,6 +214,8 @@ def objective_mode(objective_config: dict | None) -> str:
         "stochastic": "stochastic_elbo",
         "elbo": "stochastic_elbo",
         "stochastic_elbo": "stochastic_elbo",
+        "hybrid": "hybrid_elbo",
+        "hybrid_elbo": "hybrid_elbo",
         "deterministic": "deterministic_reconstruction",
         "autoencoder": "deterministic_reconstruction",
         "deterministic_autoencoder": "deterministic_reconstruction",
@@ -224,13 +226,22 @@ def objective_mode(objective_config: dict | None) -> str:
     if mode not in aliases:
         raise ValueError(
             "amortized.objective.mode must be stochastic_elbo, "
-            "neural_posterior_estimation, or deterministic_reconstruction"
+            "hybrid_elbo, neural_posterior_estimation, or "
+            "deterministic_reconstruction"
         )
     return aliases[mode]
 
 
 def is_deterministic_reconstruction(objective_config: dict | None) -> bool:
     return objective_mode(objective_config) == "deterministic_reconstruction"
+
+
+def objective_uses_truth(objective_config: dict | None) -> bool:
+    """Return whether training requires complete latent truth columns."""
+    return objective_mode(objective_config) in {
+        "hybrid_elbo",
+        "neural_posterior_estimation",
+    }
 
 
 def _diag_gaussian_entropy(log_std: jnp.ndarray) -> jnp.ndarray:

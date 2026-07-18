@@ -50,6 +50,7 @@ from .elbo import (
     is_deterministic_reconstruction,
     negative_elbo,
     objective_mode,
+    objective_uses_truth,
 )
 from .encoder import GaussianEncoder
 from .features import (
@@ -203,6 +204,9 @@ def build_amortized_model(
             min_bin_height=float(encoder_cfg.get("flow_min_bin_height", 1.0e-3)),
             min_derivative=float(encoder_cfg.get("flow_min_derivative", 1.0e-3)),
             init_scale=float(encoder_cfg.get("flow_init_scale", 0.0)),
+            output_space=str(
+                encoder_cfg.get("flow_output_space", "prior_base")
+            ),
         )
     else:
         raise ValueError(f"Unsupported amortized encoder type: {encoder_type}")
@@ -247,6 +251,7 @@ def build_prior_from_config(
             hidden_size=int(prior_cfg.get("hidden_size", 128)),
             scale_clamp=float(prior_cfg.get("scale_clamp", 0.05)),
             shift_clamp=float(prior_cfg.get("shift_clamp", 5.0)),
+            permutation=str(prior_cfg.get("permutation", "none")),
             init=str(prior_cfg.get("init", "default")),
             init_scale=float(prior_cfg.get("init_scale", 1.0)),
         )
@@ -948,6 +953,10 @@ def train_amortized_fs2(
             epoch=epoch,
             train_prior=train_prior,
         )
+        objective_config["update_phase"] = update_phase
+        objective_config["prior_mstep_only"] = bool(
+            update_phase == "prior" and cfg["prior"].get("mstep_only", False)
+        )
         epoch_rows = []
         _log(
             verbose,
@@ -980,7 +989,7 @@ def train_amortized_fs2(
             order=train_order,
             truth_names=(
                 latent_spec.names
-                if objective_mode_name == "neural_posterior_estimation"
+                if objective_uses_truth(cfg.get("objective", {}))
                 else None
             ),
         )
@@ -1084,7 +1093,14 @@ def train_amortized_fs2(
                             opt_state,
                             eqx.filter(model, eqx.is_inexact_array),
                         )
-                        model = eqx.apply_updates(model, updates)
+                        updated_model = eqx.apply_updates(model, updates)
+                        model = _restore_frozen_model_components(
+                            updated_model,
+                            model,
+                            update_phase=update_phase,
+                            train_alpha=bool(train_alpha),
+                            train_band_calibration=bool(train_band_calibration),
+                        )
                 if not update_applied and verbose:
                     _log(
                         verbose,
@@ -1110,6 +1126,9 @@ def train_amortized_fs2(
                         ),
                         "prior_freeze_epochs": int(
                             prior_update_schedule.get("freeze_epochs", 0)
+                        ),
+                        "prior_update_every_epochs": int(
+                            prior_update_schedule.get("update_every_epochs", 1)
                         ),
                         "likelihood_temperature": float(
                             objective_config.get("likelihood_temperature", 1.0)
@@ -1200,7 +1219,11 @@ def train_amortized_fs2(
                 kl_weight=float(kl_weight),
                 likelihood_config=cfg["likelihood"],
                 calibration_config=calibration_runtime_config,
-                objective_config=objective_config,
+                objective_config={
+                    **objective_config,
+                    "update_phase": "validation",
+                    "prior_mstep_only": False,
+                },
                 progress=bool(progress),
                 total=val_expected_batches,
                 desc=f"val {epoch}/{int(epochs)}",
@@ -1388,7 +1411,15 @@ def train_amortized_fs2(
         "prior_train_jointly": bool(train_prior),
         "prior_update_schedule": str(prior_update_schedule.get("mode", "joint")),
         "prior_freeze_epochs": int(prior_update_schedule.get("freeze_epochs", 0)),
+        "prior_update_every_epochs": int(
+            prior_update_schedule.get("update_every_epochs", 1)
+        ),
+        "prior_mstep_only": bool(cfg["prior"].get("mstep_only", False)),
         "objective_mode": objective_mode_name,
+        "objective_weights": {
+            "npe": float(cfg["objective"].get("npe_weight", 0.0)),
+            "prior_truth": float(cfg["objective"].get("prior_truth_weight", 0.0)),
+        },
         "best_loss": float(best_metric_value),
         "best_checkpoint_metric": best_checkpoint_metric,
         "best_checkpoint_metric_requested": configured_best_metric,
@@ -1433,6 +1464,7 @@ def train_amortized_fs2(
             "realnvp_prior": bool(train_prior),
             "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
             "prior_update_schedule": _prior_update_schedule(cfg["prior"]),
+            "prior_mstep_only": bool(cfg["prior"].get("mstep_only", False)),
             "global_sed_scale": bool(train_alpha),
             "per_band_flux_calibration": bool(train_band_calibration),
             "decoder": False,
@@ -1901,7 +1933,7 @@ def evaluate_validation_epoch(
                 feature_stats=feature_stats,
                 truth_names=(
                     latent_spec.names
-                    if objective_mode(objective_config) == "neural_posterior_estimation"
+                    if objective_uses_truth(objective_config)
                     else None
                 ),
             )
@@ -2440,6 +2472,15 @@ def _loss_with_metrics(
     calibration_config,
     objective_config,
 ):
+    if bool(objective_config.get("prior_mstep_only", False)):
+        return _prior_mstep_loss(
+            model,
+            batch,
+            latent_spec,
+            key,
+            n_samples,
+            objective_config,
+        )
     if objective_mode(objective_config) == "neural_posterior_estimation":
         if batch.truth_theta.shape[-1] != len(latent_spec.names):
             raise ValueError("NPE requires complete truth theta columns in every batch")
@@ -2476,7 +2517,7 @@ def _loss_with_metrics(
             "finite_fraction": jnp.mean(jnp.isfinite(logq_truth)),
         }
         return loss, metrics
-    return negative_elbo(
+    loss, metrics = negative_elbo(
         model,
         batch,
         latent_spec,
@@ -2490,6 +2531,93 @@ def _loss_with_metrics(
         calibration_config,
         objective_config,
     )
+    if objective_mode(objective_config) != "hybrid_elbo":
+        return loss, metrics
+    if batch.truth_theta.shape[-1] != len(latent_spec.names):
+        raise ValueError("Hybrid ELBO requires complete truth theta columns")
+    truth_x = theta_to_x(batch.truth_theta, latent_spec)
+    npe_nll = -jnp.mean(posterior_log_prob(model, batch.features, truth_x))
+    prior_truth_nll = -jnp.mean(model.prior.log_prob(truth_x))
+    npe_weight = jnp.asarray(
+        float(objective_config.get("npe_weight", 0.0)), dtype=loss.dtype
+    )
+    prior_truth_weight = jnp.asarray(
+        float(objective_config.get("prior_truth_weight", 0.0)), dtype=loss.dtype
+    )
+    total = loss + npe_weight * npe_nll + prior_truth_weight * prior_truth_nll
+    metrics = dict(metrics)
+    metrics.update(
+        {
+            "loss": total,
+            "elbo_loss": loss,
+            "npe_nll": npe_nll,
+            "npe_weight": npe_weight,
+            "prior_truth_nll": prior_truth_nll,
+            "prior_truth_weight": prior_truth_weight,
+            "prior_mstep_nll": jnp.asarray(0.0, dtype=loss.dtype),
+        }
+    )
+    return total, metrics
+
+
+def _prior_mstep_loss(
+    model,
+    batch,
+    latent_spec,
+    key,
+    n_samples,
+    objective_config,
+):
+    posterior = sample_posterior(model, key, batch.features, int(n_samples))
+    samples = jax.lax.stop_gradient(posterior.x)
+    prior_mstep_nll = -jnp.mean(model.prior.log_prob(samples))
+    prior_truth_weight = jnp.asarray(
+        float(objective_config.get("prior_truth_weight", 0.0)),
+        dtype=prior_mstep_nll.dtype,
+    )
+    prior_truth_nll = jnp.asarray(0.0, dtype=prior_mstep_nll.dtype)
+    if float(objective_config.get("prior_truth_weight", 0.0)) > 0.0:
+        if batch.truth_theta.shape[-1] != len(latent_spec.names):
+            raise ValueError("Prior truth NLL requires complete truth theta columns")
+        truth_x = theta_to_x(batch.truth_theta, latent_spec)
+        prior_truth_nll = -jnp.mean(model.prior.log_prob(truth_x))
+    loss = prior_mstep_nll + prior_truth_weight * prior_truth_nll
+    _mean, log_std = model.encoder(batch.features)
+    zero = jnp.asarray(0.0, dtype=loss.dtype)
+    metrics = {
+        "loss": loss,
+        "negative_loglike": prior_mstep_nll,
+        "loglike_mean": -prior_mstep_nll,
+        "logprior_mean": -prior_mstep_nll,
+        "logq_mean": jnp.mean(posterior.logq),
+        "kl_mc_mean": jnp.mean(posterior.logq - posterior.logprior),
+        "likelihood_temperature": jnp.asarray(1.0, dtype=loss.dtype),
+        "entropy_floor_penalty": zero,
+        "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
+        "posterior_min_log_std": jnp.min(log_std),
+        "posterior_median_log_std": jnp.median(log_std),
+        "posterior_max_log_std": jnp.max(log_std),
+        "deterministic_reconstruction": zero,
+        "effective_n_samples": jnp.asarray(posterior.x.shape[0], dtype=loss.dtype),
+        "model_flux_mean": zero,
+        "mean_model_flux_raw": zero,
+        "mean_model_flux_scaled": zero,
+        "log_alpha_sed": model.sed_scale.log_alpha_sed,
+        "alpha_sed": alpha_from_log_alpha(model.sed_scale.log_alpha_sed),
+        "alpha_prior_penalty": zero,
+        "band_alpha_prior_penalty": zero,
+        "max_abs_band_delta_mag": zero,
+        "residual_rms": zero,
+        "flux_residual_rms": zero,
+        "finite_fraction": jnp.mean(jnp.isfinite(posterior.logprior)),
+        "elbo_loss": zero,
+        "npe_nll": zero,
+        "npe_weight": zero,
+        "prior_truth_nll": prior_truth_nll,
+        "prior_truth_weight": prior_truth_weight,
+        "prior_mstep_nll": prior_mstep_nll,
+    }
+    return loss, metrics
 
 
 def _loss_batch(batch: PhotometryBatch) -> LossBatch:
@@ -2696,6 +2824,13 @@ def _make_pmap_train_step(optimizer):
             eqx.filter(model, eqx.is_inexact_array),
         )
         new_model = eqx.apply_updates(model, updates)
+        new_model = _restore_frozen_model_components(
+            new_model,
+            model,
+            update_phase=update_phase,
+            train_alpha=bool(train_alpha),
+            train_band_calibration=bool(train_band_calibration),
+        )
         model = _select_tree_when_false(new_model, model, update_applied)
         opt_state = _select_tree_when_false(new_opt_state, opt_state, update_applied)
         return (
@@ -2730,6 +2865,44 @@ def _apply_training_grad_masks(
     if not train_band_calibration:
         grads = zero_band_calibration_grads(grads)
     return grads
+
+
+def _restore_frozen_model_components(
+    new_model: AmortizedModel,
+    old_model: AmortizedModel,
+    *,
+    update_phase: str,
+    train_alpha: bool,
+    train_band_calibration: bool,
+) -> AmortizedModel:
+    """Prevent AdamW state and weight decay from moving frozen components."""
+    if update_phase in {"encoder", "joint_no_prior", "frozen_prior"}:
+        new_model = eqx.tree_at(lambda tree: tree.prior, new_model, old_model.prior)
+    if update_phase == "prior":
+        new_model = eqx.tree_at(lambda tree: tree.encoder, new_model, old_model.encoder)
+        new_model = eqx.tree_at(
+            lambda tree: tree.sed_scale, new_model, old_model.sed_scale
+        )
+        if getattr(new_model, "band_calibration", None) is not None:
+            new_model = eqx.tree_at(
+                lambda tree: tree.band_calibration,
+                new_model,
+                old_model.band_calibration,
+            )
+    if not train_alpha:
+        new_model = eqx.tree_at(
+            lambda tree: tree.sed_scale, new_model, old_model.sed_scale
+        )
+    if (
+        not train_band_calibration
+        and getattr(new_model, "band_calibration", None) is not None
+    ):
+        new_model = eqx.tree_at(
+            lambda tree: tree.band_calibration,
+            new_model,
+            old_model.band_calibration,
+        )
+    return new_model
 
 
 def _component_grad_norms_jax(grads: AmortizedModel) -> dict[str, jnp.ndarray]:
@@ -3020,11 +3193,19 @@ def _training_update_phase(
             if offset % period >= int(schedule["update_every_epochs"])
             else "encoder"
         )
+    if mode in {"variational_em", "vem"}:
+        offset = int(epoch) - int(schedule["freeze_epochs"]) - 1
+        encoder_epochs = int(schedule["update_every_epochs"])
+        return (
+            "prior"
+            if offset % (encoder_epochs + 1) == encoder_epochs
+            else "encoder"
+        )
     if mode in {"encoder_then_prior", "prior_only_after_freeze"}:
         return "prior"
     raise ValueError(
         "amortized.prior.update_schedule must be one of "
-        "joint, delayed_joint, alternating, encoder_then_prior"
+        "joint, delayed_joint, alternating, variational_em, encoder_then_prior"
     )
 
 
@@ -3054,6 +3235,8 @@ def _objective_config_for_epoch(
         "mode": str(objective.get("mode", "stochastic_elbo")),
         "likelihood_temperature": float(temperature),
         "posterior_regularization": regularization,
+        "npe_weight": float(objective.get("npe_weight", 0.0)),
+        "prior_truth_weight": float(objective.get("prior_truth_weight", 0.0)),
     }
 
 
@@ -3135,11 +3318,16 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "flow_family": cfg["encoder"].get("flow_family"),
             "flow_layers": int(cfg["encoder"].get("flow_layers", 0)),
             "flow_hidden_size": int(cfg["encoder"].get("flow_hidden_size", 0)),
+            "flow_output_space": str(
+                cfg["encoder"].get("flow_output_space", "prior_base")
+            ),
         },
         "prior": {
             "type": cfg["prior"].get("type", "realnvp"),
             "source": cfg["prior"].get("source", "joint_realnvp"),
             "train_jointly": _train_prior_jointly(cfg["prior"]),
+            "update_schedule": _prior_update_schedule(cfg["prior"]),
+            "mstep_only": bool(cfg["prior"].get("mstep_only", False)),
             "checkpoint": cfg["prior"].get("checkpoint"),
             "latent_dim": int(cfg["encoder"].get("latent_dim", 16)),
             "n_layers": int(cfg["prior"].get("n_layers", 8)),

@@ -1,0 +1,8 @@
+extends: feniks_joint_prior_ind_vem4.yaml
+
+amortized:
+  objective:
+    mode: hybrid_elbo
+    # Prior runs had median encoder gradient norms AVI/NPE ~= 1025/17.6.
+    npe_weight: 50.0
+    prior_truth_weight: 0.0
