@@ -225,6 +225,17 @@ def test_jax_cosmo_cubic_has_finite_contrast_gradients() -> None:
     assert bool(jnp.all(jnp.isfinite(gradient)))
 
 
+def test_default_spline_nodes_are_created_inside_jit() -> None:
+    time = jnp.geomspace(0.05, 12.0, 80)
+    contrasts = jnp.zeros(10, dtype=jnp.float32)
+
+    reconstructed = jax.jit(reconstruct_relative_sfh_jax)(time, contrasts)
+
+    assert reconstructed.shape == time.shape
+    assert reconstructed.dtype == time.dtype
+    np.testing.assert_allclose(reconstructed, 1.0, rtol=2.0e-5, atol=2.0e-5)
+
+
 def test_novel_truth_mask_uses_fixed_15d_contract() -> None:
     train = pd.DataFrame(
         np.arange(45, dtype=float).reshape(3, 15),

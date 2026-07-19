@@ -47,7 +47,6 @@ DEFAULT_NORMALIZED_LOG_TIME_NODES = np.asarray(
     ],
     dtype=np.float64,
 )
-DEFAULT_NORMALIZED_LOG_TIME_NODES_JAX = jnp.asarray(DEFAULT_NORMALIZED_LOG_TIME_NODES)
 GAUSSIAN_SCORE_PROBABILITIES = np.linspace(0.005, 0.995, 199)
 GAUSSIAN_SCORE_TARGET = np.asarray(
     [NormalDist().inv_cdf(float(value)) for value in GAUSSIAN_SCORE_PROBABILITIES]
@@ -495,9 +494,14 @@ def spline_knot_times_jax(
 def reconstruct_relative_sfh_jax(
     time_gyr: jnp.ndarray,
     contrasts: jnp.ndarray,
-    normalized_log_time_nodes: jnp.ndarray = DEFAULT_NORMALIZED_LOG_TIME_NODES_JAX,
+    normalized_log_time_nodes: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     """Reconstruct relative SFH shape; stellar mass supplies its amplitude."""
+    if normalized_log_time_nodes is None:
+        normalized_log_time_nodes = jnp.asarray(
+            DEFAULT_NORMALIZED_LOG_TIME_NODES,
+            dtype=time_gyr.dtype,
+        )
     knot_time = spline_knot_times_jax(time_gyr, normalized_log_time_nodes)
     knot_log_sfr = jnp.concatenate((jnp.zeros(1), jnp.cumsum(contrasts)))
     log_sfr = cubic_spline_interpolate_jax(
