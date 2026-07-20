@@ -71,6 +71,12 @@
   Compileall, Ruff, shell syntax, and `git diff --check`. A local production
   smoke was not run because the Jean-Zay catalog is not present in this WSL
   checkout; the submission preflight verifies it before `sbatch`.
+- Jean-Zay smoke array `2127215` failed identically in all four tasks before
+  training: the standalone validator imported `amortized.train`, whose model
+  bootstrap disabled PJRT plugin discovery before the validator materialized a
+  JAX array under `JAX_PLATFORMS=cuda`. Reimplemented the exact float32 latent
+  hash in NumPy/JSON so the preflight is JAX-free; a fresh-process regression
+  test and full temporary-catalog validation pass without importing `jax`.
 
 ## 2026-07-17 Amortized Warm-Restart Support
 

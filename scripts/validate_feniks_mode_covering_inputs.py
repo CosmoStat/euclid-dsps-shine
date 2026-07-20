@@ -4,16 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
 import pyarrow.parquet as pq
 
-from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
-from euclid_dsps.amortized.train import (
-    _spline15d_latent_spec_from_checkpoint,
-    _validate_loaded_prior_spec,
-)
 from euclid_dsps.config import load_config
 
 
@@ -109,18 +106,7 @@ def validate_mode_covering_inputs(
         )
         if configured_names != parameter_names:
             raise ValueError(f"{path}: parameter order does not match catalog")
-        active_spec = latent_spec_from_config(config)
-        normalized_spec = _spline15d_latent_spec_from_checkpoint(
-            normalization_checkpoint,
-            active_spec,
-            sidecar=sidecar,
-        )
-        _validate_loaded_prior_spec(
-            active_spec,
-            normalized_spec,
-            require_normalization=False,
-        )
-        hashes[str(path)] = latent_spec_hash(normalized_spec)
+        hashes[str(path)] = _normalization_hash(config, sidecar, parameter_names)
 
     unique_hashes = set(hashes.values())
     if len(unique_hashes) != 1:
@@ -132,6 +118,77 @@ def validate_mode_covering_inputs(
         f"configs={len(config_paths)} normalization_hash={next(iter(unique_hashes))} "
         f"reference_family={architecture.get('type')}"
     )
+
+
+def _normalization_hash(
+    config: dict,
+    sidecar: dict,
+    parameter_names: tuple[str, ...],
+) -> str:
+    """Reproduce the runtime LatentSpec hash without importing JAX."""
+    free = (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
+    lower = []
+    upper = []
+    for name in parameter_names:
+        bounds = (free.get(name, {}) or {}).get("bounds")
+        if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+            raise ValueError(f"Missing [low, high] bounds for {name}")
+        low, high = float(bounds[0]), float(bounds[1])
+        if not np.isfinite(low) or not np.isfinite(high) or low >= high:
+            raise ValueError(f"Invalid bounds for {name}: {bounds}")
+        lower.append(low)
+        upper.append(high)
+
+    normalization = dict(sidecar.get("normalization", {}) or {})
+    if normalization.get("whitening") is not None:
+        raise ValueError("Common spline15d normalization must not use whitening")
+    if float(normalization.get("normalized_atom_half_width", 0.0)) != 0.0:
+        raise ValueError("Runtime normalized atom jitter is not supported")
+    transforms = dict(normalization.get("transforms", {}) or {})
+    family = []
+    center = []
+    scale = []
+    location = []
+    lam = []
+    for name in parameter_names:
+        transform = dict(transforms.get(name, {}) or {})
+        transform_family = str(transform.get("family", ""))
+        if transform_family == "log":
+            family.append(1)
+            location.append(0.0)
+            lam.append(1.0)
+        elif transform_family == "shifted_asinh":
+            family.append(0)
+            location.append(float(transform["location"]))
+            lam.append(float(transform["lambda"]))
+        else:
+            raise ValueError(
+                f"Unsupported spline15d transform for {name}: {transform_family}"
+            )
+        center.append(float(transform["center"]))
+        scale.append(float(transform["scale"]))
+
+    def as_float32(values: list[float] | list[int]) -> list[float]:
+        return np.asarray(values, dtype=np.float32).astype(float).tolist()
+
+    payload = {
+        "names": list(parameter_names),
+        "lower": as_float32(lower),
+        "upper": as_float32(upper),
+        "raw_center": as_float32(center),
+        "raw_scale": as_float32(scale),
+        "normalization": "spline15d_mixed",
+        "transform_family": as_float32(family),
+        "transform_location": as_float32(location),
+        "transform_lambda": as_float32(lam),
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def main() -> None:

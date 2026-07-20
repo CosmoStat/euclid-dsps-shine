@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,3 +53,23 @@ def test_mode_covering_configs_encode_the_four_control_cells() -> None:
     assert frozen_wake["prior"]["train_jointly"] is False
     assert learned_wake["objective"]["mode"] == "periodic_wake"
     assert learned_wake["prior"]["train_jointly"] is True
+
+
+def test_mode_covering_preflight_does_not_import_jax() -> None:
+    code = (
+        "import sys; "
+        "import scripts.validate_feniks_mode_covering_inputs; "
+        "assert not any(name == 'jax' or name.startswith('jax.') "
+        "for name in sys.modules)"
+    )
+    env = dict(os.environ)
+    env["JAX_PLATFORMS"] = "cuda"
+    env["PYTHONPATH"] = str(ROOT)
+    subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
