@@ -64,7 +64,13 @@ def negative_elbo(
         x_samples = mean[None, ...]
         logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
     else:
-        posterior = sample_posterior(model, key, batch.features, int(n_samples))
+        posterior = sample_posterior(
+            model,
+            key,
+            batch.features,
+            int(n_samples),
+            sample_strategy=str(objective_config.get("sample_strategy", "random")),
+        )
         x_samples, logq = posterior.x, posterior.logq
     if use_mock_decoder:
         if mock_decoder_params is None:
@@ -216,6 +222,9 @@ def objective_mode(objective_config: dict | None) -> str:
         "stochastic_elbo": "stochastic_elbo",
         "hybrid": "hybrid_elbo",
         "hybrid_elbo": "hybrid_elbo",
+        "periodic_wake": "periodic_wake",
+        "wake": "periodic_wake",
+        "reweighted_wake_sleep": "periodic_wake",
         "deterministic": "deterministic_reconstruction",
         "autoencoder": "deterministic_reconstruction",
         "deterministic_autoencoder": "deterministic_reconstruction",
@@ -226,7 +235,7 @@ def objective_mode(objective_config: dict | None) -> str:
     if mode not in aliases:
         raise ValueError(
             "amortized.objective.mode must be stochastic_elbo, "
-            "hybrid_elbo, neural_posterior_estimation, or "
+            "hybrid_elbo, periodic_wake, neural_posterior_estimation, or "
             "deterministic_reconstruction"
         )
     return aliases[mode]

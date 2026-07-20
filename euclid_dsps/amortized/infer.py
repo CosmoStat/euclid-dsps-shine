@@ -51,7 +51,7 @@ from .diagnostics import (
 )
 from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
-from .latent import x_to_theta
+from .latent import latent_spec_hash, x_to_theta
 from .likelihood import photometric_loglike
 from .posterior import sample_posterior
 from .redshift_metrics import write_redshift_metrics_for_run
@@ -885,6 +885,12 @@ def _effective_latent_spec_payload(
         "transform_family": optional_array(latent_spec.transform_family),
         "transform_location": optional_array(latent_spec.transform_location),
         "transform_lambda": optional_array(latent_spec.transform_lambda),
+        "normalization_hash": latent_spec_hash(latent_spec),
+        "normalization_checkpoint": (
+            ((config.get("amortized", {}) or {}).get("latent", {}) or {}).get(
+                "normalization_checkpoint"
+            )
+        ),
         "prior_source": str(prior.get("source", "")),
         "prior_checkpoint": str(prior.get("checkpoint", "")),
     }

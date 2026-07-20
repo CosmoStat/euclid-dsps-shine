@@ -237,16 +237,34 @@ class ConditionalFlowEncoder(eqx.Module):
         return value, logdet
 
 
-def sample_posterior(model, key, features, n_samples: int) -> PosteriorSample:
+def sample_posterior(
+    model,
+    key,
+    features,
+    n_samples: int,
+    *,
+    sample_strategy: str = "random",
+    base_temperature: float = 1.0,
+) -> PosteriorSample:
     """Sample any configured posterior and return exact densities in x-space."""
     mean, log_std = model.encoder(features)
-    eps = jax.random.normal(
+    n_samples = int(n_samples)
+    temperature = float(base_temperature)
+    if temperature <= 0.0:
+        raise ValueError("base_temperature must be positive")
+    eps = _sample_standard_normal(
         key,
-        (int(n_samples),) + mean.shape,
+        (n_samples,) + mean.shape,
         dtype=mean.dtype,
+        strategy=sample_strategy,
     )
-    base = mean[None, ...] + jnp.exp(log_std)[None, ...] * eps
-    logq_base = _diag_normal_log_prob(base, mean[None, ...], log_std[None, ...])
+    proposal_log_std = log_std + jnp.log(jnp.asarray(temperature, dtype=log_std.dtype))
+    base = mean[None, ...] + jnp.exp(proposal_log_std)[None, ...] * eps
+    logq_base = _diag_normal_log_prob(
+        base,
+        mean[None, ...],
+        proposal_log_std[None, ...],
+    )
     residual_logdet = jnp.zeros_like(logq_base)
 
     if isinstance(model.encoder, GaussianEncoder):
@@ -272,9 +290,19 @@ def sample_posterior(model, key, features, n_samples: int) -> PosteriorSample:
     return PosteriorSample(x, logq, logprior, mean, log_std, residual_logdet)
 
 
-def posterior_log_prob(model, features, x) -> jnp.ndarray:
+def posterior_log_prob(
+    model,
+    features,
+    x,
+    *,
+    base_temperature: float = 1.0,
+) -> jnp.ndarray:
     """Evaluate exact conditional posterior density for supervised NPE."""
     mean, log_std = model.encoder(features)
+    temperature = float(base_temperature)
+    if temperature <= 0.0:
+        raise ValueError("base_temperature must be positive")
+    log_std = log_std + jnp.log(jnp.asarray(temperature, dtype=log_std.dtype))
     if isinstance(model.encoder, GaussianEncoder):
         return _diag_normal_log_prob(x, mean, log_std)
     context = jnp.concatenate([mean, log_std], axis=-1)
@@ -293,6 +321,21 @@ def posterior_log_prob(model, features, x) -> jnp.ndarray:
         + residual_inverse_logdet
         + prior_inverse_logdet
     )
+
+
+def _sample_standard_normal(key, shape, *, dtype, strategy: str) -> jnp.ndarray:
+    normalized = str(strategy).strip().lower().replace("-", "_")
+    if normalized in {"random", "iid", "independent"}:
+        return jax.random.normal(key, shape, dtype=dtype)
+    if normalized in {"antithetic", "paired_antithetic"}:
+        n_samples = int(shape[0])
+        if n_samples < 2 or n_samples % 2:
+            raise ValueError(
+                "Antithetic posterior sampling requires a positive even n_samples"
+            )
+        half = jax.random.normal(key, (n_samples // 2,) + tuple(shape[1:]), dtype=dtype)
+        return jnp.concatenate((half, -half), axis=0)
+    raise ValueError("sample_strategy must be random or antithetic")
 
 
 def _broadcast_context(context, leading_shape):
@@ -329,7 +372,5 @@ def _normalize_output_space(value: str) -> str:
         "independent_x": "latent_x",
     }
     if normalized not in aliases:
-        raise ValueError(
-            "Conditional flow output_space must be prior_base or latent_x"
-        )
+        raise ValueError("Conditional flow output_space must be prior_base or latent_x")
     return aliases[normalized]

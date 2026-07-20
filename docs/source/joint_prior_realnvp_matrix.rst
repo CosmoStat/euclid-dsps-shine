@@ -19,8 +19,10 @@ Matrix
 
 The six tasks are:
 
-* ``ind_frozen_rqspline``: AVI with an independent posterior and the existing
-  pretrained RQ-spline prior frozen;
+* ``ind_frozen_rqspline``: historical label for AVI with an independent
+  posterior and a frozen reference prior. The serialized checkpoint actually
+  identifies this prior as a 12-layer RealNVP, so new reports call it
+  ``frozen_ref_realnvp``;
 * ``ind_joint``: AVI with independent RealNVP posterior and prior, updated from
   the same ELBO step;
 * ``ind_vem1``: one encoder epoch followed by one prior-only M-step;

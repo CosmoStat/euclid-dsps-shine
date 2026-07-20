@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -208,6 +210,18 @@ def latent_spec_to_jsonable(spec: LatentSpec) -> dict[str, Any]:
     }
 
 
+def latent_spec_hash(spec: LatentSpec) -> str:
+    """Return a stable hash for the complete physical-to-network transform."""
+    payload = latent_spec_to_jsonable(spec)
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _optional_array_to_list(value: jnp.ndarray | None) -> list[float] | None:
     if value is None:
         return None
@@ -252,11 +266,16 @@ def _latent_normalization_from_config(
 ) -> tuple[np.ndarray, np.ndarray, str]:
     latent = (config.get("amortized", {}) or {}).get("latent", {}) or {}
     mode = str(latent.get("normalization", latent.get("transform", "identity"))).lower()
-    if mode in {"identity", "none", "raw_logit"}:
-        return np.zeros(len(names), dtype=float), np.ones(len(names), dtype=float), "identity"
+    if mode in {"identity", "none", "raw_logit", "spline15d_checkpoint"}:
+        return (
+            np.zeros(len(names), dtype=float),
+            np.ones(len(names), dtype=float),
+            "identity",
+        )
     if mode not in {"standardized_logit", "standardized", "centered_logit"}:
         raise ValueError(
-            "amortized.latent.normalization must be 'identity' or 'standardized_logit'"
+            "amortized.latent.normalization must be 'identity', "
+            "'standardized_logit', or 'spline15d_checkpoint'"
         )
     theta0 = latent_center_theta_from_config(config, names, lower, upper)
     span = np.maximum(upper - lower, 1.0e-12)
@@ -422,14 +441,14 @@ def latent_prior_geometry_frame(
         "center_source": center_source,
         "parameter_names": list(spec.names),
         "max_frac_within_either_5pct": float(
-            frame["frac_within_either_5pct"].max()
-            if not frame.empty
-            else float("nan")
+            frame["frac_within_either_5pct"].max() if not frame.empty else float("nan")
         ),
         "parameters_near_bounds_5pct": frame.loc[
             frame["frac_within_either_5pct"] > 0.05,
             "parameter",
-        ].astype(str).tolist(),
+        ]
+        .astype(str)
+        .tolist(),
     }
     return frame, payload
 

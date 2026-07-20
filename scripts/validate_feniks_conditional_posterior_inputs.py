@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-from euclid_dsps.prior_learning.spline15d import SPLINE15D_PARAMETER_NAMES
+from euclid_dsps.prior_learning.spline15d_schema import SPLINE15D_PARAMETER_NAMES
 
 
 def validate_inputs(catalog_dir: Path, prior_checkpoint: Path) -> None:

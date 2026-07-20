@@ -10,6 +10,12 @@ The conditional-posterior matrix is defined by
 Use `scripts/submit_feniks_conditional_posterior_matrix.sh`; each full array task
 trains and runs the same held-out photometry/corner diagnostics.
 
+The four-task unsupervised mode-covering control is defined by
+`configs/experiments/feniks_mode_*.yaml` and launched with
+`scripts/submit_feniks_mode_covering.sh`. It fixes one checkpoint-backed 15D
+coordinate transform across all tasks, then isolates normalization, antithetic
+Monte Carlo, and periodic importance-weighted wake updates.
+
 - `diffsky_synthetic_feniks_260617_50k.yaml`: generate and validate the
   14-band train/validation/test synthetic FENIKS DSPS-closure catalogues.
 - `diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml`: generate the

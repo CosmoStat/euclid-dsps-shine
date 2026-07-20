@@ -1,5 +1,77 @@
 # Plan
 
+## 2026-07-20 FENIKS Common-15D and Mode-Covering Posterior Control
+
+- Status: completed; ready for the Jean-Zay smoke-plus-full submission.
+- Extract one immutable spline-15D mixed marginal-normalization contract from
+  the synthetic training split and use it unchanged for every posterior and
+  prior variant. Keep this coordinate transform separate from the frozen
+  reference RealNVP prior and from every learned RealNVP parameter.
+- Fail fast before GPU allocation unless training, inference, checkpoint
+  reload, prior sampling, and DSPS decoding resolve the same parameter order,
+  bounds, transform families, locations, scales, and normalization hash.
+- Use the common 15D coordinates in every new control so comparisons against
+  the frozen-reference and learned-prior histories are no longer confounded by
+  latent geometry.
+- Limit the next full array to four unsupervised training controls, reusing the
+  completed one-sample frozen-reference and identity-normalized VEM 4:1 runs
+  as the zero-cost references:
+  1. `common15d_vem4_elbo_k1`: learned RealNVP prior, common 15D transform,
+     VEM 4:1, and the unchanged one-sample reverse-KL ELBO; this isolates the
+     normalization correction from the old `ind_vem4` result.
+  2. `frozen_ref_elbo_k2_antithetic`: known-good frozen JAX-COSMO reference
+     prior and two antithetic posterior samples; this measures whether estimator
+     variance, rather than KL direction, explains the narrow old frozen-prior
+     posterior.
+  3. `frozen_ref_periodic_wake_k4`: known-good frozen JAX-COSMO reference prior,
+     ordinary
+     one-sample ELBO for three epochs, then one four-particle tempered
+     importance-weighted wake update; this isolates a mass-covering encoder
+     update without simultaneously changing the prior.
+  4. `common15d_vem4_periodic_wake_k4`: learned RealNVP prior with the common
+     15D transform, VEM 4:1, and the same periodic four-particle wake update;
+     this tests the complete unsupervised learned-prior candidate while the
+     first three tasks retain enough controls to interpret its outcome.
+- Record importance-weight ESS for both wake runs and reject conclusions from
+  collapsed weights. Interpret the combined learned-prior plus wake run only
+  after checking the common-normalization prior control and frozen-prior wake
+  control independently.
+- Correct the historical provenance in the new report: the checkpoint used by
+  old `ind_frozen_rqspline` is actually a 12-layer RealNVP according to its
+  serialized sidecar. Treat it as `frozen_ref_realnvp`; do not present it as an
+  RQ-spline or silently switch to the separate dequantized RQ checkpoint, which
+  would change both prior family and normalization.
+- Keep the completed supervised NPE hybrid as an evaluation reference only;
+  do not use truth parameters in any loss or proposal in this array. Truth may
+  be read after training solely for held-out coverage, PIT, and recovery plots.
+- Select a run only if both levels pass: the learned prior matches held-out
+  population marginals/correlations without boundary saturation, and the
+  conditional posterior passes per-object coverage, PIT, photo-z, and
+  posterior-predictive diagnostics. Matching only the aggregate posterior is
+  insufficient.
+- Preserve the four-H100 data-parallel path and report decoder evaluations per
+  object, seconds per encoder epoch, skipped updates, and peak memory so the
+  mode-covering correction has an explicit speed cost.
+- Implemented exact antithetic posterior sampling, tempered proposal densities,
+  periodic self-normalized wake updates with stopped importance weights, and
+  VEM-aware encoder-epoch scheduling. Wake steps update only the encoder;
+  calibration and prior parameters are frozen, while prior M-steps continue to
+  fit stopped posterior samples.
+- Added checkpoint-time latent hashes and strict reload validation. All four
+  configs resolve the same `spline15d_mixed` hash
+  `48fe36f64913880149fde24603d75fb8219659cd8f21598aa7b76cd0a22c5a1b`.
+- Added a fail-fast catalog/checkpoint/config validator, a ten-minute four-task
+  smoke array followed by one complete `afterok` array, compact per-task and
+  aggregate reports, ESS diagnostics, required corner/residual plots, and
+  observed-versus-posterior photometry panels without writing the large raw
+  posterior-predictive tables.
+- Verification passes: 57 config/latent tests, four focused antithetic/wake
+  tests, seven ELBO/prior tests, historical checkpoint reload, exact four-config
+  hash resolution, compact photometry plot generation on a completed run,
+  Compileall, Ruff, shell syntax, and `git diff --check`. A local production
+  smoke was not run because the Jean-Zay catalog is not present in this WSL
+  checkout; the submission preflight verifies it before `sbatch`.
+
 ## 2026-07-17 Amortized Warm-Restart Support
 
 - Status: completed.

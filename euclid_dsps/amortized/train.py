@@ -69,6 +69,7 @@ from .latent import (
     LatentSpec,
     initial_theta_from_config,
     latent_spec_from_config,
+    latent_spec_hash,
     latent_spec_to_jsonable,
     theta_to_x,
     write_latent_prior_geometry,
@@ -204,9 +205,7 @@ def build_amortized_model(
             min_bin_height=float(encoder_cfg.get("flow_min_bin_height", 1.0e-3)),
             min_derivative=float(encoder_cfg.get("flow_min_derivative", 1.0e-3)),
             init_scale=float(encoder_cfg.get("flow_init_scale", 0.0)),
-            output_space=str(
-                encoder_cfg.get("flow_output_space", "prior_base")
-            ),
+            output_space=str(encoder_cfg.get("flow_output_space", "prior_base")),
         )
     else:
         raise ValueError(f"Unsupported amortized encoder type: {encoder_type}")
@@ -309,6 +308,19 @@ def build_prior_from_config(
 def _latent_spec_for_amortized_config(config: dict[str, Any]) -> LatentSpec:
     active_spec = latent_spec_from_config(config)
     cfg = amortized_config(config)
+    normalization_checkpoint = cfg["latent"].get("normalization_checkpoint")
+    has_explicit_normalization = bool(normalization_checkpoint)
+    if normalization_checkpoint:
+        normalization_spec = _spline15d_latent_spec_from_checkpoint(
+            normalization_checkpoint,
+            active_spec,
+        )
+        _validate_loaded_prior_spec(
+            active_spec,
+            normalization_spec,
+            require_normalization=False,
+        )
+        active_spec = normalization_spec
     prior_cfg = cfg["prior"]
     source = str(prior_cfg.get("source", "joint_realnvp"))
     if source not in {"supervised_checkpoint", "spline15d_checkpoint"}:
@@ -319,14 +331,20 @@ def _latent_spec_for_amortized_config(config: dict[str, Any]) -> LatentSpec:
     if source == "spline15d_checkpoint":
         _prior, prior_spec = _load_spline15d_prior(checkpoint, active_spec)
         _validate_loaded_prior_spec(
-            active_spec, prior_spec, require_normalization=False
+            active_spec,
+            prior_spec,
+            require_normalization=has_explicit_normalization,
         )
         return prior_spec
 
     from euclid_dsps.prior_learning.train import load_prior_checkpoint
 
     _prior, _sidecar, prior_spec, _schema = load_prior_checkpoint(checkpoint)
-    _validate_loaded_prior_spec(active_spec, prior_spec, require_normalization=False)
+    _validate_loaded_prior_spec(
+        active_spec,
+        prior_spec,
+        require_normalization=has_explicit_normalization,
+    )
     return prior_spec
 
 
@@ -337,12 +355,36 @@ def _load_spline15d_prior(
     """Load the spline-15D flow and expose its exact JAX marginal transform."""
     if active_spec is None:
         raise ValueError("spline15d_checkpoint requires an active latent spec")
-    from euclid_dsps.prior_learning.spline15d import SPLINE15D_PARAMETER_NAMES
     from euclid_dsps.prior_learning.spline15d_checkpoint import (
         load_spline15d_flow_checkpoint,
     )
 
     prior, sidecar = load_spline15d_flow_checkpoint(checkpoint)
+    spec = _spline15d_latent_spec_from_checkpoint(
+        checkpoint,
+        active_spec,
+        sidecar=sidecar,
+    )
+    return prior, spec
+
+
+def _spline15d_latent_spec_from_checkpoint(
+    checkpoint: str | Path,
+    active_spec: LatentSpec | None,
+    *,
+    sidecar: dict[str, Any] | None = None,
+) -> LatentSpec:
+    """Load only the immutable spline-15D transform contract."""
+    if active_spec is None:
+        raise ValueError("spline15d_checkpoint requires an active latent spec")
+    from euclid_dsps.prior_learning.spline15d_schema import (
+        SPLINE15D_PARAMETER_NAMES,
+    )
+
+    checkpoint = Path(checkpoint)
+    if sidecar is None:
+        sidecar_path = checkpoint.with_suffix(checkpoint.suffix + ".json")
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     if active_spec.names != SPLINE15D_PARAMETER_NAMES:
         raise ValueError(
             "Spline-15D active parameter order does not match the prior contract"
@@ -377,7 +419,7 @@ def _load_spline15d_prior(
             )
         center.append(float(transform["center"]))
         scale.append(float(transform["scale"]))
-    spec = LatentSpec(
+    return LatentSpec(
         names=SPLINE15D_PARAMETER_NAMES,
         lower=active_spec.lower,
         upper=active_spec.upper,
@@ -388,7 +430,6 @@ def _load_spline15d_prior(
         transform_location=jnp.asarray(location, dtype=jnp.float32),
         transform_lambda=jnp.asarray(lam, dtype=jnp.float32),
     )
-    return prior, spec
 
 
 def _validate_loaded_prior_spec(
@@ -744,6 +785,16 @@ def train_amortized_fs2(
         f"model={context.model_config}",
     )
     latent_spec = _latent_spec_for_amortized_config(config)
+    latent_payload = latent_spec_to_jsonable(latent_spec)
+    latent_payload.update(
+        {
+            "normalization_hash": latent_spec_hash(latent_spec),
+            "normalization_checkpoint": cfg["latent"].get("normalization_checkpoint"),
+            "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
+            "prior_checkpoint": cfg["prior"].get("checkpoint"),
+        }
+    )
+    write_json(out / "effective_latent_spec.json", latent_payload)
     jit_latent_spec = JitLatentSpec(
         names=latent_spec.names,
         lower=latent_spec.lower,
@@ -947,13 +998,23 @@ def train_amortized_fs2(
             int(cfg["training"].get("kl_annealing_epochs", 5)),
             max_weight=kl_weight_max,
         )
-        objective_config = _objective_config_for_epoch(cfg, epoch)
         update_phase = _training_update_phase(
             cfg["prior"],
             epoch=epoch,
             train_prior=train_prior,
         )
-        objective_config["update_phase"] = update_phase
+        encoder_epoch = _encoder_epoch_index(
+            cfg["prior"], epoch=epoch, train_prior=train_prior
+        )
+        objective_config = _objective_config_for_epoch(cfg, epoch)
+        wake_active = _wake_update_active(
+            objective_config,
+            encoder_epoch=encoder_epoch,
+            update_phase=update_phase,
+        )
+        objective_config["wake_active"] = bool(wake_active)
+        optimizer_phase = "encoder_wake" if wake_active else update_phase
+        objective_config["update_phase"] = optimizer_phase
         objective_config["prior_mstep_only"] = bool(
             update_phase == "prior" and cfg["prior"].get("mstep_only", False)
         )
@@ -962,7 +1023,7 @@ def train_amortized_fs2(
             verbose,
             "[amortized] epoch "
             f"{epoch}/{int(epochs)} start kl={kl_weight:.3f} "
-            f"phase={update_phase} "
+            f"phase={optimizer_phase} encoder_epoch={encoder_epoch} "
             "temp="
             f"{float(objective_config.get('likelihood_temperature', 1.0)):.3g}",
         )
@@ -1045,7 +1106,7 @@ def train_amortized_fs2(
                         cfg["likelihood"],
                         calibration_runtime_config,
                         objective_config,
-                        update_phase,
+                        optimizer_phase,
                         bool(train_alpha),
                         bool(train_band_calibration),
                     )
@@ -1076,7 +1137,7 @@ def train_amortized_fs2(
                     )
                     grads = _apply_training_grad_masks(
                         grads,
-                        update_phase=update_phase,
+                        update_phase=optimizer_phase,
                         train_alpha=bool(train_alpha),
                         train_band_calibration=bool(train_band_calibration),
                     )
@@ -1097,7 +1158,7 @@ def train_amortized_fs2(
                         model = _restore_frozen_model_components(
                             updated_model,
                             model,
-                            update_phase=update_phase,
+                            update_phase=optimizer_phase,
                             train_alpha=bool(train_alpha),
                             train_band_calibration=bool(train_band_calibration),
                         )
@@ -1114,8 +1175,12 @@ def train_amortized_fs2(
                         "split": "train",
                         "epoch": int(epoch),
                         "batch": int(batch_index),
-                        "kl_definition": "E_q[logq - logp_beta]",
-                        "kl_direction": "q_to_p",
+                        "kl_definition": (
+                            "self_normalized_importance_wake"
+                            if wake_active
+                            else "E_q[logq - logp_beta]"
+                        ),
+                        "kl_direction": "p_to_q" if wake_active else "q_to_p",
                         "kl_weight": float(kl_weight),
                         "prior_source": str(
                             cfg["prior"].get("source", "joint_realnvp")
@@ -1133,7 +1198,9 @@ def train_amortized_fs2(
                         "likelihood_temperature": float(
                             objective_config.get("likelihood_temperature", 1.0)
                         ),
-                        "update_phase": update_phase,
+                        "update_phase": optimizer_phase,
+                        "encoder_epoch": int(encoder_epoch),
+                        "wake_active": float(wake_active),
                         "n_objects": int(batch.flux.shape[0]),
                         "data_parallel_mode": str(data_parallel["effective"]),
                         "data_parallel_devices": int(data_parallel["n_devices"]),
@@ -1299,7 +1366,7 @@ def train_amortized_fs2(
                 kl_weight=float(kl_weight),
                 prior_source=str(cfg["prior"].get("source", "joint_realnvp")),
                 prior_train_jointly=bool(train_prior),
-                update_phase=update_phase,
+                update_phase=optimizer_phase,
                 deterministic=is_deterministic_reconstruction(cfg.get("objective", {})),
             )
         pd.DataFrame(rows).to_csv(out / "training_log.csv", index=False)
@@ -1420,6 +1487,24 @@ def train_amortized_fs2(
             "npe": float(cfg["objective"].get("npe_weight", 0.0)),
             "prior_truth": float(cfg["objective"].get("prior_truth_weight", 0.0)),
         },
+        "posterior_sample_strategy": str(
+            cfg["objective"].get("sample_strategy", "random")
+        ),
+        "wake": dict(cfg["objective"].get("wake", {}) or {}),
+        "wake_updates": int(
+            sum(
+                row.get("update_applied", 0.0)
+                for row in _training_rows(rows)
+                if row.get("update_phase") == "encoder_wake"
+            )
+        ),
+        "wake_ess_fraction_mean": _finite_mean(
+            [
+                float(row.get("wake_ess_fraction_mean", float("nan")))
+                for row in _training_rows(rows)
+                if row.get("update_phase") == "encoder_wake"
+            ]
+        ),
         "best_loss": float(best_metric_value),
         "best_checkpoint_metric": best_checkpoint_metric,
         "best_checkpoint_metric_requested": configured_best_metric,
@@ -1452,6 +1537,12 @@ def train_amortized_fs2(
                 latent_geometry.get("parameters_near_bounds_5pct", [])
             ),
         },
+        "effective_latent_spec": {
+            "path": "effective_latent_spec.json",
+            "normalization": str(latent_spec.normalization),
+            "normalization_hash": latent_spec_hash(latent_spec),
+            "normalization_checkpoint": cfg["latent"].get("normalization_checkpoint"),
+        },
         "updates_applied": int(
             sum(row.get("update_applied", 0.0) for row in _training_rows(rows))
         ),
@@ -1472,7 +1563,11 @@ def train_amortized_fs2(
             "kl_estimator": (
                 "disabled_deterministic_reconstruction"
                 if objective_mode_name == "deterministic_reconstruction"
-                else "monte_carlo_logq_minus_logp"
+                else (
+                    "periodic_self_normalized_importance_wake"
+                    if objective_mode_name == "periodic_wake"
+                    else "monte_carlo_logq_minus_logp"
+                )
             ),
         },
         "likelihood_temperature": {
@@ -1550,6 +1645,7 @@ def save_checkpoint(
         "metric": float(metric),
         "metric_name": metric_name,
         "latent_spec": latent_spec_to_jsonable(latent_spec),
+        "latent_spec_hash": latent_spec_hash(latent_spec),
         "feature_stats_path": "../feature_stats.json",
         "amortized": amortized_config(config),
         "architecture": architecture_summary(config),
@@ -1564,7 +1660,24 @@ def load_checkpoint(
     """Load an amortized model checkpoint using the active config architecture."""
     path = Path(path)
     key = jax.random.PRNGKey(int(amortized_config(config)["training"].get("seed", 42)))
-    template = build_amortized_model(config, key)
+    active_spec = _latent_spec_for_amortized_config(config)
+    sidecar_path = path.with_suffix(path.suffix + ".json")
+    if sidecar_path.is_file():
+        sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        recorded_hash = sidecar.get("latent_spec_hash")
+        expected_hash = latent_spec_hash(active_spec)
+        if recorded_hash is not None and str(recorded_hash) != expected_hash:
+            raise ValueError(
+                "Amortized checkpoint latent normalization hash does not match "
+                f"the active config: checkpoint={recorded_hash}, config={expected_hash}"
+            )
+        if recorded_hash is None and sidecar.get(
+            "latent_spec"
+        ) != latent_spec_to_jsonable(active_spec):
+            raise ValueError(
+                "Amortized checkpoint latent spec does not match the active config"
+            )
+    template = build_amortized_model(config, key, latent_spec=active_spec)
     try:
         model = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
@@ -2046,7 +2159,13 @@ def _evaluation_metrics(
         x_samples = mean[None, ...]
         logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
     else:
-        posterior = sample_posterior(model, key, batch.features, int(n_samples))
+        posterior = sample_posterior(
+            model,
+            key,
+            batch.features,
+            int(n_samples),
+            sample_strategy=str(objective_config.get("sample_strategy", "random")),
+        )
         x_samples, logq = posterior.x, posterior.logq
     model_flux_raw = model_flux_from_x(
         x_samples,
@@ -2517,6 +2636,19 @@ def _loss_with_metrics(
             "finite_fraction": jnp.mean(jnp.isfinite(logq_truth)),
         }
         return loss, metrics
+    if bool(objective_config.get("wake_active", False)):
+        return _importance_weighted_wake_loss(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+        )
     loss, metrics = negative_elbo(
         model,
         batch,
@@ -2560,6 +2692,174 @@ def _loss_with_metrics(
     return total, metrics
 
 
+def _importance_weighted_wake_loss(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    likelihood_config,
+    calibration_config,
+    objective_config,
+):
+    """Fit q to self-normalized posterior particles without truth labels."""
+    if isinstance(model.encoder, ConditionalFlowEncoder) and (
+        model.encoder.output_space != "latent_x"
+    ):
+        raise ValueError("Periodic wake requires an independent latent_x posterior")
+    wake = dict(objective_config.get("wake", {}) or {})
+    n_particles = int(wake.get("n_particles", 4))
+    n_tempered = int(wake.get("n_tempered_particles", 1))
+    temperature = float(wake.get("base_temperature", 2.0))
+    if n_particles < 2:
+        raise ValueError("Periodic wake requires at least two particles")
+    if n_tempered <= 0 or n_tempered >= n_particles:
+        raise ValueError("Periodic wake n_tempered_particles must be between 1 and K-1")
+    if temperature <= 1.0:
+        raise ValueError("Periodic wake base_temperature must be greater than one")
+
+    normal_key, tempered_key = jax.random.split(key)
+    normal = sample_posterior(
+        model,
+        normal_key,
+        batch.features,
+        n_particles - n_tempered,
+    )
+    tempered = sample_posterior(
+        model,
+        tempered_key,
+        batch.features,
+        n_tempered,
+        base_temperature=temperature,
+    )
+    samples = jax.lax.stop_gradient(jnp.concatenate((normal.x, tempered.x), axis=0))
+    logq = posterior_log_prob(model, batch.features, samples)
+    logq_tempered = posterior_log_prob(
+        model,
+        batch.features,
+        samples,
+        base_temperature=temperature,
+    )
+    tempered_fraction = jnp.asarray(
+        float(n_tempered) / float(n_particles), dtype=logq.dtype
+    )
+    logproposal = jnp.logaddexp(
+        jnp.log1p(-tempered_fraction) + logq,
+        jnp.log(tempered_fraction) + logq_tempered,
+    )
+    logprior = model.prior.log_prob(samples)
+
+    model_flux_raw = model_flux_from_x(
+        samples,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+    )
+    scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
+    log_alpha_sed = model.sed_scale.log_alpha_sed
+    model_flux = (
+        apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
+        if scale_cfg.enabled
+        else model_flux_raw
+    )
+    log_alpha_band = (
+        model.band_calibration.log_alpha_band
+        if band_cfg.enabled and model.band_calibration is not None
+        else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
+    )
+    model_flux = (
+        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+        if band_cfg.enabled
+        else model_flux
+    )
+    loglike = photometric_loglike(
+        obs_flux=batch.flux,
+        model_flux=model_flux,
+        obs_err=batch.flux_err,
+        mask=batch.mask,
+        likelihood_type=str(likelihood_config.get("type", "student_t")),
+        student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+    )
+    likelihood_temperature = jnp.asarray(
+        max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
+        dtype=loglike.dtype,
+    )
+    logweight = loglike / likelihood_temperature + logprior - logproposal
+    finite_weight = jnp.isfinite(logweight)
+    any_finite = jnp.any(finite_weight, axis=0, keepdims=True)
+    safe_logweight = jnp.where(finite_weight, logweight, -jnp.inf)
+    safe_logweight = jnp.where(any_finite, safe_logweight, jnp.zeros_like(logweight))
+    weight = jax.nn.softmax(safe_logweight, axis=0)
+    stopped_weight = jax.lax.stop_gradient(weight)
+
+    wake_nll = -jnp.mean(jnp.sum(stopped_weight * logq, axis=0))
+    ess = 1.0 / jnp.sum(jnp.square(weight), axis=0)
+    weight_entropy = -jnp.sum(
+        jnp.where(weight > 0.0, weight * jnp.log(weight), 0.0), axis=0
+    )
+    weighted_nll = jnp.mean(jnp.sum(stopped_weight * -loglike, axis=0))
+    weighted_kl = jnp.mean(jnp.sum(stopped_weight * (logq - logprior), axis=0))
+    chi = photometric_normalized_residual(
+        obs_flux=batch.flux,
+        model_flux=model_flux,
+        obs_err=batch.flux_err,
+        mask=batch.mask,
+        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
+        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+    )
+    residual = jnp.where(
+        batch.mask[None, :, :], model_flux - batch.flux[None, :, :], 0.0
+    )
+    n_valid_residual = jnp.maximum(jnp.sum(batch.mask) * n_particles, 1)
+    n_valid_flux = jnp.maximum(jnp.sum(batch.mask) * n_particles, 1)
+    _mean, log_std = model.encoder(batch.features)
+    zero = jnp.asarray(0.0, dtype=wake_nll.dtype)
+    return wake_nll, {
+        "loss": wake_nll,
+        "negative_loglike": weighted_nll,
+        "loglike_mean": -weighted_nll,
+        "logprior_mean": jnp.mean(jnp.sum(stopped_weight * logprior, axis=0)),
+        "logq_mean": jnp.mean(jnp.sum(stopped_weight * logq, axis=0)),
+        "kl_mc_mean": weighted_kl,
+        "likelihood_temperature": likelihood_temperature,
+        "entropy_floor_penalty": zero,
+        "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
+        "posterior_min_log_std": jnp.min(log_std),
+        "posterior_median_log_std": jnp.median(log_std),
+        "posterior_max_log_std": jnp.max(log_std),
+        "deterministic_reconstruction": zero,
+        "effective_n_samples": jnp.asarray(n_particles, dtype=wake_nll.dtype),
+        "model_flux_mean": jnp.mean(model_flux),
+        "mean_model_flux_raw": jnp.mean(model_flux_raw),
+        "mean_model_flux_scaled": jnp.mean(model_flux),
+        "log_alpha_sed": log_alpha_sed,
+        "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
+        "alpha_prior_penalty": zero,
+        "band_alpha_prior_penalty": zero,
+        "max_abs_band_delta_mag": jnp.max(
+            jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
+        ),
+        "residual_rms": jnp.sqrt(jnp.sum(chi**2) / n_valid_residual),
+        "flux_residual_rms": jnp.sqrt(jnp.sum(residual**2) / n_valid_flux),
+        "finite_fraction": jnp.mean(finite_weight.astype(jnp.float32)),
+        "wake_active": jnp.asarray(1.0, dtype=wake_nll.dtype),
+        "wake_nll": wake_nll,
+        "wake_ess_mean": jnp.mean(ess),
+        "wake_ess_fraction_mean": jnp.mean(ess) / float(n_particles),
+        "wake_weight_max_mean": jnp.mean(jnp.max(weight, axis=0)),
+        "wake_weight_entropy_mean": jnp.mean(weight_entropy),
+        "wake_all_nonfinite_fraction": jnp.mean((~any_finite).astype(jnp.float32)),
+        "wake_tempered_fraction": tempered_fraction,
+        "wake_base_temperature": jnp.asarray(temperature, dtype=wake_nll.dtype),
+    }
+
+
 def _prior_mstep_loss(
     model,
     batch,
@@ -2568,7 +2868,13 @@ def _prior_mstep_loss(
     n_samples,
     objective_config,
 ):
-    posterior = sample_posterior(model, key, batch.features, int(n_samples))
+    posterior = sample_posterior(
+        model,
+        key,
+        batch.features,
+        int(n_samples),
+        sample_strategy=str(objective_config.get("sample_strategy", "random")),
+    )
     samples = jax.lax.stop_gradient(posterior.x)
     prior_mstep_nll = -jnp.mean(model.prior.log_prob(samples))
     prior_truth_weight = jnp.asarray(
@@ -2854,10 +3160,13 @@ def _apply_training_grad_masks(
     train_alpha: bool,
     train_band_calibration: bool,
 ) -> AmortizedModel:
-    if update_phase in {"encoder", "joint_no_prior", "frozen_prior"}:
+    if update_phase in {"encoder", "encoder_wake", "joint_no_prior", "frozen_prior"}:
         grads = zero_prior_grads(grads)
     if update_phase == "prior":
         grads = zero_encoder_grads(grads)
+        grads = zero_sed_scale_grads(grads)
+        grads = zero_band_calibration_grads(grads)
+    elif update_phase == "encoder_wake":
         grads = zero_sed_scale_grads(grads)
         grads = zero_band_calibration_grads(grads)
     if not train_alpha:
@@ -2876,10 +3185,13 @@ def _restore_frozen_model_components(
     train_band_calibration: bool,
 ) -> AmortizedModel:
     """Prevent AdamW state and weight decay from moving frozen components."""
-    if update_phase in {"encoder", "joint_no_prior", "frozen_prior"}:
+    if update_phase in {"encoder", "encoder_wake", "joint_no_prior", "frozen_prior"}:
         new_model = eqx.tree_at(lambda tree: tree.prior, new_model, old_model.prior)
-    if update_phase == "prior":
-        new_model = eqx.tree_at(lambda tree: tree.encoder, new_model, old_model.encoder)
+    if update_phase in {"prior", "encoder_wake"}:
+        if update_phase == "prior":
+            new_model = eqx.tree_at(
+                lambda tree: tree.encoder, new_model, old_model.encoder
+            )
         new_model = eqx.tree_at(
             lambda tree: tree.sed_scale, new_model, old_model.sed_scale
         )
@@ -3196,17 +3508,41 @@ def _training_update_phase(
     if mode in {"variational_em", "vem"}:
         offset = int(epoch) - int(schedule["freeze_epochs"]) - 1
         encoder_epochs = int(schedule["update_every_epochs"])
-        return (
-            "prior"
-            if offset % (encoder_epochs + 1) == encoder_epochs
-            else "encoder"
-        )
+        return "prior" if offset % (encoder_epochs + 1) == encoder_epochs else "encoder"
     if mode in {"encoder_then_prior", "prior_only_after_freeze"}:
         return "prior"
     raise ValueError(
         "amortized.prior.update_schedule must be one of "
         "joint, delayed_joint, alternating, variational_em, encoder_then_prior"
     )
+
+
+def _encoder_epoch_index(
+    prior_cfg: dict[str, Any],
+    *,
+    epoch: int,
+    train_prior: bool,
+) -> int:
+    """Count encoder-update epochs through the requested raw epoch."""
+    return sum(
+        _training_update_phase(prior_cfg, epoch=item, train_prior=train_prior)
+        != "prior"
+        for item in range(1, int(epoch) + 1)
+    )
+
+
+def _wake_update_active(
+    objective_config: dict[str, Any],
+    *,
+    encoder_epoch: int,
+    update_phase: str,
+) -> bool:
+    if objective_mode(objective_config) != "periodic_wake" or update_phase == "prior":
+        return False
+    wake = dict(objective_config.get("wake", {}) or {})
+    start = max(1, int(wake.get("start_encoder_epoch", 40)))
+    every = max(1, int(wake.get("every_encoder_epochs", 4)))
+    return int(encoder_epoch) >= start and (int(encoder_epoch) - start) % every == 0
 
 
 def _objective_config_for_epoch(
@@ -3237,6 +3573,8 @@ def _objective_config_for_epoch(
         "posterior_regularization": regularization,
         "npe_weight": float(objective.get("npe_weight", 0.0)),
         "prior_truth_weight": float(objective.get("prior_truth_weight", 0.0)),
+        "sample_strategy": str(objective.get("sample_strategy", "random")),
+        "wake": dict(objective.get("wake", {}) or {}),
     }
 
 
@@ -3374,8 +3712,14 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "output": f"flux_{int(cfg['features'].get('n_flux_bands', 10))}",
         },
         "objective": {
-            "loss": "negative_elbo",
-            "kl_estimator": "monte_carlo_logq_minus_logp",
+            "loss": str(cfg["objective"].get("mode", "stochastic_elbo")),
+            "kl_estimator": (
+                "periodic_self_normalized_importance_wake"
+                if objective_mode(cfg.get("objective", {})) == "periodic_wake"
+                else "monte_carlo_logq_minus_logp"
+            ),
+            "sample_strategy": str(cfg["objective"].get("sample_strategy", "random")),
+            "wake": dict(cfg["objective"].get("wake", {}) or {}),
             "likelihood": cfg["likelihood"].get("type", "student_t"),
             "jointly_optimized_components": optimized,
         },

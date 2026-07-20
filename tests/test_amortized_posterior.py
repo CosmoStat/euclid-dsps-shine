@@ -22,9 +22,11 @@ if HAS_EQUINOX:
     from euclid_dsps.amortized.train import (
         JitLatentSpec,
         LossBatch,
+        _encoder_epoch_index,
         _loss_with_metrics,
         _prior_mstep_loss,
         _training_update_phase,
+        _wake_update_active,
     )
     from euclid_dsps.calibration import GlobalSedScaleState
 
@@ -61,6 +63,72 @@ def test_conditional_flow_roundtrip_and_log_prob(family: str) -> None:
     assert posterior.logq.shape == (3, 5)
     assert jnp.all(jnp.isfinite(posterior.logq))
     assert jnp.allclose(evaluated, posterior.logq, atol=2.0e-4)
+
+
+def test_antithetic_gaussian_posterior_pairs_base_noise() -> None:
+    from euclid_dsps.amortized.encoder import GaussianEncoder
+
+    encoder = GaussianEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.ones((3, 6), dtype=jnp.float32)
+    mean, _log_std = encoder(features)
+    posterior = sample_posterior(
+        model,
+        jax.random.PRNGKey(1),
+        features,
+        4,
+        sample_strategy="antithetic",
+    )
+
+    assert jnp.allclose(posterior.x[:2] + posterior.x[2:], 2.0 * mean[None, ...])
+
+
+def test_tempered_posterior_sample_density_is_exact() -> None:
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        output_space="latent_x",
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.ones((3, 6), dtype=jnp.float32)
+    posterior = sample_posterior(
+        model,
+        jax.random.PRNGKey(1),
+        features,
+        3,
+        base_temperature=2.0,
+    )
+    evaluated = jax.vmap(
+        lambda value: posterior_log_prob(model, features, value, base_temperature=2.0)
+    )(posterior.x)
+
+    assert jnp.allclose(evaluated, posterior.logq, atol=3.0e-4)
 
 
 def test_conditional_flow_gradients_are_finite() -> None:
@@ -162,9 +230,9 @@ def test_independent_conditional_flow_does_not_transport_through_prior() -> None
     key = jax.random.PRNGKey(3)
     posterior_a = sample_posterior(model_a, key, features, 2)
     posterior_b = sample_posterior(model_b, key, features, 2)
-    evaluated = jax.vmap(
-        lambda value: posterior_log_prob(model_a, features, value)
-    )(posterior_a.x)
+    evaluated = jax.vmap(lambda value: posterior_log_prob(model_a, features, value))(
+        posterior_a.x
+    )
 
     assert jnp.allclose(posterior_a.x, posterior_b.x)
     assert jnp.allclose(posterior_a.logq, posterior_b.logq)
@@ -248,9 +316,7 @@ def test_prior_mstep_is_finite_without_decoder() -> None:
         raw_center=jnp.zeros(4),
         raw_scale=jnp.ones(4),
     )
-    loss, metrics = _prior_mstep_loss(
-        model, batch, spec, jax.random.PRNGKey(2), 1, {}
-    )
+    loss, metrics = _prior_mstep_loss(model, batch, spec, jax.random.PRNGKey(2), 1, {})
     assert jnp.isfinite(loss)
     assert jnp.isfinite(metrics["prior_mstep_nll"])
     assert metrics["model_flux_mean"] == 0.0
@@ -338,6 +404,146 @@ def test_variational_em_schedule_counts_encoder_and_prior_epochs() -> None:
     assert phases[:5] == ["encoder", "encoder", "encoder", "encoder", "prior"]
     assert phases.count("encoder") == 120
     assert phases.count("prior") == 30
+
+
+def test_periodic_wake_uses_encoder_epoch_count_under_vem() -> None:
+    prior_cfg = {
+        "source": "joint_realnvp",
+        "train_jointly": True,
+        "update_schedule": "variational_em",
+        "update_every_epochs": 4,
+    }
+    objective = {
+        "mode": "periodic_wake",
+        "wake": {"start_encoder_epoch": 40, "every_encoder_epochs": 4},
+    }
+    active_raw_epochs = []
+    for epoch in range(1, 56):
+        phase = _training_update_phase(prior_cfg, epoch=epoch, train_prior=True)
+        encoder_epoch = _encoder_epoch_index(prior_cfg, epoch=epoch, train_prior=True)
+        if _wake_update_active(
+            objective,
+            encoder_epoch=encoder_epoch,
+            update_phase=phase,
+        ):
+            active_raw_epochs.append(epoch)
+
+    assert active_raw_epochs[:2] == [49, 54]
+
+
+def test_periodic_wake_loss_is_finite_and_reports_ess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import euclid_dsps.amortized.train as train_module
+
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        output_space="latent_x",
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=RealNVPPrior(
+            jax.random.PRNGKey(2),
+            latent_dim=4,
+            n_layers=2,
+            hidden_size=8,
+            init="identity",
+            init_scale=0.0,
+        ),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    batch = LossBatch(
+        flux=jnp.ones((3, 2)),
+        flux_err=jnp.ones((3, 2)),
+        mask=jnp.ones((3, 2), dtype=bool),
+        features=jnp.ones((3, 6)),
+        truth_theta=jnp.zeros((3, 0)),
+    )
+    spec = JitLatentSpec(
+        names=("a", "b", "c", "d"),
+        lower=jnp.zeros(4),
+        upper=jnp.ones(4),
+        raw_center=jnp.zeros(4),
+        raw_scale=jnp.ones(4),
+    )
+
+    def fake_model_flux(x, *_args, **_kwargs):
+        return x[..., :2]
+
+    monkeypatch.setattr(train_module, "model_flux_from_x", fake_model_flux)
+    loss, metrics = _loss_with_metrics(
+        model,
+        batch,
+        spec,
+        None,
+        None,
+        spec.names,
+        jax.random.PRNGKey(1),
+        1,
+        1.0,
+        {"type": "student_t", "student_t_dof": 2.0},
+        {},
+        {
+            "mode": "periodic_wake",
+            "wake_active": True,
+            "wake": {
+                "n_particles": 4,
+                "n_tempered_particles": 1,
+                "base_temperature": 2.0,
+            },
+        },
+    )
+
+    assert jnp.isfinite(loss)
+    assert metrics["wake_active"] == 1.0
+    assert 0.25 <= metrics["wake_ess_fraction_mean"] <= 1.0
+    assert metrics["wake_all_nonfinite_fraction"] == 0.0
+
+    def wake_loss(candidate):
+        return _loss_with_metrics(
+            candidate,
+            batch,
+            spec,
+            None,
+            None,
+            spec.names,
+            jax.random.PRNGKey(1),
+            1,
+            1.0,
+            {"type": "student_t", "student_t_dof": 2.0},
+            {},
+            {
+                "mode": "periodic_wake",
+                "wake_active": True,
+                "wake": {
+                    "n_particles": 4,
+                    "n_tempered_particles": 1,
+                    "base_temperature": 2.0,
+                },
+            },
+        )[0]
+
+    grads = eqx.filter_grad(wake_loss)(model)
+    encoder_leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(grads.encoder) if leaf is not None
+    ]
+    prior_leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(grads.prior) if leaf is not None
+    ]
+    assert encoder_leaves
+    assert all(jnp.all(jnp.isfinite(leaf)) for leaf in encoder_leaves)
+    assert any(jnp.any(jnp.abs(leaf) > 0.0) for leaf in encoder_leaves)
+    assert all(jnp.allclose(leaf, 0.0) for leaf in prior_leaves)
 
 
 def test_npe_objective_uses_truth_and_skips_decoder() -> None:

@@ -680,6 +680,16 @@ def _add_amortized_train_arguments(
         help="Override amortized.prior.checkpoint.",
     )
     parser.add_argument(
+        "--wake-start-encoder-epoch",
+        type=int,
+        help="Override the first encoder epoch using a periodic wake update.",
+    )
+    parser.add_argument(
+        "--wake-every-encoder-epochs",
+        type=int,
+        help="Override the number of encoder epochs between wake updates.",
+    )
+    parser.add_argument(
         "--likelihood-temperature-initial",
         type=float,
         help="Initial temperature dividing the photometric NLL.",
@@ -902,16 +912,18 @@ def main(argv: list[str] | None = None) -> None:
             "disable_jax_plugin_autoload": True,
             "require_gpu": False,
         }
-    if args.command == "diffsky-validate-dsps-closure" and getattr(
-        args, "runtime", "config"
-    ) != "config":
+    if (
+        args.command == "diffsky-validate-dsps-closure"
+        and getattr(args, "runtime", "config") != "config"
+    ):
         runtime_config = {
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
         }
-    if args.command.startswith("amortized-train-") and getattr(
-        args, "runtime", "config"
-    ) != "config":
+    if (
+        args.command.startswith("amortized-train-")
+        and getattr(args, "runtime", "config") != "config"
+    ):
         runtime_config = {
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
@@ -1310,6 +1322,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     data = dict(amortized.get("data", {}) or {})
     training = dict(amortized.get("training", {}) or {})
     prior = dict(amortized.get("prior", {}) or {})
+    objective = dict(amortized.get("objective", {}) or {})
+    wake = dict(objective.get("wake", {}) or {})
     posterior_regularization = dict(amortized.get("posterior_regularization", {}) or {})
     input_noise = dict(amortized.get("input_noise", {}) or {})
     if args.selection_mode is not None:
@@ -1340,6 +1354,14 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         prior["update_every_epochs"] = int(args.prior_update_every_epochs)
     if getattr(args, "prior_checkpoint", None) is not None:
         prior["checkpoint"] = str(args.prior_checkpoint)
+    if getattr(args, "wake_start_encoder_epoch", None) is not None:
+        if int(args.wake_start_encoder_epoch) < 1:
+            raise ValueError("--wake-start-encoder-epoch must be >= 1")
+        wake["start_encoder_epoch"] = int(args.wake_start_encoder_epoch)
+    if getattr(args, "wake_every_encoder_epochs", None) is not None:
+        if int(args.wake_every_encoder_epochs) < 1:
+            raise ValueError("--wake-every-encoder-epochs must be >= 1")
+        wake["every_encoder_epochs"] = int(args.wake_every_encoder_epochs)
     if getattr(args, "likelihood_temperature_initial", None) is not None:
         training["likelihood_temperature_initial"] = float(
             args.likelihood_temperature_initial
@@ -1371,6 +1393,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     amortized["data"] = data
     amortized["training"] = training
     amortized["prior"] = prior
+    objective["wake"] = wake
+    amortized["objective"] = objective
     if posterior_regularization:
         amortized["posterior_regularization"] = posterior_regularization
     if input_noise:
@@ -1522,10 +1546,7 @@ def _run_amortized_finalize_jacobian_lens(config: dict, args) -> None:
         Path(args.out),
         verbose=not bool(getattr(args, "quiet", False)),
     )
-    print(
-        "[jlens] finalized "
-        f"{payload.get('n_objects', 0)} objects -> {args.out}"
-    )
+    print(f"[jlens] finalized {payload.get('n_objects', 0)} objects -> {args.out}")
 
 
 def _run_diffsky_map_adam_prior(config: dict, args) -> None:

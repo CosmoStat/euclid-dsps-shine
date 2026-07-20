@@ -12,7 +12,7 @@ import jax.numpy as jnp
 from euclid_dsps.amortized.config import require_amortized_dependencies
 
 from .flows import RealNVPPrior, assert_flow_integrity
-from .spline15d import SPLINE15D_PARAMETER_NAMES
+from .spline15d_schema import SPLINE15D_PARAMETER_NAMES
 from .train import PriorFlow, _prior_template_from_architecture
 
 

@@ -108,6 +108,7 @@ parameters physically.
    amortized_inference
    conditional_posterior_matrix
    joint_prior_realnvp_matrix
+   mode_covering_posterior_matrix
    feniks_prior_ladder_jlens
    science_assessment
    ssp_compression

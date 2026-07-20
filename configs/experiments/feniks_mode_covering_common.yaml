@@ -1,0 +1,10 @@
+extends: feniks_joint_prior_independent_common.yaml
+
+amortized:
+  latent:
+    # Reuse only the immutable 15D coordinate transform from this checkpoint.
+    normalization: spline15d_checkpoint
+    normalization_checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx
+  objective:
+    mode: stochastic_elbo
+    sample_strategy: random

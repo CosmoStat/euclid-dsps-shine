@@ -1,0 +1,20 @@
+extends: feniks_mode_covering_common.yaml
+
+amortized:
+  prior:
+    source: joint_realnvp
+    train_jointly: true
+    n_layers: 8
+    hidden_size: 128
+    scale_clamp: 0.05
+    shift_clamp: 5.0
+    permutation: roll
+    init: identity
+    init_scale: 0.0
+    update_schedule: variational_em
+    update_every_epochs: 4
+    mstep_only: true
+  training:
+    # 120 encoder epochs plus 30 prior-only M-steps.
+    epochs: 150
+    n_samples: 1
