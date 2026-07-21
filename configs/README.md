@@ -16,6 +16,13 @@ The four-task unsupervised mode-covering control is defined by
 coordinate transform across all tasks, then isolates normalization, antithetic
 Monte Carlo, and periodic importance-weighted wake updates.
 
+The follow-up self-supervised prior/posterior matrix is defined by
+`configs/experiments/feniks_selfsup_*.yaml` and launched with
+`scripts/submit_feniks_selfsup_rws.sh`. All four tasks keep the same production
+`mixed_log_shifted_asinh` 15D transform and use the generator-matched Gaussian
+likelihood. The matrix compares a frozen-prior control, a learned-prior RWS
+wake control, and physical sleep/wake schedules with four or eight particles.
+
 - `diffsky_synthetic_feniks_260617_50k.yaml`: generate and validate the
   14-band train/validation/test synthetic FENIKS DSPS-closure catalogues.
 - `diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml`: generate the
