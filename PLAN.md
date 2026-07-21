@@ -1,5 +1,80 @@
 # Plan
 
+## 2026-07-21 Self-Supervised RWS Prior and Posterior Matrix
+
+- Status: completed; ready for the Jean-Zay smoke-plus-full submission.
+- Preserve the production checkpoint-backed 15D
+  `mixed_log_shifted_asinh` normalization for every prior and posterior.
+- Match the synthetic closure likelihood to the generator with Gaussian
+  `fluxerr`, zero added fractional floor, and zero jitter.
+- Replace invalid-model masking with particle rejection and stabilize extreme
+  spline-SFH exponentiation before DSPS evaluation.
+- Add a one-loop reweighted wake-sleep objective: model-generated physical
+  sleep updates train only the encoder; real-data wake updates train the
+  encoder and learned prior from the same stopped importance weights.
+- Add four H100 controls covering frozen prior, learned weighted-wake prior,
+  sleep 3:1 with K=4, and sleep 3:1 with K=8, including a JAX-free fail-fast
+  preflight, smoke dependency, inference plots, and locked comparison report.
+- Keep production validation at an eight-epoch cadence with snapshots and JAX
+  preallocation disabled; force both compiled paths through the ten-minute
+  smoke before releasing the full array.
+- Verification: 43 focused config, likelihood, posterior-flow, RWS-gradient,
+  noise-contract, and spline tests pass on CPU; Compileall, Ruff, shell syntax,
+  diff checks, and the new Sphinx page pass. The production catalog is absent
+  from WSL, so the JAX-free validator runs on Jean-Zay before either array is
+  submitted.
+
+## 2026-07-20 Joint-Latent Prior Diagram Correction
+
+- Status: completed.
+- Correct the target and per-experiment architecture diagrams so the learned
+  prior is shown as a population model fitted to latent samples inferred by
+  the posterior from the photometric catalog, not as a downstream likelihood
+  output.
+- Distinguish simultaneous ELBO gradients from stopped-gradient VEM M-steps.
+- Added separate object-reconstruction and latent-population lanes, the joint
+  ELBO and VEM M-step objectives, and an explicit warning that the learned
+  density is the selected-catalog population unless selection is modeled.
+
+## 2026-07-20 Joint-Prior Array Explorer and Scientific Interpretation
+
+- Status: completed.
+- Add the completed six-run independent-posterior/learned-prior array to the
+  standalone explorer with exact metrics, configs, corners, diagnostics, and
+  artifact provenance.
+- Give every experiment an explicit scientific role: sanity check, ablation,
+  supervised upper-bound diagnostic, or viable photometry-only final-model
+  candidate.
+- Explain the identifiability problem when both population prior and posterior
+  are learned without true latent distributions, and separate observable-space
+  fit from latent-space validation available only in synthetic closure tests.
+- Add a dedicated architecture diagram and training schedule for each run,
+  including gradient paths, frozen/trainable components, truth usage, and the
+  reason each comparison exists.
+- Regenerate and validate the standalone HTML at desktop and mobile widths.
+- Added all six completed joint-prior runs to the common A/B explorer, bringing
+  the catalog to 15 runs. Each new entry embeds the exact corner, training,
+  residual, photo-z, normalized config, prior-population metrics, and compact
+  artifact inventory from the July 19 full array.
+- Added a dedicated joint-prior science tab with the deployable photometry-only
+  target architecture, an identifiability explanation, observable-only
+  validation criteria, aggregate coverage/speed plots, and one gradient/schedule
+  diagram for every experiment.
+- Classified the frozen-prior run as a failed reference sanity check, the
+  simultaneous/VEM runs as currently failed but methodologically deployable
+  candidates, and the hybrid/oracle runs as synthetic-only capacity/plumbing
+  diagnostics. Corrected the historical RQ-spline label to the serialized
+  frozen RealNVP provenance.
+- The report states the actual result rather than selecting a false winner:
+  every photometry-only checkpoint fails posterior calibration; supervised NPE
+  repairs q but not p; even the prior-truth oracle leaves a failed learned
+  prior, so common normalization and prior-loss plumbing must be fixed before
+  learned-prior conclusions are trusted.
+- Regenerated the 108.2 MB standalone HTML and 110.1 MB payload. Compile, Ruff,
+  diff checks, and a memory-limited Playwright pass succeed: 16 tabs, six
+  experiment cards, 15 comparator options, nonblank aggregate figures, no body
+  overflow at 390 px, and zero JavaScript errors.
+
 ## 2026-07-20 FENIKS Common-15D and Mode-Covering Posterior Control
 
 - Status: completed; ready for the Jean-Zay smoke-plus-full submission.
@@ -77,6 +152,61 @@
   JAX array under `JAX_PLATFORMS=cuda`. Reimplemented the exact float32 latent
   hash in NumPy/JSON so the preflight is JAX-free; a fresh-process regression
   test and full temporary-catalog validation pass without importing `jax`.
+
+## 2026-07-19 FENIKS Production Run Explorer
+
+- Status: completed.
+- Inventory the completed JAX-COSMO conditional-posterior production runs and
+  preserve exact provenance across the recovered AVI and completed NPE roots.
+- Extend the standalone forward-model report with a plain-language method and
+  training-flow guide, exact per-run configuration and artifact inventories,
+  embedded corner and diagnostic plots, and explicit scientific caveats.
+- Add a two-run A/B comparator with numerical deltas, configuration
+  differences, side-by-side plots, and metric interpretation.
+- Regenerate the standalone HTML and payload, then validate navigation,
+  rendering, responsive layout, and payload completeness.
+- Added a plain-language French method guide that separates the population
+  prior from the conditional posterior, explains AVI versus NPE, and documents
+  the four posterior families and the role of every acceptance metric.
+- Added an A/B run comparator covering the eight controlled production-matrix
+  runs plus the separate learned-RQ-prior lineage. It embeds 37 exact local
+  figures, all normalized config inputs, numerical deltas, provenance warnings,
+  and compact artifact inventories with checkpoint/shard aggregation.
+- Regenerated the 65.5 MB standalone report and 67.1 MB JSON payload. Compile,
+  Ruff, diff checks, nine-run payload assertions, and Playwright navigation at
+  desktop/mobile widths pass with zero JavaScript errors; all 15 tabs keep
+  exactly one visible panel and embedded corners decode at full resolution.
+
+## 2026-07-17 JAX-COSMO Prior-to-Inference Result Audit
+
+- Status: in progress.
+- Verify completeness and provenance across the learned RealNVP prior,
+  amortized encoder training, and held-out 5,000-object inference run.
+- Quantify prior fidelity, train/validation convergence, posterior recovery and
+  calibration, photo-z performance, posterior-predictive residuals, parameter
+  boundary behavior, and failure modes from the serialized tables.
+- Produce a concise scientific assessment with explicit pass/fail conclusions
+  and the highest-priority follow-up before comparing against the running
+  dequantized RQ-spline pipeline.
+
+## 2026-07-17 Continuous-Atom JAX-COSMO RQ-Spline Pipeline
+
+- Status: completed.
+- Build an isolated grouped spline-15D dataset whose exact-zero SFH contrasts
+  are physically dequantized with uniform `+/-1e-3 dex` noise while retaining
+  exact truth files for diagnostics.
+- Generalize the production spline-15D prior trainer, checkpoint format, frozen
+  amortized-prior loader, snapshots, and final diagnostics from RealNVP-only to
+  both RealNVP and rational-quadratic spline coupling flows.
+- Add a fully versioned Jean-Zay `afterok` chain from grouped dataset projection
+  through RQ-spline prior training, four-H100 encoder/decoder training, and
+  held-out inference, without overwriting the active RealNVP baseline.
+- Validate with RQ checkpoint roundtrips, finite gradients, config resolution,
+  shell checks, and a real-parquet end-to-end smoke including diagnostics.
+- Verification completed on 64 rows per split: all 38 exact-zero atoms were
+  removed only from the projected tables, the two-epoch RQ prior smoke wrote a
+  reloadable best checkpoint and complete diagnostics, and the frozen
+  amortized loader recovered the 15D RQ prior with the matching latent order.
 
 ## 2026-07-17 Amortized Warm-Restart Support
 
@@ -6403,3 +6533,70 @@ Phase 6 - Later AGN and production scaling:
   fit --index 0 --fit-maxiter 1 --out
   outputs/runs/dev_popcosmos_diffstar_one_short --sed-samples 0` passed and
   wrote the expected diagnostic outputs.
+2026-07-17 conditional posterior experiment matrix (completed):
+- Implemented one H100 array comparing stochastic-ELBO and supervised NPE
+  objectives with the current Gaussian encoder, a prior-transported Gaussian,
+  a conditional RealNVP posterior, and a conditional RQ-spline posterior.
+- Added exact conditional-posterior sampling and density evaluation, supervised
+  truth loading, NPE loss/checkpoint selection, and shared inference support for
+  all four posterior families while keeping the frozen population prior fixed.
+- Each full array task trains, runs 5,000-object held-out inference, verifies the
+  photometric-fit and truth/prior/posterior corner plots, and writes coverage,
+  accuracy, timing, and posterior-predictive metrics. A ten-minute smoke array
+  gates the single full array through an `afterok` dependency.
+- Added an Agg Matplotlib setup with a private per-job cache, strict four-device
+  checks, non-overwrite guards, per-task completion markers, locked aggregation,
+  comparison plots, a selection report, experiment configs, and a runbook.
+- Verification: `compileall`, shell syntax checks, Ruff, config/model construction,
+  exact RealNVP/RQ-spline roundtrips, finite NPE gradients, and 39 focused tests
+  passed. The complete suite reached 350 passed and 1 skipped; its sole failure
+  is the unrelated pre-existing tiny-sample metallicity-trend gate in
+  `test_toy_smoke_generation_validation_and_parquet_roundtrip`. Sphinx renders
+  the new page; strict docs still reports eight pre-existing RST errors in
+  `docs/source/spline15d_realnvp.rst`.
+
+2026-07-18 conditional posterior result audit and AVI recovery (completed):
+- Audited the completed frozen-RQSpline/Gaussian-encoder run, the eight smoke
+  tasks, the four completed NPE tasks, and the four interrupted AVI tasks.
+- Identified a common validation-time JAX pinned-host-memory allocation failure
+  near epoch 91 in every AVI task; the training updates themselves remained
+  finite and family-specific numerical failure was not the cause.
+- Added a guarded four-task AVI warm-restart array using the last safe model
+  checkpoints, validation every four epochs, disabled JAX preallocation, and a
+  fresh comparison root that reuses the completed NPE results.
+- Corrected resumed-run timing summaries to divide elapsed time by epochs
+  actually executed and suppressed expected all-NaN redshift-reference warnings.
+- Verification: shell syntax, submit-contract mock, `compileall`, two focused
+  timing tests, Ruff, and `git diff --check` passed. Tests importing the full
+  spline15d stack could not collect locally because `jax_cosmo` is absent from
+  both available local Python environments; it remains present in the Jean-Zay
+  `shine` environment used by the production runs.
+
+2026-07-18 independent posterior and learned-prior matrix (completed):
+- Added a direct-latent conditional RealNVP posterior so `q_phi(x|y)` and the
+  unconditional population flow `p_psi(x)` have independent transformations
+  and exact, separately evaluated densities.
+- Added simultaneous joint AVI and prior-only variational-EM schedules. VEM
+  samples are stopped before the prior NLL, skip the DSPS decoder, and strict
+  component restoration prevents AdamW momentum or weight decay from moving
+  parameters during their frozen phase.
+- Added six H100 experiments: frozen pretrained RQ-spline control, simultaneous
+  RealNVP prior, VEM 1:1, VEM 4:1, VEM 4:1 plus NPE, and a synthetic-only prior
+  truth oracle. The NPE weight is 50 based on the measured AVI/NPE encoder
+  gradient-norm ratio, and every VEM configuration retains 120 encoder epochs.
+- Added a ten-minute smoke array followed by one full six-task array. Each task
+  trains, infers 5,000 held-out objects, requires the photometry-fit and corner
+  plots, and participates in a locked aggregate comparison.
+- Hardened the old epoch-91 failure path with spaced validation, disabled JAX
+  preallocation, Agg Matplotlib, a private cache, and exact four-GPU checks.
+
+2026-07-19 learned-prior smoke failure recovery (completed):
+- Audited all six tasks from smoke array 2067913. The frozen-prior control
+  completed end to end; tasks 1-5 failed at their first pmapped batch with the
+  same lazy-import `UnexpectedTracerError`.
+- Removed the module-level JAX spline-node constant that became a leaked tracer
+  when `prior_learning.spline15d` was first imported inside `pmap`. Default
+  nodes are now converted from the NumPy constant inside the traced function.
+- Added a JIT regression test for default spline-node reconstruction. The fix
+  applies to the model path itself rather than relying on eager imports in the
+  Slurm wrapper.
