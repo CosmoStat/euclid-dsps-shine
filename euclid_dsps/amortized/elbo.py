@@ -224,7 +224,8 @@ def objective_mode(objective_config: dict | None) -> str:
         "hybrid_elbo": "hybrid_elbo",
         "periodic_wake": "periodic_wake",
         "wake": "periodic_wake",
-        "reweighted_wake_sleep": "periodic_wake",
+        "reweighted_wake_sleep": "reweighted_wake_sleep",
+        "rws": "reweighted_wake_sleep",
         "deterministic": "deterministic_reconstruction",
         "autoencoder": "deterministic_reconstruction",
         "deterministic_autoencoder": "deterministic_reconstruction",
@@ -235,7 +236,8 @@ def objective_mode(objective_config: dict | None) -> str:
     if mode not in aliases:
         raise ValueError(
             "amortized.objective.mode must be stochastic_elbo, "
-            "hybrid_elbo, periodic_wake, neural_posterior_estimation, or "
+            "hybrid_elbo, periodic_wake, reweighted_wake_sleep, "
+            "neural_posterior_estimation, or "
             "deterministic_reconstruction"
         )
     return aliases[mode]

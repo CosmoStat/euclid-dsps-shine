@@ -887,6 +887,7 @@ def train_amortized_fs2(
         f"train_per_band_calibration={train_band_calibration}",
     )
     input_noise_cfg = _input_noise_config(cfg.get("input_noise", {}))
+    sleep_runtime_cfg = _sleep_runtime_config(config, feature_stats)
     if input_noise_cfg["enabled"]:
         _log(
             verbose,
@@ -1007,13 +1008,33 @@ def train_amortized_fs2(
             cfg["prior"], epoch=epoch, train_prior=train_prior
         )
         objective_config = _objective_config_for_epoch(cfg, epoch)
+        objective_config["sleep"] = {
+            **dict(objective_config.get("sleep", {}) or {}),
+            **sleep_runtime_cfg,
+        }
         wake_active = _wake_update_active(
             objective_config,
             encoder_epoch=encoder_epoch,
             update_phase=update_phase,
         )
         objective_config["wake_active"] = bool(wake_active)
-        optimizer_phase = "encoder_wake" if wake_active else update_phase
+        if wake_active:
+            train_prior_on_wake = bool(
+                train_prior
+                and (objective_config.get("wake", {}) or {}).get(
+                    "train_prior", False
+                )
+            )
+            optimizer_phase = (
+                "joint_wake" if train_prior_on_wake else "encoder_wake"
+            )
+        elif (
+            objective_mode(objective_config) == "reweighted_wake_sleep"
+            and update_phase != "prior"
+        ):
+            optimizer_phase = "encoder_sleep"
+        else:
+            optimizer_phase = update_phase
         objective_config["update_phase"] = optimizer_phase
         objective_config["prior_mstep_only"] = bool(
             update_phase == "prior" and cfg["prior"].get("mstep_only", False)
@@ -1178,9 +1199,17 @@ def train_amortized_fs2(
                         "kl_definition": (
                             "self_normalized_importance_wake"
                             if wake_active
-                            else "E_q[logq - logp_beta]"
+                            else (
+                                "model_generated_inclusive_sleep"
+                                if optimizer_phase == "encoder_sleep"
+                                else "E_q[logq - logp_beta]"
+                            )
                         ),
-                        "kl_direction": "p_to_q" if wake_active else "q_to_p",
+                        "kl_direction": (
+                            "p_to_q"
+                            if wake_active or optimizer_phase == "encoder_sleep"
+                            else "q_to_p"
+                        ),
                         "kl_weight": float(kl_weight),
                         "prior_source": str(
                             cfg["prior"].get("source", "joint_realnvp")
@@ -1272,6 +1301,13 @@ def train_amortized_fs2(
                 f"[amortized] epoch {epoch}/{int(epochs)} validation start",
             )
             key, val_key = jax.random.split(key)
+            validation_objective_config = {
+                **objective_config,
+                "update_phase": "validation",
+                "prior_mstep_only": False,
+            }
+            if objective_mode(objective_config) == "reweighted_wake_sleep":
+                validation_objective_config["wake_active"] = True
             validation_rows, epoch_bin_rows = evaluate_validation_epoch(
                 model,
                 validation_arrays,
@@ -1286,11 +1322,7 @@ def train_amortized_fs2(
                 kl_weight=float(kl_weight),
                 likelihood_config=cfg["likelihood"],
                 calibration_config=calibration_runtime_config,
-                objective_config={
-                    **objective_config,
-                    "update_phase": "validation",
-                    "prior_mstep_only": False,
-                },
+                objective_config=validation_objective_config,
                 progress=bool(progress),
                 total=val_expected_batches,
                 desc=f"val {epoch}/{int(epochs)}",
@@ -1470,8 +1502,14 @@ def train_amortized_fs2(
         "stratified_strategy": split.stratified_strategy,
         "redshift_column": split.redshift_column,
         "catalog_fingerprint": catalog_identity,
-        "kl_definition": "E_q[logq - logp_beta]",
-        "kl_direction": "q_to_p",
+        "kl_definition": (
+            "reweighted_wake_sleep"
+            if objective_mode_name == "reweighted_wake_sleep"
+            else "E_q[logq - logp_beta]"
+        ),
+        "kl_direction": (
+            "p_to_q" if objective_mode_name == "reweighted_wake_sleep" else "q_to_p"
+        ),
         "kl_annealing_epochs": int(cfg["training"].get("kl_annealing_epochs", 5)),
         "kl_weight_max": float(kl_weight_max),
         "prior_source": str(cfg["prior"].get("source", "joint_realnvp")),
@@ -1491,19 +1529,27 @@ def train_amortized_fs2(
             cfg["objective"].get("sample_strategy", "random")
         ),
         "wake": dict(cfg["objective"].get("wake", {}) or {}),
+        "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
         "wake_updates": int(
             sum(
                 row.get("update_applied", 0.0)
                 for row in _training_rows(rows)
-                if row.get("update_phase") == "encoder_wake"
+                if row.get("update_phase") in {"encoder_wake", "joint_wake"}
             )
         ),
         "wake_ess_fraction_mean": _finite_mean(
             [
                 float(row.get("wake_ess_fraction_mean", float("nan")))
                 for row in _training_rows(rows)
-                if row.get("update_phase") == "encoder_wake"
+                if row.get("update_phase") in {"encoder_wake", "joint_wake"}
             ]
+        ),
+        "sleep_updates": int(
+            sum(
+                row.get("update_applied", 0.0)
+                for row in _training_rows(rows)
+                if row.get("update_phase") == "encoder_sleep"
+            )
         ),
         "best_loss": float(best_metric_value),
         "best_checkpoint_metric": best_checkpoint_metric,
@@ -1564,9 +1610,13 @@ def train_amortized_fs2(
                 "disabled_deterministic_reconstruction"
                 if objective_mode_name == "deterministic_reconstruction"
                 else (
-                    "periodic_self_normalized_importance_wake"
-                    if objective_mode_name == "periodic_wake"
-                    else "monte_carlo_logq_minus_logp"
+                    "reweighted_wake_sleep"
+                    if objective_mode_name == "reweighted_wake_sleep"
+                    else (
+                        "periodic_self_normalized_importance_wake"
+                        if objective_mode_name == "periodic_wake"
+                        else "monte_carlo_logq_minus_logp"
+                    )
                 )
             ),
         },
@@ -2153,6 +2203,20 @@ def _evaluation_metrics(
             "kl_mc_mean": zeros,
             "posterior_predictive_chi2": zeros,
         }
+    if bool(objective_config.get("wake_active", False)):
+        _loss, metrics, object_metrics = _importance_weighted_wake_outputs(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+        )
+        return metrics, object_metrics
     deterministic = is_deterministic_reconstruction(objective_config)
     mean, log_std = model.encoder(batch.features)
     if deterministic:
@@ -2649,6 +2713,18 @@ def _loss_with_metrics(
             calibration_config,
             objective_config,
         )
+    if objective_mode(objective_config) == "reweighted_wake_sleep":
+        return _model_generated_sleep_loss(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            calibration_config,
+            objective_config,
+        )
     loss, metrics = negative_elbo(
         model,
         batch,
@@ -2693,6 +2769,33 @@ def _loss_with_metrics(
 
 
 def _importance_weighted_wake_loss(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    likelihood_config,
+    calibration_config,
+    objective_config,
+):
+    loss, metrics, _object_metrics = _importance_weighted_wake_outputs(
+        model,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        key,
+        likelihood_config,
+        calibration_config,
+        objective_config,
+    )
+    return loss, metrics
+
+
+def _importance_weighted_wake_outputs(
     model,
     batch,
     latent_spec,
@@ -2751,8 +2854,9 @@ def _importance_weighted_wake_loss(
     )
     logprior = model.prior.log_prob(samples)
 
+    safe_samples, physical_valid = _safe_decoder_inputs(samples, latent_spec)
     model_flux_raw = model_flux_from_x(
-        samples,
+        safe_samples,
         latent_spec,
         context,
         model_args,
@@ -2776,6 +2880,7 @@ def _importance_weighted_wake_loss(
         if band_cfg.enabled
         else model_flux
     )
+    physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
     loglike = photometric_loglike(
         obs_flux=batch.flux,
         model_flux=model_flux,
@@ -2786,6 +2891,7 @@ def _importance_weighted_wake_loss(
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
     )
+    loglike = jnp.where(physical_valid, loglike, -jnp.inf)
     likelihood_temperature = jnp.asarray(
         max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
         dtype=loglike.dtype,
@@ -2797,14 +2903,36 @@ def _importance_weighted_wake_loss(
     safe_logweight = jnp.where(any_finite, safe_logweight, jnp.zeros_like(logweight))
     weight = jax.nn.softmax(safe_logweight, axis=0)
     stopped_weight = jax.lax.stop_gradient(weight)
-
-    wake_nll = -jnp.mean(jnp.sum(stopped_weight * logq, axis=0))
+    valid_object = jnp.squeeze(any_finite, axis=0)
+    valid_object_count = jnp.maximum(jnp.sum(valid_object), 1)
+    weighted_logq = stopped_weight * jnp.where(finite_weight, logq, 0.0)
+    weighted_logprior = stopped_weight * jnp.where(finite_weight, logprior, 0.0)
+    weighted_loglike = stopped_weight * jnp.where(finite_weight, loglike, 0.0)
+    wake_nll_by_object = -jnp.sum(weighted_logq, axis=0)
+    wake_nll = jnp.sum(jnp.where(valid_object, wake_nll_by_object, 0.0))
+    wake_nll = wake_nll / valid_object_count
+    prior_nll_by_object = -jnp.sum(weighted_logprior, axis=0)
+    prior_mstep_nll = jnp.sum(jnp.where(valid_object, prior_nll_by_object, 0.0))
+    prior_mstep_nll = prior_mstep_nll / valid_object_count
+    train_prior = bool(wake.get("train_prior", False))
+    prior_loss_weight = jnp.asarray(
+        float(wake.get("prior_loss_weight", 1.0)), dtype=wake_nll.dtype
+    )
+    loss = wake_nll + (
+        prior_loss_weight * prior_mstep_nll if train_prior else 0.0
+    )
     ess = 1.0 / jnp.sum(jnp.square(weight), axis=0)
     weight_entropy = -jnp.sum(
         jnp.where(weight > 0.0, weight * jnp.log(weight), 0.0), axis=0
     )
-    weighted_nll = jnp.mean(jnp.sum(stopped_weight * -loglike, axis=0))
-    weighted_kl = jnp.mean(jnp.sum(stopped_weight * (logq - logprior), axis=0))
+    weighted_nll_by_object = -jnp.sum(weighted_loglike, axis=0)
+    weighted_nll = jnp.sum(
+        jnp.where(valid_object, weighted_nll_by_object, 0.0)
+    ) / valid_object_count
+    weighted_kl_by_object = jnp.sum(weighted_logq - weighted_logprior, axis=0)
+    weighted_kl = jnp.sum(
+        jnp.where(valid_object, weighted_kl_by_object, 0.0)
+    ) / valid_object_count
     chi = photometric_normalized_residual(
         obs_flux=batch.flux,
         model_flux=model_flux,
@@ -2813,19 +2941,23 @@ def _importance_weighted_wake_loss(
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
     )
+    valid_band = batch.mask[None, :, :] & physical_valid[..., None]
+    chi = jnp.where(valid_band, chi, 0.0)
     residual = jnp.where(
-        batch.mask[None, :, :], model_flux - batch.flux[None, :, :], 0.0
+        valid_band, model_flux - batch.flux[None, :, :], 0.0
     )
-    n_valid_residual = jnp.maximum(jnp.sum(batch.mask) * n_particles, 1)
-    n_valid_flux = jnp.maximum(jnp.sum(batch.mask) * n_particles, 1)
+    particle_chi2 = jnp.sum(chi**2, axis=-1)
+    weighted_chi2_by_object = jnp.sum(stopped_weight * particle_chi2, axis=0)
+    n_valid_residual = jnp.maximum(jnp.sum(valid_band), 1)
+    n_valid_flux = n_valid_residual
     _mean, log_std = model.encoder(batch.features)
     zero = jnp.asarray(0.0, dtype=wake_nll.dtype)
-    return wake_nll, {
-        "loss": wake_nll,
+    metrics = {
+        "loss": loss,
         "negative_loglike": weighted_nll,
         "loglike_mean": -weighted_nll,
-        "logprior_mean": jnp.mean(jnp.sum(stopped_weight * logprior, axis=0)),
-        "logq_mean": jnp.mean(jnp.sum(stopped_weight * logq, axis=0)),
+        "logprior_mean": -prior_mstep_nll,
+        "logq_mean": -wake_nll,
         "kl_mc_mean": weighted_kl,
         "likelihood_temperature": likelihood_temperature,
         "entropy_floor_penalty": zero,
@@ -2850,14 +2982,221 @@ def _importance_weighted_wake_loss(
         "finite_fraction": jnp.mean(finite_weight.astype(jnp.float32)),
         "wake_active": jnp.asarray(1.0, dtype=wake_nll.dtype),
         "wake_nll": wake_nll,
-        "wake_ess_mean": jnp.mean(ess),
-        "wake_ess_fraction_mean": jnp.mean(ess) / float(n_particles),
-        "wake_weight_max_mean": jnp.mean(jnp.max(weight, axis=0)),
-        "wake_weight_entropy_mean": jnp.mean(weight_entropy),
+        "wake_ess_mean": jnp.sum(jnp.where(valid_object, ess, 0.0))
+        / valid_object_count,
+        "wake_ess_fraction_mean": (
+            jnp.sum(jnp.where(valid_object, ess, 0.0)) / valid_object_count
+        )
+        / float(n_particles),
+        "wake_weight_max_mean": jnp.sum(
+            jnp.where(valid_object, jnp.max(weight, axis=0), 0.0)
+        )
+        / valid_object_count,
+        "wake_weight_entropy_mean": jnp.sum(
+            jnp.where(valid_object, weight_entropy, 0.0)
+        )
+        / valid_object_count,
         "wake_all_nonfinite_fraction": jnp.mean((~any_finite).astype(jnp.float32)),
+        "wake_physical_valid_fraction": jnp.mean(
+            physical_valid.astype(jnp.float32)
+        ),
         "wake_tempered_fraction": tempered_fraction,
         "wake_base_temperature": jnp.asarray(temperature, dtype=wake_nll.dtype),
+        "prior_mstep_nll": prior_mstep_nll,
+        "prior_loss_weight": prior_loss_weight,
+        "sleep_active": zero,
     }
+    invalid_value = jnp.asarray(jnp.inf, dtype=wake_nll.dtype)
+    object_loss = wake_nll_by_object + (
+        prior_loss_weight * prior_nll_by_object if train_prior else 0.0
+    )
+    object_metrics = {
+        "loss": jnp.where(valid_object, object_loss, invalid_value),
+        "negative_loglike": jnp.where(
+            valid_object, weighted_nll_by_object, invalid_value
+        ),
+        "kl_mc_mean": jnp.where(
+            valid_object, weighted_kl_by_object, invalid_value
+        ),
+        "posterior_predictive_chi2": jnp.where(
+            valid_object, weighted_chi2_by_object, invalid_value
+        ),
+    }
+    return loss, metrics, object_metrics
+
+
+def _model_generated_sleep_loss(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    calibration_config,
+    objective_config,
+):
+    """Fit q on latent/photometry pairs generated by the current physical model."""
+    sleep = dict(objective_config.get("sleep", {}) or {})
+    if not bool(sleep.get("enabled", False)):
+        raise ValueError("reweighted_wake_sleep requires objective.sleep.enabled=true")
+    prior_key, noise_key = jax.random.split(key)
+    n_objects = int(batch.features.shape[0])
+    samples = jax.lax.stop_gradient(model.prior.sample(prior_key, n_objects))
+    safe_samples, physical_valid = _safe_decoder_inputs(samples, latent_spec)
+    model_flux_raw = model_flux_from_x(
+        safe_samples,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+    )
+    scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
+    log_alpha_sed = model.sed_scale.log_alpha_sed
+    model_flux = (
+        apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
+        if scale_cfg.enabled
+        else model_flux_raw
+    )
+    log_alpha_band = (
+        model.band_calibration.log_alpha_band
+        if band_cfg.enabled and model.band_calibration is not None
+        else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
+    )
+    model_flux = (
+        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+        if band_cfg.enabled
+        else model_flux
+    )
+    physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
+    flux_err = _sleep_m5_flux_error(model_flux, sleep)
+    noise = flux_err * jax.random.normal(
+        noise_key, model_flux.shape, dtype=model_flux.dtype
+    )
+    noisy_flux = model_flux + noise
+    features = _sleep_encoder_features(noisy_flux, flux_err, batch.mask, sleep)
+    logq = posterior_log_prob(model, features, samples)
+    valid = physical_valid & jnp.isfinite(logq)
+    valid_count = jnp.maximum(jnp.sum(valid), 1)
+    sleep_nll = -jnp.sum(jnp.where(valid, logq, 0.0)) / valid_count
+    logprior = model.prior.log_prob(samples)
+    _mean, log_std = model.encoder(features)
+    valid_band = batch.mask & physical_valid[:, None]
+    normalized_noise = jnp.where(valid_band, noise / flux_err, 0.0)
+    valid_band_count = jnp.maximum(jnp.sum(valid_band), 1)
+    zero = jnp.asarray(0.0, dtype=sleep_nll.dtype)
+    return sleep_nll, {
+        "loss": sleep_nll,
+        "negative_loglike": sleep_nll,
+        "loglike_mean": -sleep_nll,
+        "logprior_mean": jnp.sum(jnp.where(valid, logprior, 0.0)) / valid_count,
+        "logq_mean": -sleep_nll,
+        "kl_mc_mean": zero,
+        "likelihood_temperature": jnp.asarray(1.0, dtype=sleep_nll.dtype),
+        "entropy_floor_penalty": zero,
+        "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
+        "posterior_min_log_std": jnp.min(log_std),
+        "posterior_median_log_std": jnp.median(log_std),
+        "posterior_max_log_std": jnp.max(log_std),
+        "deterministic_reconstruction": zero,
+        "effective_n_samples": jnp.asarray(1.0, dtype=sleep_nll.dtype),
+        "model_flux_mean": jnp.mean(model_flux),
+        "mean_model_flux_raw": jnp.mean(model_flux_raw),
+        "mean_model_flux_scaled": jnp.mean(model_flux),
+        "log_alpha_sed": log_alpha_sed,
+        "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
+        "alpha_prior_penalty": zero,
+        "band_alpha_prior_penalty": zero,
+        "max_abs_band_delta_mag": jnp.max(
+            jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
+        ),
+        "residual_rms": jnp.sqrt(
+            jnp.sum(normalized_noise**2) / valid_band_count
+        ),
+        "flux_residual_rms": jnp.sqrt(
+            jnp.sum(jnp.where(valid_band, noise, 0.0) ** 2) / valid_band_count
+        ),
+        "finite_fraction": jnp.mean(valid.astype(jnp.float32)),
+        "wake_active": zero,
+        "wake_nll": zero,
+        "wake_ess_mean": zero,
+        "wake_ess_fraction_mean": zero,
+        "wake_weight_max_mean": zero,
+        "wake_weight_entropy_mean": zero,
+        "wake_all_nonfinite_fraction": zero,
+        "wake_physical_valid_fraction": zero,
+        "wake_tempered_fraction": zero,
+        "wake_base_temperature": zero,
+        "prior_mstep_nll": zero,
+        "prior_loss_weight": zero,
+        "sleep_active": jnp.asarray(1.0, dtype=sleep_nll.dtype),
+        "sleep_nll": sleep_nll,
+        "sleep_physical_valid_fraction": jnp.mean(
+            physical_valid.astype(jnp.float32)
+        ),
+        "sleep_noise_rms": jnp.sqrt(
+            jnp.sum(normalized_noise**2) / valid_band_count
+        ),
+    }
+
+
+def _safe_decoder_inputs(samples, latent_spec):
+    """Return finite in-bound decoder inputs and the original support mask."""
+    theta = x_to_theta(samples, latent_spec)
+    lower = jnp.asarray(latent_spec.lower, dtype=theta.dtype)
+    upper = jnp.asarray(latent_spec.upper, dtype=theta.dtype)
+    finite = jnp.all(jnp.isfinite(theta), axis=-1)
+    in_bounds = jnp.all((theta >= lower) & (theta <= upper), axis=-1)
+    valid = finite & in_bounds
+    midpoint = 0.5 * (lower + upper)
+    sanitized = jnp.where(jnp.isfinite(theta), theta, midpoint)
+    margin = jnp.maximum((upper - lower) * 1.0e-6, 1.0e-7)
+    safe_theta = jnp.clip(sanitized, lower + margin, upper - margin)
+    safe_samples = theta_to_x(safe_theta, latent_spec)
+    return safe_samples, valid
+
+
+def _sleep_m5_flux_error(model_flux, sleep_config):
+    m5 = jnp.asarray(sleep_config["m5"], dtype=model_flux.dtype)
+    gamma = jnp.asarray(sleep_config["gamma"], dtype=model_flux.dtype)
+    unit = jnp.asarray(1.0e-32, dtype=model_flux.dtype)
+    f5 = 10 ** (-0.4 * (m5 + 48.6)) / unit
+    flux = jnp.abs(model_flux) / unit
+    sigma2 = (0.04 - gamma) * flux * f5 + gamma * f5**2
+    sigma_sys_mag = float(sleep_config.get("sigma_sys_mag", 0.0))
+    if sigma_sys_mag > 0.0:
+        sys_frac = jnp.expm1(jnp.log(10.0) * sigma_sys_mag / 2.5)
+        sigma2 = sigma2 + (sys_frac * flux) ** 2
+    floor = float(sleep_config.get("min_sigma_fnu_cgs", 1.0e-40))
+    floor_scaled = jnp.asarray(floor, dtype=model_flux.dtype) / unit
+    return jnp.sqrt(jnp.maximum(sigma2, floor_scaled**2)) * unit
+
+
+def _sleep_encoder_features(flux, flux_err, mask, sleep_config):
+    flux_scale = jnp.asarray(
+        sleep_config["feature_flux_scale"], dtype=flux.dtype
+    )
+    err_scale = jnp.asarray(sleep_config["feature_err_scale"], dtype=flux.dtype)
+    scale_floor = jnp.asarray(1.0e-30, dtype=flux.dtype)
+    relative_eps = jnp.asarray(1.0e-6, dtype=flux.dtype)
+    flux_scale_safe = jnp.maximum(flux_scale, scale_floor)
+    err_scale_safe = jnp.maximum(err_scale, scale_floor)
+    safe_flux = jnp.where(mask, flux, 0.0)
+    safe_err = jnp.where(mask, flux_err, err_scale_safe)
+    flux_ratio = safe_flux / flux_scale_safe
+    transform = str(sleep_config.get("flux_transform", "asinh"))
+    if transform == "asinh":
+        flux_features = jnp.arcsinh(flux_ratio)
+    elif transform == "signed_log1p":
+        flux_features = jnp.sign(flux_ratio) * jnp.log1p(jnp.abs(flux_ratio))
+    elif transform == "linear":
+        flux_features = flux_ratio
+    else:
+        raise ValueError(f"Unsupported sleep flux transform: {transform}")
+    err_positive = jnp.maximum(safe_err, relative_eps * err_scale_safe)
+    err_features = jnp.log(err_positive / err_scale_safe + relative_eps)
+    return jnp.concatenate((flux_features, err_features), axis=-1)
 
 
 def _prior_mstep_loss(
@@ -3000,6 +3339,74 @@ def _input_noise_config(raw: dict[str, Any] | None) -> dict[str, Any]:
         "apply_to": apply_to,
         "target": "encoder_features_only",
     }
+
+
+def _sleep_runtime_config(
+    config: dict[str, Any],
+    feature_stats: FeatureStats,
+) -> dict[str, Any]:
+    """Resolve the simulator noise and feature contract without truth columns."""
+    sleep = dict(amortized_config(config)["objective"].get("sleep", {}) or {})
+    if not bool(sleep.get("enabled", False)):
+        return {"enabled": False}
+    requested = str(sleep.get("error_model", "m5_depth")).strip().lower()
+    model = dict(
+        ((config.get("synthetic_diffsky", {}) or {}).get("flux_error_model", {}))
+        or {}
+    )
+    model_type = str(model.get("type", "")).strip().lower()
+    if requested != "m5_depth" or model_type != "m5_depth":
+        raise ValueError(
+            "Self-supervised sleep currently requires the configured "
+            "synthetic_diffsky.flux_error_model.type=m5_depth"
+        )
+    bands = tuple(feature_stats.band_names)
+    m5 = tuple(_band_config_value(model, "m5", name) for name in bands)
+    gamma_values = []
+    for name in bands:
+        gamma = _optional_band_config_value(model, "gamma", name)
+        if gamma is None:
+            eta = _optional_band_config_value(model, "eta", name)
+            if eta is None:
+                eta = float(model.get("default_eta", 1.0))
+            gamma = 0.04 * float(eta)
+        gamma_values.append(float(gamma))
+    return {
+        "enabled": True,
+        "error_model": "m5_depth",
+        "m5": m5,
+        "gamma": tuple(gamma_values),
+        "sigma_sys_mag": float(model.get("sigma_sys_mag", 0.0)),
+        "min_sigma_fnu_cgs": float(model.get("min_sigma_fnu_cgs", 1.0e-40)),
+        "feature_flux_scale": tuple(
+            np.asarray(feature_stats.flux_scale, dtype=float).tolist()
+        ),
+        "feature_err_scale": tuple(
+            np.asarray(feature_stats.err_scale, dtype=float).tolist()
+        ),
+        "flux_transform": str(feature_stats.flux_transform),
+    }
+
+
+def _band_config_value(model: dict[str, Any], key: str, band: str) -> float:
+    value = _optional_band_config_value(model, key, band)
+    if value is None:
+        raise ValueError(f"Sleep error model is missing {key} for band {band}")
+    return float(value)
+
+
+def _optional_band_config_value(
+    model: dict[str, Any], key: str, band: str
+) -> float | None:
+    value = model.get(key)
+    if isinstance(value, dict):
+        value = value.get(band)
+    if value is None:
+        return None
+    parsed = float(value)
+    if not np.isfinite(parsed):
+        raise ValueError(f"Sleep error model has non-finite {key} for band {band}")
+    return parsed
 
 
 @eqx.filter_jit
@@ -3160,13 +3567,19 @@ def _apply_training_grad_masks(
     train_alpha: bool,
     train_band_calibration: bool,
 ) -> AmortizedModel:
-    if update_phase in {"encoder", "encoder_wake", "joint_no_prior", "frozen_prior"}:
+    if update_phase in {
+        "encoder",
+        "encoder_sleep",
+        "encoder_wake",
+        "joint_no_prior",
+        "frozen_prior",
+    }:
         grads = zero_prior_grads(grads)
     if update_phase == "prior":
         grads = zero_encoder_grads(grads)
         grads = zero_sed_scale_grads(grads)
         grads = zero_band_calibration_grads(grads)
-    elif update_phase == "encoder_wake":
+    elif update_phase in {"encoder_sleep", "encoder_wake", "joint_wake"}:
         grads = zero_sed_scale_grads(grads)
         grads = zero_band_calibration_grads(grads)
     if not train_alpha:
@@ -3185,9 +3598,15 @@ def _restore_frozen_model_components(
     train_band_calibration: bool,
 ) -> AmortizedModel:
     """Prevent AdamW state and weight decay from moving frozen components."""
-    if update_phase in {"encoder", "encoder_wake", "joint_no_prior", "frozen_prior"}:
+    if update_phase in {
+        "encoder",
+        "encoder_sleep",
+        "encoder_wake",
+        "joint_no_prior",
+        "frozen_prior",
+    }:
         new_model = eqx.tree_at(lambda tree: tree.prior, new_model, old_model.prior)
-    if update_phase in {"prior", "encoder_wake"}:
+    if update_phase in {"prior", "encoder_sleep", "encoder_wake", "joint_wake"}:
         if update_phase == "prior":
             new_model = eqx.tree_at(
                 lambda tree: tree.encoder, new_model, old_model.encoder
@@ -3537,7 +3956,10 @@ def _wake_update_active(
     encoder_epoch: int,
     update_phase: str,
 ) -> bool:
-    if objective_mode(objective_config) != "periodic_wake" or update_phase == "prior":
+    if objective_mode(objective_config) not in {
+        "periodic_wake",
+        "reweighted_wake_sleep",
+    } or update_phase == "prior":
         return False
     wake = dict(objective_config.get("wake", {}) or {})
     start = max(1, int(wake.get("start_encoder_epoch", 40)))
@@ -3575,6 +3997,7 @@ def _objective_config_for_epoch(
         "prior_truth_weight": float(objective.get("prior_truth_weight", 0.0)),
         "sample_strategy": str(objective.get("sample_strategy", "random")),
         "wake": dict(objective.get("wake", {}) or {}),
+        "sleep": dict(objective.get("sleep", {}) or {}),
     }
 
 
@@ -3714,9 +4137,14 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
         "objective": {
             "loss": str(cfg["objective"].get("mode", "stochastic_elbo")),
             "kl_estimator": (
-                "periodic_self_normalized_importance_wake"
-                if objective_mode(cfg.get("objective", {})) == "periodic_wake"
-                else "monte_carlo_logq_minus_logp"
+                "reweighted_wake_sleep"
+                if objective_mode(cfg.get("objective", {}))
+                == "reweighted_wake_sleep"
+                else (
+                    "periodic_self_normalized_importance_wake"
+                    if objective_mode(cfg.get("objective", {})) == "periodic_wake"
+                    else "monte_carlo_logq_minus_logp"
+                )
             ),
             "sample_strategy": str(cfg["objective"].get("sample_strategy", "random")),
             "wake": dict(cfg["objective"].get("wake", {}) or {}),

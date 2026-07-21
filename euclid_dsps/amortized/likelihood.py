@@ -66,22 +66,27 @@ def photometric_loglike(
     )
     finite = mask & jnp.isfinite(obs_flux_scaled) & jnp.isfinite(model_flux_scaled)
     finite &= jnp.isfinite(sigma_eff) & (sigma_eff > 0.0)
+    safe_obs_flux = jnp.where(finite, obs_flux_scaled, 0.0)
+    safe_model_flux = jnp.where(finite, model_flux_scaled, 0.0)
+    safe_sigma = jnp.where(finite, sigma_eff, 1.0)
     kind = likelihood_type.strip().lower().replace("-", "_")
     if kind in {"student", "studentt"}:
         kind = "student_t"
     if kind == "student_t":
         logpdf = student_t_logpdf(
-            obs_flux_scaled,
-            model_flux_scaled,
-            sigma_eff,
+            safe_obs_flux,
+            safe_model_flux,
+            safe_sigma,
             nu=student_t_dof,
         )
     elif kind in {"gaussian", "normal"}:
-        logpdf = gaussian_logpdf(obs_flux_scaled, model_flux_scaled, sigma_eff)
+        logpdf = gaussian_logpdf(safe_obs_flux, safe_model_flux, safe_sigma)
     else:
         raise ValueError(f"Unsupported likelihood_type: {likelihood_type}")
     logpdf = logpdf - jnp.log(unit)
-    return jnp.sum(jnp.where(finite, logpdf, 0.0), axis=-1)
+    summed = jnp.sum(jnp.where(finite, logpdf, 0.0), axis=-1)
+    invalid_observed_band = mask & ~finite
+    return jnp.where(jnp.any(invalid_observed_band, axis=-1), -jnp.inf, summed)
 
 
 def photometric_normalized_residual(
@@ -108,7 +113,8 @@ def photometric_normalized_residual(
     )
     finite = mask & jnp.isfinite(obs_flux) & jnp.isfinite(model_flux)
     finite &= jnp.isfinite(sigma_eff) & (sigma_eff > 0.0)
-    chi = (model_flux - obs_flux) / sigma_eff
+    safe_model_flux = jnp.where(jnp.isfinite(model_flux), model_flux, obs_flux)
+    chi = (safe_model_flux - obs_flux) / jnp.where(finite, sigma_eff, 1.0)
     return jnp.where(finite, chi, 0.0)
 
 
@@ -134,7 +140,9 @@ def photometric_sigma_eff(
     if mask is not None:
         mask = _with_sample_axis(jnp.asarray(mask, dtype=bool))
     unit = _likelihood_unit(obs_flux, obs_err)
-    model_flux_scaled = model_flux / unit
+    model_flux_finite = jnp.isfinite(model_flux)
+    safe_model_flux = jnp.where(model_flux_finite, model_flux, 0.0)
+    model_flux_scaled = safe_model_flux / unit
     obs_err_scaled = obs_err / unit
     error_jitter_scaled = float(error_jitter) / unit
     sigma_scaled = jnp.sqrt(
@@ -146,7 +154,7 @@ def photometric_sigma_eff(
     sigma = sigma_scaled * unit
     if mask is None:
         return sigma
-    finite = mask & jnp.isfinite(obs_flux) & jnp.isfinite(model_flux)
+    finite = mask & jnp.isfinite(obs_flux) & model_flux_finite
     finite &= jnp.isfinite(sigma) & (sigma > 0.0)
     return jnp.where(finite, sigma, jnp.asarray(jnp.inf, dtype=sigma.dtype))
 

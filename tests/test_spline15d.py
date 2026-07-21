@@ -236,6 +236,16 @@ def test_default_spline_nodes_are_created_inside_jit() -> None:
     np.testing.assert_allclose(reconstructed, 1.0, rtol=2.0e-5, atol=2.0e-5)
 
 
+def test_relative_sfh_extreme_contrasts_remain_finite() -> None:
+    time = jnp.geomspace(0.05, 12.0, 80)
+    contrasts = jnp.full(10, 20.0, dtype=jnp.float32)
+
+    reconstructed = jax.jit(reconstruct_relative_sfh_jax)(time, contrasts)
+
+    assert bool(jnp.all(jnp.isfinite(reconstructed)))
+    assert bool(jnp.all(reconstructed > 0.0))
+
+
 def test_novel_truth_mask_uses_fixed_15d_contract() -> None:
     train = pd.DataFrame(
         np.arange(45, dtype=float).reshape(3, 15),

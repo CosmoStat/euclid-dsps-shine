@@ -502,7 +502,7 @@ def reconstruct_relative_sfh_jax(
     log_sfr = cubic_spline_interpolate_jax(
         jnp.log10(knot_time), knot_log_sfr, jnp.log10(time_gyr)
     )
-    return 10**log_sfr
+    return 10 ** jnp.clip(log_sfr, -30.0, 30.0)
 
 
 def cubic_spline_interpolate_jax(
