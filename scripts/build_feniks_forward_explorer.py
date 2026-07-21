@@ -181,6 +181,106 @@ RESULT_RUNS = {
 JAX_COSMO_SPLINE15D_ANALYSIS = Path(
     "outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716"
 )
+CONDITIONAL_POSTERIOR_ROOT = Path(
+    "outputs/jean_zay_20260718/array/feniks_conditional_posterior_jaxcosmo_v1"
+)
+CONDITIONAL_POSTERIOR_AVI_ROOT = Path(
+    "outputs/jean_zay_20260718/array/"
+    "feniks_conditional_posterior_jaxcosmo_v1_completed_v2"
+)
+RQ_PRIOR_RUN = Path("outputs/runs/feniks_spline15d_rqspline_dequant1e3_v1")
+RQ_PRIOR_AMORTIZED_RUN = Path(
+    "outputs/jean_zay_20260718/rqspline/"
+    "feniks_spline15d_rqspline_dequant1e3_amortized_resume90_to120_v3"
+)
+RQ_PRIOR_INFERENCE_RUN = Path(
+    "outputs/jean_zay_20260718/rqspline/"
+    "feniks_spline15d_rqspline_dequant1e3_inference_resume90_to120_v3"
+)
+JOINT_PRIOR_ROOT = Path(
+    "outputs/jean_zay_20260719/joint_prior_realnvp/full"
+)
+
+JOINT_EXPERIMENT_SCIENCE: dict[str, dict[str, Any]] = {
+    "ind_frozen_rqspline": {
+        "display_name": "Frozen reference RealNVP prior",
+        "role": "Sanity check de référence",
+        "final_candidate": False,
+        "uses_truth_training": False,
+        "question": "Un posterior RealNVP indépendant peut-il être appris par AVI quand le prior de population est déjà connu et gelé ?",
+        "justification": "Ce contrôle enlève l'apprentissage du prior. S'il échoue, il faut d'abord corriger l'objectif posterior ou son estimateur avant d'accuser l'apprentissage joint.",
+        "schedule": "120 époques q; p gelé; un échantillon ELBO par objet.",
+        "trainable": ["posterior q_phi"],
+        "frozen": ["prior RealNVP de référence", "spline + DSPS"],
+        "verdict": "Prior raisonnable, posterior fortement sous-dispersé. Contrôle échoué; pas un modèle final et le nom historique rqspline est faux.",
+        "take": "Le prior n'est pas la cause unique. Le reverse-KL AVI à un échantillon produit déjà un q trop étroit avec un p fixé.",
+    },
+    "ind_joint": {
+        "display_name": "Simultaneous joint AVI",
+        "role": "Prototype direct de l'objectif final",
+        "final_candidate": True,
+        "uses_truth_training": False,
+        "question": "Peut-on mettre à jour p_psi et q_phi ensemble avec le même ELBO photométrique ?",
+        "justification": "C'est la traduction la plus simple du but final. Elle teste si l'optimisation simultanée suffit sans phase alternée ni vérité latente.",
+        "schedule": "À chaque batch: une mise à jour commune q + p par le negative ELBO.",
+        "trainable": ["posterior q_phi", "prior p_psi"],
+        "frozen": ["spline + DSPS"],
+        "verdict": "Candidat conceptuel, résultat rejeté: prior déplacé, RMSE latente catastrophique et couverture 68 % proche de 11 %.",
+        "take": "p et q peuvent dériver ensemble vers une solution qui reconstruit les bandes sans représenter la bonne population latente.",
+    },
+    "ind_vem1": {
+        "display_name": "Variational EM 1:1",
+        "role": "Ablation de l'optimisation simultanée",
+        "final_candidate": True,
+        "uses_truth_training": False,
+        "question": "La séparation E-step/M-step empêche-t-elle p et q de se poursuivre mutuellement dans le même gradient ?",
+        "justification": "Une époque apprend q avec p fixé, puis une M-step apprend p sur des échantillons de q stoppés du gradient. Ce test isole l'interférence d'optimiseur.",
+        "schedule": "1 époque q, puis 1 M-step p; 120 époques q et 120 M-steps p.",
+        "trainable": ["posterior q_phi pendant E", "prior p_psi pendant M"],
+        "frozen": ["p pendant E", "q et spline + DSPS pendant M"],
+        "verdict": "Algorithme compatible données réelles mais rejeté ici: pire couverture 68 % de la matrice, 2,9 %.",
+        "take": "Alterner ne résout pas l'auto-confirmation: la M-step apprend la distribution déjà biaisée et trop étroite proposée par q.",
+    },
+    "ind_vem4": {
+        "display_name": "Variational EM 4:1",
+        "role": "Candidat photometry-only principal de cette array",
+        "final_candidate": True,
+        "uses_truth_training": False,
+        "question": "Laisser q se stabiliser quatre époques avant chaque mise à jour de p réduit-il la boucle de rétroaction ?",
+        "justification": "Le prior change quatre fois moins souvent. C'est l'ablation de cadence la plus proche d'un schéma final alterné utilisable sans vérité.",
+        "schedule": "4 époques q, puis 1 M-step p; 120 époques q et 30 M-steps p.",
+        "trainable": ["posterior q_phi pendant E", "prior p_psi pendant M"],
+        "frozen": ["p pendant les 4 E", "q et spline + DSPS pendant M"],
+        "verdict": "Meilleur prototype non supervisé appris-joint, mais encore clairement rejeté: couverture 68 % de 7,7 % et prior biaisé en masse.",
+        "take": "Ralentir p aide peu. Le problème dominant est le q mode-seeking et l'identifiabilité, pas seulement la cadence des mises à jour.",
+    },
+    "ind_vem4_hybrid": {
+        "display_name": "VEM 4:1 + supervised NPE anchor",
+        "role": "Sanity check supervisé de capacité",
+        "final_candidate": False,
+        "uses_truth_training": True,
+        "question": "La même architecture peut-elle produire un bon posterior si on lui indique explicitement la vraie solution latente ?",
+        "justification": "Le terme 50 x NPE_NLL ancre q sur x_true. S'il réussit alors que VEM 4:1 échoue, la capacité du flow n'est pas le blocage principal.",
+        "schedule": "VEM 4:1; ELBO + 50 x NPE sur q; aucune vérité dans la M-step p.",
+        "trainable": ["posterior q_phi avec vérité", "prior p_psi sur échantillons q"],
+        "frozen": ["spline + DSPS"],
+        "verdict": "Posterior bon en closure, prior catastrophique. Diagnostic utile, impossible comme entraînement final sur données réelles.",
+        "take": "Le saut de couverture vers 74 % prouve que q a assez de capacité. Il ne prouve pas que l'objectif photometry-only sait identifier q, et p diverge encore.",
+    },
+    "ind_vem4_oracle": {
+        "display_name": "VEM 4:1 + posterior/prior truth oracle",
+        "role": "Oracle synthétique et test de plomberie",
+        "final_candidate": False,
+        "uses_truth_training": True,
+        "question": "Quand q et p reçoivent tous deux un signal de vérité, la chaîne complète récupère-t-elle la population attendue ?",
+        "justification": "Le prior_truth_NLL teste directement le chemin de gradient du prior. Ce run doit être lu comme un test unitaire scientifique, pas comme une méthode.",
+        "schedule": "VEM 4:1; 50 x NPE sur q; 1 x truth NLL sur p.",
+        "trainable": ["posterior q_phi avec vérité", "prior p_psi avec vérité"],
+        "frozen": ["spline + DSPS"],
+        "verdict": "Posterior bon mais prior toujours faux. L'oracle prior échoue: la normalisation commune, l'échelle de loss ou la restauration de p doit être auditée.",
+        "take": "C'est le résultat le plus important pour le prior: on ne peut pas interpréter les learned-prior runs avant de corriger ce sanity check.",
+    },
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -1125,6 +1225,282 @@ def _image_data_url(path: Path) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def _flatten_config(value: Any, prefix: str = "") -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child = f"{prefix}.{key}" if prefix else str(key)
+            rows.extend(_flatten_config(item, child))
+    elif isinstance(value, list):
+        rows.append({"key": prefix, "value": json.dumps(value, ensure_ascii=True)})
+    else:
+        rows.append({"key": prefix, "value": str(value)})
+    return rows
+
+
+def _artifact_inventory(*roots: Path) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    rows: list[dict[str, Any]] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            rel = path.relative_to(root).as_posix()
+            group = None
+            if rel.startswith("checkpoints/epoch_") or "/checkpoints/epoch_" in rel:
+                group = rel.split("checkpoints/epoch_", maxsplit=1)[0] + "checkpoints/epoch_*"
+            elif rel.startswith("snapshots/epoch_") or "/snapshots/epoch_" in rel:
+                group = rel.split("snapshots/epoch_", maxsplit=1)[0] + "snapshots/epoch_*"
+            elif "/batch_" in rel:
+                group = rel.split("/batch_", maxsplit=1)[0] + "/batch_*"
+            if group is not None:
+                key = f"{root.name}/{group}"
+                entry = grouped.setdefault(
+                    key,
+                    {"path": key, "kind": "sharded group", "count": 0, "bytes": 0},
+                )
+                entry["count"] += 1
+                entry["bytes"] += path.stat().st_size
+                continue
+            rows.append(
+                {
+                    "path": f"{root.name}/{rel}",
+                    "kind": path.suffix.lstrip(".") or "marker",
+                    "count": 1,
+                    "bytes": path.stat().st_size,
+                }
+            )
+    return rows + sorted(grouped.values(), key=lambda item: item["path"])
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_matrix_run(label: str) -> dict[str, Any]:
+    objective, family = label.split("_", maxsplit=1)
+    root = (
+        CONDITIONAL_POSTERIOR_AVI_ROOT / label
+        if objective == "avi"
+        else CONDITIONAL_POSTERIOR_ROOT / label
+    )
+    required = {
+        "metrics": root / "metrics.json",
+        "config": root / "train/normalized_config.json",
+        "corner": root / "inference/corner_full_latent_truth_prior_posterior.png",
+        "training": root / "train/training_history_overview.png",
+        "residuals": root / "inference/posterior_predictive_residuals_by_band.png",
+        "photoz": root / "inference/photoz_truth_vs_pred.png",
+    }
+    missing = [str(path) for path in required.values() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing run explorer artifacts for {label}: {missing}")
+    metrics = _load_json(required["metrics"])
+    config = _load_json(required["config"])
+    return {
+        "label": label,
+        "display_name": f"{objective.upper()} / {family.replace('_', ' ')}",
+        "objective": objective,
+        "posterior_family": family,
+        "comparison_group": "conditional_posterior_matrix",
+        "strictly_comparable": True,
+        "root": str(root),
+        "metrics": metrics,
+        "config": config,
+        "config_rows": _flatten_config(config),
+        "figures": {
+            key: _image_data_url(path)
+            for key, path in required.items()
+            if key in {"corner", "training", "residuals", "photoz"}
+        },
+        "artifacts": _artifact_inventory(root),
+        "status": "complete" if (root / "DONE").exists() else "artifacts present",
+        "prior_type": config["amortized"]["prior"]["type"],
+        "prior_checkpoint": config["amortized"]["prior"]["checkpoint"],
+    }
+
+
+def _load_rq_prior_lineage_run() -> dict[str, Any]:
+    config = _load_json(RQ_PRIOR_INFERENCE_RUN / "normalized_config.json")
+    training = _load_json(RQ_PRIOR_AMORTIZED_RUN / "training_summary.json")
+    inference = _load_json(RQ_PRIOR_INFERENCE_RUN / "inference_summary.json")
+    posterior = _load_json(RQ_PRIOR_INFERENCE_RUN / "posterior_diagnostics_summary.json")
+    photoz = pd.read_csv(RQ_PRIOR_INFERENCE_RUN / "photoz_metrics.csv").iloc[0]
+    posterior_metrics = pd.read_csv(
+        RQ_PRIOR_INFERENCE_RUN / "posterior_vs_truth_metrics.csv"
+    )
+    median_rmse = float(posterior_metrics["rmse"].median())
+    prior_summary = _load_json(RQ_PRIOR_RUN / "run_summary.json")
+    figures = {
+        "corner": RQ_PRIOR_INFERENCE_RUN
+        / "corner_full_latent_truth_prior_posterior.png",
+        "training": RQ_PRIOR_AMORTIZED_RUN / "training_history_overview.png",
+        "residuals": RQ_PRIOR_INFERENCE_RUN
+        / "posterior_predictive_residuals_by_band.png",
+        "photoz": RQ_PRIOR_INFERENCE_RUN / "photoz_truth_vs_pred.png",
+        "prior_corner": RQ_PRIOR_RUN / "diagnostics/truth_vs_prior_corner.png",
+    }
+    metrics = {
+        "best_checkpoint_epoch": training["best_checkpoint_epoch"],
+        "best_validation_metric": training["best_loss"],
+        "coverage_68_median": None,
+        "coverage_95_median": None,
+        "coverage_error": None,
+        "elapsed_time_s": training["elapsed_time_s"],
+        "median_parameter_rmse": median_rmse,
+        "median_posterior_predictive_chi2": posterior[
+            "median_posterior_predictive_chi2"
+        ],
+        "n_objects": inference["n_processed"],
+        "photoz_bias": float(photoz["median_bias"]),
+        "photoz_coverage_68": float(photoz["coverage_68"]),
+        "photoz_rmse": float(photoz["rmse"]),
+        "seconds_per_epoch": training["elapsed_time_s"] / 30.0,
+        "updates_skipped": training["updates_skipped"],
+        "prior_test_nll": prior_summary["nll"]["test"],
+        "prior_median_ks": prior_summary["test_temperature_calibrated_metrics"][
+            "median_ks_normalized"
+        ],
+    }
+    return {
+        "label": "avi_gaussian_x_rq_prior_lineage",
+        "display_name": "AVI / Gaussian x / learned RQ prior",
+        "objective": "avi",
+        "posterior_family": "gaussian_x",
+        "comparison_group": "rq_prior_lineage",
+        "strictly_comparable": False,
+        "root": str(RQ_PRIOR_INFERENCE_RUN),
+        "metrics": metrics,
+        "config": config,
+        "config_rows": _flatten_config(config),
+        "figures": {key: _image_data_url(path) for key, path in figures.items()},
+        "artifacts": _artifact_inventory(
+            RQ_PRIOR_RUN, RQ_PRIOR_AMORTIZED_RUN, RQ_PRIOR_INFERENCE_RUN
+        ),
+        "status": "complete; collapse gate FAIL",
+        "prior_type": config["amortized"]["prior"]["type"],
+        "prior_checkpoint": config["amortized"]["prior"]["checkpoint"],
+    }
+
+
+def _load_joint_prior_run(label: str) -> dict[str, Any]:
+    root = JOINT_PRIOR_ROOT / label
+    required = {
+        "metrics": root / "metrics.json",
+        "config": root / "train/normalized_config.json",
+        "corner": root / "inference/corner_full_latent_truth_prior_posterior.png",
+        "training": root / "train/training_history_overview.png",
+        "residuals": root / "inference/posterior_predictive_residuals_by_band.png",
+        "photoz": root / "inference/photoz_truth_vs_pred.png",
+    }
+    missing = [str(path) for path in required.values() if not path.exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing joint-prior explorer artifacts for {label}: {missing}")
+    metrics = _load_json(required["metrics"])
+    config = _load_json(required["config"])
+    prior_population = pd.read_csv(root / "inference/prior_vs_truth_population.csv")
+    prior_by_parameter = prior_population.set_index("parameter")
+    metrics["seconds_per_epoch"] = metrics["seconds_per_encoder_epoch"]
+    metrics["prior_z_quantile_l1"] = float(
+        prior_by_parameter.loc["z_obs", "quantile_l1"]
+    )
+    metrics["prior_mass_quantile_l1"] = float(
+        prior_by_parameter.loc["log10_stellar_mass", "quantile_l1"]
+    )
+    metrics["prior_z_median_delta"] = float(
+        prior_by_parameter.loc["z_obs", "median_delta"]
+    )
+    metrics["prior_mass_median_delta"] = float(
+        prior_by_parameter.loc["log10_stellar_mass", "median_delta"]
+    )
+    prior_cfg = config["amortized"]["prior"]
+    science = JOINT_EXPERIMENT_SCIENCE[label]
+    prior_checkpoint = (
+        prior_cfg["checkpoint"]
+        if prior_cfg["source"] == "spline15d_checkpoint"
+        else "identity initialization; learned inside this run"
+    )
+    return {
+        "label": label,
+        "display_name": science["display_name"],
+        "objective": "joint_avi",
+        "posterior_family": "realnvp",
+        "comparison_group": "joint_prior_realnvp_matrix",
+        "strictly_comparable": True,
+        "root": str(root),
+        "metrics": metrics,
+        "config": config,
+        "config_rows": _flatten_config(config),
+        "figures": {
+            key: _image_data_url(path)
+            for key, path in required.items()
+            if key in {"corner", "training", "residuals", "photoz"}
+        },
+        "artifacts": _artifact_inventory(root),
+        "status": (
+            f"complete; collapse gate {metrics['collapse_gate_status']}"
+            if (root / "DONE").exists()
+            else "artifacts present"
+        ),
+        "prior_type": prior_cfg["type"],
+        "prior_checkpoint": prior_checkpoint,
+        "science": science,
+    }
+
+
+def _load_run_explorer() -> dict[str, Any]:
+    labels = [
+        f"{objective}_{family}"
+        for objective in ("avi", "npe")
+        for family in ("gaussian_x", "gaussian_u", "realnvp", "rqspline")
+    ]
+    runs = [_load_matrix_run(label) for label in labels]
+    runs.append(_load_rq_prior_lineage_run())
+    joint_labels = list(JOINT_EXPERIMENT_SCIENCE)
+    runs.extend(_load_joint_prior_run(label) for label in joint_labels)
+    shared_prior = _load_json(
+        Path("outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/run_summary.json")
+    )
+    rq_prior = _load_json(RQ_PRIOR_RUN / "run_summary.json")
+    joint_comparison_figures = {
+        "coverage": JOINT_PRIOR_ROOT / "comparison/coverage_by_parameter.png",
+        "speed": JOINT_PRIOR_ROOT / "comparison/speed_vs_coverage.png",
+    }
+    missing_joint_figures = [
+        str(path) for path in joint_comparison_figures.values() if not path.exists()
+    ]
+    if missing_joint_figures:
+        raise FileNotFoundError(
+            f"Missing joint-prior comparison figures: {missing_joint_figures}"
+        )
+    return {
+        "runs": runs,
+        "default_a": "ind_frozen_rqspline",
+        "default_b": "ind_vem4",
+        "matrix_selected": "npe_realnvp",
+        "shared_prior": shared_prior,
+        "rq_prior": rq_prior,
+        "joint_comparison": {
+            "root": str(JOINT_PRIOR_ROOT / "comparison"),
+            "figures": {
+                key: _image_data_url(path)
+                for key, path in joint_comparison_figures.items()
+            },
+        },
+        "metric_definitions": {
+            "coverage_68_median": "Fraction médiane des vérités contenues dans l'intervalle posterior à 68 %. La cible idéale est 0,68.",
+            "coverage_95_median": "Même test pour l'intervalle à 95 %. La cible idéale est 0,95.",
+            "median_parameter_rmse": "Erreur quadratique moyenne médiane sur les paramètres. Plus petit est meilleur, mais les unités normalisées doivent rester identiques.",
+            "photoz_rmse": "Erreur quadratique moyenne du redshift photométrique. Plus petit est meilleur.",
+            "photoz_coverage_68": "Fraction des vrais redshifts dans l'intervalle posterior 68 %. Cible: 0,68.",
+            "median_posterior_predictive_chi2": "Accord entre photométrie observée et photométrie redécodée. Plus petit indique un meilleur ajustement, mais une valeur faible ne garantit pas un posterior calibré.",
+            "seconds_per_epoch": "Temps mural moyen par époque. AVI décode physiquement les échantillons; NPE apprend directement sur les vérités et est donc beaucoup plus rapide.",
+            "prior_z_quantile_l1": "Écart moyen entre les quantiles 16/50/84 % du prior appris et de la vérité synthétique pour le redshift. Closure uniquement; plus petit est meilleur.",
+            "prior_mass_quantile_l1": "Même diagnostic de population pour la masse stellaire. Il n'est disponible qu'en simulation et ne doit pas entrer dans la loss finale.",
+        },
+    }
+
+
 def _load_results() -> dict[str, Any]:
     required_images = {
         "failed_flow": RESULT_RUNS["failed_flow"] / "learned_prior_vs_truth.png",
@@ -1222,6 +1598,7 @@ def main() -> None:
     spline_scan = _load_spline_scan(args.spline_scan)
     spline_prior = _load_spline_prior(args.spline_prior)
     results = _load_results()
+    run_explorer = _load_run_explorer()
     payload = _clean_json(
         _build_payload(
             frame,
@@ -1239,6 +1616,7 @@ def main() -> None:
         )
     )
     payload["results"] = _clean_json(results)
+    payload["run_explorer"] = _clean_json(run_explorer)
     payload_text = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
     args.payload_out.parent.mkdir(parents=True, exist_ok=True)
     args.payload_out.write_text(

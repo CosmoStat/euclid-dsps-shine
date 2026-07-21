@@ -43,7 +43,7 @@ h1 { margin: 0 0 5px; font-size: 28px; line-height: 1.15; letter-spacing: 0; }
 .example-control select { width: 100%; padding: 9px 34px 9px 10px; color: var(--ink); background: #fff; border: 1px solid #aab5b1; border-radius: 4px; }
 .stage-nav { background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1000; isolation: isolate; }
 .stage-nav-inner { max-width: 1500px; margin: 0 auto; display: flex; overflow-x: auto; padding: 0 18px; }
-.stage-tab { min-width: 120px; min-height: 46px; padding: 0 15px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #425055; cursor: pointer; white-space: nowrap; }
+.stage-tab { width: max-content; min-width: 120px; min-height: 46px; flex: 0 0 auto; padding: 0 15px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #425055; cursor: pointer; white-space: nowrap; }
 .stage-tab:hover { background: #f2f5f3; }
 .stage-tab.active { color: #174d3b; border-bottom-color: var(--green); font-weight: 750; }
 main { max-width: 1500px; margin: 0 auto; padding: 18px 24px 40px; }
@@ -139,12 +139,80 @@ details .details-body { padding: 0 13px 13px; color: #3f4d50; }
 .pipeline-box:not(:last-child)::after { content: "\2192"; position: absolutete; right: -16px; top: 25px; color: #66736f; font-size: 20px; }
 .result-image { display: block; width: 100%; height: auto; }
 .formula-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 14px; }
+.method-flow { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 20px; margin: 14px 0 18px; }
+.method-step { position: relative; background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 5px; padding: 13px; min-height: 132px; }
+.method-step:nth-child(2) { border-top-color: var(--gold); }
+.method-step:nth-child(3) { border-top-color: var(--violet); }
+.method-step:nth-child(4) { border-top-color: var(--rust); }
+.method-step:nth-child(5) { border-top-color: var(--green); }
+.method-step:not(:last-child)::after { content: "\2192"; position: absolute; right: -17px; top: 48px; color: #7a8783; font-size: 20px; }
+.method-step h3 { margin: 0 0 5px; font-size: 14px; }
+.method-step p { margin: 0; color: var(--muted); font-size: 12px; }
+.comparison-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.comparison-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.comparison-controls select { width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid #aeb9b5; background: #fff; border-radius: 4px; color: var(--ink); }
+.run-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.run-card { background: #fff; border: 1px solid var(--line); border-top: 5px solid var(--blue); border-radius: 6px; padding: 14px; min-width: 0; }
+.run-card.side-b { border-top-color: var(--rust); }
+.run-card h3 { margin: 0 0 3px; font-size: 17px; overflow-wrap: anywhere; }
+.run-card p { color: var(--muted); margin: 0 0 10px; }
+.metric-delta.good { color: var(--green); font-weight: 750; }
+.metric-delta.bad { color: var(--danger); font-weight: 750; }
+.comparison-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.comparison-image { background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; min-width: 0; }
+.comparison-image h3 { margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.comparison-image img { display: block; width: 100%; height: auto; }
+.config-diff td:first-child { max-width: 360px; overflow-wrap: anywhere; }
+.config-value { max-width: 520px; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.artifact-table td:first-child { max-width: 720px; overflow-wrap: anywhere; }
+.status-chip { display: inline-block; border: 1px solid #9eb8ac; background: #edf7f2; color: #174d3b; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 750; }
+.status-chip.warn { border-color: #d5ab3d; background: #fff7df; color: #6e4d00; }
+.metric-note { color: var(--muted); font-size: 11px; max-width: 480px; }
+.run-json { max-height: 520px; overflow: auto; font-size: 11px; }
+.science-verdict { border-left: 5px solid var(--danger); background: #fff5f2; padding: 12px 14px; border-radius: 4px; }
+.science-verdict strong { color: var(--danger); }
+.target-architecture { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 15px; margin-bottom: 16px; }
+.architecture-flow { display: flex; align-items: stretch; gap: 18px; overflow-x: auto; padding: 7px 2px 11px; }
+.architecture-lane { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+.architecture-lane:first-of-type { border-top: 0; margin-top: 0; }
+.architecture-lane-title { color: var(--ink); font-size: 12px; font-weight: 800; margin-bottom: 2px; }
+.architecture-lane-title span { color: var(--muted); font-weight: 500; }
+.architecture-node { position: relative; flex: 0 0 150px; min-height: 82px; padding: 10px; border: 2px solid #97a39f; background: #f8faf9; border-radius: 5px; }
+.architecture-node:not(:last-child)::after { content: "\2192"; position: absolute; right: -17px; top: 25px; color: #697672; font-size: 20px; }
+.architecture-node.train { border-color: var(--green); background: #edf7f2; }
+.architecture-node.frozen { border-color: #87918e; background: #f1f3f2; }
+.architecture-node.truth { border-color: var(--rust); background: #fff2ed; border-style: dashed; }
+.architecture-node.metric { border-color: var(--blue); background: #eef6fb; }
+.architecture-node b { display: block; margin-bottom: 3px; font-size: 12px; }
+.architecture-node span { display: block; color: var(--muted); font-size: 11px; }
+.architecture-branches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.architecture-branch { border-top: 1px solid var(--line); padding: 8px 10px 0; color: var(--muted); font-size: 11px; }
+.experiment-list { display: grid; gap: 16px; }
+.experiment-card { background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.experiment-card-head { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; padding: 14px; border-bottom: 1px solid var(--line); }
+.experiment-card-head h3 { margin: 0 0 3px; font-size: 18px; }
+.experiment-card-head p { margin: 0; color: var(--muted); }
+.experiment-body { padding: 14px; }
+.experiment-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.experiment-copy { padding: 11px 12px; border: 1px solid var(--line); border-radius: 5px; }
+.experiment-copy h4 { margin: 0 0 5px; font-size: 12px; text-transform: uppercase; color: #46534f; }
+.experiment-copy p { margin: 0; }
+.role-chip { display: inline-block; padding: 4px 7px; border: 1px solid #9eb8ac; border-radius: 3px; background: #edf7f2; color: #174d3b; font-size: 11px; font-weight: 750; }
+.role-chip.supervised { border-color: #d59a82; background: #fff2ed; color: #87391f; }
+.run-take { margin-top: 12px; padding: 11px 13px; border-left: 4px solid var(--blue); background: #eef6fb; }
+.metric-mini-grid { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); }
+.metric-mini { background: #fff; padding: 8px; }
+.metric-mini span { display: block; color: var(--muted); font-size: 10px; }
+.metric-mini b { display: block; margin-top: 2px; font-size: 14px; font-variant-numeric: tabular-nums; }
 @media (max-width: 1100px) {
   .summary-strip { grid-template-columns: repeat(3, 1fr); }
   .summary-item:nth-child(3) { border-right: 0; }
   .flow { grid-template-columns: repeat(3, 1fr); }
   .grid.two, .grid.three { grid-template-columns: 1fr; }
   .pipeline-compare, .formula-grid { grid-template-columns: 1fr; }
+  .method-flow { grid-template-columns: 1fr 1fr; }
+  .method-step::after { display: none; }
+  .metric-mini-grid { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 700px) {
   .app-header { padding: 18px 15px; }
@@ -157,6 +225,9 @@ details .details-body { padding: 0 13px 13px; color: #3f4d50; }
   .flow { grid-template-columns: 1fr 1fr; }
   .flow-step { min-height: 96px; }
   .facts li { grid-template-columns: 1fr; gap: 2px; }
+  .method-flow, .comparison-controls, .run-summary, .comparison-images { grid-template-columns: 1fr; }
+  .experiment-columns, .architecture-branches { grid-template-columns: 1fr; }
+  .metric-mini-grid { grid-template-columns: repeat(2, 1fr); }
 }
 </style>
 </head>
@@ -189,6 +260,9 @@ details .details-body { padding: 0 13px 13px; color: #3f4d50; }
     <button class="stage-tab" data-stage="photometry">10. Photometry</button>
     <button class="stage-tab" data-stage="error">11. Errors</button>
     <button class="stage-tab" data-stage="audit">12. Audit</button>
+    <button class="stage-tab" data-stage="methods">13. Méthodes</button>
+    <button class="stage-tab" data-stage="joint">14. Joint p + q</button>
+    <button class="stage-tab" data-stage="compare">15. Comparateur</button>
   </div>
 </nav>
 
@@ -200,7 +274,7 @@ details .details-body { padding: 0 13px 13px; color: #3f4d50; }
     <div class="stage-heading">
       <div><h2>What changes when the SFH is fitted as a spline?</h2><p>The original graph remains available below for auditability. The reduced inference graph makes the complexity reduction explicit.</p></div>
     </div>
-    <div class="notice"><strong>Presentation status.</strong> The active method and per-galaxy forward examples use the JAX-COSMO cubic not-a-knot spline. The generic K scan has also been recomputed with JAX-COSMO. End-to-end prior and encoder performance is still historical PCHIP evidence until the 15D projection and both training stages are rerun.</div>
+    <div class="notice"><strong>Presentation status.</strong> The active method, per-galaxy forward examples, generic K scan, optimized 11-node projection, and raw 15D distributions now use the JAX-COSMO cubic not-a-knot spline. Prior-flow and encoder performance is still historical PCHIP evidence until both training stages are rerun.</div>
     <div class="pipeline-compare">
       <article class="pipeline-lane">
         <h3>Before: 18D physical parameterization</h3>
@@ -389,7 +463,7 @@ mag_spline = filters[IGM[dust[SSP(age, Z) * age_weights_spline * Mformed]]]</pre
 
   <section id="stage-prior" class="stage-panel">
     <div class="stage-heading"><div><h2>6. 15D spline latent for prior learning</h2><p>Five physical parameters and ten log-SFR contrasts over eleven shared nodes, with placement optimized on train and closure evaluated on held-out test.</p></div></div>
-    <div class="notice"><strong>Contract transition.</strong> The active forward decoder is now the JAX-COSMO cubic not-a-knot spline. The optimized 11-node placement and the 15D projection diagnostics shown in this tab were produced with the previous JAX PCHIP decoder. They document the latent construction, but their numerical closure must be recomputed before being quoted as JAX-COSMO performance.</div>
+    <div class="notice"><strong>Current JAX-COSMO projection.</strong> The optimized 11-node placement, train/test projection, contrast distributions, latent correlations, dequantization scan, and closure diagnostics in this tab were recomputed with the cubic not-a-knot decoder on July 16. The downstream flow and encoder shown later have not yet been retrained on this projection.</div>
     <div id="prior-decision" class="notice"></div>
     <div class="grid two">
       <article class="panel"><div class="panel-head"><div><h3>Latent contract</h3><p>Dimension, coordinates, and shared placement</p></div></div><div class="panel-body"><ul id="prior-facts" class="facts"></ul></div></article>
@@ -405,7 +479,7 @@ mag_spline = filters[IGM[dust[SSP(age, Z) * age_weights_spline * Mformed]]]</pre
 
   <section id="stage-normalization" class="stage-panel">
     <div class="stage-heading"><div><h2>7. Normalizing the 15D latent for the flow</h2><p>Each coordinate receives an invertible train-only marginal transform before it enters the RealNVP. The transform improves numerical conditioning; it does not remove multivariate dependence.</p></div></div>
-    <div class="notice"><strong>Historical checkpoint contract.</strong> The values displayed here are serialized with the epoch-645 PCHIP-trained prior. The JAX-COSMO retraining must fit a new transform from its new training projection only. The formulas and support choices remain the intended production method.</div>
+    <div class="notice"><strong>Current JAX-COSMO preprocessing contract.</strong> The figure and values below are fitted only on the 40,000-row training projection produced by the cubic JAX-COSMO spline, then evaluated unchanged on 5,000 held-out rows. They define the input coordinates for the next prior-flow training; they are not parameters from the historical PCHIP checkpoint.</div>
     <div class="pipeline-chain">
       <div class="pipeline-box">Physical 15D vector<span>5 physical values + 10 SFH contrasts</span></div>
       <div class="pipeline-box">Support transform<span>log or shifted asinh, per coordinate</span></div>
@@ -463,12 +537,12 @@ Required checks:
   </section>
 
   <section id="stage-results" class="stage-panel">
-    <div class="stage-heading"><div><h2>8. Historical training results: PCHIP projection</h2><p>The figures below are embedded from the exact local training artifacts. They remain useful as optimization and normalization diagnostics, but are not JAX-COSMO retraining results.</p></div></div>
-    <div class="notice"><strong>Not yet a JAX-COSMO result set.</strong> The epoch-645 RealNVP and the 80-epoch encoder were trained on the version-1 dataset whose serialized contract is <code>pchip_log_sfr_contrasts</code>. After switching the decoder to JAX-COSMO cubic not-a-knot, the spline projection, prior flow, encoder training, and held-out inference must be rerun in that order. Do not present the distributions or losses below as final JAX-COSMO performance.</div>
+    <div class="stage-heading"><div><h2>8. Results: current JAX-COSMO projection and normalization</h2><p>The raw and normalized 15D targets come from the new JAX-COSMO projection. Flow and encoder figures remain the exact earlier PCHIP-trained artifacts for comparison.</p></div></div>
+    <div class="notice"><strong>Mixed result maturity.</strong> The raw-distribution figure, before/after normalization figure, and serialized marginal-transform parameters are current JAX-COSMO evidence. The failed-flow example, epoch-645 RealNVP recovery, complete flow trajectory, and 80-epoch encoder were trained on the version-1 <code>pchip_log_sfr_contrasts</code> dataset. Do not present those downstream losses or learned distributions as final JAX-COSMO performance.</div>
     <div class="grid two">
       <article class="panel full-width"><div class="panel-head"><div><h3>The raw 15D target</h3><p>Five physical coordinates plus ten adjacent log-SFR contrasts; the exact spikes at zero are discrete atoms, not narrow Gaussian modes.</p></div></div><div class="panel-body"><img id="results-raw-latent" class="result-image" alt="Raw distributions of the ten SFH contrasts"></div></article>
       <article class="panel full-width"><div class="panel-head"><div><h3>Why the first flow failed</h3><p>A continuous RealNVP trained on poorly conditioned coordinates misses sharp marginals and their dependence structure.</p></div></div><div class="panel-body"><img id="results-failed-flow" class="result-image" alt="Example of a failed learned flow prior"></div></article>
-      <article class="panel full-width"><div class="panel-head"><div><h3>Before and after robust marginal normalization</h3><p>Positive-support log transforms for redshift and dust attenuation; robust shifted-asinh transforms for the other 13 coordinates.</p></div></div><div class="panel-body"><img id="results-normalization" class="result-image" alt="Spline latent before and after normalization"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Current JAX-COSMO distributions before and after normalization</h3><p>Train and held-out test distributions: positive-support log transforms for redshift and dust attenuation; robust shifted-asinh transforms for the other 13 coordinates.</p></div></div><div class="panel-body"><img id="results-normalization" class="result-image" alt="JAX-COSMO spline latent before and after normalization"></div></article>
       <article class="panel full-width">
         <div class="panel-head"><div><h3>Normalization contract</h3><p>The parameters below are fitted on the training split and serialized with the checkpoint.</p></div></div>
         <div class="formula-grid panel-body">
@@ -552,6 +626,98 @@ observed_flux = flux_true + epsilon * sigma_f</pre></article>
       <article class="panel full-width"><div class="panel-head"><div><h3>Computation sources</h3><p>Functions called by this page builder</p></div></div><div class="panel-body"><ul class="facts"><li><span>Theta mapping</span><span><code>synthetic_diffsky.photometry.theta_from_truth_frame</code></span></li><li><span>Raw SFH</span><span><code>model.build_diffsky_basic_sfh_table_jax</code></span></li><li><span>Spline</span><span><code>prior_learning.spline15d.cubic_spline_interpolate_jax</code></span></li><li><span>Normalization</span><span><code>model.normalize_sfh_to_stellar_mass_jax</code></span></li><li><span>Complete forward</span><span><code>model.run_diffsky_basic_model_jax</code></span></li><li><span>Photometry</span><span><code>dsps.calc_obs_mag</code> then <code>abmag_to_fnu_cgs</code></span></li><li><span>Stored noise</span><span><code>flux = flux_true + Normal(0, fluxerr)</code></span></li></ul></div></article>
     </div>
   </section>
+  <section id="stage-methods" class="stage-panel">
+    <div class="stage-heading"><div><h2>13. Comment les nouveaux runs apprennent un posterior</h2><p>Le même jeu de données et le même forward model sont utilisés, mais AVI et NPE ne reçoivent pas le même signal d'apprentissage. Cette différence explique leur vitesse et leurs erreurs.</p></div></div>
+    <div class="notice"><strong>Deux objets différents portent le mot flow.</strong> Le <em>prior flow</em> apprend la population sans regarder la photométrie d'une galaxie précise. Le <em>posterior flow</em> apprend une distribution conditionnelle pour une galaxie donnée. Dans la matrice 8 runs, le prior commun est un RealNVP gelé; les noms <code>realnvp</code> et <code>rqspline</code> décrivent le posterior. Le run de lignée RQ utilise réellement un prior RQ-spline appris et est marqué séparément.</div>
+    <div class="method-flow" aria-label="Flux des données et de l'entraînement">
+      <article class="method-step"><h3>1. Vérités synthétiques</h3><p>Chaque galaxie possède 15 nombres connus: redshift, masse, métallicité, poussière et dix contrastes de SFH. Comme la simulation les connaît, ils servent de vérité de contrôle.</p></article>
+      <article class="method-step"><h3>2. Prior de population</h3><p>Un flow apprend quelles combinaisons de ces 15 nombres sont fréquentes ou rares dans la population. Il répond à « avant de voir les flux, qu'est-ce qui est plausible ? ».</p></article>
+      <article class="method-step"><h3>3. Photométrie observée</h3><p>Le forward JAX-COSMO spline + DSPS transforme les paramètres en 18 flux. Bruit et erreurs deviennent 36 entrées: 18 flux transformés par asinh et 18 erreurs en log.</p></article>
+      <article class="method-step"><h3>4. Encodeur conditionnel</h3><p>Un MLP lit ces 36 valeurs et produit soit une gaussienne, soit la base d'un flow conditionnel. Il construit <code>q(x|y)</code>: les paramètres plausibles <code>x</code> sachant la photométrie <code>y</code>.</p></article>
+      <article class="method-step"><h3>5. Tests sur 5 000 objets</h3><p>On échantillonne 128 posteriors par objet, redécode les flux, puis mesure couverture, RMSE, photo-z, chi2 prédictif et accord vérité/prior/posterior dans les corners.</p></article>
+    </div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>AVI: apprendre en repassant par la physique</h3><p>Stochastic evidence lower bound, ou ELBO</p></div></div><div class="panel-body"><p>L'encodeur propose des paramètres. Le prior dit s'ils sont plausibles et DSPS calcule les flux qu'ils produiraient. La loss combine l'accord photométrique et une pénalité KL vers le prior.</p><pre class="formula">x ~ q_phi(x | y)
+loss_AVI = -log p(y | x) + beta * [log q_phi(x | y) - log p_prior(x)]</pre><p><strong>Pourquoi:</strong> cette méthode peut apprendre même sans vérité physique observée, donc elle correspond au futur cas réel. <strong>Coût:</strong> chaque mise à jour traverse le décodeur physique; ici environ 320 s/époque. <strong>Risque observé:</strong> excellent ajustement des flux mais posterior trop étroit, donc couverture très insuffisante.</p></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>NPE: apprendre directement avec les vérités</h3><p>Neural posterior estimation supervisée</p></div></div><div class="panel-body"><p>La simulation donne le vrai vecteur <code>x_true</code>. On demande directement au posterior de lui donner une forte probabilité conditionnellement aux flux.</p><pre class="formula">loss_NPE = -log q_phi(x_true | y)</pre><p><strong>Pourquoi:</strong> aucun appel DSPS n'est requis dans la boucle, donc l'expérience est environ 65 fois plus rapide. <strong>Avantage observé:</strong> couverture proche des cibles 68/95 %. <strong>Limite:</strong> un bon posterior supervisé peut encore produire un chi2 photométrique moins bon et dépend entièrement du réalisme du simulateur.</p></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Les quatre familles de posterior</h3><p>Complexité croissante, pas qualité garantie croissante</p></div></div><div class="panel-body"><ul class="facts"><li><span><code>gaussian_x</code></span><span>Gaussienne diagonale directement dans les 15 coordonnées physiques normalisées. Rapide et simple, mais ne représente ni corrélations ni multimodalité.</span></li><li><span><code>gaussian_u</code></span><span>Gaussienne dans l'espace de base du prior puis transport vers x. Elle hérite de la géométrie du prior appris, au prix d'un couplage plus fort à sa qualité.</span></li><li><span><code>realnvp</code></span><span>Quatre transformations affines conditionnelles. Elles apprennent corrélations, asymétrie et courbure avec un Jacobien exact.</span></li><li><span><code>rqspline</code></span><span>Quatre transformations rationnelles-quadratiques à huit bins. Elles déforment plus finement chaque coordonnée, mais demandent plus de paramètres et peuvent être plus difficiles à stabiliser.</span></li></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Pourquoi plusieurs métriques sont obligatoires</h3><p>Aucune colonne ne suffit à déclarer un vainqueur</p></div></div><div class="panel-body"><ul class="facts"><li><span>Coverage</span><span>Vérifie si l'incertitude annoncée contient réellement la vérité à la fréquence promise.</span></li><li><span>Parameter RMSE</span><span>Mesure la précision du centre du posterior, pas la qualité de sa largeur.</span></li><li><span>Photo-z RMSE</span><span>Isole la qualité du redshift, paramètre critique mais seulement une des 15 dimensions.</span></li><li><span>Posterior predictive chi2</span><span>Vérifie que les paramètres redonnent les flux. Un modèle peut très bien fitter les flux et rester physiquement faux à cause des dégénérescences.</span></li><li><span>Corner</span><span>Montre les marginales et corrélations que les résumés numériques peuvent cacher: biais, queues, modes manquants et posterior trop étroit.</span></li></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Prior appris réellement utilisé</h3><p>Provenance, qualité et différence RealNVP / RQ-spline</p></div></div><div class="panel-body"><div id="prior-run-facts" class="grid two"></div></div></article>
+    </div>
+  </section>
+
+  <section id="stage-joint" class="stage-panel">
+    <div class="stage-heading"><div><h2>14. Apprendre conjointement le prior et le posterior</h2><p>Lecture scientifique de la nouvelle array RealNVP indépendante. L'objectif final est bien un entraînement sur photométrie seule; la vérité synthétique n'est utilisée que pour comprendre les échecs et tester la plomberie.</p></div></div>
+    <div class="science-verdict"><strong>Conclusion de cette array.</strong> Aucun run photometry-only n'est aujourd'hui un modèle final acceptable. Le meilleur candidat méthodologique est VEM 4:1, parce qu'il apprend réellement <code>p</code> et <code>q</code> sans vérité et sépare leurs mises à jour, mais son résultat est rejeté: couverture 68 % = 7,7 %, RMSE latente médiane = 2,41 et prior de masse biaisé. Les bons chiffres du run hybride viennent de la supervision NPE; ils démontrent la capacité du posterior, pas la réussite de l'apprentissage non supervisé.</div>
+
+    <article class="target-architecture">
+      <div class="panel-head" style="padding-left:0;padding-right:0"><div><h3>Architecture cible sur vraies données</h3><p>Seuls les flux, leurs erreurs, la sélection du catalogue et le forward physique sont observés</p></div></div>
+      <p><strong>Oui, le prior est appris sur le latent, conjointement au posterior.</strong> Mais ces latents ne sont pas des vérités observées: ce sont les échantillons <code>x_i ~ q_phi(x|y_i)</code> inférés à partir de tous les objets du catalogue. Le prior <code>p_psi(x)</code> apprend la distribution populationnelle de cet ensemble latent agrégé, tandis que le forward vérifie séparément que chaque latent reconstruit ses bandes.</p>
+      <div class="architecture-lane">
+        <div class="architecture-lane-title">Voie objet: reconstruction photométrique <span>un y_i à la fois</span></div>
+        <div class="architecture-flow">
+          <div class="architecture-node metric"><b>Flux observés y_i</b><span>18 flux + 18 erreurs; aucune vérité latente</span></div>
+          <div class="architecture-node train"><b>Posterior q_phi(x|y_i)</b><span>RealNVP conditionnel; propose les solutions latentes</span></div>
+          <div class="architecture-node"><b>x_i ~ q_phi</b><span>15D: z, masse, Z, poussière, SFH spline</span></div>
+          <div class="architecture-node frozen"><b>JAX-COSMO + DSPS</b><span>Forward physique différentiable et gelé</span></div>
+          <div class="architecture-node metric"><b>log p(y_i|x_i)</b><span>Accord Student-t dans les bandes</span></div>
+        </div>
+      </div>
+      <div class="architecture-lane">
+        <div class="architecture-lane-title">Voie population: apprentissage du prior latent <span>tous les y_i du catalogue</span></div>
+        <div class="architecture-flow">
+          <div class="architecture-node metric"><b>Catalogue {y_i}</b><span>Objets observés après la sélection connue</span></div>
+          <div class="architecture-node train"><b>q_phi sur le catalogue</b><span>Produit plusieurs latents plausibles par objet</span></div>
+          <div class="architecture-node"><b>Population {x_i,s}</b><span>Posterior agrégé, pas un catalogue de x_true</span></div>
+          <div class="architecture-node train"><b>Prior p_psi(x)</b><span>Flow de population ajusté aux latents inférés</span></div>
+          <div class="architecture-node metric"><b>log p_psi(x_i,s)</b><span>Terme prior qui contraint q et apprend p</span></div>
+        </div>
+      </div>
+      <pre class="formula">ELBO = sum_i E_{x ~ q_phi(x|y_i)} [ log p(y_i|x) + log p_psi(x) - log q_phi(x|y_i) ]
+
+Joint: gradients de ce même ELBO vers phi et psi
+VEM M-step: max_psi sum_i E_{stop_gradient(q_phi)} [ log p_psi(x) ]</pre>
+      <div class="architecture-branches">
+        <div class="architecture-branch"><strong>Mode joint.</strong> <code>p_psi</code> et <code>q_phi</code> reçoivent les gradients du même ELBO. Ils se co-adaptent: le prior attire les latents de q et q déplace les latents sur lesquels le prior apprend. Une mauvaise solution peut donc devenir auto-cohérente.</div>
+        <div class="architecture-branch"><strong>Mode VEM.</strong> Pendant la M-step, on fige q et on détache ses échantillons avant d'ajuster <code>p_psi</code>. Pendant l'E-step, on fige p et on ajuste q avec likelihood + prior. Cette alternance limite la poursuite instantanée entre les deux réseaux.</div>
+        <div class="architecture-branch"><strong>Sélection.</strong> Sans correction explicite, le prior apprend la population latente du <em>catalogue sélectionné</em>, pas automatiquement la population physique parente. La fonction de sélection doit entrer dans le modèle pour remonter à cette dernière.</div>
+        <div class="architecture-branch"><strong>Ce qui n'existe pas.</strong> Ni <code>x_true</code> objet par objet, ni histogramme vrai des paramètres. Les flèches de vérité utilisées dans les runs hybrides/oracles doivent disparaître en production.</div>
+      </div>
+    </article>
+
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Le problème d'identifiabilité</h3><p>Pourquoi reconstruire les bandes ne suffit pas</p></div></div><div class="panel-body"><p>L'entraînement cherche à expliquer la distribution observée par <code>p_psi(y) = integral p(y|x) p_psi(x) dx</code>. Or plusieurs paramètres produisent presque les mêmes couleurs: âge–poussière–métallicité, masse–amplitude, redshift–SED et différentes SFH peuvent se compenser.</p><p>Donc plusieurs couples <code>(p_psi, q_phi)</code> peuvent donner des flux corrects. Le posterior peut choisir un seul mode étroit; le prior apprend ensuite ce choix et le rend auto-cohérent. La loss photométrique baisse, mais la distribution latente devient fausse. C'est exactement pourquoi un chi2 autour de 52 n'empêche pas une RMSE latente supérieure à 2.</p></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Ce qu'on peut réellement valider sans vérité</h3><p>Tests disponibles sur un catalogue réel</p></div></div><div class="panel-body"><ul class="facts"><li><span>Held-out bands</span><span>Masquer certaines bandes, inférer avec les autres et tester leur densité prédictive.</span></li><li><span>Posterior predictive</span><span>Comparer flux, couleurs, non-détections et résidus par bande sur des objets jamais optimisés.</span></li><li><span>Prior predictive</span><span>Échantillonner <code>p_psi(x)</code>, passer par DSPS et comparer la distribution des bandes après la même sélection.</span></li><li><span>Stabilité</span><span>Comparer seeds, sous-catalogues, profondeurs et initialisations. Une population identifiable ne doit pas changer radicalement.</span></li><li><span>Simulation closure</span><span>Coverage, PIT et vérité restent indispensables pour développer la méthode, mais ne sont jamais des entrées de l'entraînement final.</span></li></ul></div></article>
+    </div>
+
+    <div class="grid two" style="margin-top:16px">
+      <article class="panel"><div class="panel-head"><div><h3>Couverture par paramètre</h3><p>Le résumé médian peut cacher les dimensions les plus effondrées</p></div></div><div class="panel-body"><img id="joint-coverage-figure" class="result-image" alt="Couverture par paramètre de la nouvelle array"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Vitesse contre calibration</h3><p>Le coût reste similaire entre variantes AVI; la qualité ne suit pas le temps de calcul</p></div></div><div class="panel-body"><img id="joint-speed-figure" class="result-image" alt="Vitesse contre couverture de la nouvelle array"></div></article>
+    </div>
+
+    <div class="stage-heading" style="margin-top:20px"><div><h2>Pourquoi chaque expérience existe</h2><p>Chaque carte sépare la question scientifique, le schéma de gradients, la compatibilité avec des données réelles et le verdict obtenu.</p></div></div>
+    <div id="joint-experiment-list" class="experiment-list"></div>
+  </section>
+
+  <section id="stage-compare" class="stage-panel">
+    <div class="stage-heading"><div><h2>15. Comparer deux runs</h2><p>Choisissez A et B. Les valeurs, écarts, configurations, corners et artefacts viennent directement des répertoires de production locaux sérialisés lors de la construction de cette page.</p></div></div>
+    <div id="comparison-warning" class="notice"></div>
+    <div class="comparison-controls">
+      <label>Run A<select id="run-a-select"></select></label>
+      <label>Run B<select id="run-b-select"></select></label>
+    </div>
+    <div id="run-summary" class="run-summary"></div>
+    <article class="panel"><div class="panel-head"><div><h3>Comparaison numérique</h3><p>Le delta est B - A. La couleur tient compte du sens de la métrique.</p></div></div><div class="table-scroll"><table><thead><tr><th>Métrique</th><th>A</th><th>B</th><th>Delta B - A</th><th>Comment lire</th></tr></thead><tbody id="metric-comparison"></tbody></table></div></article>
+    <div class="stage-heading" style="margin-top:18px"><div><h2>Corner plots</h2><p>Vérité, prior de population et posterior agrégé sur les 15 coordonnées latentes. Ouvrez l'image dans le navigateur pour inspecter les petits panneaux.</p></div></div>
+    <div id="corner-comparison" class="comparison-images"></div>
+    <div class="stage-heading" style="margin-top:18px"><div><h2>Diagnostics visuels</h2><p>Courbes d'entraînement, résidus photométriques par bande et redshift vrai contre prédit.</p></div></div>
+    <div id="diagnostic-comparison" class="comparison-images"></div>
+    <div class="grid two" style="margin-top:14px">
+      <article class="panel"><div class="panel-head"><div><h3>Paramètres qui diffèrent</h3><p>Comparaison clé par clé de la configuration normalisée exacte</p></div></div><div class="table-scroll"><table class="config-diff"><thead><tr><th>Clé</th><th>A</th><th>B</th></tr></thead><tbody id="config-diff"></tbody></table></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Configuration complète</h3><p>Tous les inputs sérialisés, sans résumé</p></div></div><div class="panel-body"><details><summary id="config-a-title">Run A</summary><pre id="config-a-json" class="formula run-json"></pre></details><details><summary id="config-b-title">Run B</summary><pre id="config-b-json" class="formula run-json"></pre></details></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Inventaire des artefacts</h3><p>Fichiers individuels et groupes de checkpoints/shards avec tailles exactes</p></div></div><div class="control-row panel-body"><label>Afficher les artefacts de<select id="artifact-side-select"><option value="a">Run A</option><option value="b">Run B</option></select></label></div><div class="table-scroll"><table class="artifact-table"><thead><tr><th>Chemin</th><th>Type</th><th>Nombre</th><th>Taille</th></tr></thead><tbody id="artifact-inventory"></tbody></table></div></article>
+    </div>
+  </section>
 </main>
 
 <div id="tooltip" class="tooltip"></div>
@@ -560,7 +726,7 @@ observed_flux = flux_true + epsilon * sigma_f</pre></article>
 "use strict";
 const DATA = JSON.parse(document.getElementById("feniks-data").textContent);
 const COLORS = { blue: "#276a9c", green: "#28735a", rust: "#b55432", violet: "#71558a", gold: "#b48824", ink: "#273136", gray: "#788582" };
-const state = { example: 0, stage: "overview", parameter: "z_obs", band: 0 };
+const state = { example: 0, stage: "overview", parameter: "z_obs", band: 0, runA: DATA.run_explorer.default_a, runB: DATA.run_explorer.default_b, artifactSide: "a" };
 const tooltip = document.getElementById("tooltip");
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -576,6 +742,15 @@ function fmt(value, digits = 4) {
   const a = Math.abs(n);
   if ((a > 0 && a < 1e-3) || a >= 1e5) return n.toExponential(3);
   return n.toLocaleString("fr-FR", { maximumSignificantDigits: digits });
+}
+function html(value) { return String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
+function fmtBytes(value) {
+  let n = Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  const units = ["B", "KB", "MB", "GB"];
+  let index = 0;
+  while (n >= 1024 && index < units.length - 1) { n /= 1024; index += 1; }
+  return `${n.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
 }
 function log10(values) { return values.map(v => Math.log10(Math.max(Number(v), 1e-30))); }
 function nJyToAB(value) { return Number(value) > 0 ? -2.5 * Math.log10(Number(value) * 1e-9 / 3631.0) : NaN; }
@@ -930,6 +1105,15 @@ function populateSelectors() {
   const errorBandSelect = document.getElementById("error-band-select");
   errorBandSelect.innerHTML = DATA.bands.map((band, i) => `<option value="${i}">${band.name}</option>`).join("");
   errorBandSelect.addEventListener("change", () => { state.band = Number(errorBandSelect.value); document.getElementById("band-select").value = state.band; renderError(); });
+  const runOptions = DATA.run_explorer.runs.map(run => `<option value="${html(run.label)}">${html(run.display_name)}${run.strictly_comparable ? "" : " · lignée séparée"}</option>`).join("");
+  const runASelect = document.getElementById("run-a-select");
+  const runBSelect = document.getElementById("run-b-select");
+  runASelect.innerHTML = runOptions; runBSelect.innerHTML = runOptions;
+  runASelect.value = state.runA; runBSelect.value = state.runB;
+  runASelect.addEventListener("change", () => { state.runA = runASelect.value; renderComparison(); });
+  runBSelect.addEventListener("change", () => { state.runB = runBSelect.value; renderComparison(); });
+  const artifactSideSelect = document.getElementById("artifact-side-select");
+  artifactSideSelect.addEventListener("change", () => { state.artifactSide = artifactSideSelect.value; renderArtifactInventory(); });
 }
 function transformedValue(name, value) {
   const p = currentExample().parameters;
@@ -1225,6 +1409,158 @@ function renderError() {
   const i = state.band;
   document.getElementById("band-error-facts").innerHTML = [fact("Band", `<code>${band.name}</code>`), fact("m5", `${fmt(band.m5)} AB`), fact("effective gamma", fmt(band.gamma)), fact("true flux", `${fmt(phot.stored_flux_true_njy[i])} nJy`), fact("fluxerr", `${fmt(phot.stored_fluxerr_njy[i])} nJy`), fact("drawn noise", `${fmt(phot.noise_draw_njy[i])} nJy`), fact("pull epsilon", fmt(phot.noise_pull[i])), fact("observed flux", `${fmt(phot.stored_flux_njy[i])} nJy`)].join("");
 }
+function currentRun(side) {
+  const label = side === "a" ? state.runA : state.runB;
+  return DATA.run_explorer.runs.find(run => run.label === label);
+}
+function runExplanation(run) {
+  if (run.science) return `${run.science.role}. ${run.science.take}`;
+  const objective = run.objective === "avi"
+    ? "AVI optimise l'accord photométrique et la KL vers le prior via le forward physique."
+    : "NPE maximise directement la densité du vrai latent synthétique sous le posterior.";
+  const families = {
+    gaussian_x: "Gaussienne diagonale directement dans x.",
+    gaussian_u: "Gaussienne dans l'espace de base u, transportée par le prior.",
+    realnvp: "Flow conditionnel affine RealNVP à quatre couches.",
+    rqspline: "Flow conditionnel rational-quadratic spline à quatre couches et huit bins."
+  };
+  return `${objective} ${families[run.posterior_family] || ""}`;
+}
+function renderMethods() {
+  const real = DATA.run_explorer.shared_prior;
+  const rq = DATA.run_explorer.rq_prior;
+  const cards = [
+    ["Prior commun de la matrice", real.model, "RealNVP gelé utilisé par les 8 runs AVI/NPE", real],
+    ["Prior RQ de la lignée séparée", rq.model, "RQ-spline appris sur les contrastes déquantifiés", rq]
+  ];
+  document.getElementById("prior-run-facts").innerHTML = cards.map(([title, model, note, data]) => `<article class="run-card"><h3>${html(title)}</h3><p>${html(note)}</p><ul class="facts">${[
+    fact("Modèle", html(model)),
+    fact("Checkpoint sélectionné", `époque ${fmt(data.best_epoch)}`),
+    fact("Test NLL", fmt(data.nll?.test)),
+    fact("Lignes train / val / test", `${fmt(data.rows?.train)} / ${fmt(data.rows?.validation)} / ${fmt(data.rows?.test)}`),
+    fact("Median KS normalisé", fmt(data.test_temperature_calibrated_metrics?.median_ks_normalized)),
+    fact("Wasserstein sliced", fmt(data.test_temperature_calibrated_metrics?.sliced_wasserstein_normalized)),
+    fact("Dataset", `<code>${html(data.dataset_dir)}</code>`)
+  ].join("")}</ul></article>`).join("");
+}
+function architectureNode(title, detail, kind = "") {
+  return `<div class="architecture-node ${kind}"><b>${html(title)}</b><span>${html(detail)}</span></div>`;
+}
+function jointArchitecture(run) {
+  const science = run.science;
+  const isFrozen = run.label === "ind_frozen_rqspline";
+  const isVem = run.label.includes("vem");
+  const isHybrid = run.label.includes("hybrid") || run.label.includes("oracle");
+  const isOracle = run.label.includes("oracle");
+  const qDetail = science.uses_truth_training ? "ELBO + ancrage x_true" : "ELBO photométrique seulement";
+  const pDetail = isFrozen ? "checkpoint de référence gelé" : (isVem ? "mis à jour en M-step" : "gradient ELBO simultané");
+  const reconstruction = `<div class="architecture-lane"><div class="architecture-lane-title">Voie objet: reconstruction des bandes</div><div class="architecture-flow">${[
+    architectureNode("18 flux + erreurs", "observations de chaque objet", "metric"),
+    architectureNode("q_phi(x|y)", qDetail, "train"),
+    architectureNode("x ~ q", "échantillon latent 15D"),
+    architectureNode("Spline + DSPS", "décodeur physique", "frozen"),
+    architectureNode("log p(y|x)", "Student-t photométrique", "metric")
+  ].join("")}</div></div>`;
+  let populationNodes;
+  if (isFrozen) {
+    populationNodes = [
+      architectureNode("x ~ q_phi", "latent inféré, jamais x_true"),
+      architectureNode("p_ref(x)", pDetail, "frozen"),
+      architectureNode("log p_ref(x) - log q", "KL qui régularise q", "metric")
+    ];
+  } else {
+    populationNodes = [
+      architectureNode("Catalogue {y_i}", "population photométrique observée", "metric"),
+      architectureNode("{x_i,s} ~ q_phi", "posterior agrégé sur le catalogue"),
+      ...(isVem ? [architectureNode("stop_gradient", "q figé pendant la M-step", "frozen")] : []),
+      architectureNode("p_psi(x)", pDetail, "train"),
+      architectureNode("log p_psi(x) - log q", "couplage populationnel avec q", "metric")
+    ];
+  }
+  const population = `<div class="architecture-lane"><div class="architecture-lane-title">Voie population: ${isFrozen ? "prior de contrôle non appris" : "prior appris sur les latents inférés"}</div><div class="architecture-flow">${populationNodes.join("")}</div></div>`;
+  let update = isVem
+    ? `<div class="architecture-branches"><div class="architecture-branch"><strong>E-step.</strong> q apprend avec p fixé via likelihood + reverse KL.</div><div class="architecture-branch"><strong>M-step.</strong> p maximise la densité d'échantillons de q avec <code>stop_gradient</code>; DSPS n'est pas appelé.</div><div class="architecture-branch"><strong>Cadence.</strong> ${html(science.schedule)}</div></div>`
+    : `<div class="architecture-branches"><div class="architecture-branch"><strong>Gradient q.</strong> Likelihood photométrique + KL vers p.</div><div class="architecture-branch"><strong>Gradient p.</strong> ${isFrozen ? "Aucun gradient: contrôle à prior connu." : "Même batch et même ELBO que q."}</div><div class="architecture-branch"><strong>Cadence.</strong> ${html(science.schedule)}</div></div>`;
+  if (isHybrid) update += `<div class="architecture-flow">${architectureNode("x_true synthétique", "indisponible sur vraies données", "truth")}${architectureNode("-log q_phi(x_true|y)", "poids NPE = 50", "truth")}${architectureNode("q_phi", "ancrage supervisé", "train")}${isOracle ? architectureNode("-log p_psi(x_true)", "poids prior truth = 1", "truth") + architectureNode("p_psi", "oracle supervisé", "train") : ""}</div>`;
+  return reconstruction + population + update;
+}
+function renderJointExperiments() {
+  const runs = DATA.run_explorer.runs.filter(run => run.comparison_group === "joint_prior_realnvp_matrix");
+  document.getElementById("joint-coverage-figure").src = DATA.run_explorer.joint_comparison.figures.coverage;
+  document.getElementById("joint-speed-figure").src = DATA.run_explorer.joint_comparison.figures.speed;
+  document.getElementById("joint-experiment-list").innerHTML = runs.map(run => {
+    const s = run.science, m = run.metrics;
+    const chip = s.uses_truth_training ? "role-chip supervised" : "role-chip";
+    const truthLabel = s.uses_truth_training ? "Utilise x_true: diagnostic seulement" : "Photometry-only: utilisable en principe";
+    return `<article class="experiment-card"><div class="experiment-card-head"><div><h3><code>${html(run.label)}</code> · ${html(run.display_name)}</h3><p>${html(s.role)}</p></div><span class="${chip}">${html(truthLabel)}</span></div><div class="experiment-body">${jointArchitecture(run)}<div class="experiment-columns"><div class="experiment-copy"><h4>Question scientifique</h4><p>${html(s.question)}</p></div><div class="experiment-copy"><h4>Pourquoi ce run</h4><p>${html(s.justification)}</p></div><div class="experiment-copy"><h4>Entraîné</h4><p>${html(s.trainable.join("; "))}</p></div><div class="experiment-copy"><h4>Gelé</h4><p>${html(s.frozen.join("; "))}</p></div><div class="experiment-copy"><h4>Verdict</h4><p>${html(s.verdict)}</p></div><div class="experiment-copy"><h4>Place dans le modèle final</h4><p>${s.final_candidate ? "La méthode est compatible avec l'objectif final, mais ce checkpoint précis est rejeté." : "Ce run est un contrôle scientifique, pas un candidat de production."}</p></div></div><div class="metric-mini-grid">${[
+      ["Coverage 68 %", m.coverage_68_median], ["Coverage 95 %", m.coverage_95_median], ["RMSE paramètres", m.median_parameter_rmse], ["Photo-z RMSE", m.photoz_rmse], ["Prior z Q-L1", m.prior_z_quantile_l1], ["Prior masse Q-L1", m.prior_mass_quantile_l1]
+    ].map(([label, value]) => `<div class="metric-mini"><span>${html(label)}</span><b>${fmt(value)}</b></div>`).join("")}</div><div class="run-take"><strong>Take.</strong> ${html(s.take)}</div><details><summary>Voir le corner vérité / prior / posterior</summary><div class="details-body"><img class="result-image" src="${run.figures.corner}" alt="Corner de ${html(run.display_name)}"></div></details></div></article>`;
+  }).join("");
+}
+function metricScore(key, value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  if (key === "encoder_epochs" || key === "prior_epochs") return null;
+  if (key === "coverage_68_median" || key === "photoz_coverage_68") return -Math.abs(Number(value) - 0.68);
+  if (key === "coverage_95_median") return -Math.abs(Number(value) - 0.95);
+  return -Number(value);
+}
+function renderRunCard(run, side) {
+  const m = run.metrics;
+  const warning = run.strictly_comparable ? "" : " warn";
+  return `<article class="run-card ${side === "b" ? "side-b" : ""}"><h3>${side.toUpperCase()} · ${html(run.display_name)}</h3><p>${html(runExplanation(run))}</p><ul class="facts">${[
+    fact("Statut", `<span class="status-chip${warning}">${html(run.status)}</span>`),
+    fact("Groupe", `<code>${html(run.comparison_group)}</code>`),
+    ...(run.science ? [fact("Usage vérité train", run.science.uses_truth_training ? "oui · non déployable" : "non · photometry-only"), fact("Rôle", html(run.science.role))] : []),
+    fact("Objets de test", fmt(m.n_objects)),
+    fact("Meilleur checkpoint", `époque ${fmt(m.best_checkpoint_epoch)}`),
+    fact("Prior", `<code>${html(run.prior_type)}</code>`),
+    fact("Checkpoint prior", `<code>${html(run.prior_checkpoint)}</code>`),
+    fact("Répertoire", `<code>${html(run.root)}</code>`)
+  ].join("")}</ul></article>`;
+}
+function renderFigurePair(containerId, a, b, key, title) {
+  document.getElementById(containerId).innerHTML = [a, b].map((run, index) => {
+    const source = run.figures[key];
+    if (!source) return `<article class="comparison-image"><h3>${index ? "B" : "A"} · ${html(run.display_name)}</h3><p class="panel-body">Artefact non disponible.</p></article>`;
+    return `<article class="comparison-image"><h3>${index ? "B" : "A"} · ${html(run.display_name)} · ${html(title)}</h3><a href="${source}" target="_blank" rel="noopener"><img src="${source}" alt="${html(title)} pour ${html(run.display_name)}"></a></article>`;
+  }).join("");
+}
+function renderArtifactInventory() {
+  const run = currentRun(state.artifactSide);
+  document.getElementById("artifact-inventory").innerHTML = run.artifacts.map(item => `<tr><td><code>${html(item.path)}</code></td><td>${html(item.kind)}</td><td class="num">${fmt(item.count)}</td><td class="num">${fmtBytes(item.bytes)}</td></tr>`).join("");
+}
+function renderComparison() {
+  const a = currentRun("a"), b = currentRun("b");
+  const strict = a.strictly_comparable && b.strictly_comparable && a.comparison_group === b.comparison_group;
+  document.getElementById("comparison-warning").innerHTML = strict
+    ? (a.comparison_group === "joint_prior_realnvp_matrix"
+      ? `<strong>Comparaison contrôlée de la nouvelle array.</strong> Même catalogue, forward, posterior RealNVP et 5 000 objets de test. Le statut du prior, la cadence p/q et l'usage éventuel de x_true changent volontairement. Un run supervisé reste non déployable même si ses chiffres sont meilleurs.`
+      : `<strong>Comparaison contrôlée.</strong> Même matrice, même dataset JAX-COSMO, même prior appris gelé et mêmes 5 000 objets. Les différences principales viennent de l'objectif et de la famille du posterior.`)
+    : `<strong>Comparaison de lignée, pas expérience contrôlée.</strong> Au moins un run change aussi le dataset, le prior, le nombre d'échantillons ou le protocole. Les deltas sont descriptifs et ne doivent pas être attribués à une seule différence.`;
+  document.getElementById("run-summary").innerHTML = renderRunCard(a, "a") + renderRunCard(b, "b");
+  const metrics = ["coverage_68_median", "coverage_95_median", "median_parameter_rmse", "photoz_rmse", "photoz_coverage_68", "median_posterior_predictive_chi2", "prior_z_quantile_l1", "prior_mass_quantile_l1", "seconds_per_epoch", "elapsed_time_s", "encoder_epochs", "prior_epochs", "updates_skipped", "collapse_gate_failures"];
+  const labels = { coverage_68_median: "Coverage médiane 68 %", coverage_95_median: "Coverage médiane 95 %", median_parameter_rmse: "RMSE médiane paramètres", photoz_rmse: "Photo-z RMSE", photoz_coverage_68: "Photo-z coverage 68 %", median_posterior_predictive_chi2: "Chi2 prédictif médian", prior_z_quantile_l1: "Prior redshift quantile L1", prior_mass_quantile_l1: "Prior masse quantile L1", seconds_per_epoch: "Secondes / époque", elapsed_time_s: "Temps total [s]", encoder_epochs: "Époques posterior q", prior_epochs: "M-steps prior p", updates_skipped: "Updates ignorées", collapse_gate_failures: "Échecs collapse gate" };
+  document.getElementById("metric-comparison").innerHTML = metrics.map(key => {
+    const av = a.metrics[key], bv = b.metrics[key];
+    const delta = Number.isFinite(Number(av)) && Number.isFinite(Number(bv)) ? Number(bv) - Number(av) : null;
+    const as = metricScore(key, av), bs = metricScore(key, bv);
+    const cls = as === null || bs === null || as === bs ? "" : (bs > as ? "good" : "bad");
+    const note = DATA.run_explorer.metric_definitions[key] || (key === "elapsed_time_s" ? "Temps mural sérialisé; attention aux reprises de run." : key === "updates_skipped" ? "Mises à jour rejetées pour non-finitude ou garde numérique." : key === "collapse_gate_failures" ? "Nombre de critères scientifiques en échec; zéro est requis." : key === "encoder_epochs" || key === "prior_epochs" ? "Compte des mises à jour de chaque composant; ce n'est pas une métrique de qualité." : "");
+    return `<tr><td>${html(labels[key])}</td><td class="num">${fmt(av)}</td><td class="num">${fmt(bv)}</td><td class="num metric-delta ${cls}">${delta === null ? "n/a" : `${delta >= 0 ? "+" : ""}${fmt(delta)}`}</td><td class="metric-note">${html(note)}</td></tr>`;
+  }).join("");
+  renderFigurePair("corner-comparison", a, b, "corner", "corner vérité / prior / posterior");
+  const diagnosticKeys = [["training", "entraînement"], ["residuals", "résidus par bande"], ["photoz", "photo-z"]];
+  document.getElementById("diagnostic-comparison").innerHTML = diagnosticKeys.flatMap(([key, title]) => [a, b].map((run, index) => `<article class="comparison-image"><h3>${index ? "B" : "A"} · ${html(run.display_name)} · ${html(title)}</h3><a href="${run.figures[key]}" target="_blank" rel="noopener"><img src="${run.figures[key]}" alt="${html(title)} pour ${html(run.display_name)}"></a></article>`)).join("");
+  const amap = Object.fromEntries(a.config_rows.map(row => [row.key, row.value]));
+  const bmap = Object.fromEntries(b.config_rows.map(row => [row.key, row.value]));
+  const keys = [...new Set([...Object.keys(amap), ...Object.keys(bmap)])].sort();
+  document.getElementById("config-diff").innerHTML = keys.filter(key => amap[key] !== bmap[key]).map(key => `<tr><td><code>${html(key)}</code></td><td class="config-value">${html(amap[key] ?? "absent")}</td><td class="config-value">${html(bmap[key] ?? "absent")}</td></tr>`).join("") || `<tr><td colspan="3">Configurations identiques.</td></tr>`;
+  document.getElementById("config-a-title").textContent = `A · ${a.display_name}`;
+  document.getElementById("config-b-title").textContent = `B · ${b.display_name}`;
+  document.getElementById("config-a-json").textContent = JSON.stringify(a.config, null, 2);
+  document.getElementById("config-b-json").textContent = JSON.stringify(b.config, null, 2);
+  renderArtifactInventory();
+}
 function renderAudit() {
   const g = DATA.metadata.generation_versions, c = DATA.metadata.current_versions, keys = ["repo_git_sha", "diffsky", "diffstar", "diffmah", "dsps", "jax"];
   document.getElementById("provenance-grid").innerHTML = `<div class="head">Component</div><div class="head">Generation</div><div class="head">Current</div>` + keys.map(key => `<div>${key}</div><div><code>${g[key]}</code></div><div><code>${c[key]}</code></div>`).join("");
@@ -1245,6 +1581,9 @@ function renderStage() {
   if (state.stage === "photometry") renderPhotometry();
   if (state.stage === "error") renderError();
   if (state.stage === "audit") renderAudit();
+  if (state.stage === "methods") renderMethods();
+  if (state.stage === "joint") renderJointExperiments();
+  if (state.stage === "compare") renderComparison();
 }
 function renderAll() { renderSummary(); renderNotice(); renderStage(); }
 
