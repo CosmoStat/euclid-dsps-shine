@@ -93,6 +93,7 @@ PY
 EPOCHS=120
 LIMIT=""
 POSTERIOR_SAMPLES=128
+PRIOR_SAMPLES=16384
 INFERENCE_LIMIT=5000
 VALIDATION_EVERY=8
 EXTRA_TRAIN_ARGS=()
@@ -100,6 +101,7 @@ if [[ "$SMOKE" == "1" ]]; then
   EPOCHS=2
   LIMIT=256
   POSTERIOR_SAMPLES=8
+  PRIOR_SAMPLES=512
   INFERENCE_LIMIT=8
   VALIDATION_EVERY=1
   JAX_BATCH_SIZE=128
@@ -107,7 +109,7 @@ if [[ "$SMOKE" == "1" ]]; then
 fi
 
 echo "[t2-production] task=$TASK_ID label=$LABEL config=$CONFIG smoke=$SMOKE"
-echo "[t2-production] epochs=$EPOCHS catalog_batch=1024 jax_batch=$JAX_BATCH_SIZE"
+echo "[t2-production] epochs=$EPOCHS catalog_batch=1024 jax_batch=$JAX_BATCH_SIZE prior_samples=$PRIOR_SAMPLES"
 nvidia-smi
 
 train_cmd=(
@@ -139,7 +141,7 @@ infer_cmd=(
   --batch-size 512
   --jax-batch-size 512
   --posterior-samples "$POSTERIOR_SAMPLES"
-  --prior-samples 16384
+  --prior-samples "$PRIOR_SAMPLES"
   --decoder-sample-chunk-size 1
   --prior-predictive-batch-size 256
   --seed 260722

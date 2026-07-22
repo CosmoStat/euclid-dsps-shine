@@ -2,8 +2,8 @@
 
 ## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
 
-- Status: implemented and locally verified; ready for the Jean-Zay chained
-  smoke-plus-production submission.
+- Status: smoke-timeout fix locally verified; ready for a clean Jean-Zay
+  chained smoke-plus-production relaunch.
 - Limit the scientific array to three learned-prior candidates, all using the
   immutable common 15D `mixed_log_shifted_asinh` normalization and the same
   identity-initialized population RealNVP prior.
@@ -36,6 +36,13 @@
   tiny cgs flux before rescaling underflowed under JIT/pmap even though eager
   tests passed. The depth flux is now formed directly in scaled units and the
   four-device regression applies finite sleep and SMC updates.
+- The first Jean-Zay smoke (`40583`) confirmed finite two-epoch training and
+  checkpoint creation for all three candidates. Both RWS tasks completed, but
+  SMC-Wake timed out only after training, during inference with the unchanged
+  production budget of 16,384 prior samples. Smoke inference now uses 512
+  prior samples while production retains 16,384; this still exercises two
+  prior-predictive DSPS batches without spending the smoke wall time on final
+  statistical precision.
 - Verification: 46 focused posterior, likelihood, SMC, truth/gate, Jacobian and
   config tests pass; all three wake variants and sleep compile and update under
   simulated four-device `pmap`, and every architecture survives checkpoint
