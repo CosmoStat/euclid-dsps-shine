@@ -81,6 +81,91 @@ class GaussianEncoder(eqx.Module):
         return mean, log_std
 
 
+class MixtureGaussianEncoder(eqx.Module):
+    """MLP encoder for an exact mixture of diagonal Gaussian base densities."""
+
+    trunk: tuple
+    logits_head: object
+    mean_head: object
+    log_std_head: object
+    activation_name: str = eqx.field(static=True)
+    latent_dim: int = eqx.field(static=True)
+    n_components: int = eqx.field(static=True)
+    log_std_min: float = eqx.field(static=True)
+    log_std_max: float = eqx.field(static=True)
+    initial_log_std: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key,
+        *,
+        input_dim: int = 20,
+        latent_dim: int = 16,
+        n_components: int = 2,
+        hidden_sizes: tuple[int, ...] = (256, 256, 256),
+        activation: str = "gelu",
+        log_std_min: float = -6.0,
+        log_std_max: float = 2.0,
+        initial_log_std: float = -1.0,
+    ) -> None:
+        if int(n_components) < 2:
+            raise ValueError("MixtureGaussianEncoder requires at least two components")
+        keys = jax.random.split(key, len(hidden_sizes) + 3)
+        dims = (int(input_dim), *[int(size) for size in hidden_sizes])
+        self.trunk = tuple(
+            eqx.nn.Linear(dims[index], dims[index + 1], key=keys[index])
+            for index in range(len(hidden_sizes))
+        )
+        last_dim = dims[-1]
+        self.logits_head = eqx.nn.Linear(last_dim, int(n_components), key=keys[-3])
+        self.mean_head = eqx.nn.Linear(
+            last_dim, int(n_components) * int(latent_dim), key=keys[-2]
+        )
+        self.log_std_head = eqx.nn.Linear(
+            last_dim, int(n_components) * int(latent_dim), key=keys[-1]
+        )
+        self.activation_name = str(activation)
+        self.latent_dim = int(latent_dim)
+        self.n_components = int(n_components)
+        self.log_std_min = float(log_std_min)
+        self.log_std_max = float(log_std_max)
+        self.initial_log_std = float(initial_log_std)
+
+    def mixture_parameters(self, features):
+        """Return logits, means and log-scales with shapes ``[..., M]``/``[..., M,D]``."""
+        features = jnp.asarray(features, dtype=jnp.float32)
+        if features.ndim == 1:
+            return self._single_mixture(features)
+        return jax.vmap(self._single_mixture)(features)
+
+    def __call__(self, features):
+        """Return moment-matched diagnostics compatible with Gaussian encoders."""
+        logits, means, log_stds = self.mixture_parameters(features)
+        weights = jax.nn.softmax(logits, axis=-1)
+        mean = jnp.sum(weights[..., :, None] * means, axis=-2)
+        second = jnp.sum(
+            weights[..., :, None] * (jnp.exp(2.0 * log_stds) + means**2),
+            axis=-2,
+        )
+        variance = jnp.maximum(second - mean**2, jnp.asarray(1.0e-12))
+        return mean, 0.5 * jnp.log(variance)
+
+    def _single_mixture(self, features):
+        h = features
+        activation = _activation(self.activation_name)
+        for layer in self.trunk:
+            h = activation(layer(h))
+        logits = self.logits_head(h)
+        means = self.mean_head(h).reshape(self.n_components, self.latent_dim)
+        raw = self.log_std_head(h).reshape(self.n_components, self.latent_dim)
+        log_stds = jnp.clip(
+            raw + self.initial_log_std,
+            self.log_std_min,
+            self.log_std_max,
+        )
+        return logits, means, log_stds
+
+
 def _diag_normal_log_prob(x, mean, log_std):
     var_term = ((x - mean) / jnp.exp(log_std)) ** 2
     return -0.5 * jnp.sum(

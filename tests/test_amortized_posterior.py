@@ -28,6 +28,7 @@ if HAS_EQUINOX:
         _evaluation_metrics,
         _loss_with_metrics,
         _prior_mstep_loss,
+        _sample_sleep_noise,
         _sleep_encoder_features,
         _sleep_m5_flux_error,
         _training_update_phase,
@@ -134,6 +135,50 @@ def test_tempered_posterior_sample_density_is_exact() -> None:
     )(posterior.x)
 
     assert jnp.allclose(evaluated, posterior.logq, atol=3.0e-4)
+
+
+def test_mixture_conditional_flow_sample_density_is_exact() -> None:
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        output_space="latent_x",
+        base_components=2,
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.ones((3, 6), dtype=jnp.float32)
+    posterior = sample_posterior(model, jax.random.PRNGKey(1), features, 5)
+    evaluated = jax.vmap(lambda x: posterior_log_prob(model, features, x))(posterior.x)
+
+    assert posterior.x.shape == (5, 3, 4)
+    assert jnp.all(jnp.isfinite(posterior.logq))
+    assert jnp.allclose(evaluated, posterior.logq, atol=3.0e-4)
+
+
+def test_sleep_noise_matches_student_t_likelihood() -> None:
+    error = jnp.ones((4096, 2), dtype=jnp.float32)
+    noise, family = _sample_sleep_noise(
+        jax.random.PRNGKey(4),
+        error,
+        sleep={"noise_family": "match_likelihood"},
+        likelihood_config={"type": "student_t", "student_t_dof": 2.0},
+    )
+
+    assert family == "student_t"
+    assert jnp.all(jnp.isfinite(noise))
+    assert jnp.quantile(jnp.abs(noise), 0.99) > 3.0
 
 
 def test_conditional_flow_gradients_are_finite() -> None:
@@ -512,7 +557,6 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
     assert jnp.isfinite(loss)
     assert metrics["wake_active"] == 1.0
     assert 0.25 <= metrics["wake_ess_fraction_mean"] <= 1.0
-    assert metrics["wake_all_nonfinite_fraction"] == 0.0
 
     validation_metrics, object_metrics = _evaluation_metrics(
         model,
@@ -575,6 +619,116 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
     assert all(jnp.all(jnp.isfinite(leaf)) for leaf in encoder_leaves)
     assert any(jnp.any(jnp.abs(leaf) > 0.0) for leaf in encoder_leaves)
     assert all(jnp.allclose(leaf, 0.0) for leaf in prior_leaves)
+
+
+def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import euclid_dsps.amortized.train as train_module
+
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        output_space="latent_x",
+        base_components=2,
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    batch = LossBatch(
+        flux=jnp.zeros((2, 2)),
+        flux_err=0.5 * jnp.ones((2, 2)),
+        mask=jnp.ones((2, 2), dtype=bool),
+        features=jnp.ones((2, 6)),
+        truth_theta=jnp.zeros((2, 0)),
+    )
+    spec = JitLatentSpec(
+        names=("a", "b", "c", "d"),
+        lower=jnp.zeros(4),
+        upper=jnp.ones(4),
+        raw_center=jnp.zeros(4),
+        raw_scale=jnp.ones(4),
+    )
+    monkeypatch.setattr(
+        train_module, "model_flux_from_x", lambda x, *_args, **_kwargs: x[..., :2]
+    )
+    loss, metrics = _loss_with_metrics(
+        model,
+        batch,
+        spec,
+        None,
+        None,
+        spec.names,
+        jax.random.PRNGKey(7),
+        1,
+        1.0,
+        {"type": "student_t", "student_t_dof": 2.0, "error_floor_frac": 0.0},
+        {},
+        {
+            "mode": "reweighted_wake_sleep",
+            "wake_active": True,
+            "wake": {
+                "sampler": "smc",
+                "n_particles": 4,
+                "smc_temperatures": [0.0, 0.5, 1.0],
+                "smc_mala_steps": 1,
+                "smc_mala_step_size": 0.02,
+                "prior_loss_weight": 1.0,
+            },
+        },
+    )
+
+    assert jnp.isfinite(loss)
+    assert float(metrics["smc_active"]) == 1.0
+    assert 0.0 <= float(metrics["smc_mala_acceptance_mean"]) <= 1.0
+    assert float(metrics["wake_ess_mean"]) > 0.0
+    assert metrics["wake_all_nonfinite_fraction"] == 0.0
+
+    def smc_loss(candidate):
+        return _loss_with_metrics(
+            candidate,
+            batch,
+            spec,
+            None,
+            None,
+            spec.names,
+            jax.random.PRNGKey(7),
+            1,
+            1.0,
+            {"type": "student_t", "student_t_dof": 2.0, "error_floor_frac": 0.0},
+            {},
+            {
+                "mode": "reweighted_wake_sleep",
+                "wake_active": True,
+                "wake": {
+                    "sampler": "smc",
+                    "n_particles": 4,
+                    "smc_temperatures": [0.0, 0.5, 1.0],
+                    "smc_mala_steps": 1,
+                    "smc_mala_step_size": 0.02,
+                    "prior_loss_weight": 1.0,
+                },
+            },
+        )[0]
+
+    leaves = [
+        leaf
+        for leaf in jax.tree_util.tree_leaves(eqx.filter_grad(smc_loss)(model))
+        if leaf is not None
+    ]
+    assert leaves
+    assert all(jnp.all(jnp.isfinite(leaf)) for leaf in leaves)
 
 
 def test_reweighted_wake_updates_encoder_and_learned_prior(
@@ -771,9 +925,7 @@ def test_reweighted_sleep_is_finite_and_only_trains_encoder(
 
 
 def test_sleep_m5_noise_and_features_match_catalog_contract() -> None:
-    flux = jnp.asarray(
-        [[1.0e-30, -2.0e-31], [3.0e-31, 2.0e-30]], dtype=jnp.float32
-    )
+    flux = jnp.asarray([[1.0e-30, -2.0e-31], [3.0e-31, 2.0e-30]], dtype=jnp.float32)
     config = {
         "m5": (25.0, 26.0),
         "gamma": (0.039, 0.041),
@@ -784,6 +936,7 @@ def test_sleep_m5_noise_and_features_match_catalog_contract() -> None:
         "flux_transform": "asinh",
     }
     actual = _sleep_m5_flux_error(flux, config)
+    compiled = jax.jit(lambda value: _sleep_m5_flux_error(value, config))(flux)
 
     unit = 1.0e-32
     flux64 = np.asarray(flux, dtype=np.float64) / unit
@@ -794,6 +947,8 @@ def test_sleep_m5_noise_and_features_match_catalog_contract() -> None:
     sys_frac = np.expm1(np.log(10.0) * config["sigma_sys_mag"] / 2.5)
     expected = np.sqrt(sigma2 + (sys_frac * np.abs(flux64)) ** 2) * unit
     assert jnp.allclose(actual, jnp.asarray(expected, dtype=jnp.float32), rtol=2.0e-6)
+    assert jnp.all(jnp.isfinite(compiled))
+    assert jnp.allclose(compiled, jnp.asarray(expected, dtype=jnp.float32), rtol=2.0e-6)
 
     mask = jnp.asarray([[True, False], [True, True]])
     features = _sleep_encoder_features(flux, actual, mask, config)

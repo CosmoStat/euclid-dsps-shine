@@ -8,7 +8,7 @@ import jax
 import jax.numpy as jnp
 
 from .config import require_equinox
-from .encoder import GaussianEncoder, _diag_normal_log_prob
+from .encoder import GaussianEncoder, MixtureGaussianEncoder, _diag_normal_log_prob
 from .flows import (
     _apply_net,
     _rational_quadratic_spline,
@@ -136,13 +136,14 @@ class _ConditionalCoupling(eqx.Module):
 class ConditionalFlowEncoder(eqx.Module):
     """MLP Gaussian base followed by a conditional residual coupling flow."""
 
-    base: GaussianEncoder
+    base: object
     layers: tuple
     permutations: tuple
     inverse_permutations: tuple
     family: str = eqx.field(static=True)
     latent_dim: int = eqx.field(static=True)
     output_space: str = eqx.field(static=True)
+    base_components: int = eqx.field(static=True)
 
     def __init__(
         self,
@@ -167,10 +168,14 @@ class ConditionalFlowEncoder(eqx.Module):
         min_derivative: float = 1.0e-3,
         init_scale: float = 0.0,
         output_space: str = "prior_base",
+        base_components: int = 1,
     ) -> None:
         keys = jax.random.split(key, int(n_layers) + 1)
-        self.base = GaussianEncoder(
-            keys[0],
+        self.base_components = int(base_components)
+        base_class = (
+            GaussianEncoder if self.base_components == 1 else MixtureGaussianEncoder
+        )
+        base_kwargs = dict(
             input_dim=input_dim,
             latent_dim=latent_dim,
             hidden_sizes=hidden_sizes,
@@ -179,6 +184,9 @@ class ConditionalFlowEncoder(eqx.Module):
             log_std_max=log_std_max,
             initial_log_std=initial_log_std,
         )
+        if self.base_components > 1:
+            base_kwargs["n_components"] = self.base_components
+        self.base = base_class(keys[0], **base_kwargs)
         masks = tuple(
             (jnp.arange(int(latent_dim)) % 2 == index % 2)
             for index in range(int(n_layers))
@@ -252,19 +260,51 @@ def sample_posterior(
     temperature = float(base_temperature)
     if temperature <= 0.0:
         raise ValueError("base_temperature must be positive")
-    eps = _sample_standard_normal(
-        key,
-        (n_samples,) + mean.shape,
-        dtype=mean.dtype,
-        strategy=sample_strategy,
-    )
-    proposal_log_std = log_std + jnp.log(jnp.asarray(temperature, dtype=log_std.dtype))
-    base = mean[None, ...] + jnp.exp(proposal_log_std)[None, ...] * eps
-    logq_base = _diag_normal_log_prob(
-        base,
-        mean[None, ...],
-        proposal_log_std[None, ...],
-    )
+    if _is_mixture_encoder(model.encoder):
+        if str(sample_strategy).strip().lower() not in {"random", "iid", "independent"}:
+            raise ValueError(
+                "Mixture posterior sampling currently requires random sampling"
+            )
+        component_key, normal_key = jax.random.split(key)
+        logits, component_means, component_log_stds = (
+            model.encoder.base.mixture_parameters(features)
+        )
+        component = jax.random.categorical(
+            component_key,
+            logits,
+            axis=-1,
+            shape=(n_samples,) + logits.shape[:-1],
+        )
+        selected_mean = jnp.take_along_axis(
+            component_means[None, ...], component[..., None, None], axis=-2
+        )[..., 0, :]
+        selected_log_std = jnp.take_along_axis(
+            component_log_stds[None, ...], component[..., None, None], axis=-2
+        )[..., 0, :]
+        selected_log_std = selected_log_std + jnp.log(
+            jnp.asarray(temperature, dtype=selected_log_std.dtype)
+        )
+        eps = jax.random.normal(normal_key, selected_mean.shape, dtype=mean.dtype)
+        base = selected_mean + jnp.exp(selected_log_std) * eps
+        logq_base = _mixture_base_log_prob(
+            base, logits, component_means, component_log_stds, temperature
+        )
+    else:
+        eps = _sample_standard_normal(
+            key,
+            (n_samples,) + mean.shape,
+            dtype=mean.dtype,
+            strategy=sample_strategy,
+        )
+        proposal_log_std = log_std + jnp.log(
+            jnp.asarray(temperature, dtype=log_std.dtype)
+        )
+        base = mean[None, ...] + jnp.exp(proposal_log_std)[None, ...] * eps
+        logq_base = _diag_normal_log_prob(
+            base,
+            mean[None, ...],
+            proposal_log_std[None, ...],
+        )
     residual_logdet = jnp.zeros_like(logq_base)
 
     if isinstance(model.encoder, GaussianEncoder):
@@ -310,16 +350,71 @@ def posterior_log_prob(
         model.encoder.output_space == "latent_x"
     ):
         base, inverse_logdet = model.encoder.inverse(x, context)
-        return _diag_normal_log_prob(base, mean, log_std) + inverse_logdet
+        base_log_prob = (
+            _mixture_base_log_prob_from_encoder(
+                model.encoder, features, base, temperature
+            )
+            if _is_mixture_encoder(model.encoder)
+            else _diag_normal_log_prob(base, mean, log_std)
+        )
+        return base_log_prob + inverse_logdet
     u, prior_inverse_logdet = model.prior.inverse(x)
     residual_inverse_logdet = jnp.zeros(u.shape[:-1], dtype=u.dtype)
     base = u
     if isinstance(model.encoder, ConditionalFlowEncoder):
         base, residual_inverse_logdet = model.encoder.inverse(u, context)
-    return (
-        _diag_normal_log_prob(base, mean, log_std)
-        + residual_inverse_logdet
-        + prior_inverse_logdet
+    base_log_prob = (
+        _mixture_base_log_prob_from_encoder(model.encoder, features, base, temperature)
+        if _is_mixture_encoder(model.encoder)
+        else _diag_normal_log_prob(base, mean, log_std)
+    )
+    return base_log_prob + residual_inverse_logdet + prior_inverse_logdet
+
+
+def posterior_mixture_diagnostics(model, features) -> dict[str, jnp.ndarray]:
+    """Return exact component occupancy diagnostics, or neutral values for M=1."""
+    if not _is_mixture_encoder(model.encoder):
+        zero = jnp.asarray(0.0, dtype=jnp.float32)
+        return {
+            "components": jnp.asarray(1.0),
+            "entropy": zero,
+            "max_weight": jnp.asarray(1.0),
+        }
+    logits, _means, _log_stds = model.encoder.base.mixture_parameters(features)
+    weights = jax.nn.softmax(logits, axis=-1)
+    entropy = -jnp.sum(jnp.where(weights > 0, weights * jnp.log(weights), 0.0), axis=-1)
+    return {
+        "components": jnp.asarray(float(model.encoder.base_components)),
+        "entropy": jnp.mean(entropy),
+        "max_weight": jnp.mean(jnp.max(weights, axis=-1)),
+    }
+
+
+def _is_mixture_encoder(encoder) -> bool:
+    return isinstance(encoder, ConditionalFlowEncoder) and isinstance(
+        encoder.base, MixtureGaussianEncoder
+    )
+
+
+def _mixture_base_log_prob_from_encoder(encoder, features, value, temperature):
+    logits, means, log_stds = encoder.base.mixture_parameters(features)
+    return _mixture_base_log_prob(value, logits, means, log_stds, temperature)
+
+
+def _mixture_base_log_prob(value, logits, means, log_stds, temperature):
+    value = jnp.asarray(value)
+    leading_samples = value.ndim - means.ndim + 1
+    for _ in range(max(0, leading_samples)):
+        logits = logits[None, ...]
+        means = means[None, ...]
+        log_stds = log_stds[None, ...]
+    scaled_log_stds = log_stds + jnp.log(jnp.asarray(temperature, dtype=log_stds.dtype))
+    component_log_prob = _diag_normal_log_prob(
+        value[..., None, :], means, scaled_log_stds
+    )
+    return jax.scipy.special.logsumexp(
+        jax.nn.log_softmax(logits, axis=-1) + component_log_prob,
+        axis=-1,
     )
 
 
