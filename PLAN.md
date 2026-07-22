@@ -2,9 +2,9 @@
 
 ## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
 
-- Status: second Jean-Zay smoke completed all three training/inference tasks;
-  Jacobian marker-contract fix locally verified and ready for a dependent-stage
-  relaunch reusing those completed smoke artifacts.
+- Status: smoke training, inference, Jacobian Lens, and finalization completed;
+  production startup cache-path fix locally verified and ready for a full-only
+  dependent-chain relaunch.
 - Limit the scientific array to three learned-prior candidates, all using the
   immutable common 15D `mixed_log_shifted_asinh` normalization and the same
   identity-initialized population RealNVP prior.
@@ -50,6 +50,13 @@
   created by `touch`. The lens prerequisite now checks file existence with
   `test -f`, covered by a wrapper regression test; no model or Jacobian code
   executed in the failed tasks.
+- The corrected smoke Lens array (`43316`) and finalizers (`43317`) completed
+  all tasks. The first full array (`43318`) then failed before Conda/Python
+  because its scheduler-provided `$JOBSCRATCH` paths were not writable. All
+  three production wrappers now place their isolated Matplotlib cache directly
+  under node-local `/tmp`, and a regression test rejects future `JOBSCRATCH`
+  use in this workflow. The failed full root contains only empty candidate
+  directories and can be reused safely.
 - Verification: 46 focused posterior, likelihood, SMC, truth/gate, Jacobian and
   config tests pass; all three wake variants and sleep compile and update under
   simulated four-device `pmap`, and every architecture survives checkpoint

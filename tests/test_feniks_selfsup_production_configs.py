@@ -96,3 +96,20 @@ def test_jacobian_lens_accepts_zero_byte_completion_marker() -> None:
 
     assert 'test -f "$TASK_DIR/DONE"' in wrapper
     assert 'test -s "$TASK_DIR/DONE"' not in wrapper
+
+
+@pytest.mark.parametrize(
+    "wrapper_name",
+    (
+        "feniks_selfsup_production_h100.slurm",
+        "feniks_selfsup_production_jlens_h100.slurm",
+        "feniks_selfsup_production_finalize_h100.slurm",
+    ),
+)
+def test_production_wrappers_use_node_local_matplotlib_cache(
+    wrapper_name: str,
+) -> None:
+    wrapper = (ROOT / "scripts" / wrapper_name).read_text()
+
+    assert "JOBSCRATCH" not in wrapper
+    assert 'export MPLCONFIGDIR="/tmp/mpl-' in wrapper
