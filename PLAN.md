@@ -2,8 +2,9 @@
 
 ## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
 
-- Status: smoke-timeout fix locally verified; ready for a clean Jean-Zay
-  chained smoke-plus-production relaunch.
+- Status: second Jean-Zay smoke completed all three training/inference tasks;
+  Jacobian marker-contract fix locally verified and ready for a dependent-stage
+  relaunch reusing those completed smoke artifacts.
 - Limit the scientific array to three learned-prior candidates, all using the
   immutable common 15D `mixed_log_shifted_asinh` normalization and the same
   identity-initialized population RealNVP prior.
@@ -43,6 +44,12 @@
   prior samples while production retains 16,384; this still exercises two
   prior-predictive DSPS batches without spending the smoke wall time on final
   statistical precision.
+- The second smoke training array (`41879`) completed all three candidates in
+  2:57, 3:00, and 4:26. Its twelve Jacobian tasks exited immediately because
+  the wrapper used `test -s` on the intentionally zero-byte `DONE` marker
+  created by `touch`. The lens prerequisite now checks file existence with
+  `test -f`, covered by a wrapper regression test; no model or Jacobian code
+  executed in the failed tasks.
 - Verification: 46 focused posterior, likelihood, SMC, truth/gate, Jacobian and
   config tests pass; all three wake variants and sleep compile and update under
   simulated four-device `pmap`, and every architecture survives checkpoint

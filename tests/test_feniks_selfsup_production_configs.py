@@ -89,3 +89,10 @@ def test_production_preflight_does_not_import_jax() -> None:
         capture_output=True,
         text=True,
     )
+
+
+def test_jacobian_lens_accepts_zero_byte_completion_marker() -> None:
+    wrapper = (ROOT / "scripts" / "feniks_selfsup_production_jlens_h100.slurm").read_text()
+
+    assert 'test -f "$TASK_DIR/DONE"' in wrapper
+    assert 'test -s "$TASK_DIR/DONE"' not in wrapper

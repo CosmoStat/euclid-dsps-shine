@@ -54,7 +54,7 @@ cd "$REPO_DIR"
 mkdir -p outputs/logs "$MPLCONFIGDIR" "$LENS_DIR"
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
-test -s "$TASK_DIR/DONE" || { echo "[jlens][error] incomplete run: $TASK_DIR"; exit 2; }
+test -f "$TASK_DIR/DONE" || { echo "[jlens][error] incomplete run: $TASK_DIR"; exit 2; }
 
 python - <<'PY'
 import jax
