@@ -1,5 +1,49 @@
 # Plan
 
+## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
+
+- Status: implemented and locally verified; ready for the Jean-Zay chained
+  smoke-plus-production submission.
+- Limit the scientific array to three learned-prior candidates, all using the
+  immutable common 15D `mixed_log_shifted_asinh` normalization and the same
+  identity-initialized population RealNVP prior.
+- Match the synthetic sleep corruption to the Student-t likelihood with two
+  degrees of freedom and record robust noise diagnostics instead of relying on
+  a variance that does not exist for Student-t2.
+- Compare a single-component posterior, an exact two-component Gaussian-mixture
+  base passed through the same conditional flow, and a likelihood-tempered
+  SMC-wake variant intended to reduce self-normalized importance-weight
+  collapse.
+- Use 12 H100 concurrently through a three-task training array (four local
+  H100 per `pmap` task). Do not request multi-node GPUs for one task because the
+  current trainer has no multi-host JAX initialization.
+- Run the existing Jacobian-lens workflow as a dependent 12-task array, four
+  one-GPU shards per trained candidate, then finalize each lens and the common
+  comparison report in a CPU dependency job.
+- Require photometric posterior-predictive plots, corner plots, full 15D prior
+  marginal/correlation diagnostics, importance-weight ESS, mixture occupancy,
+  SMC acceptance/ESS, Jacobian spectra, and latent/prior score sensitivities
+  before selecting a production model.
+- Implemented exact two-component posterior densities, matched Student-t2
+  sleep noise, stopped likelihood-tempered SMC-Wake with MALA diagnostics,
+  mixture occupancy metrics, the 15-marginal/105-correlation closure gate and
+  correlation-error heatmap.
+- Added a chained three-run/four-GPU training array, twelve one-GPU Jacobian
+  shards, per-run finalizers, fail-fast input/GPU/Matplotlib checks, and a
+  documented artifact contract. The smoke exercises both sleep and wake plus
+  all Jacobian paths before the full array is released.
+- Fixed an XLA-only numerical defect in the sleep `m5` error model: computing a
+  tiny cgs flux before rescaling underflowed under JIT/pmap even though eager
+  tests passed. The depth flux is now formed directly in scaled units and the
+  four-device regression applies finite sleep and SMC updates.
+- Verification: 46 focused posterior, likelihood, SMC, truth/gate, Jacobian and
+  config tests pass; all three wake variants and sleep compile and update under
+  simulated four-device `pmap`, and every architecture survives checkpoint
+  serialization/reload. Compileall, Ruff, shell syntax, CLI help, a complete
+  mocked six-job submission and diff checks pass. The production
+  parquet catalog is absent from WSL, so its JAX-free contract check remains a
+  mandatory first step in the Jean-Zay submission script.
+
 ## 2026-07-21 Self-Supervised RWS Prior and Posterior Matrix
 
 - Status: completed; ready for the Jean-Zay smoke-plus-full submission.

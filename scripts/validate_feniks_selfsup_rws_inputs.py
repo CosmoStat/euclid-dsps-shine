@@ -37,8 +37,13 @@ def validate_selfsup_rws_inputs(
         wake = dict(objective.get("wake", {}) or {})
         sleep = dict(objective.get("sleep", {}) or {})
         prior = dict(amortized.get("prior", {}) or {})
-        if str(likelihood.get("type", "")).lower() != "gaussian":
-            raise ValueError(f"{path}: closure likelihood must be gaussian")
+        likelihood_type = str(likelihood.get("type", "")).lower()
+        if likelihood_type not in {"gaussian", "student_t"}:
+            raise ValueError(f"{path}: likelihood must be gaussian or student_t")
+        if likelihood_type == "student_t" and float(
+            likelihood.get("student_t_dof", -1.0)
+        ) != 2.0:
+            raise ValueError(f"{path}: robust likelihood must use Student-t dof=2")
         if float(likelihood.get("error_floor_frac", -1.0)) != 0.0:
             raise ValueError(f"{path}: closure error_floor_frac must be zero")
         if float(likelihood.get("error_jitter", -1.0)) != 0.0:
@@ -47,6 +52,8 @@ def validate_selfsup_rws_inputs(
             raise ValueError(f"{path}: expected reweighted_wake_sleep objective")
         if not bool(sleep.get("enabled", False)):
             raise ValueError(f"{path}: model-generated sleep contract must be enabled")
+        if str(sleep.get("noise_family", "match_likelihood")) != "match_likelihood":
+            raise ValueError(f"{path}: sleep noise must match the likelihood family")
         if int(wake.get("n_particles", 0)) < 4:
             raise ValueError(f"{path}: wake requires at least four particles")
         learned = str(prior.get("source", "")) == "joint_realnvp"

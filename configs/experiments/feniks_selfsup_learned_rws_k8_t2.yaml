@@ -1,0 +1,5 @@
+extends: feniks_selfsup_learned_t2_common.yaml
+
+amortized:
+  encoder:
+    base_components: 1

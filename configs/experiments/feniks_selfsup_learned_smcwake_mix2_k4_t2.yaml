@@ -1,0 +1,12 @@
+extends: feniks_selfsup_learned_t2_common.yaml
+
+amortized:
+  encoder:
+    base_components: 2
+  objective:
+    wake:
+      sampler: smc
+      n_particles: 4
+      smc_temperatures: [0.0, 0.33, 0.67, 1.0]
+      smc_mala_steps: 1
+      smc_mala_step_size: 0.04

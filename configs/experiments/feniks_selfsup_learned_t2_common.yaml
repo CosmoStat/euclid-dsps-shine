@@ -1,0 +1,32 @@
+extends: feniks_selfsup_learned_rws_sleep3_wake1_k8.yaml
+
+amortized:
+  likelihood:
+    # Robust observation model; fluxerr remains the Student-t scale.
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+  objective:
+    sleep:
+      enabled: true
+      error_model: m5_depth
+      noise_family: match_likelihood
+    wake:
+      start_encoder_epoch: 4
+      every_encoder_epochs: 4
+      n_particles: 8
+      n_tempered_particles: 2
+      base_temperature: 2.0
+      train_prior: true
+      prior_loss_weight: 1.0
+      sampler: importance
+  training:
+    epochs: 120
+    n_samples: 1
+    validation_every: 8
+    best_checkpoint_min_epoch: 20
+  inference:
+    write_posterior_predictive: true
+    write_residual_samples: false
+    combine_sample_shards: false
