@@ -63,7 +63,9 @@ def main() -> None:
         return
     required = (args.label, args.config, args.train, args.inference, args.out)
     if any(value is None for value in required):
-        parser.error("task mode requires --label, --config, --train, --inference, --out")
+        parser.error(
+            "task mode requires --label, --config, --train, --inference, --out"
+        )
     summarize_task(args.label, args.config, args.train, args.inference, args.out)
 
 
@@ -85,8 +87,20 @@ def summarize_task(
     coverage_path = out.parent / "posterior_coverage.csv"
     coverage.to_csv(coverage_path, index=False)
     photoz = _first_row(inference / "photoz_metrics.csv")
+    prior_population = (
+        pd.read_csv(inference / "prior_vs_truth_population.csv")
+        if (inference / "prior_vs_truth_population.csv").is_file()
+        else pd.DataFrame()
+    )
+    prior_correlations = (
+        pd.read_csv(inference / "prior_vs_truth_correlations.csv")
+        if (inference / "prior_vs_truth_correlations.csv").is_file()
+        else pd.DataFrame()
+    )
     _write_photometry_fit_examples(inference)
-    missing_plots = [name for name in MODE_KEY_PLOTS if not (inference / name).is_file()]
+    missing_plots = [
+        name for name in MODE_KEY_PLOTS if not (inference / name).is_file()
+    ]
     if missing_plots:
         raise FileNotFoundError("Missing required plots: " + ", ".join(missing_plots))
     elapsed = float(training.get("elapsed_time_s", np.nan))
@@ -102,8 +116,12 @@ def summarize_task(
         "seconds_per_encoder_epoch": elapsed / len(phase_by_epoch),
         "best_checkpoint_epoch": training.get("best_checkpoint_epoch"),
         "updates_skipped": int(training.get("updates_skipped", 0)),
-        "wake_updates": int(wake_rows.get("update_applied", pd.Series(dtype=float)).sum()),
-        "sleep_updates": int(sleep_rows.get("update_applied", pd.Series(dtype=float)).sum()),
+        "wake_updates": int(
+            wake_rows.get("update_applied", pd.Series(dtype=float)).sum()
+        ),
+        "sleep_updates": int(
+            sleep_rows.get("update_applied", pd.Series(dtype=float)).sum()
+        ),
         "wake_ess_fraction_mean": _series_mean(wake_rows, "wake_ess_fraction_mean"),
         "wake_weight_max_mean": _series_mean(wake_rows, "wake_weight_max_mean"),
         "wake_all_nonfinite_fraction": _series_mean(
@@ -115,6 +133,14 @@ def summarize_task(
         "sleep_physical_valid_fraction": _series_mean(
             sleep_rows, "sleep_physical_valid_fraction"
         ),
+        "sleep_noise_abs_median": _series_mean(sleep_rows, "sleep_noise_abs_median"),
+        "sleep_noise_abs_q90": _series_mean(sleep_rows, "sleep_noise_abs_q90"),
+        "posterior_mixture_entropy": _series_mean(rows, "posterior_mixture_entropy"),
+        "posterior_mixture_max_weight": _series_mean(
+            rows, "posterior_mixture_max_weight"
+        ),
+        "smc_stage_ess_mean": _series_mean(wake_rows, "smc_stage_ess_mean"),
+        "smc_mala_acceptance_mean": _series_mean(wake_rows, "smc_mala_acceptance_mean"),
         "prior_mstep_nll": _series_mean(prior_rows, "prior_mstep_nll"),
         "normalization": latent.get("normalization"),
         "normalization_hash": latent.get("normalization_hash"),
@@ -135,6 +161,12 @@ def summarize_task(
         "median_posterior_predictive_chi2": _float(
             diagnostics.get("median_posterior_predictive_chi2")
         ),
+        "prior_15d_mean_quantile_l1_iqr": _series_mean(
+            prior_population, "quantile_l1_iqr"
+        ),
+        "prior_15d_mean_spearman_abs_delta": _series_mean(
+            prior_correlations, "abs_delta"
+        ),
         "n_objects": int(diagnostics.get("n_objects", 0)),
         "coverage_csv": str(coverage_path),
         "key_plots": [str(inference / name) for name in MODE_KEY_PLOTS],
@@ -149,7 +181,9 @@ def aggregate(root: Path, expected: int) -> None:
         return
     out = root / "comparison"
     out.mkdir(parents=True, exist_ok=True)
-    metrics = pd.DataFrame([_read_json(root / label / "metrics.json") for label in LABELS])
+    metrics = pd.DataFrame(
+        [_read_json(root / label / "metrics.json") for label in LABELS]
+    )
     metrics.to_csv(out / "experiment_metrics.csv", index=False)
     coverage_parts = []
     for label in LABELS:
