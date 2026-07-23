@@ -137,6 +137,19 @@ def test_h100_wrapper_loads_the_h100_module_tree_before_conda() -> None:
 
     assert "module purge" in wrapper
     assert "module load arch/h100" in wrapper
+    assert "export EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0" in wrapper
     assert wrapper.index("module load arch/h100") < wrapper.index(
         'conda activate "$CONDA_ENV"'
     )
+
+
+def test_generator_enables_plugin_autoload_before_importing_jax() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "generate_feniks_individual_posteriors.py"
+    ).read_text(encoding="utf-8")
+
+    bootstrap = 'os.environ.setdefault("EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD", "0")'
+    assert bootstrap in source
+    assert source.index(bootstrap) < source.index("import jax")

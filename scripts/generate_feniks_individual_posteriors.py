@@ -5,9 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
+
+# Direct scripts do not pass through the CLI runtime bootstrap. Keep PJRT plugin
+# discovery enabled before importing any module that initializes JAX.
+os.environ.setdefault("EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD", "0")
 
 import jax
 import numpy as np
