@@ -98,10 +98,36 @@ def test_jacobian_lens_accepts_zero_byte_completion_marker() -> None:
     assert 'test -s "$TASK_DIR/DONE"' not in wrapper
 
 
+def test_production_wrapper_uses_compute_bounded_smc_epochs() -> None:
+    wrapper = (ROOT / "scripts" / "feniks_selfsup_production_h100.slurm").read_text()
+
+    assert "FULL_EPOCHS=(120 120 40)" in wrapper
+    assert 'EPOCHS="${FULL_EPOCHS[$TASK_ID]}"' in wrapper
+
+
+def test_smc_recovery_is_warm_restart_without_online_validation() -> None:
+    wrapper = (
+        ROOT / "scripts" / "feniks_selfsup_production_smc_resume_h100.slurm"
+    ).read_text()
+    submitter = (
+        ROOT / "scripts" / "submit_feniks_selfsup_production_recovery.sh"
+    ).read_text()
+
+    assert 'START_EPOCH="${START_EPOCH:-37}"' in wrapper
+    assert 'END_EPOCH="${END_EPOCH:-40}"' in wrapper
+    assert '--initial-checkpoint "$INITIAL_CHECKPOINT"' in wrapper
+    assert "--validation-every 0" in wrapper
+    assert '"optimizer_state_resumed": false' in wrapper
+    assert 'mv "$FAILED_TRAIN" "$ARCHIVE_TRAIN"' in submitter
+    assert '--dependency="afterok:${resume_job}"' in submitter
+    assert '--dependency="afterok:${lens_job}"' in submitter
+
+
 @pytest.mark.parametrize(
     "wrapper_name",
     (
         "feniks_selfsup_production_h100.slurm",
+        "feniks_selfsup_production_smc_resume_h100.slurm",
         "feniks_selfsup_production_jlens_h100.slurm",
         "feniks_selfsup_production_finalize_h100.slurm",
     ),

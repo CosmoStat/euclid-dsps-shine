@@ -1331,6 +1331,32 @@ def train_amortized_fs2(
             model = _unreplicate_tree(model_replicated)
         if not epoch_rows:
             raise ValueError("No FS2 batches were produced for amortized training")
+
+        # Persist completed optimization work before validation. Validation may
+        # compile a separate executable and fail independently of training.
+        epoch_train_loss = _finite_mean([row["loss"] for row in epoch_rows])
+        save_checkpoint(
+            ckpt_dir / "last.eqx",
+            model,
+            config=config,
+            latent_spec=latent_spec,
+            feature_stats=feature_stats,
+            epoch=epoch,
+            metric=epoch_train_loss,
+            metric_name="train_loss",
+        )
+        if checkpoint_every > 0 and epoch % checkpoint_every == 0:
+            save_checkpoint(
+                ckpt_dir / f"epoch_{epoch:04d}.eqx",
+                model,
+                config=config,
+                latent_spec=latent_spec,
+                feature_stats=feature_stats,
+                epoch=epoch,
+                metric=epoch_train_loss,
+                metric_name="train_loss",
+            )
+
         validation_rows = []
         epoch_bin_rows = []
         if (
@@ -1403,27 +1429,6 @@ def train_amortized_fs2(
                 f"mean_loss={val_loss:.6g} mean_nll={val_nll:.6g} "
                 f"{best_checkpoint_metric}={checkpoint_metric_value:.6g} "
                 f"binned_rows={len(epoch_bin_rows)}",
-            )
-        save_checkpoint(
-            ckpt_dir / "last.eqx",
-            model,
-            config=config,
-            latent_spec=latent_spec,
-            feature_stats=feature_stats,
-            epoch=epoch,
-            metric=_finite_mean([row["loss"] for row in epoch_rows]),
-            metric_name="train_loss",
-        )
-        if checkpoint_every > 0 and epoch % checkpoint_every == 0:
-            save_checkpoint(
-                ckpt_dir / f"epoch_{epoch:04d}.eqx",
-                model,
-                config=config,
-                latent_spec=latent_spec,
-                feature_stats=feature_stats,
-                epoch=epoch,
-                metric=_finite_mean([row["loss"] for row in epoch_rows]),
-                metric_name="train_loss",
             )
         if _should_write_training_snapshot(snapshot_cfg, epoch):
             key, snapshot_key = jax.random.split(key)

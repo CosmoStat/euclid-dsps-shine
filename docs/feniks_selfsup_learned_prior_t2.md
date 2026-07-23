@@ -12,8 +12,14 @@ All candidates share:
 - three model-generated sleep epochs followed by one real-catalog wake epoch;
 - a Student-t likelihood with two degrees of freedom, zero extra error floor,
   and Student-t2 noise in model-generated sleep;
-- 120 epochs, held-out inference on 5000 objects, posterior-predictive flux
-  diagnostics, and 16384 learned-prior samples.
+- held-out inference on 5000 objects, posterior-predictive flux diagnostics,
+  and 16384 learned-prior samples.
+
+The two importance-RWS candidates run for 120 epochs. The SMC-Wake candidate is
+bounded at 40 epochs because its four-particle tempered MALA wake step costs
+about twice the complete wall-clock budget of either 120-epoch importance run.
+It is therefore a compute-bounded diagnostic candidate, not an epoch-matched
+comparison.
 
 ## Candidates
 
@@ -29,7 +35,10 @@ components into latent space, and `log q` uses the exact mixture density.
 the circular posterior proposal during wake with four prior particles,
 likelihood tempering at `[0, 0.33, 0.67, 1]`, resampling, and one MALA move per
 intermediate temperature. SMC particles and weights are stopped before the
-posterior and population-prior updates.
+posterior and population-prior updates. The production recovery from epoch 36
+to 40 is a warm restart: model weights are restored but AdamW state is
+reinitialized, and online validation is disabled to avoid the observed
+host-pinned-memory allocator failure.
 
 ## Required diagnostics
 

@@ -26,6 +26,7 @@ LABELS=(
   selfsup_smcwake_mix2_k4_t2
 )
 JAX_BATCH_SIZES=(256 256 128)
+FULL_EPOCHS=(120 120 40)
 
 TASK_ID="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
 CONFIG="${CONFIGS[$TASK_ID]}"
@@ -90,7 +91,7 @@ if jax.default_backend() != "gpu" or len(jax.local_devices()) != 4:
     raise SystemExit("[t2-production][error] expected exactly four local GPU devices")
 PY
 
-EPOCHS=120
+EPOCHS="${FULL_EPOCHS[$TASK_ID]}"
 LIMIT=""
 POSTERIOR_SAMPLES=128
 PRIOR_SAMPLES=16384
