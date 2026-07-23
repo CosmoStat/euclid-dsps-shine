@@ -113,12 +113,15 @@ def test_smc_recovery_is_warm_restart_without_online_validation() -> None:
         ROOT / "scripts" / "submit_feniks_selfsup_production_recovery.sh"
     ).read_text()
 
-    assert 'START_EPOCH="${START_EPOCH:-37}"' in wrapper
+    assert 'START_EPOCH="${START_EPOCH:-40}"' in wrapper
     assert 'END_EPOCH="${END_EPOCH:-40}"' in wrapper
     assert '--initial-checkpoint "$INITIAL_CHECKPOINT"' in wrapper
     assert "--validation-every 0" in wrapper
     assert '"optimizer_state_resumed": false' in wrapper
     assert 'mv "$FAILED_TRAIN" "$ARCHIVE_TRAIN"' in submitter
+    assert "start_epoch=$((source_epoch + 1))" in submitter
+    assert "expected an epoch in [1, 39]" in submitter
+    assert "START_EPOCH=$start_epoch,END_EPOCH=40" in submitter
     assert '--dependency="afterok:${resume_job}"' in submitter
     assert '--dependency="afterok:${lens_job}"' in submitter
 

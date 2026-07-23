@@ -35,10 +35,10 @@ components into latent space, and `log q` uses the exact mixture density.
 the circular posterior proposal during wake with four prior particles,
 likelihood tempering at `[0, 0.33, 0.67, 1]`, resampling, and one MALA move per
 intermediate temperature. SMC particles and weights are stopped before the
-posterior and population-prior updates. The production recovery from epoch 36
-to 40 is a warm restart: model weights are restored but AdamW state is
-reinitialized, and online validation is disabled to avoid the observed
-host-pinned-memory allocator failure.
+posterior and population-prior updates. The production recovery of epoch 40
+from the rolling epoch-39 checkpoint is a warm restart: model weights are
+restored but AdamW state is reinitialized, and online validation is disabled to
+avoid the observed host-pinned-memory allocator failure.
 
 ## Required diagnostics
 

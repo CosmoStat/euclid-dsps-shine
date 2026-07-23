@@ -16,7 +16,7 @@ set -Eeuo pipefail
 
 CONFIG="configs/experiments/feniks_selfsup_learned_smcwake_mix2_k4_t2.yaml"
 LABEL="selfsup_smcwake_mix2_k4_t2"
-START_EPOCH="${START_EPOCH:-37}"
+START_EPOCH="${START_EPOCH:-40}"
 END_EPOCH="${END_EPOCH:-40}"
 
 REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"

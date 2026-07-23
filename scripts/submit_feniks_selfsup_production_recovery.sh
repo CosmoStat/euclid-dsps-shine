@@ -28,18 +28,23 @@ test ! -f "$TASK_DIR/DONE" || {
   echo "[recovery-submit][error] SMC task is already complete"; exit 2;
 }
 
-CHECKPOINT_JSON="$INITIAL_SIDECAR" python - <<'PY'
+source_epoch=$(CHECKPOINT_JSON="$INITIAL_SIDECAR" python - <<'PY'
 import json
 import os
 
 path = os.environ["CHECKPOINT_JSON"]
 epoch = int(json.load(open(path, encoding="utf-8"))["epoch"])
-if epoch != 36:
+if not 1 <= epoch < 40:
     raise SystemExit(
-        f"[recovery-submit][error] {path}: checkpoint epoch {epoch}, expected 36"
+        f"[recovery-submit][error] {path}: checkpoint epoch {epoch}, "
+        "expected an epoch in [1, 39]"
     )
-print("[recovery-submit] source checkpoint epoch=36")
+print(epoch)
 PY
+)
+start_epoch=$((source_epoch + 1))
+printf '[recovery-submit] source checkpoint epoch=%s; resume starts at %s\n' \
+  "$source_epoch" "$start_epoch"
 
 mkdir -p "$LOG_DIR"
 mv "$FAILED_TRAIN" "$ARCHIVE_TRAIN"
@@ -52,7 +57,7 @@ restore_archive() {
 trap restore_archive EXIT
 
 resume_raw=$(sbatch --parsable \
-  --export="ALL,ROOT_DIR=$ROOT_DIR,SOURCE_TRAIN=$ARCHIVE_TRAIN" \
+  --export="ALL,ROOT_DIR=$ROOT_DIR,SOURCE_TRAIN=$ARCHIVE_TRAIN,START_EPOCH=$start_epoch,END_EPOCH=40" \
   scripts/feniks_selfsup_production_smc_resume_h100.slurm)
 resume_job="${resume_raw%%;*}"
 submitted=1
@@ -74,6 +79,8 @@ submission_log="$LOG_DIR/submit_selfsup_production_recovery_${stamp}.log"
 {
   printf 'root=%s\n' "$ROOT_DIR"
   printf 'source_train=%s\n' "$ARCHIVE_TRAIN"
+  printf 'source_epoch=%s start_epoch=%s end_epoch=40\n' \
+    "$source_epoch" "$start_epoch"
   printf 'smc_resume=%s lens=%s finalize=%s\n' \
     "$resume_job" "$lens_job" "$finalize_job"
 } | tee "$submission_log"
