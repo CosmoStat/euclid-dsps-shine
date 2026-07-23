@@ -58,6 +58,10 @@ export PIP_NO_INDEX=1
 
 cd "$REPO_DIR"
 mkdir -p outputs/logs "$MPLCONFIGDIR"
+# H100 nodes use a different CPU architecture and module tree than the login node.
+# Do not inherit an incompatible login-node environment into the batch job.
+module purge
+module load arch/h100
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 

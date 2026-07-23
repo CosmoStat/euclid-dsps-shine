@@ -126,3 +126,17 @@ def test_individual_corner_contains_truth_and_posterior_metadata(tmp_path) -> No
     metadata = corner.with_name(f"{corner.stem}_columns.csv")
     columns_frame = pd.read_csv(metadata)
     assert columns_frame["truth_finite_rows"].eq(1).all()
+
+
+def test_h100_wrapper_loads_the_h100_module_tree_before_conda() -> None:
+    wrapper = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "feniks_individual_posteriors_h100.slurm"
+    ).read_text(encoding="utf-8")
+
+    assert "module purge" in wrapper
+    assert "module load arch/h100" in wrapper
+    assert wrapper.index("module load arch/h100") < wrapper.index(
+        'conda activate "$CONDA_ENV"'
+    )
