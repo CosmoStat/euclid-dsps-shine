@@ -330,6 +330,27 @@ def sample_posterior(
     return PosteriorSample(x, logq, logprior, mean, log_std, residual_logdet)
 
 
+def posterior_reference_from_base_mean(model, features) -> jnp.ndarray:
+    """Push the encoder base mean through every configured posterior transform.
+
+    This is a deterministic, differentiable reference used by local
+    autoencoder diagnostics. It is not claimed to be the mean of a nonlinear
+    transformed posterior; empirical posterior means should be computed from
+    ``sample_posterior`` instead.
+    """
+    mean, log_std = model.encoder(features)
+    if isinstance(model.encoder, GaussianEncoder):
+        return mean
+    context = jnp.concatenate([mean, log_std], axis=-1)
+    transformed = mean
+    if isinstance(model.encoder, ConditionalFlowEncoder):
+        transformed, _ = model.encoder.forward(transformed, context)
+        if model.encoder.output_space == "latent_x":
+            return transformed
+    x, _ = model.prior.forward(transformed)
+    return x
+
+
 def posterior_log_prob(
     model,
     features,

@@ -18,6 +18,8 @@ def test_jacobian_lens_parser_defaults() -> None:
     assert args.mode == "decoder"
     assert args.include_prior_score is True
     assert args.include_ae_lens is False
+    assert args.posterior_samples == 128
+    assert args.posterior_seed == 260722
     assert args.shard_index == 0
     assert args.num_shards == 1
 

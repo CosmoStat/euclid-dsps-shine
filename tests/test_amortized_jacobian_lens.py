@@ -86,3 +86,25 @@ def test_autoencoder_lens_detects_identity_copy_like_modes() -> None:
     singular = np.asarray(result["singular_values"])
     assert singular.shape == (3,)
     assert np.allclose(singular, np.ones(3), atol=1.0e-5)
+
+
+def test_decoder_lens_projects_full_posterior_covariance() -> None:
+    covariance = jnp.asarray(
+        [[4.0, 1.5], [1.5, 9.0]],
+        dtype=jnp.float32,
+    )
+
+    result = decoder_jacobian_lens(
+        lambda x: x,
+        jnp.zeros((2,), dtype=jnp.float32),
+        _latent_spec(2),
+        obs_flux=jnp.zeros((2,), dtype=jnp.float32),
+        obs_err=jnp.ones((2,), dtype=jnp.float32),
+        mask=jnp.ones((2,), dtype=bool),
+        likelihood_type="gaussian",
+        posterior_covariance=covariance,
+    )
+
+    vt = np.asarray(result["vt_full"])
+    expected = np.einsum("di,ij,dj->d", vt, np.asarray(covariance), vt)
+    assert np.allclose(np.asarray(result["posterior_var"]), expected)

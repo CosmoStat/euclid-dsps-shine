@@ -37,6 +37,7 @@ from .elbo import is_deterministic_reconstruction
 from .features import make_encoder_features, read_feature_stats
 from .latent import LatentSpec, latent_spec_from_config, x_to_theta
 from .likelihood import photometric_sigma_eff
+from .posterior import posterior_reference_from_base_mean, sample_posterior
 from .train import _effective_jax_batch_size, load_checkpoint
 
 RANK_THRESHOLDS = (1.0e-1, 1.0e-2, 1.0e-3)
@@ -69,6 +70,7 @@ def decoder_jacobian_lens(
     error_floor_frac: float = 0.02,
     error_jitter: float = 0.0,
     log_std: jnp.ndarray | None = None,
+    posterior_covariance: jnp.ndarray | None = None,
     prior: Any | None = None,
     prior_active: bool = False,
 ) -> dict[str, jnp.ndarray]:
@@ -119,11 +121,16 @@ def decoder_jacobian_lens(
     fisher = j_white.T @ j_white
     j_theta = jax.jacrev(lambda xx: x_to_theta(xx, latent_spec))(x0)
     physical_dirs = j_theta @ vt_full.T
-    posterior_var = (
-        jnp.sum((vt_full**2) * jnp.exp(2.0 * jnp.asarray(log_std))[None, :], axis=1)
-        if log_std is not None
-        else jnp.full((vt_full.shape[0],), jnp.nan, dtype=x0.dtype)
-    )
+    if posterior_covariance is not None:
+        covariance = jnp.asarray(posterior_covariance, dtype=x0.dtype)
+        posterior_var = jnp.einsum("di,ij,dj->d", vt_full, covariance, vt_full)
+    elif log_std is not None:
+        posterior_var = jnp.sum(
+            (vt_full**2) * jnp.exp(2.0 * jnp.asarray(log_std))[None, :],
+            axis=1,
+        )
+    else:
+        posterior_var = jnp.full((vt_full.shape[0],), jnp.nan, dtype=x0.dtype)
     if prior is not None:
         prior_score = jax.grad(lambda xx: prior.log_prob(xx[None, :])[0])(x0)
         prior_projection = vt_full @ prior_score
@@ -213,6 +220,7 @@ def lens_tables_for_object(
     band_names: tuple[str, ...],
     likelihood_config: dict[str, Any],
     log_std: jnp.ndarray | None = None,
+    posterior_covariance: jnp.ndarray | None = None,
     prior: Any | None = None,
     prior_active: bool = False,
     direction_top_k: int = 5,
@@ -233,6 +241,7 @@ def lens_tables_for_object(
             error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
             error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
             log_std=log_std,
+            posterior_covariance=posterior_covariance,
             prior=prior,
             prior_active=prior_active,
         )
@@ -291,6 +300,8 @@ def run_jacobian_lens_diffsky(
     selection_seed: int = 260617,
     mode: str = "decoder",
     posterior_point: str = "mean",
+    posterior_samples: int = 128,
+    posterior_seed: int = 260722,
     max_objects: int | None = None,
     direction_top_k: int = 5,
     include_prior_score: bool = True,
@@ -301,9 +312,13 @@ def run_jacobian_lens_diffsky(
     verbose: bool = True,
 ) -> dict[str, Any]:
     """Run a sharded Physical J-lens pass over a trained Diffsky model."""
-    del posterior_point  # Reserved for future posterior-summary driven points.
     if int(batch_size) <= 0:
         raise ValueError("batch_size must be positive")
+    if int(posterior_samples) < 2:
+        raise ValueError("posterior_samples must be at least 2")
+    posterior_point = str(posterior_point).lower()
+    if posterior_point not in {"mean", "median"}:
+        raise ValueError("posterior_point must be mean or median")
     if int(num_shards) <= 0:
         raise ValueError("num_shards must be positive")
     if int(shard_index) < 0 or int(shard_index) >= int(num_shards):
@@ -411,10 +426,30 @@ def run_jacobian_lens_diffsky(
     started = time.time()
     all_tables: list[LensTables] = []
     for batch_index, batch in enumerate(batches, start=1):
-        mean, log_std = model.encoder(batch.features)
+        posterior = sample_posterior(
+            model,
+            jax.random.fold_in(
+                jax.random.PRNGKey(int(posterior_seed)),
+                int(batch_index - 1),
+            ),
+            batch.features,
+            int(posterior_samples),
+        )
+        posterior_x = posterior.x
+        posterior_center = (
+            jnp.mean(posterior_x, axis=0)
+            if posterior_point == "mean"
+            else jnp.median(posterior_x, axis=0)
+        )
+        centered = posterior_x - jnp.mean(posterior_x, axis=0, keepdims=True)
+        posterior_covariance = jnp.einsum(
+            "sbi,sbj->bij", centered, centered
+        ) / float(int(posterior_samples) - 1)
         for local_index in range(int(batch.flux.shape[0])):
-            x0 = mean[local_index]
-            log_std0 = None if deterministic else log_std[local_index]
+            x0 = posterior_center[local_index]
+            covariance0 = (
+                None if deterministic else posterior_covariance[local_index]
+            )
             flux_err0 = batch.flux_err[local_index]
 
             def decode_x(xx):
@@ -442,8 +477,7 @@ def run_jacobian_lens_diffsky(
                     fixed_flux_err[None, :],
                     feature_stats,
                 )
-                ae_mean, _ae_log_std = model.encoder(features)
-                return decode_x(ae_mean[0])
+                return decode_x(posterior_reference_from_base_mean(model, features)[0])
 
             all_tables.append(
                 lens_tables_for_object(
@@ -461,7 +495,7 @@ def run_jacobian_lens_diffsky(
                     mask=batch.mask[local_index],
                     band_names=band_names,
                     likelihood_config=cfg["likelihood"],
-                    log_std=log_std0,
+                    posterior_covariance=covariance0,
                     prior=model.prior if include_prior_score else None,
                     prior_active=prior_active,
                     direction_top_k=int(direction_top_k),
@@ -479,6 +513,11 @@ def run_jacobian_lens_diffsky(
         "feature_stats_path": str(feature_stats_path),
         "config_catalog_path": str(config.get("catalog_path")),
         "mode": mode,
+        "posterior_point": posterior_point,
+        "posterior_samples": int(posterior_samples),
+        "posterior_seed": int(posterior_seed),
+        "posterior_covariance": "empirical_full_transformed_posterior",
+        "autoencoder_reference": "flow_pushforward_of_base_mean",
         "include_prior_score": bool(include_prior_score),
         "prior_active": bool(prior_active),
         "include_ae_lens": bool(include_ae),

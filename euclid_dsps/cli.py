@@ -841,6 +841,13 @@ def _add_amortized_jlens_arguments(parser: argparse.ArgumentParser) -> None:
         default="decoder",
     )
     parser.add_argument("--posterior-point", choices=["mean", "median"], default="mean")
+    parser.add_argument(
+        "--posterior-samples",
+        type=int,
+        default=128,
+        help="Fully transformed posterior samples used for the Lens point and covariance.",
+    )
+    parser.add_argument("--posterior-seed", type=int, default=260722)
     parser.add_argument("--max-objects", type=int)
     parser.add_argument("--direction-top-k", type=int, default=5)
     parser.add_argument(
@@ -1520,6 +1527,8 @@ def _run_amortized_jacobian_lens(config: dict, args) -> None:
         selection_seed=int(args.selection_seed),
         mode=str(args.mode),
         posterior_point=str(args.posterior_point),
+        posterior_samples=int(args.posterior_samples),
+        posterior_seed=int(args.posterior_seed),
         max_objects=args.max_objects,
         direction_top_k=int(args.direction_top_k),
         include_prior_score=bool(args.include_prior_score),

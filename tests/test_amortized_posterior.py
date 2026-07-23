@@ -19,6 +19,7 @@ if HAS_EQUINOX:
     from euclid_dsps.amortized.posterior import (
         ConditionalFlowEncoder,
         posterior_log_prob,
+        posterior_reference_from_base_mean,
         sample_posterior,
     )
     from euclid_dsps.amortized.train import (
@@ -135,6 +136,36 @@ def test_tempered_posterior_sample_density_is_exact() -> None:
     )(posterior.x)
 
     assert jnp.allclose(evaluated, posterior.logq, atol=3.0e-4)
+
+
+def test_posterior_reference_pushes_base_mean_through_conditional_flow() -> None:
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(7),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        init_scale=0.05,
+        output_space="latent_x",
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.ones((3, 6), dtype=jnp.float32)
+    mean, log_std = encoder(features)
+    expected, _ = encoder.forward(mean, jnp.concatenate([mean, log_std], axis=-1))
+
+    actual = posterior_reference_from_base_mean(model, features)
+
+    assert jnp.allclose(actual, expected)
 
 
 def test_mixture_conditional_flow_sample_density_is_exact() -> None:
