@@ -1847,9 +1847,23 @@ def _write_multi_overlay_corner_plot(
                     frame = item["frame"]
                     if x_col not in frame:
                         continue
+                    finite_values = (
+                        pd.to_numeric(frame[x_col], errors="coerce")
+                        .dropna()
+                        .to_numpy(dtype=float)
+                    )
+                    if item["key"] == "truth" and finite_values.size == 1:
+                        ax.axvline(
+                            finite_values[0],
+                            color=item["color"],
+                            linestyle=item["linestyle"],
+                            linewidth=item["linewidth"],
+                            label=item["label"],
+                        )
+                        continue
                     _plot_1d_hist(
                         ax,
-                        frame[x_col].to_numpy(dtype=float),
+                        finite_values,
                         ranges[x_col],
                         color=item["color"],
                         label=item["label"],
