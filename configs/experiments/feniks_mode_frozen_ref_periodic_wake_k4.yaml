@@ -1,0 +1,21 @@
+extends: feniks_mode_covering_common.yaml
+
+amortized:
+  prior:
+    source: spline15d_checkpoint
+    checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx
+    train_jointly: false
+    update_schedule: joint
+    mstep_only: false
+  objective:
+    mode: periodic_wake
+    sample_strategy: random
+    wake:
+      start_encoder_epoch: 40
+      every_encoder_epochs: 4
+      n_particles: 4
+      n_tempered_particles: 1
+      base_temperature: 2.0
+  training:
+    epochs: 120
+    n_samples: 1

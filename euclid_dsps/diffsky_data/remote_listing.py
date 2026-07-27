@@ -61,7 +61,9 @@ class _ApacheIndexParser(HTMLParser):
             self.links.append(self._row_href)
 
 
-def list_remote_directory(url: str, *, depth: int = 0, timeout: int = 60) -> list[RemoteFile]:
+def list_remote_directory(
+    url: str, *, depth: int = 0, timeout: int = 60
+) -> list[RemoteFile]:
     """List one remote Apache-style directory without downloading data files."""
     response = requests.get(url, timeout=timeout)
     response.raise_for_status()
@@ -125,7 +127,9 @@ def crawl_remote_tree(
 def write_remote_listing(files: list[RemoteFile], path: str | Path) -> Path:
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps([asdict(item) for item in files], indent=2), encoding="utf-8")
+    output.write_text(
+        json.dumps([asdict(item) for item in files], indent=2), encoding="utf-8"
+    )
     return output
 
 

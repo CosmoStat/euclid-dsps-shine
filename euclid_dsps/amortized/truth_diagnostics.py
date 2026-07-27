@@ -58,10 +58,19 @@ MAP_TRUTH_PAIRS = (
 )
 
 PRIOR_TRUTH_PAIRS = (
-    TruthPair("z_obs", "z_obs", "redshift_true"),
-    TruthPair("log10_stellar_mass", "log10_stellar_mass", "logsm_true"),
-    TruthPair("tau2_proxy", "tau2", "tau2_truth_proxy", "proxy"),
-    TruthPair("dust_index_n_proxy", "dust_index_n", "dust_index_truth_proxy", "proxy"),
+    TruthPair("z_obs", "z_obs", "z_obs"),
+    TruthPair("log10_stellar_mass", "log10_stellar_mass", "log10_stellar_mass"),
+    TruthPair(
+        "log10_stellar_metallicity",
+        "log10_stellar_metallicity",
+        "log10_stellar_metallicity",
+    ),
+    TruthPair("dust_av", "dust_av", "dust_av"),
+    TruthPair("dust_delta", "dust_delta", "dust_delta"),
+    *tuple(
+        TruthPair(name, name, name)
+        for name in (f"sfh_dlog_sfr_{index:02d}" for index in range(1, 11))
+    ),
 )
 
 
@@ -296,6 +305,15 @@ def _write_prior_truth_block(
                 "prior_q84": float(np.quantile(pred, 0.84)),
                 "truth_q84": float(np.quantile(ref, 0.84)),
                 "quantile_l1": _quantile_l1(pred, ref),
+                "quantile_l1_iqr": _quantile_l1(pred, ref)
+                / max(float(np.quantile(ref, 0.75) - np.quantile(ref, 0.25)), 1.0e-12),
+                "median_delta_iqr": (
+                    float(np.quantile(pred, 0.5) - np.quantile(ref, 0.5))
+                    / max(
+                        float(np.quantile(ref, 0.75) - np.quantile(ref, 0.25)),
+                        1.0e-12,
+                    )
+                ),
             }
         )
     if not rows:
@@ -303,7 +321,92 @@ def _write_prior_truth_block(
     frame = pd.DataFrame(rows)
     path = out / "prior_vs_truth_population.csv"
     frame.to_csv(path, index=False)
-    return {path.name: str(path)}
+    outputs = {path.name: str(path)}
+    correlation_path = _write_prior_truth_correlations(prior, truth, out)
+    if correlation_path is not None:
+        outputs[correlation_path.name] = str(correlation_path)
+        plot_path = _write_prior_truth_correlation_plot(correlation_path, out)
+        if plot_path is not None:
+            outputs[plot_path.name] = str(plot_path)
+    return outputs
+
+
+def _write_prior_truth_correlations(
+    prior: pd.DataFrame,
+    truth: pd.DataFrame,
+    out: Path,
+) -> Path | None:
+    pairs = [
+        pair
+        for pair in PRIOR_TRUTH_PAIRS
+        if pair.pred_column in prior and pair.truth_column in truth
+    ]
+    if len(pairs) < 2:
+        return None
+    prior_values = pd.DataFrame(
+        {
+            pair.name: pd.to_numeric(prior[pair.pred_column], errors="coerce")
+            for pair in pairs
+        }
+    )
+    truth_values = pd.DataFrame(
+        {
+            pair.name: pd.to_numeric(truth[pair.truth_column], errors="coerce")
+            for pair in pairs
+        }
+    )
+    prior_corr = prior_values.corr(method="spearman")
+    truth_corr = truth_values.corr(method="spearman")
+    rows = []
+    for left_index, left in enumerate(prior_corr.columns):
+        for right in prior_corr.columns[left_index + 1 :]:
+            learned = float(prior_corr.loc[left, right])
+            reference = float(truth_corr.loc[left, right])
+            rows.append(
+                {
+                    "parameter_left": left,
+                    "parameter_right": right,
+                    "prior_spearman": learned,
+                    "truth_spearman": reference,
+                    "abs_delta": abs(learned - reference),
+                }
+            )
+    frame = pd.DataFrame(rows)
+    path = out / "prior_vs_truth_correlations.csv"
+    frame.to_csv(path, index=False)
+    return path
+
+
+def _write_prior_truth_correlation_plot(path: Path, out: Path) -> Path | None:
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:  # pragma: no cover - plotting is optional
+        return None
+    frame = pd.read_csv(path)
+    names = sorted(
+        set(frame["parameter_left"].astype(str))
+        | set(frame["parameter_right"].astype(str))
+    )
+    if not names:
+        return None
+    index = {name: offset for offset, name in enumerate(names)}
+    delta = np.zeros((len(names), len(names)), dtype=float)
+    for row in frame.itertuples(index=False):
+        left = index[str(row.parameter_left)]
+        right = index[str(row.parameter_right)]
+        delta[left, right] = delta[right, left] = float(row.abs_delta)
+    fig, ax = plt.subplots(figsize=(10, 8), constrained_layout=True)
+    image = ax.imshow(
+        delta, vmin=0.0, vmax=max(0.5, float(np.nanmax(delta))), cmap="magma"
+    )
+    ax.set_xticks(range(len(names)), labels=names, rotation=90, fontsize=7)
+    ax.set_yticks(range(len(names)), labels=names, fontsize=7)
+    ax.set_title("Learned prior vs truth: absolute Spearman correlation error")
+    fig.colorbar(image, ax=ax, label="absolute correlation difference")
+    plot_path = out / "prior_vs_truth_correlation_error.png"
+    fig.savefig(plot_path, dpi=180)
+    plt.close(fig)
+    return plot_path
 
 
 def _quantile_l1(a: np.ndarray, b: np.ndarray) -> float:
@@ -437,77 +540,7 @@ def _write_population_overlay_plots(
         fig.savefig(path, dpi=160)
         plt.close(fig)
         paths.append(path)
-    paths.extend(_write_corner_population_plot(population_columns, out))
     return paths
-
-
-def _write_corner_population_plot(
-    population_columns: dict[str, dict[str, np.ndarray]],
-    out: Path,
-) -> list[Path]:
-    if len(population_columns) < 2:
-        return []
-    try:
-        import matplotlib.pyplot as plt
-    except ImportError:
-        return []
-    names = list(population_columns)[:6]
-    labels = ("truth", "posterior", "map", "prior")
-    colors = {
-        "truth": "black",
-        "posterior": "tab:blue",
-        "map": "tab:orange",
-        "prior": "tab:green",
-    }
-    n = len(names)
-    fig, axes = plt.subplots(n, n, figsize=(2.4 * n, 2.4 * n))
-    if n == 1:
-        axes = np.asarray([[axes]])
-    for row, y_name in enumerate(names):
-        for col, x_name in enumerate(names):
-            ax = axes[row, col]
-            if row == col:
-                for label in labels:
-                    values = population_columns[x_name].get(label)
-                    if values is not None and values.size:
-                        ax.hist(
-                            values,
-                            bins=30,
-                            density=True,
-                            histtype="step",
-                            color=colors[label],
-                            lw=1.0,
-                            label=label if row == 0 and col == 0 else None,
-                        )
-            elif row > col:
-                for label in labels:
-                    x = population_columns[x_name].get(label)
-                    y = population_columns[y_name].get(label)
-                    if x is None or y is None or x.size == 0 or y.size == 0:
-                        continue
-                    size = min(x.size, y.size, 1000)
-                    ax.scatter(
-                        x[:size],
-                        y[:size],
-                        s=4,
-                        alpha=0.25,
-                        color=colors[label],
-                    )
-            else:
-                ax.axis("off")
-            if row == n - 1:
-                ax.set_xlabel(x_name)
-            if col == 0:
-                ax.set_ylabel(y_name)
-    handles, legend_labels = axes[0, 0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, legend_labels, loc="upper right")
-    fig.suptitle("Truth / posterior / MAP / prior population")
-    fig.tight_layout()
-    path = out / "corner_truth_prior_posterior_map.png"
-    fig.savefig(path, dpi=160)
-    plt.close(fig)
-    return [path]
 
 
 def _finite_values(series: pd.Series) -> np.ndarray:

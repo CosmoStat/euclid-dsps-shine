@@ -55,7 +55,9 @@ def test_asinh_flux_features_compress_bright_fluxes() -> None:
     err = np.ones_like(flux) * 1.0e-31
     stats = compute_feature_stats(flux[:1], err[:1])
 
-    features = np.asarray(make_encoder_features(jnp.asarray(flux), jnp.asarray(err), stats))
+    features = np.asarray(
+        make_encoder_features(jnp.asarray(flux), jnp.asarray(err), stats)
+    )
 
     assert stats.flux_transform == "asinh"
     assert features[1, 0] < 7.0

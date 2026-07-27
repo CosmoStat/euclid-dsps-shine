@@ -132,7 +132,9 @@ def build_truth_schema(
     ) -> None:
         for column in candidates:
             if column in available:
-                params.append(ParameterSpec(name=name, column=column, semantic=semantic))
+                params.append(
+                    ParameterSpec(name=name, column=column, semantic=semantic)
+                )
                 return
         missing.extend(candidates)
         if required:
@@ -260,7 +262,9 @@ def _bounds_for_parameter(
     raw = configured_bounds.get(param.name, configured_bounds.get(param.column))
     if raw is not None:
         if not isinstance(raw, (list, tuple)) or len(raw) != 2:
-            raise ValueError(f"prior_learning.bounds.{param.name} must be [lower, upper]")
+            raise ValueError(
+                f"prior_learning.bounds.{param.name} must be [lower, upper]"
+            )
         lower, upper = float(raw[0]), float(raw[1])
     elif param.name in DEFAULT_BOUNDS:
         lower, upper = DEFAULT_BOUNDS[param.name]
@@ -274,7 +278,11 @@ def _bounds_for_parameter(
 
 
 def _quantile_bounds(values: pd.Series) -> tuple[float, float]:
-    finite = pd.to_numeric(values, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    finite = (
+        pd.to_numeric(values, errors="coerce")
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
     if finite.empty:
         raise ValueError("Cannot infer bounds from an all-nonfinite truth column")
     lo = float(finite.quantile(0.001))

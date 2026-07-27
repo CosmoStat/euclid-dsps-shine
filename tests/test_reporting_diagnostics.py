@@ -153,12 +153,12 @@ def test_dust_av_is_never_truth_comparable_even_when_free() -> None:
 
 def test_fit_objective_components_writes_photometric_and_prior_terms() -> None:
     fits = pd.DataFrame(
-            {
-                "row_index": [0],
-                "fit_z_obs": [1.2],
-                "fit_log10_metallicity": [-2.0],
-            }
-        )
+        {
+            "row_index": [0],
+            "fit_z_obs": [1.2],
+            "fit_log10_metallicity": [-2.0],
+        }
+    )
     comparison = pd.DataFrame({"row_index": [0, 0], "chi": [2.0, -1.0]})
 
     components = fit_objective_components(fits, comparison, _config())

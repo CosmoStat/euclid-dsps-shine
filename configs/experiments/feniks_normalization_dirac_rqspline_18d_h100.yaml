@@ -1,0 +1,23 @@
+extends: ../prior_diffsky_synthetic_feniks_normalization_benchmark.yaml
+
+normalization_benchmark:
+    version: dirac_preserved
+    specs: configs/normalizations/feniks_18band_dirac_preserved_v1.json
+
+prior_learning:
+    flow:
+        type: rq_spline_coupling
+        n_layers: 16
+        hidden_size: 384
+        n_bins: 16
+        tail_bound: 12.0
+        min_bin_width: 1.0e-3
+        min_bin_height: 1.0e-3
+        min_derivative: 1.0e-3
+        permutation: roll
+        init: identity
+        init_scale: 0.0
+    training:
+        epochs: 120
+        learning_rate: 3.0e-4
+        gradient_clip_norm: 5.0

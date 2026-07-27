@@ -20,16 +20,22 @@ from .validation import validate_for_prior_learning, write_validation_report
 
 
 def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
-    listing = sub.add_parser("diffsky-list-remote", help="List remote Diffsky/OpenCosmo files.")
+    listing = sub.add_parser(
+        "diffsky-list-remote", help="List remote Diffsky/OpenCosmo files."
+    )
     listing.add_argument("--url", default=HLTDS_COSMOS_20260414)
     listing.add_argument("--max-depth", type=int, default=0)
     listing.add_argument("--out", default="outputs/diffsky_remote_listing.json")
 
-    remote_inv = sub.add_parser("diffsky-inventory-remote", help="Rank remote Diffsky candidate files.")
+    remote_inv = sub.add_parser(
+        "diffsky-inventory-remote", help="Rank remote Diffsky candidate files."
+    )
     remote_inv.add_argument("--listing", required=True)
     remote_inv.add_argument("--out", default="outputs/diffsky_candidate_files.csv")
 
-    download = sub.add_parser("diffsky-download-subset", help="Download a bounded Diffsky subset.")
+    download = sub.add_parser(
+        "diffsky-download-subset", help="Download a bounded Diffsky subset."
+    )
     download.add_argument("--listing", required=True)
     download.add_argument("--out-dir", required=True)
     download.add_argument("--max-files", type=int, default=5)
@@ -38,11 +44,16 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     download.add_argument("--overwrite", action="store_true")
     download.add_argument("--yes", action="store_true")
 
-    local_inv = sub.add_parser("diffsky-inventory-local", help="Inspect local Diffsky HDF5 files.")
+    local_inv = sub.add_parser(
+        "diffsky-inventory-local", help="Inspect local Diffsky HDF5 files."
+    )
     local_inv.add_argument("--root", required=True)
     local_inv.add_argument("--out", default="outputs/diffsky_local_inventory.json")
 
-    prepare = sub.add_parser("diffsky-prepare-dataset", help="Build normalized Diffsky photometry+truth parquet.")
+    prepare = sub.add_parser(
+        "diffsky-prepare-dataset",
+        help="Build normalized Diffsky photometry+truth parquet.",
+    )
     prepare.add_argument("--raw-root", required=True)
     prepare.add_argument("--inventory")
     prepare.add_argument("--out", required=True)
@@ -50,7 +61,12 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     prepare.add_argument("--snr", type=float, default=50.0)
     prepare.add_argument(
         "--error-model",
-        choices=("m5_depth", "fractional_snr", "magnitude_tolerance", "fractional_floor"),
+        choices=(
+            "m5_depth",
+            "fractional_snr",
+            "magnitude_tolerance",
+            "fractional_floor",
+        ),
         default="m5_depth",
         help="Synthetic per-band flux-error model to write when native errors are absent.",
     )
@@ -79,7 +95,10 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
         help="Do not write fluxerr_* columns when native photometric errors are absent.",
     )
 
-    diagnostics = sub.add_parser("diffsky-dataset-diagnostics", help="Write diagnostics for a prepared Diffsky parquet.")
+    diagnostics = sub.add_parser(
+        "diffsky-dataset-diagnostics",
+        help="Write diagnostics for a prepared Diffsky parquet.",
+    )
     diagnostics.add_argument("--dataset", required=True)
     diagnostics.add_argument("--manifest")
     diagnostics.add_argument("--out", default="outputs/reports/diffsky_dataset")
@@ -97,7 +116,13 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     subset.add_argument("--seed", type=int, default=42)
     subset.add_argument(
         "--error-model",
-        choices=("preserve", "m5_depth", "fractional_snr", "magnitude_tolerance", "fractional_floor"),
+        choices=(
+            "preserve",
+            "m5_depth",
+            "fractional_snr",
+            "magnitude_tolerance",
+            "fractional_floor",
+        ),
         default="m5_depth",
         help="Flux-error model to materialize for the subset, or preserve existing columns.",
     )
@@ -108,16 +133,26 @@ def add_diffsky_subcommands(sub: argparse._SubParsersAction) -> None:
     _add_m5_depth_args(subset)
     subset.add_argument("--no-plots", action="store_true")
 
-    validate = sub.add_parser("diffsky-validate-dataset", help="Validate prepared Diffsky dataset for prior learning.")
+    validate = sub.add_parser(
+        "diffsky-validate-dataset",
+        help="Validate prepared Diffsky dataset for prior learning.",
+    )
     validate.add_argument("--dataset", required=True)
     validate.add_argument("--manifest")
-    validate.add_argument("--out", default="outputs/reports/diffsky_dataset/prior_learning_validation_report.md")
+    validate.add_argument(
+        "--out",
+        default="outputs/reports/diffsky_dataset/prior_learning_validation_report.md",
+    )
 
-    fit_report = sub.add_parser("diffsky-fit-report", help="Regenerate Diffsky MAP fit diagnostics from a run.")
+    fit_report = sub.add_parser(
+        "diffsky-fit-report", help="Regenerate Diffsky MAP fit diagnostics from a run."
+    )
     fit_report.add_argument("--run", type=Path, required=True)
     fit_report.add_argument("--config", type=Path)
     fit_report.add_argument("--label", default="batch_fit")
-    fit_report.add_argument("--reporting-level", choices=("light", "full"), default="light")
+    fit_report.add_argument(
+        "--reporting-level", choices=("light", "full"), default="light"
+    )
 
 
 def run_diffsky_command(args: argparse.Namespace) -> None:
@@ -131,7 +166,9 @@ def run_diffsky_command(args: argparse.Namespace) -> None:
     elif args.command == "diffsky-download-subset":
         if not args.yes:
             raise SystemExit("Pass --yes to download files.")
-        patterns = tuple(args.include or ["diffsky_gals", "param", "transmission", "yaml"])
+        patterns = tuple(
+            args.include or ["diffsky_gals", "param", "transmission", "yaml"]
+        )
         paths = download_candidate_subset(
             Path(args.listing),
             Path(args.out_dir),
@@ -336,7 +373,9 @@ def _load_run_config(run_dir: Path) -> dict:
 def _read_run_table(run_dir: Path, stem: str) -> pd.DataFrame:
     path = _existing_table(run_dir, stem)
     if path is None:
-        raise FileNotFoundError(f"Could not find {stem}.parquet or {stem}.csv in {run_dir}")
+        raise FileNotFoundError(
+            f"Could not find {stem}.parquet or {stem}.csv in {run_dir}"
+        )
     return _read_table(path)
 
 

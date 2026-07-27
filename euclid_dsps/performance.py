@@ -185,9 +185,7 @@ def _performance_by_batch(frame: pd.DataFrame) -> pd.DataFrame:
     for chunk_index, group in work.groupby("chunk_index"):
         elapsed = float(group["elapsed_seconds"].sum())
         n_rows = (
-            int(group["n_rows"].dropna().max())
-            if group["n_rows"].notna().any()
-            else 0
+            int(group["n_rows"].dropna().max()) if group["n_rows"].notna().any() else 0
         )
         rows.append(
             {

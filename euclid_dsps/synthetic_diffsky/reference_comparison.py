@@ -144,7 +144,11 @@ def compare_synthetic_closure_to_reference(
     reference_kind = _infer_reference_kind(reference, reference_kind)
     reference = _standardize_reference_frame(reference, reference_kind)
     reference_label = _reference_display_name(reference_kind)
-    if max_reference is not None and int(max_reference) > 0 and len(reference) > int(max_reference):
+    if (
+        max_reference is not None
+        and int(max_reference) > 0
+        and len(reference) > int(max_reference)
+    ):
         reference = reference.sample(n=int(max_reference), random_state=int(seed))
     reference = reference.reset_index(drop=True)
 
@@ -208,7 +212,11 @@ def compare_synthetic_closure_to_reference(
         "distribution_metrics": distribution_path,
         "photometry_metrics": photometry_path,
         "correlation_metrics": correlation_path,
-        **({"proposal_weighted_metrics": proposal_metrics_path} if proposal_metrics_path else {}),
+        **(
+            {"proposal_weighted_metrics": proposal_metrics_path}
+            if proposal_metrics_path
+            else {}
+        ),
     }
 
 
@@ -260,13 +268,14 @@ def _standardize_reference_frame(
     if "redshift_true" not in frame and "z_true_gal" in frame:
         frame["redshift_true"] = pd.to_numeric(frame["z_true_gal"], errors="coerce")
     if "logsm_true" not in frame and "log_stellar_mass" in frame:
-        frame["logsm_true"] = (
-            pd.to_numeric(frame["log_stellar_mass"], errors="coerce")
-            + 2.0 * np.log10(0.73)
-        )
+        frame["logsm_true"] = pd.to_numeric(
+            frame["log_stellar_mass"], errors="coerce"
+        ) + 2.0 * np.log10(0.73)
     if "logsfr_true" not in frame and "log_sfr_true" in frame:
         frame["logsfr_true"] = pd.to_numeric(frame["log_sfr_true"], errors="coerce")
-    if "logssfr_true" not in frame and {"logsfr_true", "logsm_true"} <= set(frame.columns):
+    if "logssfr_true" not in frame and {"logsfr_true", "logsm_true"} <= set(
+        frame.columns
+    ):
         frame["logssfr_true"] = frame["logsfr_true"] - frame["logsm_true"]
     if "dust_av" not in frame and "dust_ebv_true" in frame:
         frame["dust_av"] = 4.05 * pd.to_numeric(frame["dust_ebv_true"], errors="coerce")
@@ -419,7 +428,11 @@ def _photometry_metrics(
                 syn_color,
                 ref_color,
                 f"mag_true_{left}-mag_true_{right}",
-                f"{ref_left}-{ref_right}" if ref_left and ref_right else f"mag_{left}-mag_{right}",
+                (
+                    f"{ref_left}-{ref_right}"
+                    if ref_left and ref_right
+                    else f"mag_{left}-mag_{right}"
+                ),
             )
         )
     return rows
@@ -454,9 +467,9 @@ def _proposal_weighted_metrics(proposals: pd.DataFrame) -> list[dict[str, Any]]:
         if column not in proposals.columns:
             continue
         values = pd.to_numeric(proposals[column], errors="coerce").to_numpy(dtype=float)
-        raw_weights = pd.to_numeric(proposals["galaxy_weight"], errors="coerce").to_numpy(
-            dtype=float
-        )
+        raw_weights = pd.to_numeric(
+            proposals["galaxy_weight"], errors="coerce"
+        ).to_numpy(dtype=float)
         finite = np.isfinite(values) & np.isfinite(raw_weights) & (raw_weights > 0.0)
         values = values[finite]
         raw_weights = raw_weights[finite]
@@ -480,7 +493,9 @@ def _proposal_weighted_metrics(proposals: pd.DataFrame) -> list[dict[str, Any]]:
     return rows
 
 
-def _weighted_stats(prefix: str, values: np.ndarray, weights: np.ndarray) -> dict[str, float]:
+def _weighted_stats(
+    prefix: str, values: np.ndarray, weights: np.ndarray
+) -> dict[str, float]:
     values = _finite_array(values)
     weights = _finite_array(weights)
     n = min(values.size, weights.size)
@@ -508,7 +523,9 @@ def _weighted_stats(prefix: str, values: np.ndarray, weights: np.ndarray) -> dic
     }
 
 
-def _weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
+def _weighted_quantile(
+    values: np.ndarray, weights: np.ndarray, quantile: float
+) -> float:
     order = np.argsort(values)
     values = values[order]
     weights = weights[order]
@@ -527,7 +544,10 @@ def _metric_row_from_columns(
     synthetic_column: str,
     reference_column: str,
 ) -> dict[str, Any]:
-    if synthetic_column not in synthetic.columns or reference_column not in reference.columns:
+    if (
+        synthetic_column not in synthetic.columns
+        or reference_column not in reference.columns
+    ):
         return _missing_row(
             group,
             quantity,
@@ -673,7 +693,9 @@ def _finite_array(values: Iterable[float] | np.ndarray) -> np.ndarray:
     return arr[np.isfinite(arr)]
 
 
-def _ratio_from_columns(frame: pd.DataFrame, numerator: str, denominator: str) -> np.ndarray:
+def _ratio_from_columns(
+    frame: pd.DataFrame, numerator: str, denominator: str
+) -> np.ndarray:
     if numerator not in frame.columns or denominator not in frame.columns:
         return np.asarray([], dtype=float)
     num = pd.to_numeric(frame[numerator], errors="coerce").to_numpy(dtype=float)
@@ -704,7 +726,9 @@ def _ks_distance(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.max(np.abs(left_cdf - right_cdf)))
 
 
-def _wasserstein_quantile(left: np.ndarray, right: np.ndarray, n_grid: int = 1001) -> float:
+def _wasserstein_quantile(
+    left: np.ndarray, right: np.ndarray, n_grid: int = 1001
+) -> float:
     left = _finite_array(left)
     right = _finite_array(right)
     if left.size == 0 or right.size == 0:
@@ -721,7 +745,10 @@ def _correlation_report(
     synthetic_columns: list[str] = []
     reference_columns: list[str] = []
     for quantity, synthetic_column, reference_column in LATENT_COLUMN_PAIRS:
-        if synthetic_column in synthetic.columns and reference_column in reference.columns:
+        if (
+            synthetic_column in synthetic.columns
+            and reference_column in reference.columns
+        ):
             syn_values = _finite_numeric(synthetic[synthetic_column])
             ref_values = _finite_numeric(reference[reference_column])
             if syn_values.size >= 3 and ref_values.size >= 3:
@@ -757,10 +784,14 @@ def _correlation_report(
         }
     labels = [label for label, keep in zip(labels, nonconstant, strict=True) if keep]
     synthetic_columns = [
-        column for column, keep in zip(synthetic_columns, nonconstant, strict=True) if keep
+        column
+        for column, keep in zip(synthetic_columns, nonconstant, strict=True)
+        if keep
     ]
     reference_columns = [
-        column for column, keep in zip(reference_columns, nonconstant, strict=True) if keep
+        column
+        for column, keep in zip(reference_columns, nonconstant, strict=True)
+        if keep
     ]
     syn_matrix = syn_matrix[:, nonconstant]
     ref_matrix = ref_matrix[:, nonconstant]
@@ -848,7 +879,9 @@ def _write_plots(
         absolute=True,
     )
     if top_phot:
-        path = _bar_plot(plt, top_phot, "delta_median", "top_mag_median_offsets", plot_dir)
+        path = _bar_plot(
+            plt, top_phot, "delta_median", "top_mag_median_offsets", plot_dir
+        )
         if path is not None:
             paths.append(path)
     color_color_paths = _color_color_plots(
@@ -1001,7 +1034,7 @@ def _color_color_panel_plot(
             show_legend=index == 0,
             reference_label=reference_label,
         )
-    for ax in axes_arr[len(rows):]:
+    for ax in axes_arr[len(rows) :]:
         ax.axis("off")
     fig.tight_layout()
     path = plot_dir / "color_color_reference_black_synthetic_green.png"
@@ -1097,7 +1130,10 @@ def _hist_plot(
     *,
     reference_label: str,
 ) -> Path | None:
-    if synthetic_column not in synthetic.columns or reference_column not in reference.columns:
+    if (
+        synthetic_column not in synthetic.columns
+        or reference_column not in reference.columns
+    ):
         return None
     syn = _finite_numeric(synthetic[synthetic_column])
     ref = _finite_numeric(reference[reference_column])
@@ -1105,7 +1141,13 @@ def _hist_plot(
         return None
     fig, ax = plt.subplots(figsize=(6.0, 4.0))
     ax.hist(ref, bins=50, density=True, alpha=0.55, label=reference_label)
-    ax.hist(syn, bins=min(30, max(5, syn.size // 2)), density=True, alpha=0.65, label="FENIKS closure")
+    ax.hist(
+        syn,
+        bins=min(30, max(5, syn.size // 2)),
+        density=True,
+        alpha=0.65,
+        label="FENIKS closure",
+    )
     ax.set_xlabel(label)
     ax.set_ylabel("density")
     ax.legend(frameon=False)
@@ -1151,7 +1193,11 @@ def _top_metric_rows(
     ok = ok[np.isfinite(pd.to_numeric(ok[metric], errors="coerce"))]
     if ok.empty:
         return []
-    score = pd.to_numeric(ok[metric], errors="coerce").abs() if absolute else pd.to_numeric(ok[metric], errors="coerce")
+    score = (
+        pd.to_numeric(ok[metric], errors="coerce").abs()
+        if absolute
+        else pd.to_numeric(ok[metric], errors="coerce")
+    )
     ok = ok.assign(_score=score).sort_values("_score", ascending=False).head(int(n))
     return ok.drop(columns=["_score"]).to_dict(orient="records")
 
@@ -1199,7 +1245,9 @@ def _summary_payload(
 ) -> dict[str, Any]:
     top_latent_ks = _top_metric_rows(distribution_metrics, "ks", n=10)
     top_latent_w1 = _top_metric_rows(distribution_metrics, "wasserstein_quantile", n=10)
-    mag_metrics = photometry_metrics[photometry_metrics["group"] == "mag_true_vs_reference_mag"]
+    mag_metrics = photometry_metrics[
+        photometry_metrics["group"] == "mag_true_vs_reference_mag"
+    ]
     top_mag_offsets = _top_metric_rows(mag_metrics, "delta_median", n=10, absolute=True)
     missing = pd.concat([distribution_metrics, photometry_metrics], ignore_index=True)
     missing = missing[missing["status"].astype(str).str.startswith("missing")]
@@ -1236,7 +1284,9 @@ def _summary_payload(
         "missing_metric_count": int(len(missing)),
         "missing_metrics": missing[
             ["group", "quantity", "synthetic_column", "reference_column", "status"]
-        ].head(50).to_dict(orient="records"),
+        ]
+        .head(50)
+        .to_dict(orient="records"),
         "metallicity_status": (
             metallicity_row.iloc[0].to_dict() if len(metallicity_row) else {}
         ),
@@ -1303,7 +1353,9 @@ def _markdown_report(summary: dict[str, Any]) -> str:
     lines.extend(["", "## Largest Latent KS Distances", ""])
     lines.extend(_metric_bullets(summary.get("top_latent_ks", []), "ks"))
     lines.extend(["", "## Largest Median Magnitude Offsets", ""])
-    lines.extend(_metric_bullets(summary.get("top_mag_median_offsets", []), "delta_median"))
+    lines.extend(
+        _metric_bullets(summary.get("top_mag_median_offsets", []), "delta_median")
+    )
     lines.extend(["", "## Correlations", ""])
     lines.append(f"- Status: {summary.get('correlation_status')}")
     if summary.get("correlation_frobenius_error") is not None:
@@ -1342,8 +1394,16 @@ def _mass_threshold_fractions(
     reference: pd.DataFrame,
     proposal_metrics: pd.DataFrame,
 ) -> list[dict[str, Any]]:
-    syn = _finite_numeric(synthetic["logsm_true"]) if "logsm_true" in synthetic else np.asarray([])
-    ref = _finite_numeric(reference["logsm_true"]) if "logsm_true" in reference else np.asarray([])
+    syn = (
+        _finite_numeric(synthetic["logsm_true"])
+        if "logsm_true" in synthetic
+        else np.asarray([])
+    )
+    ref = (
+        _finite_numeric(reference["logsm_true"])
+        if "logsm_true" in reference
+        else np.asarray([])
+    )
     proposal_logsm = (
         proposal_metrics[proposal_metrics["quantity"] == "logsm"].iloc[0].to_dict()
         if not proposal_metrics.empty

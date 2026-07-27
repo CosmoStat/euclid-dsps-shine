@@ -63,7 +63,9 @@ def main() -> int:
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    out.write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     if args.plot:
         write_size_plot(assets, Path(args.plot))
     print(f"wrote {out}")
@@ -86,7 +88,9 @@ def inspect_hdf5_asset(path: Path) -> dict[str, Any]:
     datasets: dict[str, Any] = {}
     attrs: dict[str, Any]
     with h5py.File(expanded, "r") as handle:
-        attrs = {str(key): jsonable_hdf5_value(value) for key, value in handle.attrs.items()}
+        attrs = {
+            str(key): jsonable_hdf5_value(value) for key, value in handle.attrs.items()
+        }
 
         def visit(name: str, obj: Any) -> None:
             if not isinstance(obj, h5py.Dataset):

@@ -128,10 +128,7 @@ def _synthetic_context(model_config: dict | None = None) -> DspsContext:
     if model_config and model_config.get("agn_model") == "template_grid":
         agn_tau = np.asarray([5.0, 10.0, 150.0], dtype=float)
         agn_template = np.stack(
-            [
-                (tau / 10.0) * 1.0e-12 * (1.0 + wave / wave.max())
-                for tau in agn_tau
-            ]
+            [(tau / 10.0) * 1.0e-12 * (1.0 + wave / wave.max()) for tau in agn_tau]
         )
         context.agn_wave_jax = jnp.asarray(wave, dtype=jnp.float32)
         context.agn_tau_grid_jax = jnp.asarray(agn_tau, dtype=jnp.float32)
@@ -158,7 +155,10 @@ def _synthetic_context(model_config: dict | None = None) -> DspsContext:
         context.agn_component_lgmet_jax = jnp.asarray(lgmet, dtype=jnp.float32)
         context.agn_component_lg_age_gyr_jax = jnp.asarray(lg_age, dtype=jnp.float32)
         context.agn_component_grid_jax = jnp.asarray(component, dtype=jnp.float32)
-    if model_config and model_config.get("agn_model") == "compressed_fsps_component_grid":
+    if (
+        model_config
+        and model_config.get("agn_model") == "compressed_fsps_component_grid"
+    ):
         fagn_grid = np.asarray([1.0e-4, 1.0e-2], dtype=float)
         agn_tau = np.asarray([5.0, 20.0], dtype=float)
         basis = (1.0 + wave / wave.max())[None, :].astype(np.float32)
@@ -220,7 +220,9 @@ def _diffstar_params() -> dict[str, float]:
     return {name: values[name] for name in DIFFSTAR_REDUCED6_PARAMETER_NAMES}
 
 
-def _wide_filter(name: str = "wide", lo: float = 4500.0, hi: float = 8500.0) -> FilterCurve:
+def _wide_filter(
+    name: str = "wide", lo: float = 4500.0, hi: float = 8500.0
+) -> FilterCurve:
     wave = np.linspace(lo, hi, 64)
     return FilterCurve(
         name=name,
@@ -400,12 +402,8 @@ def test_lognormal_sfh_stays_positive_and_peak_controls_shape() -> None:
 
     assert np.all(early > 0.0)
     assert np.all(late > 0.0)
-    assert early[np.argmin(np.abs(time - 2.0))] > late[
-        np.argmin(np.abs(time - 2.0))
-    ]
-    assert late[np.argmin(np.abs(time - 7.0))] > early[
-        np.argmin(np.abs(time - 7.0))
-    ]
+    assert early[np.argmin(np.abs(time - 2.0))] > late[np.argmin(np.abs(time - 2.0))]
+    assert late[np.argmin(np.abs(time - 7.0))] > early[np.argmin(np.abs(time - 7.0))]
 
 
 def test_popcosmos_bin_edges_are_increasing() -> None:
@@ -428,14 +426,21 @@ def test_popcosmos_sfh_equal_ratios_constant_sfr_bins() -> None:
         build_popcosmos_sfh_table_jax(t_obs - lookback_midpoints, t_obs, params)
     )
 
-    assert np.asarray(logsfr_ratios_to_sfr_bins_jax(jnp.zeros(6))).tolist() == pytest.approx(
-        [1.0] * 7
-    )
+    assert np.asarray(
+        logsfr_ratios_to_sfr_bins_jax(jnp.zeros(6))
+    ).tolist() == pytest.approx([1.0] * 7)
     assert sfr.tolist() == pytest.approx([sfr[0]] * 7)
-    assert np.trapezoid(
-        np.asarray(build_popcosmos_sfh_table_jax(jnp.linspace(0.01, t_obs, 128), t_obs, params)),
-        np.linspace(0.01, 10.0, 128),
-    ) > 0.0
+    assert (
+        np.trapezoid(
+            np.asarray(
+                build_popcosmos_sfh_table_jax(
+                    jnp.linspace(0.01, t_obs, 128), t_obs, params
+                )
+            ),
+            np.linspace(0.01, 10.0, 128),
+        )
+        > 0.0
+    )
 
 
 def test_popcosmos_sfh_ratios_follow_documented_sign() -> None:
@@ -483,9 +488,10 @@ def test_popcosmos_age_weights_integrate_step_bins_directly() -> None:
     assert weights.shape == ssp_lg_age.shape
     assert np.all(np.isfinite(weight_array))
     assert float(weights.sum()) == pytest.approx(1.0)
-    assert weight_array[ages < 0.03].sum() > weight_array[
-        (ages >= 0.03) & (ages < 0.10)
-    ].sum()
+    assert (
+        weight_array[ages < 0.03].sum()
+        > weight_array[(ages >= 0.03) & (ages < 0.10)].sum()
+    )
 
 
 def test_popcosmos_sfh_time_grid_can_preserve_legacy_linear_mode() -> None:
@@ -730,7 +736,9 @@ def test_pre_igm_order_attenuates_agn_and_stellar_together() -> None:
     total_post = apply_igm_transmission_jax(wave, stellar + agn, 6.0, config)
 
     np.testing.assert_allclose(np.asarray(pre_igm), np.full(3, 3.0), rtol=1.0e-6)
-    np.testing.assert_allclose(np.asarray(post_igm), np.asarray(total_post), rtol=1.0e-6)
+    np.testing.assert_allclose(
+        np.asarray(post_igm), np.asarray(total_post), rtol=1.0e-6
+    )
     assert float(post_igm[0]) < 2.0
 
 
@@ -1587,7 +1595,9 @@ def test_compressed_fsps_component_grid_matches_synthetic_dense_path() -> None:
     np.testing.assert_allclose(compressed, dense, rtol=5.0e-5, atol=1.0e-8)
 
 
-def test_load_context_compressed_agn_component_does_not_load_dense_grid(tmp_path) -> None:
+def test_load_context_compressed_agn_component_does_not_load_dense_grid(
+    tmp_path,
+) -> None:
     ssp_path = tmp_path / "ssp.h5"
     wave, lg_age, lgmet = _write_synthetic_ssp_hdf5(ssp_path)
     agn_path = tmp_path / "compressed_agn.h5"

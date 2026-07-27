@@ -91,7 +91,10 @@ def write_supervised_prior_run_report(
             for col in truth_frame.columns
             if col not in {"object_id", "source_row"} and col in prior.columns
         )
-        summary = {"dataset": "run_truth_theta_samples", "n_truth_rows": int(len(truth_frame))}
+        summary = {
+            "dataset": "run_truth_theta_samples",
+            "n_truth_rows": int(len(truth_frame)),
+        }
     return write_supervised_prior_diagnostics(
         truth=truth_frame,
         prior=prior,

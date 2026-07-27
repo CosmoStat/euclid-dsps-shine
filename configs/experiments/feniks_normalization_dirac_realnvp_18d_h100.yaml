@@ -1,0 +1,15 @@
+extends: ../prior_diffsky_synthetic_feniks_normalization_benchmark.yaml
+
+normalization_benchmark:
+    version: dirac_preserved
+    specs: configs/normalizations/feniks_18band_dirac_preserved_v1.json
+
+prior_learning:
+    flow:
+        type: realnvp
+        n_layers: 12
+        hidden_size: 256
+        scale_clamp: 0.05
+        shift_clamp: 5.0
+        init: identity
+        init_scale: 0.0

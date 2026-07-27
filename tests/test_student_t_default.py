@@ -25,9 +25,7 @@ def test_diffsky_science_configs_default_to_student_t_nu2() -> None:
 
 
 def test_supervised_prior_configs_do_not_enable_alpha_sed() -> None:
-    for config_path in (
-        "configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml",
-    ):
+    for config_path in ("configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml",):
         config = load_config(Path(config_path))
         alpha = config["calibration"]["global_sed_scale"]
         assert alpha["enabled"] is False

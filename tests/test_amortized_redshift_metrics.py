@@ -77,7 +77,9 @@ def test_redshift_metrics_by_truth_bin() -> None:
     )
 
 
-def test_write_redshift_metrics_includes_alpha_and_likelihood_metadata(tmp_path) -> None:
+def test_write_redshift_metrics_includes_alpha_and_likelihood_metadata(
+    tmp_path,
+) -> None:
     dataset = tmp_path / "truth.parquet"
     pd.DataFrame(
         {

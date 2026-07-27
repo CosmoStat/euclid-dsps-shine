@@ -1,0 +1,7 @@
+spline15d_prior:
+  dataset_dir: Data/diffsky/synthetic/feniks_260617_spline15d
+  normalization: {family: asinh, log10_lambda_min: -8.0, log10_lambda_max: 8.0, grid_size: 257}
+  flow: {type: realnvp, n_layers: 12, hidden_size: 256, scale_clamp: 0.02, shift_clamp: 1.0, permutation: roll, init: identity, init_scale: 0.01}
+  training: {epochs: 120, batch_size: 1024, learning_rate: 0.0005, weight_decay: 0.00001, gradient_clip_norm: 1.0, base_moment_weight: 0.01, epoch_shuffle: true, data_parallel: auto, seed: 260715}
+  evaluation: {every_epochs: 5, sample_count: 10000, max_median_ks: 0.10, max_max_ks: 0.20, max_correlation_frobenius: 1.5, min_base_std_mean: 0.8, max_base_std_mean: 1.2, max_normalized_tail_fraction: 0.002, max_negative_fraction: 0.001, temperature_min: 0.08, temperature_max: 1.0, temperature_step: 0.02, include_unit_temperature: true}
+  output: {prior_samples: 50000, truth_sample_limit: 50000, max_corner_rows: 4000}

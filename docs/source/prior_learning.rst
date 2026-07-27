@@ -141,3 +141,33 @@ Report
 Diagnostics include per-parameter histogram comparisons, KS distance,
 Wasserstein distance, mean/std/median residuals, a z/logM/logSFR pair plot when
 those parameters are present, and a corner plot when ``corner`` is installed.
+
+Hybrid atom versus Dirac-preserved benchmark
+--------------------------------------------
+
+The FENIKS 18-band benchmark compares two normalization designs with both a
+RealNVP and a rational-quadratic neural spline flow. The hybrid model uses a
+shared Bernoulli state for the four exact Diffstar atoms, a 14D flow for the
+remaining coordinates in the atom branch, and an 18D flow for non-atom rows.
+The Dirac-preserved model keeps the four atoms at exactly ``x=0`` in a single
+18D continuous flow. Its transform is invertible, but samples from a continuous
+flow have zero probability of reproducing the exact atom.
+
+Submit a short four-job smoke array on Jean Zay, then aggregate it:
+
+.. code-block:: bash
+
+   SMOKE_JOB=$(sbatch --parsable --array=0-3 \
+     --export=ALL,STAGE=train,SMOKE=1 \
+     scripts/feniks_normalization_benchmark_h100.slurm)
+   sbatch --array=0-0 --dependency=afterok:${SMOKE_JOB} \
+     --export=ALL,STAGE=compare,SMOKE=1 \
+     scripts/feniks_normalization_benchmark_h100.slurm
+
+For the complete train/validation/test benchmark, use ``SMOKE=0``. Array tasks
+0 through 3 are hybrid+RealNVP, hybrid+RQ-spline,
+Dirac-preserved+RealNVP, and Dirac-preserved+RQ-spline. Physical-space KS,
+Wasserstein, energy, and correlation metrics compare all four runs. NLL values
+are only comparable between flow architectures within one normalization
+version because the hybrid and continuous models use different reference
+measures.

@@ -135,3 +135,38 @@ A low photometric residual is not a physical recovery claim. Use the held-out
 FENIKS truths to inspect posterior calibration, parameter residuals, derived
 quantities, and MAP/MCLMC comparisons before interpreting recovered galaxy
 parameters.
+
+Spline-15D Frozen-Prior Path
+----------------------------
+
+``configs/amortized_feniks_spline15d_18band_gpu.yaml`` replaces the 13 native
+Diffstar/Diffmah SFH parameters with ten spline log-SFR contrasts. Together
+with redshift, stellar mass, stellar metallicity, ``dust_av``, and
+``dust_delta``, the encoder posterior has 15 dimensions.
+
+The RealNVP checkpoint is loaded with its serialized mixed marginal transform:
+positive log transforms for redshift and ``dust_av``, shifted-asinh transforms
+for the other coordinates, and no whitening. The flow weights remain frozen;
+only the photometric encoder is optimized. Every posterior sample follows this
+fully differentiable path:
+
+.. code-block:: text
+
+   encoder x -> inverse prior normalization -> 15 physical parameters
+             -> JAX-COSMO not-a-knot cubic SFH -> stellar-mass normalization
+             -> DSPS age weights, MDF, dust and IGM -> 18-band photometry
+
+The source Diffsky dataset is not regenerated. The helper below joins the
+existing photometry with ``<split>_exact.parquet`` by ``object_id``:
+
+.. code-block:: bash
+
+   python scripts/build_feniks_spline15d_amortized_catalog.py \
+     --source-dir Data/diffsky/synthetic/feniks_260617_dsps_closure_18band_grouped \
+     --spline-dir Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3 \
+     --out Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3/amortized
+
+For Jean-Zay, ``scripts/feniks_spline15d_amortized_h100.slurm`` performs that
+join if necessary, validates the completed prior checkpoint, and launches the
+encoder training. Submit it with an ``afterok`` dependency on the active prior
+continuation job so the selected prior checkpoint exists before training.

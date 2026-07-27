@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +116,7 @@ def load_truth_dataset_with_schema(
     *,
     schema: TruthSchema,
     limit: int | None = None,
+    latent_spec: LatentSpec | None = None,
 ) -> TruthDataset:
     """Load a truth dataset using an already resolved schema and bounds."""
     dataset_path = Path(dataset_path)
@@ -132,7 +133,7 @@ def load_truth_dataset_with_schema(
     theta = raw.loc[finite_mask].to_numpy(dtype=np.float32)
     if theta.size == 0:
         raise ValueError(f"No finite truth rows found in {dataset_path}")
-    latent_spec = latent_spec_from_parameter_specs(schema.parameters)
+    latent_spec = latent_spec or latent_spec_from_parameter_specs(schema.parameters)
     x = np.asarray(theta_to_x(jnp.asarray(theta), latent_spec), dtype=np.float32)
     object_id = (
         frame.loc[finite_mask, "object_id"].to_numpy()
@@ -152,17 +153,75 @@ def load_truth_dataset_with_schema(
     )
 
 
-def latent_spec_from_parameter_specs(parameters: tuple[ParameterSpec, ...]) -> LatentSpec:
+def latent_spec_from_parameter_specs(
+    parameters: tuple[ParameterSpec, ...],
+) -> LatentSpec:
     """Build the amortized bounded-transform spec from truth parameter specs."""
-    missing = [param.name for param in parameters if param.lower is None or param.upper is None]
+    missing = [
+        param.name for param in parameters if param.lower is None or param.upper is None
+    ]
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Parameter bounds are missing for: {joined}")
     return LatentSpec(
         names=tuple(param.name for param in parameters),
-        lower=jnp.asarray([float(param.lower) for param in parameters], dtype=jnp.float32),
-        upper=jnp.asarray([float(param.upper) for param in parameters], dtype=jnp.float32),
+        lower=jnp.asarray(
+            [float(param.lower) for param in parameters], dtype=jnp.float32
+        ),
+        upper=jnp.asarray(
+            [float(param.upper) for param in parameters], dtype=jnp.float32
+        ),
     )
+
+
+def truth_standardized_latent_spec(
+    truth: TruthDataset,
+    *,
+    min_raw_scale: float = 0.1,
+    max_raw_scale: float = 10.0,
+) -> tuple[LatentSpec, dict[str, Any]]:
+    """Return a latent spec that standardizes raw bounded logits from truth rows."""
+    raw_x = np.asarray(truth.x, dtype=np.float32)
+    center = np.nanmean(raw_x, axis=0).astype(np.float32)
+    scale = np.nanstd(raw_x, axis=0).astype(np.float32)
+    finite = np.isfinite(scale) & (scale > 0.0)
+    scale = np.where(finite, scale, 1.0).astype(np.float32)
+    min_raw_scale = float(min_raw_scale)
+    max_raw_scale = float(max_raw_scale)
+    if min_raw_scale <= 0.0 or max_raw_scale < min_raw_scale:
+        raise ValueError(
+            "truth standardized latent scales require 0 < min_raw_scale <= max_raw_scale"
+        )
+    clipped_scale = np.clip(scale, min_raw_scale, max_raw_scale).astype(np.float32)
+    spec = latent_spec_from_parameter_specs(truth.schema.parameters)
+    spec = LatentSpec(
+        names=spec.names,
+        lower=spec.lower,
+        upper=spec.upper,
+        raw_center=jnp.asarray(center, dtype=jnp.float32),
+        raw_scale=jnp.asarray(clipped_scale, dtype=jnp.float32),
+        normalization="truth_standardized_logit",
+    )
+    payload = {
+        "normalization": "truth_standardized_logit",
+        "min_raw_scale": min_raw_scale,
+        "max_raw_scale": max_raw_scale,
+        "raw_center": center.astype(float).tolist(),
+        "raw_scale_unclipped": scale.astype(float).tolist(),
+        "raw_scale": clipped_scale.astype(float).tolist(),
+        "n_raw_scale_clipped_low": int(np.sum(scale < min_raw_scale)),
+        "n_raw_scale_clipped_high": int(np.sum(scale > max_raw_scale)),
+    }
+    return spec, payload
+
+
+def truth_dataset_with_latent_spec(
+    truth: TruthDataset,
+    latent_spec: LatentSpec,
+) -> TruthDataset:
+    """Return the same truth rows represented in ``latent_spec`` coordinates."""
+    x = np.asarray(theta_to_x(jnp.asarray(truth.theta), latent_spec), dtype=np.float32)
+    return replace(truth, latent_spec=latent_spec, x=x)
 
 
 def prior_samples_frame(

@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from euclid_dsps.amortized.latent import (
+    LatentSpec,
     initial_theta_from_config,
     latent_center_theta_from_config,
     latent_prior_geometry_frame,
@@ -74,7 +75,9 @@ def test_initial_theta_uses_config_initial_with_midpoint_fallback() -> None:
 
     assert by_name["z_obs"] == 0.8
 
-    fallback_config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
+    fallback_config = load_config(
+        "configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml"
+    )
     del fallback_config["fit"]["free_parameters"]["dust_av"]["initial"]
     fallback_theta = initial_theta_from_config(
         fallback_config,
@@ -127,7 +130,9 @@ def test_feniks_full_schema_bounds_match_configured_training_space() -> None:
     config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
     spec = latent_spec_from_config(config)
 
-    assert config["amortized"]["encoder"]["latent_dim"] == len(DIFFSKY_BASIC_PARAMETER_NAMES)
+    assert config["amortized"]["encoder"]["latent_dim"] == len(
+        DIFFSKY_BASIC_PARAMETER_NAMES
+    )
     by_name = {
         name: (float(lower), float(upper))
         for name, lower, upper in zip(spec.names, spec.lower, spec.upper, strict=True)
@@ -147,3 +152,41 @@ def test_gas_metallicity_constraint_is_satisfied() -> None:
     stellar = theta[:, POPCOSMOS_PARAMETER_NAMES.index("log10_stellar_metallicity")]
     gas = theta[:, POPCOSMOS_PARAMETER_NAMES.index("log10_gas_metallicity")]
     assert jnp.all(gas >= stellar)
+
+
+def test_spline15d_mixed_transform_roundtrip() -> None:
+    spec = LatentSpec(
+        names=("positive", "shifted"),
+        lower=jnp.asarray([0.0, -10.0]),
+        upper=jnp.asarray([10.0, 10.0]),
+        raw_center=jnp.asarray([0.2, -0.4]),
+        raw_scale=jnp.asarray([0.7, 1.3]),
+        normalization="spline15d_mixed",
+        transform_family=jnp.asarray([1, 0]),
+        transform_location=jnp.asarray([0.0, 2.0]),
+        transform_lambda=jnp.asarray([1.0, 0.5]),
+    )
+    x = jnp.asarray([[-1.0, 0.5], [0.4, -1.2]], dtype=jnp.float32)
+
+    theta = x_to_theta(x, spec)
+    recovered = theta_to_x(theta, spec)
+
+    assert jnp.all(theta[:, 0] > 0.0)
+    np.testing.assert_allclose(np.asarray(recovered), np.asarray(x), atol=2.0e-6)
+
+
+def test_spline15d_config_has_exact_parameter_contract() -> None:
+    config = load_config("configs/amortized_feniks_spline15d_18band_gpu.yaml")
+    spec = latent_spec_from_config(config)
+
+    assert config["model"]["sfh_model"] == "spline15d"
+    assert config["amortized"]["prior"]["train_jointly"] is False
+    assert len(spec.names) == 15
+    assert spec.names[:5] == (
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_stellar_metallicity",
+        "dust_av",
+        "dust_delta",
+    )
+    assert spec.names[-1] == "sfh_dlog_sfr_10"

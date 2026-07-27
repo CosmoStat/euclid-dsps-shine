@@ -57,7 +57,9 @@ def write_nebular_diagnostic_outputs(
     if modes.empty:
         return
     modes.to_csv(out / f"{label}_nebular_redshift_modes.csv", index=False)
-    crossings = line_filter_crossings(context, inventory, modes, top_n_lines=top_n_lines)
+    crossings = line_filter_crossings(
+        context, inventory, modes, top_n_lines=top_n_lines
+    )
     if crossings.empty:
         return
     crossings.to_csv(out / f"{label}_nebular_line_filter_crossings.csv", index=False)

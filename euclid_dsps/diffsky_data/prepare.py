@@ -79,7 +79,11 @@ def build_diffsky_photometric_dataset(
     object_id_report = _assign_global_object_ids(dataset)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     dataset.to_parquet(output_path, index=False)
-    band_names = tuple(column.removeprefix("flux_") for column in dataset.columns if column.startswith("flux_"))
+    band_names = tuple(
+        column.removeprefix("flux_")
+        for column in dataset.columns
+        if column.startswith("flux_")
+    )
     semantics = classify_diffsky_columns(dataset.columns)
     error_model_payload = _error_model_payload(
         add_synthetic_errors=add_synthetic_errors,
@@ -112,7 +116,9 @@ def build_diffsky_photometric_dataset(
         "readiness": readiness,
     }
     manifest_path = output_path.with_suffix(".manifest.yaml")
-    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    manifest_path.write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     truth_report_path = output_path.with_suffix(".truth_report.md")
     _write_truth_report(dataset, manifest, truth_report_path)
     integrity_report_path = output_path.with_name("diffsky_dataset_integrity_report.md")
@@ -267,7 +273,9 @@ def _schema_for_dataset(
         "object_id_column": "object_id",
         "source_identity": {
             "core_tag": "core_tag" if "core_tag" in frame else None,
-            "global_object_id": "global_object_id" if "global_object_id" in frame else None,
+            "global_object_id": (
+                "global_object_id" if "global_object_id" in frame else None
+            ),
             "source_file": "source_file" if "source_file" in frame else None,
             "source_row": "source_row" if "source_row" in frame else None,
         },
@@ -298,11 +306,16 @@ def _parameter_bounds(frame: pd.DataFrame) -> list[dict[str, Any]]:
     cols = [
         column
         for column in frame.columns
-        if column.endswith("_true") or column.startswith(("diffmah_", "diffstar_", "dust_", "burst_"))
+        if column.endswith("_true")
+        or column.startswith(("diffmah_", "diffstar_", "dust_", "burst_"))
     ]
     rows = []
     for column in cols:
-        values = pd.to_numeric(frame[column], errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+        values = (
+            pd.to_numeric(frame[column], errors="coerce")
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
         if values.empty:
             continue
         rows.append(
@@ -317,7 +330,9 @@ def _parameter_bounds(frame: pd.DataFrame) -> list[dict[str, Any]]:
     return rows
 
 
-def _write_truth_report(frame: pd.DataFrame, manifest: dict[str, Any], path: Path) -> None:
+def _write_truth_report(
+    frame: pd.DataFrame, manifest: dict[str, Any], path: Path
+) -> None:
     lines = [
         "# Diffsky Truth Report",
         "",
@@ -346,7 +361,9 @@ def _write_truth_report(frame: pd.DataFrame, manifest: dict[str, Any], path: Pat
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _write_integrity_report(frame: pd.DataFrame, manifest: dict[str, Any], path: Path) -> None:
+def _write_integrity_report(
+    frame: pd.DataFrame, manifest: dict[str, Any], path: Path
+) -> None:
     object_id = manifest["object_id"]
     semantics = manifest["column_semantics"]
     lines = [

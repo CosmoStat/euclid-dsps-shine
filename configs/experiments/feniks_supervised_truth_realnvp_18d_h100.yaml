@@ -1,0 +1,24 @@
+extends: ../prior_diffsky_synthetic_feniks_full_realnvp.yaml
+
+prior_learning:
+    flow:
+        init: identity
+        init_scale: 0.0
+    snapshots:
+        enabled: true
+        every_epochs: 5
+        include_epoch_zero: true
+        prior_samples: 10000
+        truth_sample_limit: 10000
+        write_corner: true
+        max_corner_rows: 4000
+        checkpoint_every: 5
+    training:
+        data_parallel: auto
+    output:
+        prior_samples: 50000
+        truth_sample_limit: 50000
+
+calibration:
+    per_band_zero_points:
+        enabled: false

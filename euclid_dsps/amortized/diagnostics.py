@@ -21,7 +21,42 @@ from euclid_dsps.io import (
 )
 from euclid_dsps.photometric_uncertainty import effective_flux_sigma
 
-_CORNER_PARAMETER_ORDER = [
+FENIKS_FULL_18D_PARAMETER_ORDER = [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffstar_indx_lo",
+    "diffstar_indx_hi",
+    "diffstar_lg_qt",
+    "diffstar_qlglgdt",
+    "diffstar_lg_drop",
+    "diffstar_lg_rejuv",
+    "diffmah_logm0",
+    "diffmah_logtc",
+    "diffmah_early_index",
+    "diffmah_late_index",
+    "diffmah_t_peak",
+]
+
+FENIKS_USEFUL_PARAMETER_ORDER = [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "log10_sfr_at_obs",
+    "log10_ssfr_at_obs",
+    "diffstar_lgmcrit",
+    "diffstar_lgy_at_mcrit",
+    "diffmah_logm0",
+    "diffmah_t_peak",
+]
+
+_LEGACY_POPCOSMOS_PARAMETER_ORDER = [
     "log10_stellar_mass",
     "log10_stellar_metallicity",
     "tau2",
@@ -40,16 +75,42 @@ _CORNER_PARAMETER_ORDER = [
     "dlog10_sfr_1",
 ]
 
+_CORNER_PARAMETER_ORDER = [
+    *FENIKS_FULL_18D_PARAMETER_ORDER,
+    *[
+        name
+        for name in _LEGACY_POPCOSMOS_PARAMETER_ORDER
+        if name not in FENIKS_FULL_18D_PARAMETER_ORDER
+    ],
+]
+
 _PARAMETER_LABELS = {
     "z_obs": "z",
     "log10_stellar_mass": "log M",
+    "log10_stellar_metallicity": "log Z*",
+    "dust_av": "A_V",
+    "dust_delta": "dust delta",
+    "log10_sfr_at_obs": "log SFR",
+    "log10_ssfr_at_obs": "log sSFR",
+    "diffstar_lgmcrit": "DS lgmcrit",
+    "diffstar_lgy_at_mcrit": "DS lgy",
+    "diffstar_indx_lo": "DS idx lo",
+    "diffstar_indx_hi": "DS idx hi",
+    "diffstar_lg_qt": "DS lg qt",
+    "diffstar_qlglgdt": "DS q dt",
+    "diffstar_lg_drop": "DS lg drop",
+    "diffstar_lg_rejuv": "DS lg rejuv",
+    "diffmah_logm0": "DM log M0",
+    "diffmah_logtc": "DM log tc",
+    "diffmah_early_index": "DM early",
+    "diffmah_late_index": "DM late",
+    "diffmah_t_peak": "DM tpeak",
     "dlog10_sfr_1": "dSFR1",
     "dlog10_sfr_2": "dSFR2",
     "dlog10_sfr_3": "dSFR3",
     "dlog10_sfr_4": "dSFR4",
     "dlog10_sfr_5": "dSFR5",
     "dlog10_sfr_6": "dSFR6",
-    "log10_stellar_metallicity": "log Z*",
     "tau2": "tau2",
     "dust_index_n": "n",
     "tau1_over_tau2": "tau1/tau2",
@@ -120,6 +181,12 @@ def write_training_diagnostics(log_path: str | Path, out_dir: str | Path) -> lis
         "joint_grad_norm",
         "band_alpha_prior_penalty",
         "max_abs_band_delta_mag",
+        "wake_nll",
+        "wake_ess_mean",
+        "wake_ess_fraction_mean",
+        "wake_weight_max_mean",
+        "wake_weight_entropy_mean",
+        "wake_all_nonfinite_fraction",
     ]:
         if column not in epoch_summary:
             continue
@@ -167,6 +234,12 @@ def _write_training_epoch_summary(frame: pd.DataFrame, out: Path) -> pd.DataFram
         "joint_grad_norm",
         "band_alpha_prior_penalty",
         "max_abs_band_delta_mag",
+        "wake_nll",
+        "wake_ess_mean",
+        "wake_ess_fraction_mean",
+        "wake_weight_max_mean",
+        "wake_weight_entropy_mean",
+        "wake_all_nonfinite_fraction",
     ]
     metrics = [metric for metric in metrics if metric in frame]
     if "split" not in frame:
@@ -180,7 +253,9 @@ def _write_training_epoch_summary(frame: pd.DataFrame, out: Path) -> pd.DataFram
             "n_rows": int(len(group)),
             "n_objects": int(group["n_objects"].sum()) if "n_objects" in group else 0,
             "kl_weight": (
-                float(np.nanmean(group["kl_weight"])) if "kl_weight" in group else np.nan
+                float(np.nanmean(group["kl_weight"]))
+                if "kl_weight" in group
+                else np.nan
             ),
         }
         for metric in metrics:
@@ -549,33 +624,43 @@ def posterior_predictive_residual_summary_frame(
                     "band": band_names[band_index],
                     "obs_flux_fnu_cgs": float(obs_flux[object_index, band_index]),
                     "obs_err_fnu_cgs": float(obs_err[object_index, band_index]),
-                    "snr_proxy": float(
-                        abs_obs_flux[object_index, band_index]
-                        / obs_err[object_index, band_index]
-                    )
-                    if obs_err[object_index, band_index] > 0.0
-                    else float("nan"),
+                    "snr_proxy": (
+                        float(
+                            abs_obs_flux[object_index, band_index]
+                            / obs_err[object_index, band_index]
+                        )
+                        if obs_err[object_index, band_index] > 0.0
+                        else float("nan")
+                    ),
                     "obs_err_over_abs_flux": float(
                         obs_err[object_index, band_index]
                         / abs_obs_flux[object_index, band_index]
                     ),
                     "model_flux_q16": float(
-                        _nanquantile_or_nan(model_flux[:, object_index, band_index], 0.16)
+                        _nanquantile_or_nan(
+                            model_flux[:, object_index, band_index], 0.16
+                        )
                     ),
                     "model_flux_median": float(
                         np.nanmedian(model_flux[:, object_index, band_index])
                     ),
                     "model_flux_q84": float(
-                        _nanquantile_or_nan(model_flux[:, object_index, band_index], 0.84)
+                        _nanquantile_or_nan(
+                            model_flux[:, object_index, band_index], 0.84
+                        )
                     ),
                     "sigma_eff_q16": float(
-                        _nanquantile_or_nan(sigma_eff[:, object_index, band_index], 0.16)
+                        _nanquantile_or_nan(
+                            sigma_eff[:, object_index, band_index], 0.16
+                        )
                     ),
                     "sigma_eff_median": float(
                         np.nanmedian(sigma_eff[:, object_index, band_index])
                     ),
                     "sigma_eff_q84": float(
-                        _nanquantile_or_nan(sigma_eff[:, object_index, band_index], 0.84)
+                        _nanquantile_or_nan(
+                            sigma_eff[:, object_index, band_index], 0.84
+                        )
                     ),
                     "flux_residual_obs_minus_model_q16": float(
                         _nanquantile_or_nan(
@@ -595,9 +680,7 @@ def posterior_predictive_residual_summary_frame(
                     ),
                     "abs_flux_residual_over_abs_flux_median": float(
                         np.nanmedian(
-                            abs_flux_residual_over_abs_flux[
-                                :, object_index, band_index
-                            ]
+                            abs_flux_residual_over_abs_flux[:, object_index, band_index]
                         )
                     ),
                     "chi_likelihood_q16": float(
@@ -685,6 +768,7 @@ def summarize_inference_outputs(
     out = Path(out_dir)
     if not summary_path.exists():
         return
+    _remove_redundant_corner_artifacts(out)
     frame = pd.read_parquet(summary_path)
     residual_summary = _write_residual_summary(out)
     top_chi2 = _write_top_chi2(frame, residual_summary, out)
@@ -750,36 +834,22 @@ def summarize_inference_outputs(
     write_json(Path(out_dir) / "posterior_diagnostics_summary.json", payload)
 
 
-def _write_full_latent_posterior_median_corner(
-    summary: pd.DataFrame,
-    out: Path,
-    plt,
-    *,
-    config: dict[str, Any] | None,
-) -> Path | None:
-    frame = _posterior_median_parameter_frame(summary, config=config)
-    if frame.empty:
-        return None
-    prior = _read_learned_prior(out)
-    comparison = None
-    title = "Full latent posterior medians"
-    if prior is not None and not prior.empty:
-        shared = [column for column in _corner_columns(frame) if column in prior]
-        if len(shared) >= 2:
-            comparison = prior
-            title = "Full latent posterior medians vs learned prior"
-    return _write_corner_plot(
-        frame,
-        out,
-        plt,
-        comparison=comparison,
-        filename="corner_full_latent_posterior_medians.png",
-        title=title,
-        color="#2a9fd6",
-        label="posterior median per galaxy",
-        comparison_color="#ef476f",
-        comparison_label="learned prior samples",
-    )
+_REDUNDANT_CORNER_ARTIFACTS = (
+    "corner_full_latent_posterior_medians.png",
+    "corner_full_latent_posterior_medians_columns.csv",
+    "corner_truth_prior_posterior_map.png",
+    "posterior_corner.png",
+    "learned_prior_corner.png",
+    "posterior_vs_learned_prior_corner.png",
+)
+
+
+def _remove_redundant_corner_artifacts(out: Path) -> None:
+    """Keep one canonical 15D truth/prior/posterior corner per inference run."""
+    for name in _REDUNDANT_CORNER_ARTIFACTS:
+        path = out / name
+        if path.exists():
+            path.unlink()
 
 
 def _write_full_latent_truth_prior_posterior_corner(
@@ -789,11 +859,7 @@ def _write_full_latent_truth_prior_posterior_corner(
     *,
     config: dict[str, Any] | None,
 ) -> Path | None:
-    posterior, posterior_label = _full_latent_posterior_frame(
-        summary,
-        out,
-        config=config,
-    )
+    posterior, posterior_label = _full_latent_posterior_frame(out, config=config)
     if posterior.empty:
         return None
     truth = _truth_parameter_frame(summary, out, config=config)
@@ -812,48 +878,44 @@ def _write_full_latent_truth_prior_posterior_corner(
 
 
 def _full_latent_posterior_frame(
-    summary: pd.DataFrame,
     out: Path,
     *,
     config: dict[str, Any] | None,
 ) -> tuple[pd.DataFrame, str]:
-    samples_path = out / "posterior_samples.parquet"
-    if samples_path.exists():
-        samples = pd.read_parquet(samples_path)
+    samples = _read_posterior_samples_for_corner(out)
+    if not samples.empty:
         columns = _corner_columns_for_config(samples, config)
         if len(columns) >= 2:
-            return samples[columns], "posterior samples"
-    medians = _posterior_median_parameter_frame(summary, config=config)
-    return medians, "posterior medians"
+            return samples[columns], "aggregate posterior samples"
+    return pd.DataFrame(), "posterior samples unavailable"
 
 
-def _posterior_median_parameter_frame(
-    summary: pd.DataFrame,
+def _read_posterior_samples_for_corner(
+    out: Path,
     *,
-    config: dict[str, Any] | None,
+    max_rows: int = 50_000,
 ) -> pd.DataFrame:
-    if summary.empty:
+    """Read a deterministic population sample from dense or sharded outputs."""
+    dense = out / "posterior_samples.parquet"
+    if dense.exists():
+        frame = pd.read_parquet(dense)
+        if len(frame) > max_rows:
+            frame = frame.sample(n=max_rows, random_state=0)
+        return frame
+    shards = sorted((out / "posterior_samples").glob("batch_*.parquet"))
+    if not shards:
         return pd.DataFrame()
-    configured = []
-    if config is not None:
-        configured = list(
-            (config.get("fit", {}) or {}).get("free_parameters", {}) or {}
-        )
-    candidates = configured or [
-        column[: -len("_median")]
-        for column in summary.columns
-        if column.endswith("_median")
-    ]
-    columns = []
-    rename = {}
-    for name in candidates:
-        median_column = f"{name}_median"
-        if median_column in summary:
-            columns.append(median_column)
-            rename[median_column] = str(name)
-    if len(columns) < 2:
-        return pd.DataFrame()
-    return summary[columns].rename(columns=rename)
+    rows_per_shard = max(1, int(np.ceil(max_rows / len(shards))))
+    frames = []
+    for index, path in enumerate(shards):
+        frame = pd.read_parquet(path)
+        if len(frame) > rows_per_shard:
+            frame = frame.sample(n=rows_per_shard, random_state=index)
+        frames.append(frame)
+    combined = pd.concat(frames, ignore_index=True)
+    if len(combined) > max_rows:
+        combined = combined.sample(n=max_rows, random_state=0)
+    return combined
 
 
 def _truth_parameter_frame(
@@ -909,9 +971,7 @@ def _catalog_truth_frame(
         return pd.DataFrame()
     names = _configured_free_parameters(config)
     fallback_columns = [
-        column
-        for name in names
-        for column in _truth_fallback_columns(name)
+        column for name in names for column in _truth_fallback_columns(name)
     ]
     requested_columns = []
     for column in [*truth_columns_from_config(config), *fallback_columns]:
@@ -1055,7 +1115,9 @@ def _residual_value_column(frame: pd.DataFrame) -> str | None:
     return None
 
 
-def _write_residual_tail_summary(residual_summary: pd.DataFrame, out: Path) -> pd.DataFrame:
+def _write_residual_tail_summary(
+    residual_summary: pd.DataFrame, out: Path
+) -> pd.DataFrame:
     column = _residual_value_column(residual_summary)
     if residual_summary.empty or column is None:
         return pd.DataFrame()
@@ -1063,7 +1125,9 @@ def _write_residual_tail_summary(residual_summary: pd.DataFrame, out: Path) -> p
     for band, group in residual_summary.groupby("band", sort=True):
         rows.append(_residual_tail_row(group[column], band=str(band)))
     table = pd.DataFrame(rows)
-    table.to_csv(out / "posterior_predictive_normalized_residual_tails.csv", index=False)
+    table.to_csv(
+        out / "posterior_predictive_normalized_residual_tails.csv", index=False
+    )
     table.to_parquet(
         out / "posterior_predictive_normalized_residual_tails.parquet",
         index=False,
@@ -1116,9 +1180,15 @@ def _write_residual_summary(out: Path) -> pd.DataFrame:
     agg_kwargs = {
         "obs_flux_fnu_cgs": ("obs_flux_fnu_cgs", "first"),
         "obs_err_fnu_cgs": ("obs_err_fnu_cgs", "first"),
-        "model_flux_q16": ("model_flux_fnu_cgs", lambda x: _nanquantile_or_nan(x, 0.16)),
+        "model_flux_q16": (
+            "model_flux_fnu_cgs",
+            lambda x: _nanquantile_or_nan(x, 0.16),
+        ),
         "model_flux_median": ("model_flux_fnu_cgs", "median"),
-        "model_flux_q84": ("model_flux_fnu_cgs", lambda x: _nanquantile_or_nan(x, 0.84)),
+        "model_flux_q84": (
+            "model_flux_fnu_cgs",
+            lambda x: _nanquantile_or_nan(x, 0.84),
+        ),
         "chi_likelihood_q16": (
             residual_column,
             lambda x: _nanquantile_or_nan(x, 0.16),
@@ -1174,7 +1244,9 @@ def _write_residual_summary(out: Path) -> pd.DataFrame:
         agg_kwargs["raw_residual_sigma_median"] = ("raw_residual_sigma", "median")
     summary = grouped.agg(**agg_kwargs).reset_index()
     summary["abs_residual_sigma_median"] = summary["residual_sigma_median"].abs()
-    summary.to_parquet(out / "posterior_predictive_residual_summary.parquet", index=False)
+    summary.to_parquet(
+        out / "posterior_predictive_residual_summary.parquet", index=False
+    )
     return summary
 
 
@@ -1472,9 +1544,6 @@ def _write_inference_plots(
     )
     if path is not None:
         written.append(path.name)
-    path = _write_full_latent_posterior_median_corner(summary, out, plt, config=config)
-    if path is not None:
-        written.append(path.name)
     if not residual_summary.empty:
         residual_column = _residual_value_column(residual_summary)
         if residual_column is None:
@@ -1502,9 +1571,9 @@ def _write_inference_plots(
         written.append(path.name)
 
         fig, ax = plt.subplots(figsize=(7, 4))
-        values = pd.to_numeric(residual_summary[residual_column], errors="coerce").to_numpy(
-            dtype=float
-        )
+        values = pd.to_numeric(
+            residual_summary[residual_column], errors="coerce"
+        ).to_numpy(dtype=float)
         values = values[np.isfinite(values)]
         if values.size:
             ax.hist(values, bins=60, density=True, alpha=0.65, label="posterior median")
@@ -1599,7 +1668,13 @@ def _write_inference_plots(
         truth_col = next(
             (
                 column
-                for column in ["z_true_gal", "z_obs_gal", "z_true", "z_phz", "phz_median"]
+                for column in [
+                    "z_true_gal",
+                    "z_obs_gal",
+                    "z_true",
+                    "z_phz",
+                    "phz_median",
+                ]
                 if column in redshift
             ),
             None,
@@ -1633,44 +1708,8 @@ def _write_inference_plots(
     if samples_path.exists():
         samples = pd.read_parquet(samples_path)
         prior = _read_learned_prior(out)
-        path = _write_corner_plot(
-            samples,
-            out,
-            plt,
-            filename="posterior_corner.png",
-            title="Aggregate amortized posterior",
-            color="#2a9fd6",
-            label="posterior q_psi",
-        )
-        if path is not None:
-            written.append(path.name)
         if prior is not None and not prior.empty:
             path = _write_learned_prior_logprob_plot(prior, out, plt)
-            if path is not None:
-                written.append(path.name)
-            path = _write_corner_plot(
-                prior,
-                out,
-                plt,
-                filename="learned_prior_corner.png",
-                title="Learned RealNVP prior",
-                color="#ef476f",
-                label="learned prior p_beta",
-            )
-            if path is not None:
-                written.append(path.name)
-            path = _write_corner_plot(
-                samples,
-                out,
-                plt,
-                comparison=prior,
-                filename="posterior_vs_learned_prior_corner.png",
-                title="Aggregate posterior vs learned RealNVP prior",
-                color="#2a9fd6",
-                comparison_color="#ef476f",
-                label="posterior q_psi",
-                comparison_label="learned prior p_beta",
-            )
             if path is not None:
                 written.append(path.name)
         path = _write_redshift_distribution_plot(samples, redshift, prior, out, plt)
@@ -1788,9 +1827,7 @@ def _write_multi_overlay_corner_plot(
     if not frames or frames[0]["key"] != "posterior":
         return None
     columns = [
-        column
-        for column in columns
-        if any(column in item["frame"] for item in frames)
+        column for column in columns if any(column in item["frame"] for item in frames)
     ]
     if len(columns) < 2:
         return None
@@ -1812,9 +1849,23 @@ def _write_multi_overlay_corner_plot(
                     frame = item["frame"]
                     if x_col not in frame:
                         continue
+                    finite_values = (
+                        pd.to_numeric(frame[x_col], errors="coerce")
+                        .dropna()
+                        .to_numpy(dtype=float)
+                    )
+                    if item["key"] == "truth" and finite_values.size == 1:
+                        ax.axvline(
+                            finite_values[0],
+                            color=item["color"],
+                            linestyle=item["linestyle"],
+                            linewidth=item["linewidth"],
+                            label=item["label"],
+                        )
+                        continue
                     _plot_1d_hist(
                         ax,
-                        frame[x_col].to_numpy(dtype=float),
+                        finite_values,
                         ranges[x_col],
                         color=item["color"],
                         label=item["label"],
@@ -2280,10 +2331,10 @@ def _write_redshift_distribution_plot(
         summary = pd.read_parquet(posterior_summary_path, columns=["z_obs_median"])
         posterior_z = summary["z_obs_median"].to_numpy(dtype=float)
     else:
-        posterior_z = posterior_samples.groupby("object_id")["z_obs"].median().to_numpy()
-    series = [
-        (posterior_z[np.isfinite(posterior_z)], "posterior median", "#2a9fd6")
-    ]
+        posterior_z = (
+            posterior_samples.groupby("object_id")["z_obs"].median().to_numpy()
+        )
+    series = [(posterior_z[np.isfinite(posterior_z)], "posterior median", "#2a9fd6")]
     if prior is not None and "z_obs" in prior:
         prior_z = prior["z_obs"].to_numpy(dtype=float)
         series.append((prior_z[np.isfinite(prior_z)], "learned prior", "#ef476f"))
@@ -2305,7 +2356,9 @@ def _write_redshift_distribution_plot(
     for value, label, color in series:
         histtype = "stepfilled" if label == "posterior median" else "step"
         alpha = 0.35 if label == "posterior median" else 0.95
-        ax.hist(value, bins=bins, histtype=histtype, color=color, alpha=alpha, label=label)
+        ax.hist(
+            value, bins=bins, histtype=histtype, color=color, alpha=alpha, label=label
+        )
     ax.set_xlabel("z")
     ax.set_ylabel("count")
     ax.set_title("Redshift distribution comparison")
@@ -2354,7 +2407,9 @@ def _write_redshift_pit_plot(out: Path, plt) -> Path | None:
         return None
     bins = np.linspace(0.0, 1.0, 21)
     fig, ax = plt.subplots(figsize=(5.5, 4))
-    ax.hist(values, bins=bins, histtype="step", color="#ef476f", lw=1.5, label="amortized")
+    ax.hist(
+        values, bins=bins, histtype="step", color="#ef476f", lw=1.5, label="amortized"
+    )
     ax.axhline(values.size / (len(bins) - 1), color="#2a9fd6", lw=1.2, label="uniform")
     ax.set_xlabel("P(z < z_ref)")
     ax.set_ylabel("count")

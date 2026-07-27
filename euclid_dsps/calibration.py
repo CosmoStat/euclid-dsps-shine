@@ -76,7 +76,9 @@ jax.tree_util.register_pytree_node(
 
 def global_sed_scale_config(config: dict[str, Any] | None) -> GlobalSedScaleConfig:
     """Resolve the top-level calibration config into a typed object."""
-    block = dict(((config or {}).get("calibration", {}) or {}).get("global_sed_scale", {}) or {})
+    block = dict(
+        ((config or {}).get("calibration", {}) or {}).get("global_sed_scale", {}) or {}
+    )
     enabled = bool(block.get("enabled", False))
     mode = str(block.get("mode", "learn_global" if enabled else "disabled"))
     if not enabled:

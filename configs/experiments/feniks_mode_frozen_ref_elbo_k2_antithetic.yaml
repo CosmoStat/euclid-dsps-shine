@@ -1,0 +1,15 @@
+extends: feniks_mode_covering_common.yaml
+
+amortized:
+  prior:
+    source: spline15d_checkpoint
+    checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx
+    train_jointly: false
+    update_schedule: joint
+    mstep_only: false
+  objective:
+    mode: stochastic_elbo
+    sample_strategy: antithetic
+  training:
+    epochs: 120
+    n_samples: 2

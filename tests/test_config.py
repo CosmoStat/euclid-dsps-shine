@@ -690,11 +690,7 @@ def test_diffsky_hltds_dataset_config_marks_debug_truth_contract() -> None:
     )
     truth_columns = config["truth"]["parameter_columns"]
     truth_by_kind = {
-        kind: {
-            name
-            for name, spec in truth_columns.items()
-            if spec.get("kind") == kind
-        }
+        kind: {name for name, spec in truth_columns.items() if spec.get("kind") == kind}
         for kind in {"direct_truth", "projected_generated_truth", "missing"}
     }
     assert truth_by_kind["direct_truth"] == {

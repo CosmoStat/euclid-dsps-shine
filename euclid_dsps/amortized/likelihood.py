@@ -53,32 +53,40 @@ def photometric_loglike(
     unit = _likelihood_unit(obs_flux, obs_err)
     obs_flux_scaled = obs_flux / unit
     model_flux_scaled = model_flux / unit
-    obs_err_scaled = obs_err / unit
-    error_jitter_scaled = float(error_jitter) / unit
-    sigma_eff = jnp.sqrt(
-        obs_err_scaled**2
-        + (float(error_floor_frac) * jnp.abs(model_flux_scaled)) ** 2
-        + error_jitter_scaled**2
-        + 1.0e-12
+    sigma_eff = (
+        photometric_sigma_eff(
+            obs_flux,
+            model_flux,
+            obs_err,
+            mask,
+            error_floor_frac=error_floor_frac,
+            error_jitter=error_jitter,
+        )
+        / unit
     )
     finite = mask & jnp.isfinite(obs_flux_scaled) & jnp.isfinite(model_flux_scaled)
     finite &= jnp.isfinite(sigma_eff) & (sigma_eff > 0.0)
+    safe_obs_flux = jnp.where(finite, obs_flux_scaled, 0.0)
+    safe_model_flux = jnp.where(finite, model_flux_scaled, 0.0)
+    safe_sigma = jnp.where(finite, sigma_eff, 1.0)
     kind = likelihood_type.strip().lower().replace("-", "_")
     if kind in {"student", "studentt"}:
         kind = "student_t"
     if kind == "student_t":
         logpdf = student_t_logpdf(
-            obs_flux_scaled,
-            model_flux_scaled,
-            sigma_eff,
+            safe_obs_flux,
+            safe_model_flux,
+            safe_sigma,
             nu=student_t_dof,
         )
     elif kind in {"gaussian", "normal"}:
-        logpdf = gaussian_logpdf(obs_flux_scaled, model_flux_scaled, sigma_eff)
+        logpdf = gaussian_logpdf(safe_obs_flux, safe_model_flux, safe_sigma)
     else:
         raise ValueError(f"Unsupported likelihood_type: {likelihood_type}")
     logpdf = logpdf - jnp.log(unit)
-    return jnp.sum(jnp.where(finite, logpdf, 0.0), axis=-1)
+    summed = jnp.sum(jnp.where(finite, logpdf, 0.0), axis=-1)
+    invalid_observed_band = mask & ~finite
+    return jnp.where(jnp.any(invalid_observed_band, axis=-1), -jnp.inf, summed)
 
 
 def photometric_normalized_residual(
@@ -95,21 +103,60 @@ def photometric_normalized_residual(
     obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=jnp.float32))
     mask = _with_sample_axis(jnp.asarray(mask, dtype=bool))
     model_flux = jnp.asarray(model_flux, dtype=jnp.float32)
+    sigma_eff = photometric_sigma_eff(
+        obs_flux,
+        model_flux,
+        obs_err,
+        mask,
+        error_floor_frac=error_floor_frac,
+        error_jitter=error_jitter,
+    )
+    finite = mask & jnp.isfinite(obs_flux) & jnp.isfinite(model_flux)
+    finite &= jnp.isfinite(sigma_eff) & (sigma_eff > 0.0)
+    safe_model_flux = jnp.where(jnp.isfinite(model_flux), model_flux, obs_flux)
+    chi = (safe_model_flux - obs_flux) / jnp.where(finite, sigma_eff, 1.0)
+    return jnp.where(finite, chi, 0.0)
+
+
+def photometric_sigma_eff(
+    obs_flux: jnp.ndarray,
+    model_flux: jnp.ndarray,
+    obs_err: jnp.ndarray,
+    mask: jnp.ndarray | None = None,
+    *,
+    error_floor_frac: float = 0.02,
+    error_jitter: float = 0.0,
+) -> jnp.ndarray:
+    """Return the effective photometric scale in native flux units.
+
+    The likelihood internally rescales by a stop-gradient per-band flux unit to
+    avoid float32 variance underflow. This helper applies the same convention
+    and converts the result back to native flux units so Jacobian diagnostics
+    and likelihood residuals use one shared sigma definition.
+    """
+    obs_flux = _with_sample_axis(jnp.asarray(obs_flux, dtype=jnp.float32))
+    obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=jnp.float32))
+    model_flux = jnp.asarray(model_flux, dtype=jnp.float32)
+    if mask is not None:
+        mask = _with_sample_axis(jnp.asarray(mask, dtype=bool))
     unit = _likelihood_unit(obs_flux, obs_err)
-    obs_flux_scaled = obs_flux / unit
-    model_flux_scaled = model_flux / unit
+    model_flux_finite = jnp.isfinite(model_flux)
+    safe_model_flux = jnp.where(model_flux_finite, model_flux, 0.0)
+    model_flux_scaled = safe_model_flux / unit
     obs_err_scaled = obs_err / unit
     error_jitter_scaled = float(error_jitter) / unit
-    sigma_eff = jnp.sqrt(
+    sigma_scaled = jnp.sqrt(
         obs_err_scaled**2
         + (float(error_floor_frac) * jnp.abs(model_flux_scaled)) ** 2
         + error_jitter_scaled**2
         + 1.0e-12
     )
-    finite = mask & jnp.isfinite(obs_flux_scaled) & jnp.isfinite(model_flux_scaled)
-    finite &= jnp.isfinite(sigma_eff) & (sigma_eff > 0.0)
-    chi = (model_flux_scaled - obs_flux_scaled) / sigma_eff
-    return jnp.where(finite, chi, 0.0)
+    sigma = sigma_scaled * unit
+    if mask is None:
+        return sigma
+    finite = mask & jnp.isfinite(obs_flux) & model_flux_finite
+    finite &= jnp.isfinite(sigma) & (sigma > 0.0)
+    return jnp.where(finite, sigma, jnp.asarray(jnp.inf, dtype=sigma.dtype))
 
 
 def _with_sample_axis(value: jnp.ndarray) -> jnp.ndarray:

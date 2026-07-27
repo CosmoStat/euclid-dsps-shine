@@ -1,0 +1,10 @@
+extends: amortized_feniks_spline15d_18band_gpu.yaml
+
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_dequant1e3_v1/amortized/train.parquet
+
+amortized:
+  prior:
+    type: rq_spline_coupling
+    source: spline15d_checkpoint
+    checkpoint: outputs/runs/feniks_spline15d_rqspline_dequant1e3_v1/checkpoints/best.eqx
+    train_jointly: false

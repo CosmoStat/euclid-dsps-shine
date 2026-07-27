@@ -22,6 +22,7 @@ from .config import require_equinox
 from .decoder import mock_model_flux_from_x, model_flux_from_x
 from .latent import LatentSpec
 from .likelihood import photometric_loglike, photometric_normalized_residual
+from .posterior import sample_posterior
 
 eqx = require_equinox()
 
@@ -63,11 +64,14 @@ def negative_elbo(
         x_samples = mean[None, ...]
         logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
     else:
-        x_samples, logq = model.encoder.sample_and_log_prob(
+        posterior = sample_posterior(
+            model,
             key,
             batch.features,
             int(n_samples),
+            sample_strategy=str(objective_config.get("sample_strategy", "random")),
         )
+        x_samples, logq = posterior.x, posterior.logq
     if use_mock_decoder:
         if mock_decoder_params is None:
             raise ValueError(
@@ -130,11 +134,7 @@ def negative_elbo(
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
     )
-    logp = (
-        jnp.zeros_like(logq)
-        if deterministic
-        else model.prior.log_prob(x_samples)
-    )
+    logp = jnp.zeros_like(logq) if deterministic else posterior.logprior
     kl_mc = logq - logp
     likelihood_temperature = jnp.asarray(
         max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
@@ -180,9 +180,7 @@ def negative_elbo(
             else _diag_gaussian_entropy(log_std).mean()
         ),
         "posterior_min_log_std": (
-            jnp.asarray(0.0, dtype=loglike.dtype)
-            if deterministic
-            else jnp.min(log_std)
+            jnp.asarray(0.0, dtype=loglike.dtype) if deterministic else jnp.min(log_std)
         ),
         "posterior_median_log_std": (
             jnp.asarray(0.0, dtype=loglike.dtype)
@@ -190,9 +188,7 @@ def negative_elbo(
             else jnp.median(log_std)
         ),
         "posterior_max_log_std": (
-            jnp.asarray(0.0, dtype=loglike.dtype)
-            if deterministic
-            else jnp.max(log_std)
+            jnp.asarray(0.0, dtype=loglike.dtype) if deterministic else jnp.max(log_std)
         ),
         "deterministic_reconstruction": jnp.asarray(
             1.0 if deterministic else 0.0,
@@ -224,21 +220,39 @@ def objective_mode(objective_config: dict | None) -> str:
         "stochastic": "stochastic_elbo",
         "elbo": "stochastic_elbo",
         "stochastic_elbo": "stochastic_elbo",
+        "hybrid": "hybrid_elbo",
+        "hybrid_elbo": "hybrid_elbo",
+        "periodic_wake": "periodic_wake",
+        "wake": "periodic_wake",
+        "reweighted_wake_sleep": "reweighted_wake_sleep",
+        "rws": "reweighted_wake_sleep",
         "deterministic": "deterministic_reconstruction",
         "autoencoder": "deterministic_reconstruction",
         "deterministic_autoencoder": "deterministic_reconstruction",
         "deterministic_reconstruction": "deterministic_reconstruction",
+        "npe": "neural_posterior_estimation",
+        "neural_posterior_estimation": "neural_posterior_estimation",
     }
     if mode not in aliases:
         raise ValueError(
-            "amortized.objective.mode must be 'stochastic_elbo' or "
-            "'deterministic_reconstruction'"
+            "amortized.objective.mode must be stochastic_elbo, "
+            "hybrid_elbo, periodic_wake, reweighted_wake_sleep, "
+            "neural_posterior_estimation, or "
+            "deterministic_reconstruction"
         )
     return aliases[mode]
 
 
 def is_deterministic_reconstruction(objective_config: dict | None) -> bool:
     return objective_mode(objective_config) == "deterministic_reconstruction"
+
+
+def objective_uses_truth(objective_config: dict | None) -> bool:
+    """Return whether training requires complete latent truth columns."""
+    return objective_mode(objective_config) in {
+        "hybrid_elbo",
+        "neural_posterior_estimation",
+    }
 
 
 def _diag_gaussian_entropy(log_std: jnp.ndarray) -> jnp.ndarray:
@@ -263,7 +277,9 @@ def _posterior_entropy_floor_penalty(
         if min_scale <= 0.0:
             return jnp.asarray(0.0, dtype=log_std.dtype)
         min_log_std = float(jnp.log(jnp.asarray(min_scale)))
-    deficit = jax_nn_relu(jnp.asarray(float(min_log_std), dtype=log_std.dtype) - log_std)
+    deficit = jax_nn_relu(
+        jnp.asarray(float(min_log_std), dtype=log_std.dtype) - log_std
+    )
     return jnp.asarray(weight, dtype=log_std.dtype) * jnp.mean(deficit**2)
 
 

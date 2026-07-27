@@ -51,11 +51,13 @@ from .diagnostics import (
 )
 from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
-from .latent import latent_spec_from_config, x_to_theta
+from .latent import latent_spec_hash, x_to_theta
 from .likelihood import photometric_loglike
+from .posterior import sample_posterior
 from .redshift_metrics import write_redshift_metrics_for_run
 from .train import (
     _effective_jax_batch_size,
+    _latent_spec_for_amortized_config,
     _per_band_flux_calibration_summary,
     load_checkpoint,
     write_per_band_flux_calibration_artifacts,
@@ -274,7 +276,10 @@ def infer_amortized_fs2(
             f"mode={band_calibration_cfg.mode} "
             f"trainable={band_calibration_cfg.trainable}"
         )
-    latent_spec = latent_spec_from_config(config)
+    # A checkpoint-backed spline15d prior carries the exact marginal transform
+    # used during supervised prior learning.  Reuse the same resolved spec as
+    # training; the YAML placeholder is intentionally only an identity schema.
+    latent_spec = _latent_spec_for_amortized_config(config)
     likelihood_cfg = cfg["likelihood"]
     key = jax.random.PRNGKey(int(seed))
 
@@ -402,11 +407,10 @@ def infer_amortized_fs2(
             x_samples = mean[None, ...]
             logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
         else:
-            x_samples, logq = model.encoder.sample_and_log_prob(
-                sample_key,
-                batch.features,
-                int(posterior_samples),
+            posterior = sample_posterior(
+                model, sample_key, batch.features, int(posterior_samples)
             )
+            x_samples, logq = posterior.x, posterior.logq
         theta = x_to_theta(x_samples, latent_spec)
         model_flux_raw = _model_flux_from_x_sample_chunks(
             x_samples,
@@ -433,9 +437,7 @@ def infer_amortized_fs2(
             else model_flux
         )
         logprior = (
-            jnp.zeros_like(logq)
-            if deterministic_reconstruction
-            else model.prior.log_prob(x_samples)
+            jnp.zeros_like(logq) if deterministic_reconstruction else posterior.logprior
         )
         loglike = photometric_loglike(
             obs_flux=batch.flux,
@@ -668,6 +670,7 @@ def infer_amortized_fs2(
             latent_spec.names,
             alpha_sed=alpha_sed,
             summary=False,
+            batch_size=int(prior_predictive_batch_size),
         ),
         log_alpha_sed=log_alpha_sed,
         alpha_sed=alpha_sed,
@@ -735,6 +738,10 @@ def infer_amortized_fs2(
         index=False,
     )
     write_json(out / "normalized_config.json", config)
+    write_json(
+        out / "effective_latent_spec.json",
+        _effective_latent_spec_payload(latent_spec, config),
+    )
     global_sed_scale_payload = alpha_metadata(
         log_alpha_sed,
         scale_cfg.prior_sigma_log_alpha,
@@ -855,6 +862,38 @@ def infer_amortized_fs2(
     if verbose:
         print("[amortized] inference complete")
         print(f"[amortized] summary: {out / 'inference_summary.json'}")
+
+
+def _effective_latent_spec_payload(
+    latent_spec, config: dict[str, Any]
+) -> dict[str, Any]:
+    """Serialize the transform actually used by the encoder, prior, and DSPS."""
+    prior = (config.get("amortized", {}) or {}).get("prior", {}) or {}
+
+    def optional_array(value):
+        if value is None:
+            return None
+        return np.asarray(value).tolist()
+
+    return {
+        "names": list(latent_spec.names),
+        "normalization": str(latent_spec.normalization),
+        "lower": np.asarray(latent_spec.lower).tolist(),
+        "upper": np.asarray(latent_spec.upper).tolist(),
+        "raw_center": np.asarray(latent_spec.raw_center).tolist(),
+        "raw_scale": np.asarray(latent_spec.raw_scale).tolist(),
+        "transform_family": optional_array(latent_spec.transform_family),
+        "transform_location": optional_array(latent_spec.transform_location),
+        "transform_lambda": optional_array(latent_spec.transform_lambda),
+        "normalization_hash": latent_spec_hash(latent_spec),
+        "normalization_checkpoint": (
+            ((config.get("amortized", {}) or {}).get("latent", {}) or {}).get(
+                "normalization_checkpoint"
+            )
+        ),
+        "prior_source": str(prior.get("source", "")),
+        "prior_checkpoint": str(prior.get("checkpoint", "")),
+    }
 
 
 def finalize_amortized_inference(
@@ -1007,13 +1046,15 @@ def _discover_shard_records(out: Path) -> list[dict[str, Any]]:
             {
                 "batch": batch,
                 "metadata": paths["metadata"],
-                "counts": _inference_shard_row_counts(
-                    paths,
-                    write_posterior_predictive=paths["predictive"].exists(),
-                    write_residual_samples=paths["residuals"].exists(),
-                )
-                if _basic_shard_tables_exist(paths)
-                else {},
+                "counts": (
+                    _inference_shard_row_counts(
+                        paths,
+                        write_posterior_predictive=paths["predictive"].exists(),
+                        write_residual_samples=paths["residuals"].exists(),
+                    )
+                    if _basic_shard_tables_exist(paths)
+                    else {}
+                ),
                 "complete": _basic_shard_tables_exist(paths),
             }
         )
@@ -1045,8 +1086,7 @@ def _combine_inference_shard_tables(
     for name, (path_key, output_path, should_write) in table_specs.items():
         if verbose:
             print(
-                "[amortized] combine shards: "
-                f"table={name} write={bool(should_write)}"
+                f"[amortized] combine shards: table={name} write={bool(should_write)}"
             )
         paths = [
             _inference_shard_paths(out, int(record["batch"]))[path_key]
@@ -1056,17 +1096,11 @@ def _combine_inference_shard_tables(
         pieces = []
         total = len(existing)
         if verbose:
-            print(
-                "[amortized] combine shards: "
-                f"table={name} files={total}"
-            )
+            print(f"[amortized] combine shards: table={name} files={total}")
         for index, path in enumerate(existing, start=1):
             pieces.append(pd.read_parquet(path))
             if verbose and (index == 1 or index == total or index % 25 == 0):
-                print(
-                    "[amortized] combine shards: "
-                    f"table={name} read={index}/{total}"
-                )
+                print(f"[amortized] combine shards: table={name} read={index}/{total}")
         frame = pd.concat(pieces, ignore_index=True) if pieces else pd.DataFrame()
         frames[name] = frame
         if should_write and not frame.empty:
@@ -1169,22 +1203,22 @@ def _inference_shard_signature(
         **run_signature,
         "batch_index": int(batch_index),
         "batch_n_objects": int(object_id.shape[0]),
-        "batch_first_object_id": _jsonable_object_id(object_id[0])
-        if object_id.size
-        else None,
-        "batch_last_object_id": _jsonable_object_id(object_id[-1])
-        if object_id.size
-        else None,
+        "batch_first_object_id": (
+            _jsonable_object_id(object_id[0]) if object_id.size else None
+        ),
+        "batch_last_object_id": (
+            _jsonable_object_id(object_id[-1]) if object_id.size else None
+        ),
         "batch_object_id_digest": _object_id_digest(object_id),
-        "batch_first_row_index": int(row_index[0])
-        if row_index is not None and row_index.size
-        else None,
-        "batch_last_row_index": int(row_index[-1])
-        if row_index is not None and row_index.size
-        else None,
-        "batch_row_index_digest": _row_index_digest(row_index)
-        if row_index is not None
-        else None,
+        "batch_first_row_index": (
+            int(row_index[0]) if row_index is not None and row_index.size else None
+        ),
+        "batch_last_row_index": (
+            int(row_index[-1]) if row_index is not None and row_index.size else None
+        ),
+        "batch_row_index_digest": (
+            _row_index_digest(row_index) if row_index is not None else None
+        ),
     }
 
 
@@ -1360,10 +1394,32 @@ def _derived_columns_from_theta(
     *,
     alpha_sed: float,
     summary: bool,
+    batch_size: int | None = None,
 ) -> dict[str, np.ndarray]:
     theta = np.asarray(theta, dtype=float)
     if theta.size == 0:
         return {}
+    if batch_size is not None:
+        batch_size = int(batch_size)
+        if batch_size <= 0:
+            raise ValueError("derived batch_size must be positive")
+        if len(theta) > batch_size:
+            chunks = [
+                _derived_columns_from_theta(
+                    context,
+                    model_args,
+                    theta[start : start + batch_size],
+                    parameter_names,
+                    alpha_sed=alpha_sed,
+                    summary=summary,
+                    batch_size=None,
+                )
+                for start in range(0, len(theta), batch_size)
+            ]
+            return {
+                name: np.concatenate([chunk[name] for chunk in chunks])
+                for name in chunks[0]
+            }
     derived_values = np.asarray(
         jax.device_get(
             derived_from_theta_matrix_jax(

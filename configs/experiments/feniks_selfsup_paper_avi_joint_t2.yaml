@@ -1,0 +1,19 @@
+extends: feniks_joint_prior_ind_joint.yaml
+
+amortized:
+  latent:
+    normalization: spline15d_checkpoint
+    normalization_checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx
+  likelihood:
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+  training:
+    seed: 260726
+    validation_every: 8
+    best_checkpoint_min_epoch: 20
+  inference:
+    write_posterior_predictive: true
+    write_residual_samples: false
+    combine_sample_shards: false

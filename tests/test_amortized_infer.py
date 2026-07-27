@@ -88,6 +88,33 @@ def test_posterior_predictive_chi2_is_finite_for_tiny_fluxes() -> None:
     assert np.isfinite(chi2).all()
 
 
+def test_derived_columns_from_theta_are_chunked(monkeypatch) -> None:
+    calls = []
+
+    def fake_derived(context, model_args, theta, parameter_names):
+        del context, model_args, parameter_names
+        calls.append(int(theta.shape[0]))
+        return jnp.ones(
+            (theta.shape[0], len(infer_mod.DERIVED_QUANTITY_NAMES)),
+            dtype=jnp.float32,
+        )
+
+    monkeypatch.setattr(infer_mod, "derived_from_theta_matrix_jax", fake_derived)
+    theta = np.ones((5, 2), dtype=np.float32)
+    columns = infer_mod._derived_columns_from_theta(
+        None,
+        None,
+        theta,
+        ("log10_stellar_mass", "other"),
+        alpha_sed=1.0,
+        summary=False,
+        batch_size=2,
+    )
+
+    assert calls == [2, 2, 1]
+    assert all(len(values) == 5 for values in columns.values())
+
+
 def test_combine_inference_shard_tables_writes_dense_outputs(tmp_path) -> None:
     out = tmp_path
     for directory in infer_mod._inference_shard_dirs(out).values():

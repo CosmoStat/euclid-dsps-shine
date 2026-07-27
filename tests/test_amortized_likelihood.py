@@ -42,3 +42,40 @@ def test_mask_and_gradients_are_finite() -> None:
 
     assert jnp.all(jnp.isfinite(grad))
     assert grad[0, 0, 1] == 0.0
+
+
+def test_nonfinite_model_in_observed_band_rejects_particle() -> None:
+    obs = jnp.asarray([[1.0, 2.0]], dtype=jnp.float32)
+    err = jnp.asarray([[0.1, 0.2]], dtype=jnp.float32)
+    mask = jnp.asarray([[True, True]])
+    model = jnp.asarray([[[1.0, jnp.nan]]], dtype=jnp.float32)
+
+    loglike = photometric_loglike(
+        obs,
+        model,
+        err,
+        mask,
+        likelihood_type="gaussian",
+        error_floor_frac=0.0,
+    )
+
+    assert loglike.shape == (1, 1)
+    assert jnp.isneginf(loglike[0, 0])
+
+
+def test_nonfinite_model_in_masked_band_is_ignored() -> None:
+    obs = jnp.asarray([[1.0, 2.0]], dtype=jnp.float32)
+    err = jnp.asarray([[0.1, 0.2]], dtype=jnp.float32)
+    mask = jnp.asarray([[True, False]])
+    model = jnp.asarray([[[1.0, jnp.nan]]], dtype=jnp.float32)
+
+    loglike = photometric_loglike(
+        obs,
+        model,
+        err,
+        mask,
+        likelihood_type="gaussian",
+        error_floor_frac=0.0,
+    )
+
+    assert jnp.isfinite(loglike[0, 0])

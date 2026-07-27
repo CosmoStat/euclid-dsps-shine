@@ -118,9 +118,7 @@ def test_model_mags_from_theta_matrix_supplies_fixed_parameters(monkeypatch) -> 
 
     def fake_model_mags(context, model_args, params):
         del context, model_args
-        return jnp.asarray(
-            [params["free_a"] + params["fixed_only"]], dtype=jnp.float32
-        )
+        return jnp.asarray([params["free_a"] + params["fixed_only"]], dtype=jnp.float32)
 
     monkeypatch.setattr(vectors, "model_mags_jax_dynamic", fake_model_mags)
     context = SimpleNamespace(model_config={"fixed_parameters": {"fixed_only": 3.0}})

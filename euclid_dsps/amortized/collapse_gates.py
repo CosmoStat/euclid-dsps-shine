@@ -188,27 +188,58 @@ def _add_prior_population_checks(out: Path, checks: list[dict[str, Any]]) -> Non
     frame = pd.read_csv(path)
     if frame.empty or "parameter" not in frame:
         return
-    for param, warn, fail in (
-        ("z_obs", 0.10, 0.20),
-        ("log10_stellar_mass", 0.50, 1.00),
-    ):
-        row = frame.loc[frame["parameter"] == param]
-        if row.empty:
-            continue
-        for col in ("quantile_l1", "median_delta"):
-            if col in row:
-                value = float(abs(row.iloc[0][col]))
-                if not np.isfinite(value):
-                    continue
-                checks.append(
-                    _threshold(
-                        f"prior_{param}_{col}",
-                        value,
-                        warn=warn,
-                        fail=fail,
-                        lower_is_better=True,
-                    )
+    for row in frame.itertuples(index=False):
+        param = str(row.parameter)
+        for col in ("quantile_l1_iqr", "median_delta_iqr"):
+            if not hasattr(row, col):
+                continue
+            value = float(abs(getattr(row, col)))
+            if not np.isfinite(value):
+                continue
+            checks.append(
+                _threshold(
+                    f"prior_{param}_{col}",
+                    value,
+                    warn=0.25,
+                    fail=0.50,
+                    lower_is_better=True,
                 )
+            )
+    expected_parameters = 15
+    checks.append(
+        _check(
+            "prior_native_marginals_complete",
+            "PASS" if frame.parameter.nunique() >= expected_parameters else "FAIL",
+            value=int(frame.parameter.nunique()),
+            threshold=expected_parameters,
+        )
+    )
+    correlation_path = out / "prior_vs_truth_correlations.csv"
+    if correlation_path.exists():
+        correlations = pd.read_csv(correlation_path)
+        delta = pd.to_numeric(correlations.get("abs_delta"), errors="coerce")
+        finite = delta[np.isfinite(delta)]
+        if not finite.empty:
+            checks.append(
+                _threshold(
+                    "prior_15d_spearman_mean_abs_delta",
+                    float(finite.mean()),
+                    warn=0.15,
+                    fail=0.30,
+                    lower_is_better=True,
+                )
+            )
+            checks.append(
+                _threshold(
+                    "prior_15d_spearman_q90_abs_delta",
+                    float(finite.quantile(0.90)),
+                    warn=0.30,
+                    fail=0.55,
+                    lower_is_better=True,
+                )
+            )
+    else:
+        checks.append(_check("prior_15d_correlations_exist", "FAIL"))
 
 
 def _add_training_log_checks(log: pd.DataFrame, checks: list[dict[str, Any]]) -> None:
@@ -232,9 +263,19 @@ def _add_training_log_checks(log: pd.DataFrame, checks: list[dict[str, Any]]) ->
             )
         )
     if "encoder_grad_norm" in log:
-        values = pd.to_numeric(log["encoder_grad_norm"], errors="coerce").to_numpy(
-            float
-        )
+        gradient_rows = log
+        if "split" in gradient_rows:
+            gradient_rows = gradient_rows.loc[
+                gradient_rows["split"].astype(str).str.lower() == "train"
+            ]
+        if "update_applied" in gradient_rows:
+            applied = pd.to_numeric(
+                gradient_rows["update_applied"], errors="coerce"
+            ).fillna(0.0)
+            gradient_rows = gradient_rows.loc[applied > 0.0]
+        values = pd.to_numeric(
+            gradient_rows["encoder_grad_norm"], errors="coerce"
+        ).to_numpy(float)
         latest = values[np.isfinite(values)]
         if latest.size:
             checks.append(

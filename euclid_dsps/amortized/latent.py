@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,9 @@ class LatentSpec:
     raw_center: jnp.ndarray | None = None
     raw_scale: jnp.ndarray | None = None
     normalization: str = "identity"
+    transform_family: jnp.ndarray | None = None
+    transform_location: jnp.ndarray | None = None
+    transform_lambda: jnp.ndarray | None = None
 
 
 def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
@@ -45,6 +50,7 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         "diffsky_dsps_closure_full",
         "diffsky_hltds_prior_v1",
         "diffsky_truth_basic",
+        "feniks_spline15d",
     }:
         names = configured_names
         if not names:
@@ -57,7 +63,8 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         raise ValueError(
             "Unsupported amortized latent schema. Use 'popcosmos_16', "
             "'config_free_parameters', 'diffsky_dsps_closure_full', "
-            "'diffsky_hltds_prior_v1', or 'diffsky_truth_basic'."
+            "'diffsky_hltds_prior_v1', 'diffsky_truth_basic', or "
+            "'feniks_spline15d'."
         )
     lower, upper = free_parameter_bounds_from_config(config, names)
     raw_center, raw_scale, normalization = _latent_normalization_from_config(
@@ -79,6 +86,14 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
 def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map network latent ``x`` to bounded physical ``theta``."""
     x = _validate_last_dim(jnp.asarray(x, dtype=jnp.float32), spec)
+    if str(spec.normalization) == "spline15d_mixed":
+        raw = network_x_to_raw_x(x, spec)
+        family = _spline15d_transform_family(spec)
+        location = _spline15d_transform_location(spec)
+        lam = _spline15d_transform_lambda(spec)
+        shifted = location + lam * jnp.sinh(raw)
+        logged = jnp.exp(jnp.clip(raw, -30.0, 30.0))
+        return jnp.where(family == 1, logged, shifted)
     raw_x = network_x_to_raw_x(x, spec)
     theta = spec.lower + (spec.upper - spec.lower) * jax.nn.sigmoid(raw_x)
     constraint = _gas_metallicity_indices(spec.names)
@@ -99,6 +114,14 @@ def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
 def theta_to_x(theta: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map bounded physical ``theta`` to network latent ``x``."""
     theta = _validate_last_dim(jnp.asarray(theta, dtype=jnp.float32), spec)
+    if str(spec.normalization) == "spline15d_mixed":
+        family = _spline15d_transform_family(spec)
+        location = _spline15d_transform_location(spec)
+        lam = _spline15d_transform_lambda(spec)
+        shifted_raw = jnp.arcsinh((theta - location) / lam)
+        log_raw = jnp.log(jnp.maximum(theta, 1.0e-30))
+        raw = jnp.where(family == 1, log_raw, shifted_raw)
+        return raw_x_to_network_x(raw, spec)
     eps = jnp.asarray(1.0e-6, dtype=theta.dtype)
     scaled = _safe_unit_interval((theta - spec.lower) / (spec.upper - spec.lower), eps)
     raw_x = _logit(scaled)
@@ -181,7 +204,46 @@ def latent_spec_to_jsonable(spec: LatentSpec) -> dict[str, Any]:
         "raw_center": np.asarray(_latent_center(spec)).astype(float).tolist(),
         "raw_scale": np.asarray(_latent_scale(spec)).astype(float).tolist(),
         "normalization": str(spec.normalization),
+        "transform_family": _optional_array_to_list(spec.transform_family),
+        "transform_location": _optional_array_to_list(spec.transform_location),
+        "transform_lambda": _optional_array_to_list(spec.transform_lambda),
     }
+
+
+def latent_spec_hash(spec: LatentSpec) -> str:
+    """Return a stable hash for the complete physical-to-network transform."""
+    payload = latent_spec_to_jsonable(spec)
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _optional_array_to_list(value: jnp.ndarray | None) -> list[float] | None:
+    if value is None:
+        return None
+    return np.asarray(value).astype(float).tolist()
+
+
+def _spline15d_transform_family(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_family is None:
+        raise ValueError("spline15d_mixed requires transform_family")
+    return jnp.asarray(spec.transform_family, dtype=jnp.int32)
+
+
+def _spline15d_transform_location(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_location is None:
+        raise ValueError("spline15d_mixed requires transform_location")
+    return jnp.asarray(spec.transform_location, dtype=jnp.float32)
+
+
+def _spline15d_transform_lambda(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_lambda is None:
+        raise ValueError("spline15d_mixed requires transform_lambda")
+    return jnp.maximum(jnp.asarray(spec.transform_lambda, dtype=jnp.float32), 1.0e-12)
 
 
 def _latent_center(spec: LatentSpec) -> jnp.ndarray:
@@ -204,11 +266,16 @@ def _latent_normalization_from_config(
 ) -> tuple[np.ndarray, np.ndarray, str]:
     latent = (config.get("amortized", {}) or {}).get("latent", {}) or {}
     mode = str(latent.get("normalization", latent.get("transform", "identity"))).lower()
-    if mode in {"identity", "none", "raw_logit"}:
-        return np.zeros(len(names), dtype=float), np.ones(len(names), dtype=float), "identity"
+    if mode in {"identity", "none", "raw_logit", "spline15d_checkpoint"}:
+        return (
+            np.zeros(len(names), dtype=float),
+            np.ones(len(names), dtype=float),
+            "identity",
+        )
     if mode not in {"standardized_logit", "standardized", "centered_logit"}:
         raise ValueError(
-            "amortized.latent.normalization must be 'identity' or 'standardized_logit'"
+            "amortized.latent.normalization must be 'identity', "
+            "'standardized_logit', or 'spline15d_checkpoint'"
         )
     theta0 = latent_center_theta_from_config(config, names, lower, upper)
     span = np.maximum(upper - lower, 1.0e-12)
@@ -374,14 +441,14 @@ def latent_prior_geometry_frame(
         "center_source": center_source,
         "parameter_names": list(spec.names),
         "max_frac_within_either_5pct": float(
-            frame["frac_within_either_5pct"].max()
-            if not frame.empty
-            else float("nan")
+            frame["frac_within_either_5pct"].max() if not frame.empty else float("nan")
         ),
         "parameters_near_bounds_5pct": frame.loc[
             frame["frac_within_either_5pct"] > 0.05,
             "parameter",
-        ].astype(str).tolist(),
+        ]
+        .astype(str)
+        .tolist(),
     }
     return frame, payload
 

@@ -55,10 +55,14 @@ def rank_candidate_files(files: list[RemoteFile]) -> pd.DataFrame:
     frame = pd.DataFrame([classify_remote_file(item) for item in files])
     if frame.empty:
         return frame
-    return frame.sort_values(["score", "size_bytes"], ascending=[False, True], na_position="last")
+    return frame.sort_values(
+        ["score", "size_bytes"], ascending=[False, True], na_position="last"
+    )
 
 
-def write_candidate_report(frame: pd.DataFrame, csv_path: str | Path) -> tuple[Path, Path]:
+def write_candidate_report(
+    frame: pd.DataFrame, csv_path: str | Path
+) -> tuple[Path, Path]:
     csv_out = Path(csv_path)
     csv_out.parent.mkdir(parents=True, exist_ok=True)
     frame.to_csv(csv_out, index=False)
@@ -84,7 +88,9 @@ def write_candidate_report(frame: pd.DataFrame, csv_path: str | Path) -> tuple[P
     return csv_out, md_out
 
 
-def inventory_remote_listing(listing_path: str | Path, out_csv: str | Path) -> pd.DataFrame:
+def inventory_remote_listing(
+    listing_path: str | Path, out_csv: str | Path
+) -> pd.DataFrame:
     files = load_remote_listing(listing_path)
     frame = rank_candidate_files(files)
     write_candidate_report(frame, out_csv)
@@ -127,11 +133,7 @@ def _write_local_inventory_markdown(report: dict[str, Any], path: Path) -> None:
         "",
     ]
     for item in report["files"]:
-        interesting = [
-            d["name"]
-            for d in item["datasets"]
-            if d.get("interesting")
-        ][:40]
+        interesting = [d["name"] for d in item["datasets"] if d.get("interesting")][:40]
         lines.extend(
             [
                 f"### `{Path(item['path']).name}`",
@@ -150,7 +152,10 @@ def _markdown_table(frame: pd.DataFrame) -> str:
     if frame.empty:
         return "_No rows._"
     cols = list(frame.columns)
-    rows = ["| " + " | ".join(cols) + " |", "| " + " | ".join(["---"] * len(cols)) + " |"]
+    rows = [
+        "| " + " | ".join(cols) + " |",
+        "| " + " | ".join(["---"] * len(cols)) + " |",
+    ]
     for _, row in frame.iterrows():
         rows.append("| " + " | ".join(_markdown_cell(row[col]) for col in cols) + " |")
     return "\n".join(rows)

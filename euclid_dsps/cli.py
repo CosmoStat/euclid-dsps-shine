@@ -26,7 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
             "{download-assets,check,fit,posterior,"
             "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
             "amortized-train-diffsky,amortized-infer-diffsky,"
-            "amortized-finalize-inference,diffsky-map-adam-prior,"
+            "amortized-finalize-inference,amortized-jacobian-lens-diffsky,"
+            "amortized-finalize-jacobian-lens,diffsky-map-adam-prior,"
             "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
             "diffsky-train-inferred-prior,"
             "diffsky-plan-prior-workflow,"
@@ -288,6 +289,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize.add_argument("--quiet", action="store_true")
 
+    jlens = sub.add_parser(
+        "amortized-jacobian-lens-diffsky",
+        help="Run Physical Jacobian Lens diagnostics for a trained Diffsky model.",
+    )
+    _add_amortized_jlens_arguments(jlens)
+
+    finalize_jlens = sub.add_parser(
+        "amortized-finalize-jacobian-lens",
+        help="Combine sharded Physical Jacobian Lens outputs and write plots.",
+    )
+    finalize_jlens.add_argument("--out", required=True, help="J-lens output directory.")
+    finalize_jlens.add_argument("--quiet", action="store_true")
+
     map_prior = sub.add_parser(
         "diffsky-map-adam-prior",
         help="Fit free-redshift MAP DSPS estimates under a learned RealNVP prior.",
@@ -354,6 +368,11 @@ def build_parser() -> argparse.ArgumentParser:
     train_prior.add_argument("--batch-size", type=int)
     train_prior.add_argument("--epochs", type=int)
     train_prior.add_argument("--seed", type=int)
+    train_prior.add_argument(
+        "--data-parallel",
+        choices=["single", "auto", "pmap"],
+        help="Override prior_learning.training.data_parallel.",
+    )
     train_prior.add_argument("--validation-fraction", type=float)
     train_prior.add_argument(
         "--missing-policy",
@@ -562,12 +581,31 @@ def _add_amortized_train_arguments(
     *,
     default_out: str,
 ) -> None:
+    parser.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime for training or local smoke tests.",
+    )
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
     parser.add_argument("--epochs", type=int)
+    parser.add_argument(
+        "--initial-checkpoint",
+        help=(
+            "Warm-start the model from an amortized checkpoint. The optimizer "
+            "state is reinitialized."
+        ),
+    )
+    parser.add_argument(
+        "--start-epoch",
+        type=int,
+        default=1,
+        help="First epoch number to run when warm-starting (default: 1).",
+    )
     parser.add_argument("--n-samples", type=int)
     parser.add_argument("--seed", type=int)
     parser.add_argument("--row-indices-file")
@@ -609,18 +647,47 @@ def _add_amortized_train_arguments(
         help="Override amortized.training.best_checkpoint_min_epoch.",
     )
     parser.add_argument(
+        "--data-parallel",
+        choices=["single", "auto", "pmap"],
+        help="Override amortized.training.data_parallel.",
+    )
+    parser.add_argument(
         "--prior-freeze-epochs",
         type=int,
         help="Freeze RealNVP prior gradients for this many initial epochs.",
     )
     parser.add_argument(
         "--prior-update-schedule",
-        choices=["joint", "delayed_joint", "alternating", "encoder_then_prior"],
+        choices=[
+            "joint",
+            "delayed_joint",
+            "alternating",
+            "variational_em",
+            "encoder_then_prior",
+        ],
         help="Override amortized.prior.update_schedule.",
+    )
+    parser.add_argument(
+        "--prior-update-every-epochs",
+        type=int,
+        help=(
+            "Encoder epochs per prior epoch for variational_em, or phase length "
+            "for alternating updates."
+        ),
     )
     parser.add_argument(
         "--prior-checkpoint",
         help="Override amortized.prior.checkpoint.",
+    )
+    parser.add_argument(
+        "--wake-start-encoder-epoch",
+        type=int,
+        help="Override the first encoder epoch using a periodic wake update.",
+    )
+    parser.add_argument(
+        "--wake-every-encoder-epochs",
+        type=int,
+        help="Override the number of encoder epochs between wake updates.",
     )
     parser.add_argument(
         "--likelihood-temperature-initial",
@@ -674,6 +741,10 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--prior-checkpoint",
+        help="Override the frozen flow checkpoint used to rebuild the model template.",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
@@ -745,6 +816,61 @@ def _add_amortized_infer_shard_arguments(parser: argparse.ArgumentParser) -> Non
     )
 
 
+def _add_amortized_jlens_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--out", default="outputs/runs/dev_amortized_diffsky_jlens")
+    parser.add_argument("--dataset", help="Override config catalog_path.")
+    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument("--feature-stats")
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--row-indices-file")
+    parser.add_argument(
+        "--selection-mode",
+        choices=["sequential", "random", "stratified_redshift"],
+        default="sequential",
+    )
+    parser.add_argument(
+        "--stratified-strategy",
+        choices=["balanced", "proportional"],
+        default="balanced",
+    )
+    parser.add_argument("--selection-seed", type=int, default=260617)
+    parser.add_argument(
+        "--mode",
+        choices=["decoder", "autoencoder", "both"],
+        default="decoder",
+    )
+    parser.add_argument("--posterior-point", choices=["mean", "median"], default="mean")
+    parser.add_argument(
+        "--posterior-samples",
+        type=int,
+        default=128,
+        help="Fully transformed posterior samples used for the Lens point and covariance.",
+    )
+    parser.add_argument("--posterior-seed", type=int, default=260722)
+    parser.add_argument("--max-objects", type=int)
+    parser.add_argument("--direction-top-k", type=int, default=5)
+    parser.add_argument(
+        "--include-prior-score",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--include-ae-lens",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Skip this shard when complete J-lens outputs already exist.",
+    )
+    parser.add_argument("--quiet", action="store_true")
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     config_backed_diffsky_commands = {
@@ -793,9 +919,18 @@ def main(argv: list[str] | None = None) -> None:
             "disable_jax_plugin_autoload": True,
             "require_gpu": False,
         }
-    if args.command == "diffsky-validate-dsps-closure" and getattr(
-        args, "runtime", "config"
-    ) != "config":
+    if (
+        args.command == "diffsky-validate-dsps-closure"
+        and getattr(args, "runtime", "config") != "config"
+    ):
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
+        }
+    if (
+        args.command.startswith("amortized-train-")
+        and getattr(args, "runtime", "config") != "config"
+    ):
         runtime_config = {
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
@@ -819,6 +954,12 @@ def main(argv: list[str] | None = None) -> None:
         return
     if args.command == "amortized-finalize-inference":
         _run_amortized_finalize_inference(config, args)
+        return
+    if args.command == "amortized-jacobian-lens-diffsky":
+        _run_amortized_jacobian_lens(config, args)
+        return
+    if args.command == "amortized-finalize-jacobian-lens":
+        _run_amortized_finalize_jacobian_lens(config, args)
         return
     if args.command == "diffsky-map-adam-prior":
         _run_diffsky_map_adam_prior(config, args)
@@ -987,6 +1128,8 @@ def _run_amortized_train(
         row_indices_file=getattr(args, "row_indices_file", None),
         train_indices_file=getattr(args, "train_indices_file", None),
         validation_indices_file=getattr(args, "validation_indices_file", None),
+        initial_checkpoint=getattr(args, "initial_checkpoint", None),
+        start_epoch=int(getattr(args, "start_epoch", 1)),
     )
 
 
@@ -998,6 +1141,15 @@ def _run_diffsky_train_supervised_prior(config: dict, args) -> None:
 
     cfg = prior_learning_config(config)
     training = cfg["training"]
+    if getattr(args, "data_parallel", None) is not None:
+        config = dict(config)
+        prior_learning = dict(config.get("prior_learning", {}) or {})
+        prior_training = dict(prior_learning.get("training", {}) or {})
+        prior_training["data_parallel"] = str(args.data_parallel)
+        prior_learning["training"] = prior_training
+        config["prior_learning"] = prior_learning
+        cfg = prior_learning_config(config)
+        training = cfg["training"]
     train_supervised_prior(
         config,
         Path(args.out),
@@ -1177,6 +1329,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     data = dict(amortized.get("data", {}) or {})
     training = dict(amortized.get("training", {}) or {})
     prior = dict(amortized.get("prior", {}) or {})
+    objective = dict(amortized.get("objective", {}) or {})
+    wake = dict(objective.get("wake", {}) or {})
     posterior_regularization = dict(amortized.get("posterior_regularization", {}) or {})
     input_noise = dict(amortized.get("input_noise", {}) or {})
     if args.selection_mode is not None:
@@ -1195,12 +1349,26 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         training["validation_every"] = int(args.validation_every)
     if getattr(args, "best_checkpoint_min_epoch", None) is not None:
         training["best_checkpoint_min_epoch"] = int(args.best_checkpoint_min_epoch)
+    if getattr(args, "data_parallel", None) is not None:
+        training["data_parallel"] = str(args.data_parallel)
     if getattr(args, "prior_freeze_epochs", None) is not None:
         prior["freeze_epochs"] = int(args.prior_freeze_epochs)
     if getattr(args, "prior_update_schedule", None) is not None:
         prior["update_schedule"] = str(args.prior_update_schedule)
+    if getattr(args, "prior_update_every_epochs", None) is not None:
+        if int(args.prior_update_every_epochs) < 1:
+            raise ValueError("--prior-update-every-epochs must be >= 1")
+        prior["update_every_epochs"] = int(args.prior_update_every_epochs)
     if getattr(args, "prior_checkpoint", None) is not None:
         prior["checkpoint"] = str(args.prior_checkpoint)
+    if getattr(args, "wake_start_encoder_epoch", None) is not None:
+        if int(args.wake_start_encoder_epoch) < 1:
+            raise ValueError("--wake-start-encoder-epoch must be >= 1")
+        wake["start_encoder_epoch"] = int(args.wake_start_encoder_epoch)
+    if getattr(args, "wake_every_encoder_epochs", None) is not None:
+        if int(args.wake_every_encoder_epochs) < 1:
+            raise ValueError("--wake-every-encoder-epochs must be >= 1")
+        wake["every_encoder_epochs"] = int(args.wake_every_encoder_epochs)
     if getattr(args, "likelihood_temperature_initial", None) is not None:
         training["likelihood_temperature_initial"] = float(
             args.likelihood_temperature_initial
@@ -1232,6 +1400,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     amortized["data"] = data
     amortized["training"] = training
     amortized["prior"] = prior
+    objective["wake"] = wake
+    amortized["objective"] = objective
     if posterior_regularization:
         amortized["posterior_regularization"] = posterior_regularization
     if input_noise:
@@ -1255,6 +1425,13 @@ def _run_amortized_infer(
     if getattr(args, "dataset", None):
         config = dict(config)
         config["catalog_path"] = str(args.dataset)
+    if getattr(args, "prior_checkpoint", None):
+        config = dict(config)
+        amortized = dict(config.get("amortized", {}) or {})
+        prior = dict(amortized.get("prior", {}) or {})
+        prior["checkpoint"] = str(args.prior_checkpoint)
+        amortized["prior"] = prior
+        config["amortized"] = amortized
     if getattr(args, "jax_batch_size", None) is not None:
         config = dict(config)
         amortized = dict(config.get("amortized", {}) or {})
@@ -1326,6 +1503,59 @@ def _run_amortized_finalize_inference(config: dict, args) -> None:
         f"{payload['n_processed']}/{payload['expected_selected_rows']} objects "
         f"complete={payload['complete']}"
     )
+
+
+def _run_amortized_jacobian_lens(config: dict, args) -> None:
+    try:
+        from .amortized.jacobian_lens import run_jacobian_lens_diffsky
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    if getattr(args, "dataset", None):
+        config = dict(config)
+        config["catalog_path"] = str(args.dataset)
+    payload = run_jacobian_lens_diffsky(
+        config,
+        Path(args.out),
+        checkpoint=Path(args.checkpoint),
+        feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
+        limit=args.limit,
+        batch_size=int(args.batch_size),
+        row_indices_file=getattr(args, "row_indices_file", None),
+        selection_mode=str(args.selection_mode),
+        stratified_strategy=str(args.stratified_strategy),
+        selection_seed=int(args.selection_seed),
+        mode=str(args.mode),
+        posterior_point=str(args.posterior_point),
+        posterior_samples=int(args.posterior_samples),
+        posterior_seed=int(args.posterior_seed),
+        max_objects=args.max_objects,
+        direction_top_k=int(args.direction_top_k),
+        include_prior_score=bool(args.include_prior_score),
+        include_ae_lens=bool(args.include_ae_lens),
+        shard_index=int(args.shard_index),
+        num_shards=int(args.num_shards),
+        resume=bool(args.resume),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(
+        "[jlens] wrote "
+        f"{payload.get('n_objects', 0)} objects -> {payload.get('shard_dir')}"
+    )
+
+
+def _run_amortized_finalize_jacobian_lens(config: dict, args) -> None:
+    del config
+    try:
+        from .amortized.jacobian_lens import finalize_jacobian_lens
+    except ImportError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    payload = finalize_jacobian_lens(
+        Path(args.out),
+        verbose=not bool(getattr(args, "quiet", False)),
+    )
+    print(f"[jlens] finalized {payload.get('n_objects', 0)} objects -> {args.out}")
 
 
 def _run_diffsky_map_adam_prior(config: dict, args) -> None:

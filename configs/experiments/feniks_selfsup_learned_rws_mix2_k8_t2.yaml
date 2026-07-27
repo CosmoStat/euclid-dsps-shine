@@ -1,0 +1,6 @@
+extends: feniks_selfsup_learned_t2_common.yaml
+
+amortized:
+  encoder:
+    # Exact two-component base followed by the shared conditional RealNVP.
+    base_components: 2

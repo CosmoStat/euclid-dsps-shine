@@ -235,9 +235,7 @@ def compute_curve_scale(dense: h5py.Dataset, normalization: str) -> np.ndarray:
     flat = scale.reshape(-1)
     for start, stop, block in iter_dense_curve_blocks(dense):
         if normalization == "l2":
-            values = np.sqrt(
-                np.mean(np.asarray(block, dtype=np.float64) ** 2, axis=1)
-            )
+            values = np.sqrt(np.mean(np.asarray(block, dtype=np.float64) ** 2, axis=1))
         elif normalization == "max":
             values = np.max(np.abs(block), axis=1)
         else:  # pragma: no cover - argparse constrains this

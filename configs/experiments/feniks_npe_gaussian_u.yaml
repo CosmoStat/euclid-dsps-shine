@@ -1,0 +1,5 @@
+extends: feniks_conditional_posterior_common.yaml
+amortized:
+  objective: {mode: neural_posterior_estimation}
+  encoder: {type: prior_transport_gaussian}
+  training: {epochs: 200, learning_rate: 3.0e-4, kl_annealing_epochs: 0, kl_weight_max: 0.0}

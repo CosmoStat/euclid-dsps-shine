@@ -1,0 +1,20 @@
+extends: feniks_selfsup_rws_common.yaml
+
+amortized:
+  prior:
+    source: joint_realnvp
+    train_jointly: true
+    n_layers: 8
+    hidden_size: 128
+    scale_clamp: 0.05
+    shift_clamp: 5.0
+    permutation: roll
+    init: identity
+    init_scale: 0.0
+    update_schedule: joint
+    mstep_only: false
+  objective:
+    wake:
+      start_encoder_epoch: 1
+      every_encoder_epochs: 1
+      train_prior: true

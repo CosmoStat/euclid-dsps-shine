@@ -1,0 +1,9 @@
+extends: feniks_selfsup_learned_rws_k4_gaussian.yaml
+
+amortized:
+  objective:
+    wake:
+      start_encoder_epoch: 4
+      every_encoder_epochs: 4
+      n_particles: 4
+      n_tempered_particles: 1

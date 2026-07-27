@@ -1,0 +1,7 @@
+extends: amortized_feniks_spline15d_18band_gpu.yaml
+
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized/train.parquet
+
+amortized:
+  prior:
+    checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx

@@ -142,7 +142,9 @@ def load_synthetic_diffsky_config(
             _runtime_value(raw, "z_phot_table_size", 64, smoke=smoke)
         ),
         logmp_cutoff=float(raw.get("logmp_cutoff", 11.0)),
-        weighted_lc_photdata_kwargs=dict(raw.get("weighted_lc_photdata_kwargs", {}) or {}),
+        weighted_lc_photdata_kwargs=dict(
+            raw.get("weighted_lc_photdata_kwargs", {}) or {}
+        ),
         mc_lc_phot_kwargs=dict(raw.get("mc_lc_phot_kwargs", {}) or {}),
         metallicity_grid_policy=str(raw.get("metallicity_grid_policy", "fail")),
         stellar_metallicity_scatter_dex=float(
@@ -160,10 +162,14 @@ def load_synthetic_diffsky_config(
         min_ess_fraction=float(
             _runtime_value(raw, "min_ess_fraction", 2.0, smoke=smoke)
         ),
-        pool_size_factor=float(_runtime_value(raw, "pool_size_factor", 4.0, smoke=smoke)),
+        pool_size_factor=float(
+            _runtime_value(raw, "pool_size_factor", 4.0, smoke=smoke)
+        ),
         selection=selection,
         output_layers=output_layers,
-        flux_error_model=dict(raw.get("flux_error_model", default_m5_depth_error_model()) or {}),
+        flux_error_model=dict(
+            raw.get("flux_error_model", default_m5_depth_error_model()) or {}
+        ),
         splits=splits,
     )
 

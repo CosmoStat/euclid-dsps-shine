@@ -1,0 +1,6 @@
+parameter,posterior_finite_rows,posterior_available,truth_finite_rows,truth_available,prior_finite_rows,prior_available
+z_obs,128,True,1,True,4000,True
+log10_stellar_mass,128,True,1,True,4000,True
+log10_stellar_metallicity,128,True,1,True,4000,True
+dust_av,128,True,1,True,4000,True
+dust_delta,128,True,1,True,4000,True

@@ -14,13 +14,15 @@ experiment surface.
 | Install the package | `conda activate shine && python -m pip install -e .` |
 | Read the production runbook | `docs/source/production.rst` |
 | Generate the controlled dataset | `configs/diffsky_synthetic_feniks_260617_50k.yaml` |
+| Project Diffsky truth to spline 15D | `configs/feniks_spline15d_postprocess.yaml` |
+| Train the spline-15D RealNVP prior | `configs/prior_feniks_spline15d_realnvp.yaml` |
 | Validate same-parameter closure | `diffsky-validate-dsps-closure` on the generated FENIKS splits |
 | Train the supervised FENIKS prior | `configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml` |
 | Train NN+DSPS+NF inference | `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` |
 | Preflight the full ladder | `diffsky-plan-prior-workflow` |
 
 Full docs live under `docs/source/`; the most useful entry points are
-`production.rst`, `prior_learning.rst`, and `amortized_inference.rst`.
+`production.rst`, `spline15d_realnvp.rst`, and `amortized_inference.rst`.
 
 ## Production Configs
 
@@ -29,6 +31,8 @@ Full docs live under `docs/source/`; the most useful entry points are
 | `configs/diffsky_synthetic_feniks_260617_50k.yaml` | Generate the 40k/5k/5k Diffsky/FENIKS DSPS-closure splits. |
 | `configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml` | Generate the LSST+Euclid+Roman 18-band FENIKS comparison sample. |
 | `configs/prior_diffsky_synthetic_feniks_full_realnvp.yaml` | Train a supervised RealNVP prior on the full 18D closure truth vector. |
+| `configs/feniks_spline15d_postprocess.yaml` | Create exact/dequantized spline-15D splits from an existing Diffsky dataset. |
+| `configs/prior_feniks_spline15d_realnvp.yaml` | Fit train-only `asinh` normalization and train the 15D RealNVP. |
 | `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` | Train and infer with the 18D NN+DSPS model using the supervised FENIKS prior checkpoint. |
 
 Reference/debug configs:

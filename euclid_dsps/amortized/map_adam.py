@@ -701,6 +701,9 @@ def _jit_latent_spec(latent_spec) -> JitLatentSpec:
         raw_center=latent_spec.raw_center,
         raw_scale=latent_spec.raw_scale,
         normalization=latent_spec.normalization,
+        transform_family=latent_spec.transform_family,
+        transform_location=latent_spec.transform_location,
+        transform_lambda=latent_spec.transform_lambda,
     )
 
 
@@ -1111,12 +1114,8 @@ def _write_map_closure_metrics(out: Path, estimates: pd.DataFrame) -> None:
         s=10,
         alpha=0.55,
     )
-    lo = float(
-        np.nanmin([merged["redshift_true"].min(), merged[map_z_column].min()])
-    )
-    hi = float(
-        np.nanmax([merged["redshift_true"].max(), merged[map_z_column].max()])
-    )
+    lo = float(np.nanmin([merged["redshift_true"].min(), merged[map_z_column].min()]))
+    hi = float(np.nanmax([merged["redshift_true"].max(), merged[map_z_column].max()]))
     ax.plot([lo, hi], [lo, hi], color="black", lw=1.0, alpha=0.6)
     ax.set_xlabel("true redshift")
     ax.set_ylabel("MAP z_obs")

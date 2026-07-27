@@ -1,0 +1,28 @@
+spline15d_prior:
+  dataset_dir: Data/diffsky/synthetic/feniks_260617_spline15d
+  normalization:
+    family: asinh
+    log10_lambda_min: -8.0
+    log10_lambda_max: 8.0
+    grid_size: 257
+  flow:
+    type: realnvp
+    n_layers: 12
+    hidden_size: 256
+    scale_clamp: 0.05
+    shift_clamp: 5.0
+    init: identity
+    init_scale: 0.01
+  training:
+    epochs: 120
+    batch_size: 1024
+    learning_rate: 0.0005
+    weight_decay: 0.00001
+    gradient_clip_norm: 1.0
+    epoch_shuffle: true
+    data_parallel: auto
+    seed: 260715
+  output:
+    prior_samples: 50000
+    truth_sample_limit: 50000
+    max_corner_rows: 4000

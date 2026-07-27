@@ -1,0 +1,36 @@
+extends: feniks_mode_covering_common.yaml
+
+amortized:
+  likelihood:
+    # Exact closure contract: fluxerr already contains the configured 0.005 mag
+    # systematic term from the synthetic catalog generator.
+    type: gaussian
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+  objective:
+    mode: reweighted_wake_sleep
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sample_strategy: random
+    sleep:
+      enabled: true
+      error_model: m5_depth
+    wake:
+      start_encoder_epoch: 4
+      every_encoder_epochs: 4
+      n_particles: 4
+      n_tempered_particles: 1
+      base_temperature: 2.0
+      train_prior: false
+      prior_loss_weight: 1.0
+  training:
+    epochs: 120
+    n_samples: 1
+    # RWS validation decodes K posterior particles; spacing it also avoids the
+    # pinned-host-memory pattern seen in the old per-epoch AVI validation.
+    validation_every: 8
+    best_checkpoint_min_epoch: 20
+  output:
+    checkpoint_every: 4
+    diagnostics_every: 4

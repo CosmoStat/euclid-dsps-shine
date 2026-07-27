@@ -1,0 +1,5 @@
+extends: feniks_selfsup_learned_rws_k8_t2.yaml
+
+amortized:
+  training:
+    seed: 260723

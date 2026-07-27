@@ -30,13 +30,17 @@ class FspsGridError(RuntimeError):
     """User-facing failure while creating or validating FSPS grids."""
 
 
-def progress_bar(total: int, enabled: bool, desc: str, unit: str = "step") -> Any | None:
+def progress_bar(
+    total: int, enabled: bool, desc: str, unit: str = "step"
+) -> Any | None:
     if not enabled:
         return None
     try:
         from tqdm.auto import tqdm
     except ImportError:
-        print("tqdm is not installed; continuing without progress bar.", file=sys.stderr)
+        print(
+            "tqdm is not installed; continuing without progress bar.", file=sys.stderr
+        )
         return None
     return tqdm(total=total, desc=desc, unit=unit)
 
@@ -134,7 +138,9 @@ def discover_fsps_axes(sp: Any) -> dict[str, np.ndarray]:
     }
 
 
-def axes_from_reference_or_fsps(reference_ssp: str | Path | None, sp: Any) -> dict[str, np.ndarray]:
+def axes_from_reference_or_fsps(
+    reference_ssp: str | Path | None, sp: Any
+) -> dict[str, np.ndarray]:
     if reference_ssp:
         reference = Path(reference_ssp).expanduser()
         if reference.exists():
@@ -145,7 +151,9 @@ def axes_from_reference_or_fsps(reference_ssp: str | Path | None, sp: Any) -> di
 def assert_wave_matches(label: str, actual: np.ndarray, expected: np.ndarray) -> None:
     actual = np.asarray(actual, dtype=np.float32)
     expected = np.asarray(expected, dtype=np.float32)
-    if actual.shape != expected.shape or not np.allclose(actual, expected, rtol=0, atol=1.0e-4):
+    if actual.shape != expected.shape or not np.allclose(
+        actual, expected, rtol=0, atol=1.0e-4
+    ):
         raise FspsGridError(
             f"{label} wavelength grid does not match the target DSPS SSP axes. "
             "Use an FSPS build with matching libraries or pass a compatible "
@@ -169,7 +177,7 @@ def build_metallicity_plan(
     if mode in {"auto", "discrete"} and zlegend_values is not None:
         indices: list[int] = []
         for lgmet in ssp_lgmet:
-            target = float(10.0**float(lgmet))
+            target = float(10.0 ** float(lgmet))
             match_index = int(np.argmin(np.abs(zlegend_values - target)))
             if np.isclose(zlegend_values[match_index], target, rtol=2.0e-3, atol=0.0):
                 indices.append(match_index + 1)
@@ -445,10 +453,14 @@ def validate_gas_grid_with_model(
         },
     )
     if not skip_run:
-        result = run_dsps_model_jax(context, synthetic_popcosmos_params(include_agn=False))
+        result = run_dsps_model_jax(
+            context, synthetic_popcosmos_params(include_agn=False)
+        )
         mags = np.asarray(result.model_mags)
         if not np.all(np.isfinite(mags)):
-            raise FspsGridError("Synthetic gas-grid model validation produced non-finite magnitudes")
+            raise FspsGridError(
+                "Synthetic gas-grid model validation produced non-finite magnitudes"
+            )
 
 
 def validate_agn_grid_with_model(
@@ -490,10 +502,14 @@ def validate_agn_grid_with_model(
     if not skip_run:
         if progress is not None:
             progress.set_postfix(stage="forward")
-        result = run_dsps_model_jax(context, synthetic_popcosmos_params(include_agn=True))
+        result = run_dsps_model_jax(
+            context, synthetic_popcosmos_params(include_agn=True)
+        )
         mags = np.asarray(result.model_mags)
         if not np.all(np.isfinite(mags)):
-            raise FspsGridError("Synthetic AGN-grid model validation produced non-finite magnitudes")
+            raise FspsGridError(
+                "Synthetic AGN-grid model validation produced non-finite magnitudes"
+            )
         if progress is not None:
             progress.update(1)
 
@@ -559,11 +575,12 @@ def _validate_popcosmos_chabrier_attrs(handle: h5py.File, path: Path) -> None:
     if imf_errors:
         raise FspsGridError(
             "PopCosmos-like SSP metadata must consistently declare "
-            "imf_type=1 and imf_name='chabrier'; found "
-            + ", ".join(imf_errors)
+            "imf_type=1 and imf_name='chabrier'; found " + ", ".join(imf_errors)
         )
     z_sun = handle.attrs.get("z_sun")
-    if z_sun is None or not np.isclose(float(z_sun), POPCOSMOS_Z_SUN, rtol=0, atol=5.0e-6):
+    if z_sun is None or not np.isclose(
+        float(z_sun), POPCOSMOS_Z_SUN, rtol=0, atol=5.0e-6
+    ):
         raise FspsGridError(
             f"PopCosmos-like SSP metadata z_sun must be {POPCOSMOS_Z_SUN}"
         )

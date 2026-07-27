@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 
-from euclid_dsps.io import iter_catalog_batches, required_catalog_columns
+from euclid_dsps.io import (
+    iter_catalog_batches,
+    required_catalog_columns,
+    truth_column_from_spec,
+)
 from euclid_dsps.observation_arrays import (
     PhotometryArrays,
     photometry_arrays_from_dataframe,
@@ -28,6 +32,7 @@ class PhotometryBatch:
     mask: jnp.ndarray
     features: jnp.ndarray
     row_index: np.ndarray | None = None
+    truth_theta: jnp.ndarray | None = None
 
 
 def compute_feature_stats_from_config(
@@ -102,11 +107,13 @@ def iter_photometry_arrays_from_config(
         limit=limit,
         row_indices=row_index_set,
     ):
-        yield photometry_arrays_from_dataframe(
+        arrays = photometry_arrays_from_dataframe(
             frame,
             config["bands"],
             object_id_column=id_column,
         )
+        truth = _truth_arrays_from_frame(frame, config)
+        yield replace(arrays, truth=truth or None)
 
 
 def iter_fs2_photometry_arrays_from_config(
@@ -170,6 +177,7 @@ def load_photometry_arrays_from_config(
         flux_err=np.concatenate([chunk.flux_err for chunk in chunks], axis=0),
         mask=np.concatenate([chunk.mask for chunk in chunks], axis=0),
         band_names=chunks[0].band_names,
+        truth=_concatenate_truth(chunks),
     )
 
 
@@ -226,6 +234,7 @@ def iter_photometry_batches_from_arrays(
     batch_size: int,
     feature_stats: FeatureStats,
     order: np.ndarray | None = None,
+    truth_names: tuple[str, ...] | None = None,
 ) -> Iterator[PhotometryBatch]:
     """Yield JAX-ready batches from an in-memory photometry array block."""
     n_rows = int(arrays.flux.shape[0])
@@ -247,7 +256,74 @@ def iter_photometry_batches_from_arrays(
             mask=jnp.asarray(arrays.mask[idx]),
             features=features,
             row_index=np.asarray(_row_index_array(arrays)[idx], dtype=np.int64),
+            truth_theta=_truth_theta_batch(arrays, idx, truth_names),
         )
+
+
+def _truth_arrays_from_frame(frame, config: dict[str, Any]) -> dict[str, np.ndarray]:
+    truth_cfg = config.get("truth", {}) or {}
+    result: dict[str, np.ndarray] = {}
+    for name, spec in (truth_cfg.get("parameter_columns") or {}).items():
+        column = truth_column_from_spec(spec)
+        if column and column in frame:
+            result[str(name)] = _transform_truth_array(
+                frame[column].to_numpy(dtype=float), spec
+            )
+    return result
+
+
+def _transform_truth_array(values: np.ndarray, spec: Any) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    if not isinstance(spec, dict):
+        return values.astype(np.float32)
+    transform = spec.get("transform")
+    if transform == "log10":
+        positive = np.isfinite(values) & (values > 0.0)
+        transformed = np.full(values.shape, np.nan, dtype=float)
+        transformed[positive] = np.log10(values[positive])
+        values = transformed
+    elif transform == "log_stellar_mass_h2_to_msun":
+        h = float(spec.get("h", np.nan))
+        if not np.isfinite(h) or h <= 0.0:
+            raise ValueError("truth log_stellar_mass_h2_to_msun transform needs h > 0")
+        values = values + 2.0 * np.log10(h)
+    elif transform not in {None, "linear"}:
+        raise ValueError(f"Unsupported truth transform: {transform}")
+    values = values * float(spec.get("scale", 1.0))
+    values = values + float(spec.get("offset", 0.0))
+    return values.astype(np.float32)
+
+
+def _concatenate_truth(chunks: list[PhotometryArrays]) -> dict[str, np.ndarray] | None:
+    if not chunks or any(chunk.truth is None for chunk in chunks):
+        return None
+    names = tuple(chunks[0].truth or {})
+    if any(tuple(chunk.truth or {}) != names for chunk in chunks):
+        raise ValueError("Photometry truth columns differ across catalog chunks")
+    return {
+        name: np.concatenate([chunk.truth[name] for chunk in chunks], axis=0)
+        for name in names
+    }
+
+
+def _truth_theta_batch(
+    arrays: PhotometryArrays,
+    indices: np.ndarray,
+    names: tuple[str, ...] | None,
+) -> jnp.ndarray | None:
+    if names is None or arrays.truth is None:
+        return None
+    missing = [name for name in names if name not in arrays.truth]
+    if missing:
+        raise ValueError("Missing NPE truth columns: " + ", ".join(missing))
+    truth = np.stack([arrays.truth[name][indices] for name in names], axis=-1)
+    if not np.isfinite(truth).all():
+        bad = np.argwhere(~np.isfinite(truth))[0]
+        raise ValueError(
+            "Non-finite NPE truth value: "
+            f"batch_row={int(bad[0])} parameter={names[int(bad[1])]}"
+        )
+    return jnp.asarray(truth, dtype=jnp.float32)
 
 
 def _object_id_column_from_config(config: dict[str, Any]) -> str | None:

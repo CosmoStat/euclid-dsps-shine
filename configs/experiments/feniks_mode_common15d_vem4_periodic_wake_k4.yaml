@@ -1,0 +1,12 @@
+extends: feniks_mode_common15d_vem4_elbo_k1.yaml
+
+amortized:
+  objective:
+    mode: periodic_wake
+    sample_strategy: random
+    wake:
+      start_encoder_epoch: 40
+      every_encoder_epochs: 4
+      n_particles: 4
+      n_tempered_particles: 1
+      base_temperature: 2.0

@@ -180,7 +180,13 @@ def build_compressed_grid(args: argparse.Namespace) -> Path:
         if output.exists():
             output.unlink()
         with h5py.File(output, "w") as dst:
-            for key in ("ssp_wave", "ssp_lg_age_gyr", "ssp_lgmet", "fagn_grid", "agn_tau_grid"):
+            for key in (
+                "ssp_wave",
+                "ssp_lg_age_gyr",
+                "ssp_lgmet",
+                "fagn_grid",
+                "agn_tau_grid",
+            ):
                 dst[key] = np.asarray(src[key], dtype=np.float32)
             dst.create_dataset(
                 "agn_basis",
@@ -225,9 +231,7 @@ def build_compressed_grid(args: argparse.Namespace) -> Path:
                     "fagn_reference_index": (
                         -1 if ref_index is None else int(ref_index)
                     ),
-                    "fagn_reference": (
-                        "" if ref_fagn is None else float(ref_fagn)
-                    ),
+                    "fagn_reference": ("" if ref_fagn is None else float(ref_fagn)),
                     "compressed_dtypes": {
                         "agn_basis": str(basis_dtype),
                         "agn_coeff": str(coeff_dtype),
@@ -261,9 +265,7 @@ def compute_curve_scale(
     flat = scale.reshape(-1)
     for start, stop, block in block_iter():
         if normalization == "l2":
-            values = np.sqrt(
-                np.mean(np.asarray(block, dtype=np.float64) ** 2, axis=1)
-            )
+            values = np.sqrt(np.mean(np.asarray(block, dtype=np.float64) ** 2, axis=1))
         elif normalization == "max":
             values = np.max(np.abs(block), axis=1)
         else:  # pragma: no cover - argparse constrains this

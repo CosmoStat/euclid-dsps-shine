@@ -269,9 +269,7 @@ def load_row_indices(path: str | Path) -> list[int]:
     if rows.empty:
         return []
     values = pd.to_numeric(rows.iloc[:, 0], errors="coerce").dropna()
-    return sorted(
-        {int(value) for value in values.astype(int).tolist()}
-    )
+    return sorted({int(value) for value in values.astype(int).tolist()})
 
 
 def flux_fnu_cgs_to_abmag(flux: float) -> float:

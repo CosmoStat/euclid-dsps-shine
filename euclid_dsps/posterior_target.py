@@ -139,10 +139,7 @@ class PosteriorTarget:
             key: jnp.asarray(value) for key, value in self.base_params.items()
         }
         params.update(
-            {
-                name: theta[index]
-                for index, name in enumerate(self.transform.names)
-            }
+            {name: theta[index] for index, name in enumerate(self.transform.names)}
         )
         return params
 
@@ -262,7 +259,11 @@ def initial_unconstrained_position(
     free = fit_config["free_parameters"]
     values = []
     for name in target.free_names:
-        if initial_params and name in initial_params and np.isfinite(initial_params[name]):
+        if (
+            initial_params
+            and name in initial_params
+            and np.isfinite(initial_params[name])
+        ):
             value = float(initial_params[name])
         else:
             value = _initial_value(free[name], name, target.base_params)

@@ -1,0 +1,25 @@
+extends: feniks_conditional_posterior_common.yaml
+
+amortized:
+  objective:
+    mode: stochastic_elbo
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+  encoder:
+    type: conditional_flow
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_init_scale: 0.0
+  training:
+    epochs: 120
+    learning_rate: 1.0e-4
+    kl_annealing_epochs: 40
+    kl_weight_max: 1.0
+    validation_every: 4
+    best_checkpoint_min_epoch: 40
+  output:
+    checkpoint_every: 4
+    diagnostics_every: 4
+    save_training_curves: true

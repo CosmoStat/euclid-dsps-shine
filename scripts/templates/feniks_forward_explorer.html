@@ -1,0 +1,1600 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FENIKS - JAX-COSMO spline forward and 15D latent prior</title>
+<style>
+:root {
+  --bg: #f4f5f2;
+  --panel: #ffffff;
+  --ink: #1d2528;
+  --muted: #59666a;
+  --line: #d5dbd8;
+  --green: #28735a;
+  --blue: #276a9c;
+  --rust: #b55432;
+  --violet: #71558a;
+  --gold: #b48824;
+  --danger: #a33c32;
+  --warning-bg: #fff7df;
+  --warning-line: #d5ab3d;
+}
+* { box-sizing: border-box; }
+html { color-scheme: light; }
+body {
+  margin: 0;
+  color: var(--ink);
+  background: var(--bg);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+button, select { font: inherit; }
+button:focus-visible, select:focus-visible { outline: 3px solid #8fc5ad; outline-offset: 2px; }
+.app-header {
+  background: #24332f;
+  color: #fff;
+  padding: 22px 28px 20px;
+  border-bottom: 4px solid var(--green);
+}
+.header-inner { max-width: 1500px; margin: 0 auto; display: grid; grid-template-columns: 1fr minmax(260px, 380px); gap: 28px; align-items: end; }
+h1 { margin: 0 0 5px; font-size: 28px; line-height: 1.15; letter-spacing: 0; }
+.subtitle { margin: 0; color: #d4dfdb; max-width: 900px; }
+.example-control label { display: block; margin: 0 0 5px; font-weight: 700; color: #e8efec; }
+.example-control select { width: 100%; padding: 9px 34px 9px 10px; color: var(--ink); background: #fff; border: 1px solid #aab5b1; border-radius: 4px; }
+.stage-nav { background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 1000; isolation: isolate; }
+.stage-nav-inner { max-width: 1500px; margin: 0 auto; display: flex; overflow-x: auto; padding: 0 18px; }
+.stage-tab { width: max-content; min-width: 120px; min-height: 46px; flex: 0 0 auto; padding: 0 15px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: #425055; cursor: pointer; white-space: nowrap; }
+.stage-tab:hover { background: #f2f5f3; }
+.stage-tab.active { color: #174d3b; border-bottom-color: var(--green); font-weight: 750; }
+main { max-width: 1500px; margin: 0 auto; padding: 18px 24px 40px; }
+.summary-strip { display: grid; grid-template-columns: repeat(6, minmax(115px, 1fr)); background: #fff; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 16px; overflow: hidden; }
+.summary-item { min-height: 72px; padding: 11px 13px; border-right: 1px solid var(--line); }
+.summary-item:last-child { border-right: 0; }
+.summary-label { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.summary-value { display: block; margin-top: 3px; font-weight: 750; font-size: 17px; font-variant-numeric: tabular-nums; }
+.summary-small { display: block; color: var(--muted); font-size: 11px; margin-top: 1px; }
+.notice { border: 1px solid var(--warning-line); background: var(--warning-bg); padding: 12px 14px; margin-bottom: 16px; border-radius: 5px; }
+.notice strong { color: #6e4d00; }
+.stage-panel { display: none; }
+.stage-panel.active { display: block; }
+.stage-panel[hidden] { display: none !important; }
+.stage-heading { display: flex; justify-content: space-between; gap: 18px; align-items: start; margin: 5px 0 14px; }
+.stage-heading h2 { margin: 0; font-size: 22px; letter-spacing: 0; }
+.stage-heading p { margin: 3px 0 0; color: var(--muted); max-width: 960px; }
+.flow { display: grid; grid-template-columns: repeat(6, minmax(140px, 1fr)); gap: 7px; margin: 12px 0 18px; }
+.flow-step { border: 1px solid var(--line); border-top: 4px solid var(--blue); background: #fff; padding: 11px; text-align: left; cursor: pointer; min-height: 86px; border-radius: 5px; }
+.flow-step:nth-child(2) { border-top-color: var(--violet); }
+.flow-step:nth-child(3) { border-top-color: var(--rust); }
+.flow-step:nth-child(4) { border-top-color: var(--gold); }
+.flow-step:nth-child(5) { border-top-color: var(--green); }
+.flow-step:nth-child(6) { border-top-color: #4d5964; }
+.flow-step b { display: block; margin-bottom: 3px; }
+.flow-step span { display: block; color: var(--muted); font-size: 12px; }
+.grid { display: grid; gap: 14px; align-items: start; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.panel-head { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; border-bottom: 1px solid var(--line); }
+.panel-head h3 { margin: 0; font-size: 15px; letter-spacing: 0; }
+.panel-head p { margin: 1px 0 0; color: var(--muted); font-size: 11px; }
+.panel-body { padding: 12px 13px; }
+.chart { position: relative; min-height: 310px; }
+.chart.compact { min-height: 245px; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 13px; min-height: 25px; padding: 3px 4px 4px; }
+.legend-item { display: inline-flex; align-items: center; gap: 5px; color: #465458; font-size: 11px; }
+.legend-swatch { width: 17px; height: 3px; display: inline-block; }
+.axis-line { stroke: #8b9693; stroke-width: 1; }
+.grid-line { stroke: #e5e9e7; stroke-width: 1; }
+.axis-text { fill: #64716f; font-size: 10px; }
+.axis-label { fill: #3c494c; font-size: 11px; font-weight: 650; }
+.reference-line { stroke: #252e31; stroke-width: 1.2; stroke-dasharray: 4 4; }
+.reference-text { fill: #252e31; font-size: 9px; }
+.tooltip { position: fixed; z-index: 100; pointer-events: none; display: none; max-width: 310px; padding: 7px 9px; background: #17201e; color: #fff; border-radius: 4px; font-size: 11px; box-shadow: 0 5px 18px #0003; }
+.control-row { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.control-row label { display: grid; gap: 4px; min-width: 250px; color: var(--muted); font-size: 11px; }
+.control-row select { padding: 7px 30px 7px 8px; border: 1px solid #aeb9b5; background: #fff; border-radius: 4px; color: var(--ink); }
+.table-scroll { overflow: auto; max-height: 600px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 7px 8px; border-bottom: 1px solid #e3e7e5; text-align: left; vertical-align: top; }
+th { position: sticky; top: 0; z-index: 2; background: #edf1ef; color: #41504d; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.highlight td { background: #edf7f2; }
+code { font-family: "SFMono-Regular", Consolas, monospace; background: #eef1ef; padding: 1px 4px; border-radius: 3px; }
+.formula { font-family: "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; margin: 0; padding: 11px 13px; background: #f6f8f7; border-left: 4px solid var(--green); overflow-x: auto; }
+.facts { margin: 0; padding: 0; list-style: none; }
+.facts li { display: grid; grid-template-columns: minmax(140px, 0.8fr) 1.4fr; gap: 10px; padding: 6px 0; border-bottom: 1px solid #e7eae8; }
+.facts li:last-child { border-bottom: 0; }
+.facts span:first-child { color: var(--muted); }
+.facts span:last-child { font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.audit-good { color: var(--green); font-weight: 750; }
+.audit-warn { color: var(--danger); font-weight: 750; }
+.full-width { grid-column: 1 / -1; }
+details { border-top: 1px solid var(--line); }
+summary { padding: 9px 13px; cursor: pointer; font-weight: 700; color: #34423f; }
+details .details-body { padding: 0 13px 13px; color: #3f4d50; }
+.provenance-grid { display: grid; grid-template-columns: 170px 1fr 1fr; }
+.provenance-grid > div { padding: 7px 9px; border-bottom: 1px solid #e1e6e3; }
+.provenance-grid .head { background: #edf1ef; font-weight: 750; }
+.phot-table td, .phot-table th { white-space: nowrap; }
+.pipeline-wrap { overflow: auto; padding: 2px 0 10px; max-width: 100%; }
+.pipeline-graph { min-width: 1120px; background: #fff; border: 1px solid var(--line); border-radius: 6px; }
+.pipeline-graph svg { display: block; width: 100%; height: auto; }
+.pipeline-node { cursor: pointer; }
+.pipeline-node rect { fill: #fff; stroke: #9aa6a2; stroke-width: 1.2; }
+.pipeline-node:hover rect, .pipeline-node:focus rect { stroke: var(--green); stroke-width: 2.4; fill: #f1f8f4; }
+.pipeline-node .node-title { font-size: 13px; font-weight: 750; fill: #23302d; }
+.pipeline-node .node-value { font-size: 10px; fill: #53615e; }
+.pipeline-arrow { stroke: #6d7a77; stroke-width: 1.8; fill: none; }
+.graph-group { fill: #f7f9f8; stroke: #d7ddda; stroke-width: 1; }
+.graph-group-title { fill: #52605d; font-size: 11px; font-weight: 750; text-transform: uppercase; }
+.pipeline-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 0 0 18px; }
+.pipeline-lane { background: #fff; border: 1px solid var(--line); border-top: 5px solid var(--violet); border-radius: 6px; padding: 16px; }
+.pipeline-lane.after { border-top-color: var(--green); }
+.pipeline-lane h3 { margin: 0 0 4px; font-size: 18px; }
+.pipeline-lane p { color: var(--muted); margin: 0 0 13px; }
+.pipeline-chain { display: flex; align-items: stretch; gap: 18px; overflow-x: auto; padding: 3px 2px 8px; }
+.pipeline-box { position: relative; min-width: 132px; padding: 12px 10px; border: 1px solid #aeb8b4; background: #f8faf9; border-radius: 4px; font-weight: 700; }
+.pipeline-box span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 400; }
+.pipeline-box:not(:last-child)::after { content: "\2192"; position: absolutete; right: -16px; top: 25px; color: #66736f; font-size: 20px; }
+.result-image { display: block; width: 100%; height: auto; }
+.formula-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 14px; }
+.method-flow { display: grid; grid-template-columns: repeat(5, minmax(150px, 1fr)); gap: 20px; margin: 14px 0 18px; }
+.method-step { position: relative; background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--blue); border-radius: 5px; padding: 13px; min-height: 132px; }
+.method-step:nth-child(2) { border-top-color: var(--gold); }
+.method-step:nth-child(3) { border-top-color: var(--violet); }
+.method-step:nth-child(4) { border-top-color: var(--rust); }
+.method-step:nth-child(5) { border-top-color: var(--green); }
+.method-step:not(:last-child)::after { content: "\2192"; position: absolute; right: -17px; top: 48px; color: #7a8783; font-size: 20px; }
+.method-step h3 { margin: 0 0 5px; font-size: 14px; }
+.method-step p { margin: 0; color: var(--muted); font-size: 12px; }
+.comparison-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.comparison-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.comparison-controls select { width: 100%; min-height: 40px; padding: 7px 10px; border: 1px solid #aeb9b5; background: #fff; border-radius: 4px; color: var(--ink); }
+.run-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 14px; }
+.run-card { background: #fff; border: 1px solid var(--line); border-top: 5px solid var(--blue); border-radius: 6px; padding: 14px; min-width: 0; }
+.run-card.side-b { border-top-color: var(--rust); }
+.run-card h3 { margin: 0 0 3px; font-size: 17px; overflow-wrap: anywhere; }
+.run-card p { color: var(--muted); margin: 0 0 10px; }
+.metric-delta.good { color: var(--green); font-weight: 750; }
+.metric-delta.bad { color: var(--danger); font-weight: 750; }
+.comparison-images { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.comparison-image { background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; min-width: 0; }
+.comparison-image h3 { margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.comparison-image img { display: block; width: 100%; height: auto; }
+.config-diff td:first-child { max-width: 360px; overflow-wrap: anywhere; }
+.config-value { max-width: 520px; overflow-wrap: anywhere; font-family: "SFMono-Regular", Consolas, monospace; font-size: 11px; }
+.artifact-table td:first-child { max-width: 720px; overflow-wrap: anywhere; }
+.status-chip { display: inline-block; border: 1px solid #9eb8ac; background: #edf7f2; color: #174d3b; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 750; }
+.status-chip.warn { border-color: #d5ab3d; background: #fff7df; color: #6e4d00; }
+.metric-note { color: var(--muted); font-size: 11px; max-width: 480px; }
+.run-json { max-height: 520px; overflow: auto; font-size: 11px; }
+.science-verdict { border-left: 5px solid var(--danger); background: #fff5f2; padding: 12px 14px; border-radius: 4px; }
+.science-verdict strong { color: var(--danger); }
+.target-architecture { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 15px; margin-bottom: 16px; }
+.architecture-flow { display: flex; align-items: stretch; gap: 18px; overflow-x: auto; padding: 7px 2px 11px; }
+.architecture-lane { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
+.architecture-lane:first-of-type { border-top: 0; margin-top: 0; }
+.architecture-lane-title { color: var(--ink); font-size: 12px; font-weight: 800; margin-bottom: 2px; }
+.architecture-lane-title span { color: var(--muted); font-weight: 500; }
+.architecture-node { position: relative; flex: 0 0 150px; min-height: 82px; padding: 10px; border: 2px solid #97a39f; background: #f8faf9; border-radius: 5px; }
+.architecture-node:not(:last-child)::after { content: "\2192"; position: absolute; right: -17px; top: 25px; color: #697672; font-size: 20px; }
+.architecture-node.train { border-color: var(--green); background: #edf7f2; }
+.architecture-node.frozen { border-color: #87918e; background: #f1f3f2; }
+.architecture-node.truth { border-color: var(--rust); background: #fff2ed; border-style: dashed; }
+.architecture-node.metric { border-color: var(--blue); background: #eef6fb; }
+.architecture-node b { display: block; margin-bottom: 3px; font-size: 12px; }
+.architecture-node span { display: block; color: var(--muted); font-size: 11px; }
+.architecture-branches { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
+.architecture-branch { border-top: 1px solid var(--line); padding: 8px 10px 0; color: var(--muted); font-size: 11px; }
+.experiment-list { display: grid; gap: 16px; }
+.experiment-card { background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.experiment-card-head { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start; padding: 14px; border-bottom: 1px solid var(--line); }
+.experiment-card-head h3 { margin: 0 0 3px; font-size: 18px; }
+.experiment-card-head p { margin: 0; color: var(--muted); }
+.experiment-body { padding: 14px; }
+.experiment-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.experiment-copy { padding: 11px 12px; border: 1px solid var(--line); border-radius: 5px; }
+.experiment-copy h4 { margin: 0 0 5px; font-size: 12px; text-transform: uppercase; color: #46534f; }
+.experiment-copy p { margin: 0; }
+.role-chip { display: inline-block; padding: 4px 7px; border: 1px solid #9eb8ac; border-radius: 3px; background: #edf7f2; color: #174d3b; font-size: 11px; font-weight: 750; }
+.role-chip.supervised { border-color: #d59a82; background: #fff2ed; color: #87391f; }
+.run-take { margin-top: 12px; padding: 11px 13px; border-left: 4px solid var(--blue); background: #eef6fb; }
+.metric-mini-grid { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 1px; margin-top: 12px; background: var(--line); border: 1px solid var(--line); }
+.metric-mini { background: #fff; padding: 8px; }
+.metric-mini span { display: block; color: var(--muted); font-size: 10px; }
+.metric-mini b { display: block; margin-top: 2px; font-size: 14px; font-variant-numeric: tabular-nums; }
+@media (max-width: 1100px) {
+  .summary-strip { grid-template-columns: repeat(3, 1fr); }
+  .summary-item:nth-child(3) { border-right: 0; }
+  .flow { grid-template-columns: repeat(3, 1fr); }
+  .grid.two, .grid.three { grid-template-columns: 1fr; }
+  .pipeline-compare, .formula-grid { grid-template-columns: 1fr; }
+  .method-flow { grid-template-columns: 1fr 1fr; }
+  .method-step::after { display: none; }
+  .metric-mini-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 700px) {
+  .app-header { padding: 18px 15px; }
+  .header-inner { grid-template-columns: 1fr; gap: 15px; }
+  main { padding: 12px 10px 28px; }
+  h1 { font-size: 23px; }
+  .summary-strip { grid-template-columns: repeat(2, 1fr); }
+  .summary-item { border-right: 1px solid var(--line); }
+  .summary-item:nth-child(2n) { border-right: 0; }
+  .flow { grid-template-columns: 1fr 1fr; }
+  .flow-step { min-height: 96px; }
+  .facts li { grid-template-columns: 1fr; gap: 2px; }
+  .method-flow, .comparison-controls, .run-summary, .comparison-images { grid-template-columns: 1fr; }
+  .experiment-columns, .architecture-branches { grid-template-columns: 1fr; }
+  .metric-mini-grid { grid-template-columns: repeat(2, 1fr); }
+}
+</style>
+</head>
+<body>
+<header class="app-header">
+  <div class="header-inner">
+    <div>
+      <h1>FENIKS: from an 18D physical model to a 15D spline latent</h1>
+      <p class="subtitle">Interactive audit of the original Diffmah &rarr; Diffstar &rarr; DSPS path, the reduced spline &rarr; DSPS path, the learned flow prior, and frozen-prior encoder training.</p>
+    </div>
+    <div class="example-control">
+      <label for="example-select">Representative galaxy</label>
+      <select id="example-select"></select>
+    </div>
+  </div>
+</header>
+
+<nav class="stage-nav" aria-label="Forward-model stages">
+  <div class="stage-nav-inner">
+    <button class="stage-tab active" data-stage="overview">Before / after</button>
+    <button class="stage-tab" data-stage="inputs">1. Parameters</button>
+    <button class="stage-tab" data-stage="halo">2. Halo</button>
+    <button class="stage-tab" data-stage="sfh">3. SFH</button>
+    <button class="stage-tab" data-stage="spline">4. JAX-COSMO spline</button>
+    <button class="stage-tab" data-stage="kscan">5. Choosing K</button>
+    <button class="stage-tab" data-stage="prior">6. 15D latent</button>
+    <button class="stage-tab" data-stage="normalization">7. Normalization</button>
+    <button class="stage-tab" data-stage="results">8. Results</button>
+    <button class="stage-tab" data-stage="stellar">9. SED</button>
+    <button class="stage-tab" data-stage="photometry">10. Photometry</button>
+    <button class="stage-tab" data-stage="error">11. Errors</button>
+    <button class="stage-tab" data-stage="audit">12. Audit</button>
+    <button class="stage-tab" data-stage="methods">13. Méthodes</button>
+    <button class="stage-tab" data-stage="joint">14. Joint p + q</button>
+    <button class="stage-tab" data-stage="compare">15. Comparateur</button>
+  </div>
+</nav>
+
+<main>
+  <div id="summary-strip" class="summary-strip"></div>
+  <div id="runtime-notice" class="notice"></div>
+
+  <section id="stage-overview" class="stage-panel active">
+    <div class="stage-heading">
+      <div><h2>What changes when the SFH is fitted as a spline?</h2><p>The original graph remains available below for auditability. The reduced inference graph makes the complexity reduction explicit.</p></div>
+    </div>
+    <div class="notice"><strong>Presentation status.</strong> The active method, per-galaxy forward examples, generic K scan, optimized 11-node projection, and raw 15D distributions now use the JAX-COSMO cubic not-a-knot spline. Prior-flow and encoder performance is still historical PCHIP evidence until both training stages are rerun.</div>
+    <div class="pipeline-compare">
+      <article class="pipeline-lane">
+        <h3>Before: 18D physical parameterization</h3>
+        <p>Eleven halo, main-sequence, and quenching coordinates are inferred before DSPS can see an SFH.</p>
+        <div class="pipeline-chain">
+          <div class="pipeline-box">18 parameters<span>z, mass, 13 Diffmah/Diffstar, Z, dust</span></div>
+          <div class="pipeline-box">Diffmah<span>halo mass and accretion history</span></div>
+          <div class="pipeline-box">Diffstar<span>main sequence and quenching</span></div>
+          <div class="pipeline-box">DSPS<span>SSPs, dust, IGM, filters</span></div>
+          <div class="pipeline-box">18 fluxes<span>photometric likelihood</span></div>
+        </div>
+      </article>
+      <article class="pipeline-lane after">
+        <h3>After: 15D spline latent</h3>
+        <p>Diffmah and Diffstar are bypassed during inference. Ten SFH contrasts directly reconstruct the shape consumed by DSPS.</p>
+        <div class="pipeline-chain">
+          <div class="pipeline-box">15 latent coordinates<span>z, mass, Z, dust (2), SFH contrasts (10)</span></div>
+          <div class="pipeline-box">11-knot JAX-COSMO cubic<span>not-a-knot log-SFR curve</span></div>
+          <div class="pipeline-box">Mass normalization<span>exact surviving stellar mass</span></div>
+          <div class="pipeline-box">DSPS<span>unchanged physical forward</span></div>
+          <div class="pipeline-box">18 fluxes<span>same photometric likelihood</span></div>
+        </div>
+      </article>
+    </div>
+    <div class="stage-heading"><div><h2>Original forward graph</h2><p>Large-format branch diagram. Select any block to open its intermediate distributions and curves.</p></div></div>
+    <div class="pipeline-wrap"><div id="pipeline-graph" class="pipeline-graph"></div></div>
+    <div class="grid two">
+      <article class="panel">
+        <div class="panel-head"><div><h3>Derived values for this example</h3><p>Computed by the current local forward model</p></div></div>
+        <div class="panel-body"><ul id="overview-facts" class="facts"></ul></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><div><h3>Active scientific contract</h3><p>Free and fixed quantities</p></div></div>
+        <div class="panel-body">
+          <ul class="facts">
+            <li><span>SFH</span><span><code>diffsky_basic</code>, 80 cosmic-time samples</span></li>
+            <li><span>Metallicity</span><span>Lognormal MDF, scatter fixed to 0.2 dex</span></li>
+            <li><span>Dust</span><span>Prospector/FSPS diffuse, <code>tau1/tau2=0</code></span></li>
+            <li><span>IGM</span><span>FSPS Madau 1995</span></li>
+            <li><span>Nebular</span><span>Fixed in the SSPs, no gas latent</span></li>
+            <li><span>AGN</span><span>No AGN component</span></li>
+          </ul>
+        </div>
+      </article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>Important implementation detail</h3><p>Exact behavior of the local wrapper</p></div></div>
+        <pre class="formula">lgt0 = log10(t_obs)                         # ancre Diffmah utilisee localement
+raw_sfh = calc_sfh_singlegal(..., lgt0)    # Diffmah + Diffstar + Q(t)
+final_sfh = normalize(raw_sfh, Mstar)      # amplitude set by surviving stellar mass
+SED = sum_age[SSP(age, Z) * weights(age) * Mformed]
+flux = filters(redshift(IGM(dust(SED)))) + noise</pre>
+      </article>
+    </div>
+  </section>
+
+  <section id="stage-inputs" class="stage-panel">
+    <div class="stage-heading"><div><h2>1. The 18 raw parameters</h2><p>The vertical line locates this galaxy in the 40,000-row training distribution.</p></div></div>
+    <div class="grid two">
+      <article class="panel">
+        <div class="panel-head">
+          <div><h3 id="parameter-chart-title">Distribution</h3><p id="parameter-chart-subtitle"></p></div>
+          <div class="control-row"><label>Parameter<select id="parameter-select"></select></label></div>
+        </div>
+        <div id="parameter-hist" class="chart"></div>
+      </article>
+      <article class="panel">
+        <div class="panel-head"><div><h3>Value interpretation</h3><p>Raw name, conversion, and role in the code</p></div></div>
+        <div class="panel-body"><ul id="parameter-facts" class="facts"></ul></div>
+      </article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>Complete theta vector</h3><p>Selected value against population quantiles</p></div></div>
+        <div class="table-scroll"><table><thead><tr><th>Group</th><th>Raw column</th><th>Parameter mod&egrave;le</th><th>Value</th><th>q16</th><th>Median</th><th>q84</th><th>Effective role</th></tr></thead><tbody id="parameter-table"></tbody></table></div>
+      </article>
+    </div>
+  </section>
+
+  <section id="stage-halo" class="stage-panel">
+    <div class="stage-heading"><div><h2>2. Diffmah : halo history</h2><p>The wrapper passes <code>lgt0=log10(t_obs)</code>. Normalization <code>logm0</code> is therefore evaluated at the observed epoch in this forward model, unless frozen earlier at <code>t_peak</code>.</p></div></div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Halo mass</h3><p>With tc, t_peak, and t_obs</p></div></div><div id="halo-mass-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Accretion rate</h3><p>The rate becomes zero after t_peak</p></div></div><div id="halo-accretion-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Alpha index(t)</h3><p>Transition from early_index to late_index</p></div></div><div id="halo-alpha-chart" class="chart compact"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Efficiency log y(Mh)</h3><p>Transition from indx_lo to indx_hi around Mcrit</p></div></div><div id="halo-logy-chart" class="chart compact"></div></article>
+      <article class="panel full-width"><pre class="formula">alpha(t) = sigmoid(log10(t); centre=logtc, k=3.5, early_index, late_index)
+log10 Mh(t) = logm0 + alpha(t) * [log10(t) - log10(t_obs)]
+if t &gt; t_peak : Mh(t) = Mh(t_peak) et dMh/dt = 0</pre></article>
+    </div>
+  </section>
+
+  <section id="stage-sfh" class="stage-panel">
+    <div class="stage-heading"><div><h2>3. Diffstar : from Mh(t) to the final SFH</h2><p>Diffstar sets the shape; surviving stellar mass then sets the final amplitude.</p></div></div>
+    <div class="grid two">
+      <article class="panel full-width"><div class="panel-head"><div><h3>Star-formation-rate history</h3><p>Main sequence, raw SFH, and normalized SFH</p></div></div><div id="sfh-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Quenching function Q(t)</h3><p>Multiplicative factor applied to SFR_MS</p></div></div><div id="q-chart" class="chart compact"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Cumulative formed stellar mass</h3><p>Integral of the normalized SFH</p></div></div><div id="mass-chart" class="chart compact"></div></article>
+      <article class="panel full-width"><pre class="formula">log10 y(Mh) = lgy_at_mcrit + beta(Mh) * [log10(Mh) - lgmcrit]
+SFR_MS(t) = 0.156 * Mh(t) * 10^log10(y)
+SFR_raw(t) = Q(t) * SFR_MS(t)
+SFR_final(t) = SFR_raw(t) * scale(surviving Mstar, stellar mass loss)</pre></article>
+    </div>
+  </section>
+
+  <section id="stage-spline" class="stage-panel">
+    <div class="stage-heading"><div><h2>4. JAX-COSMO cubic approximation of the SFH</h2><p>Nodes are extracted from the native Diffstar SFH. <code>jax_cosmo.scipy.interpolate.InterpolatedUnivariateSpline</code> runs with <code>k=3</code> and the not-a-knot endpoint condition in log-time and log-SFR. The curve is then normalized to the same surviving stellar mass before DSPS.</p></div></div>
+    <div class="notice"><strong>Comparison within the current runtime.</strong> Both photometry calculations use exactly the same SSPs, MDF, dust, IGM, filters, and versions. Their residual therefore isolates the spline approximation and must not be confused with historical-parquet runtime drift.</div>
+    <div class="grid two">
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>1. From normalized node positions to cosmic time</h3><p>The production latent stores one shared length-11 node grid, not eleven free times per galaxy.</p></div></div>
+        <div class="formula-grid panel-body">
+          <pre class="formula">u_i in [0, 1],  i = 0,...,10
+ell_min = log10(0.05 Gyr)
+ell_obs = log10(t_obs)
+ell_i = ell_min + u_i (ell_obs - ell_min)
+t_i = 10^ell_i
+
+u_0 = 0,  u_10 = 1</pre>
+          <div><p>The normalized positions <code>u_i</code> are shared by every galaxy. Redshift changes <code>t_obs</code>, so the same normalized grid is stretched to the cosmic-time interval available to that object. The endpoints are always 0.05 Gyr and the observation time.</p><p>The interactive example below uses the node count and grid selected by the report builder. The production 15D latent uses the fixed optimized 11-node vector shown in the 15D latent tab.</p></div>
+        </div>
+      </article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>2. From ten contrasts to eleven log-SFR values</h3><p>The latent keeps SFH shape and deliberately discards its common amplitude.</p></div></div>
+        <div class="formula-grid panel-body">
+          <pre class="formula">q_i = y_(i+1) - y_i,  i = 0,...,9
+y_0^rel = 0
+y_i^rel = sum_(j=0)^(i-1) q_j
+
+y_i = y_i^rel + c_mass
+SFR_i = 10^y_i</pre>
+          <div><p>The ten adjacent differences <code>q_i</code> reconstruct eleven relative node heights by a cumulative sum. Adding the same constant to every node changes only the overall SFR amplitude, not the shape. That constant is recovered later from <code>log10_stellar_mass</code>, which is why eleven node values require only ten independent SFH coordinates.</p></div>
+        </div>
+      </article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>3. JAX-COSMO cubic not-a-knot interpolation</h3><p>A different cubic polynomial is used on each interval, with a globally smooth curve.</p></div></div>
+        <div class="formula-grid panel-body">
+          <pre class="formula">For ell in [ell_i, ell_(i+1)]:
+S_i(ell) = a_i + b_i Delta + c_i Delta^2 + d_i Delta^3
+Delta = ell - ell_i
+
+S_i(ell_i) = y_i
+S_i(ell_(i+1)) = y_(i+1)
+S_i'(ell_(i+1)) = S_(i+1)'(ell_(i+1))
+S_i''(ell_(i+1)) = S_(i+1)''(ell_(i+1))</pre>
+          <div><p><code>InterpolatedUnivariateSpline(..., k=3)</code> solves for the interval coefficients. Values, first derivatives, and second derivatives are continuous at interior knots. The not-a-knot endpoint condition makes the first two intervals share one cubic polynomial, and likewise for the last two intervals. No endpoint slope is stored or learned separately.</p><p>Interpolation happens in <code>log10(time)</code> and <code>log10(SFR)</code>. The physical curve is therefore positive after exponentiation: <code>SFR(t)=10^S(log10(t))</code>.</p></div>
+        </div>
+      </article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>4. Recovering the physical amplitude</h3><p>The spline shape is normalized through the same DSPS stellar-mass-loss calculation as the native SFH.</p></div></div>
+        <pre class="formula">SFR_rel(t) = 10^S(log10(t))
+M_surv,rel = DSPS_surviving_mass[SFR_rel(t), SSP mass loss]
+A = 10^log10_stellar_mass / M_surv,rel
+SFR_final(t) = A * SFR_rel(t)
+c_mass = log10(A)
+
+age_weights = DSPS_age_weights[SFR_final(t)]
+photometry = filters(IGM(dust(SSP x age_weights x M_formed)))</pre>
+      </article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Native SFH versus spline SFH</h3><p>Points mark the candidate learned nodes; both curves are normalized to the same stellar mass.</p></div></div><div id="spline-sfh-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>DSPS age weights</h3><p>107 SSP ages computed from each SFH</p></div></div><div id="spline-age-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Reconstruction metrics</h3><p>SFH, age weights, mass, and photometry</p></div></div><div class="panel-body"><ul id="spline-facts" class="facts"></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Native versus spline DSPS photometry</h3><p>AB magnitudes from the current runtime; higher means brighter.</p></div></div><div id="spline-mag-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Photometric residual</h3><p>mag_spline - mag_native by filter</p></div></div><div id="spline-delta-mag-chart" class="chart compact"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Node values</h3><p>Cosmic time and log10 SFR after normalization</p></div></div><div class="table-scroll"><table><thead><tr><th>Node</th><th>Time [Gyr]</th><th>log10 SFR</th></tr></thead><tbody id="spline-node-table"></tbody></table></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Summary of the evaluated galaxies</h3><p>The active row matches the example shown in the four plots.</p></div></div><div class="table-scroll"><table><thead><tr><th>Example</th><th>Description</th><th>z</th><th>L1 SFH</th><th>RMSE log SFH [dex]</th><th>L1 age weights</th><th>RMSE mag</th><th>max |Delta mag|</th></tr></thead><tbody id="spline-summary-table"></tbody></table></div></article>
+      <article class="panel full-width"><pre class="formula">x_k = uniform log10(t) grid from 0.05 Gyr a t_obs
+y_k = interpolation of log10(SFR_native) at x_k
+log10(SFR_spline(t)) = JAX_COSMO_CUBIC(x_k, y_k; log10(t))
+SFR_spline = normalization(raw SFR_spline, surviving Mstar)
+age_weights_spline = DSPS(SFR_spline)
+mag_spline = filters[IGM[dust[SSP(age, Z) * age_weights_spline * Mformed]]]</pre></article>
+    </div>
+  </section>
+
+  <section id="stage-kscan" class="stage-panel">
+    <div class="stage-heading"><div><h2>5. Selecting the number of nodes K</h2><p>JAX scan on the test split for K=6, 8, 10, 12, 16, and 20, three node placements, with p95/p99 aggregation by state, redshift, mass, and high-sSFR tail.</p></div></div>
+    <div id="kscan-decision" class="notice"></div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Scan contract</h3><p>Sample, groups, and bursty limitation</p></div></div><div class="panel-body"><ul id="kscan-facts" class="facts"></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Verdict by configuration</h3><p>A configuration passes only when every p95/p99 threshold passes.</p></div></div><div class="table-scroll"><table><thead><tr><th>Grid</th><th>K</th><th>Failed thresholds</th><th>Worst value/threshold ratio</th><th>Verdict</th></tr></thead><tbody id="kscan-decision-table"></tbody></table></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Decision thresholds</h3><p>Worst group value against the predefined threshold; each color is a node placement.</p></div></div><div class="panel-body"><img id="kscan-gates-figure" alt="K-scan threshold curves" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Robustness by state</h3><p>p95 and p99 for main-sequence, quenched, and high-sSFR-tail groups for the best tested grid.</p></div></div><div class="panel-body"><img id="kscan-state-figure" alt="Robustness by state" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Redshift and mass</h3><p>p95 of maximum photometric error by quartile</p></div></div><div class="panel-body"><img id="kscan-groups-figure" alt="Robustness by redshift and mass" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Bands in the quenched subset</h3><p>p95 of |mag_spline - mag_native| by filter</p></div></div><div class="panel-body"><img id="kscan-bands-figure" alt="Robustness by band" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Key values by K</h3><p>Best grid shown; the high-sSFR tail is not a bursty label.</p></div></div><div class="table-scroll"><table><thead><tr><th>K</th><th>Group</th><th>p95 max |Delta mag|</th><th>p99 max |Delta mag|</th><th>p95 RMS Delta f/sigma</th><th>p99 RMS Delta f/sigma</th><th>p95 L1 age weights</th></tr></thead><tbody id="kscan-state-table"></tbody></table></div></article>
+    </div>
+  </section>
+
+  <section id="stage-prior" class="stage-panel">
+    <div class="stage-heading"><div><h2>6. 15D spline latent for prior learning</h2><p>Five physical parameters and ten log-SFR contrasts over eleven shared nodes, with placement optimized on train and closure evaluated on held-out test.</p></div></div>
+    <div class="notice"><strong>Current JAX-COSMO projection.</strong> The optimized 11-node placement, train/test projection, contrast distributions, latent correlations, dequantization scan, and closure diagnostics in this tab were recomputed with the cubic not-a-knot decoder on July 16. The downstream flow and encoder shown later have not yet been retrained on this projection.</div>
+    <div id="prior-decision" class="notice"></div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Latent contract</h3><p>Dimension, coordinates, and shared placement</p></div></div><div class="panel-body"><ul id="prior-facts" class="facts"></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Closure by population</h3><p>p95/p99 of the selected placement</p></div></div><div class="table-scroll"><table><thead><tr><th>Group</th><th>p95 max |Delta mag|</th><th>p99 max |Delta mag|</th><th>p95 RMS Delta f/sigma</th><th>p99 RMS Delta f/sigma</th><th>p95 L1 age weights</th></tr></thead><tbody id="prior-state-table"></tbody></table></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Node placement and examples</h3><p>Shared positions in normalized logarithmic cosmic time</p></div></div><div class="panel-body"><img id="prior-node-figure" alt="Optimized node placement" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Closure comparison</h3><p>Heuristic grids versus optimized placement at fixed dimension</p></div></div><div class="panel-body"><img id="prior-closure-figure" alt="15D latent closure" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Dequantization on train validation</h3><p>The width is selected without using test data</p></div></div><div class="table-scroll"><table><thead><tr><th>Half-width [dex]</th><th>p95 max |Delta mag|</th><th>p95 RMS Delta f/sigma</th><th>Passes</th></tr></thead><tbody id="prior-validation-table"></tbody></table></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Final test evaluation</h3><p>Shown after width selection</p></div></div><div class="table-scroll"><table><thead><tr><th>Half-width [dex]</th><th>p95 max |Delta mag|</th><th>p95 RMS Delta f/sigma</th><th>Passes</th></tr></thead><tbody id="prior-test-table"></tbody></table></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Distributions of the ten contrasts</h3><p>Native plateaus create exact atoms before dequantization</p></div></div><div class="panel-body"><img id="prior-contrast-figure" alt="SFH contrast distributions" style="display:block;width:100%;height:auto"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>15D latent correlations</h3><p>Correlations are strong but manageable through standardization and a multivariate flow</p></div></div><div class="panel-body"><img id="prior-correlation-figure" alt="15D latent correlation" style="display:block;width:100%;height:auto"></div></article>
+    </div>
+  </section>
+
+  <section id="stage-normalization" class="stage-panel">
+    <div class="stage-heading"><div><h2>7. Normalizing the 15D latent for the flow</h2><p>Each coordinate receives an invertible train-only marginal transform before it enters the RealNVP. The transform improves numerical conditioning; it does not remove multivariate dependence.</p></div></div>
+    <div class="notice"><strong>Current JAX-COSMO preprocessing contract.</strong> The figure and values below are fitted only on the 40,000-row training projection produced by the cubic JAX-COSMO spline, then evaluated unchanged on 5,000 held-out rows. They define the input coordinates for the next prior-flow training; they are not parameters from the historical PCHIP checkpoint.</div>
+    <div class="pipeline-chain">
+      <div class="pipeline-box">Physical 15D vector<span>5 physical values + 10 SFH contrasts</span></div>
+      <div class="pipeline-box">Support transform<span>log or shifted asinh, per coordinate</span></div>
+      <div class="pipeline-box">Standardization<span>subtract center, divide by scale</span></div>
+      <div class="pipeline-box">Normalized 15D vector<span>conditioned input to RealNVP</span></div>
+      <div class="pipeline-box">Flow base space<span>learned joint density relative to N(0,I)</span></div>
+    </div>
+    <div class="grid two">
+      <article class="panel full-width"><div class="panel-head"><div><h3>Before and after the marginal transforms</h3><p>The same training rows in physical and normalized coordinates.</p></div></div><div class="panel-body"><img id="normalization-figure" class="result-image" alt="Spline latent before and after normalization"></div></article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>Shifted-asinh family: 13 coordinates</h3><p>Used for stellar mass, metallicity, dust slope, and all ten SFH contrasts.</p></div></div>
+        <div class="formula-grid panel-body">
+          <pre class="formula">m = median_train(x)
+q_lo = quantile_train(x, 0.1586552539)
+q_hi = quantile_train(x, 0.8413447461)
+lambda_robust = (q_hi - q_lo) / 2
+lambda = max(lambda_robust,
+             10^-6 std_train(x),
+             10^-6)
+
+r = asinh((x - m) / lambda)
+center = mean_train(r)
+scale = max(std_train(r), 10^-12)
+y = (r - center) / scale</pre>
+          <div><p><code>m</code> is stored as <code>location</code>. Around the median, asinh is approximately linear, so small differences remain resolved. In the tails it grows logarithmically, compressing large positive and negative excursions without clipping them.</p><p>The central quantiles correspond to approximately minus/plus one Gaussian standard deviation. They provide a robust scale even when the raw marginal is skewed or heavy-tailed.</p></div>
+        </div>
+        <pre class="formula">Inverse: x = location + lambda * sinh(center + scale * y)</pre>
+      </article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>Positive-support log family: 2 coordinates</h3><p>Used only for <code>z_obs</code> and <code>dust_av</code>, whose physical semantics require strict positivity.</p></div></div>
+        <div class="formula-grid panel-body">
+          <pre class="formula">Require x &gt; 0 for every training row
+r = log(x)
+center = mean_train(r)
+scale = max(std_train(r), 10^-12)
+y = (r - center) / scale
+
+Inverse: x = exp(center + scale * y)</pre>
+          <div><p>The log transform makes invalid negative samples impossible after inversion. This support constraint is physical and does not depend on the empirical population distribution. A nonpositive training value is treated as a contract error rather than clipped.</p></div>
+        </div>
+      </article>
+      <article class="panel"><div class="panel-head"><div><h3>What normalization does</h3><p>Numerical conditioning</p></div></div><div class="panel-body"><ul class="facts"><li><span>Centers</span><span>Each transformed marginal near zero</span></li><li><span>Scales</span><span>Each transformed marginal to order-one variance</span></li><li><span>Compresses tails</span><span>Smoothly and invertibly, without hard bounds</span></li><li><span>Enforces support</span><span>Positive redshift and dust attenuation after inversion</span></li><li><span>Serialization</span><span>All parameters travel with the checkpoint</span></li></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>What normalization does not do</h3><p>Remaining learning problem</p></div></div><div class="panel-body"><ul class="facts"><li><span>Joint dependence</span><span>Still learned by the RealNVP</span></li><li><span>Gaussianization</span><span>Not forced; marginals may remain non-Gaussian</span></li><li><span>Whitening</span><span>Disabled in the selected V6 checkpoint</span></li><li><span>Dirac atoms</span><span>Exact zero contrasts remain discrete atoms</span></li><li><span>Data leakage</span><span>Validation and test never fit transform parameters</span></li></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Serialized transform parameters for all 15 coordinates</h3><p><code>location</code> and <code>lambda</code> apply only to shifted-asinh rows.</p></div></div><div class="table-scroll"><table><thead><tr><th>Coordinate</th><th>Family</th><th>Location</th><th>q16</th><th>q84</th><th>lambda</th><th>Center</th><th>Scale</th></tr></thead><tbody id="normalization-table"></tbody></table></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Roundtrip and checkpoint rule</h3><p>The decoder must use exactly the transform stored by the prior checkpoint.</p></div></div><pre class="formula">physical x --forward transform--&gt; normalized y --inverse transform--&gt; physical x
+
+Required checks:
+1. identical coordinate names and order;
+2. identical family for every coordinate;
+3. finite center, scale, location, and lambda values;
+4. scale &gt; 0 and lambda &gt; 0;
+5. forward/inverse roundtrip within the serialized tolerance;
+6. encoder, prior, and DSPS decoder resolve the same checkpoint-backed transform.</pre></article>
+    </div>
+  </section>
+
+  <section id="stage-results" class="stage-panel">
+    <div class="stage-heading"><div><h2>8. Results: current JAX-COSMO projection and normalization</h2><p>The raw and normalized 15D targets come from the new JAX-COSMO projection. Flow and encoder figures remain the exact earlier PCHIP-trained artifacts for comparison.</p></div></div>
+    <div class="notice"><strong>Mixed result maturity.</strong> The raw-distribution figure, before/after normalization figure, and serialized marginal-transform parameters are current JAX-COSMO evidence. The failed-flow example, epoch-645 RealNVP recovery, complete flow trajectory, and 80-epoch encoder were trained on the version-1 <code>pchip_log_sfr_contrasts</code> dataset. Do not present those downstream losses or learned distributions as final JAX-COSMO performance.</div>
+    <div class="grid two">
+      <article class="panel full-width"><div class="panel-head"><div><h3>The raw 15D target</h3><p>Five physical coordinates plus ten adjacent log-SFR contrasts; the exact spikes at zero are discrete atoms, not narrow Gaussian modes.</p></div></div><div class="panel-body"><img id="results-raw-latent" class="result-image" alt="Raw distributions of the ten SFH contrasts"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Why the first flow failed</h3><p>A continuous RealNVP trained on poorly conditioned coordinates misses sharp marginals and their dependence structure.</p></div></div><div class="panel-body"><img id="results-failed-flow" class="result-image" alt="Example of a failed learned flow prior"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Current JAX-COSMO distributions before and after normalization</h3><p>Train and held-out test distributions: positive-support log transforms for redshift and dust attenuation; robust shifted-asinh transforms for the other 13 coordinates.</p></div></div><div class="panel-body"><img id="results-normalization" class="result-image" alt="JAX-COSMO spline latent before and after normalization"></div></article>
+      <article class="panel full-width">
+        <div class="panel-head"><div><h3>Normalization contract</h3><p>The parameters below are fitted on the training split and serialized with the checkpoint.</p></div></div>
+        <div class="formula-grid panel-body">
+          <pre class="formula">Shifted-asinh family:
+y = [asinh((x - location) / lambda) - center] / scale
+x = location + lambda * sinh(center + scale * y)
+
+Positive-support log family:
+y = [log(x) - center] / scale,  x &gt; 0
+x = exp(center + scale * y)</pre>
+          <div><p>The shift follows the train median and <code>lambda</code> is a robust central scale. Asinh is nearly linear near the center and logarithmic in both tails, so broad skewed coordinates become trainable without hard clipping. Exact zero SFH contrasts remain exact atoms: a continuous flow can approximate their surrounding density but cannot assign non-zero probability mass to a mathematical Dirac delta.</p></div>
+        </div>
+        <div class="table-scroll"><table><thead><tr><th>Coordinate</th><th>Family</th><th>Location</th><th>lambda</th><th>Center</th><th>Scale</th></tr></thead><tbody id="results-normalization-table"></tbody></table></div>
+      </article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Complete prior-flow training trajectory</h3><p>Concatenated initial and resumed runs, shown through the frozen epoch-645 checkpoint used by the encoder.</p></div></div><div id="results-prior-loss" class="chart"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Learned distributions at epoch 645</h3><p>Truth and flow samples in normalized and physical coordinates. Bulk marginal recovery is good; atom mass and rare joint tails remain separate acceptance criteria.</p></div></div><div class="panel-body"><img id="results-prior-recovery" class="result-image" alt="Truth versus learned prior in normalized and physical space"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>What is next for the Dirac atoms?</h3><p>A likelihood model must match the mixed discrete-continuous support.</p></div></div><div class="panel-body"><ol><li>Store an explicit atom mask for each zero-capable SFH contrast.</li><li>Learn Bernoulli atom probabilities, conditionally or autoregressively.</li><li>Train the flow only on the continuous component.</li><li>Validate atom fractions and conditional physical closures separately from NLL.</li></ol></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Prior checkpoint used downstream</h3><p>Frozen during amortized training</p></div></div><div class="panel-body"><ul id="results-prior-facts" class="facts"></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Encoder/decoder training with KL under the learned prior</h3><p>The DSPS decoder and epoch-645 RealNVP prior are frozen; only the photometric encoder is optimized.</p></div></div><div class="panel-body"><img id="results-encoder-overview" class="result-image" alt="Encoder training overview"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Encoder convergence and KL annealing</h3><p>Epoch means for training and validation. KL reaches full weight at epoch 40.</p></div></div><div id="results-encoder-loss" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Training contract</h3><p>What did and did not update</p></div></div><div class="panel-body"><ul id="results-encoder-facts" class="facts"></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Current interpretation</h3><p>Optimization evidence versus inference evidence</p></div></div><div class="panel-body"><p>All 1,440 encoder updates are finite and the validation objective is still improving at epoch 80. The posterior contracts strongly, with median log-standard-deviation near -2.16. Physical posterior and photometric residual plots from the first held-out run are intentionally excluded: that run decoded with a placeholder identity transform instead of the checkpoint-backed mixed transform. The corrected inference must be rerun before physical encoder quality is claimed.</p></div></article>
+    </div>
+  </section>
+
+  <section id="stage-stellar" class="stage-panel">
+    <div class="stage-heading"><div><h2>9. Stellar populations, dust, and SED</h2><p>The final SFH becomes age weights combined with the MDF and SSPs before attenuation.</p></div></div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Stellar-population age weights</h3><p>107 SSP ages; weights sum to one</p></div></div><div id="age-weight-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Values stellaires et poussi&egrave;re</h3><p>Numerical conversions used</p></div></div><div class="panel-body"><ul id="stellar-facts" class="facts"></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>SED et transmissions des filters au repos</h3><p>L_lambda en Lsun par Angstrom; each filter observes lambda_obs=(1+z) lambda_rest</p></div></div><div id="sed-chart" class="chart"></div></article>
+      <article class="panel full-width"><pre class="formula">log10(Z absolute) = log10(0.0142) + log10_stellar_metallicity
+SSP_Z(age, lambda) = lognormal MDF average with sigma_Z = 0.2 dex
+SED_Lnu = sum_age SSP_Z * age_weight * formed_mass
+SED_Llambda [Lsun/Angstrom] = SED_Lnu [Lsun/Hz] * c [Angstrom/s] / lambda^2
+tau2 = dust_av / 1.086 ; dust_index_n = dust_delta ; tau1/tau2 = 0
+final_SED = IGM_Madau95(Prospector_FSPS_attenuation(SED_Llambda))</pre></article>
+    </div>
+  </section>
+
+  <section id="stage-photometry" class="stage-panel">
+    <div class="stage-heading"><div><h2>10. 18-band photometry</h2><p>The page separates photometry stored at generation time from values recomputed with the current local runtime.</p></div></div>
+    <div class="notice"><strong>Two centers, two questions.</strong> The blue bar <code>flux_true +/- fluxerr</code> shows the distribution used for sampling. A Gaussian observation falls inside this one-sigma interval in only 68.3% of cases. The black bar <code>flux_obs +/- fluxerr</code> is the conventional error bar attached to the measurement; the observed point is always at its center. The green current forward model tests software drift and is not expected to fall in either bar.</div>
+    <div class="grid two">
+      <article class="panel full-width"><div class="panel-head"><div><h3>Fluxes, generative intervals, measurement bars, and noise</h3><p>Blue: truth +/- sigma. Black: observed +/- sigma. Orange: truth-to-observation noise draw. Green: noiseless current forward model.</p></div></div><div id="flux-error-chart" class="chart"></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>AB magnitudes: provenance of the three curves</h3><p>Generation and the current runtime are noiseless; noisy observations have magnitudes only for positive flux. Higher means brighter.</p></div></div><div id="magnitude-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Current forward-model difference</h3><p>mag_current - stored_mag</p></div></div><div id="delta-mag-chart" class="chart compact"></div></article>
+      <article class="panel">
+        <div class="panel-head"><div><h3 id="band-hist-title">Band distribution</h3><p>True magnitude across 40,000 rows</p></div><div class="control-row"><label>Filter<select id="band-select"></select></label></div></div>
+        <div id="band-hist" class="chart compact"></div>
+      </article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Stored and recomputed fluxes</h3><p>nJy; noise = observed flux - true flux</p></div></div><div class="table-scroll"><table class="phot-table"><thead><tr><th>Band</th><th>lambda eff.</th><th>mag generation</th><th>mag observation</th><th>mag current</th><th>Current - generation delta</th><th>true flux</th><th>observed flux</th><th>fluxerr</th><th>noise</th><th>pull noise/sigma</th><th>S/N</th></tr></thead><tbody id="photometry-table"></tbody></table></div></article>
+    </div>
+  </section>
+
+  <section id="stage-error" class="stage-panel">
+    <div class="stage-heading"><div><h2>11. Error model and noise draw</h2><p>Scatter comes from m5 depths, source/background terms, and the systematic floor; displayed noise is stored in the parquet file.</p></div></div>
+    <div class="grid two">
+      <article class="panel full-width"><div class="panel-head"><div><h3>Noise realization by band</h3><p>epsilon=(flux_obs-flux_true)/fluxerr; dashed lines show plus or minus one sigma</p></div></div><div id="noise-pull-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Distribution of all pulls</h3><p>720 000 draws, 40 000 galaxies times 18 bandes</p></div></div><div id="all-pull-hist" class="chart compact"></div></article>
+      <article class="panel">
+        <div class="panel-head"><div><h3 id="error-band-title">Distribution by band</h3><p>Noise pull in the training set</p></div><div class="control-row"><label>Filter<select id="error-band-select"></select></label></div></div>
+        <div id="band-pull-hist" class="chart compact"></div>
+      </article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Flux-error components</h3><p>Square roots of the three variance contributions, en nJy</p></div></div><div id="error-components-chart" class="chart"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Active configuration</h3><p>Values exactes du YAML et de la fonction m5_depth</p></div></div><div class="panel-body"><ul id="error-facts" class="facts"></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Selected band</h3><p>Depth and noise for this example</p></div></div><div class="panel-body"><ul id="band-error-facts" class="facts"></ul></div></article>
+      <article class="panel full-width"><pre class="formula">f5 = 3631 Jy * 10^(-0.4 * m5)
+sigma_f^2 = (0.04-gamma) * |f_true| * f5 + gamma * f5^2 + (sys_frac * |f_true|)^2
+sys_frac = expm1[ln(10) * sigma_sys_mag / 2.5]
+epsilon ~ Normal(0,1)
+observed_flux = flux_true + epsilon * sigma_f</pre></article>
+    </div>
+  </section>
+
+  <section id="stage-audit" class="stage-panel">
+    <div class="stage-heading"><div><h2>12. Audit and provenance</h2><p>Closure is exact only when the code, versions, and assets match those used at generation time.</p></div></div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Generation runtime versus current runtime</h3><p>Read from manifest.yaml and the active environment</p></div></div><div id="provenance-grid" class="provenance-grid"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Example audit</h3><p>Numerical contracts and photometric drift</p></div></div><div class="panel-body"><ul id="audit-facts" class="facts"></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Computation sources</h3><p>Functions called by this page builder</p></div></div><div class="panel-body"><ul class="facts"><li><span>Theta mapping</span><span><code>synthetic_diffsky.photometry.theta_from_truth_frame</code></span></li><li><span>Raw SFH</span><span><code>model.build_diffsky_basic_sfh_table_jax</code></span></li><li><span>Spline</span><span><code>prior_learning.spline15d.cubic_spline_interpolate_jax</code></span></li><li><span>Normalization</span><span><code>model.normalize_sfh_to_stellar_mass_jax</code></span></li><li><span>Complete forward</span><span><code>model.run_diffsky_basic_model_jax</code></span></li><li><span>Photometry</span><span><code>dsps.calc_obs_mag</code> then <code>abmag_to_fnu_cgs</code></span></li><li><span>Stored noise</span><span><code>flux = flux_true + Normal(0, fluxerr)</code></span></li></ul></div></article>
+    </div>
+  </section>
+  <section id="stage-methods" class="stage-panel">
+    <div class="stage-heading"><div><h2>13. Comment les nouveaux runs apprennent un posterior</h2><p>Le même jeu de données et le même forward model sont utilisés, mais AVI et NPE ne reçoivent pas le même signal d'apprentissage. Cette différence explique leur vitesse et leurs erreurs.</p></div></div>
+    <div class="notice"><strong>Deux objets différents portent le mot flow.</strong> Le <em>prior flow</em> apprend la population sans regarder la photométrie d'une galaxie précise. Le <em>posterior flow</em> apprend une distribution conditionnelle pour une galaxie donnée. Dans la matrice 8 runs, le prior commun est un RealNVP gelé; les noms <code>realnvp</code> et <code>rqspline</code> décrivent le posterior. Le run de lignée RQ utilise réellement un prior RQ-spline appris et est marqué séparément.</div>
+    <div class="method-flow" aria-label="Flux des données et de l'entraînement">
+      <article class="method-step"><h3>1. Vérités synthétiques</h3><p>Chaque galaxie possède 15 nombres connus: redshift, masse, métallicité, poussière et dix contrastes de SFH. Comme la simulation les connaît, ils servent de vérité de contrôle.</p></article>
+      <article class="method-step"><h3>2. Prior de population</h3><p>Un flow apprend quelles combinaisons de ces 15 nombres sont fréquentes ou rares dans la population. Il répond à « avant de voir les flux, qu'est-ce qui est plausible ? ».</p></article>
+      <article class="method-step"><h3>3. Photométrie observée</h3><p>Le forward JAX-COSMO spline + DSPS transforme les paramètres en 18 flux. Bruit et erreurs deviennent 36 entrées: 18 flux transformés par asinh et 18 erreurs en log.</p></article>
+      <article class="method-step"><h3>4. Encodeur conditionnel</h3><p>Un MLP lit ces 36 valeurs et produit soit une gaussienne, soit la base d'un flow conditionnel. Il construit <code>q(x|y)</code>: les paramètres plausibles <code>x</code> sachant la photométrie <code>y</code>.</p></article>
+      <article class="method-step"><h3>5. Tests sur 5 000 objets</h3><p>On échantillonne 128 posteriors par objet, redécode les flux, puis mesure couverture, RMSE, photo-z, chi2 prédictif et accord vérité/prior/posterior dans les corners.</p></article>
+    </div>
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>AVI: apprendre en repassant par la physique</h3><p>Stochastic evidence lower bound, ou ELBO</p></div></div><div class="panel-body"><p>L'encodeur propose des paramètres. Le prior dit s'ils sont plausibles et DSPS calcule les flux qu'ils produiraient. La loss combine l'accord photométrique et une pénalité KL vers le prior.</p><pre class="formula">x ~ q_phi(x | y)
+loss_AVI = -log p(y | x) + beta * [log q_phi(x | y) - log p_prior(x)]</pre><p><strong>Pourquoi:</strong> cette méthode peut apprendre même sans vérité physique observée, donc elle correspond au futur cas réel. <strong>Coût:</strong> chaque mise à jour traverse le décodeur physique; ici environ 320 s/époque. <strong>Risque observé:</strong> excellent ajustement des flux mais posterior trop étroit, donc couverture très insuffisante.</p></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>NPE: apprendre directement avec les vérités</h3><p>Neural posterior estimation supervisée</p></div></div><div class="panel-body"><p>La simulation donne le vrai vecteur <code>x_true</code>. On demande directement au posterior de lui donner une forte probabilité conditionnellement aux flux.</p><pre class="formula">loss_NPE = -log q_phi(x_true | y)</pre><p><strong>Pourquoi:</strong> aucun appel DSPS n'est requis dans la boucle, donc l'expérience est environ 65 fois plus rapide. <strong>Avantage observé:</strong> couverture proche des cibles 68/95 %. <strong>Limite:</strong> un bon posterior supervisé peut encore produire un chi2 photométrique moins bon et dépend entièrement du réalisme du simulateur.</p></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Les quatre familles de posterior</h3><p>Complexité croissante, pas qualité garantie croissante</p></div></div><div class="panel-body"><ul class="facts"><li><span><code>gaussian_x</code></span><span>Gaussienne diagonale directement dans les 15 coordonnées physiques normalisées. Rapide et simple, mais ne représente ni corrélations ni multimodalité.</span></li><li><span><code>gaussian_u</code></span><span>Gaussienne dans l'espace de base du prior puis transport vers x. Elle hérite de la géométrie du prior appris, au prix d'un couplage plus fort à sa qualité.</span></li><li><span><code>realnvp</code></span><span>Quatre transformations affines conditionnelles. Elles apprennent corrélations, asymétrie et courbure avec un Jacobien exact.</span></li><li><span><code>rqspline</code></span><span>Quatre transformations rationnelles-quadratiques à huit bins. Elles déforment plus finement chaque coordonnée, mais demandent plus de paramètres et peuvent être plus difficiles à stabiliser.</span></li></ul></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Pourquoi plusieurs métriques sont obligatoires</h3><p>Aucune colonne ne suffit à déclarer un vainqueur</p></div></div><div class="panel-body"><ul class="facts"><li><span>Coverage</span><span>Vérifie si l'incertitude annoncée contient réellement la vérité à la fréquence promise.</span></li><li><span>Parameter RMSE</span><span>Mesure la précision du centre du posterior, pas la qualité de sa largeur.</span></li><li><span>Photo-z RMSE</span><span>Isole la qualité du redshift, paramètre critique mais seulement une des 15 dimensions.</span></li><li><span>Posterior predictive chi2</span><span>Vérifie que les paramètres redonnent les flux. Un modèle peut très bien fitter les flux et rester physiquement faux à cause des dégénérescences.</span></li><li><span>Corner</span><span>Montre les marginales et corrélations que les résumés numériques peuvent cacher: biais, queues, modes manquants et posterior trop étroit.</span></li></ul></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Prior appris réellement utilisé</h3><p>Provenance, qualité et différence RealNVP / RQ-spline</p></div></div><div class="panel-body"><div id="prior-run-facts" class="grid two"></div></div></article>
+    </div>
+  </section>
+
+  <section id="stage-joint" class="stage-panel">
+    <div class="stage-heading"><div><h2>14. Apprendre conjointement le prior et le posterior</h2><p>Lecture scientifique de la nouvelle array RealNVP indépendante. L'objectif final est bien un entraînement sur photométrie seule; la vérité synthétique n'est utilisée que pour comprendre les échecs et tester la plomberie.</p></div></div>
+    <div class="science-verdict"><strong>Conclusion de cette array.</strong> Aucun run photometry-only n'est aujourd'hui un modèle final acceptable. Le meilleur candidat méthodologique est VEM 4:1, parce qu'il apprend réellement <code>p</code> et <code>q</code> sans vérité et sépare leurs mises à jour, mais son résultat est rejeté: couverture 68 % = 7,7 %, RMSE latente médiane = 2,41 et prior de masse biaisé. Les bons chiffres du run hybride viennent de la supervision NPE; ils démontrent la capacité du posterior, pas la réussite de l'apprentissage non supervisé.</div>
+
+    <article class="target-architecture">
+      <div class="panel-head" style="padding-left:0;padding-right:0"><div><h3>Architecture cible sur vraies données</h3><p>Seuls les flux, leurs erreurs, la sélection du catalogue et le forward physique sont observés</p></div></div>
+      <p><strong>Oui, le prior est appris sur le latent, conjointement au posterior.</strong> Mais ces latents ne sont pas des vérités observées: ce sont les échantillons <code>x_i ~ q_phi(x|y_i)</code> inférés à partir de tous les objets du catalogue. Le prior <code>p_psi(x)</code> apprend la distribution populationnelle de cet ensemble latent agrégé, tandis que le forward vérifie séparément que chaque latent reconstruit ses bandes.</p>
+      <div class="architecture-lane">
+        <div class="architecture-lane-title">Voie objet: reconstruction photométrique <span>un y_i à la fois</span></div>
+        <div class="architecture-flow">
+          <div class="architecture-node metric"><b>Flux observés y_i</b><span>18 flux + 18 erreurs; aucune vérité latente</span></div>
+          <div class="architecture-node train"><b>Posterior q_phi(x|y_i)</b><span>RealNVP conditionnel; propose les solutions latentes</span></div>
+          <div class="architecture-node"><b>x_i ~ q_phi</b><span>15D: z, masse, Z, poussière, SFH spline</span></div>
+          <div class="architecture-node frozen"><b>JAX-COSMO + DSPS</b><span>Forward physique différentiable et gelé</span></div>
+          <div class="architecture-node metric"><b>log p(y_i|x_i)</b><span>Accord Student-t dans les bandes</span></div>
+        </div>
+      </div>
+      <div class="architecture-lane">
+        <div class="architecture-lane-title">Voie population: apprentissage du prior latent <span>tous les y_i du catalogue</span></div>
+        <div class="architecture-flow">
+          <div class="architecture-node metric"><b>Catalogue {y_i}</b><span>Objets observés après la sélection connue</span></div>
+          <div class="architecture-node train"><b>q_phi sur le catalogue</b><span>Produit plusieurs latents plausibles par objet</span></div>
+          <div class="architecture-node"><b>Population {x_i,s}</b><span>Posterior agrégé, pas un catalogue de x_true</span></div>
+          <div class="architecture-node train"><b>Prior p_psi(x)</b><span>Flow de population ajusté aux latents inférés</span></div>
+          <div class="architecture-node metric"><b>log p_psi(x_i,s)</b><span>Terme prior qui contraint q et apprend p</span></div>
+        </div>
+      </div>
+      <pre class="formula">ELBO = sum_i E_{x ~ q_phi(x|y_i)} [ log p(y_i|x) + log p_psi(x) - log q_phi(x|y_i) ]
+
+Joint: gradients de ce même ELBO vers phi et psi
+VEM M-step: max_psi sum_i E_{stop_gradient(q_phi)} [ log p_psi(x) ]</pre>
+      <div class="architecture-branches">
+        <div class="architecture-branch"><strong>Mode joint.</strong> <code>p_psi</code> et <code>q_phi</code> reçoivent les gradients du même ELBO. Ils se co-adaptent: le prior attire les latents de q et q déplace les latents sur lesquels le prior apprend. Une mauvaise solution peut donc devenir auto-cohérente.</div>
+        <div class="architecture-branch"><strong>Mode VEM.</strong> Pendant la M-step, on fige q et on détache ses échantillons avant d'ajuster <code>p_psi</code>. Pendant l'E-step, on fige p et on ajuste q avec likelihood + prior. Cette alternance limite la poursuite instantanée entre les deux réseaux.</div>
+        <div class="architecture-branch"><strong>Sélection.</strong> Sans correction explicite, le prior apprend la population latente du <em>catalogue sélectionné</em>, pas automatiquement la population physique parente. La fonction de sélection doit entrer dans le modèle pour remonter à cette dernière.</div>
+        <div class="architecture-branch"><strong>Ce qui n'existe pas.</strong> Ni <code>x_true</code> objet par objet, ni histogramme vrai des paramètres. Les flèches de vérité utilisées dans les runs hybrides/oracles doivent disparaître en production.</div>
+      </div>
+    </article>
+
+    <div class="grid two">
+      <article class="panel"><div class="panel-head"><div><h3>Le problème d'identifiabilité</h3><p>Pourquoi reconstruire les bandes ne suffit pas</p></div></div><div class="panel-body"><p>L'entraînement cherche à expliquer la distribution observée par <code>p_psi(y) = integral p(y|x) p_psi(x) dx</code>. Or plusieurs paramètres produisent presque les mêmes couleurs: âge–poussière–métallicité, masse–amplitude, redshift–SED et différentes SFH peuvent se compenser.</p><p>Donc plusieurs couples <code>(p_psi, q_phi)</code> peuvent donner des flux corrects. Le posterior peut choisir un seul mode étroit; le prior apprend ensuite ce choix et le rend auto-cohérent. La loss photométrique baisse, mais la distribution latente devient fausse. C'est exactement pourquoi un chi2 autour de 52 n'empêche pas une RMSE latente supérieure à 2.</p></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Ce qu'on peut réellement valider sans vérité</h3><p>Tests disponibles sur un catalogue réel</p></div></div><div class="panel-body"><ul class="facts"><li><span>Held-out bands</span><span>Masquer certaines bandes, inférer avec les autres et tester leur densité prédictive.</span></li><li><span>Posterior predictive</span><span>Comparer flux, couleurs, non-détections et résidus par bande sur des objets jamais optimisés.</span></li><li><span>Prior predictive</span><span>Échantillonner <code>p_psi(x)</code>, passer par DSPS et comparer la distribution des bandes après la même sélection.</span></li><li><span>Stabilité</span><span>Comparer seeds, sous-catalogues, profondeurs et initialisations. Une population identifiable ne doit pas changer radicalement.</span></li><li><span>Simulation closure</span><span>Coverage, PIT et vérité restent indispensables pour développer la méthode, mais ne sont jamais des entrées de l'entraînement final.</span></li></ul></div></article>
+    </div>
+
+    <div class="grid two" style="margin-top:16px">
+      <article class="panel"><div class="panel-head"><div><h3>Couverture par paramètre</h3><p>Le résumé médian peut cacher les dimensions les plus effondrées</p></div></div><div class="panel-body"><img id="joint-coverage-figure" class="result-image" alt="Couverture par paramètre de la nouvelle array"></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Vitesse contre calibration</h3><p>Le coût reste similaire entre variantes AVI; la qualité ne suit pas le temps de calcul</p></div></div><div class="panel-body"><img id="joint-speed-figure" class="result-image" alt="Vitesse contre couverture de la nouvelle array"></div></article>
+    </div>
+
+    <div class="stage-heading" style="margin-top:20px"><div><h2>Pourquoi chaque expérience existe</h2><p>Chaque carte sépare la question scientifique, le schéma de gradients, la compatibilité avec des données réelles et le verdict obtenu.</p></div></div>
+    <div id="joint-experiment-list" class="experiment-list"></div>
+  </section>
+
+  <section id="stage-compare" class="stage-panel">
+    <div class="stage-heading"><div><h2>15. Comparer deux runs</h2><p>Choisissez A et B. Les valeurs, écarts, configurations, corners et artefacts viennent directement des répertoires de production locaux sérialisés lors de la construction de cette page.</p></div></div>
+    <div id="comparison-warning" class="notice"></div>
+    <div class="comparison-controls">
+      <label>Run A<select id="run-a-select"></select></label>
+      <label>Run B<select id="run-b-select"></select></label>
+    </div>
+    <div id="run-summary" class="run-summary"></div>
+    <article class="panel"><div class="panel-head"><div><h3>Comparaison numérique</h3><p>Le delta est B - A. La couleur tient compte du sens de la métrique.</p></div></div><div class="table-scroll"><table><thead><tr><th>Métrique</th><th>A</th><th>B</th><th>Delta B - A</th><th>Comment lire</th></tr></thead><tbody id="metric-comparison"></tbody></table></div></article>
+    <div class="stage-heading" style="margin-top:18px"><div><h2>Corner plots</h2><p>Vérité, prior de population et posterior agrégé sur les 15 coordonnées latentes. Ouvrez l'image dans le navigateur pour inspecter les petits panneaux.</p></div></div>
+    <div id="corner-comparison" class="comparison-images"></div>
+    <div class="stage-heading" style="margin-top:18px"><div><h2>Diagnostics visuels</h2><p>Courbes d'entraînement, résidus photométriques par bande et redshift vrai contre prédit.</p></div></div>
+    <div id="diagnostic-comparison" class="comparison-images"></div>
+    <div class="grid two" style="margin-top:14px">
+      <article class="panel"><div class="panel-head"><div><h3>Paramètres qui diffèrent</h3><p>Comparaison clé par clé de la configuration normalisée exacte</p></div></div><div class="table-scroll"><table class="config-diff"><thead><tr><th>Clé</th><th>A</th><th>B</th></tr></thead><tbody id="config-diff"></tbody></table></div></article>
+      <article class="panel"><div class="panel-head"><div><h3>Configuration complète</h3><p>Tous les inputs sérialisés, sans résumé</p></div></div><div class="panel-body"><details><summary id="config-a-title">Run A</summary><pre id="config-a-json" class="formula run-json"></pre></details><details><summary id="config-b-title">Run B</summary><pre id="config-b-json" class="formula run-json"></pre></details></div></article>
+      <article class="panel full-width"><div class="panel-head"><div><h3>Inventaire des artefacts</h3><p>Fichiers individuels et groupes de checkpoints/shards avec tailles exactes</p></div></div><div class="control-row panel-body"><label>Afficher les artefacts de<select id="artifact-side-select"><option value="a">Run A</option><option value="b">Run B</option></select></label></div><div class="table-scroll"><table class="artifact-table"><thead><tr><th>Chemin</th><th>Type</th><th>Nombre</th><th>Taille</th></tr></thead><tbody id="artifact-inventory"></tbody></table></div></article>
+    </div>
+  </section>
+</main>
+
+<div id="tooltip" class="tooltip"></div>
+<script id="feniks-data" type="application/json">__FENIKS_PAYLOAD__</script>
+<script>
+"use strict";
+const DATA = JSON.parse(document.getElementById("feniks-data").textContent);
+const COLORS = { blue: "#276a9c", green: "#28735a", rust: "#b55432", violet: "#71558a", gold: "#b48824", ink: "#273136", gray: "#788582" };
+const state = { example: 0, stage: "overview", parameter: "z_obs", band: 0, runA: DATA.run_explorer.default_a, runB: DATA.run_explorer.default_b, artifactSide: "a" };
+const tooltip = document.getElementById("tooltip");
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(tag, attrs = {}, text = "") {
+  const node = document.createElementNS(SVG_NS, tag);
+  Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, String(value)));
+  if (text) node.textContent = text;
+  return node;
+}
+function fmt(value, digits = 4) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "n/a";
+  const n = Number(value);
+  const a = Math.abs(n);
+  if ((a > 0 && a < 1e-3) || a >= 1e5) return n.toExponential(3);
+  return n.toLocaleString("fr-FR", { maximumSignificantDigits: digits });
+}
+function html(value) { return String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
+function fmtBytes(value) {
+  let n = Number(value);
+  if (!Number.isFinite(n)) return "n/a";
+  const units = ["B", "KB", "MB", "GB"];
+  let index = 0;
+  while (n >= 1024 && index < units.length - 1) { n /= 1024; index += 1; }
+  return `${n.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+function log10(values) { return values.map(v => Math.log10(Math.max(Number(v), 1e-30))); }
+function nJyToAB(value) { return Number(value) > 0 ? -2.5 * Math.log10(Number(value) * 1e-9 / 3631.0) : NaN; }
+function currentExample() { return DATA.examples[state.example]; }
+function showTooltip(event, html) {
+  tooltip.innerHTML = html;
+  tooltip.style.display = "block";
+  tooltip.style.left = `${Math.min(event.clientX + 13, window.innerWidth - 325)}px`;
+  tooltip.style.top = `${Math.min(event.clientY + 13, window.innerHeight - 130)}px`;
+}
+function hideTooltip() { tooltip.style.display = "none"; }
+function clearChart(container) { container.replaceChildren(); }
+
+function chartFrame(container, options = {}) {
+  clearChart(container);
+  const width = Math.max(420, Math.min(980, container.clientWidth || 700));
+  const height = options.height || (container.classList.contains("compact") ? 230 : 305);
+  const margin = { left: 62, right: options.rightMargin || 18, top: 12, bottom: 47 };
+  const legend = document.createElement("div"); legend.className = "legend"; container.appendChild(legend);
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": options.aria || "Graphique scientifique" });
+  container.appendChild(svg);
+  return { svg, legend, width, height, margin, plotW: width - margin.left - margin.right, plotH: height - margin.top - margin.bottom };
+}
+
+function extent(values) {
+  const finite = values.filter(Number.isFinite);
+  if (!finite.length) return [0, 1];
+  let lo = Math.min(...finite), hi = Math.max(...finite);
+  if (lo === hi) { const pad = Math.max(Math.abs(lo) * 0.05, 1); lo -= pad; hi += pad; }
+  return [lo, hi];
+}
+function ticks(lo, hi, n = 5) { return Array.from({ length: n }, (_, i) => lo + (hi - lo) * i / (n - 1)); }
+function addAxes(frame, xDomain, yDomain, options = {}) {
+  const { svg, margin: m, plotW, plotH } = frame;
+  const [x0, x1] = xDomain, [y0, y1] = yDomain;
+  const sx = x => m.left + (x - x0) / (x1 - x0) * plotW;
+  const sy = y => options.invertY ? m.top + (y - y0) / (y1 - y0) * plotH : m.top + (y1 - y) / (y1 - y0) * plotH;
+  ticks(y0, y1).forEach(value => {
+    const y = sy(value);
+    svg.appendChild(svgEl("line", { x1: m.left, x2: m.left + plotW, y1: y, y2: y, class: "grid-line" }));
+    svg.appendChild(svgEl("text", { x: m.left - 7, y: y + 3, "text-anchor": "end", class: "axis-text" }, (options.yFormat || fmt)(value)));
+  });
+  ticks(x0, x1).forEach(value => {
+    const x = sx(value);
+    svg.appendChild(svgEl("line", { x1: x, x2: x, y1: m.top, y2: m.top + plotH, class: "grid-line" }));
+    svg.appendChild(svgEl("text", { x, y: m.top + plotH + 17, "text-anchor": "middle", class: "axis-text" }, (options.xFormat || fmt)(value)));
+  });
+  svg.appendChild(svgEl("line", { x1: m.left, x2: m.left + plotW, y1: m.top + plotH, y2: m.top + plotH, class: "axis-line" }));
+  svg.appendChild(svgEl("line", { x1: m.left, x2: m.left, y1: m.top, y2: m.top + plotH, class: "axis-line" }));
+  if (options.xLabel) svg.appendChild(svgEl("text", { x: m.left + plotW / 2, y: frame.height - 7, "text-anchor": "middle", class: "axis-label" }, options.xLabel));
+  if (options.yLabel) svg.appendChild(svgEl("text", { transform: `translate(14 ${m.top + plotH / 2}) rotate(-90)`, "text-anchor": "middle", class: "axis-label" }, options.yLabel));
+  return { sx, sy };
+}
+function addLegend(legend, series) {
+  series.forEach(item => {
+    const row = document.createElement("span"); row.className = "legend-item";
+    const swatch = document.createElement("span"); swatch.className = "legend-swatch"; swatch.style.background = item.color;
+    row.append(swatch, document.createTextNode(item.label)); legend.appendChild(row);
+  });
+}
+
+function renderLineChart(container, series, options = {}) {
+  const frame = chartFrame(container, options); addLegend(frame.legend, series);
+  const tx = options.xScale === "log" ? x => Math.log10(Math.max(x, 1e-30)) : x => x;
+  const xs = series.flatMap(s => s.x.map(tx));
+  const ys = series.flatMap(s => s.y.map(Number));
+  let xDomain = options.xDomain || extent(xs), yDomain = options.yDomain || extent(ys);
+  const yPad = (yDomain[1] - yDomain[0]) * 0.07; yDomain = [yDomain[0] - yPad, yDomain[1] + yPad];
+  const xFormat = options.xScale === "log" ? value => fmt(10 ** value, 3) : options.xFormat;
+  const scales = addAxes(frame, xDomain, yDomain, { ...options, xFormat });
+  (options.markers || []).forEach(marker => {
+    const transformed = tx(marker.x);
+    if (transformed < xDomain[0] || transformed > xDomain[1]) return;
+    const x = scales.sx(transformed);
+    frame.svg.appendChild(svgEl("line", { x1: x, x2: x, y1: frame.margin.top, y2: frame.margin.top + frame.plotH, class: "reference-line" }));
+    frame.svg.appendChild(svgEl("text", { x: x + 3, y: frame.margin.top + 10, class: "reference-text" }, marker.label));
+  });
+  series.forEach(item => {
+    const points = item.x.map((x, i) => [tx(Number(x)), Number(item.y[i])]).filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    const d = points.map((p, i) => `${i ? "L" : "M"}${scales.sx(p[0]).toFixed(2)},${scales.sy(p[1]).toFixed(2)}`).join(" ");
+    if (item.line !== false) frame.svg.appendChild(svgEl("path", { d, fill: "none", stroke: item.color, "stroke-width": item.width || 2.1, "stroke-dasharray": item.dash || "", "vector-effect": "non-scaling-stroke" }));
+    if (item.points) points.forEach(point => frame.svg.appendChild(svgEl("circle", { cx: scales.sx(point[0]), cy: scales.sy(point[1]), r: item.pointRadius || 3.4, fill: item.color, stroke: "#fff", "stroke-width": 1 })));
+  });
+  const overlay = svgEl("rect", { x: frame.margin.left, y: frame.margin.top, width: frame.plotW, height: frame.plotH, fill: "transparent" });
+  overlay.addEventListener("mousemove", event => {
+    const rect = frame.svg.getBoundingClientRect();
+    const px = (event.clientX - rect.left) / rect.width * frame.width;
+    const xT = xDomain[0] + (px - frame.margin.left) / frame.plotW * (xDomain[1] - xDomain[0]);
+    const xOriginal = options.xScale === "log" ? 10 ** xT : xT;
+    const rows = series.map(item => {
+      let best = 0, distance = Infinity;
+      item.x.forEach((value, i) => { const d = Math.abs(Number(value) - xOriginal); if (d < distance) { best = i; distance = d; } });
+      return `<span style="color:${item.color}">&#9632;</span> ${item.label}: <b>${fmt(item.y[best])}</b>`;
+    });
+    showTooltip(event, `${options.xLabel || "x"}: <b>${fmt(xOriginal)}</b><br>${rows.join("<br>")}`);
+  });
+  overlay.addEventListener("mouseleave", hideTooltip); frame.svg.appendChild(overlay);
+}
+
+function renderHistogram(container, histogram, selected, options = {}) {
+  const frame = chartFrame(container, { height: container.classList.contains("compact") ? 230 : 305 });
+  const edges = histogram.edges.map(Number), values = histogram.fractions.map(Number);
+  const xDomain = [edges[0], edges[edges.length - 1]], yDomain = [0, Math.max(...values) * 1.13 || 1];
+  const scales = addAxes(frame, xDomain, yDomain, { xLabel: options.xLabel, yLabel: "Fraction par bin", yFormat: v => `${fmt(v * 100, 3)}%` });
+  values.forEach((value, i) => {
+    const x0 = scales.sx(edges[i]), x1 = scales.sx(edges[i + 1]), y = scales.sy(value), y0 = scales.sy(0);
+    const bar = svgEl("rect", { x: x0 + 0.5, y, width: Math.max(x1 - x0 - 1, 1), height: Math.max(y0 - y, 0), fill: options.color || COLORS.blue, opacity: 0.76 });
+    bar.addEventListener("mousemove", event => showTooltip(event, `${fmt(edges[i])} &agrave; ${fmt(edges[i + 1])}<br>Fraction: <b>${fmt(value * 100)}%</b>`));
+    bar.addEventListener("mouseleave", hideTooltip); frame.svg.appendChild(bar);
+  });
+  if (Number.isFinite(selected)) {
+    const x = scales.sx(selected);
+    frame.svg.appendChild(svgEl("line", { x1: x, x2: x, y1: frame.margin.top, y2: frame.margin.top + frame.plotH, stroke: COLORS.rust, "stroke-width": 2.4 }));
+    frame.svg.appendChild(svgEl("text", { x: Math.min(x + 5, frame.width - 100), y: frame.margin.top + 12, fill: COLORS.rust, "font-size": 10, "font-weight": 700 }, `exemple ${fmt(selected)}`));
+  }
+}
+
+function categoricalSeries(container, labels, series, options = {}) {
+  const x = labels.map((_, i) => i);
+  renderLineChart(container, series.map(s => ({ ...s, x })), {
+    xDomain: [-0.4, labels.length - 0.6], yDomain: options.yDomain, invertY: options.invertY,
+    xLabel: options.xLabel || "Filters", yLabel: options.yLabel,
+    xFormat: value => labels[Math.max(0, Math.min(labels.length - 1, Math.round(value)))].replace("euclid_", "E_").replace("roman_", "R_"),
+    yFormat: options.yFormat
+  });
+}
+
+function renderPipelineGraph() {
+  const container = document.getElementById("pipeline-graph");
+  clearChart(container);
+  const e = currentExample(), d = e.derived, p = e.parameters, phot = e.photometry;
+  const svg = svgEl("svg", { viewBox: "0 0 1680 880", role: "img", "aria-label": "Graphe interactif ramifie du forward model complet" });
+  const defs = svgEl("defs");
+  const marker = svgEl("marker", { id: "pipeline-arrowhead", markerWidth: 8, markerHeight: 8, refX: 7, refY: 4, orient: "auto" });
+  marker.appendChild(svgEl("path", { d: "M0,0 L8,4 L0,8 Z", fill: "#6d7a77" }));
+  defs.appendChild(marker); svg.appendChild(defs);
+  const groups = [
+    { x: 12, y: 38, w: 255, h: 830, title: "18 PARQUET GROUND TRUTHS" },
+    { x: 283, y: 38, w: 522, h: 830, title: "HALO DYNAMICS AND FORMATION HISTORY" },
+    { x: 821, y: 38, w: 486, h: 830, title: "STELLAR POPULATIONS AND SPECTRUM" },
+    { x: 1323, y: 38, w: 342, h: 830, title: "OBSERVABLES AND NOISE" }
+  ];
+  groups.forEach(group => {
+    svg.appendChild(svgEl("rect", { x: group.x, y: group.y, width: group.w, height: group.h, rx: 7, class: "graph-group" }));
+    svg.appendChild(svgEl("text", { x: group.x + 12, y: group.y + 20, class: "graph-group-title" }, group.title));
+  });
+  const nodes = {
+    basic: { x: 28, y: 75, w: 220, h: 82, stage: "inputs", title: "Observation + mass", lines: [`z_obs = ${fmt(p.z_obs)}`, `log10_stellar_mass = ${fmt(p.log10_stellar_mass)}`], color: COLORS.blue },
+    mahInput: { x: 28, y: 180, w: 220, h: 180, stage: "inputs", title: "5 Diffmah parameters", lines: [`logm0 = ${fmt(p.diffmah_logm0)}`, `logtc = ${fmt(p.diffmah_logtc)}`, `early_index = ${fmt(p.diffmah_early_index)}`, `late_index = ${fmt(p.diffmah_late_index)}`, `t_peak = ${fmt(p.diffmah_t_peak)} Gyr`], color: COLORS.violet },
+    msInput: { x: 28, y: 385, w: 220, h: 155, stage: "inputs", title: "4 main-sequence parameters", lines: [`lgmcrit = ${fmt(p.diffstar_lgmcrit)}`, `lgy_at_mcrit = ${fmt(p.diffstar_lgy_at_mcrit)}`, `indx_lo = ${fmt(p.diffstar_indx_lo)}`, `indx_hi = ${fmt(p.diffstar_indx_hi)}`], color: COLORS.rust },
+    qInput: { x: 28, y: 565, w: 220, h: 155, stage: "inputs", title: "4 quenching parameters", lines: [`lg_qt = ${fmt(p.diffstar_lg_qt)}`, `qlglgdt = ${fmt(p.diffstar_qlglgdt)}`, `lg_drop = ${fmt(p.diffstar_lg_drop)}`, `lg_rejuv = ${fmt(p.diffstar_lg_rejuv)}`], color: COLORS.rust },
+    stellarInput: { x: 28, y: 745, w: 220, h: 105, stage: "inputs", title: "Metallicity + dust", lines: [`log Zstar/Zsun = ${fmt(p.log10_stellar_metallicity)}`, `dust_av = ${fmt(p.dust_av)} mag`, `dust_delta = ${fmt(p.dust_delta)}`], color: COLORS.green },
+    cosmology: { x: 305, y: 75, w: 210, h: 92, stage: "halo", title: "DSPS cosmology", lines: [`age_at_z -> t_obs = ${fmt(d.t_obs_gyr)} Gyr`, `80-point grid: 0.05 -> t_obs`, `local lgt0 = log10(t_obs)`], color: COLORS.blue },
+    mah: { x: 565, y: 190, w: 215, h: 135, stage: "halo", title: "Diffmah: Mh(t)", lines: [`alpha(t): early -> late`, `log Mh(obs) = ${fmt(e.halo.logmh.at(-1))}`, `dMh/dt = 0 after t_peak`], color: COLORS.violet },
+    efficiency: { x: 305, y: 385, w: 220, h: 125, stage: "halo", title: "Efficiency y(Mh)", lines: [`beta: indx_lo -> indx_hi`, `pivot = lgmcrit`, `SFR_MS = fb Mh 10^logy`], color: COLORS.rust },
+    qfunc: { x: 565, y: 385, w: 215, h: 125, stage: "sfh", title: "Q(t) function", lines: [`tq = ${fmt(10 ** p.diffstar_lg_qt)} Gyr`, `Qmin = ${fmt(10 ** p.diffstar_lg_drop)}`, `Q(obs) = ${fmt(d.q_at_obs)}`], color: COLORS.rust },
+    raw: { x: 435, y: 555, w: 220, h: 105, stage: "sfh", title: "Raw SFH", lines: [`SFR_raw = Q * SFR_MS`, `SFR_raw(obs) = ${fmt(e.sfh.sfr_raw.at(-1))}`, `unit: Msun/yr`], color: COLORS.rust },
+    normalized: { x: 435, y: 700, w: 220, h: 130, stage: "sfh", title: "SFH normalized to Mstar", lines: [`global scale = ${fmt(d.normalization_scale)}`, `SFR_final(obs) = ${fmt(d.sfr_at_obs)}`, `lgy_at_mcrit cancels out`, `Msurv = ${fmt(d.surviving_mass_msun)} Msun`], color: COLORS.gold },
+    ssp: { x: 845, y: 175, w: 210, h: 125, stage: "stellar", title: "MDF + SSP", lines: [`Zsun = 0.0142`, `MDF scatter = 0.2 dex`, `107 age weights`, `Mformed = ${fmt(d.formed_mass_msun)}`], color: COLORS.green },
+    sed: { x: 1080, y: 175, w: 205, h: 125, stage: "stellar", title: "Intrinsic SED", lines: [`sum SSP * weights * Mformed`, `Lnu -> Llambda`, `display unit: Lsun/Angstrom`], color: COLORS.green },
+    dust: { x: 845, y: 385, w: 210, h: 125, stage: "stellar", title: "Prospector/FSPS dust", lines: [`tau2 = A_V / 1.086 = ${fmt(d.tau_v)}`, `index_n = dust_delta`, `tau1/tau2 = 0`], color: COLORS.rust },
+    igm: { x: 1080, y: 385, w: 205, h: 125, stage: "stellar", title: "SED after dust + IGM", lines: [`age-dependent attenuation`, `IGM FSPS Madau95`, `depends on z_obs`], color: COLORS.green },
+    filters: { x: 960, y: 600, w: 220, h: 120, stage: "stellar", title: "Redshift + 18 filters", lines: [`lambda_rest = lambda_obs/(1+z)`, `6 LSST + 4 Euclid + 8 Roman`, `integration calc_obs_mag`], color: COLORS.blue },
+    fluxTrue: { x: 1345, y: 175, w: 295, h: 115, stage: "photometry", title: "Noiseless generation forward model", lines: [`stored mag_true and flux_true`, `runtime: commit ${DATA.metadata.generation_versions.repo_git_sha.slice(0, 8)}`, `current forward model plotted separately`], color: COLORS.blue },
+    error: { x: 1345, y: 385, w: 295, h: 145, stage: "error", title: "Error model m5_depth", lines: [`m5 and gamma by band`, `sigma_sys = ${DATA.error_model.sigma_sys_mag} mag`, `epsilon ~ Normal(0,1)`, `pull ${DATA.bands[state.band].name} = ${fmt(phot.noise_pull[state.band])}`], color: COLORS.rust },
+    observed: { x: 1345, y: 620, w: 295, h: 155, stage: "photometry", title: "Observed photometry", lines: [`flux_obs = flux_true + epsilon sigma`, `measurement bar = flux_obs +/- sigma`, `generative interval = flux_true +/- sigma`, `maximum current drift = ${fmt(d.max_abs_stored_current_mag)} mag`], color: COLORS.ink }
+  };
+  function connect(fromKey, toKey, label = "") {
+    const from = nodes[fromKey], to = nodes[toKey];
+    const targetIsRight = to.x > from.x + from.w + 8;
+    let pathData, labelX, labelY;
+    if (targetIsRight) {
+      const sx = from.x + from.w, sy = from.y + from.h / 2, tx = to.x, ty = to.y + to.h / 2;
+      const mid = sx + (tx - sx) * 0.5;
+      pathData = `M${sx},${sy} L${mid},${sy} L${mid},${ty} L${tx - 8},${ty}`;
+      labelX = mid + 3; labelY = (sy + ty) / 2 - 3;
+    } else {
+      const downward = to.y >= from.y;
+      const sx = from.x + from.w / 2, sy = downward ? from.y + from.h : from.y;
+      const tx = to.x + to.w / 2, ty = downward ? to.y : to.y + to.h;
+      const mid = sy + (ty - sy) * 0.5;
+      pathData = `M${sx},${sy} L${sx},${mid} L${tx},${mid} L${tx},${ty + (downward ? -8 : 8)}`;
+      labelX = (sx + tx) / 2 + 3; labelY = mid - 3;
+    }
+    const path = svgEl("path", { d: pathData, class: "pipeline-arrow", "marker-end": "url(#pipeline-arrowhead)" });
+    svg.appendChild(path);
+    if (label) svg.appendChild(svgEl("text", { x: labelX, y: labelY, class: "reference-text" }, label));
+  }
+  [
+    ["basic", "cosmology"], ["mahInput", "mah"], ["cosmology", "mah"],
+    ["msInput", "efficiency"], ["mah", "efficiency"], ["qInput", "qfunc"],
+    ["efficiency", "raw"], ["qfunc", "raw"], ["raw", "normalized"],
+    ["basic", "normalized", "Mstar"], ["normalized", "ssp"], ["stellarInput", "ssp", "Zstar"],
+    ["ssp", "sed"], ["sed", "dust"], ["stellarInput", "dust", "A_V, delta"],
+    ["dust", "igm"], ["cosmology", "igm", "z"], ["igm", "filters"],
+    ["filters", "fluxTrue"], ["fluxTrue", "error", "flux_true"],
+    ["fluxTrue", "observed"], ["error", "observed", "epsilon sigma"]
+  ].forEach(edge => connect(...edge));
+  function appendNode(node) {
+    const group = svgEl("g", { class: "pipeline-node", tabindex: 0, role: "button", "aria-label": `Open ${node.title}` });
+    group.appendChild(svgEl("rect", { x: node.x, y: node.y, width: node.w, height: node.h, rx: 5 }));
+    group.appendChild(svgEl("rect", { x: node.x, y: node.y, width: node.w, height: 5, rx: 2, style: `fill:${node.color};stroke:none` }));
+    group.appendChild(svgEl("text", { x: node.x + 10, y: node.y + 25, class: "node-title" }, node.title));
+    node.lines.forEach((line, index) => group.appendChild(svgEl("text", { x: node.x + 10, y: node.y + 45 + index * 15, class: "node-value" }, line)));
+    group.addEventListener("click", () => setStage(node.stage));
+    group.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") setStage(node.stage); });
+    svg.appendChild(group);
+  }
+  Object.values(nodes).forEach(appendNode);
+  svg.appendChild(svgEl("text", { x: 20, y: 24, class: "axis-label" }, "Branched graph of the executed code - select a node to open its distributions and curves"));
+  container.appendChild(svg);
+}
+
+function renderSedWithFilters(container, example) {
+  const st = example.stellar, z = example.parameters.z_obs;
+  const sedSeries = [
+    { x: st.wave_angstrom, y: st.log_llambda_intrinsic, label: "Intrinsic L_lambda", color: COLORS.blue },
+    { x: st.wave_angstrom, y: st.log_llambda_dusted, label: "After dust", color: COLORS.rust },
+    { x: st.wave_angstrom, y: st.log_llambda_post_igm, label: "After IGM", color: COLORS.green }
+  ];
+  const frame = chartFrame(container, { rightMargin: 62 });
+  addLegend(frame.legend, [...sedSeries, { label: "Filters LSST", color: COLORS.blue }, { label: "Filters Euclid", color: COLORS.green }, { label: "Filters Roman", color: COLORS.rust }]);
+  const tx = x => Math.log10(Math.max(x, 1));
+  const xDomain = extent(st.wave_angstrom.map(tx));
+  let yDomain = extent(sedSeries.flatMap(series => series.y));
+  const pad = (yDomain[1] - yDomain[0]) * 0.06; yDomain = [yDomain[0] - pad, yDomain[1] + pad];
+  const scales = addAxes(frame, xDomain, yDomain, { xLabel: "Longueur d'onde au repos [Angstrom]", yLabel: "log10 L_lambda [Lsun/Angstrom]", xFormat: value => fmt(10 ** value, 3) });
+  const syTransmission = value => frame.margin.top + (1 - value) * frame.plotH;
+  ticks(0, 1).forEach(value => {
+    const y = syTransmission(value);
+    frame.svg.appendChild(svgEl("text", { x: frame.margin.left + frame.plotW + 7, y: y + 3, class: "axis-text" }, fmt(value, 2)));
+  });
+  frame.svg.appendChild(svgEl("line", { x1: frame.margin.left + frame.plotW, x2: frame.margin.left + frame.plotW, y1: frame.margin.top, y2: frame.margin.top + frame.plotH, class: "axis-line" }));
+  frame.svg.appendChild(svgEl("text", { transform: `translate(${frame.width - 9} ${frame.margin.top + frame.plotH / 2}) rotate(-90)`, "text-anchor": "middle", class: "axis-label" }, "Normalized transmission"));
+  DATA.bands.forEach(band => {
+    const color = band.name.startsWith("lsst") ? COLORS.blue : band.name.startsWith("euclid") ? COLORS.green : COLORS.rust;
+    const points = band.filter_wave_observed_angstrom.map((wave, i) => [tx(wave / (1 + z)), Number(band.filter_transmission[i])]).filter(point => point[0] >= xDomain[0] && point[0] <= xDomain[1]);
+    const d = points.map((point, i) => `${i ? "L" : "M"}${scales.sx(point[0]).toFixed(2)},${syTransmission(point[1]).toFixed(2)}`).join(" ");
+    const path = svgEl("path", { d, fill: "none", stroke: color, "stroke-width": 1, opacity: 0.34, "vector-effect": "non-scaling-stroke" });
+    path.addEventListener("mousemove", event => showTooltip(event, `<b>${band.name}</b><br>lambda_eff repos: ${fmt(band.effective_wavelength_angstrom / (1 + z))} Angstrom`));
+    path.addEventListener("mouseleave", hideTooltip); frame.svg.appendChild(path);
+  });
+  sedSeries.forEach(item => {
+    const d = item.x.map((x, i) => `${i ? "L" : "M"}${scales.sx(tx(x)).toFixed(2)},${scales.sy(item.y[i]).toFixed(2)}`).join(" ");
+    frame.svg.appendChild(svgEl("path", { d, fill: "none", stroke: item.color, "stroke-width": 2.2, "vector-effect": "non-scaling-stroke" }));
+  });
+}
+
+function renderFluxErrorChart(container, example) {
+  const phot = example.photometry, labels = DATA.bands.map(band => band.name);
+  const frame = chartFrame(container);
+  addLegend(frame.legend, [
+    { label: "Generation truth + truth interval +/- sigma", color: COLORS.blue },
+    { label: "Observation noiseee + measurement bar obs +/- sigma", color: COLORS.ink },
+    { label: "Noiseless current runtime forward model", color: COLORS.green },
+    { label: "Truth-to-observation noise draw", color: COLORS.rust }
+  ]);
+  const sigmaScale = Math.max([...phot.stored_fluxerr_njy].sort((a, b) => a - b)[Math.floor(labels.length / 2)], 1e-3);
+  const transform = value => Math.asinh(value / sigmaScale);
+  const inverse = value => Math.sinh(value) * sigmaScale;
+  const transformed = [];
+  labels.forEach((_, i) => transformed.push(
+    transform(phot.stored_flux_true_njy[i] - phot.stored_fluxerr_njy[i]),
+    transform(phot.stored_flux_true_njy[i] + phot.stored_fluxerr_njy[i]),
+    transform(phot.stored_flux_njy[i] - phot.stored_fluxerr_njy[i]),
+    transform(phot.stored_flux_njy[i] + phot.stored_fluxerr_njy[i]),
+    transform(phot.current_model_flux_njy[i])
+  ));
+  const yDomain = extent(transformed); const yPad = (yDomain[1] - yDomain[0]) * 0.08; yDomain[0] -= yPad; yDomain[1] += yPad;
+  const scales = addAxes(frame, [-0.5, labels.length - 0.5], yDomain, { xLabel: "Filters", yLabel: "Flux [nJy], echelle asinh", xFormat: value => labels[Math.max(0, Math.min(labels.length - 1, Math.round(value)))].replace("euclid_", "E_").replace("roman_", "R_"), yFormat: value => fmt(inverse(value), 3) });
+  labels.forEach((label, i) => {
+    const trueY = scales.sy(transform(phot.stored_flux_true_njy[i]));
+    const obsY = scales.sy(transform(phot.stored_flux_njy[i]));
+    const currentY = scales.sy(transform(phot.current_model_flux_njy[i]));
+    const trueLowY = scales.sy(transform(phot.stored_flux_true_njy[i] - phot.stored_fluxerr_njy[i]));
+    const trueHighY = scales.sy(transform(phot.stored_flux_true_njy[i] + phot.stored_fluxerr_njy[i]));
+    const obsLowY = scales.sy(transform(phot.stored_flux_njy[i] - phot.stored_fluxerr_njy[i]));
+    const obsHighY = scales.sy(transform(phot.stored_flux_njy[i] + phot.stored_fluxerr_njy[i]));
+    const x = scales.sx(i);
+    const xTrue = x - 5, xObs = x + 5;
+    frame.svg.appendChild(svgEl("line", { x1: xTrue, x2: xTrue, y1: trueLowY, y2: trueHighY, stroke: COLORS.blue, "stroke-width": 1.5, opacity: 0.9 }));
+    frame.svg.appendChild(svgEl("line", { x1: xTrue - 4, x2: xTrue + 4, y1: trueLowY, y2: trueLowY, stroke: COLORS.blue }));
+    frame.svg.appendChild(svgEl("line", { x1: xTrue - 4, x2: xTrue + 4, y1: trueHighY, y2: trueHighY, stroke: COLORS.blue }));
+    frame.svg.appendChild(svgEl("line", { x1: xObs, x2: xObs, y1: obsLowY, y2: obsHighY, stroke: COLORS.ink, "stroke-width": 1.5 }));
+    frame.svg.appendChild(svgEl("line", { x1: xObs - 4, x2: xObs + 4, y1: obsLowY, y2: obsLowY, stroke: COLORS.ink }));
+    frame.svg.appendChild(svgEl("line", { x1: xObs - 4, x2: xObs + 4, y1: obsHighY, y2: obsHighY, stroke: COLORS.ink }));
+    frame.svg.appendChild(svgEl("line", { x1: xTrue, x2: xObs, y1: trueY, y2: obsY, stroke: COLORS.rust, "stroke-width": 3, opacity: 0.78 }));
+    frame.svg.appendChild(svgEl("circle", { cx: xTrue, cy: trueY, r: 3.4, fill: COLORS.blue }));
+    frame.svg.appendChild(svgEl("circle", { cx: x, cy: currentY, r: 3.4, fill: COLORS.green }));
+    const observed = svgEl("rect", { x: xObs - 3, y: obsY - 3, width: 6, height: 6, fill: COLORS.ink, transform: `rotate(45 ${xObs} ${obsY})` });
+    const insideGenerative = Math.abs(phot.noise_pull[i]) <= 1;
+    observed.addEventListener("mousemove", event => showTooltip(event, `<b>${label}</b><br>generation truth: ${fmt(phot.stored_flux_true_njy[i])} nJy<br>noisy observation: ${fmt(phot.stored_flux_njy[i])} nJy<br>sigma: ${fmt(phot.stored_fluxerr_njy[i])} nJy<br>drawn noise: ${fmt(phot.noise_draw_njy[i])} nJy (${fmt(phot.noise_pull[i])} sigma)<br>in truth +/- sigma: <b>${insideGenerative ? "yes" : "no"}</b><br>the point is centered on observed +/- sigma`));
+    observed.addEventListener("mouseleave", hideTooltip); frame.svg.appendChild(observed);
+  });
+}
+
+function setStage(name) {
+  state.stage = name;
+  document.querySelectorAll(".stage-tab").forEach(button => {
+    const active = button.dataset.stage === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  document.querySelectorAll(".stage-panel").forEach(panel => {
+    const active = panel.id === `stage-${name}`;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
+  renderStage();
+}
+function fact(label, value) { return `<li><span>${label}</span><span>${value}</span></li>`; }
+
+function renderSummary() {
+  const e = currentExample(), p = e.parameters, d = e.derived;
+  const entries = [
+    ["Example", e.key, `row ${e.source_row}`],
+    ["Redshift", fmt(p.z_obs), `t_obs ${fmt(d.t_obs_gyr)} Gyr`],
+    ["Stellar mass", fmt(p.log10_stellar_mass), "log10 Mstar/Msun"],
+    ["SFR actuelle", fmt(d.sfr_at_obs), "Msun/yr"],
+    ["Quenching Q(t_obs)", fmt(d.q_at_obs), d.q_at_obs < 0.8 ? "suppression active" : "peu ou pas actif"],
+    ["Drift max", `${fmt(d.max_abs_stored_current_mag)} mag`, "current versus stored"]
+  ];
+  document.getElementById("summary-strip").innerHTML = entries.map(([label, value, small]) => `<div class="summary-item"><span class="summary-label">${label}</span><span class="summary-value">${value}</span><span class="summary-small">${small}</span></div>`).join("");
+}
+function renderNotice() {
+  const g = DATA.metadata.generation_versions, c = DATA.metadata.current_versions;
+  const same = g.repo_git_sha === c.repo_git_sha && g.diffstar === c.diffstar && g.jax === c.jax;
+  document.getElementById("runtime-notice").innerHTML = same
+    ? `<strong>Runtime reproduced.</strong> The main versions match the generation manifest.`
+    : `<strong>Runtime differs from generation.</strong> The parquet file comes from commit <code>${g.repo_git_sha.slice(0, 8)}</code> with Diffstar ${g.diffstar} et JAX ${g.jax}; this page recomputes with le commit <code>${c.repo_git_sha.slice(0, 8)}</code>, Diffstar ${c.diffstar} et JAX ${c.jax}. The current curves are therefore not presented as identical to stored fluxes.`;
+}
+function renderOverview() {
+  const e = currentExample(), d = e.derived;
+  renderPipelineGraph();
+  document.getElementById("overview-facts").innerHTML = [
+    fact("Selection", e.description), fact("Object ID", `<code>${e.object_id}</code>`),
+    fact("Age of the Universe", `${fmt(d.t_obs_gyr)} Gyr`), fact("Formed mass", `${fmt(d.formed_mass_msun)} Msun`),
+    fact("Surviving mass", `${fmt(d.surviving_mass_msun)} Msun`), fact("SFH normalization factor", fmt(d.normalization_scale)),
+    fact("Q a l'observation", fmt(d.q_at_obs)), fact("Ecart photometrique max", `${fmt(d.max_abs_stored_current_mag)} mag`)
+  ].join("");
+}
+function populateSelectors() {
+  const exampleSelect = document.getElementById("example-select");
+  exampleSelect.innerHTML = DATA.examples.map((e, i) => `<option value="${i}">${e.key} - ${e.description}</option>`).join("");
+  exampleSelect.addEventListener("change", () => { state.example = Number(exampleSelect.value); renderAll(); });
+  const parameterSelect = document.getElementById("parameter-select");
+  parameterSelect.innerHTML = DATA.parameter_order.map(name => `<option value="${name}">${name}</option>`).join("");
+  parameterSelect.addEventListener("change", () => { state.parameter = parameterSelect.value; renderInputs(); });
+  const bandSelect = document.getElementById("band-select");
+  bandSelect.innerHTML = DATA.bands.map((band, i) => `<option value="${i}">${band.name}</option>`).join("");
+  bandSelect.addEventListener("change", () => { state.band = Number(bandSelect.value); document.getElementById("error-band-select").value = state.band; renderPhotometry(); });
+  const errorBandSelect = document.getElementById("error-band-select");
+  errorBandSelect.innerHTML = DATA.bands.map((band, i) => `<option value="${i}">${band.name}</option>`).join("");
+  errorBandSelect.addEventListener("change", () => { state.band = Number(errorBandSelect.value); document.getElementById("band-select").value = state.band; renderError(); });
+  const runOptions = DATA.run_explorer.runs.map(run => `<option value="${html(run.label)}">${html(run.display_name)}${run.strictly_comparable ? "" : " · lignée séparée"}</option>`).join("");
+  const runASelect = document.getElementById("run-a-select");
+  const runBSelect = document.getElementById("run-b-select");
+  runASelect.innerHTML = runOptions; runBSelect.innerHTML = runOptions;
+  runASelect.value = state.runA; runBSelect.value = state.runB;
+  runASelect.addEventListener("change", () => { state.runA = runASelect.value; renderComparison(); });
+  runBSelect.addEventListener("change", () => { state.runB = runBSelect.value; renderComparison(); });
+  const artifactSideSelect = document.getElementById("artifact-side-select");
+  artifactSideSelect.addEventListener("change", () => { state.artifactSide = artifactSideSelect.value; renderArtifactInventory(); });
+}
+function transformedValue(name, value) {
+  const p = currentExample().parameters;
+  const transforms = {
+    z_obs: `t_obs = ${fmt(currentExample().derived.t_obs_gyr)} Gyr`,
+    log10_stellar_mass: `Mstar = ${fmt(10 ** value)} Msun`,
+    diffstar_lgmcrit: `Mcrit = ${fmt(10 ** value)} Msun`,
+    diffstar_lgy_at_mcrit: `ycrit = ${fmt(10 ** value)} /an, then amplitude renormalisee`,
+    diffstar_lg_qt: `tq = ${fmt(10 ** value)} Gyr`,
+    diffstar_qlglgdt: `Delta log10(t) = ${fmt(10 ** value)} dex`,
+    diffstar_lg_drop: `Qmin = ${fmt(10 ** value)}`,
+    diffstar_lg_rejuv: `Qfinal = ${fmt(10 ** value)}`,
+    diffmah_logm0: `M0 local = ${fmt(10 ** value)} Msun a t_obs`,
+    diffmah_logtc: `tc = ${fmt(10 ** value)} Gyr`,
+    log10_stellar_metallicity: `Zstar/Zsun = ${fmt(10 ** value)}`,
+    dust_av: `tau_V = ${fmt(value / 1.086)}`,
+    dust_delta: `dust_index_n = ${fmt(value)}`
+  };
+  return transforms[name] || `directly injected value = ${fmt(value)}`;
+}
+function renderInputs() {
+  const e = currentExample(), name = state.parameter, info = DATA.distributions[name], value = e.parameters[name], h = info.histogram;
+  document.getElementById("parameter-chart-title").textContent = name;
+  document.getElementById("parameter-chart-subtitle").textContent = `${info.label} - ${info.unit}`;
+  renderHistogram(document.getElementById("parameter-hist"), h, value, { xLabel: info.unit, color: COLORS.blue });
+  document.getElementById("parameter-facts").innerHTML = [fact("Parquet column", `<code>${info.raw_column}</code>`), fact("Model name", `<code>${name}</code>`), fact("Raw value", `${fmt(value)} ${info.unit}`), fact("Value used", transformedValue(name, value)), fact("Physical meaning", info.meaning), fact("Code operation", info.code_role), fact("Population q16 / median / q84", `${fmt(h.q16)} / ${fmt(h.median)} / ${fmt(h.q84)}`)].join("");
+  document.getElementById("parameter-table").innerHTML = DATA.parameter_order.map(param => {
+    const d = DATA.distributions[param], hist = d.histogram, selected = param === name ? "highlight" : "";
+    return `<tr class="${selected}" data-param="${param}"><td>${d.group}</td><td><code>${d.raw_column}</code></td><td><code>${param}</code></td><td class="num">${fmt(e.parameters[param])}</td><td class="num">${fmt(hist.q16)}</td><td class="num">${fmt(hist.median)}</td><td class="num">${fmt(hist.q84)}</td><td>${d.code_role}</td></tr>`;
+  }).join("");
+  document.querySelectorAll("#parameter-table tr").forEach(row => row.addEventListener("click", () => { state.parameter = row.dataset.param; document.getElementById("parameter-select").value = state.parameter; renderInputs(); }));
+}
+function timeMarkers(e) { return [{ x: 10 ** e.parameters.diffmah_logtc, label: "tc" }, { x: e.parameters.diffmah_t_peak, label: "t_peak" }, { x: e.derived.t_obs_gyr, label: "t_obs" }]; }
+function renderHalo() {
+  const e = currentExample(), h = e.halo, markers = timeMarkers(e);
+  renderLineChart(document.getElementById("halo-mass-chart"), [{ x: h.time_gyr, y: h.logmh, label: "log10 Mh", color: COLORS.blue }], { xLabel: "Cosmic time [Gyr]", yLabel: "log10 Mh/Msun", markers });
+  renderLineChart(document.getElementById("halo-accretion-chart"), [{ x: h.time_gyr, y: log10(h.dmhdt), label: "log10 dMh/dt", color: COLORS.rust }], { xLabel: "Cosmic time [Gyr]", yLabel: "log10 dMh/dt [Msun/yr]", markers });
+  renderLineChart(document.getElementById("halo-alpha-chart"), [{ x: h.time_gyr, y: h.alpha, label: "alpha(t)", color: COLORS.violet }], { xLabel: "Cosmic time [Gyr]", yLabel: "Alpha index", markers });
+  renderLineChart(document.getElementById("halo-logy-chart"), [{ x: h.logmh, y: h.logy, label: "log10 y", color: COLORS.green }], { xLabel: "log10 Mh/Msun", yLabel: "log10 y [1/an]" });
+}
+function renderSFH() {
+  const e = currentExample(), s = e.sfh, markers = timeMarkers(e);
+  renderLineChart(document.getElementById("sfh-chart"), [
+    { x: s.time_gyr, y: log10(s.sfr_ms), label: "SFR sequence principale", color: COLORS.blue },
+    { x: s.time_gyr, y: log10(s.sfr_raw), label: "Raw SFH after Q(t)", color: COLORS.rust, dash: "6 4" },
+    { x: s.time_gyr, y: log10(s.sfr_normalized), label: "Final SFH normalized to Mstar", color: COLORS.green, width: 2.7 }
+  ], { xLabel: "Cosmic time [Gyr]", yLabel: "log10 SFR [Msun/yr]", markers });
+  renderLineChart(document.getElementById("q-chart"), [{ x: s.time_gyr, y: s.q_function, label: "Q(t)", color: COLORS.violet }], { xLabel: "Cosmic time [Gyr]", yLabel: "Q factor", markers });
+  renderLineChart(document.getElementById("mass-chart"), [{ x: s.time_gyr, y: log10(s.cumulative_formed_mass), label: "Formed mass cumulee", color: COLORS.gold }], { xLabel: "Cosmic time [Gyr]", yLabel: "log10 Mformed/Msun", markers });
+}
+function renderSpline() {
+  const e = currentExample(), native = e.sfh, stellar = e.stellar, spline = e.spline, metrics = spline.metrics;
+  const labels = DATA.bands.map(band => band.name);
+  renderLineChart(document.getElementById("spline-sfh-chart"), [
+    { x: native.time_gyr, y: log10(native.sfr_normalized), label: "SFH native Diffstar", color: COLORS.blue, width: 2.7 },
+    { x: native.time_gyr, y: log10(spline.sfr_normalized), label: "SFH spline JAX", color: COLORS.rust, dash: "6 4", width: 2.7 },
+    { x: spline.knot_time_gyr, y: spline.knot_log_sfr, label: `${spline.n_nodes} nodes spline`, color: COLORS.ink, line: false, points: true, pointRadius: 3.8 }
+  ], { xScale: "log", xLabel: "Cosmic time [Gyr]", yLabel: "log10 SFR [Msun/yr]" });
+  renderLineChart(document.getElementById("spline-age-chart"), [
+    { x: stellar.ssp_age_gyr, y: stellar.age_weights, label: "Native weights", color: COLORS.blue, width: 2.5 },
+    { x: stellar.ssp_age_gyr, y: spline.age_weights, label: "Spline weights", color: COLORS.rust, dash: "6 4", width: 2.5 }
+  ], { xScale: "log", xLabel: "SSP stellar age [Gyr]", yLabel: "Age weight" });
+  categoricalSeries(document.getElementById("spline-mag-chart"), labels, [
+    { y: spline.native_model_mag, label: "DSPS with native SFH", color: COLORS.blue, width: 2.7 },
+    { y: spline.model_mag, label: "DSPS with spline SFH", color: COLORS.rust, dash: "6 4", width: 2.7 }
+  ], { yLabel: "Magnitude AB", invertY: true });
+  categoricalSeries(document.getElementById("spline-delta-mag-chart"), labels, [
+    { y: labels.map(() => 0), label: "Reference zero", color: COLORS.gray, dash: "5 5" },
+    { y: spline.delta_mag_spline_minus_native, label: "Spline - native", color: COLORS.violet, width: 2.7 }
+  ], { yLabel: "Delta magnitude [mag]" });
+  const magOk = metrics.magnitude_max_abs < 0.01;
+  const massOk = Math.abs(metrics.surviving_mass_log10_error) < 5e-5;
+  document.getElementById("spline-facts").innerHTML = [
+    fact("Interpolation", `<code>${spline.interpolator}</code>`),
+    fact("Node coordinate", spline.coordinate),
+    fact("Nombre de nodes", spline.n_nodes),
+    fact("Mass-normalized SFH L1", fmt(metrics.sfh_mass_normalized_l1)),
+    fact("RMSE log SFH", `${fmt(metrics.log_sfh_rmse_dex)} dex`),
+    fact("Age-weight L1", fmt(metrics.age_weight_l1)),
+    fact("Native / spline weight sums", `${fmt(metrics.age_weight_sum_native)} / ${fmt(metrics.age_weight_sum_spline)}`),
+    fact("Spline/native formed-mass difference", `${fmt(100 * metrics.formed_mass_relative_error)}%`),
+    fact("Closure Mstar spline", `<span class="${massOk ? "audit-good" : "audit-warn"}">${fmt(metrics.surviving_mass_log10_error)} dex</span>`),
+    fact("RMSE photometrique", `${fmt(metrics.magnitude_rmse)} mag`),
+    fact("Ecart photometrique maximum", `<span class="${magOk ? "audit-good" : "audit-warn"}">${fmt(metrics.magnitude_max_abs)} mag</span>`),
+    fact("JAX-COSMO eager / JIT agreement", fmt(DATA.metadata.model.spline.eager_jit_max_abs_error))
+  ].join("");
+  document.getElementById("spline-node-table").innerHTML = spline.knot_time_gyr.map((time, index) => `<tr><td class="num">${index + 1}</td><td class="num">${fmt(time)}</td><td class="num">${fmt(spline.knot_log_sfr[index])}</td></tr>`).join("");
+  document.getElementById("spline-summary-table").innerHTML = DATA.examples.map((example, index) => {
+    const m = example.spline.metrics, selected = index === state.example ? "highlight" : "";
+    return `<tr class="${selected}"><td><code>${example.key}</code></td><td>${example.description}</td><td class="num">${fmt(example.parameters.z_obs)}</td><td class="num">${fmt(m.sfh_mass_normalized_l1)}</td><td class="num">${fmt(m.log_sfh_rmse_dex)}</td><td class="num">${fmt(m.age_weight_l1)}</td><td class="num">${fmt(m.magnitude_rmse)}</td><td class="num">${fmt(m.magnitude_max_abs)}</td></tr>`;
+  }).join("");
+}
+function renderKScan() {
+  const scan = DATA.spline_scan;
+  if (!scan) {
+    document.getElementById("kscan-decision").innerHTML = "<strong>Scan unavailable.</strong> The K-selection payload was not found when the report was built.";
+    return;
+  }
+  const meta = scan.metadata, best = scan.best_scanned, selected = scan.selected, practical = scan.practical_thresholds;
+  const kval = value => value === null ? "aucun K <= 20" : `K=${value}`;
+  document.getElementById("kscan-decision").innerHTML = selected
+    ? `<strong>Selected configuration: ${selected.grid}, K=${selected.K}.</strong> This is the smallest configuration that passes all p95/p99 thresholds.`
+    : `<strong>No configuration passes every threshold.</strong> The best scanned compromise is <code>${best.grid}, K=${best.K}</code>, but its approximation is not yet negligible in every tail.`;
+  document.getElementById("kscan-facts").innerHTML = [
+    fact("Split", `<code>${meta.dataset}</code>`),
+    fact("Sample", `${meta.sample_size} objects : ${meta.main_sequence_count} main-sequence + ${meta.quenched_count} quenched`),
+    fact("Prevalence main-sequence", `${fmt(100 * meta.main_sequence_prevalence)}%`),
+    fact("K testes", scan.k_values.join(", ")),
+    fact("Grids", meta.node_grids.join(", ")),
+    fact("Queue haute sSFR", `${meta.high_ssfr_count} objects, seuil ${fmt(meta.high_ssfr_threshold)}`),
+    fact("Taille minimale d'un groupe", meta.min_group_size),
+    fact("p95 population < 0.01 mag", kval(practical.population_weighted.p95_max_abs_delta_mag_lt_0p01)),
+    fact("p95 main-sequence < 0.01 mag", kval(practical.main_sequence.p95_max_abs_delta_mag_lt_0p01)),
+    fact("p95 quenched < 0.01 mag", kval(practical.quenched.p95_max_abs_delta_mag_lt_0p01)),
+    fact("p95 haute-sSFR < 0.01 mag", kval(practical.high_ssfr_tail.p95_max_abs_delta_mag_lt_0p01)),
+    fact("p95 population RMS Delta f/sigma < 0.1", kval(practical.population_weighted.p95_noise_rms_lt_0p1)),
+    fact("Diffsky bursty state", `<span class="audit-warn">unavailable in the parquet file</span>`),
+    fact("Pourquoi", meta.bursty_limitation)
+  ].join("");
+  const decisions = new Map();
+  scan.gates.forEach(gate => {
+    const key = `${gate.grid}:${gate.K}`;
+    if (!decisions.has(key)) decisions.set(key, { grid: gate.grid, K: gate.K, failed: 0, ratio: 0 });
+    const row = decisions.get(key);
+    if (!gate.passed) row.failed += 1;
+    row.ratio = Math.max(row.ratio, gate.threshold_ratio);
+  });
+  const ordered = [...decisions.values()].sort((a, b) => a.K - b.K || a.grid.localeCompare(b.grid));
+  document.getElementById("kscan-decision-table").innerHTML = ordered.map(row => {
+    const passed = row.failed === 0;
+    const active = row.grid === best.grid && row.K === best.K ? "highlight" : "";
+    return `<tr class="${active}"><td><code>${row.grid}</code></td><td class="num">${row.K}</td><td class="num">${row.failed}</td><td class="num">${fmt(row.ratio)}</td><td><span class="${passed ? "audit-good" : "audit-warn"}">${passed ? "passes" : "fails"}</span></td></tr>`;
+  }).join("");
+  const figures = scan.figures;
+  document.getElementById("kscan-gates-figure").src = figures["spline_k_selection_gates.png"];
+  document.getElementById("kscan-state-figure").src = figures["spline_k_state_tail_curves.png"];
+  document.getElementById("kscan-groups-figure").src = figures["spline_k_redshift_mass_heatmaps.png"];
+  document.getElementById("kscan-bands-figure").src = figures["spline_k_quenched_band_heatmap.png"];
+  const grid = scan.display_grid, groups = ["main_sequence", "quenched", "high_ssfr_tail"];
+  function metricRow(K, group, metric) {
+    return scan.summary.find(row => row.grid === grid && row.K === K && row.group === group && row.metric === metric);
+  }
+  document.getElementById("kscan-state-table").innerHTML = scan.k_values.flatMap(K => groups.map(group => {
+    const mag = metricRow(K, group, "max_abs_delta_mag");
+    const noise = metricRow(K, group, "noise_rms");
+    const age = metricRow(K, group, "age_weight_l1");
+    return `<tr><td class="num">${K}</td><td><code>${group}</code></td><td class="num">${fmt(mag.p95)}</td><td class="num">${fmt(mag.p99)}</td><td class="num">${fmt(noise.p95)}</td><td class="num">${fmt(noise.p99)}</td><td class="num">${fmt(age.p95)}</td></tr>`;
+  })).join("");
+}
+function renderPrior() {
+  const prior = DATA.spline_prior;
+  if (!prior) {
+    document.getElementById("prior-decision").innerHTML = "<strong>15D analysis unavailable.</strong> The spline-prior payload was not found when the report was built.";
+    return;
+  }
+  const contract = prior.contract, sfh = contract.sfh_parameterization;
+  const latent = contract.latent_diagnostics, deq = contract.dequantization;
+  const placement = sfh.selected_placement;
+  const metric = (group, name) => prior.summary.find(row => row.grid === placement && row.group === group && row.metric === name);
+  const popMag = metric("population_weighted", "max_abs_delta_mag");
+  const popNoise = metric("population_weighted", "noise_rms");
+  const validationPassed = Boolean(deq.validation_target_passed);
+  document.getElementById("prior-decision").innerHTML = `<strong>Configuration for the first training run: dequantized 15D latent, 11 nodes, and 10 contrasts.</strong> The <code>${placement}</code> placement passes the population test at p95 (${fmt(popMag.p95)} mag, ${fmt(popNoise.p95)} sigma). ${validationPassed ? "The dequantization width passes the train-validation thresholds." : `No width strictly passes 0.1 sigma on validation; <code>${fmt(deq.half_width_dex)} dex</code> is the minimum-distortion fallback.`}`;
+  document.getElementById("prior-facts").innerHTML = [
+    fact("Dimension", contract.dimension),
+    fact("Parameters physiques", contract.physical_parameters.join(", ")),
+    fact("SFH coordinates", `${sfh.independent_shape_contrasts} contrasts for ${sfh.node_count} nodes`),
+    fact("Definition", `<code>${sfh.contrast_definition}</code>`),
+    fact("Amplitude commune", sfh.common_amplitude),
+    fact("Placement", `<code>${placement}</code>`),
+    fact("Nodes in normalized log-time", sfh.optimized_normalized_log_time_nodes.map(value => fmt(value)).join(", ")),
+    fact("Atome exact maximal", `<span class="audit-warn">${fmt(100 * latent.max_exact_zero_fraction)}% sur ${latent.worst_exact_zero_coordinate}</span>`),
+    fact("Selected dequantization", `+/-${fmt(deq.half_width_dex)} dex`),
+    fact("R&egrave;gle", deq.selection_rule),
+    fact("Rang effectif des 10 contrastes", fmt(latent.shape_effective_rank)),
+    fact("Maximum absolute correlation", fmt(latent.max_abs_shape_correlation)),
+    fact("Recommended training set", `<code>${contract.dataset.projected_train_dequantized}</code>`)
+  ].join("");
+  const scanRows = (rows, target) => {
+    document.getElementById(target).innerHTML = rows.map(row => {
+      const selected = Math.abs(row.half_width_dex - deq.half_width_dex) < 1e-12 ? "highlight" : "";
+      return `<tr class="${selected}"><td class="num">${fmt(row.half_width_dex)}</td><td class="num">${fmt(row.population_p95_max_abs_delta_mag)}</td><td class="num">${fmt(row.population_p95_noise_rms)}</td><td><span class="${row.passes_population_targets ? "audit-good" : "audit-warn"}">${row.passes_population_targets ? "yes" : "no"}</span></td></tr>`;
+    }).join("");
+  };
+  scanRows(deq.validation_scan, "prior-validation-table");
+  scanRows(deq.test_scan, "prior-test-table");
+  const groups = ["population_weighted", "main_sequence", "quenched", "high_ssfr_tail"];
+  document.getElementById("prior-state-table").innerHTML = groups.map(group => {
+    const mag = metric(group, "max_abs_delta_mag"), noise = metric(group, "noise_rms"), age = metric(group, "age_weight_l1");
+    return `<tr><td><code>${group}</code></td><td class="num">${fmt(mag.p95)}</td><td class="num">${fmt(mag.p99)}</td><td class="num">${fmt(noise.p95)}</td><td class="num">${fmt(noise.p99)}</td><td class="num">${fmt(age.p95)}</td></tr>`;
+  }).join("");
+  const figures = prior.figures;
+  document.getElementById("prior-node-figure").src = figures["spline_15d_node_placements.png"];
+  document.getElementById("prior-closure-figure").src = figures["spline_15d_closure_comparison.png"];
+  document.getElementById("prior-contrast-figure").src = figures["spline_15d_contrast_distributions.png"];
+  document.getElementById("prior-correlation-figure").src = figures["spline_15d_latent_correlation.png"];
+}
+function renderNormalization() {
+  const results = DATA.results;
+  document.getElementById("normalization-figure").src = results.figures.normalization;
+  document.getElementById("normalization-table").innerHTML = results.normalization_parameters.map(row => `<tr>
+    <td><code>${row.parameter}</code></td>
+    <td>${row.family}</td>
+    <td class="num">${fmt(row.location)}</td>
+    <td class="num">${fmt(row.train_q_low)}</td>
+    <td class="num">${fmt(row.train_q_high)}</td>
+    <td class="num">${fmt(row.lambda)}</td>
+    <td class="num">${fmt(row.center)}</td>
+    <td class="num">${fmt(row.scale)}</td>
+  </tr>`).join("");
+}
+function renderResults() {
+  const results = DATA.results, figures = results.figures;
+  document.getElementById("results-raw-latent").src = DATA.spline_prior.figures["spline_15d_contrast_distributions.png"];
+  document.getElementById("results-failed-flow").src = figures.failed_flow;
+  document.getElementById("results-normalization").src = figures.normalization;
+  document.getElementById("results-prior-recovery").src = figures.prior_recovery;
+  document.getElementById("results-encoder-overview").src = figures.encoder_overview;
+  document.getElementById("results-normalization-table").innerHTML = results.normalization_parameters.map(row => `<tr><td><code>${row.parameter}</code></td><td>${row.family}</td><td class="num">${fmt(row.location)}</td><td class="num">${fmt(row.lambda)}</td><td class="num">${fmt(row.center)}</td><td class="num">${fmt(row.scale)}</td></tr>`).join("");
+
+  const ph = results.prior_history;
+  renderLineChart(document.getElementById("results-prior-loss"), [
+    { x: ph.map(row => row.epoch), y: ph.map(row => row.validation_nll), label: "Validation NLL", color: COLORS.blue, width: 2.7 }
+  ], { xLabel: "Epoch", yLabel: "Validation negative log-likelihood" });
+  const lastPrior = ph.at(-1);
+  document.getElementById("results-prior-facts").innerHTML = [
+    fact("Checkpoint", `epoch ${results.prior_checkpoint_epoch}`),
+    fact("Validation NLL", fmt(lastPrior.validation_nll)),
+    fact("Median / max physical KS", `${fmt(lastPrior.median_ks_physical)} / ${fmt(lastPrior.max_ks_physical)}`),
+    fact("Invalid z / dust samples", `${fmt(lastPrior.negative_z_fraction)} / ${fmt(lastPrior.negative_dust_av_fraction)}`),
+    fact("Role during encoder training", "Frozen prior; zero gradient")
+  ].join("");
+
+  const eh = results.encoder_history, train = eh.filter(row => row.split === "train"), validation = eh.filter(row => row.split === "validation");
+  renderLineChart(document.getElementById("results-encoder-loss"), [
+    { x: train.map(row => row.epoch), y: train.map(row => row.negative_loglike), label: "Train negative log-likelihood", color: COLORS.blue },
+    { x: validation.map(row => row.epoch), y: validation.map(row => row.negative_loglike), label: "Validation negative log-likelihood", color: COLORS.green, width: 2.7 },
+    { x: train.map(row => row.epoch), y: train.map(row => row.kl_mc_mean), label: "Train KL(q || learned prior)", color: COLORS.rust, dash: "5 4" }
+  ], { xLabel: "Epoch", yLabel: "Epoch-mean objective term" });
+  const summary = results.encoder_summary, finalValidation = validation.at(-1);
+  document.getElementById("results-encoder-facts").innerHTML = [
+    fact("Train / validation objects", `${summary.train_rows} / ${summary.validation_rows}`),
+    fact("Updates applied / skipped", `${summary.updates_applied} / ${summary.updates_skipped}`),
+    fact("KL schedule", `0.025 to 1.0 over ${summary.kl_annealing_epochs} epochs`),
+    fact("Final validation negative log-likelihood", fmt(finalValidation.negative_loglike)),
+    fact("Final posterior median log std", fmt(finalValidation.posterior_median_log_std)),
+    fact("Prior gradient norm", fmt(finalValidation.prior_grad_norm)),
+    fact("Data parallelism", `${summary.data_parallel.effective}, ${summary.data_parallel.local_device_count} devices`)
+  ].join("");
+}
+function renderStellar() {
+  const e = currentExample(), st = e.stellar, p = e.parameters, d = e.derived;
+  renderLineChart(document.getElementById("age-weight-chart"), [{ x: st.ssp_age_gyr, y: st.age_weights, label: "SSP weights", color: COLORS.gold }], { xScale: "log", xLabel: "Stellar age [Gyr]", yLabel: "Age weight" });
+  renderSedWithFilters(document.getElementById("sed-chart"), e);
+  document.getElementById("stellar-facts").innerHTML = [fact("Metallicity brute", `${fmt(p.log10_stellar_metallicity)} dex`), fact("Zstar/Zsun", fmt(10 ** p.log10_stellar_metallicity)), fact("Median absolute Z", fmt(0.0142 * 10 ** p.log10_stellar_metallicity)), fact("Scatter MDF", "0.2 dex fixed"), fact("A_V", `${fmt(p.dust_av)} mag`), fact("tau2", fmt(d.tau_v)), fact("dust_index_n", fmt(p.dust_delta)), fact("tau1/tau2", "0 fixed"), fact("Formed mass", `${fmt(d.formed_mass_msun)} Msun`)].join("");
+}
+function renderPhotometry() {
+  const e = currentExample(), phot = e.photometry, labels = DATA.bands.map(b => b.name);
+  const observedMagnitudes = phot.stored_flux_njy.map(nJyToAB);
+  renderFluxErrorChart(document.getElementById("flux-error-chart"), e);
+  categoricalSeries(document.getElementById("magnitude-chart"), labels, [
+    { y: phot.stored_mag_true, label: "Noiseless stored generation forward", color: COLORS.blue },
+    { y: phot.current_model_mag, label: "Noiseless current runtime forward", color: COLORS.green, dash: "6 4" },
+    { y: observedMagnitudes, label: "Observation noiseee - flux positif uniquement", color: COLORS.ink, dash: "3 3" }
+  ], { yLabel: "Magnitude AB", invertY: true });
+  categoricalSeries(document.getElementById("delta-mag-chart"), labels, [{ y: phot.delta_mag_current_minus_stored, label: "Delta mag", color: COLORS.violet }], { yLabel: "mag current - stockee" });
+  const band = DATA.bands[state.band];
+  document.getElementById("band-hist-title").textContent = `Distribution ${band.name}`;
+  renderHistogram(document.getElementById("band-hist"), band.magnitude_distribution, phot.stored_mag_true[state.band], { xLabel: "Stored AB magnitude", color: COLORS.green });
+  document.getElementById("photometry-table").innerHTML = DATA.bands.map((bandInfo, i) => {
+    const snr = phot.stored_flux_njy[i] / phot.stored_fluxerr_njy[i];
+    return `<tr><td><code>${bandInfo.name}</code></td><td class="num">${fmt(bandInfo.effective_wavelength_angstrom)} A</td><td class="num">${fmt(phot.stored_mag_true[i])}</td><td class="num">${fmt(observedMagnitudes[i])}</td><td class="num">${fmt(phot.current_model_mag[i])}</td><td class="num">${fmt(phot.delta_mag_current_minus_stored[i])}</td><td class="num">${fmt(phot.stored_flux_true_njy[i])}</td><td class="num">${fmt(phot.stored_flux_njy[i])}</td><td class="num">${fmt(phot.stored_fluxerr_njy[i])}</td><td class="num">${fmt(phot.noise_draw_njy[i])}</td><td class="num">${fmt(phot.noise_pull[i])}</td><td class="num">${fmt(snr)}</td></tr>`;
+  }).join("");
+}
+function renderError() {
+  const e = currentExample(), phot = e.photometry, labels = DATA.bands.map(band => band.name), band = DATA.bands[state.band];
+  document.getElementById("error-band-select").value = state.band;
+  categoricalSeries(document.getElementById("noise-pull-chart"), labels, [
+    { y: labels.map(() => 1), label: "+1 sigma", color: COLORS.gray, dash: "5 5" },
+    { y: labels.map(() => -1), label: "-1 sigma", color: COLORS.gray, dash: "5 5" },
+    { y: phot.noise_pull, label: "Epsilon draw", color: COLORS.rust, width: 2.7 }
+  ], { yLabel: "(flux_obs-flux_true)/fluxerr", yDomain: [-3.5, 3.5] });
+  renderHistogram(document.getElementById("all-pull-hist"), DATA.error_model.all_band_noise_pull_distribution, NaN, { xLabel: "Pull epsilon", color: COLORS.violet });
+  document.getElementById("error-band-title").textContent = `Distribution ${band.name}`;
+  renderHistogram(document.getElementById("band-pull-hist"), band.noise_pull_distribution, phot.noise_pull[state.band], { xLabel: "Pull epsilon", color: COLORS.rust });
+  categoricalSeries(document.getElementById("error-components-chart"), labels, [
+    { y: phot.sigma_source_njy, label: "Source term", color: COLORS.blue },
+    { y: phot.sigma_background_njy, label: "Background term", color: COLORS.violet },
+    { y: phot.sigma_systematic_njy, label: "Systematic term", color: COLORS.gold },
+    { y: phot.stored_fluxerr_njy, label: "total stored fluxerr", color: COLORS.ink, width: 2.7 }
+  ], { yLabel: "Contribution sigma [nJy]" });
+  document.getElementById("error-facts").innerHTML = [fact("Type", `<code>${DATA.error_model.type}</code>`), fact("sigma_sys_mag", `${fmt(DATA.error_model.sigma_sys_mag)} mag`), fact("default_eta", fmt(DATA.error_model.default_eta)), fact("Formula", `<code>${DATA.error_model.formula}</code>`), fact("Draw", "epsilon ~ Normal(0,1)"), fact("Application", "flux = flux_true + epsilon * fluxerr")].join("");
+  const i = state.band;
+  document.getElementById("band-error-facts").innerHTML = [fact("Band", `<code>${band.name}</code>`), fact("m5", `${fmt(band.m5)} AB`), fact("effective gamma", fmt(band.gamma)), fact("true flux", `${fmt(phot.stored_flux_true_njy[i])} nJy`), fact("fluxerr", `${fmt(phot.stored_fluxerr_njy[i])} nJy`), fact("drawn noise", `${fmt(phot.noise_draw_njy[i])} nJy`), fact("pull epsilon", fmt(phot.noise_pull[i])), fact("observed flux", `${fmt(phot.stored_flux_njy[i])} nJy`)].join("");
+}
+function currentRun(side) {
+  const label = side === "a" ? state.runA : state.runB;
+  return DATA.run_explorer.runs.find(run => run.label === label);
+}
+function runExplanation(run) {
+  if (run.science) return `${run.science.role}. ${run.science.take}`;
+  const objective = run.objective === "avi"
+    ? "AVI optimise l'accord photométrique et la KL vers le prior via le forward physique."
+    : "NPE maximise directement la densité du vrai latent synthétique sous le posterior.";
+  const families = {
+    gaussian_x: "Gaussienne diagonale directement dans x.",
+    gaussian_u: "Gaussienne dans l'espace de base u, transportée par le prior.",
+    realnvp: "Flow conditionnel affine RealNVP à quatre couches.",
+    rqspline: "Flow conditionnel rational-quadratic spline à quatre couches et huit bins."
+  };
+  return `${objective} ${families[run.posterior_family] || ""}`;
+}
+function renderMethods() {
+  const real = DATA.run_explorer.shared_prior;
+  const rq = DATA.run_explorer.rq_prior;
+  const cards = [
+    ["Prior commun de la matrice", real.model, "RealNVP gelé utilisé par les 8 runs AVI/NPE", real],
+    ["Prior RQ de la lignée séparée", rq.model, "RQ-spline appris sur les contrastes déquantifiés", rq]
+  ];
+  document.getElementById("prior-run-facts").innerHTML = cards.map(([title, model, note, data]) => `<article class="run-card"><h3>${html(title)}</h3><p>${html(note)}</p><ul class="facts">${[
+    fact("Modèle", html(model)),
+    fact("Checkpoint sélectionné", `époque ${fmt(data.best_epoch)}`),
+    fact("Test NLL", fmt(data.nll?.test)),
+    fact("Lignes train / val / test", `${fmt(data.rows?.train)} / ${fmt(data.rows?.validation)} / ${fmt(data.rows?.test)}`),
+    fact("Median KS normalisé", fmt(data.test_temperature_calibrated_metrics?.median_ks_normalized)),
+    fact("Wasserstein sliced", fmt(data.test_temperature_calibrated_metrics?.sliced_wasserstein_normalized)),
+    fact("Dataset", `<code>${html(data.dataset_dir)}</code>`)
+  ].join("")}</ul></article>`).join("");
+}
+function architectureNode(title, detail, kind = "") {
+  return `<div class="architecture-node ${kind}"><b>${html(title)}</b><span>${html(detail)}</span></div>`;
+}
+function jointArchitecture(run) {
+  const science = run.science;
+  const isFrozen = run.label === "ind_frozen_rqspline";
+  const isVem = run.label.includes("vem");
+  const isHybrid = run.label.includes("hybrid") || run.label.includes("oracle");
+  const isOracle = run.label.includes("oracle");
+  const qDetail = science.uses_truth_training ? "ELBO + ancrage x_true" : "ELBO photométrique seulement";
+  const pDetail = isFrozen ? "checkpoint de référence gelé" : (isVem ? "mis à jour en M-step" : "gradient ELBO simultané");
+  const reconstruction = `<div class="architecture-lane"><div class="architecture-lane-title">Voie objet: reconstruction des bandes</div><div class="architecture-flow">${[
+    architectureNode("18 flux + erreurs", "observations de chaque objet", "metric"),
+    architectureNode("q_phi(x|y)", qDetail, "train"),
+    architectureNode("x ~ q", "échantillon latent 15D"),
+    architectureNode("Spline + DSPS", "décodeur physique", "frozen"),
+    architectureNode("log p(y|x)", "Student-t photométrique", "metric")
+  ].join("")}</div></div>`;
+  let populationNodes;
+  if (isFrozen) {
+    populationNodes = [
+      architectureNode("x ~ q_phi", "latent inféré, jamais x_true"),
+      architectureNode("p_ref(x)", pDetail, "frozen"),
+      architectureNode("log p_ref(x) - log q", "KL qui régularise q", "metric")
+    ];
+  } else {
+    populationNodes = [
+      architectureNode("Catalogue {y_i}", "population photométrique observée", "metric"),
+      architectureNode("{x_i,s} ~ q_phi", "posterior agrégé sur le catalogue"),
+      ...(isVem ? [architectureNode("stop_gradient", "q figé pendant la M-step", "frozen")] : []),
+      architectureNode("p_psi(x)", pDetail, "train"),
+      architectureNode("log p_psi(x) - log q", "couplage populationnel avec q", "metric")
+    ];
+  }
+  const population = `<div class="architecture-lane"><div class="architecture-lane-title">Voie population: ${isFrozen ? "prior de contrôle non appris" : "prior appris sur les latents inférés"}</div><div class="architecture-flow">${populationNodes.join("")}</div></div>`;
+  let update = isVem
+    ? `<div class="architecture-branches"><div class="architecture-branch"><strong>E-step.</strong> q apprend avec p fixé via likelihood + reverse KL.</div><div class="architecture-branch"><strong>M-step.</strong> p maximise la densité d'échantillons de q avec <code>stop_gradient</code>; DSPS n'est pas appelé.</div><div class="architecture-branch"><strong>Cadence.</strong> ${html(science.schedule)}</div></div>`
+    : `<div class="architecture-branches"><div class="architecture-branch"><strong>Gradient q.</strong> Likelihood photométrique + KL vers p.</div><div class="architecture-branch"><strong>Gradient p.</strong> ${isFrozen ? "Aucun gradient: contrôle à prior connu." : "Même batch et même ELBO que q."}</div><div class="architecture-branch"><strong>Cadence.</strong> ${html(science.schedule)}</div></div>`;
+  if (isHybrid) update += `<div class="architecture-flow">${architectureNode("x_true synthétique", "indisponible sur vraies données", "truth")}${architectureNode("-log q_phi(x_true|y)", "poids NPE = 50", "truth")}${architectureNode("q_phi", "ancrage supervisé", "train")}${isOracle ? architectureNode("-log p_psi(x_true)", "poids prior truth = 1", "truth") + architectureNode("p_psi", "oracle supervisé", "train") : ""}</div>`;
+  return reconstruction + population + update;
+}
+function renderJointExperiments() {
+  const runs = DATA.run_explorer.runs.filter(run => run.comparison_group === "joint_prior_realnvp_matrix");
+  document.getElementById("joint-coverage-figure").src = DATA.run_explorer.joint_comparison.figures.coverage;
+  document.getElementById("joint-speed-figure").src = DATA.run_explorer.joint_comparison.figures.speed;
+  document.getElementById("joint-experiment-list").innerHTML = runs.map(run => {
+    const s = run.science, m = run.metrics;
+    const chip = s.uses_truth_training ? "role-chip supervised" : "role-chip";
+    const truthLabel = s.uses_truth_training ? "Utilise x_true: diagnostic seulement" : "Photometry-only: utilisable en principe";
+    return `<article class="experiment-card"><div class="experiment-card-head"><div><h3><code>${html(run.label)}</code> · ${html(run.display_name)}</h3><p>${html(s.role)}</p></div><span class="${chip}">${html(truthLabel)}</span></div><div class="experiment-body">${jointArchitecture(run)}<div class="experiment-columns"><div class="experiment-copy"><h4>Question scientifique</h4><p>${html(s.question)}</p></div><div class="experiment-copy"><h4>Pourquoi ce run</h4><p>${html(s.justification)}</p></div><div class="experiment-copy"><h4>Entraîné</h4><p>${html(s.trainable.join("; "))}</p></div><div class="experiment-copy"><h4>Gelé</h4><p>${html(s.frozen.join("; "))}</p></div><div class="experiment-copy"><h4>Verdict</h4><p>${html(s.verdict)}</p></div><div class="experiment-copy"><h4>Place dans le modèle final</h4><p>${s.final_candidate ? "La méthode est compatible avec l'objectif final, mais ce checkpoint précis est rejeté." : "Ce run est un contrôle scientifique, pas un candidat de production."}</p></div></div><div class="metric-mini-grid">${[
+      ["Coverage 68 %", m.coverage_68_median], ["Coverage 95 %", m.coverage_95_median], ["RMSE paramètres", m.median_parameter_rmse], ["Photo-z RMSE", m.photoz_rmse], ["Prior z Q-L1", m.prior_z_quantile_l1], ["Prior masse Q-L1", m.prior_mass_quantile_l1]
+    ].map(([label, value]) => `<div class="metric-mini"><span>${html(label)}</span><b>${fmt(value)}</b></div>`).join("")}</div><div class="run-take"><strong>Take.</strong> ${html(s.take)}</div><details><summary>Voir le corner vérité / prior / posterior</summary><div class="details-body"><img class="result-image" src="${run.figures.corner}" alt="Corner de ${html(run.display_name)}"></div></details></div></article>`;
+  }).join("");
+}
+function metricScore(key, value) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return null;
+  if (key === "encoder_epochs" || key === "prior_epochs") return null;
+  if (key === "coverage_68_median" || key === "photoz_coverage_68") return -Math.abs(Number(value) - 0.68);
+  if (key === "coverage_95_median") return -Math.abs(Number(value) - 0.95);
+  return -Number(value);
+}
+function renderRunCard(run, side) {
+  const m = run.metrics;
+  const warning = run.strictly_comparable ? "" : " warn";
+  return `<article class="run-card ${side === "b" ? "side-b" : ""}"><h3>${side.toUpperCase()} · ${html(run.display_name)}</h3><p>${html(runExplanation(run))}</p><ul class="facts">${[
+    fact("Statut", `<span class="status-chip${warning}">${html(run.status)}</span>`),
+    fact("Groupe", `<code>${html(run.comparison_group)}</code>`),
+    ...(run.science ? [fact("Usage vérité train", run.science.uses_truth_training ? "oui · non déployable" : "non · photometry-only"), fact("Rôle", html(run.science.role))] : []),
+    fact("Objets de test", fmt(m.n_objects)),
+    fact("Meilleur checkpoint", `époque ${fmt(m.best_checkpoint_epoch)}`),
+    fact("Prior", `<code>${html(run.prior_type)}</code>`),
+    fact("Checkpoint prior", `<code>${html(run.prior_checkpoint)}</code>`),
+    fact("Répertoire", `<code>${html(run.root)}</code>`)
+  ].join("")}</ul></article>`;
+}
+function renderFigurePair(containerId, a, b, key, title) {
+  document.getElementById(containerId).innerHTML = [a, b].map((run, index) => {
+    const source = run.figures[key];
+    if (!source) return `<article class="comparison-image"><h3>${index ? "B" : "A"} · ${html(run.display_name)}</h3><p class="panel-body">Artefact non disponible.</p></article>`;
+    return `<article class="comparison-image"><h3>${index ? "B" : "A"} · ${html(run.display_name)} · ${html(title)}</h3><a href="${source}" target="_blank" rel="noopener"><img src="${source}" alt="${html(title)} pour ${html(run.display_name)}"></a></article>`;
+  }).join("");
+}
+function renderArtifactInventory() {
+  const run = currentRun(state.artifactSide);
+  document.getElementById("artifact-inventory").innerHTML = run.artifacts.map(item => `<tr><td><code>${html(item.path)}</code></td><td>${html(item.kind)}</td><td class="num">${fmt(item.count)}</td><td class="num">${fmtBytes(item.bytes)}</td></tr>`).join("");
+}
+function renderComparison() {
+  const a = currentRun("a"), b = currentRun("b");
+  const strict = a.strictly_comparable && b.strictly_comparable && a.comparison_group === b.comparison_group;
+  document.getElementById("comparison-warning").innerHTML = strict
+    ? (a.comparison_group === "joint_prior_realnvp_matrix"
+      ? `<strong>Comparaison contrôlée de la nouvelle array.</strong> Même catalogue, forward, posterior RealNVP et 5 000 objets de test. Le statut du prior, la cadence p/q et l'usage éventuel de x_true changent volontairement. Un run supervisé reste non déployable même si ses chiffres sont meilleurs.`
+      : `<strong>Comparaison contrôlée.</strong> Même matrice, même dataset JAX-COSMO, même prior appris gelé et mêmes 5 000 objets. Les différences principales viennent de l'objectif et de la famille du posterior.`)
+    : `<strong>Comparaison de lignée, pas expérience contrôlée.</strong> Au moins un run change aussi le dataset, le prior, le nombre d'échantillons ou le protocole. Les deltas sont descriptifs et ne doivent pas être attribués à une seule différence.`;
+  document.getElementById("run-summary").innerHTML = renderRunCard(a, "a") + renderRunCard(b, "b");
+  const metrics = ["coverage_68_median", "coverage_95_median", "median_parameter_rmse", "photoz_rmse", "photoz_coverage_68", "median_posterior_predictive_chi2", "prior_z_quantile_l1", "prior_mass_quantile_l1", "seconds_per_epoch", "elapsed_time_s", "encoder_epochs", "prior_epochs", "updates_skipped", "collapse_gate_failures"];
+  const labels = { coverage_68_median: "Coverage médiane 68 %", coverage_95_median: "Coverage médiane 95 %", median_parameter_rmse: "RMSE médiane paramètres", photoz_rmse: "Photo-z RMSE", photoz_coverage_68: "Photo-z coverage 68 %", median_posterior_predictive_chi2: "Chi2 prédictif médian", prior_z_quantile_l1: "Prior redshift quantile L1", prior_mass_quantile_l1: "Prior masse quantile L1", seconds_per_epoch: "Secondes / époque", elapsed_time_s: "Temps total [s]", encoder_epochs: "Époques posterior q", prior_epochs: "M-steps prior p", updates_skipped: "Updates ignorées", collapse_gate_failures: "Échecs collapse gate" };
+  document.getElementById("metric-comparison").innerHTML = metrics.map(key => {
+    const av = a.metrics[key], bv = b.metrics[key];
+    const delta = Number.isFinite(Number(av)) && Number.isFinite(Number(bv)) ? Number(bv) - Number(av) : null;
+    const as = metricScore(key, av), bs = metricScore(key, bv);
+    const cls = as === null || bs === null || as === bs ? "" : (bs > as ? "good" : "bad");
+    const note = DATA.run_explorer.metric_definitions[key] || (key === "elapsed_time_s" ? "Temps mural sérialisé; attention aux reprises de run." : key === "updates_skipped" ? "Mises à jour rejetées pour non-finitude ou garde numérique." : key === "collapse_gate_failures" ? "Nombre de critères scientifiques en échec; zéro est requis." : key === "encoder_epochs" || key === "prior_epochs" ? "Compte des mises à jour de chaque composant; ce n'est pas une métrique de qualité." : "");
+    return `<tr><td>${html(labels[key])}</td><td class="num">${fmt(av)}</td><td class="num">${fmt(bv)}</td><td class="num metric-delta ${cls}">${delta === null ? "n/a" : `${delta >= 0 ? "+" : ""}${fmt(delta)}`}</td><td class="metric-note">${html(note)}</td></tr>`;
+  }).join("");
+  renderFigurePair("corner-comparison", a, b, "corner", "corner vérité / prior / posterior");
+  const diagnosticKeys = [["training", "entraînement"], ["residuals", "résidus par bande"], ["photoz", "photo-z"]];
+  document.getElementById("diagnostic-comparison").innerHTML = diagnosticKeys.flatMap(([key, title]) => [a, b].map((run, index) => `<article class="comparison-image"><h3>${index ? "B" : "A"} · ${html(run.display_name)} · ${html(title)}</h3><a href="${run.figures[key]}" target="_blank" rel="noopener"><img src="${run.figures[key]}" alt="${html(title)} pour ${html(run.display_name)}"></a></article>`)).join("");
+  const amap = Object.fromEntries(a.config_rows.map(row => [row.key, row.value]));
+  const bmap = Object.fromEntries(b.config_rows.map(row => [row.key, row.value]));
+  const keys = [...new Set([...Object.keys(amap), ...Object.keys(bmap)])].sort();
+  document.getElementById("config-diff").innerHTML = keys.filter(key => amap[key] !== bmap[key]).map(key => `<tr><td><code>${html(key)}</code></td><td class="config-value">${html(amap[key] ?? "absent")}</td><td class="config-value">${html(bmap[key] ?? "absent")}</td></tr>`).join("") || `<tr><td colspan="3">Configurations identiques.</td></tr>`;
+  document.getElementById("config-a-title").textContent = `A · ${a.display_name}`;
+  document.getElementById("config-b-title").textContent = `B · ${b.display_name}`;
+  document.getElementById("config-a-json").textContent = JSON.stringify(a.config, null, 2);
+  document.getElementById("config-b-json").textContent = JSON.stringify(b.config, null, 2);
+  renderArtifactInventory();
+}
+function renderAudit() {
+  const g = DATA.metadata.generation_versions, c = DATA.metadata.current_versions, keys = ["repo_git_sha", "diffsky", "diffstar", "diffmah", "dsps", "jax"];
+  document.getElementById("provenance-grid").innerHTML = `<div class="head">Component</div><div class="head">Generation</div><div class="head">Current</div>` + keys.map(key => `<div>${key}</div><div><code>${g[key]}</code></div><div><code>${c[key]}</code></div>`).join("");
+  const d = currentExample().derived, kernelOk = d.raw_component_relative_error < 5e-5, driftOk = d.max_abs_stored_current_mag < 0.01;
+  document.getElementById("audit-facts").innerHTML = [fact("Diffstar decomposition", `<span class="${kernelOk ? "audit-good" : "audit-warn"}">relative error ${fmt(d.raw_component_relative_error)}</span>`), fact("Surviving mass cible", `${fmt(d.surviving_mass_msun)} Msun`), fact("Maximum photometric drift", `<span class="${driftOk ? "audit-good" : "audit-warn"}">${fmt(d.max_abs_stored_current_mag)} mag</span>`), fact("Dataset", `<code>${DATA.metadata.dataset}</code>`), fact("Config", `<code>${DATA.metadata.config}</code>`), fact("Precomputed examples", DATA.examples.length), fact("Bands", DATA.metadata.n_bands)].join("");
+}
+function renderStage() {
+  if (state.stage === "overview") renderOverview();
+  if (state.stage === "inputs") renderInputs();
+  if (state.stage === "halo") renderHalo();
+  if (state.stage === "sfh") renderSFH();
+  if (state.stage === "spline") renderSpline();
+  if (state.stage === "kscan") renderKScan();
+  if (state.stage === "prior") renderPrior();
+  if (state.stage === "normalization") renderNormalization();
+  if (state.stage === "results") renderResults();
+  if (state.stage === "stellar") renderStellar();
+  if (state.stage === "photometry") renderPhotometry();
+  if (state.stage === "error") renderError();
+  if (state.stage === "audit") renderAudit();
+  if (state.stage === "methods") renderMethods();
+  if (state.stage === "joint") renderJointExperiments();
+  if (state.stage === "compare") renderComparison();
+}
+function renderAll() { renderSummary(); renderNotice(); renderStage(); }
+
+populateSelectors();
+document.querySelectorAll(".stage-tab").forEach(button => button.addEventListener("click", () => setStage(button.dataset.stage)));
+document.querySelectorAll("[data-go]").forEach(button => button.addEventListener("click", () => setStage(button.dataset.go)));
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(renderStage, 120); });
+renderSummary();
+renderNotice();
+setStage(state.stage);
+</script>
+</body>
+</html>
