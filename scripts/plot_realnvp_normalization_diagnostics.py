@@ -13,24 +13,96 @@ import numpy as np
 import pandas as pd
 
 PARAMETERS: dict[str, tuple[str, str, str]] = {
-    "z_obs": ("Observed redshift z", "Observation / cosmology", "Sets luminosity distance and the rest-frame wavelength mapping."),
-    "log10_stellar_mass": ("Stellar mass log10(M*/Msun)", "Stellar population", "Sets the overall stellar luminosity scale."),
-    "log10_stellar_metallicity": ("Stellar metallicity log10(Z*/Zsun)", "Stellar population", "Sets the stellar metal content and its SED."),
-    "dust_av": ("Dust attenuation A_V [mag]", "Dust attenuation", "Sets the overall attenuation strength."),
-    "dust_delta": ("Dust-law slope offset delta", "Dust attenuation", "Tilts the attenuation curve relative to the reference dust law."),
-    "diffstar_lgmcrit": ("SF-efficiency pivot mass log10(Mcrit/Msun)", "SFH (Diffstar)", "Sets the halo-mass pivot of the star-formation efficiency relation."),
-    "diffstar_lgy_at_mcrit": ("SF-efficiency amplitude at Mcrit (log10)", "SFH (Diffstar)", "Sets the star-formation efficiency at the pivot halo mass."),
-    "diffstar_indx_lo": ("Low-mass slope of SF efficiency", "SFH (Diffstar)", "Controls how star-formation efficiency changes below the pivot mass."),
-    "diffstar_indx_hi": ("High-mass slope of SF efficiency", "SFH (Diffstar)", "Controls how star-formation efficiency changes above the pivot mass."),
-    "diffstar_lg_qt": ("Quenching time log10(tq / Gyr)", "SFH (Diffstar)", "Sets when quenching begins in cosmic time."),
-    "diffstar_qlglgdt": ("Quenching transition log-width", "SFH (Diffstar)", "Sets how rapidly the star-formation history transitions into quenching."),
-    "diffstar_lg_drop": ("Quenching depth log10(drop)", "SFH (Diffstar)", "Sets the suppression depth after quenching."),
-    "diffstar_lg_rejuv": ("Rejuvenation amplitude log10", "SFH (Diffstar)", "Sets the strength of star formation after a quenching episode."),
-    "diffmah_logm0": ("Halo mass at a=1 log10(Mhalo/Msun)", "Halo assembly (Diffmah)", "Sets the late-time halo mass scale."),
-    "diffmah_logtc": ("Halo transition time log10(tc / Gyr)", "Halo assembly (Diffmah)", "Sets when halo mass accretion changes regime."),
-    "diffmah_early_index": ("Early halo-growth index", "Halo assembly (Diffmah)", "Controls the early-time halo mass-accretion slope."),
-    "diffmah_late_index": ("Late halo-growth index", "Halo assembly (Diffmah)", "Controls the late-time halo mass-accretion slope."),
-    "diffmah_t_peak": ("Halo assembly peak time [Gyr]", "Halo assembly (Diffmah)", "Sets the time of peak halo mass accretion."),
+    "z_obs": (
+        "Observed redshift z",
+        "Observation / cosmology",
+        "Sets luminosity distance and the rest-frame wavelength mapping.",
+    ),
+    "log10_stellar_mass": (
+        "Stellar mass log10(M*/Msun)",
+        "Stellar population",
+        "Sets the overall stellar luminosity scale.",
+    ),
+    "log10_stellar_metallicity": (
+        "Stellar metallicity log10(Z*/Zsun)",
+        "Stellar population",
+        "Sets the stellar metal content and its SED.",
+    ),
+    "dust_av": (
+        "Dust attenuation A_V [mag]",
+        "Dust attenuation",
+        "Sets the overall attenuation strength.",
+    ),
+    "dust_delta": (
+        "Dust-law slope offset delta",
+        "Dust attenuation",
+        "Tilts the attenuation curve relative to the reference dust law.",
+    ),
+    "diffstar_lgmcrit": (
+        "SF-efficiency pivot mass log10(Mcrit/Msun)",
+        "SFH (Diffstar)",
+        "Sets the halo-mass pivot of the star-formation efficiency relation.",
+    ),
+    "diffstar_lgy_at_mcrit": (
+        "SF-efficiency amplitude at Mcrit (log10)",
+        "SFH (Diffstar)",
+        "Sets the star-formation efficiency at the pivot halo mass.",
+    ),
+    "diffstar_indx_lo": (
+        "Low-mass slope of SF efficiency",
+        "SFH (Diffstar)",
+        "Controls how star-formation efficiency changes below the pivot mass.",
+    ),
+    "diffstar_indx_hi": (
+        "High-mass slope of SF efficiency",
+        "SFH (Diffstar)",
+        "Controls how star-formation efficiency changes above the pivot mass.",
+    ),
+    "diffstar_lg_qt": (
+        "Quenching time log10(tq / Gyr)",
+        "SFH (Diffstar)",
+        "Sets when quenching begins in cosmic time.",
+    ),
+    "diffstar_qlglgdt": (
+        "Quenching transition log-width",
+        "SFH (Diffstar)",
+        "Sets how rapidly the star-formation history transitions into quenching.",
+    ),
+    "diffstar_lg_drop": (
+        "Quenching depth log10(drop)",
+        "SFH (Diffstar)",
+        "Sets the suppression depth after quenching.",
+    ),
+    "diffstar_lg_rejuv": (
+        "Rejuvenation amplitude log10",
+        "SFH (Diffstar)",
+        "Sets the strength of star formation after a quenching episode.",
+    ),
+    "diffmah_logm0": (
+        "Halo mass at a=1 log10(Mhalo/Msun)",
+        "Halo assembly (Diffmah)",
+        "Sets the late-time halo mass scale.",
+    ),
+    "diffmah_logtc": (
+        "Halo transition time log10(tc / Gyr)",
+        "Halo assembly (Diffmah)",
+        "Sets when halo mass accretion changes regime.",
+    ),
+    "diffmah_early_index": (
+        "Early halo-growth index",
+        "Halo assembly (Diffmah)",
+        "Controls the early-time halo mass-accretion slope.",
+    ),
+    "diffmah_late_index": (
+        "Late halo-growth index",
+        "Halo assembly (Diffmah)",
+        "Controls the late-time halo mass-accretion slope.",
+    ),
+    "diffmah_t_peak": (
+        "Halo assembly peak time [Gyr]",
+        "Halo assembly (Diffmah)",
+        "Sets the time of peak halo mass accretion.",
+    ),
 }
 
 USEFUL_PARAMETER_ORDER = (
@@ -60,8 +132,15 @@ GAUSSIAN_QUANTILES = np.asarray(
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", type=Path, required=True, help="Supervised prior run directory.")
-    parser.add_argument("--dataset", type=Path, required=True, help="FENIKS train parquet used for the plot.")
+    parser.add_argument(
+        "--run", type=Path, required=True, help="Supervised prior run directory."
+    )
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        required=True,
+        help="FENIKS train parquet used for the plot.",
+    )
     parser.add_argument("--out", type=Path, help="Output directory; defaults to --run.")
     return parser.parse_args()
 
@@ -72,7 +151,9 @@ def _read_json(path: Path) -> dict[str, object]:
 
 def _hist(ax: plt.Axes, values: np.ndarray, *, color: str, xlabel: str) -> None:
     finite = values[np.isfinite(values)]
-    ax.hist(finite, bins=60, density=True, histtype="stepfilled", color=color, alpha=0.72)
+    ax.hist(
+        finite, bins=60, density=True, histtype="stepfilled", color=color, alpha=0.72
+    )
     ax.set_xlabel(xlabel, fontsize=8)
     ax.set_ylabel("Density", fontsize=8)
     ax.tick_params(labelsize=7)
@@ -109,7 +190,9 @@ def _fit_asinh_transform(
         _, center, scale = _standardize(transformed)
         quantiles = value * np.arcsinh(physical_quantiles / value)
         normalized_quantiles = (quantiles - center) / scale
-        score = float(np.sqrt(np.mean((normalized_quantiles - GAUSSIAN_QUANTILES) ** 2)))
+        score = float(
+            np.sqrt(np.mean((normalized_quantiles - GAUSSIAN_QUANTILES) ** 2))
+        )
         scan_rows.append({"lambda": float(value), "gaussian_quantile_rmse": score})
         if best is None or score < best[0]:
             best = (score, float(value), center, scale)
@@ -129,7 +212,9 @@ def _fit_asinh_transform(
 
 
 def _parameter_label(name: str) -> tuple[str, str, str]:
-    return PARAMETERS.get(name, (name, "Unlabelled parameter", "No description available."))
+    return PARAMETERS.get(
+        name, (name, "Unlabelled parameter", "No description available.")
+    )
 
 
 def _write_glossary(
@@ -164,7 +249,9 @@ def _write_glossary(
         )
     largest_tail = max(rows, key=lambda row: float(row["x_abs_max"]))
     floored = [
-        row for row in rows if np.isclose(float(row["raw_scale"]), scale_floor, rtol=0.0, atol=1.0e-8)
+        row
+        for row in rows
+        if np.isclose(float(row["raw_scale"]), scale_floor, rtol=0.0, atol=1.0e-8)
     ]
     lines.extend(
         [
@@ -270,7 +357,9 @@ def _write_dirac_zoom(
         axes[row, 1].hist(residual, bins=bins, color="#b85c36", alpha=0.75)
         axes[row, 1].set_yscale("log")
         axes[row, 1].axvline(0.0, color="0.2", linestyle="--", linewidth=0.9)
-        axes[row, 1].set_title("Atom zoom: all values retained (log count scale)", fontsize=9)
+        axes[row, 1].set_title(
+            "Atom zoom: all values retained (log count scale)", fontsize=9
+        )
         axes[row, 1].set_xlabel("theta - dominant value")
         axes[row, 1].set_ylabel("Count (log scale)")
         in_window = int(np.sum(np.abs(non_atom) <= 0.5))
@@ -338,12 +427,24 @@ def _write_asinh_comparison_plot(
         _hist(axes[row, 0], theta[:, index], color="#3979a6", xlabel=label)
         axes[row, 0].set_title(f"{role}: {label}", loc="left", fontsize=9)
 
-        _hist(axes[row, 1], current_x[:, index], color="#b85c36", xlabel="Current standardized logit x")
+        _hist(
+            axes[row, 1],
+            current_x[:, index],
+            color="#b85c36",
+            xlabel="Current standardized logit x",
+        )
         axes[row, 1].plot(normal_x, normal_density, color="0.15", linewidth=1.0)
         axes[row, 1].set_xlim(-5.0, 5.0)
-        axes[row, 1].set_title(f"Current Gaussian RMSE = {result['current_gaussian_rmse']:.3f}", fontsize=9)
+        axes[row, 1].set_title(
+            f"Current Gaussian RMSE = {result['current_gaussian_rmse']:.3f}", fontsize=9
+        )
 
-        _hist(axes[row, 2], asinh_x[:, index], color="#5d8f54", xlabel="Per-parameter asinh + standardization")
+        _hist(
+            axes[row, 2],
+            asinh_x[:, index],
+            color="#5d8f54",
+            xlabel="Per-parameter asinh + standardization",
+        )
         axes[row, 2].plot(normal_x, normal_density, color="0.15", linewidth=1.0)
         axes[row, 2].set_xlim(-5.0, 5.0)
         axes[row, 2].set_title(
@@ -377,9 +478,13 @@ def _write_asinh_report(path: Path, summary: pd.DataFrame, dataset: Path) -> Non
         if row["dominant_fraction"] >= 0.5:
             assessment = "Discrete-continuous mixture: a monotone transform cannot remove the atom."
         elif row["asinh_regime"] == "linear limit":
-            assessment = "No compression benefit: ordinary linear standardization is preferred."
+            assessment = (
+                "No compression benefit: ordinary linear standardization is preferred."
+            )
         elif row["asinh_gaussian_rmse"] < 0.9 * row["linear_gaussian_rmse"]:
-            assessment = "Asinh improves the marginal relative to linear standardization."
+            assessment = (
+                "Asinh improves the marginal relative to linear standardization."
+            )
         elif row["current_gaussian_rmse"] < row["asinh_gaussian_rmse"]:
             assessment = "The current bounded-logit marginal is closer to Gaussian."
         else:
@@ -421,14 +526,20 @@ def main() -> None:
     source_by_name = {entry["name"]: entry["column"] for entry in schema}
     source_columns = [source_by_name[name] for name in names]
     frame = pd.read_parquet(args.dataset, columns=source_columns)
-    theta = frame[source_columns].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+    theta = (
+        frame[source_columns]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
     finite = np.isfinite(theta).all(axis=1)
     theta = theta[finite]
     if theta.size == 0:
         raise ValueError(f"No finite rows in {args.dataset}")
 
     unit = (theta - lower) / (upper - lower)
-    raw = np.log(np.clip(unit, 1.0e-6, 1.0 - 1.0e-6)) - np.log1p(-np.clip(unit, 1.0e-6, 1.0 - 1.0e-6))
+    raw = np.log(np.clip(unit, 1.0e-6, 1.0 - 1.0e-6)) - np.log1p(
+        -np.clip(unit, 1.0e-6, 1.0 - 1.0e-6)
+    )
     x = (raw - center) / scale
     raw_scale_unclipped = np.std(raw, axis=0)
     asinh_x = np.empty_like(theta)
@@ -461,9 +572,11 @@ def main() -> None:
                 "asinh_regime": (
                     "log-like limit"
                     if metadata["lambda_at_scan_min"]
-                    else "linear limit"
-                    if metadata["lambda_at_scan_max"]
-                    else "finite compression"
+                    else (
+                        "linear limit"
+                        if metadata["lambda_at_scan_max"]
+                        else "finite compression"
+                    )
                 ),
             }
         )
@@ -471,7 +584,9 @@ def main() -> None:
             asinh_scan_rows.append({"parameter": name, **scan_row})
     asinh_summary = pd.DataFrame(asinh_rows)
     asinh_summary.to_csv(out / "realnvp_asinh_transform_summary.csv", index=False)
-    pd.DataFrame(asinh_scan_rows).to_csv(out / "realnvp_asinh_lambda_scan.csv", index=False)
+    pd.DataFrame(asinh_scan_rows).to_csv(
+        out / "realnvp_asinh_lambda_scan.csv", index=False
+    )
 
     rows: list[dict[str, object]] = []
     for index, name in enumerate(names):
@@ -500,7 +615,9 @@ def main() -> None:
         )
     stats = pd.DataFrame(rows)
     stats.to_csv(out / "realnvp_normalization_statistics.csv", index=False)
-    checkpoint_dataset = str(sidecar.get("source_dataset", sidecar["prior_learning"]["dataset"]))
+    checkpoint_dataset = str(
+        sidecar.get("source_dataset", sidecar["prior_learning"]["dataset"])
+    )
     scale_floor = float(sidecar["prior_learning"]["latent"]["min_raw_scale"])
     _write_glossary(
         out / "realnvp_parameter_glossary.md",
@@ -582,7 +699,10 @@ def main() -> None:
         _hist(axis, raw[:, index], color="#6a9b4f", xlabel="Raw bounded logit")
         axis.set_title(f"{group}\n{label}", fontsize=9)
         axis.axvline(center[index], color="0.25", linestyle="--", linewidth=0.8)
-    fig.suptitle("Intermediate step: raw logit before centering/scaling (dashed = training mean)", fontsize=14)
+    fig.suptitle(
+        "Intermediate step: raw logit before centering/scaling (dashed = training mean)",
+        fontsize=14,
+    )
     fig.savefig(out / "realnvp_1d_raw_logit.png", dpi=180)
     plt.close(fig)
 

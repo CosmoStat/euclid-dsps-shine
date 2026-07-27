@@ -222,9 +222,7 @@ def _snr_counts(
         flux_col = f"{prefix}_{band}"
         err_col = f"fluxerr_{band}"
         if flux_col not in frame or err_col not in frame:
-            raise ValueError(
-                f"Photometric selection requires {flux_col} and {err_col}"
-            )
+            raise ValueError(f"Photometric selection requires {flux_col} and {err_col}")
         flux = pd.to_numeric(frame[flux_col], errors="coerce").to_numpy(float)
         err = pd.to_numeric(frame[err_col], errors="coerce").to_numpy(float)
         if observed:
@@ -254,9 +252,9 @@ def _cut_summary(mask: np.ndarray) -> dict[str, Any]:
     return {
         "kept": int(np.count_nonzero(valid)),
         "rejected": int(valid.size - np.count_nonzero(valid)),
-        "kept_fraction": float(np.count_nonzero(valid) / valid.size)
-        if valid.size
-        else 0.0,
+        "kept_fraction": (
+            float(np.count_nonzero(valid) / valid.size) if valid.size else 0.0
+        ),
     }
 
 

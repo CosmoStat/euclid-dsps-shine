@@ -169,7 +169,9 @@ def test_truth_standardized_latent_spec_reuses_train_coordinates(
     assert np.allclose(np.mean(normalized.x, axis=0), 0.0, atol=1.0e-5)
 
 
-def test_supervised_prior_diagnostics_skip_constant_corner_columns(tmp_path: Path) -> None:
+def test_supervised_prior_diagnostics_skip_constant_corner_columns(
+    tmp_path: Path,
+) -> None:
     truth = pd.DataFrame(
         {
             "z_obs": np.linspace(0.1, 0.5, 32),
@@ -514,7 +516,9 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
     assert (out / "snapshots" / "epoch_0002" / "snapshot_summary.json").exists()
 
     sidecar_path = out / "checkpoints" / "best.eqx.json"
-    progress = json.loads((out / "prior_training_progress.json").read_text(encoding="utf-8"))
+    progress = json.loads(
+        (out / "prior_training_progress.json").read_text(encoding="utf-8")
+    )
     assert progress["completed_epochs"] == 2
     assert progress["last"]["best_epoch"] >= 1
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))

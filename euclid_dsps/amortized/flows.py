@@ -244,7 +244,9 @@ class _RQSplineCouplingLayer(eqx.Module):
         )
         init = str(init).lower()
         if init not in {"default", "identity"}:
-            raise ValueError("RQSplineCouplingPrior init must be 'default' or 'identity'")
+            raise ValueError(
+                "RQSplineCouplingPrior init must be 'default' or 'identity'"
+            )
         if init == "identity":
             self.net = _scale_last_linear(self.net, float(init_scale))
         self.n_bins = int(n_bins)
@@ -487,7 +489,9 @@ def flow_integrity_diagnostics(
     masks_binary = all(bool(jnp.all((mask == 0) | (mask == 1))) for mask in masks)
     masks_static = all(not eqx.is_inexact_array(layer.mask) for layer in layers)
 
-    permutations = tuple(jnp.asarray(perm) for perm in getattr(prior, "permutations", ()))
+    permutations = tuple(
+        jnp.asarray(perm) for perm in getattr(prior, "permutations", ())
+    )
     permutation_dtypes = [str(perm.dtype) for perm in permutations]
     expected_perm = jnp.arange(int(prior.latent_dim))
     permutations_valid = all(
@@ -822,9 +826,11 @@ def _rational_quadratic_spline_inside(
     numerator = input_bin_heights * (
         input_delta * theta**2 + input_derivatives * theta_one_minus_theta
     )
-    denominator = input_delta + (
-        input_derivatives + input_derivatives_plus_one - 2.0 * input_delta
-    ) * theta_one_minus_theta
+    denominator = (
+        input_delta
+        + (input_derivatives + input_derivatives_plus_one - 2.0 * input_delta)
+        * theta_one_minus_theta
+    )
     outputs = input_cumheights + numerator / denominator
     logabsdet = _rational_quadratic_logabsdet(
         theta,
@@ -859,9 +865,11 @@ def _rational_quadratic_logabsdet(
     input_derivatives_plus_one,
 ):
     theta_one_minus_theta = theta * (1.0 - theta)
-    denominator = input_delta + (
-        input_derivatives + input_derivatives_plus_one - 2.0 * input_delta
-    ) * theta_one_minus_theta
+    denominator = (
+        input_delta
+        + (input_derivatives + input_derivatives_plus_one - 2.0 * input_delta)
+        * theta_one_minus_theta
+    )
     derivative_numerator = input_delta**2 * (
         input_derivatives_plus_one * theta**2
         + 2.0 * input_delta * theta_one_minus_theta
@@ -881,7 +889,9 @@ def _inverse_softplus(value: float) -> float:
 def _scale_last_linear(net, scale: float):
     """Scale the final MLP affine layer for near-identity flow initialization."""
     final = net.layers[-1]
-    scaled_weight = jnp.asarray(final.weight) * jnp.asarray(scale, dtype=final.weight.dtype)
+    scaled_weight = jnp.asarray(final.weight) * jnp.asarray(
+        scale, dtype=final.weight.dtype
+    )
     if final.bias is None:
         return eqx.tree_at(lambda item: item.layers[-1].weight, net, scaled_weight)
     scaled_bias = jnp.asarray(final.bias) * jnp.asarray(scale, dtype=final.bias.dtype)
@@ -894,7 +904,9 @@ def _scale_last_linear(net, scale: float):
 
 def _alternating_masks(latent_dim: int, n_layers: int) -> tuple[jnp.ndarray, ...]:
     base = (jnp.arange(latent_dim) % 2).astype(jnp.bool_)
-    return tuple(base if index % 2 == 0 else jnp.logical_not(base) for index in range(n_layers))
+    return tuple(
+        base if index % 2 == 0 else jnp.logical_not(base) for index in range(n_layers)
+    )
 
 
 def _integrity_check(

@@ -905,8 +905,7 @@ def fit_objective_components(
         if column not in out:
             out[column] = 0.0
     out["physical_prior_penalty"] = (
-        out["physical_gaussian_prior_penalty"]
-        + out["physical_beta_prior_penalty"]
+        out["physical_gaussian_prior_penalty"] + out["physical_beta_prior_penalty"]
     )
     out["population_prior_penalty"] = (
         out["population_gaussian_prior_penalty"]
@@ -964,7 +963,9 @@ def _fit_parameter_warning_flags(
 
 
 def _photometric_chi2_by_row(fits: pd.DataFrame, comparison: pd.DataFrame) -> pd.Series:
-    chi_column = _first_present(comparison, ["chi_likelihood", "chi_flux", "chi"]) or "chi"
+    chi_column = (
+        _first_present(comparison, ["chi_likelihood", "chi_flux", "chi"]) or "chi"
+    )
     if not comparison.empty and {"row_index", chi_column}.issubset(comparison.columns):
         grouped = comparison.assign(
             _chi2=pd.to_numeric(comparison[chi_column], errors="coerce") ** 2
@@ -1136,9 +1137,7 @@ def plot_population_bias_heatmap(by_row: pd.DataFrame, path: str | Path) -> None
         return
 
     work = (
-        by_row[[z_col, m_col, quality_col]]
-        .replace([np.inf, -np.inf], np.nan)
-        .dropna()
+        by_row[[z_col, m_col, quality_col]].replace([np.inf, -np.inf], np.nan).dropna()
     )
     if len(work) < 10:
         return
@@ -1236,7 +1235,9 @@ def plot_color_redshift_diagnostics(
     plt.close(fig)
 
 
-def plot_physical_population_diagnostics(by_row: pd.DataFrame, path: str | Path) -> None:
+def plot_physical_population_diagnostics(
+    by_row: pd.DataFrame, path: str | Path
+) -> None:
     """Plot fitted/proxy physical relations in redshift bins."""
     if by_row.empty:
         return
@@ -1265,9 +1266,9 @@ def plot_physical_population_diagnostics(by_row: pd.DataFrame, path: str | Path)
         return
     work = by_row.copy()
     if "__ssfr__" in [col for _, col in rows]:
-        work["__ssfr__"] = pd.to_numeric(work[sfr_col], errors="coerce") - pd.to_numeric(
-            work[mass_col], errors="coerce"
-        )
+        work["__ssfr__"] = pd.to_numeric(
+            work[sfr_col], errors="coerce"
+        ) - pd.to_numeric(work[mass_col], errors="coerce")
     z_values = pd.to_numeric(work[z_col], errors="coerce").replace(
         [np.inf, -np.inf], np.nan
     )
@@ -1289,8 +1290,14 @@ def plot_physical_population_diagnostics(by_row: pd.DataFrame, path: str | Path)
     for row_index, (ylabel, y_col) in enumerate(rows):
         for col_index in range(n_cols):
             lo, hi = edges[col_index], edges[col_index + 1]
-            mask = (z_values >= lo) & (z_values <= hi if col_index == n_cols - 1 else z_values < hi)
-            subset = work.loc[mask, [mass_col, y_col]].replace([np.inf, -np.inf], np.nan).dropna()
+            mask = (z_values >= lo) & (
+                z_values <= hi if col_index == n_cols - 1 else z_values < hi
+            )
+            subset = (
+                work.loc[mask, [mass_col, y_col]]
+                .replace([np.inf, -np.inf], np.nan)
+                .dropna()
+            )
             ax = axes[row_index, col_index]
             if len(subset) < 3:
                 ax.set_visible(False)
@@ -1429,9 +1436,9 @@ def summarize_by_row(valid: pd.DataFrame) -> pd.DataFrame:
         derived_columns["photometric_objective"] = photometric_objective
     if "fit_quality_metric" not in by_row:
         if "photometric_likelihood" in by_row:
-            derived_columns["fit_quality_metric"] = by_row["photometric_likelihood"].map(
-                _fit_quality_metric_name
-            )
+            derived_columns["fit_quality_metric"] = by_row[
+                "photometric_likelihood"
+            ].map(_fit_quality_metric_name)
         else:
             derived_columns["fit_quality_metric"] = "gaussian_chi2"
 
@@ -1544,9 +1551,7 @@ def redshift_attractor_summary(
                 good = np.isfinite(dz) & np.isfinite(truth)
                 if good.any():
                     catastrophic = np.abs(dz[good]) > 0.15 * (1.0 + truth[good])
-                    row["catastrophic_fraction_0p15_1pz"] = float(
-                        catastrophic.mean()
-                    )
+                    row["catastrophic_fraction_0p15_1pz"] = float(catastrophic.mean())
         for metric in (
             "reduced_fit_quality",
             "fit_quality_per_band",
@@ -1832,9 +1837,9 @@ def plot_sed_diagnostic(
                 alpha=0.9,
             )
         if "ground_truth_unscaled_lnu_lsun_per_hz_display" in truth:
-            unscaled = truth[
-                "ground_truth_unscaled_lnu_lsun_per_hz_display"
-            ].to_numpy(dtype=float)
+            unscaled = truth["ground_truth_unscaled_lnu_lsun_per_hz_display"].to_numpy(
+                dtype=float
+            )
             unscaled_mask = _sed_plot_mask(truth_wave, unscaled)
             if unscaled_mask.any():
                 ax_sed.plot(
@@ -1984,7 +1989,9 @@ def _plot_rest_frame_filters(
             continue
         rest_wave = wave_filter_obs[passband_mask] / (1.0 + float(z_obs))
         color = palette[index % len(palette)]
-        norm_trans = transmission[passband_mask] / np.nanmax(transmission[passband_mask])
+        norm_trans = transmission[passband_mask] / np.nanmax(
+            transmission[passband_mask]
+        )
         scaled = base + height * norm_trans
         ax.fill_between(
             rest_wave,
@@ -2184,13 +2191,15 @@ def plot_fit_trace(trace: pd.DataFrame, path: str | Path) -> None:
     y_col = (
         "objective"
         if "objective" in trace
-        else "mean_fit_quality"
-        if "mean_fit_quality" in trace
-        else "mean_chi2_or_loss"
-        if "mean_chi2_or_loss" in trace
-        else "chi2"
-        if "chi2" in trace
-        else None
+        else (
+            "mean_fit_quality"
+            if "mean_fit_quality" in trace
+            else (
+                "mean_chi2_or_loss"
+                if "mean_chi2_or_loss" in trace
+                else "chi2" if "chi2" in trace else None
+            )
+        )
     )
     if y_col is None:
         return
@@ -3113,9 +3122,11 @@ def plot_redshift_attractors(
     fig, axes = plt.subplots(1, 2, figsize=(10.5, 4))
     work = by_row.copy()
     if {"redshift_truth", "z_obs"}.issubset(work.columns):
-        sample = work[["redshift_truth", "z_obs"]].replace(
-            [np.inf, -np.inf], np.nan
-        ).dropna()
+        sample = (
+            work[["redshift_truth", "z_obs"]]
+            .replace([np.inf, -np.inf], np.nan)
+            .dropna()
+        )
         if len(sample) > 5000:
             sample = sample.sample(5000, random_state=4)
         axes[0].scatter(sample["redshift_truth"], sample["z_obs"], s=8, alpha=0.3)
@@ -3166,9 +3177,8 @@ def plot_batch_parameter_truth(
     for col in by_row.columns:
         if col.startswith("truth_"):
             param_name = col[6:]
-            if (
-                f"fit_{param_name}" in by_row.columns
-                and is_comparable_fit_parameter(config, param_name)
+            if f"fit_{param_name}" in by_row.columns and is_comparable_fit_parameter(
+                config, param_name
             ):
                 params.append(param_name)
 

@@ -166,9 +166,7 @@ def calibration_hash(calibration_dir: str | Path, calibration_name: str) -> str 
     return None
 
 
-def _calibration_candidates(
-    calibration_dir: Path, calibration_name: str
-) -> list[Path]:
+def _calibration_candidates(calibration_dir: Path, calibration_name: str) -> list[Path]:
     """Return local and installed-Diffsky candidate calibration paths."""
     bname = f"diffsky_{calibration_name}_param_collection.hdf5"
     candidates = [calibration_dir / bname, calibration_dir]

@@ -220,9 +220,7 @@ def _build_contrast_reconstructor(
         knot_log_time = jnp.log10(jnp.maximum(knot_time, 1.0e-6))
         log_time = jnp.log10(jnp.maximum(time, 1.0e-6))
         knot_log_sfr = jnp.concatenate((jnp.zeros(1), jnp.cumsum(contrasts)))
-        return 10 ** cubic_spline_interpolate_jax(
-            knot_log_time, knot_log_sfr, log_time
-        )
+        return 10 ** cubic_spline_interpolate_jax(knot_log_time, knot_log_sfr, log_time)
 
     return jax.jit(jax.vmap(single, in_axes=(0, 0)))
 

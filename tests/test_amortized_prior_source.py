@@ -34,7 +34,9 @@ if HAS_DEPS:
 
 
 def _tree_leaves(tree):
-    return [leaf for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)]
+    return [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if eqx.is_inexact_array(leaf)
+    ]
 
 
 def test_standard_normal_prior_baseline_shape_and_logprob() -> None:
@@ -70,10 +72,14 @@ def test_frozen_prior_gradients_do_not_update_prior() -> None:
     grads = zero_prior_grads(grads)
     optimizer = optax.adamw(1.0e-2)
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
-    updates, _ = optimizer.update(grads, opt_state, eqx.filter(model, eqx.is_inexact_array))
+    updates, _ = optimizer.update(
+        grads, opt_state, eqx.filter(model, eqx.is_inexact_array)
+    )
     updated = eqx.apply_updates(model, updates)
 
-    for before, after in zip(_tree_leaves(model.prior), _tree_leaves(updated.prior), strict=True):
+    for before, after in zip(
+        _tree_leaves(model.prior), _tree_leaves(updated.prior), strict=True
+    ):
         assert jnp.allclose(before, after)
 
 

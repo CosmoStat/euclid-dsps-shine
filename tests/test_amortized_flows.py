@@ -59,9 +59,7 @@ def test_realnvp_permuted_roundtrip_and_temperature(permutation: str) -> None:
 
     x, _ = prior.forward(u)
     recovered, _ = prior.inverse(x)
-    samples = prior.sample_with_temperature(
-        jax.random.PRNGKey(1), 7, temperature=0.2
-    )
+    samples = prior.sample_with_temperature(jax.random.PRNGKey(1), 7, temperature=0.2)
     logp = prior.log_prob_with_temperature(x, temperature=0.2)
 
     assert jnp.allclose(recovered, u, atol=1.0e-5)
@@ -224,9 +222,7 @@ def test_rq_spline_temperature_and_invalid_temperature() -> None:
     )
     x = jnp.zeros((3, 4), dtype=jnp.float32)
 
-    samples = prior.sample_with_temperature(
-        jax.random.PRNGKey(1), 7, temperature=0.2
-    )
+    samples = prior.sample_with_temperature(jax.random.PRNGKey(1), 7, temperature=0.2)
     logp = prior.log_prob_with_temperature(x, temperature=0.2)
 
     assert samples.shape == (7, 4)

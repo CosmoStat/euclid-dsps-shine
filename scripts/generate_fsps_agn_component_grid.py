@@ -154,9 +154,7 @@ def generate_component_grid(args: argparse.Namespace) -> Path:
 
     with h5py.File(output, "w") as handle:
         handle["ssp_wave"] = np.asarray(axes["ssp_wave"], dtype=np.float32)
-        handle["ssp_lg_age_gyr"] = np.asarray(
-            axes["ssp_lg_age_gyr"], dtype=np.float32
-        )
+        handle["ssp_lg_age_gyr"] = np.asarray(axes["ssp_lg_age_gyr"], dtype=np.float32)
         handle["ssp_lgmet"] = np.asarray(axes["ssp_lgmet"], dtype=np.float32)
         handle["fagn_grid"] = np.asarray(fagn_grid, dtype=np.float32)
         handle["agn_tau_grid"] = np.asarray(tau_grid, dtype=np.float32)

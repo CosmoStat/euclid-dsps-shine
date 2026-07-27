@@ -25,7 +25,6 @@ from .io import GalaxyObservation
 from .parameters import DIFFSTAR_FIXED_PARAMETER_DEFAULTS, POPCOSMOS_PARAMETER_NAMES
 from .photometry import abmag_to_fnu_cgs
 
-
 POPCOSMOS_Z_SUN = 0.0142
 LEGACY_Z_SUN = 0.0134
 _AXIS_RTOL = 0.0
@@ -477,7 +476,9 @@ def _load_compressed_ssp_grid(
             else np.ones(coeff.shape[:-1], dtype=np.float32)
         )
     if basis.ndim != 2 or basis.shape[1] != len(wave):
-        raise ValueError("Compressed SSP grid ssp_basis must have shape (n_basis, n_wave)")
+        raise ValueError(
+            "Compressed SSP grid ssp_basis must have shape (n_basis, n_wave)"
+        )
     expected_coeff_shape = (len(lgmet), len(lg_age), basis.shape[0])
     if coeff.ndim != 3 or coeff.shape != expected_coeff_shape:
         raise ValueError(
@@ -489,7 +490,9 @@ def _load_compressed_ssp_grid(
             "Compressed SSP grid ssp_scale must have shape "
             "(n_ssp_lgmet, n_ssp_lg_age_gyr)"
         )
-    _validate_compressed_ssp_reference_axes(grid_path, reference_ssp, wave, lg_age, lgmet)
+    _validate_compressed_ssp_reference_axes(
+        grid_path, reference_ssp, wave, lg_age, lgmet
+    )
     _validate_popcosmos_ssp_metadata(grid_path, model_config or {})
     _validate_compressed_asset_dtype_metadata(
         grid_path,
@@ -534,7 +537,9 @@ def _validate_compressed_ssp_reference_axes(
     lg_age: np.ndarray,
     lgmet: np.ndarray,
 ) -> None:
-    _assert_axis_close(path, "ssp_wave", np.asarray(reference_ssp.ssp_wave), wave, _WAVE_ATOL)
+    _assert_axis_close(
+        path, "ssp_wave", np.asarray(reference_ssp.ssp_wave), wave, _WAVE_ATOL
+    )
     _assert_axis_close(
         path,
         "ssp_lg_age_gyr",
@@ -586,7 +591,9 @@ def _load_optional_gas_grid(
     if nebular_model == "gas_grid":
         path = model_config.get("gas_grid_path")
         if not path:
-            raise ValueError("model.nebular_model='gas_grid' requires model.gas_grid_path")
+            raise ValueError(
+                "model.nebular_model='gas_grid' requires model.gas_grid_path"
+            )
         gas_lgmet, gas_lgu, ssp_flux = _load_gas_ssp_grid(
             path, reference_ssp=ssp, model_config=model_config
         )
@@ -812,7 +819,20 @@ def _load_optional_agn_grid(
                 path, model_config=model_config, reference_ssp=reference_ssp
             )
         )
-        return wave, fagn, tau, None, None, None, lgmet, lg_age, None, basis, coeff, scale
+        return (
+            wave,
+            fagn,
+            tau,
+            None,
+            None,
+            None,
+            lgmet,
+            lg_age,
+            None,
+            basis,
+            coeff,
+            scale,
+        )
     if agn_model != "template_grid":
         raise ValueError(f"Unsupported model.agn_model: {agn_model}")
     path = model_config.get("agn_template_path")
@@ -993,7 +1013,9 @@ def _load_compressed_agn_component_grid(
     """
     grid_path = Path(path).expanduser()
     if not grid_path.exists():
-        raise FileNotFoundError(f"Compressed AGN component grid file not found: {grid_path}")
+        raise FileNotFoundError(
+            f"Compressed AGN component grid file not found: {grid_path}"
+        )
     try:
         import h5py
     except ImportError as exc:  # pragma: no cover - pyproject requires h5py
@@ -1055,8 +1077,7 @@ def _load_compressed_agn_component_grid(
             basis.shape[0],
         )
         shape_message = (
-            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, "
-            "n_ssp_lg_age_gyr, n_basis)"
+            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, " "n_ssp_lg_age_gyr, n_basis)"
         )
         scale_shape_message = (
             "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr)"
@@ -1370,8 +1391,10 @@ def _corrected_enriched_gas_flux(
             "Gas SSP grid line_flux_grid must have shape "
             "(n_gas_lgmet, n_gas_lgu, n_stellar_lgmet, n_age, n_line)"
         )
-    if continuum.ndim != 5 or line_grid.ndim != 5 or line_grid.shape[-1] != len(
-        line_wave
+    if (
+        continuum.ndim != 5
+        or line_grid.ndim != 5
+        or line_grid.shape[-1] != len(line_wave)
     ):
         raise ValueError("Gas SSP grid enriched line datasets have incompatible shapes")
     line_names = _line_names_from_hdf5(handle, line_grid.shape[-1])
@@ -1430,14 +1453,18 @@ def _line_correction_multipliers(
             f"grid: {', '.join(missing)}"
         )
     if not np.all(np.isfinite(multipliers)):
-        raise ValueError("Emission-line correction multipliers contain non-finite values")
+        raise ValueError(
+            "Emission-line correction multipliers contain non-finite values"
+        )
     return multipliers
 
 
 def _read_emission_line_correction_table(path: str | Path) -> dict[str, float]:
     table_path = Path(path).expanduser()
     if not table_path.exists():
-        raise FileNotFoundError(f"Emission-line correction table not found: {table_path}")
+        raise FileNotFoundError(
+            f"Emission-line correction table not found: {table_path}"
+        )
     required = {
         "line_name",
         "line_wavelength",
@@ -1455,8 +1482,14 @@ def _read_emission_line_correction_table(path: str | Path) -> dict[str, float]:
         for row in reader:
             name = str(row["line_name"]).strip()
             if not name:
-                raise ValueError("Emission-line correction table has an empty line_name")
-            for key in ("line_wavelength", "fractional_correction", "fractional_variance"):
+                raise ValueError(
+                    "Emission-line correction table has an empty line_name"
+                )
+            for key in (
+                "line_wavelength",
+                "fractional_correction",
+                "fractional_variance",
+            ):
                 try:
                     value = float(row[key])
                 except (TypeError, ValueError) as exc:
@@ -1659,11 +1692,14 @@ def _random_uniform_redshift(
 
 def run_dsps_model(context: DspsContext, params: dict[str, float]) -> ModelResult:
     """Run DSPS from simple SFH/metallicity parameters to SED and photometry."""
-    if float(
-        gas_metallicity_constraint_penalty_jax(
-            params, context.model_config, penalty=1.0
+    if (
+        float(
+            gas_metallicity_constraint_penalty_jax(
+                params, context.model_config, penalty=1.0
+            )
         )
-    ) > 0.0:
+        > 0.0
+    ):
         raise ValueError(
             "PopCosmos-like gas metallicity constraint violated: "
             "log10_gas_metallicity must be >= log10_stellar_metallicity "
@@ -1714,7 +1750,9 @@ def run_dsps_model_jax(context: DspsContext, params: dict[str, Any]) -> JaxModel
     return run_lognormal_model_jax(context, params)
 
 
-def run_dsps_model_mags_jax(context: DspsContext, params: dict[str, Any]) -> jnp.ndarray:
+def run_dsps_model_mags_jax(
+    context: DspsContext, params: dict[str, Any]
+) -> jnp.ndarray:
     """Return model magnitudes without constructing diagnostic SED outputs."""
     model_config = _normalized_model_config(context.model_config)
     sfh_model = str(model_config.get("sfh_model", "lognormal"))
@@ -2280,7 +2318,6 @@ def run_diffsky_basic_model_jax(
         params["log10_stellar_metallicity"], context.z_sun
     )
 
-
     frac_surviving_by_age = _diffsky_basic_surviving_mstar_by_age_jax(
         context, model_config, lgmet_abs
     )
@@ -2754,9 +2791,7 @@ def diffsky_basic_dust_params_jax(
         1.086, dtype=jnp.float32
     )
     dust_index_n = jnp.asarray(params.get("dust_delta", 0.0), dtype=jnp.float32)
-    tau1_over_tau2 = jnp.asarray(
-        params.get("tau1_over_tau2", 0.0), dtype=jnp.float32
-    )
+    tau1_over_tau2 = jnp.asarray(params.get("tau1_over_tau2", 0.0), dtype=jnp.float32)
     return (
         jnp.maximum(tau2, 0.0),
         dust_index_n,
@@ -2798,9 +2833,7 @@ def project_sfh_to_popcosmos_sfr_bins_jax(
     sfr_table = jnp.asarray(gal_sfr_table, dtype=jnp.float32)
     dt = jnp.diff(t_table)
     dm = 0.5 * (sfr_table[1:] + sfr_table[:-1]) * dt
-    cumulative = jnp.concatenate(
-        [jnp.zeros(1, dtype=sfr_table.dtype), jnp.cumsum(dm)]
-    )
+    cumulative = jnp.concatenate([jnp.zeros(1, dtype=sfr_table.dtype), jnp.cumsum(dm)])
     lookback_edges = build_popcosmos_lookback_bin_edges_jax(t_obs)
     t_high = jnp.asarray(t_obs, dtype=jnp.float32) - lookback_edges[:-1]
     t_low = jnp.asarray(t_obs, dtype=jnp.float32) - lookback_edges[1:]
@@ -2819,9 +2852,7 @@ def project_sfh_to_popcosmos_dlogsfr_jax(
     gal_t_table: jnp.ndarray, gal_sfr_table: jnp.ndarray, t_obs: jnp.ndarray
 ) -> jnp.ndarray:
     """Project any SFH to six adjacent PopCosmos log-SFR ratios."""
-    sfr_bins = project_sfh_to_popcosmos_sfr_bins_jax(
-        gal_t_table, gal_sfr_table, t_obs
-    )
+    sfr_bins = project_sfh_to_popcosmos_sfr_bins_jax(gal_t_table, gal_sfr_table, t_obs)
     log_sfr = jnp.log10(jnp.maximum(sfr_bins, 1.0e-30))
     return log_sfr[:-1] - log_sfr[1:]
 
@@ -2928,9 +2959,10 @@ def interpolate_context_ssp_stellar_metallicity_jax(
         scale,
         jnp.asarray(lgmet_abs, dtype=jnp.float32),
     )
-    weighted_coeff = jnp.asarray(coeff_z, dtype=jnp.float32) * jnp.asarray(
-        scale_z, dtype=jnp.float32
-    )[:, None]
+    weighted_coeff = (
+        jnp.asarray(coeff_z, dtype=jnp.float32)
+        * jnp.asarray(scale_z, dtype=jnp.float32)[:, None]
+    )
     basis = jnp.asarray(context.compressed_ssp_basis_jax, dtype=jnp.float32)
     reconstructed = jnp.einsum("ak,kw->aw", weighted_coeff, basis)
     return jnp.nan_to_num(reconstructed, nan=0.0, posinf=1.0e30, neginf=-1.0e30)
@@ -3179,9 +3211,7 @@ def apply_prospector_fsps_dust_by_age_jax(
     tau1 = jnp.maximum(jnp.asarray(tau1_over_tau2, dtype=jnp.float32), 0.0) * tau2_safe
     diffuse_shape = _prospector_fsps_diffuse_shape_jax(wave_safe, dust_index_n)
     diffuse = tau2_safe * diffuse_shape
-    birth = tau1 * (wave_safe / 5500.0) ** jnp.asarray(
-        dust1_index, dtype=jnp.float32
-    )
+    birth = tau1 * (wave_safe / 5500.0) ** jnp.asarray(dust1_index, dtype=jnp.float32)
     age_logyr = jnp.asarray(ssp_lg_age_gyr, dtype=jnp.float32) + 9.0
     young = age_logyr <= jnp.asarray(dust_tesc_logyr, dtype=jnp.float32)
     old_trans = jnp.exp(-jnp.clip(diffuse, 0.0, 80.0))
@@ -3199,11 +3229,11 @@ def _prospector_fsps_diffuse_shape_jax(
     eb = 0.85 - 1.9 * slope
     lamuvb = jnp.asarray(2175.0, dtype=jnp.float32)
     dlam = jnp.asarray(350.0, dtype=jnp.float32)
-    drude = eb * (wave * dlam) ** 2 / (
-        (wave**2 - lamuvb**2) ** 2 + (wave * dlam) ** 2
-    )
+    drude = eb * (wave * dlam) ** 2 / ((wave**2 - lamuvb**2) ** 2 + (wave * dlam) ** 2)
     shape = (calzetti + drude / 4.05) * (wave / 5500.0) ** slope
-    return jnp.clip(jnp.nan_to_num(shape, nan=0.0, posinf=1.0e6, neginf=0.0), 0.0, 1.0e6)
+    return jnp.clip(
+        jnp.nan_to_num(shape, nan=0.0, posinf=1.0e6, neginf=0.0), 0.0, 1.0e6
+    )
 
 
 def _fsps_calzetti_tau_shape_jax(wave_angstrom: jnp.ndarray) -> jnp.ndarray:
@@ -3211,12 +3241,11 @@ def _fsps_calzetti_tau_shape_jax(wave_angstrom: jnp.ndarray) -> jnp.ndarray:
     wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=jnp.float32), 1.0)
     inv_micron = 10_000.0 / wave
     red = 1.17 * (-1.857 + 1.04 * inv_micron) + 1.78
-    blue = 1.17 * (
-        -2.156
-        + 1.509 * inv_micron
-        - 0.198 * inv_micron**2
-        + 0.011 * inv_micron**3
-    ) + 1.78
+    blue = (
+        1.17
+        * (-2.156 + 1.509 * inv_micron - 0.198 * inv_micron**2 + 0.011 * inv_micron**3)
+        + 1.78
+    )
     cal00 = jnp.where(wave > 6300.0, red, blue) / (0.44 * 4.05)
     return jnp.maximum(cal00, 0.0)
 
@@ -3241,9 +3270,9 @@ def apply_igm_transmission_jax(
         transmission = jnp.exp(-jnp.clip(tau_forest + tau_continuum, 0.0, 80.0))
         return jnp.asarray(rest_sed, dtype=jnp.float32) * transmission
     if mode == "fsps_madau95":
-        return jnp.asarray(rest_sed, dtype=jnp.float32) * fsps_madau95_igm_transmission_jax(
-            wave_rest, z_obs
-        )
+        return jnp.asarray(
+            rest_sed, dtype=jnp.float32
+        ) * fsps_madau95_igm_transmission_jax(wave_rest, z_obs)
     raise ValueError(f"Unsupported model.igm_model: {mode}")
 
 
@@ -3335,10 +3364,7 @@ def interpolate_gas_ssp_grid_jax(
             log10_gas_metallicity,
             log10_gas_ionization,
         )
-    if (
-        context.gas_lgmet_grid_jax is None
-        or context.gas_lgu_grid_jax is None
-    ):
+    if context.gas_lgmet_grid_jax is None or context.gas_lgu_grid_jax is None:
         raise ValueError("model.nebular_model='gas_grid' requires a loaded gas grid")
     gas_z_lo, gas_z_hi, gas_z_weight = _interp_bracket(
         context.gas_lgmet_grid_jax,
@@ -3387,18 +3413,22 @@ def interpolate_compressed_gas_ssp_grid_jax(
     scale = jnp.asarray(context.compressed_gas_scale_jax, dtype=jnp.float32)
     basis = jnp.asarray(context.compressed_gas_basis_jax)
 
-    wc00 = jnp.asarray(coeff[gas_z_lo, gas_u_lo], dtype=jnp.float32) * scale[
-        gas_z_lo, gas_u_lo
-    ][..., None]
-    wc01 = jnp.asarray(coeff[gas_z_lo, gas_u_hi], dtype=jnp.float32) * scale[
-        gas_z_lo, gas_u_hi
-    ][..., None]
-    wc10 = jnp.asarray(coeff[gas_z_hi, gas_u_lo], dtype=jnp.float32) * scale[
-        gas_z_hi, gas_u_lo
-    ][..., None]
-    wc11 = jnp.asarray(coeff[gas_z_hi, gas_u_hi], dtype=jnp.float32) * scale[
-        gas_z_hi, gas_u_hi
-    ][..., None]
+    wc00 = (
+        jnp.asarray(coeff[gas_z_lo, gas_u_lo], dtype=jnp.float32)
+        * scale[gas_z_lo, gas_u_lo][..., None]
+    )
+    wc01 = (
+        jnp.asarray(coeff[gas_z_lo, gas_u_hi], dtype=jnp.float32)
+        * scale[gas_z_lo, gas_u_hi][..., None]
+    )
+    wc10 = (
+        jnp.asarray(coeff[gas_z_hi, gas_u_lo], dtype=jnp.float32)
+        * scale[gas_z_hi, gas_u_lo][..., None]
+    )
+    wc11 = (
+        jnp.asarray(coeff[gas_z_hi, gas_u_hi], dtype=jnp.float32)
+        * scale[gas_z_hi, gas_u_hi][..., None]
+    )
     low_u = wc00 * (1.0 - gas_u_weight) + wc01 * gas_u_weight
     high_u = wc10 * (1.0 - gas_u_weight) + wc11 * gas_u_weight
     weighted_coeff = low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
@@ -3448,18 +3478,22 @@ def interpolate_compressed_gas_ssp_stellar_metallicity_jax(
     coeff = jnp.asarray(context.compressed_gas_coeff_jax)
     scale = jnp.asarray(context.compressed_gas_scale_jax, dtype=jnp.float32)
 
-    wc00 = jnp.asarray(coeff[gas_z_lo, gas_u_lo], dtype=jnp.float32) * scale[
-        gas_z_lo, gas_u_lo
-    ][..., None]
-    wc01 = jnp.asarray(coeff[gas_z_lo, gas_u_hi], dtype=jnp.float32) * scale[
-        gas_z_lo, gas_u_hi
-    ][..., None]
-    wc10 = jnp.asarray(coeff[gas_z_hi, gas_u_lo], dtype=jnp.float32) * scale[
-        gas_z_hi, gas_u_lo
-    ][..., None]
-    wc11 = jnp.asarray(coeff[gas_z_hi, gas_u_hi], dtype=jnp.float32) * scale[
-        gas_z_hi, gas_u_hi
-    ][..., None]
+    wc00 = (
+        jnp.asarray(coeff[gas_z_lo, gas_u_lo], dtype=jnp.float32)
+        * scale[gas_z_lo, gas_u_lo][..., None]
+    )
+    wc01 = (
+        jnp.asarray(coeff[gas_z_lo, gas_u_hi], dtype=jnp.float32)
+        * scale[gas_z_lo, gas_u_hi][..., None]
+    )
+    wc10 = (
+        jnp.asarray(coeff[gas_z_hi, gas_u_lo], dtype=jnp.float32)
+        * scale[gas_z_hi, gas_u_lo][..., None]
+    )
+    wc11 = (
+        jnp.asarray(coeff[gas_z_hi, gas_u_hi], dtype=jnp.float32)
+        * scale[gas_z_hi, gas_u_hi][..., None]
+    )
     low_u = wc00 * (1.0 - gas_u_weight) + wc01 * gas_u_weight
     high_u = wc10 * (1.0 - gas_u_weight) + wc11 * gas_u_weight
     weighted_coeff = low_u * (1.0 - gas_z_weight) + high_u * gas_z_weight
@@ -3488,11 +3522,10 @@ def gas_metallicity_constraint_penalty_jax(
 ) -> jnp.ndarray:
     """Hard PopCosmos-like constraint enforcing log10(Zgas/Zsun) >= log10(Zstar/Zsun)."""
     config = _normalized_model_config(model_config)
-    if (
-        str(config.get("nebular_model", "fixed_ssp"))
-        not in {"gas_grid", "compressed_gas_grid"}
-        or not _is_popcosmos_like_model_config(config)
-    ):
+    if str(config.get("nebular_model", "fixed_ssp")) not in {
+        "gas_grid",
+        "compressed_gas_grid",
+    } or not _is_popcosmos_like_model_config(config):
         return jnp.asarray(0.0, dtype=jnp.float32)
     gas = jnp.asarray(params["log10_gas_metallicity"], dtype=jnp.float32)
     stellar = jnp.asarray(params["log10_stellar_metallicity"], dtype=jnp.float32)
@@ -3600,7 +3633,9 @@ def agn_component_jax(
         (
             jnp.asarray(template_tage_gyr, dtype=jnp.float32)
             if template_tage_gyr is not None
-            else jnp.asarray(config.get("agn_template_tage_gyr", 1.0), dtype=jnp.float32)
+            else jnp.asarray(
+                config.get("agn_template_tage_gyr", 1.0), dtype=jnp.float32
+            )
         ),
         (
             jnp.asarray(stellar_logzsol, dtype=jnp.float32)
@@ -3734,7 +3769,9 @@ def agn_component_from_compressed_grid_jax(
             if fagn_is_factored
             else _interp_axis0_linear(context.agn_fagn_grid_jax, scale, fagn)
         )
-        scale_tau = _interp_axis0_linear(context.agn_tau_grid_jax, scale_for_tau, tauagn)
+        scale_tau = _interp_axis0_linear(
+            context.agn_tau_grid_jax, scale_for_tau, tauagn
+        )
         scale_z = _interp_axis0_linear(
             context.agn_component_lgmet_jax,
             scale_tau,
@@ -3829,7 +3866,9 @@ def apply_agn_host_attenuation_jax(
         elif baked_mode == "fsps_powerlaw_unit_tau":
             baked_shape = _fsps_powerlaw_unit_tau_shape_jax(
                 wave_safe,
-                jnp.asarray(config.get("agn_baked_dust_index", -0.7), dtype=jnp.float32),
+                jnp.asarray(
+                    config.get("agn_baked_dust_index", -0.7), dtype=jnp.float32
+                ),
             )
             optical_depth = shape - baked_shape
         else:
@@ -3929,9 +3968,10 @@ def _interp_axis0_linear(
     x0 = x_grid[lo]
     x1 = x_grid[hi]
     weight = (x_clipped - x0) / jnp.maximum(x1 - x0, 1.0e-12)
-    return jnp.asarray(values[lo], dtype=jnp.float32) * (1.0 - weight) + jnp.asarray(
-        values[hi], dtype=jnp.float32
-    ) * weight
+    return (
+        jnp.asarray(values[lo], dtype=jnp.float32) * (1.0 - weight)
+        + jnp.asarray(values[hi], dtype=jnp.float32) * weight
+    )
 
 
 def _jax_result_derived_array(result: JaxModelResult) -> jnp.ndarray:

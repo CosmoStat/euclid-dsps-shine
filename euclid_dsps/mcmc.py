@@ -322,9 +322,7 @@ def _sample_one_galaxy_mclmc(
         sample_config.get("mclmc_step_size", sample_config.get("step_size")),
         min(0.10, 1.0 / np.sqrt(float(dim))),
     )
-    inverse_mass_matrix = _mclmc_batch_inverse_mass_matrix(
-        sample_config, 1, dim
-    )
+    inverse_mass_matrix = _mclmc_batch_inverse_mass_matrix(sample_config, 1, dim)
 
     algorithm = blackjax.mclmc(
         logdensity_fn=target.logdensity,
@@ -347,7 +345,9 @@ def _sample_one_galaxy_mclmc(
         init_position_keys,
         init_strategy=init_strategy,
     )
-    chain_initial_theta = np.asarray(jax.vmap(target.theta_from_unconstrained)(chain_y0s))
+    chain_initial_theta = np.asarray(
+        jax.vmap(target.theta_from_unconstrained)(chain_y0s)
+    )
     _mclmc_log(
         progress_bar or debug,
         "backend="
@@ -445,10 +445,7 @@ def _sample_one_galaxy_mclmc(
     chain_ids = np.repeat(np.arange(num_chains, dtype=np.int32), num_samples)
     warmup_info = _concat_mclmc_infos(warmup_infos)
     sample_info = _concat_mclmc_infos(sample_infos)
-    samples = {
-        name: theta_np[:, index]
-        for index, name in enumerate(target.free_names)
-    }
+    samples = {name: theta_np[:, index] for index, name in enumerate(target.free_names)}
     posterior_model_mags = _posterior_model_mags(
         context,
         base_params,
@@ -590,16 +587,8 @@ def sample_galaxy_batch_mclmc(
     student_t_dof = _student_t_dof(fit_config)
 
     def params_from_base_theta(base, theta):
-        params = {
-            name: base[index]
-            for index, name in enumerate(parameter_names)
-        }
-        params.update(
-            {
-                name: theta[index]
-                for index, name in enumerate(free_names)
-            }
-        )
+        params = {name: base[index] for index, name in enumerate(parameter_names)}
+        params.update({name: theta[index] for index, name in enumerate(free_names)})
         return params
 
     def single_logdensity(
@@ -622,9 +611,7 @@ def sample_galaxy_batch_mclmc(
         if band_offsets.size:
             model_mag = model_mag + band_offsets
         model_obs = (
-            abmag_to_fnu_cgs_jax(model_mag)
-            if likelihood_space == "flux"
-            else model_mag
+            abmag_to_fnu_cgs_jax(model_mag) if likelihood_space == "flux" else model_mag
         )
         loglike = _masked_observation_logprob(
             observed=observed_i,
@@ -932,7 +919,10 @@ def _mclmc_observation_batch_arrays(
         dtype=float,
     )
     sigma_mag = np.asarray(
-        [[band.sigma_mag for band in observation.bands] for observation in observations],
+        [
+            [band.sigma_mag for band in observation.bands]
+            for observation in observations
+        ],
         dtype=float,
     )
     observed_flux = np.asarray(
@@ -1057,8 +1047,7 @@ def _mclmc_batched_bounded_log_prior(
     uniform = -jnp.log(span)
     normal = jstats.norm.logpdf(theta, loc, scale)
     norm = jnp.maximum(
-        jsp.special.ndtr((high - loc) / scale)
-        - jsp.special.ndtr((low - loc) / scale),
+        jsp.special.ndtr((high - loc) / scale) - jsp.special.ndtr((low - loc) / scale),
         1.0e-12,
     )
     truncated = normal - jnp.log(norm)
@@ -1082,9 +1071,7 @@ def _mclmc_batched_bounded_log_prior(
     return jnp.sum(logprob)
 
 
-def _mclmc_batch_init_strategy(
-    sample_config: dict[str, Any], has_initial: bool
-) -> str:
+def _mclmc_batch_init_strategy(sample_config: dict[str, Any], has_initial: bool) -> str:
     fallback = "map" if has_initial else "config"
     strategy = str(sample_config.get("init_strategy", fallback)).lower()
     if strategy == "map" and not has_initial:
@@ -1174,9 +1161,7 @@ def _mclmc_random_uniform_position_for_transform(
     lower = transform.lower
     upper = transform.upper
     eps = jnp.asarray(1.0e-4, dtype=lower.dtype)
-    unit = eps + (1.0 - 2.0 * eps) * random.uniform(
-        key, lower.shape, dtype=lower.dtype
-    )
+    unit = eps + (1.0 - 2.0 * eps) * random.uniform(key, lower.shape, dtype=lower.dtype)
     theta = lower + (upper - lower) * unit
     constraint = transform.gas_metallicity_constraint
     if constraint is None:
@@ -1192,9 +1177,7 @@ def _mclmc_random_uniform_position_for_transform(
     stellar = stellar_low + (stellar_high - stellar_low) * stellar_unit
     gas_low = jnp.maximum(lower[gas_index], stellar)
     gas_span = jnp.maximum(upper[gas_index] - gas_low, 1.0e-6)
-    gas_unit = eps + (1.0 - 2.0 * eps) * random.uniform(
-        gas_key, (), dtype=lower.dtype
-    )
+    gas_unit = eps + (1.0 - 2.0 * eps) * random.uniform(gas_key, (), dtype=lower.dtype)
     gas = gas_low + gas_span * gas_unit
     theta = theta.at[stellar_index].set(stellar).at[gas_index].set(gas)
     return transform.to_unconstrained(theta)
@@ -1251,7 +1234,9 @@ def _mclmc_initial_positions(
         return jnp.repeat(base_y0[None, :], n_chains, axis=0)
     if init_strategy == "map_jitter":
         scale = float(sample_config.get("init_jitter_scale", 0.25))
-        noise = random.normal(keys[0], (n_chains, base_y0.shape[0]), dtype=base_y0.dtype)
+        noise = random.normal(
+            keys[0], (n_chains, base_y0.shape[0]), dtype=base_y0.dtype
+        )
         return base_y0[None, :] + scale * noise
     raise ValueError(
         "sample.init_strategy must be one of "
@@ -1263,9 +1248,7 @@ def _mclmc_random_uniform_position(target, key: jnp.ndarray) -> jnp.ndarray:
     lower = target.transform.lower
     upper = target.transform.upper
     eps = jnp.asarray(1.0e-4, dtype=lower.dtype)
-    unit = eps + (1.0 - 2.0 * eps) * random.uniform(
-        key, lower.shape, dtype=lower.dtype
-    )
+    unit = eps + (1.0 - 2.0 * eps) * random.uniform(key, lower.shape, dtype=lower.dtype)
     theta = lower + (upper - lower) * unit
     constraint = target.transform.gas_metallicity_constraint
     if constraint is None:
@@ -1281,9 +1264,7 @@ def _mclmc_random_uniform_position(target, key: jnp.ndarray) -> jnp.ndarray:
     stellar = stellar_low + (stellar_high - stellar_low) * stellar_unit
     gas_low = jnp.maximum(lower[gas_index], stellar)
     gas_span = jnp.maximum(upper[gas_index] - gas_low, 1.0e-6)
-    gas_unit = eps + (1.0 - 2.0 * eps) * random.uniform(
-        gas_key, (), dtype=lower.dtype
-    )
+    gas_unit = eps + (1.0 - 2.0 * eps) * random.uniform(gas_key, (), dtype=lower.dtype)
     gas = gas_low + gas_span * gas_unit
     theta = theta.at[stellar_index].set(stellar).at[gas_index].set(gas)
     return target.transform.to_unconstrained(theta)
@@ -1372,8 +1353,7 @@ def _run_mclmc_steps(
             pbar.close()
 
     return state, {
-        name: jnp.concatenate(values, axis=0)
-        for name, values in chunks.items()
+        name: jnp.concatenate(values, axis=0) for name, values in chunks.items()
     }
 
 
@@ -1608,11 +1588,15 @@ def _posterior_model_mags(
         mags = predict_batch_mags(context, parameter_names, matrix)
     else:
         chunks = [
-            predict_batch_mags(context, parameter_names, matrix[start : start + batch_size])
+            predict_batch_mags(
+                context, parameter_names, matrix[start : start + batch_size]
+            )
             for start in range(0, matrix.shape[0], batch_size)
         ]
         mags = np.concatenate(chunks, axis=0)
-    offsets = np.asarray(fit_config.get("band_calibration_offsets_mag", []), dtype=float)
+    offsets = np.asarray(
+        fit_config.get("band_calibration_offsets_mag", []), dtype=float
+    )
     if offsets.size:
         mags = mags + offsets
     return mags
@@ -1749,9 +1733,11 @@ def _mclmc_diagnostics(
         "compile_time_s": float(compile_time),
         "warmup_time_s": float(warmup_time),
         "sampling_time_s": float(sampling_time),
-        "samples_per_second": float((num_chains * num_samples) / sampling_time)
-        if sampling_time > 0.0
-        else float("inf"),
+        "samples_per_second": (
+            float((num_chains * num_samples) / sampling_time)
+            if sampling_time > 0.0
+            else float("inf")
+        ),
         "jax_backend": str(jax.default_backend()),
         "jax_devices": _jax_device_strings(),
         "device": f"{jax.devices()[0].platform}:{jax.devices()[0].id}",
@@ -1783,10 +1769,7 @@ def _mclmc_diagnostics(
         }
     if chain_initial_theta.size:
         diagnostics["chain_initial_parameters"] = [
-            {
-                name: float(theta[index])
-                for index, name in enumerate(free_names)
-            }
+            {name: float(theta[index]) for index, name in enumerate(free_names)}
             for theta in np.asarray(chain_initial_theta)
         ]
     diagnostics["chains"] = chain_summaries

@@ -23,13 +23,8 @@ def validate_paper_inputs(
     sidecar_path = reference_checkpoint.with_suffix(
         reference_checkpoint.suffix + ".json"
     )
-    sidecar = json.loads(
-        sidecar_path.read_text(encoding="utf-8")
-    )
-    if (
-        (sidecar.get("normalization") or {}).get("family")
-        != "mixed_log_shifted_asinh"
-    ):
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    if (sidecar.get("normalization") or {}).get("family") != "mixed_log_shifted_asinh":
         raise ValueError("Paper array requires the immutable mixed-asinh normalization")
 
     seeds = []

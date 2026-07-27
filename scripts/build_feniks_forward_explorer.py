@@ -174,9 +174,7 @@ RESULT_RUNS = {
     "prior_resume_400": Path(
         "outputs/runs/feniks_spline15d_v6_positive_support_resume400_to800"
     ),
-    "encoder": Path(
-        "outputs/runs/feniks_spline15d_amortized_epoch645_4xh100_b2048_v4"
-    ),
+    "encoder": Path("outputs/runs/feniks_spline15d_amortized_epoch645_4xh100_b2048_v4"),
 }
 JAX_COSMO_SPLINE15D_ANALYSIS = Path(
     "outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716"
@@ -197,9 +195,7 @@ RQ_PRIOR_INFERENCE_RUN = Path(
     "outputs/jean_zay_20260718/rqspline/"
     "feniks_spline15d_rqspline_dequant1e3_inference_resume90_to120_v3"
 )
-JOINT_PRIOR_ROOT = Path(
-    "outputs/jean_zay_20260719/joint_prior_realnvp/full"
-)
+JOINT_PRIOR_ROOT = Path("outputs/jean_zay_20260719/joint_prior_realnvp/full")
 
 JOINT_EXPERIMENT_SCIENCE: dict[str, dict[str, Any]] = {
     "ind_frozen_rqspline": {
@@ -1248,9 +1244,14 @@ def _artifact_inventory(*roots: Path) -> list[dict[str, Any]]:
             rel = path.relative_to(root).as_posix()
             group = None
             if rel.startswith("checkpoints/epoch_") or "/checkpoints/epoch_" in rel:
-                group = rel.split("checkpoints/epoch_", maxsplit=1)[0] + "checkpoints/epoch_*"
+                group = (
+                    rel.split("checkpoints/epoch_", maxsplit=1)[0]
+                    + "checkpoints/epoch_*"
+                )
             elif rel.startswith("snapshots/epoch_") or "/snapshots/epoch_" in rel:
-                group = rel.split("snapshots/epoch_", maxsplit=1)[0] + "snapshots/epoch_*"
+                group = (
+                    rel.split("snapshots/epoch_", maxsplit=1)[0] + "snapshots/epoch_*"
+                )
             elif "/batch_" in rel:
                 group = rel.split("/batch_", maxsplit=1)[0] + "/batch_*"
             if group is not None:
@@ -1294,7 +1295,9 @@ def _load_matrix_run(label: str) -> dict[str, Any]:
     }
     missing = [str(path) for path in required.values() if not path.exists()]
     if missing:
-        raise FileNotFoundError(f"Missing run explorer artifacts for {label}: {missing}")
+        raise FileNotFoundError(
+            f"Missing run explorer artifacts for {label}: {missing}"
+        )
     metrics = _load_json(required["metrics"])
     config = _load_json(required["config"])
     return {
@@ -1324,7 +1327,9 @@ def _load_rq_prior_lineage_run() -> dict[str, Any]:
     config = _load_json(RQ_PRIOR_INFERENCE_RUN / "normalized_config.json")
     training = _load_json(RQ_PRIOR_AMORTIZED_RUN / "training_summary.json")
     inference = _load_json(RQ_PRIOR_INFERENCE_RUN / "inference_summary.json")
-    posterior = _load_json(RQ_PRIOR_INFERENCE_RUN / "posterior_diagnostics_summary.json")
+    posterior = _load_json(
+        RQ_PRIOR_INFERENCE_RUN / "posterior_diagnostics_summary.json"
+    )
     photoz = pd.read_csv(RQ_PRIOR_INFERENCE_RUN / "photoz_metrics.csv").iloc[0]
     posterior_metrics = pd.read_csv(
         RQ_PRIOR_INFERENCE_RUN / "posterior_vs_truth_metrics.csv"
@@ -1395,7 +1400,9 @@ def _load_joint_prior_run(label: str) -> dict[str, Any]:
     }
     missing = [str(path) for path in required.values() if not path.exists()]
     if missing:
-        raise FileNotFoundError(f"Missing joint-prior explorer artifacts for {label}: {missing}")
+        raise FileNotFoundError(
+            f"Missing joint-prior explorer artifacts for {label}: {missing}"
+        )
     metrics = _load_json(required["metrics"])
     config = _load_json(required["config"])
     prior_population = pd.read_csv(root / "inference/prior_vs_truth_population.csv")
@@ -1552,7 +1559,9 @@ def _load_results() -> dict[str, Any]:
         (RESULT_RUNS["encoder"] / "training_summary.json").read_text(encoding="utf-8")
     )
     return {
-        "figures": {key: _image_data_url(path) for key, path in required_images.items()},
+        "figures": {
+            key: _image_data_url(path) for key, path in required_images.items()
+        },
         "prior_history": prior_history.to_dict(orient="records"),
         "normalization_parameters": normalization.to_dict(orient="records"),
         "normalization_contract": normalization_contract,

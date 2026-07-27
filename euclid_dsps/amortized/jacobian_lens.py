@@ -99,9 +99,7 @@ def decoder_jacobian_lens(
     residual = (model_flux - obs_flux) / sigma_eff
     kind = _likelihood_kind(likelihood_type)
     if kind == "student_t":
-        weight = (float(student_t_dof) + 1.0) / (
-            float(student_t_dof) + residual**2
-        )
+        weight = (float(student_t_dof) + 1.0) / (float(student_t_dof) + residual**2)
     else:
         weight = jnp.ones_like(residual)
     finite_band = (
@@ -247,7 +245,9 @@ def lens_tables_for_object(
         )
         tables = _tables_from_decoder_arrays(
             base=base,
-            arrays={key: np.asarray(jax.device_get(value)) for key, value in arrays.items()},
+            arrays={
+                key: np.asarray(jax.device_get(value)) for key, value in arrays.items()
+            },
             latent_spec=latent_spec,
             band_names=band_names,
             direction_top_k=int(direction_top_k),
@@ -267,7 +267,10 @@ def lens_tables_for_object(
             tables = _append_ae_tables(
                 tables,
                 base,
-                {key: np.asarray(jax.device_get(value)) for key, value in ae_arrays.items()},
+                {
+                    key: np.asarray(jax.device_get(value))
+                    for key, value in ae_arrays.items()
+                },
             )
         except Exception as exc:
             summary = tables.object_summary.copy()
@@ -331,7 +334,9 @@ def run_jacobian_lens_diffsky(
     if not include_decoder and not include_ae:
         raise ValueError("At least one J-lens mode must be enabled")
     out = ensure_dir(out_dir)
-    shard_dir = ensure_dir(out / "jacobian_lens_shards" / f"part_{int(shard_index):06d}")
+    shard_dir = ensure_dir(
+        out / "jacobian_lens_shards" / f"part_{int(shard_index):06d}"
+    )
     if resume and _lens_shard_complete(shard_dir):
         if verbose:
             print(f"[jlens] shard exists; skipping {shard_dir}")
@@ -366,7 +371,9 @@ def run_jacobian_lens_diffsky(
     )
     deterministic = is_deterministic_reconstruction(cfg.get("objective", {}))
     kl_weight_max = float(cfg["training"].get("kl_weight_max", 1.0))
-    prior_active = bool(include_prior_score and not deterministic and kl_weight_max > 0.0)
+    prior_active = bool(
+        include_prior_score and not deterministic and kl_weight_max > 0.0
+    )
     redshift_bins = inference_cfg.get(
         "redshift_bins",
         ((config.get("amortized", {}) or {}).get("data", {}) or {}).get(
@@ -442,14 +449,12 @@ def run_jacobian_lens_diffsky(
             else jnp.median(posterior_x, axis=0)
         )
         centered = posterior_x - jnp.mean(posterior_x, axis=0, keepdims=True)
-        posterior_covariance = jnp.einsum(
-            "sbi,sbj->bij", centered, centered
-        ) / float(int(posterior_samples) - 1)
+        posterior_covariance = jnp.einsum("sbi,sbj->bij", centered, centered) / float(
+            int(posterior_samples) - 1
+        )
         for local_index in range(int(batch.flux.shape[0])):
             x0 = posterior_center[local_index]
-            covariance0 = (
-                None if deterministic else posterior_covariance[local_index]
-            )
+            covariance0 = None if deterministic else posterior_covariance[local_index]
             flux_err0 = batch.flux_err[local_index]
 
             def decode_x(xx):
@@ -540,13 +545,18 @@ def run_jacobian_lens_diffsky(
         "outputs": outputs,
     }
     write_json(shard_dir / "shard_summary.json", summary)
-    write_json(shard_dir / "jacobian_lens_artifact_manifest.json", _artifact_manifest(shard_dir))
+    write_json(
+        shard_dir / "jacobian_lens_artifact_manifest.json",
+        _artifact_manifest(shard_dir),
+    )
     if int(num_shards) == 1:
         finalize_jacobian_lens(out, verbose=verbose)
     return summary
 
 
-def finalize_jacobian_lens(out_dir: str | Path, *, verbose: bool = True) -> dict[str, Any]:
+def finalize_jacobian_lens(
+    out_dir: str | Path, *, verbose: bool = True
+) -> dict[str, Any]:
     """Combine J-lens shards and write global summaries/plots."""
     out = ensure_dir(out_dir)
     shard_root = out / "jacobian_lens_shards"
@@ -643,14 +653,20 @@ def _tables_from_decoder_arrays(
             "prior_score_null_fraction": (
                 prior_null / prior_total if prior_total > 0 else np.nan
             ),
-            "posterior_var_visible_median": _nanmedian(posterior_var[:n_singular][visible[:n_singular]]),
-            "posterior_var_weak_median": _nanmedian(posterior_var[:n_singular][weak[:n_singular]]),
+            "posterior_var_visible_median": _nanmedian(
+                posterior_var[:n_singular][visible[:n_singular]]
+            ),
+            "posterior_var_weak_median": _nanmedian(
+                posterior_var[:n_singular][weak[:n_singular]]
+            ),
             "posterior_var_exact_null_median": _nanmedian(posterior_var[n_singular:]),
         }
     )
     singular_rows = []
     for direction_index in range(latent_dim):
-        singular_value = singular[direction_index] if direction_index < n_singular else 0.0
+        singular_value = (
+            singular[direction_index] if direction_index < n_singular else 0.0
+        )
         relative = rel[direction_index] if direction_index < n_singular else 0.0
         singular_rows.append(
             {
@@ -737,7 +753,9 @@ def _append_ae_tables(
             **base,
             "ae_direction_index": int(index),
             "ae_singular_value": float(value),
-            "ae_relative_singular_value": float(rel[index]) if index < rel.size else 0.0,
+            "ae_relative_singular_value": (
+                float(rel[index]) if index < rel.size else 0.0
+            ),
         }
         for index, value in enumerate(singular)
     ]
@@ -771,7 +789,9 @@ def _write_lens_tables(out: Path, tables: list[LensTables]) -> dict[str, str]:
     names = LensTables.__dataclass_fields__.keys()
     outputs = {}
     for name in names:
-        frames = [getattr(item, name) for item in tables if not getattr(item, name).empty]
+        frames = [
+            getattr(item, name) for item in tables if not getattr(item, name).empty
+        ]
         frame = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
         path = out / f"{name}.parquet"
         frame.to_parquet(path, index=False)
@@ -903,7 +923,9 @@ def _top_loading_rows(
                         else 0.0
                     ),
                     "relative_singular_value": (
-                        float(rel[direction_index]) if direction_index < rel.size else 0.0
+                        float(rel[direction_index])
+                        if direction_index < rel.size
+                        else 0.0
                     ),
                 }
             )
@@ -1031,7 +1053,11 @@ def _likelihood_kind(value: str) -> str:
 
 
 def _lens_shard_complete(path: Path) -> bool:
-    required = ("object_summary.parquet", "singular_values.parquet", "shard_summary.json")
+    required = (
+        "object_summary.parquet",
+        "singular_values.parquet",
+        "shard_summary.json",
+    )
     return all((path / name).exists() for name in required)
 
 

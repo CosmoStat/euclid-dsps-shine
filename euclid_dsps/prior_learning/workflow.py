@@ -180,8 +180,12 @@ def build_feniks_prior_workflow_plan(
             expected_rows=split_sizes.get("test"),
             root=root,
         ),
-        _artifact("manifest", dataset_dir / "manifest.yaml", "file", "validation", root=root),
-        _artifact("schema", dataset_dir / "schema.json", "file", "validation", root=root),
+        _artifact(
+            "manifest", dataset_dir / "manifest.yaml", "file", "validation", root=root
+        ),
+        _artifact(
+            "schema", dataset_dir / "schema.json", "file", "validation", root=root
+        ),
         _artifact(
             "validation_report",
             dataset_dir / "validation_report.json",
@@ -336,9 +340,7 @@ def render_feniks_prior_workflow_markdown(plan: PriorWorkflowPlan) -> str:
     for item in plan.artifacts:
         status = "present" if item.exists else "missing"
         detail = item.detail or item.path
-        lines.append(
-            f"| `{item.name}` | {item.required_for} | {status} | `{detail}` |"
-        )
+        lines.append(f"| `{item.name}` | {item.required_for} | {status} | `{detail}` |")
     if plan.blockers:
         lines.extend(["", "## Blockers", ""])
         lines.extend(f"- {item}" for item in plan.blockers)

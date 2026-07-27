@@ -1046,13 +1046,15 @@ def _discover_shard_records(out: Path) -> list[dict[str, Any]]:
             {
                 "batch": batch,
                 "metadata": paths["metadata"],
-                "counts": _inference_shard_row_counts(
-                    paths,
-                    write_posterior_predictive=paths["predictive"].exists(),
-                    write_residual_samples=paths["residuals"].exists(),
-                )
-                if _basic_shard_tables_exist(paths)
-                else {},
+                "counts": (
+                    _inference_shard_row_counts(
+                        paths,
+                        write_posterior_predictive=paths["predictive"].exists(),
+                        write_residual_samples=paths["residuals"].exists(),
+                    )
+                    if _basic_shard_tables_exist(paths)
+                    else {}
+                ),
                 "complete": _basic_shard_tables_exist(paths),
             }
         )
@@ -1201,22 +1203,22 @@ def _inference_shard_signature(
         **run_signature,
         "batch_index": int(batch_index),
         "batch_n_objects": int(object_id.shape[0]),
-        "batch_first_object_id": _jsonable_object_id(object_id[0])
-        if object_id.size
-        else None,
-        "batch_last_object_id": _jsonable_object_id(object_id[-1])
-        if object_id.size
-        else None,
+        "batch_first_object_id": (
+            _jsonable_object_id(object_id[0]) if object_id.size else None
+        ),
+        "batch_last_object_id": (
+            _jsonable_object_id(object_id[-1]) if object_id.size else None
+        ),
         "batch_object_id_digest": _object_id_digest(object_id),
-        "batch_first_row_index": int(row_index[0])
-        if row_index is not None and row_index.size
-        else None,
-        "batch_last_row_index": int(row_index[-1])
-        if row_index is not None and row_index.size
-        else None,
-        "batch_row_index_digest": _row_index_digest(row_index)
-        if row_index is not None
-        else None,
+        "batch_first_row_index": (
+            int(row_index[0]) if row_index is not None and row_index.size else None
+        ),
+        "batch_last_row_index": (
+            int(row_index[-1]) if row_index is not None and row_index.size else None
+        ),
+        "batch_row_index_digest": (
+            _row_index_digest(row_index) if row_index is not None else None
+        ),
     }
 
 

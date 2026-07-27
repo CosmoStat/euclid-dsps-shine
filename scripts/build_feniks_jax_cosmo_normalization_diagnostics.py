@@ -28,9 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-dir",
         type=Path,
-        default=Path(
-            "outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716"
-        ),
+        default=Path("outputs/analysis/feniks_jax_cosmo_spline_15d_prior_20260716"),
     )
     parser.add_argument("--out", type=Path)
     return parser.parse_args()
@@ -46,7 +44,9 @@ def read_matrix(path: Path) -> np.ndarray:
 
 def fit_transforms(train: np.ndarray) -> dict[str, dict[str, float | str]]:
     transforms = fit_shifted_asinh_transforms(train)
-    indices = [SPLINE15D_PARAMETER_NAMES.index(name) for name in POSITIVE_LOG_PARAMETERS]
+    indices = [
+        SPLINE15D_PARAMETER_NAMES.index(name) for name in POSITIVE_LOG_PARAMETERS
+    ]
     transforms.update(fit_log_transforms(train[:, indices], POSITIVE_LOG_PARAMETERS))
     return transforms
 
@@ -130,9 +130,9 @@ def main() -> None:
     if roundtrip_max_abs > 1.0e-10:
         raise ValueError(f"Normalization roundtrip failed: {roundtrip_max_abs:.4g}")
 
-    pd.DataFrame.from_dict(transforms, orient="index").rename_axis(
-        "parameter"
-    ).to_csv(out / "normalization_parameters.csv")
+    pd.DataFrame.from_dict(transforms, orient="index").rename_axis("parameter").to_csv(
+        out / "normalization_parameters.csv"
+    )
     payload = {
         "version": 3,
         "family": "mixed_log_shifted_asinh",

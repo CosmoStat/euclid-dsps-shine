@@ -10,7 +10,9 @@ import yaml
 from .truth import classify_diffsky_columns
 
 
-def validate_for_prior_learning(dataset_path: str | Path, manifest_path: str | Path | None = None) -> dict:
+def validate_for_prior_learning(
+    dataset_path: str | Path, manifest_path: str | Path | None = None
+) -> dict:
     frame = pd.read_parquet(dataset_path)
     manifest = {}
     if manifest_path is not None and Path(manifest_path).exists():
@@ -20,22 +22,40 @@ def validate_for_prior_learning(dataset_path: str | Path, manifest_path: str | P
     mask_cols = [column for column in frame.columns if column.startswith("mask_")]
     semantics = classify_diffsky_columns(frame.columns)
     has_basic = bool(flux_cols) and "redshift_true" in frame and "logsm_true" in frame
-    has_extended = has_basic and any(column.startswith("diffstar_") for column in frame) and any(column.startswith("diffmah_") for column in frame)
-    readiness = "READY_EXTENDED" if has_extended else ("READY_BASIC" if has_basic else "NOT_READY")
-    error_model = manifest.get("error_model") or _infer_error_model_from_columns(err_cols)
+    has_extended = (
+        has_basic
+        and any(column.startswith("diffstar_") for column in frame)
+        and any(column.startswith("diffmah_") for column in frame)
+    )
+    readiness = (
+        "READY_EXTENDED"
+        if has_extended
+        else ("READY_BASIC" if has_basic else "NOT_READY")
+    )
+    error_model = manifest.get("error_model") or _infer_error_model_from_columns(
+        err_cols
+    )
     report = {
         "readiness": readiness,
         "n_objects": int(len(frame)),
         "n_bands": len(flux_cols),
         "n_fluxerr_columns": len(err_cols),
-        "object_id_unique": bool(frame["object_id"].is_unique) if "object_id" in frame else False,
-        "core_tag_unique_global": bool(frame["core_tag"].is_unique) if "core_tag" in frame else None,
+        "object_id_unique": (
+            bool(frame["object_id"].is_unique) if "object_id" in frame else False
+        ),
+        "core_tag_unique_global": (
+            bool(frame["core_tag"].is_unique) if "core_tag" in frame else None
+        ),
         "has_redshift_true": "redshift_true" in frame,
         "has_logsm_true": "logsm_true" in frame,
         "has_diffstar": any(column.startswith("diffstar_") for column in frame),
         "has_diffmah": any(column.startswith("diffmah_") for column in frame),
-        "mask_fraction_valid": float(frame[mask_cols].to_numpy(dtype=bool).mean()) if mask_cols else None,
-        "band_names": manifest.get("band_names", [column.removeprefix("flux_") for column in flux_cols]),
+        "mask_fraction_valid": (
+            float(frame[mask_cols].to_numpy(dtype=bool).mean()) if mask_cols else None
+        ),
+        "band_names": manifest.get(
+            "band_names", [column.removeprefix("flux_") for column in flux_cols]
+        ),
         "error_model": error_model,
         "column_semantics": manifest.get("column_semantics", semantics.as_dict()),
         "missing_fields": manifest.get("missing_fields", list(semantics.unavailable)),

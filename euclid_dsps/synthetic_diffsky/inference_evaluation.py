@@ -66,8 +66,16 @@ def _parameter_metrics(
 ) -> pd.DataFrame:
     rows = []
     truth_by_id = truth.set_index("object_id")
-    summary_by_id = summary.set_index("object_id") if summary is not None and "object_id" in summary else None
-    sample_groups = samples.groupby("object_id") if samples is not None and "object_id" in samples else None
+    summary_by_id = (
+        summary.set_index("object_id")
+        if summary is not None and "object_id" in summary
+        else None
+    )
+    sample_groups = (
+        samples.groupby("object_id")
+        if samples is not None and "object_id" in samples
+        else None
+    )
     for name in DIFFSKY_BASIC_PARAMETER_NAMES:
         truth_col = GROUND_TRUTH_COLUMNS[name]
         if truth_col not in truth_by_id:
@@ -79,7 +87,9 @@ def _parameter_metrics(
             pred = pd.to_numeric(summary_by_id[f"{name}_median"], errors="coerce")
         else:
             continue
-        joined = pd.concat([y_true.rename("truth"), pred.rename("prediction")], axis=1).dropna()
+        joined = pd.concat(
+            [y_true.rename("truth"), pred.rename("prediction")], axis=1
+        ).dropna()
         if joined.empty:
             continue
         delta = joined["prediction"].to_numpy(float) - joined["truth"].to_numpy(float)
@@ -137,15 +147,19 @@ def _coverage_metrics(
                         "parameter": name,
                         "interval": label,
                         "nominal": nominal,
-                        "coverage": float(
-                            np.mean(
-                                (joined["truth"] >= joined["low"])
-                                & (joined["truth"] <= joined["high"])
+                        "coverage": (
+                            float(
+                                np.mean(
+                                    (joined["truth"] >= joined["low"])
+                                    & (joined["truth"] <= joined["high"])
+                                )
                             )
-                        )
-                        if len(joined)
-                        else np.nan,
-                        "mean_pit_rank": float(np.mean(rank_rows)) if rank_rows else np.nan,
+                            if len(joined)
+                            else np.nan
+                        ),
+                        "mean_pit_rank": (
+                            float(np.mean(rank_rows)) if rank_rows else np.nan
+                        ),
                     }
                 )
         elif summary is not None and "object_id" in summary:
@@ -167,14 +181,16 @@ def _coverage_metrics(
                     "parameter": name,
                     "interval": "68",
                     "nominal": 0.68,
-                    "coverage": float(
-                        np.mean(
-                            (joined["truth"] >= joined["low"])
-                            & (joined["truth"] <= joined["high"])
+                    "coverage": (
+                        float(
+                            np.mean(
+                                (joined["truth"] >= joined["low"])
+                                & (joined["truth"] <= joined["high"])
+                            )
                         )
-                    )
-                    if len(joined)
-                    else np.nan,
+                        if len(joined)
+                        else np.nan
+                    ),
                     "mean_pit_rank": np.nan,
                 }
             )
@@ -191,7 +207,9 @@ def _posterior_predictive_residual_payload(run: Path) -> dict[str, Any]:
     for path in candidates:
         if not path.exists():
             continue
-        frame = pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+        frame = (
+            pd.read_parquet(path) if path.suffix == ".parquet" else pd.read_csv(path)
+        )
         numeric = frame.select_dtypes(include=[np.number])
         payload: dict[str, Any] = {"path": str(path), "rows": int(len(frame))}
         for column in numeric.columns:

@@ -1114,12 +1114,8 @@ def _write_map_closure_metrics(out: Path, estimates: pd.DataFrame) -> None:
         s=10,
         alpha=0.55,
     )
-    lo = float(
-        np.nanmin([merged["redshift_true"].min(), merged[map_z_column].min()])
-    )
-    hi = float(
-        np.nanmax([merged["redshift_true"].max(), merged[map_z_column].max()])
-    )
+    lo = float(np.nanmin([merged["redshift_true"].min(), merged[map_z_column].min()]))
+    hi = float(np.nanmax([merged["redshift_true"].max(), merged[map_z_column].max()]))
     ax.plot([lo, hi], [lo, hi], color="black", lw=1.0, alpha=0.6)
     ax.set_xlabel("true redshift")
     ax.set_ylabel("MAP z_obs")

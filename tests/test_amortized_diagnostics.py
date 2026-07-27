@@ -168,9 +168,7 @@ def test_catalog_proxy_diagnostics(tmp_path) -> None:
     assert payload["catalog_proxy_comparison_rows"] == 2
     assert "catalog_log10_stellar_mass_proxy" in proxies
     assert "catalog_log10_sfr_at_obs_proxy" in proxies
-    assert (
-        tmp_path / "catalog_proxy_stellar_mass_comparison.png"
-    ).exists()
+    assert (tmp_path / "catalog_proxy_stellar_mass_comparison.png").exists()
     assert (tmp_path / "catalog_proxy_sfr_distribution.png").exists()
     assert (tmp_path / "catalog_proxy_mass_sfr_plane.png").exists()
 

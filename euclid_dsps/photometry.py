@@ -63,8 +63,8 @@ def microjy_to_abmag(flux_microjy: Any) -> Any:
 
 def magerr_to_fluxerr_fnu_cgs(flux_fnu_cgs: Any, mag_err: Any) -> Any:
     """Propagate local magnitude error to ``Fnu`` cgs error around a flux."""
-    return np.abs(np.asarray(flux_fnu_cgs)) * MAGERR_TO_FRAC_FLUXERR * np.asarray(
-        mag_err
+    return (
+        np.abs(np.asarray(flux_fnu_cgs)) * MAGERR_TO_FRAC_FLUXERR * np.asarray(mag_err)
     )
 
 

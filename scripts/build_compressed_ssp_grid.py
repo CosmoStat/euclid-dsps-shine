@@ -73,7 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         if args.validate_only:
-            print(json.dumps(validate_compressed_grid(args.output), indent=2, sort_keys=True))
+            print(
+                json.dumps(
+                    validate_compressed_grid(args.output), indent=2, sort_keys=True
+                )
+            )
             return 0
         output = build_compressed_grid(args)
         print(f"wrote {output}")
@@ -245,7 +249,9 @@ def validate_compressed_grid(path: str | Path) -> dict[str, Any]:
                 "ssp_coeff must have shape (n_ssp_lgmet, n_ssp_lg_age_gyr, n_basis)"
             )
         if "ssp_scale" in handle and handle["ssp_scale"].shape != expected_coeff[:-1]:
-            raise FspsGridError("ssp_scale must have shape (n_ssp_lgmet, n_ssp_lg_age_gyr)")
+            raise FspsGridError(
+                "ssp_scale must have shape (n_ssp_lgmet, n_ssp_lg_age_gyr)"
+            )
         attrs = {key: decode_attr(value) for key, value in handle.attrs.items()}
         payload = basis.size * basis.dtype.itemsize + coeff.size * coeff.dtype.itemsize
         if "ssp_scale" in handle:

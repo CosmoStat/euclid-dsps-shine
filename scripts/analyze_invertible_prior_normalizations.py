@@ -74,7 +74,11 @@ def _fit_affine(values: np.ndarray) -> dict[str, Any]:
 
 def _fit_logit(values: np.ndarray, lower: float, upper: float) -> dict[str, Any]:
     if np.any(values <= lower) or np.any(values >= upper):
-        return {"family": "wide_bound_logit", "valid": False, "train_score": float("inf")}
+        return {
+            "family": "wide_bound_logit",
+            "valid": False,
+            "train_score": float("inf"),
+        }
     unit = (values - lower) / (upper - lower)
     raw = np.log(unit) - np.log1p(-unit)
     normalized, center, scale = _standardize(raw)
@@ -123,9 +127,7 @@ def _fit_shifted_asinh(values: np.ndarray, seed: int) -> dict[str, Any]:
     physical_quantiles = np.quantile(values, SCORE_PROBABILITIES)
     rng = np.random.default_rng(seed)
     moment_sample = (
-        values
-        if len(values) <= 8192
-        else rng.choice(values, size=8192, replace=False)
+        values if len(values) <= 8192 else rng.choice(values, size=8192, replace=False)
     )
 
     def objective(parameters: np.ndarray) -> float:
@@ -153,7 +155,9 @@ def _fit_shifted_asinh(values: np.ndarray, seed: int) -> dict[str, Any]:
     value = data_scale * 10.0 ** float(result.x[1])
     transformed = value * np.arcsinh((values - shift) / value)
     normalized, center, scale = _standardize(transformed)
-    support_distance = min(abs(shift - float(np.min(values))), abs(shift - float(np.max(values))))
+    support_distance = min(
+        abs(shift - float(np.min(values))), abs(shift - float(np.max(values)))
+    )
     return {
         "family": "shifted_asinh",
         "shift": shift,
@@ -164,8 +168,7 @@ def _fit_shifted_asinh(values: np.ndarray, seed: int) -> dict[str, Any]:
         "lambda_regime": _lambda_regime(float(result.x[1])),
         "shift_support_distance_std": support_distance / data_scale,
         "tail_fragile": bool(
-            float(result.x[1]) <= -3.0
-            and support_distance / data_scale < 0.5
+            float(result.x[1]) <= -3.0 and support_distance / data_scale < 0.5
         ),
     }
 
@@ -179,7 +182,9 @@ def _lambda_regime(log10_relative_lambda: float) -> str:
 
 
 def _fit_quantile_spline(values: np.ndarray) -> dict[str, Any]:
-    probabilities = np.linspace(0.5 / len(values), 1.0 - 0.5 / len(values), SPLINE_KNOTS)
+    probabilities = np.linspace(
+        0.5 / len(values), 1.0 - 0.5 / len(values), SPLINE_KNOTS
+    )
     theta_knots = np.quantile(values, probabilities)
     theta_knots[0] = np.min(values)
     theta_knots[-1] = np.max(values)
@@ -259,9 +264,7 @@ def _inverse(values: np.ndarray, spec: dict[str, Any]) -> np.ndarray:
         return spec["lambda"] * np.sinh(transformed / spec["lambda"])
     if family == "shifted_asinh":
         transformed = spec["center"] + spec["scale"] * values
-        return spec["shift"] + spec["lambda"] * np.sinh(
-            transformed / spec["lambda"]
-        )
+        return spec["shift"] + spec["lambda"] * np.sinh(transformed / spec["lambda"])
     if family == "quantile_spline":
         return _interpolate_extrapolate(
             values,
@@ -300,7 +303,9 @@ def _select_transform(candidates: dict[str, dict[str, Any]]) -> dict[str, Any]:
         for candidate in valid
         if float(candidate["train_score"]) <= best_score + SIMPLICITY_TOLERANCE
     ]
-    selected = min(eligible, key=lambda candidate: simple_order.index(candidate["family"]))
+    selected = min(
+        eligible, key=lambda candidate: simple_order.index(candidate["family"])
+    )
     if float(selected["train_score"]) <= SIMPLE_SCORE_THRESHOLD:
         return selected
     return candidates["quantile_spline"]
@@ -378,7 +383,12 @@ def _write_plot(
             family_label = spec["family"]
         for axis, values, split, score in (
             (axes[row, 1], train_x, "train", result["selected_train_score"]),
-            (axes[row, 2], validation_x, "validation", result["selected_validation_score"]),
+            (
+                axes[row, 2],
+                validation_x,
+                "validation",
+                result["selected_validation_score"],
+            ),
         ):
             axis.hist(values, bins=60, density=True, color="#5d8f54", alpha=0.75)
             axis.plot(normal_x, normal_density, color="0.15", linewidth=1.0)
@@ -392,8 +402,16 @@ def _write_plot(
 
 
 def _write_score_plot(scores: pd.DataFrame, path: Path) -> None:
-    families = ["affine", "wide_bound_logit", "asinh", "shifted_asinh", "quantile_spline"]
-    pivot = scores.pivot(index="parameter", columns="family", values="train_score").reindex(columns=families)
+    families = [
+        "affine",
+        "wide_bound_logit",
+        "asinh",
+        "shifted_asinh",
+        "quantile_spline",
+    ]
+    pivot = scores.pivot(
+        index="parameter", columns="family", values="train_score"
+    ).reindex(columns=families)
     fig, axis = plt.subplots(figsize=(14, 8), constrained_layout=True)
     x = np.arange(len(pivot))
     width = 0.16
@@ -465,7 +483,9 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     sidecar = _read_json(args.run / "checkpoints" / "best.eqx.json")
     names = list(sidecar["latent_spec"]["names"])
-    schema = {entry["name"]: entry["column"] for entry in sidecar["schema"]["parameters"]}
+    schema = {
+        entry["name"]: entry["column"] for entry in sidecar["schema"]["parameters"]
+    }
     source_columns = [schema[name] for name in names]
     train_frame = pd.read_parquet(args.train, columns=source_columns)
     validation_frame = pd.read_parquet(args.validation, columns=source_columns)
@@ -522,7 +542,9 @@ def main() -> None:
             roundtrip_spec = spec
             structure = "continuous"
         selected_specs[name] = spec
-        reconstructed = _inverse(_forward(roundtrip_values, roundtrip_spec), roundtrip_spec)
+        reconstructed = _inverse(
+            _forward(roundtrip_values, roundtrip_spec), roundtrip_spec
+        )
         roundtrip_error = float(np.max(np.abs(reconstructed - roundtrip_values)))
         validation_roundtrip = _inverse(selected_validation, roundtrip_spec)
         validation_roundtrip_error = float(
@@ -547,7 +569,9 @@ def main() -> None:
             )
             validation_score = float("nan")
             if candidate.get("valid", True):
-                validation_score = _gaussian_score(_forward(candidate_validation, candidate))
+                validation_score = _gaussian_score(
+                    _forward(candidate_validation, candidate)
+                )
             score_rows.append(
                 {
                     "parameter": name,
@@ -570,9 +594,13 @@ def main() -> None:
                 "selected_validation_score": _gaussian_score(selected_validation),
                 "roundtrip_max_abs": roundtrip_error,
                 "validation_roundtrip_max_abs": validation_roundtrip_error,
-                "validation_x_abs_q999": float(np.quantile(np.abs(selected_validation), 0.999)),
+                "validation_x_abs_q999": float(
+                    np.quantile(np.abs(selected_validation), 0.999)
+                ),
                 "validation_x_abs_max": float(np.max(np.abs(selected_validation))),
-                "atom_value": atom_value if atom_fraction >= ATOM_FRACTION_THRESHOLD else None,
+                "atom_value": (
+                    atom_value if atom_fraction >= ATOM_FRACTION_THRESHOLD else None
+                ),
                 "atom_fraction_train": atom_fraction,
                 **outliers,
             }
@@ -622,7 +650,17 @@ def main() -> None:
         args.train,
         args.validation,
     )
-    print(summary[["parameter", "selected_family", "selected_continuous_family", "selected_train_score", "selected_validation_score"]].to_string(index=False))
+    print(
+        summary[
+            [
+                "parameter",
+                "selected_family",
+                "selected_continuous_family",
+                "selected_train_score",
+                "selected_validation_score",
+            ]
+        ].to_string(index=False)
+    )
 
 
 if __name__ == "__main__":

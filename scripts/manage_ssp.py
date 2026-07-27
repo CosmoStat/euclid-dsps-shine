@@ -101,7 +101,7 @@ def test_ssp(path):
         if "chabrier" in ssp_path.name.lower():
             print(
                 "Generate the PopCosmos Chabrier SSP first with:\n"
-                "  export SPS_HOME=\"$HOME/src/fsps\"\n"
+                '  export SPS_HOME="$HOME/src/fsps"\n'
                 "  python scripts/generate_fsps_ssp_grid.py "
                 f"--output {ssp_path} --overwrite"
             )

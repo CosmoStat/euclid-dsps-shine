@@ -26,11 +26,7 @@ class PhotometryColumnReport:
 
 def detect_photometry_columns(columns: Sequence[str]) -> PhotometryColumnReport:
     names = [str(column).split("/")[-1] for column in columns]
-    mag_columns = [
-        name
-        for name in names
-        if _is_composite_mag_column(name)
-    ]
+    mag_columns = [name for name in names if _is_composite_mag_column(name)]
     if mag_columns:
         return PhotometryColumnReport(
             native_kind="magnitude",
@@ -75,7 +71,9 @@ def standardize_magnitude_photometry(
         frame[f"mag_{band}"] = mag
         frame[f"flux_{band}"] = flux
         if add_synthetic_errors:
-            model = default_m5_depth_error_model() if error_model is None else error_model
+            model = (
+                default_m5_depth_error_model() if error_model is None else error_model
+            )
             err = flux_error_from_model(flux, model, band_name=band)
             frame[f"fluxerr_{band}"] = err
         frame[f"mask_{band}"] = valid
@@ -84,9 +82,19 @@ def standardize_magnitude_photometry(
 
 def _is_composite_mag_column(name: str) -> bool:
     lower = name.lower()
-    if any(part in lower for part in ("_bulge", "_disk", "_knots", "nodust", "rest", "grism", "prism")):
+    if any(
+        part in lower
+        for part in ("_bulge", "_disk", "_knots", "nodust", "rest", "grism", "prism")
+    ):
         return False
-    if lower.startswith("lsst_") and lower in {"lsst_u", "lsst_g", "lsst_r", "lsst_i", "lsst_z", "lsst_y"}:
+    if lower.startswith("lsst_") and lower in {
+        "lsst_u",
+        "lsst_g",
+        "lsst_r",
+        "lsst_i",
+        "lsst_z",
+        "lsst_y",
+    }:
         return True
     if lower.startswith("roman_f"):
         return True

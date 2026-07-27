@@ -110,7 +110,9 @@ def write_supervised_prior_diagnostics(
         **summary,
         "n_parameters": int(len(parameter_names)),
         "median_ks_distance": _safe_median(metrics.get("ks_distance")),
-        "median_wasserstein_distance": _safe_median(metrics.get("wasserstein_distance")),
+        "median_wasserstein_distance": _safe_median(
+            metrics.get("wasserstein_distance")
+        ),
         "correlation_frobenius_error": corr_payload["frobenius_error"],
         "correlation_max_abs_error": corr_payload["max_abs_error"],
         "sliced_wasserstein_distance": multivariate["sliced_wasserstein_distance"],
@@ -431,7 +433,12 @@ def conditional_metrics_frame(truth: pd.DataFrame, prior: pd.DataFrame) -> pd.Da
     ]
     rows = []
     for xname, yname in pairs:
-        if xname not in truth or yname not in truth or xname not in prior or yname not in prior:
+        if (
+            xname not in truth
+            or yname not in truth
+            or xname not in prior
+            or yname not in prior
+        ):
             continue
         truth_slope = _linear_slope(truth[xname], truth[yname])
         prior_slope = _linear_slope(prior[xname], prior[yname])
@@ -950,7 +957,11 @@ def _frame_to_markdown(frame: pd.DataFrame, max_rows: int = 80) -> str:
             "| " + " | ".join("---" for _ in columns) + " |",
         ]
         for _, row in sample.iterrows():
-            lines.append("| " + " | ".join(_markdown_cell(row[col]) for col in sample.columns) + " |")
+            lines.append(
+                "| "
+                + " | ".join(_markdown_cell(row[col]) for col in sample.columns)
+                + " |"
+            )
         return "\n".join(lines)
 
 

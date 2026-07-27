@@ -91,7 +91,10 @@ def test_prior_full_truth_schema_uses_canonical_order() -> None:
         schema_name="diffsky_dsps_closure_full",
         missing_policy="fail",
     )
-    assert tuple(param.name for param in schema.parameters) == DIFFSKY_BASIC_PARAMETER_NAMES
+    assert (
+        tuple(param.name for param in schema.parameters)
+        == DIFFSKY_BASIC_PARAMETER_NAMES
+    )
     assert schema.reduced is False
 
 
@@ -164,9 +167,10 @@ def test_weighted_resampling_and_ess_are_reproducible() -> None:
     result_a = resample_weighted_proposals(proposals, split)
     result_b = resample_weighted_proposals(proposals, split)
     assert effective_sample_size(np.asarray([1.0, 1.0, 1.0])) == pytest.approx(3.0)
-    assert result_a.frame["source_proposal_id"].tolist() == result_b.frame[
-        "source_proposal_id"
-    ].tolist()
+    assert (
+        result_a.frame["source_proposal_id"].tolist()
+        == result_b.frame["source_proposal_id"].tolist()
+    )
     assert result_a.frame["object_id"].iloc[0] == 10
 
 
@@ -264,7 +268,9 @@ def test_lsst_euclid_roman_18_band_preset_resolves() -> None:
     names = [band["name"] for band in cfg["bands"]]
     assert len(names) == 18
     assert names[:6] == ["lsst_u", "lsst_g", "lsst_r", "lsst_i", "lsst_z", "lsst_y"]
-    assert {"euclid_vis", "euclid_nisp_y", "euclid_nisp_j", "euclid_nisp_h"} <= set(names)
+    assert {"euclid_vis", "euclid_nisp_y", "euclid_nisp_j", "euclid_nisp_h"} <= set(
+        names
+    )
     assert {"roman_F062", "roman_F213"} <= set(names)
 
 
@@ -371,7 +377,9 @@ def test_closure_inference_evaluation_outputs_metrics(tmp_path) -> None:
     report = evaluate_closure_inference(run_dir=run, dataset_path=dataset)
 
     assert report.exists()
-    metrics = pd.read_csv(run / "closure_evaluation" / "posterior_truth_parameter_metrics.csv")
+    metrics = pd.read_csv(
+        run / "closure_evaluation" / "posterior_truth_parameter_metrics.csv"
+    )
     coverage = pd.read_csv(run / "closure_evaluation" / "posterior_truth_coverage.csv")
     assert set(metrics["parameter"]) == set(DIFFSKY_BASIC_PARAMETER_NAMES)
     assert {"50", "68", "90", "95"} <= set(coverage["interval"].astype(str))
@@ -454,7 +462,9 @@ def test_reference_comparison_writes_population_and_photometry_tables(tmp_path) 
     )
 
 
-def test_reference_comparison_converts_fs2_flux_columns_to_ab_magnitudes(tmp_path) -> None:
+def test_reference_comparison_converts_fs2_flux_columns_to_ab_magnitudes(
+    tmp_path,
+) -> None:
     synthetic = pd.DataFrame(
         {
             "redshift_true": [0.5, 0.7, 1.0],
@@ -501,7 +511,9 @@ def test_reference_comparison_converts_fs2_flux_columns_to_ab_magnitudes(tmp_pat
     assert summary["reference_kind"] == "fs2"
     assert summary["reference_label"] == "Euclid FS2 phz1"
     assert summary["reference_photometry_units"]["lsst_g"]["mag_column"] == "mag_lsst_g"
-    assert summary["reference_photometry_units"]["lsst_g"]["flux_column"] == "flux_lsst_g"
+    assert (
+        summary["reference_photometry_units"]["lsst_g"]["flux_column"] == "flux_lsst_g"
+    )
     assert summary["reference_photometry_units"]["lsst_g"]["mag_from_flux"] is True
     mag_g = photometry[
         (photometry["group"] == "mag_true_vs_reference_mag")

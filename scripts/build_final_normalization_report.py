@@ -102,8 +102,7 @@ def _inverse_v2(values: np.ndarray, spec: dict[str, Any]) -> np.ndarray:
 
 def _split_values(frame: pd.DataFrame, schema: dict[str, str]) -> dict[str, np.ndarray]:
     return {
-        name: frame[column].to_numpy(dtype=float)
-        for name, column in schema.items()
+        name: frame[column].to_numpy(dtype=float) for name, column in schema.items()
     }
 
 
@@ -320,8 +319,7 @@ def _build_html(
             spec = specs[name]
             formula, inverse, computation = _formula(spec, version)
             row = metric_index.loc[(name, version)]
-            versions.append(
-                f"""
+            versions.append(f"""
                 <div class="version">
                   <h4>{html.escape(title)}</h4>
                   <dl>
@@ -333,17 +331,14 @@ def _build_html(
                   </dl>
                   {_details_html(spec)}
                 </div>
-                """
-            )
-        parameter_sections.append(
-            f"""
+                """)
+        parameter_sections.append(f"""
             <section class="parameter" id="{html.escape(name)}">
               <h3>{html.escape(label)} <code>{html.escape(name)}</code></h3>
               <p class="role">{html.escape(role)}. {html.escape(description)}</p>
               {''.join(versions)}
             </section>
-            """
-        )
+            """)
 
     rows = []
     for name in names:
@@ -424,7 +419,9 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     sidecar = _read_json(args.run / "checkpoints" / "best.eqx.json")
     names = list(sidecar["latent_spec"]["names"])
-    schema = {entry["name"]: entry["column"] for entry in sidecar["schema"]["parameters"]}
+    schema = {
+        entry["name"]: entry["column"] for entry in sidecar["schema"]["parameters"]
+    }
     columns = [schema[name] for name in names]
     train_frame = pd.read_parquet(args.train, columns=columns)
     validation_frame = pd.read_parquet(args.validation, columns=columns)
@@ -432,7 +429,9 @@ def main() -> None:
     train = _split_values(train_frame, schema)
     validation = _split_values(validation_frame, schema)
     test = _split_values(test_frame, schema)
-    hybrid_specs = _read_json(args.run / "invertible_normalization_specs.json")["transforms"]
+    hybrid_specs = _read_json(args.run / "invertible_normalization_specs.json")[
+        "transforms"
+    ]
     v2_specs = json.loads(json.dumps(hybrid_specs))
     for name in ATOM_NAMES:
         hybrid = hybrid_specs[name]
@@ -472,7 +471,9 @@ def main() -> None:
                     "test_gaussian_rmse": _gaussian_score(test_x),
                     "test_x_abs_q999": float(np.quantile(np.abs(test_x), 0.999)),
                     "test_x_abs_max": float(np.max(np.abs(test_x))),
-                    "test_roundtrip_max_abs": float(np.max(np.abs(reconstructed - test_values))),
+                    "test_roundtrip_max_abs": float(
+                        np.max(np.abs(reconstructed - test_values))
+                    ),
                 }
             )
     metrics = pd.DataFrame(metric_rows)
@@ -505,7 +506,11 @@ def main() -> None:
         hybrid_specs=hybrid_specs,
         v2_specs=v2_specs,
         metrics=metrics,
-        datasets={"train": args.train, "validation": args.validation, "test": args.test},
+        datasets={
+            "train": args.train,
+            "validation": args.validation,
+            "test": args.test,
+        },
     )
     print(metrics.to_string(index=False))
 

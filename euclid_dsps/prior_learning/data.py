@@ -153,16 +153,24 @@ def load_truth_dataset_with_schema(
     )
 
 
-def latent_spec_from_parameter_specs(parameters: tuple[ParameterSpec, ...]) -> LatentSpec:
+def latent_spec_from_parameter_specs(
+    parameters: tuple[ParameterSpec, ...],
+) -> LatentSpec:
     """Build the amortized bounded-transform spec from truth parameter specs."""
-    missing = [param.name for param in parameters if param.lower is None or param.upper is None]
+    missing = [
+        param.name for param in parameters if param.lower is None or param.upper is None
+    ]
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"Parameter bounds are missing for: {joined}")
     return LatentSpec(
         names=tuple(param.name for param in parameters),
-        lower=jnp.asarray([float(param.lower) for param in parameters], dtype=jnp.float32),
-        upper=jnp.asarray([float(param.upper) for param in parameters], dtype=jnp.float32),
+        lower=jnp.asarray(
+            [float(param.lower) for param in parameters], dtype=jnp.float32
+        ),
+        upper=jnp.asarray(
+            [float(param.upper) for param in parameters], dtype=jnp.float32
+        ),
     )
 
 
@@ -181,7 +189,9 @@ def truth_standardized_latent_spec(
     min_raw_scale = float(min_raw_scale)
     max_raw_scale = float(max_raw_scale)
     if min_raw_scale <= 0.0 or max_raw_scale < min_raw_scale:
-        raise ValueError("truth standardized latent scales require 0 < min_raw_scale <= max_raw_scale")
+        raise ValueError(
+            "truth standardized latent scales require 0 < min_raw_scale <= max_raw_scale"
+        )
     clipped_scale = np.clip(scale, min_raw_scale, max_raw_scale).astype(np.float32)
     spec = latent_spec_from_parameter_specs(truth.schema.parameters)
     spec = LatentSpec(

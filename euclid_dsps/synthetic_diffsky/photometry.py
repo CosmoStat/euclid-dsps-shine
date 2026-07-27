@@ -1,4 +1,5 @@
 """DSPS closure photometry for synthetic Diffsky proposal rows."""
+
 # ruff: noqa: E402
 
 from __future__ import annotations
@@ -42,7 +43,9 @@ def theta_from_truth_frame(frame: pd.DataFrame) -> np.ndarray:
     ]
     if missing:
         raise ValueError(f"Missing closure ground-truth columns: {missing}")
-    theta = frame[[GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES]]
+    theta = frame[
+        [GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES]
+    ]
     arr = theta.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32)
     if not np.isfinite(arr).all():
         bad = int((~np.isfinite(arr).all(axis=1)).sum())

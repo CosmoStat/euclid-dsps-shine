@@ -532,10 +532,16 @@ def _catalog_column_text(components: dict) -> str:
             _wrap(f"`flux_{band}` is the observed target flux f_obs."),
             "Unit: fnu_cgs = erg s^-1 cm^-2 Hz^-1.",
             "",
-            _wrap(f"`fluxerr_{band}` is the materialized catalog uncertainty sigma_cat."),
-            _wrap("It is synthetic for this Diffsky subset, not a native HLTDS measurement error."),
+            _wrap(
+                f"`fluxerr_{band}` is the materialized catalog uncertainty sigma_cat."
+            ),
+            _wrap(
+                "It is synthetic for this Diffsky subset, not a native HLTDS measurement error."
+            ),
             "",
-            _wrap("There is no per-object m5 column: m5 is a per-band depth from the error-model manifest/config."),
+            _wrap(
+                "There is no per-object m5 column: m5 is a per-band depth from the error-model manifest/config."
+            ),
         ]
     )
 
@@ -546,7 +552,9 @@ def _depth_provenance_text(components: dict) -> str:
         m5_source = "LSST 10-year coadd default in default_m5_depth_error_model()."
         shape_source = "gamma is the LSST PhotErr-style band parameter."
     elif band.lower().startswith("roman_"):
-        m5_source = "Roman WFI one-hour point-source default in default_m5_depth_error_model()."
+        m5_source = (
+            "Roman WFI one-hour point-source default in default_m5_depth_error_model()."
+        )
         shape_source = "eta=0.95 is converted to gamma=0.04*eta."
     else:
         m5_source = "Configured per-band depth in the m5_depth error model."
@@ -558,7 +566,9 @@ def _depth_provenance_text(components: dict) -> str:
             _wrap("f5 is obtained by AB conversion: 3631 Jy * 10^(-0.4 m5) * 1e-23."),
             "",
             _wrap(shape_source),
-            _wrap(f"sigma_sys_mag={float(components['sigma_sys_mag']):.3f} mag gives s_sys={float(components['sys_frac']):.4g}."),
+            _wrap(
+                f"sigma_sys_mag={float(components['sigma_sys_mag']):.3f} mag gives s_sys={float(components['sys_frac']):.4g}."
+            ),
         ]
     )
 
@@ -569,10 +579,16 @@ def _student_t_text(components: dict) -> str:
         [
             _wrap("The Student-t sees y=f_obs, loc=f_model, and scale=sigma_eff."),
             _wrap(f"sigma_eff^2 = sigma_cat^2 + ({floor:.2f} |f_ref|)^2 + jitter^2."),
-            _wrap("Standalone MAP/posterior reporting uses f_ref=f_obs; amortized JAX uses f_ref=f_model."),
+            _wrap(
+                "Standalone MAP/posterior reporting uses f_ref=f_obs; amortized JAX uses f_ref=f_model."
+            ),
             "",
-            _wrap("Active configs use nu=2. MAP minimizes (nu+1) log(1+r^2/nu) per valid band."),
-            _wrap("Amortized training uses the full Student-t log density, with the same residual scale r."),
+            _wrap(
+                "Active configs use nu=2. MAP minimizes (nu+1) log(1+r^2/nu) per valid band."
+            ),
+            _wrap(
+                "Amortized training uses the full Student-t log density, with the same residual scale r."
+            ),
         ]
     )
 
@@ -926,9 +942,7 @@ def _summary_payload(components: dict) -> dict[str, float | str | dict[str, str]
         ),
         "f5_fnu_cgs": float(components["f5"]),
         "gamma": float(components["gamma"]),
-        "gamma_source": (
-            "Configured LSST gamma value or Roman gamma=0.04*eta."
-        ),
+        "gamma_source": ("Configured LSST gamma value or Roman gamma=0.04*eta."),
         "sigma_sys_mag": float(components["sigma_sys_mag"]),
         "sys_frac": float(components["sys_frac"]),
         "flux_error_floor_frac": float(components["flux_floor_frac"]),

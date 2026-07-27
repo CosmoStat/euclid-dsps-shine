@@ -40,9 +40,10 @@ def validate_selfsup_rws_inputs(
         likelihood_type = str(likelihood.get("type", "")).lower()
         if likelihood_type not in {"gaussian", "student_t"}:
             raise ValueError(f"{path}: likelihood must be gaussian or student_t")
-        if likelihood_type == "student_t" and float(
-            likelihood.get("student_t_dof", -1.0)
-        ) != 2.0:
+        if (
+            likelihood_type == "student_t"
+            and float(likelihood.get("student_t_dof", -1.0)) != 2.0
+        ):
             raise ValueError(f"{path}: robust likelihood must use Student-t dof=2")
         if float(likelihood.get("error_floor_frac", -1.0)) != 0.0:
             raise ValueError(f"{path}: closure error_floor_frac must be zero")
@@ -63,7 +64,9 @@ def validate_selfsup_rws_inputs(
             if str(prior.get("init", "")) != "identity":
                 raise ValueError(f"{path}: learned prior must start at identity")
             if str(prior.get("update_schedule", "")) != "joint":
-                raise ValueError(f"{path}: RWS prior must update on shared wake batches")
+                raise ValueError(
+                    f"{path}: RWS prior must update on shared wake batches"
+                )
             if not bool(wake.get("train_prior", False)):
                 raise ValueError(f"{path}: learned prior wake loss is disabled")
         elif bool(wake.get("train_prior", False)):
@@ -78,7 +81,9 @@ def validate_selfsup_rws_inputs(
         if float(noise_model.get("sigma_sys_mag", -1.0)) != 0.005:
             raise ValueError(f"{path}: unexpected synthetic systematic noise")
 
-    noise = _catalog_noise_check(catalog_dir / "test.parquet", load_config(config_paths[0]))
+    noise = _catalog_noise_check(
+        catalog_dir / "test.parquet", load_config(config_paths[0])
+    )
     if not 0.95 <= noise["residual_std"] <= 1.05:
         raise ValueError(f"Catalog fluxerr is not generator-matched: {noise}")
     if not 14.0 <= noise["median_chi2"] <= 21.0:
@@ -105,7 +110,9 @@ def _catalog_noise_check(path: Path, config: dict) -> dict[str, float]:
     error = np.column_stack([frame[f"fluxerr_{band}"] for band in bands])
     valid = np.isfinite(truth) & np.isfinite(flux) & np.isfinite(error) & (error > 0)
     if not bool(np.all(valid)):
-        raise ValueError("Closure noise check requires finite positive errors in all bands")
+        raise ValueError(
+            "Closure noise check requires finite positive errors in all bands"
+        )
     residual = (flux - truth) / error
     chi2 = np.sum(residual**2, axis=1)
     return {

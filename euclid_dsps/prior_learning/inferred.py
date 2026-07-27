@@ -66,7 +66,9 @@ def train_inferred_prior(
         f"dropped_nonfinite={dataset.dropped_rows}",
     )
     write_json(out / "normalized_config.json", config)
-    dataset.theta_frame().to_parquet(out / "inferred_theta_samples.parquet", index=False)
+    dataset.theta_frame().to_parquet(
+        out / "inferred_theta_samples.parquet", index=False
+    )
     dataset.x_frame().to_parquet(out / "inferred_x_samples.parquet", index=False)
     split = _train_validation_split(
         len(dataset.x),
@@ -163,8 +165,7 @@ def load_inferred_theta_dataset(
     missing = [name for name in names if name not in raw]
     if missing:
         raise ValueError(
-            "Inferred prior input is missing parameter columns: "
-            + ", ".join(missing)
+            "Inferred prior input is missing parameter columns: " + ", ".join(missing)
         )
     theta_frame = raw[list(names)].apply(pd.to_numeric, errors="coerce")
     finite = np.isfinite(theta_frame.to_numpy(dtype=float)).all(axis=1)
@@ -176,14 +177,14 @@ def load_inferred_theta_dataset(
         source_values = pd.to_numeric(raw.loc[finite, "row_index"], errors="coerce")
         source_rows_float = source_values.to_numpy(dtype=float)
         fallback = np.arange(int(finite.sum()), dtype=float)
-        source_rows = np.where(np.isfinite(source_rows_float), source_rows_float, fallback)
+        source_rows = np.where(
+            np.isfinite(source_rows_float), source_rows_float, fallback
+        )
         source_rows = source_rows.astype(np.int64)
     else:
         source_rows = np.arange(int(finite.sum()), dtype=np.int64)
     object_id = (
-        raw.loc[finite, "object_id"].to_numpy()
-        if "object_id" in raw
-        else source_rows
+        raw.loc[finite, "object_id"].to_numpy() if "object_id" in raw else source_rows
     )
     lower = np.asarray(latent_spec.lower, dtype=float)
     upper = np.asarray(latent_spec.upper, dtype=float)

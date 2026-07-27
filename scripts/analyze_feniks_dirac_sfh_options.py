@@ -70,9 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-dir",
         type=Path,
-        default=Path(
-            "Data/diffsky/synthetic/feniks_260617_dsps_closure_18band"
-        ),
+        default=Path("Data/diffsky/synthetic/feniks_260617_dsps_closure_18band"),
     )
     parser.add_argument(
         "--out",
@@ -104,9 +102,7 @@ def _atom_bits(frame: pd.DataFrame, atom_values: dict[str, float]) -> np.ndarray
     )
 
 
-def _shared_atom_mask(
-    frame: pd.DataFrame, atom_values: dict[str, float]
-) -> np.ndarray:
+def _shared_atom_mask(frame: pd.DataFrame, atom_values: dict[str, float]) -> np.ndarray:
     bits = _atom_bits(frame, atom_values)
     coherent = np.all(bits, axis=1) | np.all(~bits, axis=1)
     if not np.all(coherent):
@@ -201,20 +197,17 @@ def _state_contrast_table(
     z = frame["redshift_true"].to_numpy(float)
     mass = frame["logsm_true"].to_numpy(float)
     logssfr = frame["logssfr_true"].to_numpy(float)
-    color = (
-        frame["mag_true_lsst_r"].to_numpy(float)
-        - frame["mag_true_euclid_nisp_j"].to_numpy(float)
-    )
-    design = np.column_stack(
-        [np.ones(len(frame)), z, z**2, mass, mass**2, z * mass]
-    )
+    color = frame["mag_true_lsst_r"].to_numpy(float) - frame[
+        "mag_true_euclid_nisp_j"
+    ].to_numpy(float)
+    design = np.column_stack([np.ones(len(frame)), z, z**2, mass, mass**2, z * mass])
     finite_design = np.isfinite(design).all(axis=1)
 
     def residual_from_atom_trend(values: np.ndarray) -> np.ndarray:
         fit_mask = mask & finite_design & np.isfinite(values)
-        coefficients = np.linalg.lstsq(
-            design[fit_mask], values[fit_mask], rcond=None
-        )[0]
+        coefficients = np.linalg.lstsq(design[fit_mask], values[fit_mask], rcond=None)[
+            0
+        ]
         return values - design @ coefficients
 
     variables = {
@@ -223,9 +216,9 @@ def _state_contrast_table(
         "log10_sSFR": logssfr,
         "log10_sSFR_residual_at_fixed_z_mass": residual_from_atom_trend(logssfr),
         "log10_SFR": frame["logsfr_true"].to_numpy(float),
-        "log10_stellar_metallicity": frame[
-            "log10_stellar_metallicity_true"
-        ].to_numpy(float),
+        "log10_stellar_metallicity": frame["log10_stellar_metallicity_true"].to_numpy(
+            float
+        ),
         "dust_Av": frame["dust_av_true"].to_numpy(float),
         "dust_delta": frame["dust_delta_true"].to_numpy(float),
         "halo_logm0": frame["diffmah_logm0_true"].to_numpy(float),
@@ -347,8 +340,8 @@ def _build_forward_functions(context: dsps_model.DspsContext):
             * weights[:, None]
             * jnp.asarray(formed_mass, dtype=jnp.float32)
         )
-        tau2, dust_index_n, tau1_over_tau2 = (
-            dsps_model.diffsky_basic_dust_params_jax(params)
+        tau2, dust_index_n, tau1_over_tau2 = dsps_model.diffsky_basic_dust_params_jax(
+            params
         )
         wave = dsps_model._context_ssp_wave(context)
         dusted_by_age = dsps_model.apply_popcosmos_dust_by_age_jax(
@@ -428,9 +421,7 @@ def _pchip_approximation(
     return np.clip(output, 1.0e-30, np.inf)
 
 
-def _bin_average(
-    time: np.ndarray, sfr: np.ndarray, low: float, high: float
-) -> float:
+def _bin_average(time: np.ndarray, sfr: np.ndarray, low: float, high: float) -> float:
     lo = max(float(low), float(time[0]))
     hi = min(float(high), float(time[-1]))
     if hi <= lo:
@@ -463,9 +454,7 @@ def _lookback_bin_approximation(
     return np.clip(output, 1.0e-30, np.inf)
 
 
-def _popcosmos_approximation(
-    t_table: np.ndarray, sfh: np.ndarray
-) -> np.ndarray:
+def _popcosmos_approximation(t_table: np.ndarray, sfh: np.ndarray) -> np.ndarray:
     output = np.empty_like(sfh)
     for index, (time, sfr) in enumerate(zip(t_table, sfh, strict=True)):
         t_obs = float(time[-1])
@@ -690,7 +679,9 @@ def _plot_state_contrasts(
     axes.flat[5].set_xlabel("LSST r - Euclid J true color")
     axes.flat[5].set_ylabel("density")
     axes.flat[0].legend(frameon=False, fontsize=9)
-    fig.suptitle("The rare continuous branch is a distinct galaxy population", fontsize=15)
+    fig.suptitle(
+        "The rare continuous branch is a distinct galaxy population", fontsize=15
+    )
     fig.savefig(path, dpi=180)
     plt.close(fig)
 
@@ -703,9 +694,9 @@ def _plot_state_grid(grid: pd.DataFrame, path: Path) -> None:
     for row in grid.itertuples(index=False):
         iz = int(np.flatnonzero(np.all(z_pairs == [row.z_low, row.z_high], axis=1))[0])
         im = int(
-            np.flatnonzero(
-                np.all(mass_pairs == [row.mass_low, row.mass_high], axis=1)
-            )[0]
+            np.flatnonzero(np.all(mass_pairs == [row.mass_low, row.mass_high], axis=1))[
+                0
+            ]
         )
         if row.count >= 20:
             values[im, iz] = row.quenched_continuous_fraction
@@ -717,9 +708,7 @@ def _plot_state_grid(grid: pd.DataFrame, path: Path) -> None:
             text = "<20" if counts[im, iz] < 20 else f"{values[im, iz]:.1%}"
             axis.text(iz, im, text, ha="center", va="center", fontsize=8)
     axis.set_xticks(range(len(z_pairs)), [f"{a:g}-{b:g}" for a, b in z_pairs])
-    axis.set_yticks(
-        range(len(mass_pairs)), [f"{a:g}-{b:g}" for a, b in mass_pairs]
-    )
+    axis.set_yticks(range(len(mass_pairs)), [f"{a:g}-{b:g}" for a, b in mass_pairs])
     axis.set_xlabel("redshift bin")
     axis.set_ylabel("log10 stellar-mass bin")
     axis.set_title("Quenched continuous-branch fraction (test split)")
@@ -828,9 +817,7 @@ def _plot_representation_accuracy(
                 label=f"{name}, {label_suffix}",
             )
         age_l1 = np.sum(
-            np.abs(
-                representations[name]["age_weights"] - native["age_weights"]
-            ),
+            np.abs(representations[name]["age_weights"] - native["age_weights"]),
             axis=1,
         )
         axes[1].scatter(
@@ -874,7 +861,9 @@ def _plot_representation_accuracy(
 
 def _plot_counterfactuals(by_band: pd.DataFrame, path: Path) -> None:
     labels = list(dict.fromkeys(by_band["counterfactual"]))
-    fig, axes = plt.subplots(len(labels), 1, figsize=(13, 4.3 * len(labels)), sharex=True)
+    fig, axes = plt.subplots(
+        len(labels), 1, figsize=(13, 4.3 * len(labels)), sharex=True
+    )
     axes = np.atleast_1d(axes)
     for axis, label in zip(axes, labels, strict=True):
         subset = by_band[by_band["counterfactual"] == label]
@@ -898,9 +887,7 @@ def _plot_counterfactuals(by_band: pd.DataFrame, path: Path) -> None:
         axis.set_ylabel("absolute magnitude change")
         axis.set_title(label)
         axis.legend(frameon=False)
-    axes[-1].set_xticks(
-        np.arange(len(subset)), subset["band"], rotation=55, ha="right"
-    )
+    axes[-1].set_xticks(np.arange(len(subset)), subset["band"], rotation=55, ha="right")
     fig.suptitle("Changing the shared quenching state changes the photometry")
     fig.savefig(path, dpi=180)
     plt.close(fig)
@@ -1501,7 +1488,8 @@ def main() -> None:
         "n_ssp_ages": int(len(context.ssp.ssp_lg_age_gyr)),
         "n_ssp_metallicities": int(len(context.ssp.ssp_lgmet)),
         "nearest_joint_continuous_proxy": {
-            name: float(value) for name, value in zip(ATOM_NAMES, nearest_proxy, strict=True)
+            name: float(value)
+            for name, value in zip(ATOM_NAMES, nearest_proxy, strict=True)
         },
         "state_prevalence": prevalence.to_dict(orient="records"),
         "counterfactuals": counterfactual_summary.to_dict(orient="records"),

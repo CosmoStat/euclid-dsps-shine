@@ -203,9 +203,9 @@ def test_jax_cosmo_cubic_matches_scipy_not_a_knot_and_jit() -> None:
 
     eager = cubic_spline_interpolate_jax(x, y, x_new)
     compiled = jax.jit(cubic_spline_interpolate_jax)(x, y, x_new)
-    expected = CubicSpline(
-        np.asarray(x), np.asarray(y), bc_type="not-a-knot"
-    )(np.asarray(x_new))
+    expected = CubicSpline(np.asarray(x), np.asarray(y), bc_type="not-a-knot")(
+        np.asarray(x_new)
+    )
 
     np.testing.assert_allclose(eager, expected, rtol=2.0e-5, atol=2.0e-5)
     np.testing.assert_allclose(compiled, eager, rtol=2.0e-6, atol=2.0e-6)
@@ -213,9 +213,7 @@ def test_jax_cosmo_cubic_matches_scipy_not_a_knot_and_jit() -> None:
 
 def test_jax_cosmo_cubic_has_finite_contrast_gradients() -> None:
     time = jnp.geomspace(0.05, 12.0, 80)
-    contrasts = jnp.asarray(
-        [0.3, -0.2, 0.4, 0.0, 0.0, -0.3, 0.1, 0.2, -0.1, 0.05]
-    )
+    contrasts = jnp.asarray([0.3, -0.2, 0.4, 0.0, 0.0, -0.3, 0.1, 0.2, -0.1, 0.05])
 
     gradient = jax.grad(
         lambda values: jnp.sum(reconstruct_relative_sfh_jax(time, values))

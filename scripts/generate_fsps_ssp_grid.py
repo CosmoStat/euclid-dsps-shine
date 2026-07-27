@@ -192,7 +192,11 @@ def generate_ssp_grid(args: argparse.Namespace) -> Path:
         progress = progress_bar(
             total=shape[0],
             enabled=not args.no_progress,
-            desc="FSPS Chabrier stellar SSP" if args.stellar_only else "FSPS Chabrier SSP",
+            desc=(
+                "FSPS Chabrier stellar SSP"
+                if args.stellar_only
+                else "FSPS Chabrier SSP"
+            ),
             unit="metallicity",
         )
         try:
@@ -227,7 +231,9 @@ def generate_ssp_grid(args: argparse.Namespace) -> Path:
             if progress is not None:
                 progress.close()
 
-        attrs = fsps_metadata(fsps, sp, sys.argv if sys.argv else ["generate_fsps_ssp_grid.py"])
+        attrs = fsps_metadata(
+            fsps, sp, sys.argv if sys.argv else ["generate_fsps_ssp_grid.py"]
+        )
         asset_kind = (
             "popcosmos_chabrier_stellar_only_ssp"
             if args.stellar_only
@@ -347,9 +353,7 @@ def _discover_axes_and_line_count(
     return axes, int(emline_luminosity.shape[1])
 
 
-def _emline_luminosity(
-    sp: Any, n_age: int, n_line: int, dtype: np.dtype
-) -> np.ndarray:
+def _emline_luminosity(sp: Any, n_age: int, n_line: int, dtype: np.dtype) -> np.ndarray:
     luminosity = np.asarray(getattr(sp, "emline_luminosity", []), dtype=dtype)
     expected = (n_age, n_line)
     if luminosity.shape != expected:
@@ -375,7 +379,10 @@ def _line_names(reference_line_names: str | Path | None, n_line: int) -> np.ndar
         reference = Path(reference_line_names).expanduser()
         if reference.exists():
             with h5py.File(reference, "r") as handle:
-                if "ssp_emline_name" in handle and len(handle["ssp_emline_name"]) == n_line:
+                if (
+                    "ssp_emline_name" in handle
+                    and len(handle["ssp_emline_name"]) == n_line
+                ):
                     return np.asarray(handle["ssp_emline_name"][:], dtype="S64")
     return np.asarray(
         [f"line_{index:03d}".encode() for index in range(n_line)], dtype="S16"

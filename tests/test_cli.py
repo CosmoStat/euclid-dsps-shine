@@ -3,7 +3,9 @@ from __future__ import annotations
 from euclid_dsps import cli
 
 
-def test_diffsky_map_adam_prior_dispatches_to_config_backed_handler(monkeypatch) -> None:
+def test_diffsky_map_adam_prior_dispatches_to_config_backed_handler(
+    monkeypatch,
+) -> None:
     called: dict[str, bool] = {}
 
     def fail_diffsky_data_dispatch(args) -> None:

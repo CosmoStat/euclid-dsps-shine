@@ -87,8 +87,14 @@ def run_generation_population_diagnostics(
     if not bool(diagnostics_cfg.get("enabled", False)):
         return None
     dataset_dir = Path(dataset_dir)
-    out = ensure_dir(dataset_dir / str(diagnostics_cfg.get("output_subdir", "diagnostics/population")))
-    bands = tuple(str(band["name"]) for band in config.get("bands", [])) or DEFAULT_DIAGNOSTIC_BANDS
+    out = ensure_dir(
+        dataset_dir
+        / str(diagnostics_cfg.get("output_subdir", "diagnostics/population"))
+    )
+    bands = (
+        tuple(str(band["name"]) for band in config.get("bands", []))
+        or DEFAULT_DIAGNOSTIC_BANDS
+    )
     frames = _load_split_frames(dataset_dir)
     if not frames:
         raise ValueError(f"No split parquets found under {dataset_dir}")
@@ -218,7 +224,9 @@ def _parameter_stats(
         for name in DIFFSKY_BASIC_PARAMETER_NAMES
         if GROUND_TRUTH_COLUMNS[name] in all_frame.columns
     ]
-    columns.extend((name, column) for name, column in PHYSICAL_COLUMNS if column in all_frame)
+    columns.extend(
+        (name, column) for name, column in PHYSICAL_COLUMNS if column in all_frame
+    )
     seen: set[str] = set()
     for label, column in columns:
         if column in seen:
@@ -248,7 +256,9 @@ def _photometry_stats(
                 if column in frame.columns:
                     rows.append(_stats_row(split, kind, band, column, frame[column]))
             snr = _ratio_from_columns(frame, f"flux_{band}", f"fluxerr_{band}")
-            rows.append(_array_stats_row(split, "snr", band, f"flux_{band}/fluxerr_{band}", snr))
+            rows.append(
+                _array_stats_row(split, "snr", band, f"flux_{band}/fluxerr_{band}", snr)
+            )
     return pd.DataFrame(rows)
 
 
@@ -263,7 +273,9 @@ def _color_stats(
         for left, right in COLOR_PAIRS:
             if left not in bands or right not in bands:
                 continue
-            color = _difference_from_columns(frame, f"mag_true_{left}", f"mag_true_{right}")
+            color = _difference_from_columns(
+                frame, f"mag_true_{left}", f"mag_true_{right}"
+            )
             rows.append(
                 _array_stats_row(
                     split,
@@ -293,10 +305,16 @@ def _error_model_stats(
             }
             if not required <= set(frame.columns):
                 continue
-            flux_true = pd.to_numeric(frame[f"flux_true_{band}"], errors="coerce").to_numpy(float)
+            flux_true = pd.to_numeric(
+                frame[f"flux_true_{band}"], errors="coerce"
+            ).to_numpy(float)
             flux = pd.to_numeric(frame[f"flux_{band}"], errors="coerce").to_numpy(float)
-            fluxerr = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(float)
-            mag = pd.to_numeric(frame[f"mag_true_{band}"], errors="coerce").to_numpy(float)
+            fluxerr = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(
+                float
+            )
+            mag = pd.to_numeric(frame[f"mag_true_{band}"], errors="coerce").to_numpy(
+                float
+            )
             finite = (
                 np.isfinite(flux_true)
                 & np.isfinite(flux)
@@ -313,16 +331,38 @@ def _error_model_stats(
                     "band": band,
                     "n": int(np.count_nonzero(finite)),
                     "error_model_applied": bool(np.count_nonzero(finite) == len(frame)),
-                    "residual_mean": float(np.mean(residual)) if residual.size else np.nan,
-                    "residual_std": float(np.std(residual)) if residual.size else np.nan,
-                    "residual_q01": float(np.quantile(residual, 0.01)) if residual.size else np.nan,
-                    "residual_q99": float(np.quantile(residual, 0.99)) if residual.size else np.nan,
-                    "fluxerr_median": float(np.median(fluxerr[finite])) if np.any(finite) else np.nan,
-                    "fluxerr_q16": float(np.quantile(fluxerr[finite], 0.16)) if np.any(finite) else np.nan,
-                    "fluxerr_q84": float(np.quantile(fluxerr[finite], 0.84)) if np.any(finite) else np.nan,
+                    "residual_mean": (
+                        float(np.mean(residual)) if residual.size else np.nan
+                    ),
+                    "residual_std": (
+                        float(np.std(residual)) if residual.size else np.nan
+                    ),
+                    "residual_q01": (
+                        float(np.quantile(residual, 0.01)) if residual.size else np.nan
+                    ),
+                    "residual_q99": (
+                        float(np.quantile(residual, 0.99)) if residual.size else np.nan
+                    ),
+                    "fluxerr_median": (
+                        float(np.median(fluxerr[finite])) if np.any(finite) else np.nan
+                    ),
+                    "fluxerr_q16": (
+                        float(np.quantile(fluxerr[finite], 0.16))
+                        if np.any(finite)
+                        else np.nan
+                    ),
+                    "fluxerr_q84": (
+                        float(np.quantile(fluxerr[finite], 0.84))
+                        if np.any(finite)
+                        else np.nan
+                    ),
                     "snr_median": float(np.median(snr)) if snr.size else np.nan,
-                    "true_snr_median": float(np.median(true_snr)) if true_snr.size else np.nan,
-                    "mag_median": float(np.median(mag[finite])) if np.any(finite) else np.nan,
+                    "true_snr_median": (
+                        float(np.median(true_snr)) if true_snr.size else np.nan
+                    ),
+                    "mag_median": (
+                        float(np.median(mag[finite])) if np.any(finite) else np.nan
+                    ),
                     "negative_noisy_flux_fraction": (
                         float(np.mean(flux[finite] < 0.0)) if np.any(finite) else np.nan
                     ),
@@ -341,7 +381,9 @@ def _proposal_final_metrics(
         proposals = _read_proposals(proposal_dir)
         if proposals is None or "galaxy_weight" not in proposals.columns:
             continue
-        weights = pd.to_numeric(proposals["galaxy_weight"], errors="coerce").to_numpy(float)
+        weights = pd.to_numeric(proposals["galaxy_weight"], errors="coerce").to_numpy(
+            float
+        )
         for label, column in PROPOSAL_COMPARE_COLUMNS:
             if column not in proposals.columns or column not in final.columns:
                 continue
@@ -392,8 +434,14 @@ def _correlation_payload(frame: pd.DataFrame) -> dict[str, Any]:
     matrix = frame[truth_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
     finite = np.isfinite(matrix).all(axis=1)
     matrix = matrix[finite]
-    dynamic = np.std(matrix, axis=0) > 0.0 if len(matrix) else np.zeros(len(truth_columns), dtype=bool)
-    columns = [column for column, keep in zip(truth_columns, dynamic, strict=True) if keep]
+    dynamic = (
+        np.std(matrix, axis=0) > 0.0
+        if len(matrix)
+        else np.zeros(len(truth_columns), dtype=bool)
+    )
+    columns = [
+        column for column, keep in zip(truth_columns, dynamic, strict=True) if keep
+    ]
     matrix = matrix[:, dynamic] if len(matrix) else matrix
     if matrix.shape[0] < 3 or matrix.shape[1] < 2:
         return {
@@ -448,11 +496,23 @@ def _write_plots(
     physical_columns = [
         (name, column) for name, column in PHYSICAL_COLUMNS if column in frame.columns
     ]
-    path = _hist_grid(plt, out / "physical_diagnostic_histograms.png", frame, physical_columns, bins=45)
+    path = _hist_grid(
+        plt,
+        out / "physical_diagnostic_histograms.png",
+        frame,
+        physical_columns,
+        bins=45,
+    )
     if path:
         outputs["physical_diagnostic_histograms"] = str(path)
-    mag_columns = [(band, f"mag_true_{band}") for band in bands if f"mag_true_{band}" in frame.columns]
-    path = _hist_grid(plt, out / "magnitude_histograms.png", frame, mag_columns, bins=45)
+    mag_columns = [
+        (band, f"mag_true_{band}")
+        for band in bands
+        if f"mag_true_{band}" in frame.columns
+    ]
+    path = _hist_grid(
+        plt, out / "magnitude_histograms.png", frame, mag_columns, bins=45
+    )
     if path:
         outputs["magnitude_histograms"] = str(path)
     color_frame = _color_frame(frame, bands)
@@ -503,9 +563,14 @@ def _hist_grid(
     for ax, (label, column) in zip(axes_arr, columns, strict=False):
         values = _finite_numeric(frame[column])
         if values.size:
-            ax.hist(values, bins=min(bins, max(8, values.size // 3)), histtype="stepfilled", alpha=0.65)
+            ax.hist(
+                values,
+                bins=min(bins, max(8, values.size // 3)),
+                histtype="stepfilled",
+                alpha=0.65,
+            )
         ax.set_title(label, fontsize=9)
-    for ax in axes_arr[len(columns):]:
+    for ax in axes_arr[len(columns) :]:
         ax.axis("off")
     fig.tight_layout()
     fig.savefig(path, dpi=150)
@@ -541,7 +606,9 @@ def _band_summary_plot(
         return None
     table = pd.DataFrame(rows)
     x = np.arange(len(table))
-    fig, axes = plt.subplots(2, 1, figsize=(max(8.0, 0.55 * len(table)), 6.5), sharex=True)
+    fig, axes = plt.subplots(
+        2, 1, figsize=(max(8.0, 0.55 * len(table)), 6.5), sharex=True
+    )
     axes[0].errorbar(
         x,
         table["mag_median"],
@@ -572,7 +639,12 @@ def _write_error_model_plots(
     summary_rows = []
     residuals_by_band: dict[str, np.ndarray] = {}
     for band in bands:
-        cols = [f"flux_true_{band}", f"flux_{band}", f"fluxerr_{band}", f"mag_true_{band}"]
+        cols = [
+            f"flux_true_{band}",
+            f"flux_{band}",
+            f"fluxerr_{band}",
+            f"mag_true_{band}",
+        ]
         if not set(cols) <= set(frame.columns):
             continue
         flux_true = pd.to_numeric(frame[cols[0]], errors="coerce").to_numpy(float)
@@ -596,14 +668,18 @@ def _write_error_model_plots(
                 "fluxerr_median": float(np.median(fluxerr[finite])),
                 "fluxerr_q16": float(np.quantile(fluxerr[finite], 0.16)),
                 "fluxerr_q84": float(np.quantile(fluxerr[finite], 0.84)),
-                "true_snr_median": float(np.median(flux_true[finite] / fluxerr[finite])),
+                "true_snr_median": float(
+                    np.median(flux_true[finite] / fluxerr[finite])
+                ),
                 "mag_median": float(np.median(mag[finite])),
             }
         )
     if summary_rows:
         table = pd.DataFrame(summary_rows)
         x = np.arange(len(table))
-        fig, axes = plt.subplots(3, 1, figsize=(max(8.0, 0.55 * len(table)), 8.0), sharex=True)
+        fig, axes = plt.subplots(
+            3, 1, figsize=(max(8.0, 0.55 * len(table)), 8.0), sharex=True
+        )
         axes[0].errorbar(
             x,
             table["fluxerr_median"],
@@ -632,13 +708,20 @@ def _write_error_model_plots(
         nrows = int(np.ceil(len(residuals_by_band) / ncols))
         fig, axes = plt.subplots(nrows, ncols, figsize=(4.0 * ncols, 2.8 * nrows))
         axes_arr = np.asarray(axes).reshape(-1)
-        for ax, (band, residual) in zip(axes_arr, residuals_by_band.items(), strict=False):
+        for ax, (band, residual) in zip(
+            axes_arr, residuals_by_band.items(), strict=False
+        ):
             if residual.size:
-                ax.hist(residual, bins=min(50, max(8, residual.size // 2)), histtype="stepfilled", alpha=0.7)
+                ax.hist(
+                    residual,
+                    bins=min(50, max(8, residual.size // 2)),
+                    histtype="stepfilled",
+                    alpha=0.7,
+                )
                 ax.axvline(0.0, color="black", lw=0.8)
             ax.set_title(band, fontsize=9)
             ax.set_xlabel("(flux - flux_true) / fluxerr")
-        for ax in axes_arr[len(residuals_by_band):]:
+        for ax in axes_arr[len(residuals_by_band) :]:
             ax.axis("off")
         fig.tight_layout()
         path = out / "normalized_noise_residual_histograms.png"
@@ -667,7 +750,7 @@ def _write_error_model_plots(
             ax.set_xlabel("mag_true")
             ax.set_ylabel("fluxerr")
             ax.set_yscale("log")
-        for ax in axes_arr[len(rows):]:
+        for ax in axes_arr[len(rows) :]:
             ax.axis("off")
         fig.tight_layout()
         path = out / "fluxerr_vs_mag_true.png"
@@ -741,7 +824,9 @@ def _write_corner_plots(
         for name in ("logsfr_true", "logssfr_true")
         if name in frame.columns and _has_dynamic_range(frame[name])
     )
-    outputs.update(_corner_or_scatter_matrix(out, frame, core[:8], "corner_core_truths"))
+    outputs.update(
+        _corner_or_scatter_matrix(out, frame, core[:8], "corner_core_truths")
+    )
     outputs.update(_corner_or_scatter_matrix(out, frame, columns, "corner_18_truths"))
     return outputs
 
@@ -756,7 +841,9 @@ def _corner_or_scatter_matrix(
     if len(columns) < 2:
         return {}
     labels = [label for label, _ in columns]
-    data = frame[[column for _, column in columns]].apply(pd.to_numeric, errors="coerce")
+    data = frame[[column for _, column in columns]].apply(
+        pd.to_numeric, errors="coerce"
+    )
     matrix = data.to_numpy(dtype=float)
     finite = np.isfinite(matrix).all(axis=1)
     matrix = matrix[finite]
@@ -836,10 +923,15 @@ def _run_reference_comparison(
         reference_z_max = diagnostics_cfg.get("reference_z_max")
         if reference_z_max is None:
             reference = pd.read_parquet(reference_path, columns=["redshift_true"])
-            reference_z_max = float(np.nanmax(reference["redshift_true"].to_numpy(float)))
+            reference_z_max = float(
+                np.nanmax(reference["redshift_true"].to_numpy(float))
+            )
         overlap = all_frame[
             (pd.to_numeric(all_frame["redshift_true"], errors="coerce") >= z_min)
-            & (pd.to_numeric(all_frame["redshift_true"], errors="coerce") <= float(reference_z_max))
+            & (
+                pd.to_numeric(all_frame["redshift_true"], errors="coerce")
+                <= float(reference_z_max)
+            )
         ]
         temp_path = out / "synthetic_overlap_reference_z.parquet"
         overlap.to_parquet(temp_path, index=False)
@@ -874,13 +966,26 @@ def _summary_payload(
     reference_outputs: dict[str, str],
     smoke: bool,
 ) -> dict[str, Any]:
-    z = _finite_numeric(all_frame["redshift_true"]) if "redshift_true" in all_frame else np.asarray([])
-    logsm = _finite_numeric(all_frame["logsm_true"]) if "logsm_true" in all_frame else np.asarray([])
+    z = (
+        _finite_numeric(all_frame["redshift_true"])
+        if "redshift_true" in all_frame
+        else np.asarray([])
+    )
+    logsm = (
+        _finite_numeric(all_frame["logsm_true"])
+        if "logsm_true" in all_frame
+        else np.asarray([])
+    )
     mass_fractions = {
-        f"logsm_ge_{threshold:g}": float(np.mean(logsm >= threshold)) if logsm.size else np.nan
+        f"logsm_ge_{threshold:g}": (
+            float(np.mean(logsm >= threshold)) if logsm.size else np.nan
+        )
         for threshold in (5.0, 7.0, 8.0, 9.0, 10.0)
     }
-    bands = tuple(str(band["name"]) for band in config.get("bands", [])) or DEFAULT_DIAGNOSTIC_BANDS
+    bands = (
+        tuple(str(band["name"]) for band in config.get("bands", []))
+        or DEFAULT_DIAGNOSTIC_BANDS
+    )
     all_error = (
         error_model_stats[error_model_stats["split"] == "all"]
         if "split" in error_model_stats
@@ -907,8 +1012,12 @@ def _summary_payload(
         "n_rows": int(len(all_frame)),
         "split_rows": {split: int(len(frame)) for split, frame in frames.items()},
         "configured_redshift_range": {
-            "z_min": float((config.get("synthetic_diffsky", {}) or {}).get("z_min", np.nan)),
-            "z_max": float((config.get("synthetic_diffsky", {}) or {}).get("z_max", np.nan)),
+            "z_min": float(
+                (config.get("synthetic_diffsky", {}) or {}).get("z_min", np.nan)
+            ),
+            "z_max": float(
+                (config.get("synthetic_diffsky", {}) or {}).get("z_max", np.nan)
+            ),
         },
         "realized_redshift_range": {
             "min": float(np.min(z)) if z.size else np.nan,
@@ -994,7 +1103,9 @@ def _markdown_report(summary: dict[str, Any]) -> str:
         for key, path in summary["plots"].items():
             lines.append(f"- `{key}`: `{path}`")
     else:
-        lines.append("- No plots written; matplotlib/corner may be unavailable or plotting disabled.")
+        lines.append(
+            "- No plots written; matplotlib/corner may be unavailable or plotting disabled."
+        )
     if summary["reference_comparison"]:
         lines.extend(["", "## Reference Comparison", ""])
         for key, path in summary["reference_comparison"].items():
@@ -1080,7 +1191,9 @@ def _color_frame(frame: pd.DataFrame, bands: Sequence[str]) -> pd.DataFrame:
     data = {}
     for left, right in COLOR_PAIRS:
         if left in bands and right in bands:
-            values = _difference_from_columns(frame, f"mag_true_{left}", f"mag_true_{right}")
+            values = _difference_from_columns(
+                frame, f"mag_true_{left}", f"mag_true_{right}"
+            )
             if values.size:
                 data[f"{left}-{right}"] = pd.Series(values)
     return pd.DataFrame(data)
@@ -1102,7 +1215,9 @@ def _finite_array(values: Iterable[float] | np.ndarray) -> np.ndarray:
     return arr[np.isfinite(arr)]
 
 
-def _ratio_from_columns(frame: pd.DataFrame, numerator: str, denominator: str) -> np.ndarray:
+def _ratio_from_columns(
+    frame: pd.DataFrame, numerator: str, denominator: str
+) -> np.ndarray:
     if numerator not in frame.columns or denominator not in frame.columns:
         return np.asarray([], dtype=float)
     num = pd.to_numeric(frame[numerator], errors="coerce").to_numpy(dtype=float)
@@ -1133,7 +1248,9 @@ def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
     return float(np.sum(values * weights) / np.sum(weights))
 
 
-def _weighted_quantile(values: np.ndarray, weights: np.ndarray, quantile: float) -> float:
+def _weighted_quantile(
+    values: np.ndarray, weights: np.ndarray, quantile: float
+) -> float:
     if values.size == 0 or weights.size == 0 or np.sum(weights) <= 0.0:
         return np.nan
     order = np.argsort(values)
@@ -1154,7 +1271,9 @@ def _ks_distance(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.max(np.abs(left_cdf - right_cdf)))
 
 
-def _wasserstein_quantile(left: np.ndarray, right: np.ndarray, n_grid: int = 1001) -> float:
+def _wasserstein_quantile(
+    left: np.ndarray, right: np.ndarray, n_grid: int = 1001
+) -> float:
     left = _finite_array(left)
     right = _finite_array(right)
     if left.size == 0 or right.size == 0:

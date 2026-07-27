@@ -14,9 +14,7 @@ def test_build_catalogs_joins_exact_truth_by_object_id(tmp_path) -> None:
     source_dir.mkdir()
     spline_dir.mkdir()
     ids = np.asarray([20, 10, 30])
-    source = pd.DataFrame(
-        {"object_id": ids, "flux_lsst_g": [1.0, 2.0, 3.0]}
-    )
+    source = pd.DataFrame({"object_id": ids, "flux_lsst_g": [1.0, 2.0, 3.0]})
     truth = pd.DataFrame({"object_id": ids[::-1]})
     for index, name in enumerate(SPLINE15D_PARAMETER_NAMES):
         truth[name] = np.arange(3, dtype=float) + index

@@ -93,8 +93,7 @@ def test_replicate_tree_adds_device_axis_without_deprecated_jax_helper() -> None
 
 
 def test_prior_pmap_step_handles_static_realnvp_leaves_on_fake_cpu_devices() -> None:
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         import equinox as eqx
         import jax
         import jax.numpy as jnp
@@ -134,8 +133,7 @@ def test_prior_pmap_step_handles_static_realnvp_leaves_on_fake_cpu_devices() -> 
         assert bool(loss_finite[0])
         assert bool(grads_finite[0])
         assert bool(update[0])
-        """
-    )
+        """)
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=3"

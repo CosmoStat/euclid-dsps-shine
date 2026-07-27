@@ -85,7 +85,10 @@ def get_expected_diffstar_columns() -> tuple[str, ...]:
         from diffstar.defaults import DEFAULT_DIFFSTAR_PARAMS  # type: ignore
 
         fields = []
-        for part in (DEFAULT_DIFFSTAR_PARAMS.ms_params, DEFAULT_DIFFSTAR_PARAMS.q_params):
+        for part in (
+            DEFAULT_DIFFSTAR_PARAMS.ms_params,
+            DEFAULT_DIFFSTAR_PARAMS.q_params,
+        ):
             fields.extend(getattr(part, "_fields", ()))
         return tuple(fields)
     except Exception:
@@ -129,12 +132,36 @@ def detect_truth_columns(available_columns: Sequence[str]) -> TruthColumnReport:
         halo_mass=first("logmp_obs", "diffmah_logmp_fit", "target_halo_mass"),
         central=first("central"),
         size=first("r50_disk", "diskHalfLightRadius"),
-        diffmah_columns=tuple(column for column in columns if suffix(column) in diffmah_expected or "diffmah" in suffix(column).lower()),
-        diffstar_columns=tuple(column for column in columns if suffix(column) in diffstar_expected or "diffstar" in suffix(column).lower()),
-        dust_columns=tuple(column for column in columns if suffix(column).lower() in {"av", "delta", "dust_av", "dust_delta", "dust_eb"}),
-        metallicity_columns=tuple(column for column in columns if any(key in suffix(column).lower() for key in ("metal", "zmet", "lgmet"))),
-        photometry_columns=tuple(column for column in columns if _looks_like_photometry(suffix(column))),
-        sed_columns=tuple(column for column in columns if any(key in suffix(column).lower() for key in ("sed", "wave", "ssp_flux"))),
+        diffmah_columns=tuple(
+            column
+            for column in columns
+            if suffix(column) in diffmah_expected or "diffmah" in suffix(column).lower()
+        ),
+        diffstar_columns=tuple(
+            column
+            for column in columns
+            if suffix(column) in diffstar_expected
+            or "diffstar" in suffix(column).lower()
+        ),
+        dust_columns=tuple(
+            column
+            for column in columns
+            if suffix(column).lower()
+            in {"av", "delta", "dust_av", "dust_delta", "dust_eb"}
+        ),
+        metallicity_columns=tuple(
+            column
+            for column in columns
+            if any(key in suffix(column).lower() for key in ("metal", "zmet", "lgmet"))
+        ),
+        photometry_columns=tuple(
+            column for column in columns if _looks_like_photometry(suffix(column))
+        ),
+        sed_columns=tuple(
+            column
+            for column in columns
+            if any(key in suffix(column).lower() for key in ("sed", "wave", "ssp_flux"))
+        ),
     )
 
 
@@ -195,4 +222,9 @@ def _looks_like_photometry(name: str) -> bool:
     lower = name.lower()
     if any(part in lower for part in ("_bulge", "_disk", "_knots", "nodust", "rest")):
         return False
-    return lower.startswith("lsst_") or lower.startswith("roman_f") or lower.startswith("lsst_obs_") or lower.startswith("roman_obs_")
+    return (
+        lower.startswith("lsst_")
+        or lower.startswith("roman_f")
+        or lower.startswith("lsst_obs_")
+        or lower.startswith("roman_obs_")
+    )

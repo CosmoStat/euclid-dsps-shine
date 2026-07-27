@@ -533,7 +533,9 @@ def _build_layered_final_catalogs(
             layer_frame = selected.sample(
                 n=n_write,
                 replace=False,
-                random_state=int(split_cfg.resample_seed) + 271_828 + 1009 * layer_index,
+                random_state=int(split_cfg.resample_seed)
+                + 271_828
+                + 1009 * layer_index,
             )
         else:
             layer_frame = selected.head(n_write)
@@ -697,7 +699,9 @@ def _write_schema(path: Path, config: dict[str, Any]) -> None:
             "log10_stellar_metallicity_true": "log10(Z/Z_sun)",
         },
     }
-    path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8"
+    )
 
 
 def _write_all_catalog(out: Path) -> None:

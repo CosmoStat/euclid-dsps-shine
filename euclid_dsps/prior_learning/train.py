@@ -133,7 +133,9 @@ def _normalize_supervised_prior_truth(
     normalized = truth_dataset_with_latent_spec(truth, latent_spec)
     payload.update(
         {
-            "network_x_abs_q99": float(np.quantile(np.abs(normalized.x).reshape(-1), 0.99)),
+            "network_x_abs_q99": float(
+                np.quantile(np.abs(normalized.x).reshape(-1), 0.99)
+            ),
             "network_x_abs_max": float(np.max(np.abs(normalized.x))),
         }
     )
@@ -216,11 +218,15 @@ def train_supervised_prior(
         f"rows={truth.theta.shape[0]} dim={truth.theta.shape[1]} "
         f"dropped_nonfinite={truth.dropped_rows}",
     )
-    truth.theta_frame().head(int(cfg["output"].get("truth_sample_limit", 200_000))).to_parquet(
+    truth.theta_frame().head(
+        int(cfg["output"].get("truth_sample_limit", 200_000))
+    ).to_parquet(
         out / "truth_theta_samples.parquet",
         index=False,
     )
-    truth.x_frame().head(int(cfg["output"].get("truth_sample_limit", 200_000))).to_parquet(
+    truth.x_frame().head(
+        int(cfg["output"].get("truth_sample_limit", 200_000))
+    ).to_parquet(
         out / "truth_x_samples.parquet",
         index=False,
     )
@@ -231,7 +237,9 @@ def train_supervised_prior(
             seed=int(training_cfg.get("seed", 42)),
         )
         x_train = truth.x[split["train"]]
-        x_validation = truth.x[split["validation"]] if len(split["validation"]) else None
+        x_validation = (
+            truth.x[split["validation"]] if len(split["validation"]) else None
+        )
         validation_rows = int(len(split["validation"]))
     else:
         split = {
@@ -245,8 +253,7 @@ def train_supervised_prior(
     np.save(out / "validation_indices.npy", split["validation"])
     _log(
         verbose,
-        "[prior] split: "
-        f"train={len(split['train'])} validation={validation_rows}",
+        "[prior] split: " f"train={len(split['train'])} validation={validation_rows}",
     )
     _log(
         verbose,
@@ -384,7 +391,9 @@ def train_supervised_prior(
             "minimizes KL(p_truth || p_beta) up to the entropy of p_truth"
         ),
         "flow_integrity": integrity,
-        "realnvp_integrity": integrity if isinstance(result.prior, RealNVPPrior) else None,
+        "realnvp_integrity": (
+            integrity if isinstance(result.prior, RealNVPPrior) else None
+        ),
         "snapshots": {
             "enabled": bool(snapshot_cfg.get("enabled", False)),
             "every_epochs": int(snapshot_cfg.get("every_epochs", 5)),
@@ -428,7 +437,11 @@ def _supervised_prior_epoch_callback(
                 snapshot_config=snapshot_config,
                 seed=seed,
             )
-        if checkpoint_every > 0 and int(epoch) > 0 and int(epoch) % checkpoint_every == 0:
+        if (
+            checkpoint_every > 0
+            and int(epoch) > 0
+            and int(epoch) % checkpoint_every == 0
+        ):
             save_prior_checkpoint(
                 checkpoint_dir / f"epoch_{int(epoch):04d}.eqx",
                 prior,
@@ -471,7 +484,9 @@ def _supervised_prior_progress_callback(
         payload = {
             "total_epochs": int(total_epochs),
             "completed_epochs": int(record["epoch"]),
-            "fraction_complete": float(int(record["epoch"]) / max(int(total_epochs), 1)),
+            "fraction_complete": float(
+                int(record["epoch"]) / max(int(total_epochs), 1)
+            ),
             "elapsed_time_s": float(time.time() - start_time),
             "best_epoch": int(record["best_epoch"]),
             "best_metric": float(record["best_metric"]),
@@ -576,10 +591,9 @@ def fit_realnvp_to_x(
     seed: int,
     epoch_callback: Callable[[int, PriorFlow], None] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    selection_callback: Callable[
-        [int, PriorFlow, float], dict[str, Any] | None
-    ]
-    | None = None,
+    selection_callback: (
+        Callable[[int, PriorFlow, float], dict[str, Any] | None] | None
+    ) = None,
     initial_prior: PriorFlow | None = None,
     initial_epoch: int = 0,
 ) -> PriorTrainingResult:
@@ -825,9 +839,7 @@ def fit_realnvp_to_x(
             if selection is not None:
                 selection_diagnostics = dict(selection)
                 metric = float(selection_diagnostics.pop("metric"))
-                selection_eligible = bool(
-                    selection_diagnostics.pop("eligible", False)
-                )
+                selection_eligible = bool(selection_diagnostics.pop("eligible", False))
                 selection_evaluated = True
             else:
                 selection_eligible = False
@@ -873,9 +885,7 @@ def fit_realnvp_to_x(
                     "best_metric": float(best_metric),
                     "best_epoch": int(best_epoch),
                     "mean_grad_norm": float(np.nanmean(epoch_grad_norms)),
-                    "mean_base_moment_penalty": float(
-                        np.nanmean(epoch_base_penalties)
-                    ),
+                    "mean_base_moment_penalty": float(np.nanmean(epoch_base_penalties)),
                     "selection_evaluated": bool(selection_evaluated),
                     "selection_eligible": bool(selection_eligible),
                     **selection_diagnostics,
@@ -1010,7 +1020,9 @@ def _prior_template_from_architecture(arch: dict[str, Any]) -> PriorFlow:
             init=str(arch.get("init", "default")),
             init_scale=float(arch.get("init_scale", 1.0)),
         )
-    raise ValueError(f"Unsupported prior checkpoint architecture type: {arch.get('type')}")
+    raise ValueError(
+        f"Unsupported prior checkpoint architecture type: {arch.get('type')}"
+    )
 
 
 def _normalize_flow_type(value: Any) -> str:
@@ -1140,7 +1152,9 @@ def load_prior_checkpoint(
             )
             for param in schema_payload["parameters"]
         ),
-        missing_columns=tuple(str(col) for col in schema_payload.get("missing_columns", [])),
+        missing_columns=tuple(
+            str(col) for col in schema_payload.get("missing_columns", [])
+        ),
         reduced=bool(schema_payload.get("reduced", False)),
     )
     return prior, sidecar, latent_spec, schema
@@ -1313,7 +1327,9 @@ def _shard_x_batch(batch: jnp.ndarray, n_devices: int) -> jnp.ndarray:
             "pmap prior batch leading dimension must be divisible by device count: "
             f"shape={batch.shape} devices={n_devices}"
         )
-    return batch.reshape((int(n_devices), batch.shape[0] // int(n_devices), *batch.shape[1:]))
+    return batch.reshape(
+        (int(n_devices), batch.shape[0] // int(n_devices), *batch.shape[1:])
+    )
 
 
 def _replicate_tree(tree, devices: tuple[Any, ...]):
@@ -1426,14 +1442,18 @@ def _select_tree_when_false(true_tree, false_tree, predicate):
 
 
 def _tree_all_finite(tree) -> bool:
-    leaves = [leaf for leaf in jax.tree_util.tree_leaves(tree) if hasattr(leaf, "dtype")]
+    leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if hasattr(leaf, "dtype")
+    ]
     if not leaves:
         return True
     return bool(all(bool(jnp.all(jnp.isfinite(leaf))) for leaf in leaves))
 
 
 def _tree_l2_norm(tree) -> float:
-    leaves = [leaf for leaf in jax.tree_util.tree_leaves(tree) if hasattr(leaf, "dtype")]
+    leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(tree) if hasattr(leaf, "dtype")
+    ]
     if not leaves:
         return 0.0
     total = sum(float(jnp.sum(jnp.asarray(leaf) ** 2)) for leaf in leaves)

@@ -103,9 +103,9 @@ def summarize_task(
         "elapsed_time_s": elapsed,
         "encoder_epochs": encoder_epochs,
         "prior_epochs": prior_epochs,
-        "seconds_per_encoder_epoch": elapsed / encoder_epochs
-        if encoder_epochs
-        else None,
+        "seconds_per_encoder_epoch": (
+            elapsed / encoder_epochs if encoder_epochs else None
+        ),
         "best_checkpoint_epoch": training.get("best_checkpoint_epoch"),
         "updates_skipped": int(training.get("updates_skipped", 0)),
         "wake_epochs": int(wake_rows.epoch.nunique()),

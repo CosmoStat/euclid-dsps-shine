@@ -49,7 +49,10 @@ def build_catalogs(
 
         source = pd.read_parquet(source_path)
         spline = pd.read_parquet(spline_path, columns=["object_id", *truth_columns])
-        if source["object_id"].duplicated().any() or spline["object_id"].duplicated().any():
+        if (
+            source["object_id"].duplicated().any()
+            or spline["object_id"].duplicated().any()
+        ):
             raise ValueError(f"Duplicate object_id in {split}")
         if limit is not None:
             source = source.head(max(int(limit), 0))

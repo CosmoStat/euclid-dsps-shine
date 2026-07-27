@@ -230,7 +230,13 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
         or args.stellar_logzsol_grid is not None
     )
     progress = progress_bar(
-        total=int(len(fagn_grid) * len(agn_tau_grid) * len(tage_grid) * len(stellar_logzsol_grid)) + 3,
+        total=int(
+            len(fagn_grid)
+            * len(agn_tau_grid)
+            * len(tage_grid)
+            * len(stellar_logzsol_grid)
+        )
+        + 3,
         enabled=not args.no_progress,
         desc="FSPS AGN grid",
         unit="step",
@@ -274,19 +280,31 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
             progress.update(1)
 
         template_shape = (
-            (len(fagn_grid), len(agn_tau_grid), len(tage_grid), len(stellar_logzsol_grid), len(wave))
+            (
+                len(fagn_grid),
+                len(agn_tau_grid),
+                len(tage_grid),
+                len(stellar_logzsol_grid),
+                len(wave),
+            )
             if audit_grid
             else (len(agn_tau_grid), len(wave))
         )
         template = np.zeros(template_shape, dtype=np.dtype(args.dtype))
-        lbol_grid = np.zeros((len(tage_grid), len(stellar_logzsol_grid)), dtype=np.float64)
+        lbol_grid = np.zeros(
+            (len(tage_grid), len(stellar_logzsol_grid)), dtype=np.float64
+        )
         for age_index, tage_gyr in enumerate(tage_grid):
             for logz_index, stellar_logzsol in enumerate(stellar_logzsol_grid):
                 sp.params["fagn"] = 0.0
                 sp.params["logzsol"] = float(stellar_logzsol)
                 wave_base, stellar = sp.get_spectrum(tage=float(tage_gyr), peraa=False)
-                if np.asarray(wave_base).shape != wave.shape or not np.allclose(wave_base, wave):
-                    raise FspsGridError("FSPS AGN wavelength grid changed between evaluations")
+                if np.asarray(wave_base).shape != wave.shape or not np.allclose(
+                    wave_base, wave
+                ):
+                    raise FspsGridError(
+                        "FSPS AGN wavelength grid changed between evaluations"
+                    )
                 stellar = np.asarray(stellar, dtype=np.float64)
                 lbol_stellar = lbol_from_lnu(wave, stellar)
                 if not np.isfinite(lbol_stellar) or lbol_stellar <= 0.0:
@@ -320,7 +338,9 @@ def generate_agn_grid(args: argparse.Namespace) -> Path:
                         if not args.signed_delta:
                             normalized = np.clip(normalized, 0.0, np.inf)
                         if audit_grid:
-                            template[fagn_index, tau_index, age_index, logz_index, :] = normalized
+                            template[
+                                fagn_index, tau_index, age_index, logz_index, :
+                            ] = normalized
                         else:
                             template[tau_index, :] = normalized
                         if progress is None:
@@ -418,9 +438,7 @@ def _write_agn_grid(
             )
             handle["stellar_lbol_lsun_grid"] = np.asarray(lbol_grid, dtype=np.float32)
         handle["agn_tau_grid"] = agn_tau_grid
-        chunks = (
-            (1, 1, 1, 1, len(wave)) if audit_grid else (1, len(wave))
-        )
+        chunks = (1, 1, 1, 1, len(wave)) if audit_grid else (1, len(wave))
         handle.create_dataset(
             "template_lnu_per_lbol",
             data=template,

@@ -255,7 +255,9 @@ def generate_gas_grid(args: argparse.Namespace) -> Path:
             if progress is not None:
                 progress.close()
 
-        attrs = fsps_metadata(fsps, sp, sys.argv if sys.argv else ["generate_fsps_gas_grid.py"])
+        attrs = fsps_metadata(
+            fsps, sp, sys.argv if sys.argv else ["generate_fsps_gas_grid.py"]
+        )
         attrs.update(
             {
                 "asset_kind": "popcosmos_chabrier_gas_ssp_grid",
@@ -339,7 +341,9 @@ def _progress_bar(total: int, enabled: bool, desc: str) -> Any | None:
     try:
         from tqdm.auto import tqdm
     except ImportError:
-        print("tqdm is not installed; continuing without progress bar.", file=sys.stderr)
+        print(
+            "tqdm is not installed; continuing without progress bar.", file=sys.stderr
+        )
         return None
 
     return tqdm(total=total, desc=desc, unit="spectrum")

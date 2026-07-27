@@ -725,9 +725,11 @@ def _plot_group_heatmaps(summary: pd.DataFrame, grid_strategy: str, path: Path) 
                     f"{matrix[row, column]:.3g}",
                     ha="center",
                     va="center",
-                    color="black"
-                    if matrix[row, column] > 0.65 * np.nanmax(matrix)
-                    else "white",
+                    color=(
+                        "black"
+                        if matrix[row, column] > 0.65 * np.nanmax(matrix)
+                        else "white"
+                    ),
                     fontsize=8,
                 )
         fig.colorbar(image, ax=axis, label="mag")

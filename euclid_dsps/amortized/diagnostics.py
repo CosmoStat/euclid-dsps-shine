@@ -624,12 +624,14 @@ def posterior_predictive_residual_summary_frame(
                     "band": band_names[band_index],
                     "obs_flux_fnu_cgs": float(obs_flux[object_index, band_index]),
                     "obs_err_fnu_cgs": float(obs_err[object_index, band_index]),
-                    "snr_proxy": float(
-                        abs_obs_flux[object_index, band_index]
-                        / obs_err[object_index, band_index]
-                    )
-                    if obs_err[object_index, band_index] > 0.0
-                    else float("nan"),
+                    "snr_proxy": (
+                        float(
+                            abs_obs_flux[object_index, band_index]
+                            / obs_err[object_index, band_index]
+                        )
+                        if obs_err[object_index, band_index] > 0.0
+                        else float("nan")
+                    ),
                     "obs_err_over_abs_flux": float(
                         obs_err[object_index, band_index]
                         / abs_obs_flux[object_index, band_index]

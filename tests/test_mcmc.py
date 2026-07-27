@@ -98,7 +98,9 @@ def test_sample_one_galaxy_passes_dynamic_model_args(monkeypatch) -> None:
         "predict_batch_mags",
         lambda context, names, matrix: np.full((matrix.shape[0], 1), 20.0),
     )
-    monkeypatch.setattr(mcmc, "predict_batch_derived", lambda context, names, matrix: {})
+    monkeypatch.setattr(
+        mcmc, "predict_batch_derived", lambda context, names, matrix: {}
+    )
 
     result = sample_one_galaxy(
         DspsContext(ssp=None, filters={}, model_config={}),
@@ -161,7 +163,9 @@ def test_sample_one_galaxy_mclmc_smoke(monkeypatch) -> None:
         "predict_batch_mags",
         lambda context, names, matrix: np.full((matrix.shape[0], 1), 20.0),
     )
-    monkeypatch.setattr(mcmc, "predict_batch_derived", lambda context, names, matrix: {})
+    monkeypatch.setattr(
+        mcmc, "predict_batch_derived", lambda context, names, matrix: {}
+    )
 
     result = sample_one_galaxy(
         DspsContext(ssp=None, filters={}, model_config={}),

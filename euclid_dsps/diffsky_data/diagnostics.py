@@ -7,7 +7,9 @@ from pathlib import Path
 import pandas as pd
 
 
-def write_dataset_diagnostics(dataset_path: str | Path, out_dir: str | Path) -> list[Path]:
+def write_dataset_diagnostics(
+    dataset_path: str | Path, out_dir: str | Path
+) -> list[Path]:
     import matplotlib.pyplot as plt
 
     frame = pd.read_parquet(dataset_path)
@@ -35,7 +37,9 @@ def write_dataset_diagnostics(dataset_path: str | Path, out_dir: str | Path) -> 
     missing = pd.DataFrame(
         {
             "column": frame.columns,
-            "missing_fraction": [float(frame[column].isna().mean()) for column in frame.columns],
+            "missing_fraction": [
+                float(frame[column].isna().mean()) for column in frame.columns
+            ],
         }
     )
     missing_path = out / "missing_values_report.csv"

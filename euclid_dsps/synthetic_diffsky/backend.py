@@ -158,7 +158,9 @@ def generate_toy_proposal_shard(
     z = rng.uniform(cfg.z_min, cfg.z_max, n)
     logm = rng.normal(10.2 + 0.8 * z / max(cfg.z_max, 1.0e-6), 0.45, n)
     logm = np.clip(logm, 7.5, 12.2)
-    lgmet_abs = np.log10(z_sun) + np.clip(-0.6 + 0.25 * (logm - 10.0) - 0.3 * z, -2.0, 0.2)
+    lgmet_abs = np.log10(z_sun) + np.clip(
+        -0.6 + 0.25 * (logm - 10.0) - 0.3 * z, -2.0, 0.2
+    )
     transform = absolute_lgmet_to_logzsol(
         lgmet_abs,
         z_sun=z_sun,
@@ -184,7 +186,9 @@ def generate_toy_proposal_shard(
         "diffmah_late_index_true": rng.normal(0.2, 0.2, n),
         "diffmah_t_peak_true": rng.uniform(2.0, 13.5, n),
         "log10_stellar_metallicity_true": transform.log10_z_over_zsun,
-        "dust_av_true": np.clip(rng.normal(0.25 + 0.18 * (logm - 10.0), 0.18, n), 0.0, 2.5),
+        "dust_av_true": np.clip(
+            rng.normal(0.25 + 0.18 * (logm - 10.0), 0.18, n), 0.0, 2.5
+        ),
         "dust_delta_true": np.clip(rng.normal(-0.4, 0.25, n), -2.0, 0.5),
         "logssfr_true": ssfr,
         "logsfr_true": ssfr + logm,

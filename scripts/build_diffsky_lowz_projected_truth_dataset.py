@@ -147,9 +147,7 @@ def build_projected_truth(
         else np.arange(len(frame), dtype=int)
     )
     object_id = (
-        frame["object_id"].to_numpy(int)
-        if "object_id" in frame
-        else row_index.copy()
+        frame["object_id"].to_numpy(int) if "object_id" in frame else row_index.copy()
     )
     truth = pd.DataFrame({"row_index": row_index, "object_id": object_id})
     metadata_rows: list[dict[str, Any]] = []

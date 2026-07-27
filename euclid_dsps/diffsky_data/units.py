@@ -13,6 +13,10 @@ def describe_photometry_unit(native_kind: str, native_unit: str) -> dict:
         "kind": native_kind,
         "unit": native_unit,
         "conversion_applied": native_kind == "magnitude" and "AB" in native_unit,
-        "prepared_flux_unit": "fnu_cgs" if native_kind == "magnitude" and "AB" in native_unit else native_unit,
+        "prepared_flux_unit": (
+            "fnu_cgs"
+            if native_kind == "magnitude" and "AB" in native_unit
+            else native_unit
+        ),
         "warnings": warnings,
     }

@@ -62,7 +62,9 @@ def download_candidate_subset(
         size = int(row["size_bytes"]) if row["size_bytes"] == row["size_bytes"] else 0
         if size and total + size > max_total:
             continue
-        selected.append(RemoteFile(**{k: row[k] for k in RemoteFile.__dataclass_fields__}))
+        selected.append(
+            RemoteFile(**{k: row[k] for k in RemoteFile.__dataclass_fields__})
+        )
         total += size
         if len(selected) >= max_files:
             break
@@ -78,5 +80,7 @@ def download_candidate_subset(
         "downloaded": [str(path) for path in paths],
     }
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "download_manifest.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+    (output_dir / "download_manifest.yaml").write_text(
+        yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8"
+    )
     return paths

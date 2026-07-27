@@ -61,7 +61,9 @@ def test_prepare_dataset_creates_truth_photometry_and_manifest(tmp_path: Path) -
     assert "logsfr_true" in schema["column_semantics"]["derived_truth"]
 
 
-def test_prepare_dataset_duplicate_core_tag_gets_global_object_id(tmp_path: Path) -> None:
+def test_prepare_dataset_duplicate_core_tag_gets_global_object_id(
+    tmp_path: Path,
+) -> None:
     raw = tmp_path / "raw"
     raw.mkdir()
     _write_hltds_shard(raw / "lc_cores-001.diffsky_gals.hdf5", [10])

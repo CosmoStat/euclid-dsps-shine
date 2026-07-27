@@ -35,7 +35,9 @@ def redshift_metrics_from_samples(
             continue
         truth_row = truth_indexed.loc[identity_value]
         z_true = float(truth_lookup.loc[identity_value])
-        samples = pd.to_numeric(group[z_parameter], errors="coerce").to_numpy(dtype=float)
+        samples = pd.to_numeric(group[z_parameter], errors="coerce").to_numpy(
+            dtype=float
+        )
         samples = samples[np.isfinite(samples)]
         if samples.size == 0 or not np.isfinite(z_true):
             continue
@@ -106,9 +108,7 @@ def summarize_redshift_metrics(frame: pd.DataFrame) -> dict[str, float | int]:
         "pit_mean": float(np.nanmean(frame["pit"])),
         "coverage_68": float(np.nanmean(frame["covered_68"].astype(float))),
         "coverage_95": float(np.nanmean(frame["covered_95"].astype(float))),
-        "posterior_width_68_median": float(
-            np.nanmedian(frame["posterior_width_68"])
-        ),
+        "posterior_width_68_median": float(np.nanmedian(frame["posterior_width_68"])),
     }
 
 
@@ -166,9 +166,7 @@ def redshift_metrics_by_truth_bin(
                 "pit_mean": summary["pit_mean"],
                 "coverage_68": summary["coverage_68"],
                 "coverage_95": summary["coverage_95"],
-                "posterior_width_68_median": summary[
-                    "posterior_width_68_median"
-                ],
+                "posterior_width_68_median": summary["posterior_width_68_median"],
             }
         )
     return pd.DataFrame(rows)
@@ -291,7 +289,13 @@ def write_redshift_metrics_for_run(
     """Compute redshift and posterior-vs-truth metrics for one inference run."""
     run = Path(run_dir)
     out = ensure_dir(out_dir or run)
-    truth_cols = ["object_id", "redshift_true", "logsm_true", "logsfr_true", "logssfr_true"]
+    truth_cols = [
+        "object_id",
+        "redshift_true",
+        "logsm_true",
+        "logsfr_true",
+        "logssfr_true",
+    ]
     truth = _truth_for_run(run, dataset_path, truth_cols)
     object_frames = []
     residual_frames = []
@@ -314,9 +318,7 @@ def write_redshift_metrics_for_run(
     if not found_samples:
         raise FileNotFoundError(f"Missing posterior sample outputs under {run}")
     object_metrics = (
-        pd.concat(object_frames, ignore_index=True)
-        if object_frames
-        else pd.DataFrame()
+        pd.concat(object_frames, ignore_index=True) if object_frames else pd.DataFrame()
     )
     summary = summarize_redshift_metrics(object_metrics)
     object_path = out / "photoz_object_metrics.csv"

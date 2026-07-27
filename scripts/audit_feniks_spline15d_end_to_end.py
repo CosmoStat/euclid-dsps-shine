@@ -40,8 +40,12 @@ def _convert_legacy_theta(
     return np.concatenate(xs), np.concatenate(corrected)
 
 
-def _posterior_metrics(summary: pd.DataFrame, truth: pd.DataFrame, names: tuple[str, ...]) -> pd.DataFrame:
-    joined = truth[["object_id", *names]].merge(summary, on="object_id", validate="one_to_one")
+def _posterior_metrics(
+    summary: pd.DataFrame, truth: pd.DataFrame, names: tuple[str, ...]
+) -> pd.DataFrame:
+    joined = truth[["object_id", *names]].merge(
+        summary, on="object_id", validate="one_to_one"
+    )
     rows = []
     for name in names:
         y = joined[name].to_numpy(float)
@@ -66,7 +70,9 @@ def _posterior_metrics(summary: pd.DataFrame, truth: pd.DataFrame, names: tuple[
     return pd.DataFrame(rows)
 
 
-def _prior_metrics(prior: pd.DataFrame, truth: pd.DataFrame, names: tuple[str, ...]) -> pd.DataFrame:
+def _prior_metrics(
+    prior: pd.DataFrame, truth: pd.DataFrame, names: tuple[str, ...]
+) -> pd.DataFrame:
     rows = []
     for name in names:
         p = prior[name].to_numpy(float)
@@ -106,7 +112,14 @@ def _plot_marginals(
         bins = np.linspace(lo, hi, 45)
         ax.hist(y, bins=bins, density=True, histtype="step", lw=2, label="truth")
         ax.hist(p, bins=bins, density=True, histtype="step", lw=1.5, label="prior")
-        ax.hist(q, bins=bins, density=True, histtype="step", lw=1.5, label="posterior median")
+        ax.hist(
+            q,
+            bins=bins,
+            density=True,
+            histtype="step",
+            lw=1.5,
+            label="posterior median",
+        )
         ax.set_title(name, fontsize=10)
         ax.set_xlim(lo, hi)
     axes.flat[0].legend(fontsize=8)

@@ -119,12 +119,11 @@ def _write_closure_truth_parquet(
     rows: int,
     drop_column: str | None = None,
 ) -> None:
-    columns = [column for column in expected_closure_truth_columns() if column != drop_column]
+    columns = [
+        column for column in expected_closure_truth_columns() if column != drop_column
+    ]
     frame = pd.DataFrame(
-        {
-            column: np.linspace(0.2, 0.4, rows, dtype=float)
-            for column in columns
-        }
+        {column: np.linspace(0.2, 0.4, rows, dtype=float) for column in columns}
     )
     frame.insert(0, "object_id", np.arange(rows, dtype=np.int64))
     path.parent.mkdir(parents=True, exist_ok=True)

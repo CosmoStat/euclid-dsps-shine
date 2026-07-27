@@ -75,7 +75,9 @@ def test_initial_theta_uses_config_initial_with_midpoint_fallback() -> None:
 
     assert by_name["z_obs"] == 0.8
 
-    fallback_config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
+    fallback_config = load_config(
+        "configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml"
+    )
     del fallback_config["fit"]["free_parameters"]["dust_av"]["initial"]
     fallback_theta = initial_theta_from_config(
         fallback_config,
@@ -128,7 +130,9 @@ def test_feniks_full_schema_bounds_match_configured_training_space() -> None:
     config = load_config("configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml")
     spec = latent_spec_from_config(config)
 
-    assert config["amortized"]["encoder"]["latent_dim"] == len(DIFFSKY_BASIC_PARAMETER_NAMES)
+    assert config["amortized"]["encoder"]["latent_dim"] == len(
+        DIFFSKY_BASIC_PARAMETER_NAMES
+    )
     by_name = {
         name: (float(lower), float(upper))
         for name, lower, upper in zip(spec.names, spec.lower, spec.upper, strict=True)

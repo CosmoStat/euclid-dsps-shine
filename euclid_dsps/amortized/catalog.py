@@ -169,7 +169,9 @@ def learned_prior_samples_frame(
     if theta.ndim != 2:
         raise ValueError(f"theta must be [S,D], got {theta.shape}")
     if x.shape[0] != theta.shape[0]:
-        raise ValueError(f"x and theta must have same sample count, got {x.shape} and {theta.shape}")
+        raise ValueError(
+            f"x and theta must have same sample count, got {x.shape} and {theta.shape}"
+        )
     derived = _normalized_derived_columns(derived, theta.shape[0])
     rows = []
     for sample_id in range(theta.shape[0]):

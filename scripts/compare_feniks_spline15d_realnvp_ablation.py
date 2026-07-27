@@ -15,9 +15,7 @@ from euclid_dsps.io import ensure_dir, write_json
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runs-root", type=Path, default=Path("outputs/runs"))
-    parser.add_argument(
-        "--pattern", default="feniks_spline15d_realnvp_v2_[abcd]*"
-    )
+    parser.add_argument("--pattern", default="feniks_spline15d_realnvp_v2_[abcd]*")
     parser.add_argument(
         "--out", type=Path, default=Path("outputs/reports/spline15d_realnvp_v2")
     )
@@ -57,9 +55,7 @@ def main() -> None:
                     "correlation_frobenius_physical"
                 ),
                 "validation_base_std_mean": validation.get("base_std_mean"),
-                "selected_temperature": calibration.get(
-                    "selected_base_temperature"
-                ),
+                "selected_temperature": calibration.get("selected_base_temperature"),
                 "test_median_ks_calibrated": test.get("median_ks_normalized"),
                 "test_max_ks_calibrated": test.get("max_ks_normalized"),
                 "test_correlation_frobenius_calibrated": test.get(

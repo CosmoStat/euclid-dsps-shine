@@ -75,9 +75,7 @@ def test_m5_depth_flux_error_adds_photerr_systematic_floor() -> None:
 
     sys_frac = 10 ** (DEFAULT_PHOTERR_SIGMA_SYS_MAG / 2.5) - 1.0
     expected_depth = math.sqrt((f5 / 5.0) ** 2 + (sys_frac * f5) ** 2)
-    expected_bright_rand = math.sqrt(
-        (0.04 - 0.039) * 100.0 * f5**2 + 0.039 * f5**2
-    )
+    expected_bright_rand = math.sqrt((0.04 - 0.039) * 100.0 * f5**2 + 0.039 * f5**2)
     expected_bright = math.sqrt(expected_bright_rand**2 + (sys_frac * flux[1]) ** 2)
     assert err[0] == pytest.approx(expected_depth)
     assert err[1] == pytest.approx(expected_bright)

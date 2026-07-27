@@ -599,7 +599,9 @@ def _map_start_batch(
             initial[name] = float(value)
         initial_rows.append(initial if len(initial) == len(free_names) else None)
         chi2 = fit_row.get("chi2")
-        chi2_rows.append(float(chi2) if chi2 is not None and np.isfinite(chi2) else None)
+        chi2_rows.append(
+            float(chi2) if chi2 is not None and np.isfinite(chi2) else None
+        )
     return initial_rows, chi2_rows
 
 
@@ -1297,7 +1299,7 @@ def fit_population(
     sed_sample_limit = _sed_sample_limit(config)
     total = _progress_total(config["catalog_path"], limit, row_indices)
     with _make_progress_bar(
-            total=total, desc="population-fit", unit="galaxy"
+        total=total, desc="population-fit", unit="galaxy"
     ) as progress:
         chunk_index = 0
         for batch in iter_catalog_batches(
@@ -1791,7 +1793,9 @@ def _fit_dataframe_batch(
                 if obs_flux_error > 0
                 else float("nan")
             )
-            likelihood_space = str(config["fit"].get("likelihood_space", "flux")).lower()
+            likelihood_space = str(
+                config["fit"].get("likelihood_space", "flux")
+            ).lower()
             if likelihood_space == "flux":
                 sigma_likelihood = float(
                     np.sqrt(
@@ -1815,8 +1819,7 @@ def _fit_dataframe_batch(
             chi2_contribution = chi_likelihood**2
             if photometric_likelihood == "student_t":
                 objective_contribution = (
-                    (student_t_dof + 1.0)
-                    * np.log1p(chi2_contribution / student_t_dof)
+                    (student_t_dof + 1.0) * np.log1p(chi2_contribution / student_t_dof)
                     if np.isfinite(chi2_contribution)
                     else float("nan")
                 )
@@ -1836,7 +1839,9 @@ def _fit_dataframe_batch(
                         valid_band_mask[local_index, band_index]
                     ),
                     "band_is_nondetection": bool(
-                        np.isfinite(obs_flux) and obs_flux <= 0.0 and obs_flux_error > 0.0
+                        np.isfinite(obs_flux)
+                        and obs_flux <= 0.0
+                        and obs_flux_error > 0.0
                     ),
                     "n_valid_bands": n_valid_bands,
                     "n_masked_bands": n_masked_bands,

@@ -345,9 +345,7 @@ def realnvp_saturation_metrics(prior, values: np.ndarray) -> dict[str, float]:
         scale_flags.append(
             (np.abs(log_scale) > 0.9 * float(layer.scale_clamp)).reshape(-1)
         )
-        shift_flags.append(
-            (np.abs(shift) > 0.9 * float(layer.shift_clamp)).reshape(-1)
-        )
+        shift_flags.append((np.abs(shift) > 0.9 * float(layer.shift_clamp)).reshape(-1))
         value, _logdet = layer.inverse(value)
     return {
         "scale_saturation_fraction": float(np.mean(np.concatenate(scale_flags))),

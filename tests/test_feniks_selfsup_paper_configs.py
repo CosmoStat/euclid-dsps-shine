@@ -34,9 +34,7 @@ def test_paper_configs_share_physics_and_exclude_truth(config_name: str) -> None
 
 
 def test_paper_matrix_has_the_intended_objective_and_prior_controls() -> None:
-    configs = [
-        amortized_config(load_config(CONFIG_DIR / name)) for name in CONFIGS
-    ]
+    configs = [amortized_config(load_config(CONFIG_DIR / name)) for name in CONFIGS]
 
     assert [objective_mode(cfg["objective"]) for cfg in configs] == [
         "reweighted_wake_sleep",

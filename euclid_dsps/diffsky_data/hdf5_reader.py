@@ -88,14 +88,18 @@ def _sample_stats(dataset: h5py.Dataset, sample_size: int) -> dict[str, Any]:
             sample = np.asarray([dataset[()]])
         else:
             first_dim = min(int(dataset.shape[0]), int(sample_size))
-            slices = (slice(0, first_dim),) + tuple(slice(0, min(int(dim), 4)) for dim in dataset.shape[1:])
+            slices = (slice(0, first_dim),) + tuple(
+                slice(0, min(int(dim), 4)) for dim in dataset.shape[1:]
+            )
             sample = np.asarray(dataset[slices])
     except Exception as exc:
         return {"sample_error": str(exc)}
     if np.issubdtype(sample.dtype, np.number):
         flat = sample.reshape(-1)
         finite = np.isfinite(flat)
-        stats: dict[str, Any] = {"finite_fraction": float(finite.mean()) if finite.size else None}
+        stats: dict[str, Any] = {
+            "finite_fraction": float(finite.mean()) if finite.size else None
+        }
         if finite.any():
             vals = flat[finite]
             stats.update(
@@ -117,7 +121,14 @@ def _attrs_to_dict(attrs: h5py.AttributeManager) -> dict[str, Any]:
         elif hasattr(value, "tolist"):
             raw = value.tolist()
             if isinstance(raw, list):
-                raw = [item.decode("utf-8", errors="replace") if isinstance(item, bytes) else item for item in raw]
+                raw = [
+                    (
+                        item.decode("utf-8", errors="replace")
+                        if isinstance(item, bytes)
+                        else item
+                    )
+                    for item in raw
+                ]
             out[key] = raw
         else:
             out[key] = value

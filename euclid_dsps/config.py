@@ -672,6 +672,7 @@ DEFAULT_RUNTIME_CONFIG = {
     "jax_persistent_cache_min_compile_time_secs": 1.0,
 }
 
+
 class ConfigValidationError(ValueError):
     """Raised when a run configuration is internally inconsistent."""
 
@@ -794,9 +795,7 @@ def normalize_config(config: dict[str, Any]) -> dict[str, Any]:
         "parameterization", "log_alpha"
     )
     config["calibration"]["global_sed_scale"].setdefault("initial_log_alpha", 0.0)
-    config["calibration"]["global_sed_scale"].setdefault(
-        "prior_sigma_log_alpha", 0.10
-    )
+    config["calibration"]["global_sed_scale"].setdefault("prior_sigma_log_alpha", 0.10)
     config["calibration"]["global_sed_scale"].setdefault("trainable", False)
     config["calibration"].setdefault("per_band_zero_points", {})
     config["calibration"]["per_band_zero_points"] = dict(
@@ -1621,9 +1620,10 @@ def _validate_diffsky_basic_free_parameters(
             "model.stellar_metallicity_model='single' or "
             "'lognormal_mdf_fixed_scatter'"
         )
-    if _normalize_model_dust_model(
-        model.get("dust_model", "prospector_fsps")
-    ) not in {"charlot_fall_powerlaw", "prospector_fsps"}:
+    if _normalize_model_dust_model(model.get("dust_model", "prospector_fsps")) not in {
+        "charlot_fall_powerlaw",
+        "prospector_fsps",
+    }:
         errors.append(
             "model.sfh_model='diffsky_basic' requires "
             "model.dust_model='charlot_fall_powerlaw' or 'prospector_fsps'"
@@ -1670,8 +1670,7 @@ def _validate_spline15d_free_parameters(
         )
     for name in unknown:
         errors.append(
-            f"fit.free_parameters.{name} is not used by "
-            "model.sfh_model='spline15d'"
+            f"fit.free_parameters.{name} is not used by " "model.sfh_model='spline15d'"
         )
     metallicity_model = str(model.get("stellar_metallicity_model", "single"))
     if metallicity_model not in {"single", "lognormal_mdf_fixed_scatter"}:

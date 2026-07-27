@@ -74,7 +74,9 @@ def build_redshift_subset(
     summary_path = output_path.with_suffix(".summary.json")
     summary_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     _write_schema_json(subset, report, output_path.with_suffix(".schema.json"))
-    _write_truth_distribution_table(subset, output_path.with_suffix(".truth_summary.csv"))
+    _write_truth_distribution_table(
+        subset, output_path.with_suffix(".truth_summary.csv")
+    )
     _write_markdown_report(report, output_path.with_suffix(".report.md"))
     _write_truth_report(subset, report, output_path.with_suffix(".truth_report.md"))
     if make_plots:
@@ -121,7 +123,9 @@ def _subset_report(
         },
         "max_objects": None if max_objects is None else int(max_objects),
         "redshift_summary": _series_summary(z_finite),
-        "truth_columns": [column for column in DEFAULT_TRUTH_COLUMNS if column in frame],
+        "truth_columns": [
+            column for column in DEFAULT_TRUTH_COLUMNS if column in frame
+        ],
         "band_names": [
             column.removeprefix("flux_")
             for column in frame.columns
@@ -150,7 +154,9 @@ def _write_schema_json(frame: pd.DataFrame, report: dict[str, Any], path: Path) 
     schema = {
         "latent_schema": "diffsky_redshift_subset",
         "object_id_column": "object_id",
-        "source_object_id_column": "source_object_id" if "source_object_id" in frame else None,
+        "source_object_id_column": (
+            "source_object_id" if "source_object_id" in frame else None
+        ),
         "source_dataset": report["source_dataset"],
         "band_names": band_names,
         "photometry": {
@@ -239,7 +245,9 @@ def _write_markdown_report(report: dict[str, Any], path: Path) -> None:
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _write_truth_report(frame: pd.DataFrame, report: dict[str, Any], path: Path) -> None:
+def _write_truth_report(
+    frame: pd.DataFrame, report: dict[str, Any], path: Path
+) -> None:
     lines = [
         "# Diffsky Subset Truth Report",
         "",
@@ -286,7 +294,9 @@ def _write_distribution_plots(frame: pd.DataFrame, output_path: Path) -> None:
     plot_dir.mkdir(parents=True, exist_ok=True)
     if "redshift_true" in frame:
         fig, ax = plt.subplots(figsize=(7, 4))
-        values = pd.to_numeric(frame["redshift_true"], errors="coerce").to_numpy(dtype=float)
+        values = pd.to_numeric(frame["redshift_true"], errors="coerce").to_numpy(
+            dtype=float
+        )
         values = values[np.isfinite(values)]
         ax.hist(values, bins=80, histtype="step", density=True, lw=1.8)
         ax.set_xlabel("redshift_true")
@@ -296,7 +306,9 @@ def _write_distribution_plots(frame: pd.DataFrame, output_path: Path) -> None:
         fig.savefig(plot_dir / "redshift_true_distribution.png", dpi=150)
         plt.close(fig)
     truth_cols = [
-        column for column in DEFAULT_TRUTH_COLUMNS if column in frame and column != "redshift_true"
+        column
+        for column in DEFAULT_TRUTH_COLUMNS
+        if column in frame and column != "redshift_true"
     ]
     if truth_cols:
         n_cols = min(3, len(truth_cols))
@@ -321,7 +333,9 @@ def _write_distribution_plots(frame: pd.DataFrame, output_path: Path) -> None:
     _write_flux_error_diagnostics(frame, plot_dir, plt)
 
 
-def _write_flux_error_diagnostics(frame: pd.DataFrame, plot_dir: Path, plt: Any) -> None:
+def _write_flux_error_diagnostics(
+    frame: pd.DataFrame, plot_dir: Path, plt: Any
+) -> None:
     bands = [
         column.removeprefix("flux_")
         for column in frame.columns
@@ -337,8 +351,12 @@ def _write_flux_error_diagnostics(frame: pd.DataFrame, plot_dir: Path, plt: Any)
     scatter_payload = []
     rng = np.random.default_rng(12345)
     for band in bands:
-        flux = pd.to_numeric(frame[f"flux_{band}"], errors="coerce").to_numpy(dtype=float)
-        err = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(dtype=float)
+        flux = pd.to_numeric(frame[f"flux_{band}"], errors="coerce").to_numpy(
+            dtype=float
+        )
+        err = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(
+            dtype=float
+        )
         ok = np.isfinite(flux) & np.isfinite(err) & (np.abs(flux) > 0.0) & (err > 0.0)
         if not np.any(ok):
             continue
@@ -393,7 +411,9 @@ def _write_flux_error_diagnostics(frame: pd.DataFrame, plot_dir: Path, plt: Any)
         figsize=(3.2 * n_cols, 2.8 * n_rows),
         squeeze=False,
     )
-    for ax, (band, log_flux, log_err) in zip(axes.ravel(), scatter_payload, strict=False):
+    for ax, (band, log_flux, log_err) in zip(
+        axes.ravel(), scatter_payload, strict=False
+    ):
         ax.scatter(log_flux, log_err, s=2, alpha=0.25, rasterized=True)
         ax.set_title(band)
         ax.set_xlabel("log10(abs(flux))")

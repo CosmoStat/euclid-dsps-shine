@@ -1,4 +1,5 @@
 """Validation gates for synthetic Diffsky DSPS closure catalogs."""
+
 # ruff: noqa: E402
 
 from __future__ import annotations
@@ -107,7 +108,9 @@ def validate_dsps_closure_dataset(
     report["gates"]["pass"] = not errors
     report["gates"]["errors"] = errors
     report_path = root / "validation_report.json"
-    report_path.write_text(json.dumps(report, indent=2, sort_keys=False), encoding="utf-8")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=False), encoding="utf-8"
+    )
     (diagnostics / "validation_errors.txt").write_text(
         "\n".join(errors) + ("\n" if errors else ""),
         encoding="utf-8",
@@ -130,12 +133,16 @@ def _validate_split_frame(
     errors: list[str] = []
     if len(frame) != int(expected_size):
         errors.append(f"{split}: expected {expected_size} rows, found {len(frame)}")
-    truth_columns = [GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES]
+    truth_columns = [
+        GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES
+    ]
     missing_truth = [column for column in truth_columns if column not in frame.columns]
     if missing_truth:
         errors.append(f"{split}: missing truth columns {missing_truth}")
     else:
-        truth = frame[truth_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+        truth = (
+            frame[truth_columns].apply(pd.to_numeric, errors="coerce").to_numpy(float)
+        )
         if not np.isfinite(truth).all():
             errors.append(f"{split}: non-finite values in 18 truth columns")
     for band in bands:
@@ -144,11 +151,15 @@ def _validate_split_frame(
             if column not in frame.columns:
                 errors.append(f"{split}: missing {column}")
         if f"flux_true_{band}" in frame:
-            values = pd.to_numeric(frame[f"flux_true_{band}"], errors="coerce").to_numpy(float)
+            values = pd.to_numeric(
+                frame[f"flux_true_{band}"], errors="coerce"
+            ).to_numpy(float)
             if not np.isfinite(values).all():
                 errors.append(f"{split}: non-finite flux_true_{band}")
         if f"fluxerr_{band}" in frame and f"mask_{band}" in frame:
-            err = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(float)
+            err = pd.to_numeric(frame[f"fluxerr_{band}"], errors="coerce").to_numpy(
+                float
+            )
             mask = frame[f"mask_{band}"].astype(bool).to_numpy()
             if np.any(mask & (~np.isfinite(err) | (err <= 0.0))):
                 errors.append(f"{split}: invalid positive fluxerr for valid {band}")
@@ -173,7 +184,7 @@ def _validate_disjoint_identity(split_frames: dict[str, pd.DataFrame]) -> list[s
         if "source_proposal_id" in frame
     }
     for left_index, left in enumerate(SPLIT_ORDER):
-        for right in SPLIT_ORDER[left_index + 1:]:
+        for right in SPLIT_ORDER[left_index + 1 :]:
             if object_sets.get(left, set()) & object_sets.get(right, set()):
                 errors.append(f"object_id collision between {left} and {right}")
             if proposal_sets.get(left, set()) & proposal_sets.get(right, set()):
@@ -181,7 +192,9 @@ def _validate_disjoint_identity(split_frames: dict[str, pd.DataFrame]) -> list[s
     return errors
 
 
-def _validate_weighted_nz(root: Path, split_frames: dict[str, pd.DataFrame]) -> list[str]:
+def _validate_weighted_nz(
+    root: Path, split_frames: dict[str, pd.DataFrame]
+) -> list[str]:
     errors: list[str] = []
     manifest = _read_manifest(root / "manifest.yaml")
     gen_cfg = dict(manifest.get("synthetic_diffsky", {}) or {})
@@ -198,7 +211,9 @@ def _validate_weighted_nz(root: Path, split_frames: dict[str, pd.DataFrame]) -> 
         if not paths:
             errors.append(f"{split}: no proposal shards found for weighted n(z)")
             continue
-        proposals = pd.concat([pd.read_parquet(path) for path in paths], ignore_index=True)
+        proposals = pd.concat(
+            [pd.read_parquet(path) for path in paths], ignore_index=True
+        )
         if not {"redshift_true", "galaxy_weight"} <= set(proposals.columns):
             errors.append(f"{split}: proposals missing redshift_true/galaxy_weight")
             continue
@@ -208,7 +223,9 @@ def _validate_weighted_nz(root: Path, split_frames: dict[str, pd.DataFrame]) -> 
             errors.append(f"{split}: proposal selection failed for n(z): {exc}")
             continue
         if len(proposals) == 0:
-            errors.append(f"{split}: proposal selection leaves no rows for weighted n(z)")
+            errors.append(
+                f"{split}: proposal selection leaves no rows for weighted n(z)"
+            )
             continue
         prop_z = proposals["redshift_true"].to_numpy(float)
         weights = proposals["galaxy_weight"].to_numpy(float)
@@ -323,7 +340,9 @@ def _metallicity_population_report(
         expected = frame["lgmet_abs_used_true"].to_numpy(float) - np.log10(z_sun)
         valid = np.isfinite(expected) & np.isfinite(met)
         if valid.any():
-            max_abs_conversion_delta = float(np.max(np.abs(expected[valid] - met[valid])))
+            max_abs_conversion_delta = float(
+                np.max(np.abs(expected[valid] - met[valid]))
+            )
             if max_abs_conversion_delta > 1.0e-6:
                 errors.append(
                     "log10_stellar_metallicity_true is inconsistent with "
@@ -339,11 +358,7 @@ def _metallicity_population_report(
         "out_of_bounds_count": out_of_bounds_count,
         "max_abs_conversion_delta": max_abs_conversion_delta,
         "pass": ok,
-        "message": (
-            "metallicity population checks pass"
-            if ok
-            else "; ".join(errors)
-        ),
+        "message": ("metallicity population checks pass" if ok else "; ".join(errors)),
     }
 
 
@@ -357,7 +372,11 @@ def _photometric_selection_report(
     min_true = int(selection["min_true_snr_bands"])
     min_observed = int(selection["min_observed_snr_bands"])
     if min_true <= 0 and min_observed <= 0:
-        return {"enabled": False, "pass": True, "message": "no S/N selection configured"}
+        return {
+            "enabled": False,
+            "pass": True,
+            "message": "no S/N selection configured",
+        }
     errors: list[str] = []
     if "n_bands_true_snr_ge_threshold" not in frame:
         errors.append("missing n_bands_true_snr_ge_threshold")
@@ -383,26 +402,28 @@ def _photometric_selection_report(
         "snr_threshold": float(selection["snr_threshold"]),
         "min_true_snr_bands": min_true,
         "min_observed_snr_bands": min_observed,
-        "true_snr_band_count_min": float(np.min(true_counts))
-        if true_counts.size
-        else float("nan"),
-        "true_snr_band_count_median": float(np.median(true_counts))
-        if true_counts.size
-        else float("nan"),
-        "observed_snr_band_count_min": float(np.min(observed_counts))
-        if observed_counts.size
-        else float("nan"),
-        "observed_snr_band_count_median": float(np.median(observed_counts))
-        if observed_counts.size
-        else float("nan"),
+        "true_snr_band_count_min": (
+            float(np.min(true_counts)) if true_counts.size else float("nan")
+        ),
+        "true_snr_band_count_median": (
+            float(np.median(true_counts)) if true_counts.size else float("nan")
+        ),
+        "observed_snr_band_count_min": (
+            float(np.min(observed_counts)) if observed_counts.size else float("nan")
+        ),
+        "observed_snr_band_count_median": (
+            float(np.median(observed_counts)) if observed_counts.size else float("nan")
+        ),
         "pass": not errors,
-        "message": "photometric S/N selection checks pass"
-        if not errors
-        else "; ".join(errors),
+        "message": (
+            "photometric S/N selection checks pass" if not errors else "; ".join(errors)
+        ),
     }
 
 
-def _ssp_relative_metallicity_bounds(config: dict[str, Any]) -> tuple[float, float] | None:
+def _ssp_relative_metallicity_bounds(
+    config: dict[str, Any],
+) -> tuple[float, float] | None:
     path = Path(str(config.get("ssp_path", "")))
     if not path.exists():
         return None
@@ -469,12 +490,16 @@ def _recompute_flux_report(
     rel_flux = []
     for index, band in enumerate(bands):
         if f"mag_true_{band}" in sample:
-            deltas.append(np.abs(mag[:, index] - sample[f"mag_true_{band}"].to_numpy(float)))
+            deltas.append(
+                np.abs(mag[:, index] - sample[f"mag_true_{band}"].to_numpy(float))
+            )
         flux = np.asarray(abmag_to_fnu_cgs(mag[:, index]), dtype=float)
         old = sample[f"flux_true_{band}"].to_numpy(float)
         rel_flux.append(np.abs(flux - old) / np.maximum(np.abs(old), 1.0e-300))
     max_abs_delta_mag = float(np.max(np.concatenate(deltas))) if deltas else 0.0
-    max_relative_flux_error = float(np.max(np.concatenate(rel_flux))) if rel_flux else 0.0
+    max_relative_flux_error = (
+        float(np.max(np.concatenate(rel_flux))) if rel_flux else 0.0
+    )
     delta_mag_tolerance = 5.0e-4
     relative_flux_tolerance = 5.0e-4
     ok = bool(
