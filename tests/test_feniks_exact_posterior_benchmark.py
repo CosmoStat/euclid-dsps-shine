@@ -91,7 +91,7 @@ def test_exact_wrappers_avoid_unreliable_jobscratch_and_use_headless_plots() -> 
     chain = (ROOT / "scripts" / "feniks_exact_chain_h100.slurm").read_text()
     finalize = (ROOT / "scripts" / "feniks_exact_finalize_h100.slurm").read_text()
     assert "MPLBACKEND=Agg" in prepare
-    assert "JAX_ENABLE_X64=false" in chain
+    assert "JAX_ENABLE_X64=true" in chain
     assert "MPLBACKEND=Agg" in finalize
 
 

@@ -152,10 +152,11 @@ def run_nuts_chain(
     resume: bool = True,
 ) -> dict[str, Any]:
     """Adapt and sample one resumable BlackJAX NUTS chain."""
-    _enforce_float32_sampling()
+    _enforce_float64_sampling()
     import blackjax
 
-    sampling_logdensity = _float32_logdensity(logdensity_fn)
+    sampling_logdensity = _float64_logdensity(logdensity_fn)
+    initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
     _validate_chunks(settings.sample_chunks)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -167,12 +168,14 @@ def run_nuts_chain(
     started = time.perf_counter()
     if resume and state_path.exists() and params_path.exists():
         payload = _read_pickle(state_path)
-        state = payload["state"]
+        state = _float64_sampling_state(payload["state"])
         key = payload["key"]
         params_np = np.load(params_path)
         parameters = {
-            "step_size": jnp.asarray(params_np["step_size"]),
-            "inverse_mass_matrix": jnp.asarray(params_np["inverse_mass_matrix"]),
+            "step_size": jnp.asarray(params_np["step_size"], dtype=jnp.float64),
+            "inverse_mass_matrix": jnp.asarray(
+                params_np["inverse_mass_matrix"], dtype=jnp.float64
+            ),
         }
         warmup_elapsed = float(payload.get("warmup_elapsed_s", 0.0))
     else:
@@ -183,11 +186,12 @@ def run_nuts_chain(
             target_acceptance_rate=float(settings.target_accept),
             progress_bar=False,
             max_num_doublings=int(settings.max_num_doublings),
+            initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
         )
         warmup_started = time.perf_counter()
         (state, parameters), adaptation_info = adaptation.run(
             warmup_key,
-            jnp.asarray(initial_position, dtype=jnp.float32),
+            initial_position,
             int(settings.warmup_steps),
         )
         jax.block_until_ready(state.position)
@@ -254,6 +258,7 @@ def run_nuts_chain(
         chunks.append(_chunk_record(chunk_id, n_samples, chunk_path, info_path))
     manifest = {
         "sampler": "nuts",
+        "sampling_dtype": "float64",
         "seed": int(seed),
         "warmup_steps": int(settings.warmup_steps),
         "target_accept": float(settings.target_accept),
@@ -279,11 +284,12 @@ def run_adjusted_mclmc_chain(
     resume: bool = True,
 ) -> dict[str, Any]:
     """Adapt and sample one resumable Metropolis-adjusted MCLMC chain."""
-    _enforce_float32_sampling()
+    _enforce_float64_sampling()
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
-    sampling_logdensity = _float32_logdensity(logdensity_fn)
+    sampling_logdensity = _float64_logdensity(logdensity_fn)
+    initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
     _validate_chunks(settings.sample_chunks)
     if int(settings.thinning) <= 0:
         raise ValueError("MCLMC thinning must be positive")
@@ -297,24 +303,26 @@ def run_adjusted_mclmc_chain(
     started = time.perf_counter()
     if resume and state_path.exists() and params_path.exists():
         payload = _read_pickle(state_path)
-        state = payload["state"]
+        state = _float64_sampling_state(payload["state"])
         key = payload["key"]
         saved = np.load(params_path)
         parameters = {
-            "L": jnp.asarray(saved["L"]),
-            "step_size": jnp.asarray(saved["step_size"]),
-            "inverse_mass_matrix": jnp.asarray(saved["inverse_mass_matrix"]),
+            "L": jnp.asarray(saved["L"], dtype=jnp.float64),
+            "step_size": jnp.asarray(saved["step_size"], dtype=jnp.float64),
+            "inverse_mass_matrix": jnp.asarray(
+                saved["inverse_mass_matrix"], dtype=jnp.float64
+            ),
         }
         warmup_elapsed = float(payload.get("warmup_elapsed_s", 0.0))
         tuning_integrator_steps = int(payload.get("tuning_integrator_steps", 0))
     else:
         state = blackjax.mcmc.adjusted_mclmc.init(
-            jnp.asarray(initial_position, dtype=jnp.float32), sampling_logdensity
+            initial_position, sampling_logdensity
         )
         initial_params = MCLMCAdaptationState(
-            L=jnp.asarray(max(math.sqrt(dim), 1.0), dtype=jnp.float32),
-            step_size=jnp.asarray(settings.initial_step_size, dtype=jnp.float32),
-            inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float32),
+            L=jnp.asarray(max(math.sqrt(dim), 1.0), dtype=jnp.float64),
+            step_size=jnp.asarray(settings.initial_step_size, dtype=jnp.float64),
+            inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float64),
         )
 
         def adaptation_kernel(
@@ -440,6 +448,7 @@ def run_adjusted_mclmc_chain(
     stored = int(sum(settings.sample_chunks))
     manifest = {
         "sampler": "adjusted_mclmc",
+        "sampling_dtype": "float64",
         "seed": int(seed),
         "tune_steps": int(settings.tune_steps),
         "actual_tuning_integrator_steps": int(tuning_integrator_steps),
@@ -478,11 +487,12 @@ def run_unadjusted_mclmc_chain(
     resume: bool = True,
 ) -> dict[str, Any]:
     """Run an explicitly labelled unadjusted MCLMC diagnostic chain."""
-    _enforce_float32_sampling()
+    _enforce_float64_sampling()
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
-    sampling_logdensity = _float32_logdensity(logdensity_fn)
+    sampling_logdensity = _float64_logdensity(logdensity_fn)
+    initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
     _validate_chunks(settings.sample_chunks)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -494,26 +504,28 @@ def run_unadjusted_mclmc_chain(
     started = time.perf_counter()
     if resume and state_path.exists() and params_path.exists():
         payload = _read_pickle(state_path)
-        state = payload["state"]
+        state = _float64_sampling_state(payload["state"])
         key = payload["key"]
         saved = np.load(params_path)
         parameters = {
-            "L": jnp.asarray(saved["L"]),
-            "step_size": jnp.asarray(saved["step_size"]),
-            "inverse_mass_matrix": jnp.asarray(saved["inverse_mass_matrix"]),
+            "L": jnp.asarray(saved["L"], dtype=jnp.float64),
+            "step_size": jnp.asarray(saved["step_size"], dtype=jnp.float64),
+            "inverse_mass_matrix": jnp.asarray(
+                saved["inverse_mass_matrix"], dtype=jnp.float64
+            ),
         }
         warmup_elapsed = float(payload.get("warmup_elapsed_s", 0.0))
         tuning_integrator_steps = int(payload.get("tuning_integrator_steps", 0))
     else:
         state = blackjax.mcmc.mclmc.init(
-            jnp.asarray(initial_position, dtype=jnp.float32),
+            initial_position,
             sampling_logdensity,
             init_key,
         )
         initial_params = MCLMCAdaptationState(
-            L=jnp.asarray(max(math.sqrt(dim), 1.0), dtype=jnp.float32),
-            step_size=jnp.asarray(settings.initial_step_size, dtype=jnp.float32),
-            inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float32),
+            L=jnp.asarray(max(math.sqrt(dim), 1.0), dtype=jnp.float64),
+            step_size=jnp.asarray(settings.initial_step_size, dtype=jnp.float64),
+            inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float64),
         )
 
         def kernel_factory(inverse_mass_matrix):
@@ -610,6 +622,7 @@ def run_unadjusted_mclmc_chain(
     stored = int(sum(settings.sample_chunks))
     manifest = {
         "sampler": "unadjusted_mclmc",
+        "sampling_dtype": "float64",
         "scientific_role": "efficiency_and_energy_diagnostic_only",
         "seed": int(seed),
         "tune_steps": int(settings.tune_steps),
@@ -810,24 +823,55 @@ def _info_columns(infos, n_rows: int) -> dict[str, np.ndarray]:
     return result
 
 
-def _float32_logdensity(
+def _float64_logdensity(
     logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
 ) -> Callable[[jnp.ndarray], jnp.ndarray]:
     """Keep BlackJAX states and target gradients on one explicit dtype."""
 
     def wrapped(position):
-        value = logdensity_fn(jnp.asarray(position, dtype=jnp.float32))
-        return jnp.asarray(value, dtype=jnp.float32)
+        value = logdensity_fn(jnp.asarray(position, dtype=jnp.float64))
+        return jnp.asarray(value, dtype=jnp.float64)
 
     return wrapped
 
 
-def _enforce_float32_sampling() -> None:
-    """Disable JAX x64 before BlackJAX constructs any adaptation state."""
-    if jax.config.x64_enabled:
-        jax.config.update("jax_enable_x64", False)
-    if jax.config.x64_enabled:
-        raise RuntimeError("BlackJAX benchmark requires jax_enable_x64=False")
+def _enforce_float64_sampling() -> None:
+    """Enable x64 before BlackJAX constructs any adaptation state."""
+    if not jax.config.x64_enabled:
+        jax.config.update("jax_enable_x64", True)
+    if not jax.config.x64_enabled:
+        raise RuntimeError("BlackJAX benchmark requires jax_enable_x64=True")
+
+
+def _validate_sampling_target(
+    logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    initial_position: jnp.ndarray,
+) -> jnp.ndarray:
+    """Compile one target evaluation and reject mixed sampler dtypes early."""
+    position = jnp.asarray(initial_position, dtype=jnp.float64)
+    value, gradient = jax.value_and_grad(logdensity_fn)(position)
+    value, gradient = jax.device_get((value, gradient))
+    if np.asarray(value).dtype != np.dtype(np.float64):
+        raise TypeError(f"logdensity dtype must be float64, got {np.asarray(value).dtype}")
+    if np.asarray(gradient).dtype != np.dtype(np.float64):
+        raise TypeError(
+            f"logdensity gradient dtype must be float64, got {np.asarray(gradient).dtype}"
+        )
+    if not np.isfinite(np.asarray(value)).all() or not np.isfinite(gradient).all():
+        raise ValueError("Initial sampling target value and gradient must be finite")
+    return position
+
+
+def _float64_sampling_state(state: Any) -> Any:
+    """Promote floating leaves in a resumed BlackJAX state to float64."""
+
+    def promote(value):
+        array = jnp.asarray(value)
+        if jnp.issubdtype(array.dtype, jnp.floating):
+            return array.astype(jnp.float64)
+        return value
+
+    return jax.tree.map(promote, state)
 
 
 def _validate_mclmc_parameters(

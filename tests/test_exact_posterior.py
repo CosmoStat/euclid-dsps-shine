@@ -11,7 +11,7 @@ import pytest
 from euclid_dsps.amortized.exact_posterior import (
     MCLMCSettings,
     NUTSSettings,
-    _float32_logdensity,
+    _float64_logdensity,
     combine_chain_diagnostics,
     normalized_importance_weights,
     run_adjusted_mclmc_chain,
@@ -105,30 +105,31 @@ def test_adjusted_mclmc_uses_real_thinning_and_valid_step_size(
     assert manifest["integrator_steps_after_warmup"] >= 48
 
 
-def test_samplers_coerce_a_float64_target_to_float32(tmp_path: Path) -> None:
+def test_samplers_promote_a_float32_target_to_float64(tmp_path: Path) -> None:
     pytest.importorskip("blackjax")
 
-    jax.config.update("jax_enable_x64", True)
+    jax.config.update("jax_enable_x64", False)
 
-    def float64_logdensity(x):
-        value = x.astype(jnp.float64) if jax.config.x64_enabled else x
+    def float32_logdensity(x):
+        value = x.astype(jnp.float32)
         return -0.5 * jnp.sum(value**2)
 
-    wrapped = _float32_logdensity(float64_logdensity)
-    position = jnp.array([0.1, -0.2], dtype=jnp.float32)
-    assert wrapped(position).dtype == jnp.float32
-    assert jax.grad(wrapped)(position).dtype == jnp.float32
+    jax.config.update("jax_enable_x64", True)
+    wrapped = _float64_logdensity(float32_logdensity)
+    position = jnp.array([0.1, -0.2], dtype=jnp.float64)
+    assert wrapped(position).dtype == jnp.float64
+    assert jax.grad(wrapped)(position).dtype == jnp.float64
 
     try:
         nuts = run_nuts_chain(
-            float64_logdensity,
+            float32_logdensity,
             jnp.array([0.1, -0.2], dtype=jnp.float32),
             seed=51,
             settings=NUTSSettings(warmup_steps=20, sample_chunks=(4,)),
             out_dir=tmp_path / "nuts_mixed_dtype",
         )
         mclmc = run_adjusted_mclmc_chain(
-            float64_logdensity,
+            float32_logdensity,
             jnp.array([0.1, -0.2], dtype=jnp.float32),
             seed=52,
             settings=MCLMCSettings(
@@ -143,4 +144,5 @@ def test_samplers_coerce_a_float64_target_to_float32(tmp_path: Path) -> None:
 
     assert nuts["stored_samples"] == 4
     assert mclmc["stored_samples"] == 4
-    assert jax.config.x64_enabled is False
+    assert nuts["sampling_dtype"] == "float64"
+    assert mclmc["sampling_dtype"] == "float64"
