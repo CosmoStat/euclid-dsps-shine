@@ -108,18 +108,18 @@ def test_adjusted_mclmc_uses_real_thinning_and_valid_step_size(
 def test_samplers_coerce_a_float64_target_to_float32(tmp_path: Path) -> None:
     pytest.importorskip("blackjax")
 
-    with jax.enable_x64():
+    jax.config.update("jax_enable_x64", True)
 
-        def float64_logdensity(x):
-            value = x.astype(jnp.float64) if jax.config.x64_enabled else x
-            return -0.5 * jnp.sum(value**2)
+    def float64_logdensity(x):
+        value = x.astype(jnp.float64) if jax.config.x64_enabled else x
+        return -0.5 * jnp.sum(value**2)
 
-        wrapped = _float32_logdensity(float64_logdensity)
-        position = jnp.array([0.1, -0.2], dtype=jnp.float32)
-        assert wrapped(position).dtype == jnp.float32
-        assert jax.grad(wrapped)(position).dtype == jnp.float32
+    wrapped = _float32_logdensity(float64_logdensity)
+    position = jnp.array([0.1, -0.2], dtype=jnp.float32)
+    assert wrapped(position).dtype == jnp.float32
+    assert jax.grad(wrapped)(position).dtype == jnp.float32
 
-    with jax.enable_x64(False):
+    try:
         nuts = run_nuts_chain(
             float64_logdensity,
             jnp.array([0.1, -0.2], dtype=jnp.float32),
@@ -138,6 +138,9 @@ def test_samplers_coerce_a_float64_target_to_float32(tmp_path: Path) -> None:
             ),
             out_dir=tmp_path / "mclmc_mixed_dtype",
         )
+    finally:
+        jax.config.update("jax_enable_x64", False)
 
     assert nuts["stored_samples"] == 4
     assert mclmc["stored_samples"] == 4
+    assert jax.config.x64_enabled is False

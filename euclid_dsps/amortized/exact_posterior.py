@@ -152,6 +152,7 @@ def run_nuts_chain(
     resume: bool = True,
 ) -> dict[str, Any]:
     """Adapt and sample one resumable BlackJAX NUTS chain."""
+    _enforce_float32_sampling()
     import blackjax
 
     sampling_logdensity = _float32_logdensity(logdensity_fn)
@@ -278,6 +279,7 @@ def run_adjusted_mclmc_chain(
     resume: bool = True,
 ) -> dict[str, Any]:
     """Adapt and sample one resumable Metropolis-adjusted MCLMC chain."""
+    _enforce_float32_sampling()
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
@@ -476,6 +478,7 @@ def run_unadjusted_mclmc_chain(
     resume: bool = True,
 ) -> dict[str, Any]:
     """Run an explicitly labelled unadjusted MCLMC diagnostic chain."""
+    _enforce_float32_sampling()
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
@@ -817,6 +820,14 @@ def _float32_logdensity(
         return jnp.asarray(value, dtype=jnp.float32)
 
     return wrapped
+
+
+def _enforce_float32_sampling() -> None:
+    """Disable JAX x64 before BlackJAX constructs any adaptation state."""
+    if jax.config.x64_enabled:
+        jax.config.update("jax_enable_x64", False)
+    if jax.config.x64_enabled:
+        raise RuntimeError("BlackJAX benchmark requires jax_enable_x64=False")
 
 
 def _validate_mclmc_parameters(
