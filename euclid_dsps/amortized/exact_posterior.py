@@ -154,6 +154,7 @@ def run_nuts_chain(
     """Adapt and sample one resumable BlackJAX NUTS chain."""
     import blackjax
 
+    sampling_logdensity = _float32_logdensity(logdensity_fn)
     _validate_chunks(settings.sample_chunks)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -176,7 +177,7 @@ def run_nuts_chain(
     else:
         adaptation = blackjax.window_adaptation(
             blackjax.nuts,
-            logdensity_fn,
+            sampling_logdensity,
             is_mass_matrix_diagonal=True,
             target_acceptance_rate=float(settings.target_accept),
             progress_bar=False,
@@ -214,7 +215,7 @@ def run_nuts_chain(
             },
         )
     algorithm = blackjax.nuts(
-        logdensity_fn,
+        sampling_logdensity,
         step_size=parameters["step_size"],
         inverse_mass_matrix=parameters["inverse_mass_matrix"],
         max_num_doublings=int(settings.max_num_doublings),
@@ -280,6 +281,7 @@ def run_adjusted_mclmc_chain(
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
+    sampling_logdensity = _float32_logdensity(logdensity_fn)
     _validate_chunks(settings.sample_chunks)
     if int(settings.thinning) <= 0:
         raise ValueError("MCLMC thinning must be positive")
@@ -305,7 +307,7 @@ def run_adjusted_mclmc_chain(
         tuning_integrator_steps = int(payload.get("tuning_integrator_steps", 0))
     else:
         state = blackjax.mcmc.adjusted_mclmc.init(
-            jnp.asarray(initial_position, dtype=jnp.float32), logdensity_fn
+            jnp.asarray(initial_position, dtype=jnp.float32), sampling_logdensity
         )
         initial_params = MCLMCAdaptationState(
             L=jnp.asarray(max(math.sqrt(dim), 1.0), dtype=jnp.float32),
@@ -321,7 +323,7 @@ def run_adjusted_mclmc_chain(
             inverse_mass_matrix,
         ):
             kernel = blackjax.mcmc.adjusted_mclmc.build_kernel(
-                logdensity_fn,
+                sampling_logdensity,
                 inverse_mass_matrix=inverse_mass_matrix,
             )
             integration_steps = jnp.maximum(
@@ -392,7 +394,7 @@ def run_adjusted_mclmc_chain(
         ),
     )
     algorithm = blackjax.adjusted_mclmc(
-        logdensity_fn,
+        sampling_logdensity,
         step_size=parameters["step_size"],
         inverse_mass_matrix=parameters["inverse_mass_matrix"],
         num_integration_steps=integration_steps,
@@ -477,6 +479,7 @@ def run_unadjusted_mclmc_chain(
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
+    sampling_logdensity = _float32_logdensity(logdensity_fn)
     _validate_chunks(settings.sample_chunks)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -501,7 +504,7 @@ def run_unadjusted_mclmc_chain(
     else:
         state = blackjax.mcmc.mclmc.init(
             jnp.asarray(initial_position, dtype=jnp.float32),
-            logdensity_fn,
+            sampling_logdensity,
             init_key,
         )
         initial_params = MCLMCAdaptationState(
@@ -512,7 +515,7 @@ def run_unadjusted_mclmc_chain(
 
         def kernel_factory(inverse_mass_matrix):
             return blackjax.mcmc.mclmc.build_kernel(
-                logdensity_fn=logdensity_fn,
+                logdensity_fn=sampling_logdensity,
                 inverse_mass_matrix=inverse_mass_matrix,
                 integrator=blackjax.mcmc.integrators.isokinetic_mclachlan,
                 desired_energy_var=float(settings.desired_energy_var),
@@ -564,7 +567,7 @@ def run_unadjusted_mclmc_chain(
             },
         )
     _validate_mclmc_parameters(parameters, settings)
-    algorithm = blackjax.mclmc(logdensity_fn, **parameters)
+    algorithm = blackjax.mclmc(sampling_logdensity, **parameters)
     chunks = []
     for chunk_id, n_samples in enumerate(settings.sample_chunks):
         chunk_path = out / "chunks" / f"part_{chunk_id:06d}.parquet"
@@ -802,6 +805,18 @@ def _info_columns(infos, n_rows: int) -> dict[str, np.ndarray]:
     if not result:
         result["valid"] = np.ones(n_rows, dtype=bool)
     return result
+
+
+def _float32_logdensity(
+    logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
+) -> Callable[[jnp.ndarray], jnp.ndarray]:
+    """Keep BlackJAX states and target gradients on one explicit dtype."""
+
+    def wrapped(position):
+        value = logdensity_fn(jnp.asarray(position, dtype=jnp.float32))
+        return jnp.asarray(value, dtype=jnp.float32)
+
+    return wrapped
 
 
 def _validate_mclmc_parameters(

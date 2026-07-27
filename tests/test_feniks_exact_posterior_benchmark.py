@@ -70,6 +70,12 @@ def test_smoke_and_full_submission_topology_is_dependency_gated() -> None:
     assert '--dependency="afterok:$full_nuts:$full_mclmc"' in full
     assert "requested_upper_bound_h100_hours=825.00" in full
     assert "SMOKE_ROOT" in full
+    recovery = (
+        ROOT / "scripts" / "submit_feniks_exact_posterior_smoke_recovery.sh"
+    ).read_text()
+    assert "PREP_DONE" in recovery
+    assert "feniks_exact_prepare_h100.slurm" not in recovery
+    assert '--dependency="afterok:$nuts:$mclmc"' in recovery
 
 
 def test_exact_wrappers_avoid_unreliable_jobscratch_and_use_headless_plots() -> None:
@@ -82,8 +88,10 @@ def test_exact_wrappers_avoid_unreliable_jobscratch_and_use_headless_plots() -> 
         assert "JOBSCRATCH" not in content
         assert "module load arch/h100" in content
     prepare = (ROOT / "scripts" / "feniks_exact_prepare_h100.slurm").read_text()
+    chain = (ROOT / "scripts" / "feniks_exact_chain_h100.slurm").read_text()
     finalize = (ROOT / "scripts" / "feniks_exact_finalize_h100.slurm").read_text()
     assert "MPLBACKEND=Agg" in prepare
+    assert "JAX_ENABLE_X64=false" in chain
     assert "MPLBACKEND=Agg" in finalize
 
 
