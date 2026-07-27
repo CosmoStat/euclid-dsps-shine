@@ -68,7 +68,16 @@ from euclid_dsps.model import (
     load_context,
     predict_batch_seds,
 )
-from scripts.generate_feniks_individual_posteriors import select_representative_rows
+
+try:
+    from scripts.generate_feniks_individual_posteriors import select_representative_rows
+except ModuleNotFoundError as error:
+    if error.name not in {
+        "scripts",
+        "scripts.generate_feniks_individual_posteriors",
+    }:
+        raise
+    from generate_feniks_individual_posteriors import select_representative_rows
 
 
 @dataclass

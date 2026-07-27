@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +10,25 @@ from scripts.run_feniks_exact_posterior_benchmark import _write_run_comparison
 from scripts.select_feniks_mclmc_pilot import CONFIGS
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_runner_can_be_executed_as_a_direct_script() -> None:
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "run_feniks_exact_posterior_benchmark.py"),
+            "--help",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "prepare-cohort" in result.stdout
 
 
 def test_pilot_grid_contains_nuts_agreement_and_unadjusted_energy_controls() -> None:

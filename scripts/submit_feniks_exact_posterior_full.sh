@@ -13,6 +13,7 @@ STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 
 cd "$REPO_DIR"
 mkdir -p outputs/logs
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 test -f "$SMOKE_ROOT/DONE" || {
   echo "[exact-full][error] smoke is not complete: $SMOKE_ROOT/DONE"
   exit 2

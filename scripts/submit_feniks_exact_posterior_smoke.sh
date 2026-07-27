@@ -12,6 +12,7 @@ ROOT_DIR="${ROOT_DIR:-outputs/runs/feniks_exact_posterior_smoke_${STAMP}}"
 
 cd "$REPO_DIR"
 mkdir -p outputs/logs
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 for path in "$CONFIG" "$DATASET" "$CHECKPOINT" "${CHECKPOINT}.json" "$FEATURE_STATS"; do
   test -s "$path" || { echo "[exact-smoke][error] missing $path"; exit 2; }
 done
