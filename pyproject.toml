@@ -56,7 +56,8 @@ docs = [
 euclid-dsps = "euclid_dsps.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["euclid_dsps*"]
+include = ["euclid_dsps", "euclid_dsps.*"]
+exclude = ["euclid_dsps_shine.egg-info*"]
 
 [tool.black]
 line-length = 88

@@ -32,7 +32,7 @@ asset generation:
    export SPS_HOME="$HOME/src/fsps"
    git clone https://github.com/cconroy20/fsps.git "$SPS_HOME"
 
-   cd /home/maxime/src/DSPS
+   cd /path/to/euclid-dsps-shine
    export SPS_HOME="$HOME/src/fsps"
    python -m pip install fsps
 

@@ -598,7 +598,10 @@ def _truth_frame() -> pd.DataFrame:
 def _write_synthetic_ssp(path) -> None:
     wave = np.linspace(1000.0, 12000.0, 48).astype(np.float32)
     lg_age = np.linspace(-3.0, 0.9, 16).astype(np.float32)
-    lgmet = np.asarray([-2.0, -1.4, -0.8, -0.2, 0.2], dtype=np.float32)
+    lgmet = np.asarray(
+        [-3.0, -2.5, -2.0, -1.4, -0.8, -0.2, 0.2],
+        dtype=np.float32,
+    )
     met_factor = np.linspace(0.8, 1.2, len(lgmet))[:, None, None]
     age_factor = np.linspace(1.5, 0.5, len(lg_age))[None, :, None]
     wave_factor = (1.0 + 0.2 * wave / wave.max())[None, None, :]

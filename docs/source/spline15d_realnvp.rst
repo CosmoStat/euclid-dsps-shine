@@ -112,11 +112,11 @@ small end-to-end smoke test uses separate output directories:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,SMOKE=1,\
-GROUPED_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_grouped_v3_smoke,\
-SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3_smoke,\
-OUT_DIR=outputs/runs/feniks_spline15d_realnvp_whitened_v3_smoke \
-     scripts/feniks_spline15d_whitened_realnvp_h100.slurm
+   export SMOKE=1
+   export GROUPED_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_grouped_v3_smoke
+   export SPLINE_DATASET_DIR=Data/diffsky/synthetic/feniks_260617_spline15d_grouped_v3_smoke
+   export OUT_DIR=outputs/runs/feniks_spline15d_realnvp_whitened_v3_smoke
+   sbatch --export=ALL scripts/feniks_spline15d_whitened_realnvp_h100.slurm
 
 After the smoke job succeeds, launch the single production job:
 
@@ -164,9 +164,9 @@ Run a short smoke test without rebuilding the dataset:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,SMOKE=1,\
-OUT_DIR=outputs/runs/feniks_spline15d_realnvp_shifted_v4_smoke \
-     scripts/feniks_spline15d_shifted_realnvp_h100.slurm
+   export SMOKE=1
+   export OUT_DIR=outputs/runs/feniks_spline15d_realnvp_shifted_v4_smoke
+   sbatch --export=ALL scripts/feniks_spline15d_shifted_realnvp_h100.slurm
 
 Then run production:
 
@@ -263,9 +263,9 @@ Run a two-epoch integration smoke without rebuilding the dataset:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,SMOKE=1,\
-OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_smoke \
-     scripts/feniks_spline15d_v6_positive_support_h100.slurm
+   export SMOKE=1
+   export OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_smoke
+   sbatch --export=ALL scripts/feniks_spline15d_v6_positive_support_h100.slurm
 
 Then launch the single production job:
 
@@ -301,11 +301,10 @@ For the interrupted V6 run, resume from epoch 155 with:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,\
-RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support/snapshots/epoch_155/checkpoint.eqx,\
-OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume155,\
-LEARNING_RATE=0.00001 \
-     scripts/feniks_spline15d_v6_positive_support_h100.slurm
+   export RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support/snapshots/epoch_155/checkpoint.eqx
+   export OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume155
+   export LEARNING_RATE=0.00001
+   sbatch --export=ALL scripts/feniks_spline15d_v6_positive_support_h100.slurm
 
 If validation NLL is still improving at the target epoch, ``TARGET_EPOCHS``
 extends the same checkpoint continuation without changing the YAML. For
@@ -314,8 +313,8 @@ learning rate:
 
 .. code-block:: bash
 
-   sbatch --export=ALL,\
-RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support_resume155/checkpoints/best.eqx,\
-OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume400_to800,\
-LEARNING_RATE=0.000005,TARGET_EPOCHS=800 \
-     scripts/feniks_spline15d_v6_positive_support_h100.slurm
+   export RESUME_CHECKPOINT=outputs/runs/feniks_spline15d_v6_positive_support_resume155/checkpoints/best.eqx
+   export OUT_DIR=outputs/runs/feniks_spline15d_v6_positive_support_resume400_to800
+   export LEARNING_RATE=0.000005
+   export TARGET_EPOCHS=800
+   sbatch --export=ALL scripts/feniks_spline15d_v6_positive_support_h100.slurm
