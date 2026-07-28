@@ -28,6 +28,10 @@ def test_ab_magnitude_flux_roundtrip() -> None:
 
 def test_microjy_conversions() -> None:
     assert math.isclose(microjy_to_flux_fnu_cgs(1.0), 1.0e-29)
+    np.testing.assert_allclose(
+        microjy_to_flux_fnu_cgs(np.array([1.0, 2.0])),
+        np.array([1.0e-29, 2.0e-29]),
+    )
     assert microjy_to_abmag(1.0) == pytest.approx(23.90006562228223)
     assert np.isnan(microjy_to_abmag(-1.0))
 

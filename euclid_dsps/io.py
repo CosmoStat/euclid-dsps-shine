@@ -282,9 +282,10 @@ def abmag_to_flux_fnu_cgs(mag: float) -> float:
     return float(abmag_to_fnu_cgs(mag))
 
 
-def microjy_to_flux_fnu_cgs(flux_microjy: float) -> float:
-    """Convert microJansky to F_nu in erg/s/cm^2/Hz."""
-    return float(microjy_to_fnu_cgs(flux_microjy))
+def microjy_to_flux_fnu_cgs(flux_microjy):
+    """Convert scalar or array microJansky to F_nu in erg/s/cm^2/Hz."""
+    converted = np.asarray(microjy_to_fnu_cgs(flux_microjy), dtype=float)
+    return float(converted) if converted.ndim == 0 else converted
 
 
 def microjy_to_abmag(flux_microjy: float) -> float:
