@@ -23,6 +23,8 @@ INSTALL="${INSTALL:-1}"
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-120}"
+export PIP_RETRIES="${PIP_RETRIES:-10}"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 
 cd "$REPO_DIR"
@@ -30,12 +32,25 @@ mkdir -p outputs/logs "$ASSET_DIR" "$PREPARED_DIR"
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
+pip_install_with_retry() {
+  local attempt
+  for attempt in 1 2 3; do
+    if python -m pip install \
+      --no-build-isolation --retries 10 --timeout 120 "$@"; then
+      return 0
+    fi
+    echo "[cosmos2020-prepost] pip attempt $attempt/3 failed" >&2
+    sleep $((attempt * 15))
+  done
+  return 1
+}
+
 if [[ "$INSTALL" == "1" ]]; then
-  python -m pip install -e '.[amortized,samplers,gpu]'
+  pip_install_with_retry -e '.[amortized,samplers,gpu]'
 fi
 python scripts/download_cosmos2020_assets.py --out "$ASSET_DIR"
 if [[ "$INSTALL" == "1" ]]; then
-  python -m pip install --no-deps -e "$ASSET_DIR/external/pop-cosmos"
+  pip_install_with_retry --no-deps -e "$ASSET_DIR/external/pop-cosmos"
   python - <<'PY'
 from pop_cosmos.constants import COSMOS_FILTERS
 if len(COSMOS_FILTERS) != 26:
