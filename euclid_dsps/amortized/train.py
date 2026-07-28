@@ -3413,7 +3413,9 @@ def _model_generated_sleep_loss(
         raise ValueError("reweighted_wake_sleep requires objective.sleep.enabled=true")
     prior_key, noise_key = jax.random.split(key)
     n_objects = int(batch.features.shape[0])
-    samples = jax.lax.stop_gradient(model.prior.sample(prior_key, n_objects))
+    candidate_factor = int(sleep.get("selection_candidate_factor", 1))
+    n_candidates = n_objects * max(candidate_factor, 1)
+    samples = jax.lax.stop_gradient(model.prior.sample(prior_key, n_candidates))
     safe_samples, physical_valid = _safe_decoder_inputs(samples, latent_spec)
     model_flux_raw = model_flux_from_x(
         safe_samples,
@@ -3441,6 +3443,27 @@ def _model_generated_sleep_loss(
         else model_flux
     )
     physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
+    selection_band_index = sleep.get("selection_band_index")
+    if selection_band_index is not None:
+        selection_flux_min = jnp.asarray(
+            sleep["selection_flux_min_fnu_cgs"], dtype=model_flux.dtype
+        )
+        physical_valid &= (
+            model_flux[:, int(selection_band_index)] > selection_flux_min
+        )
+        # Approximate rejection sampling with a fixed-shape candidate pool so
+        # the sleep step remains JIT-compatible. Prior draws are exchangeable;
+        # top_k selects up to n_objects valid draws without sorting by flux.
+        tie_break = jnp.linspace(
+            0.0, 1.0e-6, n_candidates, dtype=model_flux.dtype
+        )
+        _, selected = jax.lax.top_k(
+            physical_valid.astype(model_flux.dtype) + tie_break, n_objects
+        )
+        samples = jnp.take(samples, selected, axis=0)
+        model_flux_raw = jnp.take(model_flux_raw, selected, axis=0)
+        model_flux = jnp.take(model_flux, selected, axis=0)
+        physical_valid = jnp.take(physical_valid, selected, axis=0)
     flux_err = _sleep_m5_flux_error(model_flux, sleep)
     noise, noise_family = _sample_sleep_noise(
         noise_key,
@@ -3796,6 +3819,32 @@ def _sleep_runtime_config(
             np.asarray(feature_stats.err_scale, dtype=float).tolist()
         ),
         "flux_transform": str(feature_stats.flux_transform),
+        **_sleep_selection_config(sleep, bands),
+    }
+
+
+def _sleep_selection_config(
+    sleep: dict[str, Any], bands: tuple[str, ...]
+) -> dict[str, Any]:
+    """Resolve an optional hard flux selection for model-generated sleep pairs."""
+    selection = dict(sleep.get("selection", {}) or {})
+    if not bool(selection.get("enabled", False)):
+        return {}
+    band = str(selection.get("band", ""))
+    if band not in bands:
+        raise ValueError(
+            f"objective.sleep.selection.band={band!r} is not in configured bands"
+        )
+    threshold = float(selection.get("min_flux_fnu_cgs", np.nan))
+    if not np.isfinite(threshold):
+        raise ValueError(
+            "objective.sleep.selection.min_flux_fnu_cgs must be finite"
+        )
+    return {
+        "selection_band": band,
+        "selection_band_index": bands.index(band),
+        "selection_flux_min_fnu_cgs": threshold,
+        "selection_candidate_factor": int(selection.get("candidate_factor", 4)),
     }
 
 

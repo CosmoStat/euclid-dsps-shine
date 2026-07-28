@@ -1,0 +1,221 @@
+extends: ../fs2_gpu.yaml
+
+catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
+runtime: gpu
+column_groups: []
+extra_columns: [lp_zbest, r_abmag_mw_corrected]
+
+dataset:
+  name: cosmos2020_farmer_a24
+  id_column: object_id
+
+truth:
+  __replace__: true
+
+selection:
+  index: 0
+  require_positive_flux: false
+  nondetection_policy: gaussian_flux
+
+redshift:
+  initial: random_uniform
+  column:
+  truth_column:
+  fixed_value: 1.0
+  min: 0.0001
+  max: 4.5
+  seed: 260727
+  prior_z:
+    mode: none
+
+# SVO Filter Profile Service curves downloaded by download_cosmos2020_assets.py.
+bands:
+  - {name: u_megaprime_sagem, column: flux_u_megaprime_sagem, error_column: fluxerr_u_megaprime_sagem, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/u_megaprime_sagem.dat}}
+  - {name: hsc_g, column: flux_hsc_g, error_column: fluxerr_hsc_g, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_g.dat}}
+  - {name: hsc_r, column: flux_hsc_r, error_column: fluxerr_hsc_r, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_r.dat}}
+  - {name: hsc_i, column: flux_hsc_i, error_column: fluxerr_hsc_i, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_i.dat}}
+  - {name: hsc_z, column: flux_hsc_z, error_column: fluxerr_hsc_z, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_z.dat}}
+  - {name: hsc_y, column: flux_hsc_y, error_column: fluxerr_hsc_y, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_y.dat}}
+  - {name: uvista_y_cosmos, column: flux_uvista_y_cosmos, error_column: fluxerr_uvista_y_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_y_cosmos.dat}}
+  - {name: uvista_j_cosmos, column: flux_uvista_j_cosmos, error_column: fluxerr_uvista_j_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_j_cosmos.dat}}
+  - {name: uvista_h_cosmos, column: flux_uvista_h_cosmos, error_column: fluxerr_uvista_h_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_h_cosmos.dat}}
+  - {name: uvista_ks_cosmos, column: flux_uvista_ks_cosmos, error_column: fluxerr_uvista_ks_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_ks_cosmos.dat}}
+  - {name: ia427_cosmos, column: flux_ia427_cosmos, error_column: fluxerr_ia427_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia427_cosmos.dat}}
+  - {name: ia464_cosmos, column: flux_ia464_cosmos, error_column: fluxerr_ia464_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia464_cosmos.dat}}
+  - {name: ia484_cosmos, column: flux_ia484_cosmos, error_column: fluxerr_ia484_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia484_cosmos.dat}}
+  - {name: ia505_cosmos, column: flux_ia505_cosmos, error_column: fluxerr_ia505_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia505_cosmos.dat}}
+  - {name: ia527_cosmos, column: flux_ia527_cosmos, error_column: fluxerr_ia527_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia527_cosmos.dat}}
+  - {name: ia574_cosmos, column: flux_ia574_cosmos, error_column: fluxerr_ia574_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia574_cosmos.dat}}
+  - {name: ia624_cosmos, column: flux_ia624_cosmos, error_column: fluxerr_ia624_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia624_cosmos.dat}}
+  - {name: ia679_cosmos, column: flux_ia679_cosmos, error_column: fluxerr_ia679_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia679_cosmos.dat}}
+  - {name: ia709_cosmos, column: flux_ia709_cosmos, error_column: fluxerr_ia709_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia709_cosmos.dat}}
+  - {name: ia738_cosmos, column: flux_ia738_cosmos, error_column: fluxerr_ia738_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia738_cosmos.dat}}
+  - {name: ia767_cosmos, column: flux_ia767_cosmos, error_column: fluxerr_ia767_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia767_cosmos.dat}}
+  - {name: ia827_cosmos, column: flux_ia827_cosmos, error_column: fluxerr_ia827_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia827_cosmos.dat}}
+  - {name: NB711.SuprimeCam, column: flux_NB711.SuprimeCam, error_column: fluxerr_NB711.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB711.SuprimeCam.dat}}
+  - {name: NB816.SuprimeCam, column: flux_NB816.SuprimeCam, error_column: fluxerr_NB816.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB816.SuprimeCam.dat}}
+  - {name: irac1_cosmos, column: flux_irac1_cosmos, error_column: fluxerr_irac1_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/irac1_cosmos.dat}}
+  - {name: irac2_cosmos, column: flux_irac2_cosmos, error_column: fluxerr_irac2_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/irac2_cosmos.dat}}
+
+fit:
+  photometric_likelihood: student_t
+  student_t_dof: 2.0
+  flux_error_floor_frac: 0.0
+  flux_error_jitter: 0.0
+  free_parameters:
+    z_obs: {initial: 1.0, bounds: [0.0001, 4.5]}
+    log10_stellar_mass: {initial: 10.0, bounds: [7.0, 13.0]}
+    dlog10_sfr_1: {initial: 0.0, bounds: [-5.0, 5.0]}
+    dlog10_sfr_2: {initial: 0.0, bounds: [-5.0, 5.0]}
+    dlog10_sfr_3: {initial: 0.0, bounds: [-5.0, 5.0]}
+    dlog10_sfr_4: {initial: 0.0, bounds: [-5.0, 5.0]}
+    dlog10_sfr_5: {initial: 0.0, bounds: [-5.0, 5.0]}
+    dlog10_sfr_6: {initial: 0.0, bounds: [-5.0, 5.0]}
+    log10_stellar_metallicity: {initial: -0.5, bounds: [-1.98, 0.19]}
+    tau2: {initial: 0.3, bounds: [0.0, 4.0]}
+    dust_index_n: {initial: -0.7, bounds: [-1.0, 0.4]}
+    tau1_over_tau2: {initial: 1.0, bounds: [0.0, 2.0]}
+    log10_gas_metallicity: {initial: -0.5, bounds: [-2.0, 0.5]}
+    log10_gas_ionization: {initial: -2.0, bounds: [-4.0, -1.0]}
+    ln_fagn: {initial: -8.0, bounds: [-11.512925, 1.098612]}
+    ln_tauagn: {initial: 2.302585, bounds: [1.609438, 5.010635]}
+
+calibration:
+  per_band_zero_points:
+    enabled: true
+    mode: learn_per_band
+    trainable: true
+    prior_sigma_mag: 0.05
+
+# Approximate COSMOS2020 5-sigma depths used only for model-generated sleep
+# noise. Wake updates always use the Farmer per-object errors.
+synthetic_diffsky:
+  flux_error_model:
+    type: m5_depth
+    m5:
+      u_megaprime_sagem: 27.8
+      hsc_g: 27.8
+      hsc_r: 27.4
+      hsc_i: 27.3
+      hsc_z: 26.8
+      hsc_y: 26.2
+      uvista_y_cosmos: 26.6
+      uvista_j_cosmos: 26.4
+      uvista_h_cosmos: 26.1
+      uvista_ks_cosmos: 25.6
+      ia427_cosmos: 26.0
+      ia464_cosmos: 26.0
+      ia484_cosmos: 26.0
+      ia505_cosmos: 26.0
+      ia527_cosmos: 26.0
+      ia574_cosmos: 25.8
+      ia624_cosmos: 25.8
+      ia679_cosmos: 25.7
+      ia709_cosmos: 25.7
+      ia738_cosmos: 25.6
+      ia767_cosmos: 25.5
+      ia827_cosmos: 25.4
+      NB711.SuprimeCam: 25.5
+      NB816.SuprimeCam: 25.4
+      irac1_cosmos: 25.5
+      irac2_cosmos: 25.3
+    default_eta: 1.0
+    sigma_sys_mag: 0.005
+
+amortized:
+  enabled: true
+  data:
+    expected_n_bands: 26
+    selection_mode: random
+    stratified_strategy: proportional
+    stratify_column: lp_zbest
+    redshift_bins: [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 4.5]
+    validation_fraction: 0.1
+    epoch_shuffle: true
+    catalog_batch_size: 10000
+  latent:
+    schema: popcosmos_16
+    include_redshift: true
+    use_fit_bounds: true
+    normalization: identity
+  features:
+    type: flux_and_errors
+    n_flux_bands: 26
+    n_error_bands: 26
+    normalize_per_band: true
+    flux_transform: asinh
+    error_transform: log
+  encoder:
+    type: conditional_flow
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_init_scale: 0.0
+    hidden_sizes: [256, 256, 256]
+    activation: gelu
+  prior:
+    type: realnvp
+    source: joint_realnvp
+    train_jointly: true
+    n_layers: 8
+    hidden_size: 128
+    scale_clamp: 0.05
+    shift_clamp: 5.0
+    permutation: roll
+    init: identity
+    init_scale: 0.0
+    update_schedule: joint
+  likelihood:
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+  objective:
+    mode: reweighted_wake_sleep
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sample_strategy: random
+    sleep:
+      enabled: true
+      error_model: m5_depth
+      noise_family: match_likelihood
+      selection:
+        enabled: true
+        band: hsc_r
+        min_flux_fnu_cgs: 3.6307805477e-30
+        candidate_factor: 4
+    wake:
+      start_encoder_epoch: 2
+      every_encoder_epochs: 1
+      n_particles: 8
+      n_tempered_particles: 2
+      base_temperature: 2.0
+      train_prior: true
+      prior_loss_weight: 1.0
+      sampler: importance
+  training:
+    epochs: 40
+    batch_size: 256
+    jax_batch_size: 256
+    n_samples: 1
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-5
+    gradient_clip_norm: 1.0
+    validation_every: 2
+    best_checkpoint_min_epoch: 2
+    seed: 260727
+    data_parallel: single
+  inference:
+    posterior_samples: 128
+    prior_samples: 16384
+    decoder_sample_chunk_size: 1
+    prior_predictive_batch_size: 256
+    write_posterior_predictive: true
+    write_residual_samples: false
+    combine_sample_shards: false
+  output:
+    checkpoint_every: 1
+    diagnostics_every: 1
+    save_training_curves: true
+    save_posterior_preview: true

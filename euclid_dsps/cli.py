@@ -233,6 +233,14 @@ def build_parser() -> argparse.ArgumentParser:
         train_diffsky,
         default_out="outputs/runs/dev_amortized_diffsky",
     )
+    train_cosmos = sub.add_parser(
+        "amortized-train-cosmos",
+        help="Train the joint RWS encoder/prior on prepared COSMOS photometry.",
+    )
+    _add_amortized_train_arguments(
+        train_cosmos,
+        default_out="outputs/runs/dev_amortized_cosmos",
+    )
 
     infer = sub.add_parser(
         "amortized-infer-fs2",
@@ -275,10 +283,24 @@ def build_parser() -> argparse.ArgumentParser:
         infer_diffsky,
         default_out="outputs/runs/dev_amortized_diffsky_infer",
     )
+    infer_cosmos = sub.add_parser(
+        "amortized-infer-cosmos",
+        help="Run COSMOS amortized posterior inference from a checkpoint.",
+    )
+    _add_amortized_infer_arguments(
+        infer_cosmos,
+        default_out="outputs/runs/dev_amortized_cosmos_infer",
+    )
 
     finalize = sub.add_parser(
         "amortized-finalize-inference",
         help="Combine sharded amortized inference outputs and write diagnostics.",
+    )
+    finalize.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime while loading inference utilities.",
     )
     finalize.add_argument("--out", required=True, help="Inference output directory.")
     finalize.add_argument("--limit", type=int)
@@ -738,6 +760,12 @@ def _add_amortized_infer_arguments(
     *,
     default_out: str,
 ) -> None:
+    parser.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime for inference or local smoke tests.",
+    )
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--checkpoint", required=True)
@@ -935,6 +963,22 @@ def main(argv: list[str] | None = None) -> None:
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
         }
+    if (
+        args.command.startswith("amortized-infer-")
+        and getattr(args, "runtime", "config") != "config"
+    ):
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
+        }
+    if (
+        args.command == "amortized-finalize-inference"
+        and getattr(args, "runtime", "config") != "config"
+    ):
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
+        }
     apply_jax_runtime_env(runtime_config)
 
     if args.command == "amortized-synthetic-smoke":
@@ -949,8 +993,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "amortized-train-diffsky":
         _run_amortized_train(config, args, dataset_label="Diffsky")
         return
+    if args.command == "amortized-train-cosmos":
+        _run_amortized_train(config, args, dataset_label="COSMOS2020 Farmer")
+        return
     if args.command == "amortized-infer-diffsky":
         _run_amortized_infer(config, args, dataset_label="Diffsky")
+        return
+    if args.command == "amortized-infer-cosmos":
+        _run_amortized_infer(config, args, dataset_label="COSMOS2020 Farmer")
         return
     if args.command == "amortized-finalize-inference":
         _run_amortized_finalize_inference(config, args)
