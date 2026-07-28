@@ -373,22 +373,19 @@ def run_adjusted_mclmc_chain(
             def adaptation_kernel(
                 rng_key,
                 state,
-                avg_num_integration_steps,
+                logdensity_fn,
                 step_size,
                 inverse_mass_matrix,
+                integration_steps_params,
             ):
-                kernel = blackjax.mcmc.adjusted_mclmc.build_kernel(
-                    sampling_logdensity,
-                    inverse_mass_matrix=inverse_mass_matrix,
-                )
-                integration_steps = jnp.maximum(
-                    1, jnp.ceil(avg_num_integration_steps).astype(jnp.int32)
-                )
+                kernel = blackjax.mcmc.adjusted_mclmc.build_kernel()
                 return kernel(
-                    rng_key,
-                    state,
-                    step_size,
-                    integration_steps,
+                    rng_key=rng_key,
+                    state=state,
+                    logdensity_fn=logdensity_fn,
+                    step_size=step_size,
+                    inverse_mass_matrix=inverse_mass_matrix,
+                    integration_steps_params=integration_steps_params,
                 )
 
             warmup_started = time.perf_counter()
@@ -399,6 +396,7 @@ def run_adjusted_mclmc_chain(
             state, tuned, tuning_integrator_steps = (
                 blackjax.adjusted_mclmc_find_L_and_step_size(
                     mclmc_kernel=adaptation_kernel,
+                    logdensity_fn=sampling_logdensity,
                     num_steps=int(settings.tune_steps),
                     state=state,
                     rng_key=warmup_key,
@@ -751,15 +749,32 @@ def combine_chain_diagnostics(
             }
         )
     diagnostics = pd.DataFrame(rows)
+    rhat = diagnostics["rhat"].to_numpy(dtype=np.float64)
+    bulk_ess = diagnostics["bulk_ess"].to_numpy(dtype=np.float64)
+    tail_ess = diagnostics["tail_ess"].to_numpy(dtype=np.float64)
+    finite_rhat = np.isfinite(rhat)
+    finite_bulk_ess = np.isfinite(bulk_ess)
+    finite_tail_ess = np.isfinite(tail_ess)
     summary = {
         "chains": int(values.shape[0]),
         "draws_per_chain": int(values.shape[1]),
-        "max_rhat": float(diagnostics["rhat"].max()),
-        "min_bulk_ess": float(diagnostics["bulk_ess"].min()),
-        "min_tail_ess": float(diagnostics["tail_ess"].min()),
-        "passes_rhat_1_01": bool((diagnostics["rhat"] <= 1.01).all()),
-        "passes_bulk_ess_400": bool((diagnostics["bulk_ess"] >= 400.0).all()),
-        "passes_tail_ess_400": bool((diagnostics["tail_ess"] >= 400.0).all()),
+        "max_rhat": float(np.max(rhat)) if finite_rhat.all() else None,
+        "min_bulk_ess": (
+            float(np.min(bulk_ess)) if finite_bulk_ess.all() else None
+        ),
+        "min_tail_ess": (
+            float(np.min(tail_ess)) if finite_tail_ess.all() else None
+        ),
+        "finite_rhat_parameters": int(finite_rhat.sum()),
+        "finite_bulk_ess_parameters": int(finite_bulk_ess.sum()),
+        "finite_tail_ess_parameters": int(finite_tail_ess.sum()),
+        "passes_rhat_1_01": bool(finite_rhat.all() and (rhat <= 1.01).all()),
+        "passes_bulk_ess_400": bool(
+            finite_bulk_ess.all() and (bulk_ess >= 400.0).all()
+        ),
+        "passes_tail_ess_400": bool(
+            finite_tail_ess.all() and (tail_ess >= 400.0).all()
+        ),
     }
     return diagnostics, summary
 

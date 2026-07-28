@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 
 from euclid_dsps.amortized.exact_posterior import (
@@ -75,6 +77,30 @@ def test_nuts_chain_is_resumable_and_writes_diagnostics(tmp_path: Path) -> None:
     assert diagnostics["parameter"].tolist() == ["a", "b"]
     assert np.isfinite(summary["max_rhat"])
     assert summary["min_bulk_ess"] > 0
+
+
+def test_chain_summary_serializes_nonfinite_smoke_diagnostics_as_null(
+    tmp_path: Path,
+) -> None:
+    chain_dirs = []
+    for chain, value in enumerate((0.0, 1.0)):
+        directory = tmp_path / f"chain_{chain:02d}"
+        chunks = directory / "chunks"
+        chunks.mkdir(parents=True)
+        pd.DataFrame({"x_00": np.full(10, value)}).to_parquet(
+            chunks / "part_000000.parquet", index=False
+        )
+        chain_dirs.append(directory)
+
+    diagnostics, summary = combine_chain_diagnostics(
+        chain_dirs, parameter_names=("constant_within_chain",)
+    )
+
+    assert np.isinf(diagnostics.loc[0, "rhat"])
+    assert summary["max_rhat"] is None
+    assert summary["finite_rhat_parameters"] == 0
+    assert summary["passes_rhat_1_01"] is False
+    assert '"max_rhat": null' in json.dumps(summary, allow_nan=False)
 
 
 def test_adjusted_mclmc_uses_real_thinning_and_valid_step_size(
