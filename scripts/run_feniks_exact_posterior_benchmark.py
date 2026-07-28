@@ -105,6 +105,7 @@ def parse_args() -> argparse.Namespace:
             "prepare-cohort",
             "prepare-galaxy",
             "sample-chain",
+            "finalize-mclmc",
             "finalize-galaxy",
             "finalize-run",
         ),
@@ -119,6 +120,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sampler", choices=("nuts", "mclmc", "mclmc_unadjusted"))
     parser.add_argument("--sampler-label")
     parser.add_argument("--pilot-selection", type=Path)
+    parser.add_argument(
+        "--cohort-file",
+        type=Path,
+        help="Optional real-data cohort with order, example_key, row_index, object_id.",
+    )
     parser.add_argument("--mode", choices=("smoke", "pilot", "full"), default="full")
     parser.add_argument("--encoder-samples", type=int)
     parser.add_argument("--map-starts", type=int, default=16)
@@ -144,6 +150,8 @@ def main() -> None:
         prepare_galaxy(args, config)
     elif args.command == "sample-chain":
         sample_chain(args, config)
+    elif args.command == "finalize-mclmc":
+        finalize_mclmc(args, config)
     elif args.command == "finalize-galaxy":
         finalize_galaxy(args, config)
     else:
@@ -152,7 +160,14 @@ def main() -> None:
 
 def prepare_cohort(args: argparse.Namespace, config: dict[str, Any]) -> None:
     out = ensure_dir(args.out)
-    cohort = select_representative_rows(config, args.dataset)
+    if args.cohort_file is not None:
+        cohort = pd.read_csv(args.cohort_file)
+        required = {"order", "example_key", "row_index", "object_id"}
+        missing = sorted(required - set(cohort.columns))
+        if missing:
+            raise ValueError("Cohort file is missing columns: " + ", ".join(missing))
+    else:
+        cohort = select_representative_rows(config, args.dataset)
     if args.mode == "smoke":
         cohort = cohort.iloc[:2].reset_index(drop=True)
     cohort.to_parquet(out / "cohort.parquet", index=False)
@@ -249,7 +264,9 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     _write_json(
         galaxy_dir / "importance_diagnostics.json",
         {
-            key_name: float(value)
+            key_name: (
+                float(value) if np.isfinite(float(value)) else None
+            )
             for key_name, value in importance.items()
             if np.isscalar(value)
         },
@@ -270,29 +287,37 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     )
     np.save(galaxy_dir / "initial_positions.npy", initial)
     truth_theta = _truth_theta(runtime)
-    truth_x = np.asarray(
-        jax.device_get(theta_to_x(jnp.asarray(truth_theta), runtime.latent_spec))
-    )
-    truth_target = target_fn(jnp.asarray(truth_x))
-    truth = pd.DataFrame(
-        [
-            {
-                **{f"x_{name}": truth_x[i] for i, name in enumerate(runtime.latent_spec.names)},
-                **{
-                    name: truth_theta[i]
-                    for i, name in enumerate(runtime.latent_spec.names)
-                },
-                "loglike": float(truth_target.loglike),
-                "logprior": float(truth_target.logprior),
-                "logtarget": float(truth_target.logtarget),
-            }
-        ]
-    )
-    _write_parquet(truth, galaxy_dir / "truth.parquet")
-    audit_points = np.concatenate(
-        [np.median(np.asarray(jax.device_get(x)), axis=0)[None, :], initial, truth_x[None, :]],
-        axis=0,
-    )
+    audit_parts = [
+        np.median(np.asarray(jax.device_get(x)), axis=0)[None, :],
+        initial,
+    ]
+    audit_labels = ["encoder_median", *[f"chain_start_{i}" for i in range(4)]]
+    if truth_theta is not None:
+        truth_x = np.asarray(
+            jax.device_get(theta_to_x(jnp.asarray(truth_theta), runtime.latent_spec))
+        )
+        truth_target = target_fn(jnp.asarray(truth_x))
+        truth = pd.DataFrame(
+            [
+                {
+                    **{
+                        f"x_{name}": truth_x[i]
+                        for i, name in enumerate(runtime.latent_spec.names)
+                    },
+                    **{
+                        name: truth_theta[i]
+                        for i, name in enumerate(runtime.latent_spec.names)
+                    },
+                    "loglike": float(truth_target.loglike),
+                    "logprior": float(truth_target.logprior),
+                    "logtarget": float(truth_target.logtarget),
+                }
+            ]
+        )
+        _write_parquet(truth, galaxy_dir / "truth.parquet")
+        audit_parts.append(truth_x[None, :])
+        audit_labels.append("truth")
+    audit_points = np.concatenate(audit_parts, axis=0)
     audit = _evaluate_target_chunks(target_fn, jnp.asarray(audit_points), chunk_size=8)
     logdensity = _logdensity_fn(runtime)
     gradients = np.asarray(
@@ -309,7 +334,7 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     gradient_norm = np.linalg.norm(gradients, axis=1)
     audit_frame = pd.DataFrame(
         {
-            "point": ["encoder_median", *[f"chain_start_{i}" for i in range(4)], "truth"],
+            "point": audit_labels,
             "loglike": audit.loglike,
             "logprior": audit.logprior,
             "logtarget": audit.logtarget,
@@ -348,6 +373,7 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
         "jax_devices": [str(device) for device in jax.devices()],
         "target_audit_finite": finite_audit,
         "roundtrip_max_abs_error": roundtrip_error,
+        "truth_available": truth_theta is not None,
     }
     _write_json(galaxy_dir / "prepare_manifest.json", manifest)
     done.touch()
@@ -490,6 +516,42 @@ def finalize_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
             },
         )
     (galaxy_dir / "DONE").touch()
+
+
+def finalize_mclmc(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    """Combine an adjusted-MCLMC-only real-data run without requiring truth."""
+    galaxy_index = _required_index(args.galaxy_index, "galaxy-index")
+    item = _cohort_item(args.out, galaxy_index)
+    galaxy_dir = _galaxy_dir(args.out, item)
+    runtime = _load_runtime(args, config, int(item.row_index))
+    n_chains = 2 if args.mode == "smoke" else 4
+    directories = [
+        galaxy_dir / "mclmc" / f"chain_{index:02d}" for index in range(n_chains)
+    ]
+    missing = [path for path in directories if not (path / "DONE").exists()]
+    if missing:
+        raise FileNotFoundError(
+            "MCLMC has incomplete chains: " + ", ".join(map(str, missing))
+        )
+    diagnostics, summary = combine_chain_diagnostics(
+        directories, parameter_names=runtime.latent_spec.names
+    )
+    _write_parquet(diagnostics, galaxy_dir / "mclmc/diagnostics.parquet")
+    _write_json(galaxy_dir / "mclmc/diagnostics.json", summary)
+    samples = _combine_physical_chains(directories, runtime.latent_spec)
+    _write_parquet(samples, galaxy_dir / "mclmc/samples.parquet")
+    _write_json(
+        galaxy_dir / "mclmc_real_data_summary.json",
+        {
+            "status": "complete",
+            "truth_available": False,
+            "sampler": "adjusted_mclmc",
+            "n_chains": n_chains,
+            "n_samples": int(len(samples)),
+            "diagnostics": summary,
+        },
+    )
+    (galaxy_dir / "MCLMC_DONE").touch()
 
 
 def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -930,9 +992,9 @@ def _sample_frame(x, theta, names, *, logq, target) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def _truth_theta(runtime: Runtime) -> np.ndarray:
+def _truth_theta(runtime: Runtime) -> np.ndarray | None:
     if runtime.arrays.truth is None:
-        raise ValueError("Selected benchmark catalog has no truth columns")
+        return None
     missing = [
         name for name in runtime.latent_spec.names if name not in runtime.arrays.truth
     ]

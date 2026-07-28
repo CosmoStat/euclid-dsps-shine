@@ -184,7 +184,6 @@ def run_nuts_chain(
             sampling_logdensity,
             is_mass_matrix_diagonal=True,
             target_acceptance_rate=float(settings.target_accept),
-            progress_bar=False,
             max_num_doublings=int(settings.max_num_doublings),
             initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
         )
@@ -326,31 +325,13 @@ def run_adjusted_mclmc_chain(
             inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float64),
         )
 
-        def adaptation_kernel(
-            rng_key,
-            state,
-            avg_num_integration_steps,
-            step_size,
-            inverse_mass_matrix,
-        ):
-            kernel = blackjax.mcmc.adjusted_mclmc.build_kernel(
-                sampling_logdensity,
-                inverse_mass_matrix=inverse_mass_matrix,
-            )
-            integration_steps = jnp.maximum(
-                1, jnp.ceil(avg_num_integration_steps).astype(jnp.int32)
-            )
-            return kernel(
-                rng_key,
-                state,
-                step_size,
-                integration_steps,
-            )
+        adaptation_kernel = blackjax.mcmc.adjusted_mclmc.build_kernel()
 
         warmup_started = time.perf_counter()
         state, tuned, tuning_integrator_steps = (
             blackjax.adjusted_mclmc_find_L_and_step_size(
                 mclmc_kernel=adaptation_kernel,
+                logdensity_fn=sampling_logdensity,
                 num_steps=int(settings.tune_steps),
                 state=state,
                 rng_key=warmup_key,

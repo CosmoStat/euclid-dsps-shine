@@ -2,11 +2,15 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 
-from scripts.run_feniks_exact_posterior_benchmark import _write_run_comparison
+from scripts.run_feniks_exact_posterior_benchmark import (
+    _truth_theta,
+    _write_run_comparison,
+)
 from scripts.select_feniks_mclmc_pilot import CONFIGS
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,14 @@ def test_runner_can_be_executed_as_a_direct_script() -> None:
     )
 
     assert "prepare-cohort" in result.stdout
+
+
+def test_real_data_runtime_does_not_require_truth() -> None:
+    runtime = SimpleNamespace(
+        arrays=SimpleNamespace(truth=None),
+        latent_spec=SimpleNamespace(names=("z_obs", "log10_stellar_mass")),
+    )
+    assert _truth_theta(runtime) is None
 
 
 def test_pilot_grid_contains_nuts_agreement_and_unadjusted_energy_controls() -> None:
