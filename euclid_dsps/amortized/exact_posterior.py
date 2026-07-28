@@ -355,54 +355,69 @@ def run_adjusted_mclmc_chain(
             inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float64),
         )
 
-        def adaptation_kernel(
-            rng_key,
-            state,
-            avg_num_integration_steps,
-            step_size,
-            inverse_mass_matrix,
-        ):
-            kernel = blackjax.mcmc.adjusted_mclmc.build_kernel(
-                sampling_logdensity,
-                inverse_mass_matrix=inverse_mass_matrix,
+        if int(settings.tune_steps) == 0:
+            fixed_integration_steps = 4
+            tuned = initial_params._replace(
+                L=initial_params.step_size * fixed_integration_steps
             )
-            integration_steps = jnp.maximum(
-                1, jnp.ceil(avg_num_integration_steps).astype(jnp.int32)
+            tuning_integrator_steps = 0
+            warmup_elapsed = 0.0
+            print(
+                "[exact-sampler:mclmc] fixed smoke geometry "
+                f"step_size={float(initial_params.step_size):.6g} "
+                f"integration_steps={fixed_integration_steps}",
+                flush=True,
             )
-            return kernel(
+        else:
+
+            def adaptation_kernel(
                 rng_key,
                 state,
+                avg_num_integration_steps,
                 step_size,
-                integration_steps,
-            )
+                inverse_mass_matrix,
+            ):
+                kernel = blackjax.mcmc.adjusted_mclmc.build_kernel(
+                    sampling_logdensity,
+                    inverse_mass_matrix=inverse_mass_matrix,
+                )
+                integration_steps = jnp.maximum(
+                    1, jnp.ceil(avg_num_integration_steps).astype(jnp.int32)
+                )
+                return kernel(
+                    rng_key,
+                    state,
+                    step_size,
+                    integration_steps,
+                )
 
-        warmup_started = time.perf_counter()
-        print(
-            f"[exact-sampler:mclmc] adaptation start steps={settings.tune_steps}",
-            flush=True,
-        )
-        state, tuned, tuning_integrator_steps = (
-            blackjax.adjusted_mclmc_find_L_and_step_size(
-                mclmc_kernel=adaptation_kernel,
-                num_steps=int(settings.tune_steps),
-                state=state,
-                rng_key=warmup_key,
-                target=float(settings.target_accept),
-                frac_tune1=float(settings.frac_tune1),
-                frac_tune2=float(settings.frac_tune2),
-                frac_tune3=float(settings.frac_tune3),
-                diagonal_preconditioning=bool(settings.diagonal_preconditioning),
-                params=initial_params,
+            warmup_started = time.perf_counter()
+            print(
+                f"[exact-sampler:mclmc] adaptation start steps={settings.tune_steps}",
+                flush=True,
             )
-        )
-        jax.block_until_ready(state.position)
-        warmup_elapsed = time.perf_counter() - warmup_started
-        print(
-            "[exact-sampler:mclmc] adaptation done "
-            f"elapsed_s={warmup_elapsed:.1f} "
-            f"integrator_steps={int(tuning_integrator_steps)}",
-            flush=True,
-        )
+            state, tuned, tuning_integrator_steps = (
+                blackjax.adjusted_mclmc_find_L_and_step_size(
+                    mclmc_kernel=adaptation_kernel,
+                    num_steps=int(settings.tune_steps),
+                    state=state,
+                    rng_key=warmup_key,
+                    target=float(settings.target_accept),
+                    frac_tune1=float(settings.frac_tune1),
+                    frac_tune2=float(settings.frac_tune2),
+                    frac_tune3=float(settings.frac_tune3),
+                    diagonal_preconditioning=bool(settings.diagonal_preconditioning),
+                    params=initial_params,
+                )
+            )
+            jax.block_until_ready(state.position)
+            warmup_elapsed = time.perf_counter() - warmup_started
+            print(
+                "[exact-sampler:mclmc] adaptation done "
+                f"elapsed_s={warmup_elapsed:.1f} "
+                f"integrator_steps={int(tuning_integrator_steps)}",
+                flush=True,
+            )
         parameters = {
             "L": tuned.L,
             "step_size": tuned.step_size,
@@ -499,6 +514,11 @@ def run_adjusted_mclmc_chain(
         "sampler": "adjusted_mclmc",
         "sampling_dtype": "float64",
         "target_dtype": "float32",
+        "adaptation_mode": (
+            "fixed_geometry_smoke"
+            if int(settings.tune_steps) == 0
+            else "blackjax_three_phase"
+        ),
         "seed": int(seed),
         "tune_steps": int(settings.tune_steps),
         "actual_tuning_integrator_steps": int(tuning_integrator_steps),

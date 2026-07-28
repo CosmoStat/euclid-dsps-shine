@@ -105,6 +105,27 @@ def test_adjusted_mclmc_uses_real_thinning_and_valid_step_size(
     assert manifest["integrator_steps_after_warmup"] >= 48
 
 
+def test_adjusted_mclmc_supports_fixed_geometry_smoke(tmp_path: Path) -> None:
+    pytest.importorskip("blackjax")
+    manifest = run_adjusted_mclmc_chain(
+        _normal_logdensity,
+        jnp.array([0.2, -0.1]),
+        seed=13,
+        settings=MCLMCSettings(
+            tune_steps=0,
+            sample_chunks=(3,),
+            thinning=1,
+            initial_step_size=5.0e-2,
+        ),
+        out_dir=tmp_path / "mclmc_fixed_smoke",
+    )
+
+    assert manifest["adaptation_mode"] == "fixed_geometry_smoke"
+    assert manifest["actual_tuning_integrator_steps"] == 0
+    assert manifest["integration_steps_per_transition"] == 4
+    assert manifest["stored_samples"] == 3
+
+
 def test_samplers_promote_a_float32_target_to_float64(tmp_path: Path) -> None:
     pytest.importorskip("blackjax")
 

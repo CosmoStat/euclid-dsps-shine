@@ -443,7 +443,7 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
             tune_steps=int(
                 args.mclmc_tune
                 if args.mclmc_tune is not None
-                else (10 if args.mode == "smoke" else 500)
+                else (0 if args.mode == "smoke" else 500)
             ),
             sample_chunks=chunks,
             thinning=int(
