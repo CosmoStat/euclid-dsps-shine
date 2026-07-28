@@ -415,7 +415,7 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
             ),
             sample_chunks=chunks,
             target_accept=0.65,
-            max_num_doublings=10,
+            max_num_doublings=4 if args.mode == "smoke" else 10,
         )
         print(
             f"[exact-chain] NUTS warmup={settings.warmup_steps} "
@@ -450,7 +450,7 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
                 thinning if thinning is not None else (1 if args.mode == "smoke" else 8)
             ),
             target_accept=0.8,
-            initial_step_size=1.0e-4,
+            initial_step_size=5.0e-2 if args.mode == "smoke" else 1.0e-3,
             frac_tune1=frac[0],
             frac_tune2=frac[1],
             frac_tune3=frac[2],
