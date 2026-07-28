@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from scripts.run_feniks_exact_posterior_benchmark import (
+    _all_finite_at_most,
     _truth_theta,
     _write_run_comparison,
 )
@@ -41,6 +42,13 @@ def test_real_data_runtime_does_not_require_truth() -> None:
         latent_spec=SimpleNamespace(names=("z_obs", "log10_stellar_mass")),
     )
     assert _truth_theta(runtime) is None
+
+
+def test_convergence_gate_rejects_missing_or_nonfinite_diagnostics() -> None:
+    assert _all_finite_at_most(pd.Series([1.0, 1.01]), 1.01)
+    assert not _all_finite_at_most(pd.Series([1.0, None]), 1.01)
+    assert not _all_finite_at_most(pd.Series([1.0, np.inf]), 1.01)
+    assert not _all_finite_at_most(pd.Series(dtype=float), 1.01)
 
 
 def test_pilot_grid_contains_nuts_agreement_and_unadjusted_energy_controls() -> None:

@@ -585,19 +585,28 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
     contract = json.loads((args.out / "contract.json").read_text(encoding="utf-8"))
     if contract.get("mode") != "smoke":
         _write_run_comparison(args.out, cohort)
+    nuts_rhat_pass = _all_finite_at_most(scoreboard["nuts_max_rhat"], 1.01)
+    mclmc_rhat_pass = _all_finite_at_most(scoreboard["mclmc_max_rhat"], 1.01)
     _write_json(
         args.out / "benchmark_summary.json",
         {
             "galaxies": int(len(scoreboard)),
             "methods": ["encoder", "importance", "map", "nuts", "mclmc", "truth"],
-            "all_nuts_rhat_pass": bool((scoreboard["nuts_max_rhat"] <= 1.01).all()),
-            "all_mclmc_rhat_pass": bool(
-                (scoreboard["mclmc_max_rhat"] <= 1.01).all()
-            ),
+            "all_nuts_rhat_pass": nuts_rhat_pass,
+            "all_mclmc_rhat_pass": mclmc_rhat_pass,
             "code_commit": _git_commit(),
         },
     )
     (args.out / "DONE").touch()
+
+
+def _all_finite_at_most(values: pd.Series, threshold: float) -> bool:
+    numeric = pd.to_numeric(values, errors="coerce").to_numpy(dtype=np.float64)
+    return bool(
+        numeric.size > 0
+        and np.isfinite(numeric).all()
+        and (numeric <= float(threshold)).all()
+    )
 
 
 def _write_run_comparison(out: Path, cohort: pd.DataFrame) -> None:
