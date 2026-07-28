@@ -111,14 +111,18 @@ def test_samplers_promote_a_float32_target_to_float64(tmp_path: Path) -> None:
     jax.config.update("jax_enable_x64", False)
 
     def float32_logdensity(x):
+        observed_target_dtypes.append(x.dtype)
         value = x.astype(jnp.float32)
         return -0.5 * jnp.sum(value**2)
 
+    observed_target_dtypes = []
     jax.config.update("jax_enable_x64", True)
     wrapped = _float64_logdensity(float32_logdensity)
     position = jnp.array([0.1, -0.2], dtype=jnp.float64)
     assert wrapped(position).dtype == jnp.float64
     assert jax.grad(wrapped)(position).dtype == jnp.float64
+    assert observed_target_dtypes
+    assert all(dtype == jnp.float32 for dtype in observed_target_dtypes)
 
     try:
         nuts = run_nuts_chain(
@@ -145,4 +149,6 @@ def test_samplers_promote_a_float32_target_to_float64(tmp_path: Path) -> None:
     assert nuts["stored_samples"] == 4
     assert mclmc["stored_samples"] == 4
     assert nuts["sampling_dtype"] == "float64"
+    assert nuts["target_dtype"] == "float32"
     assert mclmc["sampling_dtype"] == "float64"
+    assert mclmc["target_dtype"] == "float32"

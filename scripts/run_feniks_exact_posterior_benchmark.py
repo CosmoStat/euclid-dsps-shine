@@ -359,11 +359,19 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
     chain_index = _required_index(args.chain_index, "chain-index")
     if not args.sampler:
         raise ValueError("--sampler is required for sample-chain")
+    print(
+        "[exact-chain] "
+        f"sampler={args.sampler} galaxy={galaxy_index} chain={chain_index} "
+        f"mode={args.mode}",
+        flush=True,
+    )
     item = _cohort_item(args.out, galaxy_index)
     galaxy_dir = _galaxy_dir(args.out, item)
     if not (galaxy_dir / "PREP_DONE").exists():
         raise FileNotFoundError(f"Galaxy preparation is incomplete: {galaxy_dir}")
+    print(f"[exact-chain] loading runtime for row={int(item.row_index)}", flush=True)
     runtime = _load_runtime(args, config, int(item.row_index))
+    print("[exact-chain] runtime ready; constructing target", flush=True)
     logdensity_fn = _logdensity_fn(runtime)
     initial = np.load(galaxy_dir / "initial_positions.npy")
     if chain_index >= len(initial):
@@ -382,6 +390,11 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
             sample_chunks=chunks,
             target_accept=0.65,
             max_num_doublings=10,
+        )
+        print(
+            f"[exact-chain] NUTS warmup={settings.warmup_steps} "
+            f"chunks={settings.sample_chunks}",
+            flush=True,
         )
         manifest = run_nuts_chain(
             logdensity_fn,
@@ -423,6 +436,11 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
             run_unadjusted_mclmc_chain
             if args.sampler == "mclmc_unadjusted"
             else run_adjusted_mclmc_chain
+        )
+        print(
+            f"[exact-chain] {args.sampler} tune={settings.tune_steps} "
+            f"thinning={settings.thinning} chunks={settings.sample_chunks}",
+            flush=True,
         )
         manifest = runner(
             logdensity_fn,

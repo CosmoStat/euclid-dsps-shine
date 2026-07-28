@@ -259,6 +259,7 @@ def run_nuts_chain(
     manifest = {
         "sampler": "nuts",
         "sampling_dtype": "float64",
+        "target_dtype": "float32",
         "seed": int(seed),
         "warmup_steps": int(settings.warmup_steps),
         "target_accept": float(settings.target_accept),
@@ -449,6 +450,7 @@ def run_adjusted_mclmc_chain(
     manifest = {
         "sampler": "adjusted_mclmc",
         "sampling_dtype": "float64",
+        "target_dtype": "float32",
         "seed": int(seed),
         "tune_steps": int(settings.tune_steps),
         "actual_tuning_integrator_steps": int(tuning_integrator_steps),
@@ -623,6 +625,7 @@ def run_unadjusted_mclmc_chain(
     manifest = {
         "sampler": "unadjusted_mclmc",
         "sampling_dtype": "float64",
+        "target_dtype": "float32",
         "scientific_role": "efficiency_and_energy_diagnostic_only",
         "seed": int(seed),
         "tune_steps": int(settings.tune_steps),
@@ -826,10 +829,10 @@ def _info_columns(infos, n_rows: int) -> dict[str, np.ndarray]:
 def _float64_logdensity(
     logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
 ) -> Callable[[jnp.ndarray], jnp.ndarray]:
-    """Keep BlackJAX states and target gradients on one explicit dtype."""
+    """Use a float64 sampler around the native float32 DSPS target."""
 
     def wrapped(position):
-        value = logdensity_fn(jnp.asarray(position, dtype=jnp.float64))
+        value = logdensity_fn(jnp.asarray(position, dtype=jnp.float32))
         return jnp.asarray(value, dtype=jnp.float64)
 
     return wrapped
