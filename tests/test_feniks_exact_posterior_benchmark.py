@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -96,6 +97,80 @@ def test_smoke_and_full_submission_topology_is_dependency_gated() -> None:
     assert "PREP_DONE" in recovery
     assert "feniks_exact_prepare_h100.slurm" not in recovery
     assert '--dependency="afterok:$nuts:$mclmc"' in recovery
+
+
+def test_adaptation_probe_and_two_galaxy_pilot_are_isolated() -> None:
+    probe = (ROOT / "scripts/submit_feniks_mclmc_adaptation_probe.sh").read_text()
+    pilot = (
+        ROOT / "scripts/submit_feniks_exact_posterior_two_galaxy_pilot.sh"
+    ).read_text()
+
+    assert "--array=0 --time=01:00:00" in probe
+    assert "MCLMC_TUNE=10" in probe
+    assert "SAMPLE_CHUNKS=10" in probe
+    assert "requested_upper_bound_h100_hours=1.00" in probe
+
+    assert '--cohort-file "$SMOKE_ROOT/cohort.csv"' in pilot
+    assert "--array=0-7%8" in pilot
+    assert pilot.count("--array=0-7%8") == 2
+    assert '--dependency="afterok:$nuts:$mclmc"' in pilot
+    assert "requested_upper_bound_h100_hours=108.33" in pilot
+    assert "submit_feniks_exact_posterior_full.sh" not in pilot
+    assert "--array=0-27" not in pilot
+
+
+def test_adaptation_probe_summary_accepts_finite_adjusted_chain(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "probe"
+    chain = (
+        root
+        / "galaxies"
+        / "01_typical_row1358"
+        / "mclmc_adaptation_probe_t10"
+        / "chain_00"
+    )
+    chunks = chain / "chunks"
+    chunks.mkdir(parents=True)
+    (chain / "DONE").touch()
+    (chain / "chain_manifest.json").write_text(
+        json.dumps(
+            {
+                "adaptation_mode": "blackjax_three_phase",
+                "tune_steps": 10,
+                "actual_tuning_integrator_steps": 24,
+                "step_size": 0.01,
+                "L": 0.04,
+                "integration_steps_per_transition": 4,
+                "stored_samples": 10,
+                "warmup_elapsed_s": 12.0,
+                "total_elapsed_s": 20.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        {
+            "acceptance_rate": np.full(10, 0.8),
+            "is_divergent": np.zeros(10, dtype=bool),
+            "energy": np.linspace(1.0, 1.1, 10),
+        }
+    ).to_parquet(chunks / "part_000000_info.parquet", index=False)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts/summarize_feniks_mclmc_adaptation_probe.py"),
+            "--root",
+            str(root),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    summary = json.loads(result.stdout)
+    assert summary["status"] == "passed"
+    assert summary["mean_acceptance"] == 0.8
 
 
 def test_exact_wrappers_avoid_unreliable_jobscratch_and_use_headless_plots() -> None:
