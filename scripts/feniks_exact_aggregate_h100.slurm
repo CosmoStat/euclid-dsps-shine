@@ -22,6 +22,7 @@ MODEL_ROOT="${MODEL_ROOT:-outputs/runs/feniks_selfsup_paper_v1/rws_k8_t2_seed2}"
 CHECKPOINT="${CHECKPOINT:-$MODEL_ROOT/train/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-$MODEL_ROOT/train/feature_stats.json}"
 ROOT_DIR="${ROOT_DIR:?ROOT_DIR is required}"
+FINAL_SAMPLERS="${FINAL_SAMPLERS:-nuts,mclmc}"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 export JAX_PLATFORMS=cuda
 export MPLBACKEND=Agg
@@ -34,4 +35,5 @@ source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 python scripts/run_feniks_exact_posterior_benchmark.py finalize-run \
   --config "$CONFIG" --dataset "$DATASET" --checkpoint "$CHECKPOINT" \
-  --feature-stats "$FEATURE_STATS" --out "$ROOT_DIR"
+  --feature-stats "$FEATURE_STATS" --out "$ROOT_DIR" \
+  --samplers "$FINAL_SAMPLERS"

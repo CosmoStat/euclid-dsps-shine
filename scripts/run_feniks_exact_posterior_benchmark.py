@@ -119,6 +119,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chain-index", type=int)
     parser.add_argument("--sampler", choices=("nuts", "mclmc", "mclmc_unadjusted"))
     parser.add_argument("--sampler-label")
+    parser.add_argument(
+        "--samplers",
+        default="nuts,mclmc",
+        help="Comma-separated samplers required during finalization.",
+    )
     parser.add_argument("--pilot-selection", type=Path)
     parser.add_argument(
         "--cohort-file",
@@ -484,7 +489,8 @@ def finalize_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     item = _cohort_item(args.out, galaxy_index)
     galaxy_dir = _galaxy_dir(args.out, item)
     runtime = _load_runtime(args, config, int(item.row_index))
-    for sampler in ("nuts", "mclmc"):
+    samplers = _selected_samplers(args)
+    for sampler in samplers:
         n_chains = 2 if args.mode == "smoke" and sampler == "mclmc" else 4
         directories = [
             galaxy_dir / sampler / f"chain_{i:02d}" for i in range(n_chains)
@@ -503,9 +509,13 @@ def finalize_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
         samples = _combine_physical_chains(directories, runtime.latent_spec)
         _write_parquet(samples, galaxy_dir / sampler / "samples.parquet")
     if args.mode != "smoke":
-        _write_corner_plots(galaxy_dir, runtime, item)
-        _write_sed_and_photometry(galaxy_dir, runtime, item)
-        _write_convergence_plots(galaxy_dir, runtime.latent_spec.names)
+        _write_corner_plots(galaxy_dir, runtime, item, samplers=samplers)
+        _write_sed_and_photometry(galaxy_dir, runtime, item, samplers=samplers)
+        _write_convergence_plots(
+            galaxy_dir,
+            runtime.latent_spec.names,
+            samplers=samplers,
+        )
     else:
         _write_json(
             galaxy_dir / "smoke_summary.json",
@@ -556,6 +566,7 @@ def finalize_mclmc(args: argparse.Namespace, config: dict[str, Any]) -> None:
 
 def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
     cohort = pd.read_parquet(args.out / "cohort.parquet")
+    samplers = _selected_samplers(args)
     rows = []
     for index, item in enumerate(cohort.itertuples(index=False)):
         galaxy_dir = _galaxy_dir(args.out, item)
@@ -566,7 +577,7 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "example_key": item.example_key,
             "row_index": int(item.row_index),
         }
-        for sampler in ("nuts", "mclmc"):
+        for sampler in samplers:
             diagnostics = json.loads(
                 (galaxy_dir / sampler / "diagnostics.json").read_text()
             )
@@ -584,16 +595,20 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
     scoreboard.to_csv(args.out / "scoreboard.csv", index=False)
     contract = json.loads((args.out / "contract.json").read_text(encoding="utf-8"))
     if contract.get("mode") != "smoke":
-        _write_run_comparison(args.out, cohort)
-    nuts_rhat_pass = _all_finite_at_most(scoreboard["nuts_max_rhat"], 1.01)
-    mclmc_rhat_pass = _all_finite_at_most(scoreboard["mclmc_max_rhat"], 1.01)
+        _write_run_comparison(args.out, cohort, samplers=samplers)
+    convergence = {
+        f"all_{sampler}_rhat_pass": _all_finite_at_most(
+            scoreboard[f"{sampler}_max_rhat"],
+            1.01,
+        )
+        for sampler in samplers
+    }
     _write_json(
         args.out / "benchmark_summary.json",
         {
             "galaxies": int(len(scoreboard)),
-            "methods": ["encoder", "importance", "map", "nuts", "mclmc", "truth"],
-            "all_nuts_rhat_pass": nuts_rhat_pass,
-            "all_mclmc_rhat_pass": mclmc_rhat_pass,
+            "methods": ["encoder", "importance", "map", *samplers, "truth"],
+            **convergence,
             "code_commit": _git_commit(),
         },
     )
@@ -609,7 +624,12 @@ def _all_finite_at_most(values: pd.Series, threshold: float) -> bool:
     )
 
 
-def _write_run_comparison(out: Path, cohort: pd.DataFrame) -> None:
+def _write_run_comparison(
+    out: Path,
+    cohort: pd.DataFrame,
+    *,
+    samplers: tuple[str, ...] = ("nuts", "mclmc"),
+) -> None:
     import matplotlib.pyplot as plt
     from scipy.stats import wasserstein_distance
 
@@ -618,9 +638,13 @@ def _write_run_comparison(out: Path, cohort: pd.DataFrame) -> None:
     methods = {
         "Encoder": "encoder_samples.parquet",
         "Encoder + IS": "importance_resampled_samples.parquet",
-        "NUTS": "nuts/samples.parquet",
-        "MCLMC": "mclmc/samples.parquet",
     }
+    methods.update(
+        {
+            sampler.upper(): f"{sampler}/samples.parquet"
+            for sampler in samplers
+        }
+    )
     for item in cohort.itertuples(index=False):
         galaxy_dir = _galaxy_dir(out, item)
         prepare = json.loads(
@@ -707,7 +731,12 @@ def _write_run_comparison(out: Path, cohort: pd.DataFrame) -> None:
     photometry.to_csv(out / "photometric_fit_metrics.csv", index=False)
 
     names = list(dict.fromkeys(posterior["parameter"]))
-    shown_methods = ["Encoder", "Encoder + IS", "MCLMC", "MAP"]
+    shown_methods = [
+        "Encoder",
+        "Encoder + IS",
+        *[sampler.upper() for sampler in samplers if sampler != "nuts"],
+        "MAP",
+    ]
     metrics = (
         (
             "nuts_standardized_mean_offset",
@@ -780,7 +809,7 @@ def _write_run_comparison(out: Path, cohort: pd.DataFrame) -> None:
         np.arange(len(summary)), labels=summary.index, rotation=25, ha="right"
     )
     ax.set_ylabel("Photometric chi2 of median prediction")
-    ax.set_title("Same seven galaxies and same DSPS likelihood inputs")
+    ax.set_title("Same galaxies and same DSPS likelihood inputs")
     fig.tight_layout()
     fig.savefig(out / "photometric_fit_comparison.png", dpi=190)
     fig.savefig(out / "photometric_fit_comparison.pdf")
@@ -1058,7 +1087,13 @@ def _combine_physical_chains(directories, latent_spec) -> pd.DataFrame:
     return pd.concat(pieces, ignore_index=True)
 
 
-def _write_corner_plots(galaxy_dir: Path, runtime: Runtime, item) -> None:
+def _write_corner_plots(
+    galaxy_dir: Path,
+    runtime: Runtime,
+    item,
+    *,
+    samplers: tuple[str, ...] = ("nuts", "mclmc"),
+) -> None:
     import corner
     import matplotlib.pyplot as plt
 
@@ -1068,23 +1103,35 @@ def _write_corner_plots(galaxy_dir: Path, runtime: Runtime, item) -> None:
         "Encoder + IS": pd.read_parquet(
             galaxy_dir / "importance_resampled_samples.parquet"
         ),
-        "NUTS": pd.read_parquet(galaxy_dir / "nuts" / "samples.parquet"),
-        "MCLMC": pd.read_parquet(galaxy_dir / "mclmc" / "samples.parquet"),
     }
+    methods.update(
+        {
+            sampler.upper(): pd.read_parquet(
+                galaxy_dir / sampler / "samples.parquet"
+            )
+            for sampler in samplers
+        }
+    )
     truth = pd.read_parquet(galaxy_dir / "truth.parquet").iloc[0]
     map_best = (
         pd.read_parquet(galaxy_dir / "map_solutions.parquet")
         .sort_values("objective")
         .iloc[0]
     )
-    colors = ["#0072B2", "#009E73", "#D55E00", "#CC79A7"]
+    colors = {
+        "Encoder": "#0072B2",
+        "Encoder + IS": "#009E73",
+        "NUTS": "#D55E00",
+        "MCLMC": "#CC79A7",
+    }
     for subset_name, subset in (
         ("corner_key5", ("z_obs", "log10_stellar_mass", "dust_av", "dust_delta", "sfh_dlog_sfr_01")),
         ("corner_full15", names),
     ):
         labels = list(subset)
         figure = None
-        for (label, frame), color in zip(methods.items(), colors, strict=True):
+        for label, frame in methods.items():
+            color = colors[label]
             values = frame[labels].to_numpy(dtype=float)
             if len(values) > 2_000:
                 values = values[np.linspace(0, len(values) - 1, 2_000).astype(int)]
@@ -1133,7 +1180,13 @@ def _write_corner_plots(galaxy_dir: Path, runtime: Runtime, item) -> None:
         plt.close(figure)
 
 
-def _write_sed_and_photometry(galaxy_dir: Path, runtime: Runtime, item) -> None:
+def _write_sed_and_photometry(
+    galaxy_dir: Path,
+    runtime: Runtime,
+    item,
+    *,
+    samplers: tuple[str, ...] = ("nuts", "mclmc"),
+) -> None:
     import matplotlib.pyplot as plt
 
     names = runtime.latent_spec.names
@@ -1154,15 +1207,18 @@ def _write_sed_and_photometry(galaxy_dir: Path, runtime: Runtime, item) -> None:
             ],
             32,
         ),
-        "NUTS": _even_subsample(
-            pd.read_parquet(galaxy_dir / "nuts" / "samples.parquet")[list(names)],
-            32,
-        ),
-        "MCLMC": _even_subsample(
-            pd.read_parquet(galaxy_dir / "mclmc" / "samples.parquet")[list(names)],
-            32,
-        ),
     }
+    sources.update(
+        {
+            sampler.upper(): _even_subsample(
+                pd.read_parquet(galaxy_dir / sampler / "samples.parquet")[
+                    list(names)
+                ],
+                32,
+            )
+            for sampler in samplers
+        }
+    )
     colors = {
         "Truth": "black",
         "MAP": "#E69F00",
@@ -1275,10 +1331,15 @@ def _write_sed_and_photometry(galaxy_dir: Path, runtime: Runtime, item) -> None:
     plt.close(fig)
 
 
-def _write_convergence_plots(galaxy_dir: Path, names: tuple[str, ...]) -> None:
+def _write_convergence_plots(
+    galaxy_dir: Path,
+    names: tuple[str, ...],
+    *,
+    samplers: tuple[str, ...] = ("nuts", "mclmc"),
+) -> None:
     import matplotlib.pyplot as plt
 
-    for sampler in ("nuts", "mclmc"):
+    for sampler in samplers:
         frame = pd.read_parquet(galaxy_dir / sampler / "samples.parquet")
         shown = names[:5]
         fig, axes = plt.subplots(len(shown), 1, figsize=(10, 1.8 * len(shown)), sharex=True)
@@ -1331,6 +1392,22 @@ def _sample_chunks(args: argparse.Namespace) -> tuple[int, ...]:
     if any(value <= 0 for value in chunks):
         raise ValueError("sample chunks must be positive")
     return chunks
+
+
+def _selected_samplers(args: argparse.Namespace) -> tuple[str, ...]:
+    samplers = tuple(
+        value.strip().lower()
+        for value in str(args.samplers).split(",")
+        if value.strip()
+    )
+    if not samplers or len(set(samplers)) != len(samplers):
+        raise ValueError("--samplers must contain unique sampler names")
+    unsupported = sorted(set(samplers) - {"nuts", "mclmc"})
+    if unsupported:
+        raise ValueError(f"Unsupported finalization samplers: {unsupported}")
+    if "nuts" not in samplers:
+        raise ValueError("NUTS is required as the benchmark reference")
+    return samplers
 
 
 def _even_subsample(frame: pd.DataFrame, size: int) -> np.ndarray:

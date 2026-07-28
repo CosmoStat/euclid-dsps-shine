@@ -10,6 +10,7 @@ import pandas as pd
 
 from scripts.run_feniks_exact_posterior_benchmark import (
     _all_finite_at_most,
+    _selected_samplers,
     _truth_theta,
     _write_run_comparison,
 )
@@ -117,6 +118,36 @@ def test_adaptation_probe_and_two_galaxy_pilot_are_isolated() -> None:
     assert "requested_upper_bound_h100_hours=108.33" in pilot
     assert "submit_feniks_exact_posterior_full.sh" not in pilot
     assert "--array=0-27" not in pilot
+
+
+def test_two_galaxy_nuts_submission_has_no_mclmc_dependency() -> None:
+    submission = (
+        ROOT / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts.sh"
+    ).read_text()
+
+    assert '--cohort-file "$SMOKE_ROOT/cohort.csv"' in submission
+    assert "--array=0-1%2" in submission
+    assert "--array=0-7%8" in submission
+    assert "SAMPLER=nuts" in submission
+    assert "FINAL_SAMPLERS=nuts" in submission
+    assert '--dependency="afterok:$nuts"' in submission
+    assert "SAMPLER=mclmc" not in submission
+    assert "requested_upper_bound_h100_hours=60.33" in submission
+
+
+def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> None:
+    assert _selected_samplers(SimpleNamespace(samplers="nuts")) == ("nuts",)
+    assert _selected_samplers(SimpleNamespace(samplers="nuts,mclmc")) == (
+        "nuts",
+        "mclmc",
+    )
+    for value in ("", "mclmc", "nuts,nuts", "nuts,hmc"):
+        try:
+            _selected_samplers(SimpleNamespace(samplers=value))
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Expected invalid sampler contract: {value!r}")
 
 
 def test_adaptation_probe_summary_accepts_finite_adjusted_chain(
@@ -265,3 +296,62 @@ def test_run_comparison_preserves_restyleable_tables(tmp_path: Path) -> None:
     assert (tmp_path / "posterior_method_agreement.png").is_file()
     assert (tmp_path / "photometric_fit_metrics.parquet").is_file()
     assert (tmp_path / "photometric_fit_comparison.pdf").is_file()
+
+
+def test_run_comparison_supports_nuts_only(tmp_path: Path) -> None:
+    cohort = pd.DataFrame(
+        [{"order": 0, "example_key": "example", "row_index": 12}]
+    )
+    galaxy = tmp_path / "galaxies" / "00_example_row12"
+    (galaxy / "nuts").mkdir(parents=True)
+    (galaxy / "prepare_manifest.json").write_text(
+        '{"latent_spec": {"names": ["z_obs", "mass"]}}',
+        encoding="utf-8",
+    )
+    pd.DataFrame([{"z_obs": 0.4, "mass": 10.0}]).to_parquet(
+        galaxy / "truth.parquet", index=False
+    )
+    pd.DataFrame(
+        [{"objective": 1.0, "z_obs": 0.45, "mass": 10.05}]
+    ).to_parquet(galaxy / "map_solutions.parquet", index=False)
+    rng = np.random.default_rng(4)
+    for relative in (
+        "encoder_samples.parquet",
+        "importance_resampled_samples.parquet",
+        "nuts/samples.parquet",
+    ):
+        pd.DataFrame(
+            {
+                "z_obs": rng.normal(0.4, 0.05, 40),
+                "mass": rng.normal(10.0, 0.2, 40),
+            }
+        ).to_parquet(galaxy / relative, index=False)
+    pd.DataFrame(
+        {
+            "band": ["g", "r"],
+            "flux": [2.0, 3.0],
+            "flux_err": [0.2, 0.3],
+            "mask": [True, True],
+        }
+    ).to_parquet(galaxy / "observation.parquet", index=False)
+    rows = []
+    for method in ("Truth", "MAP", "Encoder", "Encoder + IS", "NUTS"):
+        rows.extend(
+            {
+                "method": method,
+                "band": band,
+                "flux_q16": flux - 0.1,
+                "flux_q50": flux,
+                "flux_q84": flux + 0.1,
+            }
+            for band, flux in (("g", 2.0), ("r", 3.0))
+        )
+    pd.DataFrame(rows).to_parquet(
+        galaxy / "photometric_predictions.parquet", index=False
+    )
+
+    _write_run_comparison(tmp_path, cohort, samplers=("nuts",))
+
+    agreement = pd.read_parquet(tmp_path / "posterior_agreement.parquet")
+    assert set(agreement["method"]) == {"Encoder", "Encoder + IS", "NUTS", "MAP"}
+    assert (tmp_path / "posterior_method_agreement.png").is_file()

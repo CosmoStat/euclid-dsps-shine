@@ -25,6 +25,7 @@ CHECKPOINT="${CHECKPOINT:-$MODEL_ROOT/train/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-$MODEL_ROOT/train/feature_stats.json}"
 ROOT_DIR="${ROOT_DIR:?ROOT_DIR is required}"
 MODE="${MODE:-full}"
+FINAL_SAMPLERS="${FINAL_SAMPLERS:-nuts,mclmc}"
 
 export PYTHONUNBUFFERED=1
 export JAX_PLATFORMS=cuda
@@ -44,4 +45,5 @@ conda activate "$CONDA_ENV"
 python scripts/run_feniks_exact_posterior_benchmark.py finalize-galaxy \
   --config "$CONFIG" --dataset "$DATASET" --checkpoint "$CHECKPOINT" \
   --feature-stats "$FEATURE_STATS" --out "$ROOT_DIR" \
-  --galaxy-index "$TASK_ID" --mode "$MODE"
+  --galaxy-index "$TASK_ID" --mode "$MODE" \
+  --samplers "$FINAL_SAMPLERS"
