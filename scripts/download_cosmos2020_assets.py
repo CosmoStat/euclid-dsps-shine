@@ -37,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-external-repo", action="store_true")
     parser.add_argument("--skip-zenodo", action="store_true")
     parser.add_argument("--timeout", type=int, default=7200)
+    parser.add_argument(
+        "--tap-job-url",
+        help="Resume an existing full-catalog ESO asynchronous TAP job.",
+    )
     return parser.parse_args()
 
 
@@ -69,9 +73,17 @@ def _request(
     raise AssertionError("unreachable")
 
 
-def _tap_download(path: Path, max_rows: int | None, timeout: int) -> str:
+def _tap_download(
+    path: Path,
+    max_rows: int | None,
+    timeout: int,
+    *,
+    tap_job_url: str | None = None,
+) -> str:
     query = farmer_adql(max_rows)
     if max_rows is not None:
+        if tap_job_url is not None:
+            raise ValueError("--tap-job-url is only valid for a full async download")
         payload = _request(
             f"{ESO_TAP_URL}/sync",
             data={
@@ -85,22 +97,26 @@ def _tap_download(path: Path, max_rows: int | None, timeout: int) -> str:
         path.write_bytes(payload)
         return query
 
-    opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
-    request = urllib.request.Request(
-        f"{ESO_TAP_URL}/async",
-        data=urllib.parse.urlencode(
-            {
-                "REQUEST": "doQuery",
-                "LANG": "ADQL",
-                "FORMAT": "fits",
-                "MAXREC": "2000000",
-                "QUERY": query,
-            }
-        ).encode("ascii"),
-    )
-    with opener.open(request, timeout=120) as response:
-        job_url = response.geturl().rstrip("/")
-    _request(f"{job_url}/phase", data={"PHASE": "RUN"})
+    if tap_job_url is None:
+        opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
+        request = urllib.request.Request(
+            f"{ESO_TAP_URL}/async",
+            data=urllib.parse.urlencode(
+                {
+                    "REQUEST": "doQuery",
+                    "LANG": "ADQL",
+                    "FORMAT": "fits",
+                    "MAXREC": "2000000",
+                    "QUERY": query,
+                }
+            ).encode("ascii"),
+        )
+        with opener.open(request, timeout=120) as response:
+            job_url = response.geturl().rstrip("/")
+        _request(f"{job_url}/phase", data={"PHASE": "RUN"})
+    else:
+        job_url = tap_job_url.rstrip("/")
+        print(f"[cosmos2020-download] resuming TAP job={job_url}", flush=True)
     deadline = time.monotonic() + timeout
     while True:
         phase = _request(f"{job_url}/phase").decode("ascii").strip().upper()
@@ -207,7 +223,12 @@ def main() -> None:
             if args.max_rows is not None
             else "cosmos2020_farmer_v21.fits"
         )
-        query = _tap_download(farmer, args.max_rows, args.timeout)
+        query = _tap_download(
+            farmer,
+            args.max_rows,
+            args.timeout,
+            tap_job_url=args.tap_job_url,
+        )
         manifest["farmer"] = {
             "path": str(farmer),
             "sha256": sha256_file(farmer),

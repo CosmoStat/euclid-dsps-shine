@@ -13,6 +13,7 @@ from euclid_dsps.cosmos2020 import (
     prepare_farmer_catalog,
     write_nested_subsets,
 )
+from scripts.download_cosmos2020_assets import parse_args
 from scripts.validate_cosmos2020_reproduction import validate_spectral_assets
 
 
@@ -43,6 +44,24 @@ def test_farmer_contract_has_public_a24_order_and_columns() -> None:
     assert len(farmer_columns()) == 7 + 3 * 26
     assert "COSMOS2020_FARMER_V1" in farmer_adql(32)
     assert "TOP 32" in farmer_adql(32)
+
+
+def test_downloader_exposes_async_tap_resume(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "download_cosmos2020_assets.py",
+            "--out",
+            "assets",
+            "--tap-job-url",
+            "https://archive.example/async/123",
+            "--timeout",
+            "14400",
+        ],
+    )
+    args = parse_args()
+    assert args.tap_job_url.endswith("/123")
+    assert args.timeout == 14400
 
 
 def test_prepare_farmer_applies_selection_and_extinction() -> None:

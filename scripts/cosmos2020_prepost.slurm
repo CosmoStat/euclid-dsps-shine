@@ -19,6 +19,8 @@ ASSET_DIR="${ASSET_DIR:-Data/cosmos2020/assets}"
 PREPARED_DIR="${PREPARED_DIR:-Data/cosmos2020/prepared}"
 EXPECTED_SELECTED="${EXPECTED_SELECTED:-140938}"
 INSTALL="${INSTALL:-1}"
+TAP_TIMEOUT="${TAP_TIMEOUT:-14400}"
+TAP_JOB_URL="${TAP_JOB_URL:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
@@ -48,7 +50,11 @@ pip_install_with_retry() {
 if [[ "$INSTALL" == "1" ]]; then
   pip_install_with_retry -e '.[amortized,samplers,gpu]'
 fi
-python scripts/download_cosmos2020_assets.py --out "$ASSET_DIR"
+DOWNLOAD_ARGS=(--out "$ASSET_DIR" --timeout "$TAP_TIMEOUT")
+if [[ -n "$TAP_JOB_URL" ]]; then
+  DOWNLOAD_ARGS+=(--tap-job-url "$TAP_JOB_URL")
+fi
+python scripts/download_cosmos2020_assets.py "${DOWNLOAD_ARGS[@]}"
 if [[ "$INSTALL" == "1" ]]; then
   pip_install_with_retry --no-deps -e "$ASSET_DIR/external/pop-cosmos"
   python - <<'PY'
