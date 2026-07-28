@@ -155,7 +155,7 @@ def run_nuts_chain(
     _enforce_float64_sampling()
     import blackjax
 
-    sampling_logdensity = _float64_logdensity(logdensity_fn)
+    sampling_logdensity = jax.jit(_float64_logdensity(logdensity_fn), inline=False)
     target_started = time.perf_counter()
     print("[exact-sampler:nuts] validating target value and gradient", flush=True)
     initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
@@ -311,7 +311,7 @@ def run_adjusted_mclmc_chain(
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
-    sampling_logdensity = _float64_logdensity(logdensity_fn)
+    sampling_logdensity = jax.jit(_float64_logdensity(logdensity_fn), inline=False)
     target_started = time.perf_counter()
     print("[exact-sampler:mclmc] validating target value and gradient", flush=True)
     initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
@@ -541,7 +541,7 @@ def run_unadjusted_mclmc_chain(
     import blackjax
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
-    sampling_logdensity = _float64_logdensity(logdensity_fn)
+    sampling_logdensity = jax.jit(_float64_logdensity(logdensity_fn), inline=False)
     initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
     _validate_chunks(settings.sample_chunks)
     out = Path(out_dir)
