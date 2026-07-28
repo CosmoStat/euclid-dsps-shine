@@ -63,6 +63,16 @@ extra=()
 [[ -n "${NUTS_WARMUP:-}" ]] && extra+=(--nuts-warmup "$NUTS_WARMUP")
 [[ -n "${MCLMC_TUNE:-}" ]] && extra+=(--mclmc-tune "$MCLMC_TUNE")
 
+heartbeat() {
+  while sleep 60; do
+    printf '[exact-chain] heartbeat sampler=%s galaxy=%s chain=%s elapsed=%s\n' \
+      "$SAMPLER" "$galaxy" "$chain" "${SECONDS}s"
+  done
+}
+heartbeat &
+heartbeat_pid=$!
+trap 'kill "$heartbeat_pid" 2>/dev/null || true' EXIT
+
 python scripts/run_feniks_exact_posterior_benchmark.py sample-chain \
   --config "$CONFIG" --dataset "$DATASET" --checkpoint "$CHECKPOINT" \
   --feature-stats "$FEATURE_STATS" --out "$ROOT_DIR" \

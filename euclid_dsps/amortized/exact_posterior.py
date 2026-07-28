@@ -156,7 +156,14 @@ def run_nuts_chain(
     import blackjax
 
     sampling_logdensity = _float64_logdensity(logdensity_fn)
+    target_started = time.perf_counter()
+    print("[exact-sampler:nuts] validating target value and gradient", flush=True)
     initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
+    print(
+        "[exact-sampler:nuts] target ready "
+        f"elapsed_s={time.perf_counter() - target_started:.1f}",
+        flush=True,
+    )
     _validate_chunks(settings.sample_chunks)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -188,6 +195,10 @@ def run_nuts_chain(
             initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
         )
         warmup_started = time.perf_counter()
+        print(
+            f"[exact-sampler:nuts] warmup start steps={settings.warmup_steps}",
+            flush=True,
+        )
         (state, parameters), adaptation_info = adaptation.run(
             warmup_key,
             initial_position,
@@ -195,6 +206,10 @@ def run_nuts_chain(
         )
         jax.block_until_ready(state.position)
         warmup_elapsed = time.perf_counter() - warmup_started
+        print(
+            f"[exact-sampler:nuts] warmup done elapsed_s={warmup_elapsed:.1f}",
+            flush=True,
+        )
         np.savez(
             params_path,
             step_size=np.asarray(jax.device_get(parameters["step_size"])),
@@ -233,11 +248,19 @@ def run_nuts_chain(
             continue
         key, chunk_key = jax.random.split(key)
         chunk_started = time.perf_counter()
+        print(
+            f"[exact-sampler:nuts] chunk={chunk_id} start draws={n_samples}",
+            flush=True,
+        )
         state, positions, infos = _run_algorithm_steps(
             algorithm, state, chunk_key, int(n_samples), thinning=1
         )
         jax.block_until_ready(state.position)
         elapsed = time.perf_counter() - chunk_started
+        print(
+            f"[exact-sampler:nuts] chunk={chunk_id} done elapsed_s={elapsed:.1f}",
+            flush=True,
+        )
         _write_chain_chunk(
             chunk_path,
             info_path,
@@ -289,7 +312,14 @@ def run_adjusted_mclmc_chain(
     from blackjax.adaptation.mclmc_adaptation import MCLMCAdaptationState
 
     sampling_logdensity = _float64_logdensity(logdensity_fn)
+    target_started = time.perf_counter()
+    print("[exact-sampler:mclmc] validating target value and gradient", flush=True)
     initial_position = _validate_sampling_target(sampling_logdensity, initial_position)
+    print(
+        "[exact-sampler:mclmc] target ready "
+        f"elapsed_s={time.perf_counter() - target_started:.1f}",
+        flush=True,
+    )
     _validate_chunks(settings.sample_chunks)
     if int(settings.thinning) <= 0:
         raise ValueError("MCLMC thinning must be positive")
@@ -325,13 +355,35 @@ def run_adjusted_mclmc_chain(
             inverse_mass_matrix=jnp.ones((dim,), dtype=jnp.float64),
         )
 
-        adaptation_kernel = blackjax.mcmc.adjusted_mclmc.build_kernel()
+        def adaptation_kernel(
+            rng_key,
+            state,
+            avg_num_integration_steps,
+            step_size,
+            inverse_mass_matrix,
+        ):
+            kernel = blackjax.mcmc.adjusted_mclmc.build_kernel(
+                sampling_logdensity,
+                inverse_mass_matrix=inverse_mass_matrix,
+            )
+            integration_steps = jnp.maximum(
+                1, jnp.ceil(avg_num_integration_steps).astype(jnp.int32)
+            )
+            return kernel(
+                rng_key,
+                state,
+                step_size,
+                integration_steps,
+            )
 
         warmup_started = time.perf_counter()
+        print(
+            f"[exact-sampler:mclmc] adaptation start steps={settings.tune_steps}",
+            flush=True,
+        )
         state, tuned, tuning_integrator_steps = (
             blackjax.adjusted_mclmc_find_L_and_step_size(
                 mclmc_kernel=adaptation_kernel,
-                logdensity_fn=sampling_logdensity,
                 num_steps=int(settings.tune_steps),
                 state=state,
                 rng_key=warmup_key,
@@ -345,6 +397,12 @@ def run_adjusted_mclmc_chain(
         )
         jax.block_until_ready(state.position)
         warmup_elapsed = time.perf_counter() - warmup_started
+        print(
+            "[exact-sampler:mclmc] adaptation done "
+            f"elapsed_s={warmup_elapsed:.1f} "
+            f"integrator_steps={int(tuning_integrator_steps)}",
+            flush=True,
+        )
         parameters = {
             "L": tuned.L,
             "step_size": tuned.step_size,
@@ -400,6 +458,11 @@ def run_adjusted_mclmc_chain(
             continue
         key, chunk_key = jax.random.split(key)
         chunk_started = time.perf_counter()
+        print(
+            f"[exact-sampler:mclmc] chunk={chunk_id} start "
+            f"draws={n_samples} thinning={settings.thinning}",
+            flush=True,
+        )
         state, positions, infos = _run_algorithm_steps(
             algorithm,
             state,
@@ -409,6 +472,10 @@ def run_adjusted_mclmc_chain(
         )
         jax.block_until_ready(state.position)
         elapsed = time.perf_counter() - chunk_started
+        print(
+            f"[exact-sampler:mclmc] chunk={chunk_id} done elapsed_s={elapsed:.1f}",
+            flush=True,
+        )
         _write_chain_chunk(
             chunk_path,
             info_path,
