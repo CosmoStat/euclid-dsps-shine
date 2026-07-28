@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 REPO_DIR="${REPO_DIR:-$PWD}"
 SMOKE_ROOT="${SMOKE_ROOT:?Set SMOKE_ROOT to the completed exact-posterior smoke}"
-PROBE_LABEL="${PROBE_LABEL:-mclmc_adaptation_probe_t10}"
+PROBE_LABEL="${PROBE_LABEL:-mclmc_adaptation_probe_t10_compat}"
 PROBE_SUMMARY="${PROBE_SUMMARY:-}"
 CONFIG="${CONFIG:-configs/experiments/feniks_selfsup_paper_rws_k8_t2_seed2.yaml}"
 DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized/test.parquet}"

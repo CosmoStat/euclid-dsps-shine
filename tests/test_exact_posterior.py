@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -13,6 +14,7 @@ import pytest
 from euclid_dsps.amortized.exact_posterior import (
     MCLMCSettings,
     NUTSSettings,
+    _adjusted_mclmc_adaptation_adapter,
     _float64_logdensity,
     combine_chain_diagnostics,
     normalized_importance_weights,
@@ -101,6 +103,58 @@ def test_chain_summary_serializes_nonfinite_smoke_diagnostics_as_null(
     assert summary["finite_rhat_parameters"] == 0
     assert summary["passes_rhat_1_01"] is False
     assert '"max_rhat": null' in json.dumps(summary, allow_nan=False)
+
+
+def test_adjusted_mclmc_adapter_supports_both_blackjax_signatures() -> None:
+    def explicit_adaptation(mclmc_kernel, logdensity_fn, num_steps):
+        del mclmc_kernel, logdensity_fn, num_steps
+
+    def explicit_build_kernel():
+        return lambda **kwargs: kwargs
+
+    explicit_module = SimpleNamespace(
+        adjusted_mclmc_find_L_and_step_size=explicit_adaptation,
+        mcmc=SimpleNamespace(
+            adjusted_mclmc=SimpleNamespace(build_kernel=explicit_build_kernel)
+        ),
+    )
+    kernel, extra, api = _adjusted_mclmc_adaptation_adapter(
+        explicit_module, _normal_logdensity
+    )
+    assert api == "explicit_logdensity"
+    assert extra == {"logdensity_fn": _normal_logdensity}
+    explicit_result = kernel(
+        "key", "state", _normal_logdensity, 0.1, "mass", (2.0,)
+    )
+    assert explicit_result["logdensity_fn"] is _normal_logdensity
+    assert explicit_result["integration_steps_params"] == (2.0,)
+
+    def closed_adaptation(mclmc_kernel, num_steps):
+        del mclmc_kernel, num_steps
+
+    def closed_build_kernel(logdensity_fn, *, inverse_mass_matrix):
+        assert logdensity_fn is _normal_logdensity
+        assert inverse_mass_matrix == "mass"
+        return lambda key, state, step, integration_steps: (
+            key,
+            state,
+            step,
+            integration_steps,
+        )
+
+    closed_module = SimpleNamespace(
+        adjusted_mclmc_find_L_and_step_size=closed_adaptation,
+        mcmc=SimpleNamespace(
+            adjusted_mclmc=SimpleNamespace(build_kernel=closed_build_kernel)
+        ),
+    )
+    kernel, extra, api = _adjusted_mclmc_adaptation_adapter(
+        closed_module, _normal_logdensity
+    )
+    assert api == "closed_logdensity"
+    assert extra == {}
+    closed_result = kernel("key", "state", 2.2, 0.1, "mass")
+    assert int(closed_result[-1]) == 3
 
 
 def test_adjusted_mclmc_uses_real_thinning_and_valid_step_size(

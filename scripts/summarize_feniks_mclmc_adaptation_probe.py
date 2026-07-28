@@ -14,7 +14,7 @@ import pandas as pd
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--label", default="mclmc_adaptation_probe_t10")
+    parser.add_argument("--label", default="mclmc_adaptation_probe_t10_compat")
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
 

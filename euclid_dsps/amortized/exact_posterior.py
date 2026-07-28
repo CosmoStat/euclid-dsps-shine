@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import os
@@ -369,34 +370,22 @@ def run_adjusted_mclmc_chain(
                 flush=True,
             )
         else:
-
-            def adaptation_kernel(
-                rng_key,
-                state,
-                logdensity_fn,
-                step_size,
-                inverse_mass_matrix,
-                integration_steps_params,
-            ):
-                kernel = blackjax.mcmc.adjusted_mclmc.build_kernel()
-                return kernel(
-                    rng_key=rng_key,
-                    state=state,
-                    logdensity_fn=logdensity_fn,
-                    step_size=step_size,
-                    inverse_mass_matrix=inverse_mass_matrix,
-                    integration_steps_params=integration_steps_params,
+            adaptation_kernel, adaptation_extra, adaptation_api = (
+                _adjusted_mclmc_adaptation_adapter(
+                    blackjax,
+                    sampling_logdensity,
                 )
+            )
 
             warmup_started = time.perf_counter()
             print(
-                f"[exact-sampler:mclmc] adaptation start steps={settings.tune_steps}",
+                "[exact-sampler:mclmc] adaptation start "
+                f"steps={settings.tune_steps} api={adaptation_api}",
                 flush=True,
             )
             state, tuned, tuning_integrator_steps = (
                 blackjax.adjusted_mclmc_find_L_and_step_size(
                     mclmc_kernel=adaptation_kernel,
-                    logdensity_fn=sampling_logdensity,
                     num_steps=int(settings.tune_steps),
                     state=state,
                     rng_key=warmup_key,
@@ -406,6 +395,7 @@ def run_adjusted_mclmc_chain(
                     frac_tune3=float(settings.frac_tune3),
                     diagonal_preconditioning=bool(settings.diagonal_preconditioning),
                     params=initial_params,
+                    **adaptation_extra,
                 )
             )
             jax.block_until_ready(state.position)
@@ -713,6 +703,63 @@ def run_unadjusted_mclmc_chain(
     }
     _write_json_atomic(out / "chain_manifest.json", manifest)
     return manifest
+
+
+def _adjusted_mclmc_adaptation_adapter(
+    blackjax_module: Any,
+    sampling_logdensity: Callable[[jnp.ndarray], jnp.ndarray],
+) -> tuple[Callable[..., Any], dict[str, Any], str]:
+    """Bridge the released and development BlackJAX adjusted-MCLMC APIs."""
+    adaptation = blackjax_module.adjusted_mclmc_find_L_and_step_size
+    if "logdensity_fn" in inspect.signature(adaptation).parameters:
+
+        def explicit_logdensity_kernel(
+            rng_key,
+            state,
+            logdensity_fn,
+            step_size,
+            inverse_mass_matrix,
+            integration_steps_params,
+        ):
+            kernel = blackjax_module.mcmc.adjusted_mclmc.build_kernel()
+            return kernel(
+                rng_key=rng_key,
+                state=state,
+                logdensity_fn=logdensity_fn,
+                step_size=step_size,
+                inverse_mass_matrix=inverse_mass_matrix,
+                integration_steps_params=integration_steps_params,
+            )
+
+        return (
+            explicit_logdensity_kernel,
+            {"logdensity_fn": sampling_logdensity},
+            "explicit_logdensity",
+        )
+
+    def closed_logdensity_kernel(
+        rng_key,
+        state,
+        avg_num_integration_steps,
+        step_size,
+        inverse_mass_matrix,
+    ):
+        kernel = blackjax_module.mcmc.adjusted_mclmc.build_kernel(
+            sampling_logdensity,
+            inverse_mass_matrix=inverse_mass_matrix,
+        )
+        integration_steps = jnp.maximum(
+            1,
+            jnp.ceil(avg_num_integration_steps).astype(jnp.int32),
+        )
+        return kernel(
+            rng_key,
+            state,
+            step_size,
+            integration_steps,
+        )
+
+    return closed_logdensity_kernel, {}, "closed_logdensity"
 
 
 def combine_chain_diagnostics(

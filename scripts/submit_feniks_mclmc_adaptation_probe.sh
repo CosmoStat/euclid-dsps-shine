@@ -8,7 +8,7 @@ DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxco
 MODEL_ROOT="${MODEL_ROOT:-outputs/runs/feniks_selfsup_paper_v1/rws_k8_t2_seed2}"
 CHECKPOINT="${CHECKPOINT:-$MODEL_ROOT/train/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-$MODEL_ROOT/train/feature_stats.json}"
-PROBE_LABEL="${PROBE_LABEL:-mclmc_adaptation_probe_t10}"
+PROBE_LABEL="${PROBE_LABEL:-mclmc_adaptation_probe_t10_compat}"
 STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 
 cd "$REPO_DIR"

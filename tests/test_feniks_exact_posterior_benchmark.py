@@ -127,7 +127,7 @@ def test_adaptation_probe_summary_accepts_finite_adjusted_chain(
         root
         / "galaxies"
         / "01_typical_row1358"
-        / "mclmc_adaptation_probe_t10"
+        / "mclmc_adaptation_probe_t10_compat"
         / "chain_00"
     )
     chunks = chain / "chunks"
