@@ -35,7 +35,10 @@ if HAS_EQUINOX:
         _training_update_phase,
         _wake_update_active,
     )
-    from euclid_dsps.calibration import GlobalSedScaleState
+    from euclid_dsps.calibration import (
+        GlobalSedScaleState,
+        PerBandFluxCalibrationState,
+    )
 
 
 @pytest.mark.parametrize("family", ["realnvp", "rq_spline"])
@@ -457,7 +460,16 @@ def test_hybrid_objective_combines_elbo_npe_and_prior_truth(
         jax.random.PRNGKey(1),
         1,
         1.0,
-        {},
+        {
+            "calibration": {
+                "per_band_zero_points": {
+                    "enabled": True,
+                    "mode": "learn_per_band",
+                    "trainable": True,
+                    "prior_sigma_mag": 0.05,
+                }
+            }
+        },
         {},
         {
             "mode": "hybrid_elbo",
@@ -542,6 +554,9 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
             init_scale=0.0,
         ),
         sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+        band_calibration=PerBandFluxCalibrationState(
+            log_alpha_band=jnp.zeros(2)
+        ),
     )
     batch = LossBatch(
         flux=jnp.ones((3, 2)),
@@ -573,7 +588,16 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
         1,
         1.0,
         {"type": "student_t", "student_t_dof": 2.0},
-        {},
+        {
+            "calibration": {
+                "per_band_zero_points": {
+                    "enabled": True,
+                    "mode": "learn_per_band",
+                    "trainable": True,
+                    "prior_sigma_mag": 0.05,
+                }
+            }
+        },
         {
             "mode": "periodic_wake",
             "wake_active": True,
@@ -588,6 +612,7 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
     assert jnp.isfinite(loss)
     assert metrics["wake_active"] == 1.0
     assert 0.25 <= metrics["wake_ess_fraction_mean"] <= 1.0
+    assert jnp.isfinite(metrics["calibration_mstep_nll_per_band"])
 
     validation_metrics, object_metrics = _evaluation_metrics(
         model,
@@ -600,7 +625,16 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
         1,
         1.0,
         {"type": "student_t", "student_t_dof": 2.0},
-        {},
+        {
+            "calibration": {
+                "per_band_zero_points": {
+                    "enabled": True,
+                    "mode": "learn_per_band",
+                    "trainable": True,
+                    "prior_sigma_mag": 0.05,
+                }
+            }
+        },
         {
             "mode": "periodic_wake",
             "wake_active": True,
@@ -627,7 +661,16 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
             1,
             1.0,
             {"type": "student_t", "student_t_dof": 2.0},
-            {},
+            {
+                "calibration": {
+                    "per_band_zero_points": {
+                        "enabled": True,
+                        "mode": "learn_per_band",
+                        "trainable": True,
+                        "prior_sigma_mag": 0.05,
+                    }
+                }
+            },
             {
                 "mode": "periodic_wake",
                 "wake_active": True,
@@ -650,6 +693,8 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
     assert all(jnp.all(jnp.isfinite(leaf)) for leaf in encoder_leaves)
     assert any(jnp.any(jnp.abs(leaf) > 0.0) for leaf in encoder_leaves)
     assert all(jnp.allclose(leaf, 0.0) for leaf in prior_leaves)
+    assert grads.band_calibration is not None
+    assert jnp.any(jnp.abs(grads.band_calibration.log_alpha_band) > 0.0)
 
 
 def test_smc_wake_is_finite_and_reports_sampler_diagnostics(

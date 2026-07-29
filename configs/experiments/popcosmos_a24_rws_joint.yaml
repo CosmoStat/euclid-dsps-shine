@@ -193,13 +193,15 @@ amortized:
         min_flux_fnu_cgs: 3.6307805477e-30
         candidate_factor: 4
     wake:
-      start_encoder_epoch: 2
-      every_encoder_epochs: 1
+      # Three simulator-supervised sleep epochs followed by one real-data wake.
+      start_encoder_epoch: 4
+      every_encoder_epochs: 4
       n_particles: 8
       n_tempered_particles: 2
       base_temperature: 2.0
       train_prior: true
       prior_loss_weight: 1.0
+      calibration_loss_weight: 1.0
       sampler: importance
   training:
     epochs: 40

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ def write_inference_collapse_gate(run_dir: str | Path) -> dict[str, Any]:
     _add_photoz_checks(out, checks)
     _add_extended_truth_checks(out, checks)
     _add_prior_population_checks(out, checks)
+    _add_real_photometry_checks(out, checks)
     status = _status_from_checks(checks)
     payload = {
         "status": status,
@@ -48,14 +50,13 @@ def write_training_collapse_gate(run_dir: str | Path) -> dict[str, Any]:
             checks.append(_check("training_log_readable", "WARN", message=str(exc)))
         else:
             _add_training_log_checks(log, checks)
+            _add_trainable_calibration_checks(out, log, checks)
     else:
         checks.append(
             _check("training_log_exists", "WARN", message="missing training_log.csv")
         )
     if progress_path.exists():
         try:
-            import json
-
             progress = json.loads(progress_path.read_text(encoding="utf-8"))
         except Exception as exc:  # pragma: no cover - corrupt external artifact
             checks.append(
@@ -287,6 +288,173 @@ def _add_training_log_checks(log: pd.DataFrame, checks: list[dict[str, Any]]) ->
                     lower_is_better=True,
                 )
             )
+    wake_rows = log
+    if "split" in wake_rows:
+        wake_rows = wake_rows.loc[
+            wake_rows["split"].astype(str).str.lower() == "train"
+        ]
+    if "wake_active" in wake_rows:
+        active = pd.to_numeric(
+            wake_rows["wake_active"], errors="coerce"
+        ).fillna(0.0)
+        wake_rows = wake_rows.loc[active > 0.5]
+    elif "update_phase" in wake_rows:
+        wake_rows = wake_rows.loc[
+            wake_rows["update_phase"].astype(str).isin(
+                {"encoder_wake", "joint_wake"}
+            )
+        ]
+    else:
+        wake_rows = wake_rows.iloc[0:0]
+    if not wake_rows.empty:
+        if "wake_ess_fraction_mean" in wake_rows:
+            ess = pd.to_numeric(
+                wake_rows["wake_ess_fraction_mean"], errors="coerce"
+            )
+            finite_ess = ess[np.isfinite(ess)]
+        else:
+            finite_ess = pd.Series(dtype=float)
+        if not finite_ess.empty:
+            checks.append(
+                _threshold(
+                    "wake_ess_fraction_mean",
+                    float(finite_ess.mean()),
+                    warn=0.25,
+                    fail=0.15,
+                    lower_is_better=False,
+                )
+            )
+        if "wake_weight_max_mean" in wake_rows:
+            max_weight = pd.to_numeric(
+                wake_rows["wake_weight_max_mean"], errors="coerce"
+            )
+            finite_weight = max_weight[np.isfinite(max_weight)]
+        else:
+            finite_weight = pd.Series(dtype=float)
+        if not finite_weight.empty:
+            checks.append(
+                _threshold(
+                    "wake_weight_max_mean",
+                    float(finite_weight.mean()),
+                    warn=0.80,
+                    fail=0.95,
+                    lower_is_better=True,
+                )
+            )
+        if "wake_physical_valid_fraction" in wake_rows:
+            physical = pd.to_numeric(
+                wake_rows["wake_physical_valid_fraction"], errors="coerce"
+            )
+            finite_physical = physical[np.isfinite(physical)]
+        else:
+            finite_physical = pd.Series(dtype=float)
+        if not finite_physical.empty:
+            checks.append(
+                _threshold(
+                    "wake_physical_valid_fraction",
+                    float(finite_physical.mean()),
+                    warn=0.99,
+                    fail=0.95,
+                    lower_is_better=False,
+                )
+            )
+
+
+def _add_real_photometry_checks(
+    out: Path, checks: list[dict[str, Any]]
+) -> None:
+    summary_path = out / "posterior_diagnostics_summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        chi2 = _first_number(summary, "median_posterior_predictive_chi2")
+        n_bands = _first_number(summary, "median_valid_bands")
+        if chi2 is not None and n_bands is not None and n_bands > 0:
+            checks.append(
+                _threshold(
+                    "median_posterior_predictive_reduced_chi2",
+                    chi2 / n_bands,
+                    warn=5.0,
+                    fail=25.0,
+                    lower_is_better=True,
+                )
+            )
+    tails_path = out / "posterior_predictive_normalized_residual_tails.csv"
+    if tails_path.exists():
+        tails = pd.read_csv(tails_path)
+        all_bands = tails.loc[tails.get("band") == "__all__"]
+        if not all_bands.empty:
+            frac = _first_number(
+                all_bands.iloc[0].to_dict(), "frac_abs_gt_5"
+            )
+            if frac is not None:
+                checks.append(
+                    _threshold(
+                        "posterior_predictive_frac_abs_gt_5",
+                        frac,
+                        warn=0.20,
+                        fail=0.50,
+                        lower_is_better=True,
+                    )
+                )
+    bounds_path = out / "parameter_bound_diagnostics.csv"
+    if bounds_path.exists():
+        bounds = pd.read_csv(bounds_path)
+        if "frac_within_5pct_boundary" not in bounds:
+            return
+        values = pd.to_numeric(
+            bounds["frac_within_5pct_boundary"], errors="coerce"
+        )
+        finite = values[np.isfinite(values)]
+        if not finite.empty:
+            checks.append(
+                _threshold(
+                    "max_parameter_frac_within_5pct_boundary",
+                    float(finite.max()),
+                    warn=0.50,
+                    fail=0.80,
+                    lower_is_better=True,
+                )
+            )
+
+
+def _add_trainable_calibration_checks(
+    out: Path,
+    log: pd.DataFrame,
+    checks: list[dict[str, Any]],
+) -> None:
+    summary_path = out / "training_summary.json"
+    if not summary_path.exists() or "band_alpha_grad_norm" not in log:
+        return
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    calibration = summary.get("per_band_flux_calibration") or {}
+    if not bool(calibration.get("trainable", False)):
+        return
+    wake = log
+    if "split" in wake:
+        wake = wake.loc[wake["split"].astype(str).str.lower() == "train"]
+    if "wake_active" in wake:
+        active = pd.to_numeric(wake["wake_active"], errors="coerce").fillna(0.0)
+        wake = wake.loc[active > 0.5]
+    values = pd.to_numeric(wake["band_alpha_grad_norm"], errors="coerce")
+    finite = values[np.isfinite(values)]
+    if finite.empty:
+        checks.append(
+            _check(
+                "trainable_band_calibration_has_wake_gradient",
+                "FAIL",
+                message="no finite wake calibration gradients",
+            )
+        )
+        return
+    maximum = float(finite.max())
+    checks.append(
+        _check(
+            "trainable_band_calibration_has_wake_gradient",
+            "PASS" if maximum > 1.0e-12 else "FAIL",
+            value=maximum,
+            threshold=1.0e-12,
+        )
+    )
 
 
 def _first_number(row: dict[str, Any], *keys: str) -> float | None:

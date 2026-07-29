@@ -2979,7 +2979,22 @@ def _importance_weighted_wake_outputs(
     prior_loss_weight = jnp.asarray(
         float(wake.get("prior_loss_weight", 1.0)), dtype=wake_nll.dtype
     )
-    loss = wake_nll + (prior_loss_weight * prior_mstep_nll if train_prior else 0.0)
+    alpha_prior_penalty = (
+        global_sed_scale_prior_penalty(
+            log_alpha_sed,
+            scale_cfg.prior_sigma_log_alpha,
+        )
+        if scale_cfg.enabled and scale_cfg.trainable
+        else jnp.asarray(0.0, dtype=wake_nll.dtype)
+    )
+    band_prior_penalty = (
+        per_band_flux_calibration_prior_penalty(
+            log_alpha_band,
+            band_cfg.prior_sigma_log_alpha,
+        )
+        if band_cfg.enabled and band_cfg.trainable
+        else jnp.asarray(0.0, dtype=wake_nll.dtype)
+    )
     ess = 1.0 / jnp.sum(jnp.square(weight), axis=0)
     weight_entropy = -jnp.sum(
         jnp.where(weight > 0.0, weight * jnp.log(weight), 0.0), axis=0
@@ -2989,6 +3004,28 @@ def _importance_weighted_wake_outputs(
         jnp.sum(jnp.where(valid_object, weighted_nll_by_object, 0.0))
         / valid_object_count
     )
+    mean_valid_bands = jnp.maximum(
+        jnp.sum(
+            jnp.where(valid_object[:, None], batch.mask, False).astype(jnp.float32)
+        )
+        / valid_object_count,
+        1.0,
+    )
+    calibration_trainable = bool(
+        (scale_cfg.enabled and scale_cfg.trainable)
+        or (band_cfg.enabled and band_cfg.trainable)
+    )
+    calibration_loss_weight = jnp.asarray(
+        float(wake.get("calibration_loss_weight", 1.0)), dtype=wake_nll.dtype
+    )
+    calibration_mstep_nll_per_band = (
+        weighted_nll + alpha_prior_penalty + band_prior_penalty
+    ) / mean_valid_bands
+    loss = wake_nll + (
+        prior_loss_weight * prior_mstep_nll if train_prior else 0.0
+    )
+    if calibration_trainable:
+        loss = loss + calibration_loss_weight * calibration_mstep_nll_per_band
     weighted_kl_by_object = jnp.sum(weighted_logq - weighted_logprior, axis=0)
     weighted_kl = (
         jnp.sum(jnp.where(valid_object, weighted_kl_by_object, 0.0))
@@ -3032,8 +3069,8 @@ def _importance_weighted_wake_outputs(
         "mean_model_flux_scaled": jnp.mean(model_flux),
         "log_alpha_sed": log_alpha_sed,
         "alpha_sed": alpha_from_log_alpha(log_alpha_sed),
-        "alpha_prior_penalty": zero,
-        "band_alpha_prior_penalty": zero,
+        "alpha_prior_penalty": alpha_prior_penalty,
+        "band_alpha_prior_penalty": band_prior_penalty,
         "max_abs_band_delta_mag": jnp.max(
             jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
         ),
@@ -3062,6 +3099,8 @@ def _importance_weighted_wake_outputs(
         "wake_base_temperature": jnp.asarray(temperature, dtype=wake_nll.dtype),
         "prior_mstep_nll": prior_mstep_nll,
         "prior_loss_weight": prior_loss_weight,
+        "calibration_mstep_nll_per_band": calibration_mstep_nll_per_band,
+        "calibration_loss_weight": calibration_loss_weight,
         "sleep_active": zero,
         "posterior_mixture_components": mixture["components"],
         "posterior_mixture_entropy": mixture["entropy"],
@@ -4039,7 +4078,7 @@ def _apply_training_grad_masks(
         grads = zero_encoder_grads(grads)
         grads = zero_sed_scale_grads(grads)
         grads = zero_band_calibration_grads(grads)
-    elif update_phase in {"encoder_sleep", "encoder_wake", "joint_wake"}:
+    elif update_phase in {"encoder_sleep", "encoder_wake"}:
         grads = zero_sed_scale_grads(grads)
         grads = zero_band_calibration_grads(grads)
     if not train_alpha:
@@ -4066,7 +4105,7 @@ def _restore_frozen_model_components(
         "frozen_prior",
     }:
         new_model = eqx.tree_at(lambda tree: tree.prior, new_model, old_model.prior)
-    if update_phase in {"prior", "encoder_sleep", "encoder_wake", "joint_wake"}:
+    if update_phase in {"prior", "encoder_sleep", "encoder_wake"}:
         if update_phase == "prior":
             new_model = eqx.tree_at(
                 lambda tree: tree.encoder, new_model, old_model.encoder
