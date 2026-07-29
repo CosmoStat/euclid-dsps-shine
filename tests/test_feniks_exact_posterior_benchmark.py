@@ -222,7 +222,7 @@ def test_two_galaxy_big_nuts_is_probe_gated_resumable_and_provenanced() -> None:
     assert "FINAL_SAMPLERS=nuts" in submission
 
 
-def test_two_galaxy_big_can_be_submitted_after_the_running_probe() -> None:
+def test_two_galaxy_big_can_be_submitted_after_a_running_or_completed_probe() -> None:
     submission = (
         ROOT / "scripts/submit_feniks_exact_posterior_big_after_probe.sh"
     ).read_text()
@@ -231,7 +231,10 @@ def test_two_galaxy_big_can_be_submitted_after_the_running_probe() -> None:
     ).read_text()
 
     assert 'PROBE_JOB_ID="${PROBE_JOB_ID:?' in submission
-    assert '--dependency="afterok:$PROBE_JOB_ID"' in submission
+    assert 'squeue -h -j "$PROBE_JOB_ID"' in submission
+    assert 'sacct -X -n -P -j "$PROBE_JOB_ID" --format=State' in submission
+    assert 'dependency_args=(--dependency="afterok:$PROBE_JOB_ID")' in submission
+    assert 'probe_dependency_mode="completed_gate_immediate"' in submission
     assert "feniks_exact_two_galaxy_big_gate.slurm" in submission
     assert "requested_upper_bound_h100_hours_after_gate=44.33" in submission
     assert "#SBATCH --partition=prepost" in gate

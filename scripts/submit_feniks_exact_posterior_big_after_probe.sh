@@ -37,16 +37,41 @@ test ! -e "$ROOT_DIR" || {
   exit 2
 }
 
+dependency_args=()
+if squeue -h -j "$PROBE_JOB_ID" -o "%i" 2>/dev/null | grep -q .; then
+  dependency_args=(--dependency="afterok:$PROBE_JOB_ID")
+  probe_dependency_mode="afterok_active"
+else
+  probe_states=$(
+    sacct -X -n -P -j "$PROBE_JOB_ID" --format=State 2>/dev/null \
+      | cut -d "|" -f 1 \
+      | sed -e "s/[[:space:]]//g" -e "/^$/d"
+  )
+  test -n "$probe_states" || {
+    echo "[two-galaxy-big-after-probe][error] probe $PROBE_JOB_ID is absent from squeue and sacct"
+    exit 2
+  }
+  while IFS= read -r state; do
+    state="${state%%+*}"
+    test "$state" = "COMPLETED" || {
+      echo "[two-galaxy-big-after-probe][error] probe $PROBE_JOB_ID is not successful: $probe_states"
+      exit 2
+    }
+  done <<< "$probe_states"
+  probe_dependency_mode="completed_gate_immediate"
+fi
+
 common_export="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,PREPARED_ROOT=$PREPARED_ROOT,ROOT_DIR=$ROOT_DIR,STAMP=$STAMP,CONFIG=$CONFIG,DATASET=$DATASET,MODEL_ROOT=$MODEL_ROOT,CHECKPOINT=$CHECKPOINT,FEATURE_STATS=$FEATURE_STATS,NUTS_WARMUP=$NUTS_WARMUP,NUTS_MAX_DOUBLINGS=$NUTS_MAX_DOUBLINGS,SAMPLE_CHUNKS=$SAMPLE_CHUNKS,NUTS_TIME=$NUTS_TIME"
 gate=$(sbatch --parsable \
-  --dependency="afterok:$PROBE_JOB_ID" \
+  "${dependency_args[@]}" \
   --export="$common_export" \
   scripts/feniks_exact_two_galaxy_big_gate.slurm)
 gate="${gate%%;*}"
 
 log="outputs/logs/submit_feniks_exact_big_after_probe_${STAMP}.log"
 {
-  printf 'probe=%q gate=%q\n' "$PROBE_JOB_ID" "$gate"
+  printf 'probe=%q gate=%q probe_dependency_mode=%q\n' \
+    "$PROBE_JOB_ID" "$gate" "$probe_dependency_mode"
   printf 'prepared_root=%q\nroot=%q\n' "$PREPARED_ROOT" "$ROOT_DIR"
   printf 'nuts_warmup=%q nuts_max_doublings=%q sample_chunks=%q nuts_time=%q\n' \
     "$NUTS_WARMUP" "$NUTS_MAX_DOUBLINGS" "$SAMPLE_CHUNKS" "$NUTS_TIME"
