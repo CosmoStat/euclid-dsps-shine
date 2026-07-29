@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import shutil
 import subprocess
@@ -19,6 +20,9 @@ from astropy.io.votable import parse_single_table
 
 from euclid_dsps.cosmos2020 import (
     COSMOS_BANDS,
+    ESO_FARMER_V21_ID,
+    ESO_FARMER_V21_SIZE,
+    ESO_FARMER_V21_URL,
     ESO_TAP_URL,
     POPCOSMOS_COMMIT,
     POPCOSMOS_URL,
@@ -38,10 +42,97 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-zenodo", action="store_true")
     parser.add_argument("--timeout", type=int, default=7200)
     parser.add_argument(
+        "--farmer-url",
+        default=ESO_FARMER_V21_URL,
+        help="Direct URL for the full Farmer v2.1 FITS product.",
+    )
+    parser.add_argument(
         "--tap-job-url",
         help="Resume an existing full-catalog ESO asynchronous TAP job.",
     )
     return parser.parse_args()
+
+
+def _download_direct(
+    path: Path,
+    url: str,
+    *,
+    expected_size: int,
+    attempts: int = 8,
+) -> None:
+    """Stream a public archive product with retry and HTTP range resume."""
+    if path.is_file() and path.stat().st_size == expected_size:
+        print(f"[cosmos2020-download] reusing complete Farmer FITS: {path}")
+        return
+    if path.exists():
+        raise ValueError(
+            f"Existing final Farmer file has size {path.stat().st_size}, "
+            f"expected {expected_size}: {path}"
+        )
+
+    partial = path.with_suffix(path.suffix + ".part")
+    for attempt in range(1, attempts + 1):
+        offset = partial.stat().st_size if partial.exists() else 0
+        if offset > expected_size:
+            raise ValueError(
+                f"Partial Farmer file exceeds expected size: {partial}"
+            )
+        request = urllib.request.Request(url)
+        if offset:
+            request.add_header("Range", f"bytes={offset}-")
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                status = response.getcode()
+                if offset and status != 206:
+                    print(
+                        "[cosmos2020-download] server ignored range request; "
+                        "restarting Farmer download",
+                        flush=True,
+                    )
+                    offset = 0
+                mode = "ab" if offset and status == 206 else "wb"
+                downloaded = offset
+                last_report = time.monotonic()
+                with partial.open(mode) as stream:
+                    while True:
+                        block = response.read(8 * 1024 * 1024)
+                        if not block:
+                            break
+                        stream.write(block)
+                        downloaded += len(block)
+                        if time.monotonic() - last_report >= 30:
+                            fraction = 100.0 * downloaded / expected_size
+                            print(
+                                "[cosmos2020-download] Farmer "
+                                f"{downloaded}/{expected_size} bytes "
+                                f"({fraction:.1f}%)",
+                                flush=True,
+                            )
+                            last_report = time.monotonic()
+            actual_size = partial.stat().st_size
+            if actual_size != expected_size:
+                raise OSError(
+                    f"incomplete Farmer download: {actual_size}/{expected_size} bytes"
+                )
+            partial.replace(path)
+            print(
+                f"[cosmos2020-download] Farmer direct download complete: {path}",
+                flush=True,
+            )
+            return
+        except (OSError, http.client.HTTPException) as error:
+            if attempt == attempts:
+                raise
+            delay = min(2 ** (attempt - 1), 60)
+            current = partial.stat().st_size if partial.exists() else 0
+            print(
+                "[cosmos2020-download] Farmer transfer interrupted "
+                f"at {current}/{expected_size} bytes ({error}); "
+                f"retry {attempt}/{attempts} in {delay}s",
+                flush=True,
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 def _request(
@@ -223,18 +314,35 @@ def main() -> None:
             if args.max_rows is not None
             else "cosmos2020_farmer_v21.fits"
         )
-        query = _tap_download(
-            farmer,
-            args.max_rows,
-            args.timeout,
-            tap_job_url=args.tap_job_url,
-        )
-        manifest["farmer"] = {
-            "path": str(farmer),
-            "sha256": sha256_file(farmer),
-            "adql": query,
-            "max_rows": args.max_rows,
-        }
+        if args.max_rows is None and args.tap_job_url is None:
+            _download_direct(
+                farmer,
+                args.farmer_url,
+                expected_size=ESO_FARMER_V21_SIZE,
+            )
+            manifest["farmer"] = {
+                "path": str(farmer),
+                "sha256": sha256_file(farmer),
+                "method": "eso_phase3_direct",
+                "archive_id": ESO_FARMER_V21_ID,
+                "url": args.farmer_url,
+                "size_bytes": farmer.stat().st_size,
+                "max_rows": None,
+            }
+        else:
+            query = _tap_download(
+                farmer,
+                args.max_rows,
+                args.timeout,
+                tap_job_url=args.tap_job_url,
+            )
+            manifest["farmer"] = {
+                "path": str(farmer),
+                "sha256": sha256_file(farmer),
+                "method": "eso_tap",
+                "adql": query,
+                "max_rows": args.max_rows,
+            }
     manifest["filters"] = _download_filters(args.out / "filters")
     if not args.skip_external_repo:
         manifest["popcosmos"] = _clone_popcosmos(args.out / "external/pop-cosmos")

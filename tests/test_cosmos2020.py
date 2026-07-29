@@ -6,14 +6,16 @@ import pytest
 
 from euclid_dsps.cosmos2020 import (
     COSMOS_BANDS,
+    ESO_FARMER_V21_URL,
     R_LIMIT_UJY,
     deterministic_nested_order,
     farmer_adql,
     farmer_columns,
     prepare_farmer_catalog,
+    read_farmer_table,
     write_nested_subsets,
 )
-from scripts.download_cosmos2020_assets import parse_args
+from scripts.download_cosmos2020_assets import _download_direct, parse_args
 from scripts.validate_cosmos2020_reproduction import validate_spectral_assets
 
 
@@ -62,6 +64,46 @@ def test_downloader_exposes_async_tap_resume(monkeypatch) -> None:
     args = parse_args()
     assert args.tap_job_url.endswith("/123")
     assert args.timeout == 14400
+    assert args.farmer_url == ESO_FARMER_V21_URL
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes, status: int) -> None:
+        self.payload = payload
+        self.status = status
+        self.offset = 0
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, size: int) -> bytes:
+        block = self.payload[self.offset : self.offset + size]
+        self.offset += len(block)
+        return block
+
+
+def test_direct_farmer_download_resumes_partial_file(
+    tmp_path, monkeypatch
+) -> None:
+    target = tmp_path / "farmer.fits"
+    partial = tmp_path / "farmer.fits.part"
+    partial.write_bytes(b"abc")
+
+    def fake_urlopen(request, timeout):
+        assert request.headers["Range"] == "bytes=3-"
+        assert timeout == 300
+        return _FakeResponse(b"def", 206)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _download_direct(target, "https://archive.example/farmer", expected_size=6)
+    assert target.read_bytes() == b"abcdef"
+    assert not partial.exists()
 
 
 def test_prepare_farmer_applies_selection_and_extinction() -> None:
@@ -73,6 +115,17 @@ def test_prepare_farmer_applies_selection_and_extinction() -> None:
     assert manifest["selection_modelled_in_rws"] is False
     assert selected.loc[0, "flux_hsc_g"] == 1.0
     assert np.isnan(selected.loc[0, "fluxerr_hsc_g"])
+
+
+def test_read_farmer_fits_only_materializes_required_columns(tmp_path) -> None:
+    from astropy.table import Table
+
+    fixture = _farmer_fixture()
+    fixture["UNUSED_LARGE_COLUMN"] = "unused"
+    path = tmp_path / "farmer.fits"
+    Table.from_pandas(fixture).write(path)
+    loaded = read_farmer_table(path)
+    assert set(loaded.columns) == set(farmer_columns())
 
 
 def test_nested_subsets_are_deterministic_and_nested(tmp_path) -> None:

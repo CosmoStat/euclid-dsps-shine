@@ -10,10 +10,16 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from astropy.io import fits
 from astropy.table import Table
 
 ESO_TAP_URL = "https://archive.eso.org/tap_cat"
 ESO_TABLE = "COSMOS2020_FARMER_V1"
+ESO_FARMER_V21_ID = "ADP.2022-06-21T19:13:38.112"
+ESO_FARMER_V21_URL = (
+    f"https://dataportal.eso.org/dataPortal/file/{ESO_FARMER_V21_ID}"
+)
+ESO_FARMER_V21_SIZE = 2_923_603_200
 POPCOSMOS_COMMIT = "28690aab5ae1aeca01db1ceaf7bc7fe2a58378a7"
 POPCOSMOS_URL = "https://github.com/Cosmo-Pop/pop-cosmos.git"
 ZENODO_RECORD = "13820043"
@@ -96,7 +102,12 @@ def farmer_adql(max_rows: int | None = None) -> str:
 
 def read_farmer_table(path: str | Path) -> pd.DataFrame:
     path = Path(path)
-    if path.suffix.lower() in {".fits", ".fit", ".fts", ".vot", ".xml"}:
+    if path.suffix.lower() in {".fits", ".fit", ".fts"}:
+        with fits.open(path, memmap=True) as hdus:
+            data = hdus[1].data
+            table = Table({name: data[name] for name in farmer_columns()})
+        frame = table.to_pandas()
+    elif path.suffix.lower() in {".vot", ".xml"}:
         table = Table.read(path)
         frame = table.to_pandas()
     elif path.suffix.lower() in {".parquet", ".pq"}:

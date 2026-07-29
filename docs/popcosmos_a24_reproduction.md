@@ -106,9 +106,13 @@ squeue -j "${prepost_job%%;*}"
 ```
 
 The job installs this checkout, clones Pop-COSMOS at commit
-`28690aab5ae1aeca01db1ceaf7bc7fe2a58378a7`, downloads the ESO TAP table, the
-26 SVO curves, and Zenodo record `13820043`, then builds deterministic nested
-subsets. It fails if the A24 selection does not yield exactly 140,938 rows.
+`28690aab5ae1aeca01db1ceaf7bc7fe2a58378a7`, downloads the public ESO Phase 3
+Farmer v2.1 product `ADP.2022-06-21T19:13:38.112` directly, the 26 SVO curves,
+and Zenodo record `13820043`, then builds deterministic nested subsets. The
+2,923,603,200-byte FITS transfer is streamed to a `.part` file and resumed
+after transient failures. Full downloads do not use TAP; TAP remains available
+only for local `--max-rows` smokes. The job fails if the A24 selection does not
+yield exactly 140,938 rows.
 
 After it leaves `squeue`, verify terminal state and artifacts:
 
