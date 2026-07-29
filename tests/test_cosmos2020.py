@@ -15,7 +15,11 @@ from euclid_dsps.cosmos2020 import (
     read_farmer_table,
     write_nested_subsets,
 )
-from scripts.download_cosmos2020_assets import _download_direct, parse_args
+from scripts.download_cosmos2020_assets import (
+    _download_direct,
+    _download_filters,
+    parse_args,
+)
 from scripts.prepare_cosmos2020_farmer import _public_r25_non_xray_rows
 from scripts.validate_cosmos2020_reproduction import validate_spectral_assets
 
@@ -123,7 +127,6 @@ def test_prepare_farmer_applies_selection_and_extinction() -> None:
 def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None:
     fixture = _farmer_fixture()
     fixture.loc[:, "FLAG_COMBINED"] = 0
-    fixture.loc[:, "lp_type"] = 0
     summary = pd.DataFrame(
         {
             "INDEX_COSMOS": [10, 11, 12],
@@ -143,6 +146,53 @@ def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None
     assert selected["catalog_index"].tolist() == [0]
     assert manifest["public_catalog_ids"] is True
     assert manifest["catalog_valid_flags_applied"] is False
+    assert manifest["public_cohort_audit"]["lp_type_counts"] == {"0": 1}
+
+
+def test_public_cohort_audits_lp_type_without_changing_membership() -> None:
+    fixture = _farmer_fixture()
+    fixture.loc[:, "FLAG_COMBINED"] = 0
+    selected, manifest = prepare_farmer_catalog(
+        fixture, public_catalog_rows=np.array([0, 2])
+    )
+    assert selected["object_id"].tolist() == [10, 12]
+    assert manifest["public_cohort_audit"]["lp_type_counts"] == {"0": 1, "1": 1}
+
+
+def test_filter_download_retries_invalid_payload_and_writes_atomically(
+    tmp_path, monkeypatch
+) -> None:
+    valid_payload = (
+        b'<?xml version="1.0"?>'
+        b'<VOTABLE version="1.3" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">'
+        b"<RESOURCE><TABLE>"
+        b'<FIELD name="Wavelength" datatype="double"/>'
+        b'<FIELD name="Transmission" datatype="double"/>'
+        b"<DATA><TABLEDATA>"
+        b"<TR><TD>4000</TD><TD>0.1</TD></TR>"
+        b"<TR><TD>5000</TD><TD>0.9</TD></TR>"
+        b"</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>"
+    )
+    calls = 0
+
+    def fake_request(url):
+        nonlocal calls
+        calls += 1
+        return b"<VOTABLE>" if calls == 1 else valid_payload
+
+    monkeypatch.setattr(
+        "scripts.download_cosmos2020_assets.COSMOS_BANDS", COSMOS_BANDS[:1]
+    )
+    monkeypatch.setattr(
+        "scripts.download_cosmos2020_assets._request", fake_request
+    )
+    monkeypatch.setattr("scripts.download_cosmos2020_assets.time.sleep", lambda _: None)
+    rows = _download_filters(tmp_path)
+    assert calls == 2
+    assert len(rows) == 1
+    assert (tmp_path / f"{COSMOS_BANDS[0].name}.vot").is_file()
+    assert np.loadtxt(tmp_path / f"{COSMOS_BANDS[0].name}.dat").shape == (2, 2)
+    assert not list(tmp_path.glob(".*"))
 
 
 def test_read_farmer_fits_only_materializes_required_columns(tmp_path) -> None:

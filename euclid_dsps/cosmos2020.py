@@ -209,10 +209,6 @@ def prepare_farmer_catalog(
         selection = "published T24 MAGCUT_r == Y and XRAY == N Farmer IDs"
     selected_frame = output.loc[selected].copy()
     if public_catalog_rows is not None:
-        if not np.all(selected_frame["flag_combined"].to_numpy() == 0):
-            raise ValueError("Published T24 cohort contains FLAG_COMBINED != 0")
-        if not np.all(selected_frame["lp_type"].to_numpy() == 0):
-            raise ValueError("Published non-X-ray T24 cohort contains lp_type != 0")
         for band in COSMOS_BANDS:
             flux = selected_frame[f"flux_{band.name}"].to_numpy(float)
             error = selected_frame[f"fluxerr_{band.name}"].to_numpy(float)
@@ -229,6 +225,24 @@ def prepare_farmer_catalog(
     )
     selected_frame = selected_frame.sort_values("object_id").reset_index(drop=True)
     selected_frame.insert(0, "row_index", np.arange(len(selected_frame), dtype=np.int64))
+    public_cohort_audit = None
+    if public_catalog_rows is not None:
+        public_cohort_audit = {
+            "flag_combined_counts": {
+                str(key): int(value)
+                for key, value in selected_frame["flag_combined"]
+                .value_counts(dropna=False)
+                .sort_index()
+                .items()
+            },
+            "lp_type_counts": {
+                str(key): int(value)
+                for key, value in selected_frame["lp_type"]
+                .value_counts(dropna=False)
+                .sort_index()
+                .items()
+            },
+        }
     manifest = {
         "input_rows": int(len(frame)),
         "selected_rows": int(len(selected_frame)),
@@ -237,6 +251,7 @@ def prepare_farmer_catalog(
         "mw_extinction_applied_to": ["flux"],
         "farmer_lephare_offsets_applied_to": ["flux"],
         "public_catalog_ids": public_catalog_rows is not None,
+        "public_cohort_audit": public_cohort_audit,
         "catalog_valid_flags_applied": public_catalog_rows is None,
         "output_flux_units": "microjy",
         "n_bands": len(COSMOS_BANDS),

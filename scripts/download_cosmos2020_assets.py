@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.client
+import io
 import json
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -233,11 +235,52 @@ def _download_filters(output: Path) -> list[dict[str, str]]:
         )
         votable = output / f"{band.name}.vot"
         dat = output / f"{band.name}.dat"
-        votable.write_bytes(_request(url))
-        table = parse_single_table(votable).to_table()
-        wave = np.asarray(table["Wavelength"], dtype=float)
-        transmission = np.asarray(table["Transmission"], dtype=float)
-        np.savetxt(dat, np.column_stack((wave, transmission)), fmt="%.10e")
+        for attempt in range(1, 6):
+            try:
+                payload = _request(url)
+                table = parse_single_table(io.BytesIO(payload)).to_table()
+                wave = np.asarray(table["Wavelength"], dtype=float)
+                transmission = np.asarray(table["Transmission"], dtype=float)
+                if (
+                    wave.ndim != 1
+                    or transmission.shape != wave.shape
+                    or len(wave) < 2
+                    or not np.all(np.isfinite(wave))
+                    or not np.all(np.isfinite(transmission))
+                ):
+                    raise ValueError(f"Invalid SVO filter payload for {band.svo_id}")
+
+                with tempfile.NamedTemporaryFile(
+                    dir=output, prefix=f".{band.name}.", suffix=".vot", delete=False
+                ) as stream:
+                    stream.write(payload)
+                    temporary_votable = Path(stream.name)
+                with tempfile.NamedTemporaryFile(
+                    dir=output,
+                    prefix=f".{band.name}.",
+                    suffix=".dat",
+                    mode="w",
+                    delete=False,
+                ) as stream:
+                    np.savetxt(
+                        stream,
+                        np.column_stack((wave, transmission)),
+                        fmt="%.10e",
+                    )
+                    temporary_dat = Path(stream.name)
+                temporary_votable.replace(votable)
+                temporary_dat.replace(dat)
+                break
+            except (OSError, ValueError) as error:
+                if attempt == 5:
+                    raise
+                delay = min(2 ** (attempt - 1), 30)
+                print(
+                    f"[cosmos2020-download] invalid filter response for "
+                    f"{band.svo_id} ({error}); retry {attempt}/5 in {delay}s",
+                    flush=True,
+                )
+                time.sleep(delay)
         rows.append(
             {
                 "band": band.name,

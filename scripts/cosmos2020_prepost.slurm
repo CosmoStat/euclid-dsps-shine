@@ -54,7 +54,11 @@ DOWNLOAD_ARGS=(--out "$ASSET_DIR" --timeout "$TAP_TIMEOUT")
 if [[ -n "$TAP_JOB_URL" ]]; then
   DOWNLOAD_ARGS+=(--tap-job-url "$TAP_JOB_URL")
 fi
-python scripts/download_cosmos2020_assets.py "${DOWNLOAD_ARGS[@]}"
+if [[ -s "$ASSET_DIR/DOWNLOAD_COMPLETE.json" ]]; then
+  echo "[cosmos2020-prepost] reusing completed asset download: $ASSET_DIR"
+else
+  python scripts/download_cosmos2020_assets.py "${DOWNLOAD_ARGS[@]}"
+fi
 if [[ "$INSTALL" == "1" ]]; then
   pip_install_with_retry --no-deps -e "$ASSET_DIR/external/pop-cosmos"
   python - <<'PY'
