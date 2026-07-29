@@ -236,6 +236,9 @@ def test_two_galaxy_big_can_be_submitted_after_the_running_probe() -> None:
     assert "requested_upper_bound_h100_hours_after_gate=44.33" in submission
     assert "#SBATCH --partition=prepost" in gate
     assert "#SBATCH --account=jrx@cpu" in gate
+    assert "#SBATCH --mem" not in gate
+    assert "#SBATCH --mem-per-cpu" not in gate
+    assert "#SBATCH --mem-per-gpu" not in gate
     assert "summarize_feniks_nuts_batched_probe.py" in gate
     assert "submit_feniks_exact_posterior_two_galaxy_nuts_big.sh" in gate
 
