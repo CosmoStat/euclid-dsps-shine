@@ -305,8 +305,9 @@ def run_batched_nuts_chains(
     seeds: tuple[int, ...],
     settings: NUTSSettings,
     out_dirs: tuple[str | Path, ...],
+    resume: bool = True,
 ) -> list[dict[str, Any]]:
-    """Adapt and sample independent NUTS chains in one vectorized JAX program."""
+    """Adapt and sample resumable independent NUTS chains with ``vmap``."""
     _enforce_float64_sampling()
     import blackjax
 
@@ -319,9 +320,34 @@ def run_batched_nuts_chains(
     _validate_chunks(settings.sample_chunks)
     outputs = tuple(Path(path) for path in out_dirs)
     for output in outputs:
-        if output.exists() and any(output.iterdir()):
-            raise FileExistsError(f"Batched NUTS requires a fresh chain directory: {output}")
         output.mkdir(parents=True, exist_ok=True)
+    parents = {output.parent for output in outputs}
+    if len(parents) != 1:
+        raise ValueError("Batched NUTS chain directories must share one parent")
+    parent = next(iter(parents))
+    group_name = "-".join(output.name for output in outputs)
+    resume_path = parent / f".{group_name}.batched_nuts_state.pkl"
+    contract_path = parent / f".{group_name}.batched_nuts_contract.json"
+    contract = {
+        "version": 1,
+        "sampler": "nuts",
+        "execution": "vmap_batched_chains",
+        "chain_directories": [output.name for output in outputs],
+        "seeds": [int(seed) for seed in seeds],
+        "warmup_steps": int(settings.warmup_steps),
+        "target_accept": float(settings.target_accept),
+        "max_num_doublings": int(settings.max_num_doublings),
+        "sample_chunks": list(settings.sample_chunks),
+    }
+    if contract_path.exists():
+        existing_contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        if existing_contract != contract:
+            raise ValueError(
+                "Incompatible batched NUTS resume contract: "
+                f"actual={existing_contract} expected={contract}"
+            )
+    else:
+        _write_json_atomic(contract_path, contract)
 
     sampling_logdensity = jax.jit(_float64_logdensity(logdensity_fn), inline=False)
     target_started = time.perf_counter()
@@ -341,51 +367,165 @@ def run_batched_nuts_chains(
         flush=True,
     )
 
-    base_keys = jnp.stack([jax.random.PRNGKey(int(seed)) for seed in seeds])
-    split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(base_keys)
-    keys = split_keys[:, 0]
-    warmup_keys = split_keys[:, 1]
-    adaptation = blackjax.window_adaptation(
-        blackjax.nuts,
-        sampling_logdensity,
-        is_mass_matrix_diagonal=True,
-        target_acceptance_rate=float(settings.target_accept),
-        max_num_doublings=int(settings.max_num_doublings),
-        initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
+    resumed = False
+    completed_chunks = 0
+    sampling_elapsed = 0.0
+    adaptation_info = None
+    if resume and resume_path.exists():
+        payload = _read_pickle(resume_path)
+        states = _float64_sampling_state(payload["states"])
+        keys = jnp.asarray(payload["keys"])
+        parameters = {
+            "step_size": jnp.asarray(
+                payload["parameters"]["step_size"], dtype=jnp.float64
+            ),
+            "inverse_mass_matrix": jnp.asarray(
+                payload["parameters"]["inverse_mass_matrix"],
+                dtype=jnp.float64,
+            ),
+        }
+        warmup_elapsed = float(payload["warmup_elapsed_s"])
+        sampling_elapsed = float(payload.get("sampling_elapsed_s", 0.0))
+        completed_chunks = int(payload.get("completed_chunks", 0))
+        resumed = True
+    else:
+        state_paths = [output / "sampling_state.pkl" for output in outputs]
+        parameter_paths = [output / "tuned_parameters.npz" for output in outputs]
+        resumable = [
+            state_path.exists() and parameter_path.exists()
+            for state_path, parameter_path in zip(
+                state_paths, parameter_paths, strict=True
+            )
+        ]
+        if resume and all(resumable):
+            payloads = [_read_pickle(path) for path in state_paths]
+            states = jax.tree.map(
+                lambda *values: jnp.stack(values),
+                *[
+                    _float64_sampling_state(payload["state"])
+                    for payload in payloads
+                ],
+            )
+            keys = jnp.stack([jnp.asarray(payload["key"]) for payload in payloads])
+            loaded_parameters = [np.load(path) for path in parameter_paths]
+            parameters = {
+                "step_size": jnp.stack(
+                    [
+                        jnp.asarray(values["step_size"], dtype=jnp.float64)
+                        for values in loaded_parameters
+                    ]
+                ),
+                "inverse_mass_matrix": jnp.stack(
+                    [
+                        jnp.asarray(
+                            values["inverse_mass_matrix"], dtype=jnp.float64
+                        )
+                        for values in loaded_parameters
+                    ]
+                ),
+            }
+            warmup_elapsed = max(
+                float(payload.get("warmup_elapsed_s", 0.0))
+                for payload in payloads
+            )
+            completed_chunks, sampling_elapsed = _completed_batched_nuts_chunks(
+                outputs,
+                settings.sample_chunks,
+            )
+            resumed = True
+            _write_pickle_atomic(
+                resume_path,
+                {
+                    "states": states,
+                    "keys": keys,
+                    "parameters": parameters,
+                    "warmup_elapsed_s": warmup_elapsed,
+                    "sampling_elapsed_s": sampling_elapsed,
+                    "completed_chunks": completed_chunks,
+                },
+            )
+        elif any(resumable) or any(
+            output.exists() and any(output.iterdir()) for output in outputs
+        ):
+            raise FileExistsError(
+                "Batched NUTS found incomplete, non-resumable chain artifacts: "
+                + ", ".join(map(str, outputs))
+            )
+        else:
+            base_keys = jnp.stack(
+                [jax.random.PRNGKey(int(seed)) for seed in seeds]
+            )
+            split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(
+                base_keys
+            )
+            keys = split_keys[:, 0]
+            warmup_keys = split_keys[:, 1]
+            adaptation = blackjax.window_adaptation(
+                blackjax.nuts,
+                sampling_logdensity,
+                is_mass_matrix_diagonal=True,
+                target_acceptance_rate=float(settings.target_accept),
+                max_num_doublings=int(settings.max_num_doublings),
+                initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
+            )
+
+            warmup_started = time.perf_counter()
+            print(
+                "[exact-sampler:nuts-batched] warmup start "
+                f"chains={n_chains} steps={settings.warmup_steps} "
+                f"max_doublings={settings.max_num_doublings}",
+                flush=True,
+            )
+
+            def adapt_one(key, position):
+                return adaptation.run(
+                    key, position, int(settings.warmup_steps)
+                )
+
+            (states, parameters), adaptation_info = jax.vmap(adapt_one)(
+                warmup_keys,
+                positions,
+            )
+            jax.block_until_ready(states.position)
+            warmup_elapsed = time.perf_counter() - warmup_started
+            print(
+                "[exact-sampler:nuts-batched] warmup done "
+                f"chains={n_chains} elapsed_s={warmup_elapsed:.1f}",
+                flush=True,
+            )
+            _write_pickle_atomic(
+                resume_path,
+                {
+                    "states": states,
+                    "keys": keys,
+                    "parameters": parameters,
+                    "warmup_elapsed_s": warmup_elapsed,
+                    "sampling_elapsed_s": 0.0,
+                    "completed_chunks": 0,
+                },
+            )
+
+    if completed_chunks < 0 or completed_chunks > len(settings.sample_chunks):
+        raise ValueError(
+            f"Invalid completed batched chunk count: {completed_chunks}"
+        )
+    if resumed:
+        print(
+            "[exact-sampler:nuts-batched] resume "
+            f"chains={n_chains} completed_chunks={completed_chunks} "
+            f"stored_draws={sum(settings.sample_chunks[:completed_chunks])}",
+            flush=True,
+        )
+    _validate_or_rollback_batched_nuts_chunks(
+        outputs,
+        settings.sample_chunks,
+        completed_chunks=completed_chunks,
     )
 
-    warmup_started = time.perf_counter()
-    print(
-        "[exact-sampler:nuts-batched] warmup start "
-        f"chains={n_chains} steps={settings.warmup_steps} "
-        f"max_doublings={settings.max_num_doublings}",
-        flush=True,
-    )
-
-    def adapt_one(key, position):
-        return adaptation.run(key, position, int(settings.warmup_steps))
-
-    (states, parameters), adaptation_info = jax.vmap(adapt_one)(
-        warmup_keys,
-        positions,
-    )
-    jax.block_until_ready(states.position)
-    warmup_elapsed = time.perf_counter() - warmup_started
-    print(
-        "[exact-sampler:nuts-batched] warmup done "
-        f"chains={n_chains} elapsed_s={warmup_elapsed:.1f}",
-        flush=True,
-    )
-
-    started = time.perf_counter()
     for chain_index, output in enumerate(outputs):
         chain_parameters = jax.tree.map(
             lambda value, index=chain_index: value[index],
             parameters,
-        )
-        chain_info = jax.tree.map(
-            lambda value, index=chain_index: value[index],
-            adaptation_info,
         )
         np.savez(
             output / "tuned_parameters.npz",
@@ -396,14 +536,28 @@ def run_batched_nuts_chains(
                 jax.device_get(chain_parameters["inverse_mass_matrix"])
             ),
         )
-        _write_warmup_summary(
-            output / "warmup_summary.json",
-            sampler="nuts_batched",
-            elapsed_s=warmup_elapsed,
-            nominal_steps=int(settings.warmup_steps),
-            parameters=chain_parameters,
-            adaptation_info=chain_info,
-        )
+        warmup_path = output / "warmup_summary.json"
+        if adaptation_info is not None:
+            chain_info = jax.tree.map(
+                lambda value, index=chain_index: value[index],
+                adaptation_info,
+            )
+            _write_warmup_summary(
+                warmup_path,
+                sampler="nuts_batched",
+                elapsed_s=warmup_elapsed,
+                nominal_steps=int(settings.warmup_steps),
+                parameters=chain_parameters,
+                adaptation_info=chain_info,
+            )
+        elif not warmup_path.exists():
+            _write_warmup_summary(
+                warmup_path,
+                sampler="nuts_batched",
+                elapsed_s=warmup_elapsed,
+                nominal_steps=int(settings.warmup_steps),
+                parameters=chain_parameters,
+            )
         _write_pickle_atomic(
             output / "sampling_state.pkl",
             {
@@ -416,10 +570,21 @@ def run_batched_nuts_chains(
             },
         )
 
-    chunks_by_chain: list[list[dict[str, Any]]] = [
-        [] for _ in range(n_chains)
+    chunks_by_chain = [
+        [
+            _chunk_record(
+                chunk_id,
+                settings.sample_chunks[chunk_id],
+                output / "chunks" / f"part_{chunk_id:06d}.parquet",
+                output / "chunks" / f"part_{chunk_id:06d}_info.parquet",
+            )
+            for chunk_id in range(completed_chunks)
+        ]
+        for output in outputs
     ]
     for chunk_id, n_samples in enumerate(settings.sample_chunks):
+        if chunk_id < completed_chunks:
+            continue
         key_pairs = jax.vmap(lambda key: jax.random.split(key, 2))(keys)
         keys = key_pairs[:, 0]
         chunk_keys = key_pairs[:, 1]
@@ -461,6 +626,19 @@ def run_batched_nuts_chains(
                 elapsed_s=elapsed,
                 thinning=1,
             )
+        sampling_elapsed += elapsed
+        _write_pickle_atomic(
+            resume_path,
+            {
+                "states": states,
+                "keys": keys,
+                "parameters": parameters,
+                "warmup_elapsed_s": warmup_elapsed,
+                "sampling_elapsed_s": sampling_elapsed,
+                "completed_chunks": chunk_id + 1,
+            },
+        )
+        for chain_index, output in enumerate(outputs):
             _write_pickle_atomic(
                 output / "sampling_state.pkl",
                 {
@@ -481,7 +659,7 @@ def run_batched_nuts_chains(
                 )
             )
 
-    total_elapsed = time.perf_counter() - started + warmup_elapsed
+    total_elapsed = warmup_elapsed + sampling_elapsed
     manifests = []
     for chain_index, output in enumerate(outputs):
         manifest = {
@@ -499,6 +677,8 @@ def run_batched_nuts_chains(
             "kernel_transitions": int(sum(settings.sample_chunks)),
             "warmup_elapsed_s": warmup_elapsed,
             "total_elapsed_s": total_elapsed,
+            "resumed": resumed,
+            "resumed_from_chunks": completed_chunks,
             "chunks": chunks_by_chain[chain_index],
         }
         _write_json_atomic(output / "chain_manifest.json", manifest)
@@ -1335,6 +1515,91 @@ def _find_tree_field(tree: Any, name: str):
 def _validate_chunks(chunks: tuple[int, ...]) -> None:
     if not chunks or any(int(value) <= 0 for value in chunks):
         raise ValueError("sample_chunks must contain positive integers")
+
+
+def _completed_batched_nuts_chunks(
+    outputs: tuple[Path, ...],
+    sample_chunks: tuple[int, ...],
+) -> tuple[int, float]:
+    """Infer a complete legacy batch prefix from standard chain artifacts."""
+    completed = 0
+    elapsed_s = 0.0
+    found_gap = False
+    for chunk_id, n_samples in enumerate(sample_chunks):
+        pairs = [
+            (
+                output / "chunks" / f"part_{chunk_id:06d}.parquet",
+                output / "chunks" / f"part_{chunk_id:06d}_info.parquet",
+            )
+            for output in outputs
+        ]
+        pair_complete = [
+            samples.exists() and info.exists() for samples, info in pairs
+        ]
+        pair_partial = [
+            samples.exists() != info.exists() for samples, info in pairs
+        ]
+        if any(pair_partial) or (any(pair_complete) and not all(pair_complete)):
+            raise RuntimeError(
+                f"Partial legacy batched NUTS chunk {chunk_id}; "
+                "a common rollback checkpoint is unavailable"
+            )
+        if not any(pair_complete):
+            found_gap = True
+            continue
+        if found_gap:
+            raise RuntimeError(
+                f"Non-contiguous legacy batched NUTS chunk {chunk_id}"
+            )
+        for samples, info in pairs:
+            _validate_nuts_chunk_rows(samples, info, n_samples)
+        timing = pd.read_parquet(pairs[0][0], columns=["elapsed_s"])
+        values = timing["elapsed_s"].to_numpy(dtype=np.float64)
+        if values.size and np.isfinite(values).all():
+            elapsed_s += float(values[0])
+        completed += 1
+    return completed, elapsed_s
+
+
+def _validate_or_rollback_batched_nuts_chunks(
+    outputs: tuple[Path, ...],
+    sample_chunks: tuple[int, ...],
+    *,
+    completed_chunks: int,
+) -> None:
+    """Validate committed chunks and remove files beyond the batch checkpoint."""
+    for chunk_id, n_samples in enumerate(sample_chunks):
+        for output in outputs:
+            for temporary in (output / "chunks").glob(
+                f"part_{chunk_id:06d}*.tmp-*"
+            ):
+                temporary.unlink(missing_ok=True)
+            samples = output / "chunks" / f"part_{chunk_id:06d}.parquet"
+            info = output / "chunks" / f"part_{chunk_id:06d}_info.parquet"
+            if chunk_id < completed_chunks:
+                if not samples.exists() or not info.exists():
+                    raise FileNotFoundError(
+                        "Committed batched NUTS chunk is incomplete: "
+                        f"{samples}, {info}"
+                    )
+                _validate_nuts_chunk_rows(samples, info, n_samples)
+            else:
+                samples.unlink(missing_ok=True)
+                info.unlink(missing_ok=True)
+
+
+def _validate_nuts_chunk_rows(
+    samples_path: Path,
+    info_path: Path,
+    expected_rows: int,
+) -> None:
+    sample_rows = len(pd.read_parquet(samples_path, columns=["draw"]))
+    info_rows = len(pd.read_parquet(info_path, columns=["draw"]))
+    if sample_rows != int(expected_rows) or info_rows != int(expected_rows):
+        raise ValueError(
+            "Invalid NUTS chunk row count: "
+            f"samples={sample_rows} info={info_rows} expected={expected_rows}"
+        )
 
 
 def _chunk_record(

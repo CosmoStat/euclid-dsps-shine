@@ -21,20 +21,33 @@ test -f "$galaxy_dir/nuts/chain_00/DONE" || {
   echo "[batched-nuts-probe][error] scalar baseline is incomplete"
   exit 2
 }
+resume_state="$galaxy_dir/nuts/.chain_01-chain_02-chain_03.batched_nuts_state.pkl"
+legacy_resumable=1
 for chain in 01 02 03; do
   chain_dir="$galaxy_dir/nuts/chain_$chain"
+  [[ -f "$chain_dir/sampling_state.pkl" \
+    && -f "$chain_dir/tuned_parameters.npz" ]] || legacy_resumable=0
+done
+complete=0
+for chain in 01 02 03; do
+  chain_dir="$galaxy_dir/nuts/chain_$chain"
+  [[ -f "$chain_dir/DONE" ]] && complete=$(( complete + 1 ))
   find "$chain_dir" -maxdepth 0 -type d -empty -delete 2>/dev/null || true
-  test ! -e "$chain_dir" || {
-    echo "[batched-nuts-probe][error] non-empty chain: $chain_dir"
+  [[ ! -d "$chain_dir" || -f "$chain_dir/DONE" || -f "$resume_state" \
+    || "$legacy_resumable" -eq 1 ]] || {
+    echo "[batched-nuts-probe][error] non-resumable chain: $chain_dir"
     exit 2
   }
 done
 
 common_export="ALL,ROOT_DIR=$ROOT_DIR,CONFIG=$CONFIG,DATASET=$DATASET,MODEL_ROOT=$MODEL_ROOT,CHECKPOINT=$CHECKPOINT,FEATURE_STATS=$FEATURE_STATS"
-probe=$(sbatch --parsable --array=0 --time=04:00:00 \
-  --export="$common_export,MODE=pilot,CHAIN_INDICES=1:2:3,NUTS_WARMUP=50,NUTS_MAX_DOUBLINGS=4,SAMPLE_CHUNKS=100" \
-  scripts/feniks_exact_nuts_batched_h100.slurm)
-probe="${probe%%;*}"
+probe=""
+if (( complete < 3 )); then
+  probe=$(sbatch --parsable --array=0 --time=04:00:00 \
+    --export="$common_export,MODE=pilot,CHAIN_INDICES=1:2:3,NUTS_WARMUP=50,NUTS_MAX_DOUBLINGS=4,SAMPLE_CHUNKS=100" \
+    scripts/feniks_exact_nuts_batched_h100.slurm)
+  probe="${probe%%;*}"
+fi
 
 log="outputs/logs/submit_feniks_exact_nuts_batched_probe_${STAMP}.log"
 {
@@ -44,4 +57,5 @@ log="outputs/logs/submit_feniks_exact_nuts_batched_probe_${STAMP}.log"
 } | tee "$log"
 echo "monitor: squeue -j $probe"
 echo "requested_upper_bound_h100_hours=4.00 peak_h100=1"
+(( complete == 3 )) && echo "probe already complete; run the summarizer now"
 echo "submission_log=$log"

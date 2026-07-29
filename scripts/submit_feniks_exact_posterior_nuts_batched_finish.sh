@@ -20,11 +20,19 @@ for chain in 00 01 02 03; do
   }
 done
 second_galaxy="$ROOT_DIR/galaxies/02_nearby_row400"
+resume_state="$second_galaxy/nuts/.chain_00-chain_01-chain_02-chain_03.batched_nuts_state.pkl"
+legacy_resumable=1
+for chain in 00 01 02 03; do
+  chain_dir="$second_galaxy/nuts/chain_$chain"
+  [[ -f "$chain_dir/sampling_state.pkl" \
+    && -f "$chain_dir/tuned_parameters.npz" ]] || legacy_resumable=0
+done
 for chain in 00 01 02 03; do
   chain_dir="$second_galaxy/nuts/chain_$chain"
   find "$chain_dir" -maxdepth 0 -type d -empty -delete 2>/dev/null || true
-  test ! -e "$chain_dir" || {
-    echo "[batched-nuts-finish][error] non-empty chain: $chain_dir"
+  [[ ! -d "$chain_dir" || -f "$chain_dir/DONE" || -f "$resume_state" \
+    || "$legacy_resumable" -eq 1 ]] || {
+    echo "[batched-nuts-finish][error] non-resumable chain: $chain_dir"
     exit 2
   }
 done

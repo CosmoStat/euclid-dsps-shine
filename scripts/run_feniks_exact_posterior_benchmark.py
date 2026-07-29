@@ -503,18 +503,14 @@ def sample_nuts_batched(args: argparse.Namespace, config: dict[str, Any]) -> Non
         raise ValueError("--chain-indices must be in [0, 3]")
     chunks = _sample_chunks(args)
     settings = _nuts_settings(args, chunks)
-    missing = []
+    incomplete = []
     for chain_index in requested:
         chain_dir = galaxy_dir / "nuts" / f"chain_{chain_index:02d}"
         if (chain_dir / "DONE").exists():
             _validate_completed_nuts_manifest(chain_dir, settings)
             continue
-        if chain_dir.exists() and any(chain_dir.iterdir()):
-            raise FileExistsError(
-                f"Cannot batch-resume incomplete chain directory: {chain_dir}"
-            )
-        missing.append(chain_index)
-    if not missing:
+        incomplete.append(chain_index)
+    if not incomplete:
         print(
             f"[exact-nuts-batched] galaxy={galaxy_index} already complete",
             flush=True,
@@ -523,7 +519,8 @@ def sample_nuts_batched(args: argparse.Namespace, config: dict[str, Any]) -> Non
 
     print(
         "[exact-nuts-batched] "
-        f"galaxy={galaxy_index} row={int(item.row_index)} chains={missing} "
+        f"galaxy={galaxy_index} row={int(item.row_index)} chains={requested} "
+        f"incomplete={incomplete} "
         f"warmup={settings.warmup_steps} "
         f"max_doublings={settings.max_num_doublings} "
         f"chunks={settings.sample_chunks}",
@@ -534,15 +531,15 @@ def sample_nuts_batched(args: argparse.Namespace, config: dict[str, Any]) -> Non
     initial = np.load(galaxy_dir / "initial_positions.npy")
     seeds = tuple(
         int(args.seed) + galaxy_index * 10_000 + chain_index * 101
-        for chain_index in missing
+        for chain_index in requested
     )
     out_dirs = tuple(
         galaxy_dir / "nuts" / f"chain_{chain_index:02d}"
-        for chain_index in missing
+        for chain_index in requested
     )
     manifests = run_batched_nuts_chains(
         logdensity_fn,
-        jnp.asarray(initial[missing]),
+        jnp.asarray(initial[list(requested)]),
         seeds=seeds,
         settings=settings,
         out_dirs=out_dirs,

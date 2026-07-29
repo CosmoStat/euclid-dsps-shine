@@ -191,6 +191,37 @@ def test_batched_nuts_probe_and_finish_preserve_chain_artifact_contract() -> Non
     assert "requested_upper_bound_h100_hours=8.33" in finish
 
 
+def test_two_galaxy_big_nuts_is_probe_gated_resumable_and_provenanced() -> None:
+    submission = (
+        ROOT
+        / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts_big.sh"
+    ).read_text()
+
+    assert "batched_probe_summary.json" in submission
+    assert 'summary.get("status") != "passed"' in submission
+    assert "batched_divergences" in submission
+    assert "throughput_speedup" in submission
+    assert 'NUTS_WARMUP="${NUTS_WARMUP:-200}"' in submission
+    assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-4}"' in submission
+    assert (
+        'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-'
+        "100:100:100:100:100:100:100:100:100:100}\""
+    ) in submission
+    assert 'NUTS_TIME="${NUTS_TIME:-20:00:00}"' in submission
+    assert 'os.link(src, dst)' in submission
+    assert '"row_index": int(row.row_index)' in submission
+    assert '"object_id": str(row.object_id)' in submission
+    assert '"draws_per_galaxy": 4 * sum(chunks)' in submission
+    assert '"resume_granularity": "completed sample chunk"' in submission
+    assert "sed_draws.npz" in submission
+    assert "corner_full15.png" in submission
+    assert "posterior_method_agreement.png" in submission
+    assert '--array="${array_spec}%${concurrency}"' in submission
+    assert "feniks_exact_nuts_batched_h100.slurm" in submission
+    assert '--dependency="afterok:$nuts"' in submission
+    assert "FINAL_SAMPLERS=nuts" in submission
+
+
 def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> None:
     assert _selected_samplers(SimpleNamespace(samplers="nuts")) == ("nuts",)
     assert _selected_samplers(SimpleNamespace(samplers="nuts,mclmc")) == (

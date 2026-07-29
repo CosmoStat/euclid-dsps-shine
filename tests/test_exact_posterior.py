@@ -122,6 +122,33 @@ def test_batched_nuts_writes_independent_standard_chain_artifacts(
         frames[0][["x_00", "x_01"]].to_numpy(),
         frames[1][["x_00", "x_01"]].to_numpy(),
     )
+    digests = [
+        _sha256(directory / "chunks" / "part_000000.parquet")
+        for directory in directories
+    ]
+    resumed = run_batched_nuts_chains(
+        _normal_logdensity,
+        jnp.asarray(
+            [
+                [0.2, -0.1],
+                [-0.3, 0.4],
+                [0.1, 0.3],
+            ]
+        ),
+        seeds=(11, 12, 13),
+        settings=NUTSSettings(
+            warmup_steps=12,
+            sample_chunks=(6,),
+            max_num_doublings=3,
+        ),
+        out_dirs=directories,
+    )
+    assert all(row["resumed"] is True for row in resumed)
+    assert all(row["resumed_from_chunks"] == 1 for row in resumed)
+    assert [
+        _sha256(directory / "chunks" / "part_000000.parquet")
+        for directory in directories
+    ] == digests
 
 
 def test_chain_summary_serializes_nonfinite_smoke_diagnostics_as_null(
