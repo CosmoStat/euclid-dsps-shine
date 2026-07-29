@@ -132,7 +132,24 @@ def test_two_galaxy_nuts_submission_has_no_mclmc_dependency() -> None:
     assert "FINAL_SAMPLERS=nuts" in submission
     assert '--dependency="afterok:$nuts"' in submission
     assert "SAMPLER=mclmc" not in submission
+    assert "NUTS_MAX_DOUBLINGS" in submission
     assert "requested_upper_bound_h100_hours=60.33" in submission
+
+
+def test_two_galaxy_nuts_recovery_reuses_preparation_and_caps_tree_depth() -> None:
+    recovery = (
+        ROOT
+        / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts_recovery.sh"
+    ).read_text()
+
+    assert "PREP_DONE" in recovery
+    assert "feniks_exact_prepare_h100.slurm" not in recovery
+    assert 'NUTS_WARMUP="${NUTS_WARMUP:-200}"' in recovery
+    assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-6}"' in recovery
+    assert 'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100,300}"' in recovery
+    assert "--array=0-7%8" in recovery
+    assert "FINAL_SAMPLERS=nuts" in recovery
+    assert "requested_upper_bound_h100_hours=52.33" in recovery
 
 
 def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> None:
@@ -218,6 +235,7 @@ def test_exact_wrappers_avoid_unreliable_jobscratch_and_use_headless_plots() -> 
     finalize = (ROOT / "scripts" / "feniks_exact_finalize_h100.slurm").read_text()
     assert "MPLBACKEND=Agg" in prepare
     assert "JAX_ENABLE_X64=true" in chain
+    assert "NUTS_MAX_DOUBLINGS" in chain
     assert "MPLBACKEND=Agg" in finalize
 
 

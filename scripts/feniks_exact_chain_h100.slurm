@@ -62,6 +62,8 @@ extra=()
 [[ -n "${DESIRED_ENERGY_VAR:-}" ]] && extra+=(--desired-energy-var "$DESIRED_ENERGY_VAR")
 [[ -n "${SAMPLE_CHUNKS:-}" ]] && extra+=(--sample-chunks "$SAMPLE_CHUNKS")
 [[ -n "${NUTS_WARMUP:-}" ]] && extra+=(--nuts-warmup "$NUTS_WARMUP")
+[[ -n "${NUTS_MAX_DOUBLINGS:-}" ]] && \
+  extra+=(--nuts-max-doublings "$NUTS_MAX_DOUBLINGS")
 [[ -n "${MCLMC_TUNE:-}" ]] && extra+=(--mclmc-tune "$MCLMC_TUNE")
 
 heartbeat() {

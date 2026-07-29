@@ -135,6 +135,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--map-starts", type=int, default=16)
     parser.add_argument("--map-iterations", type=int)
     parser.add_argument("--nuts-warmup", type=int)
+    parser.add_argument("--nuts-max-doublings", type=int)
     parser.add_argument("--mclmc-tune", type=int)
     parser.add_argument("--sample-chunks")
     parser.add_argument("--thinning", type=int)
@@ -420,10 +421,15 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
             ),
             sample_chunks=chunks,
             target_accept=0.65,
-            max_num_doublings=4 if args.mode == "smoke" else 10,
+            max_num_doublings=int(
+                args.nuts_max_doublings
+                if args.nuts_max_doublings is not None
+                else (4 if args.mode == "smoke" else 6)
+            ),
         )
         print(
             f"[exact-chain] NUTS warmup={settings.warmup_steps} "
+            f"max_doublings={settings.max_num_doublings} "
             f"chunks={settings.sample_chunks}",
             flush=True,
         )
