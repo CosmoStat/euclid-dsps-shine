@@ -8,9 +8,9 @@ DATASET="${DATASET:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxco
 MODEL_ROOT="${MODEL_ROOT:-outputs/runs/feniks_selfsup_paper_v1/rws_k8_t2_seed2}"
 CHECKPOINT="${CHECKPOINT:-$MODEL_ROOT/train/checkpoints/best.eqx}"
 FEATURE_STATS="${FEATURE_STATS:-$MODEL_ROOT/train/feature_stats.json}"
-NUTS_WARMUP="${NUTS_WARMUP:-200}"
-NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-6}"
-SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100,300}"
+NUTS_WARMUP="${NUTS_WARMUP:-50}"
+NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-4}"
+SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100}"
 STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 
 cd "$REPO_DIR"
@@ -19,6 +19,7 @@ for path in "$CONFIG" "$DATASET" "$CHECKPOINT" "${CHECKPOINT}.json" \
   "$FEATURE_STATS" "$ROOT_DIR/cohort.parquet" "$ROOT_DIR/contract.json"; do
   test -s "$path" || { echo "[nuts-recovery][error] missing $path"; exit 2; }
 done
+missing_tasks=()
 for galaxy_index in 0 1; do
   galaxy_dir=$(python - "$ROOT_DIR" "$galaxy_index" <<'PY'
 import sys
@@ -39,24 +40,51 @@ PY
     echo "[nuts-recovery][error] incomplete preparation: $galaxy_dir"
     exit 2
   }
-  completed=$(find "$galaxy_dir/nuts" -mindepth 2 -maxdepth 2 \
-    -name DONE 2>/dev/null | wc -l)
-  (( completed == 0 )) || {
-    echo "[nuts-recovery][error] refusing to mix settings with completed chains: $galaxy_dir"
-    exit 2
-  }
-  find "$galaxy_dir/nuts" -mindepth 1 -maxdepth 1 \
-    -type d -name 'chain_*' -empty -delete 2>/dev/null || true
+  for chain_index in 0 1 2 3; do
+    task_id=$(( galaxy_index * 4 + chain_index ))
+    chain_dir=$(printf '%s/nuts/chain_%02d' "$galaxy_dir" "$chain_index")
+    if [[ -f "$chain_dir/DONE" ]]; then
+      python - "$chain_dir/chain_manifest.json" \
+        "$NUTS_WARMUP" "$NUTS_MAX_DOUBLINGS" "$SAMPLE_CHUNKS" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_chunks = [int(value) for value in sys.argv[4].replace(":", ",").split(",")]
+expected = {
+    "warmup_steps": int(sys.argv[2]),
+    "max_num_doublings": int(sys.argv[3]),
+    "sample_chunks": expected_chunks,
+}
+actual = {key: manifest.get(key) for key in expected}
+if actual != expected:
+    raise SystemExit(
+        f"Incompatible completed NUTS chain {sys.argv[1]}: "
+        f"actual={actual} expected={expected}"
+    )
+PY
+      continue
+    fi
+    find "$chain_dir" -maxdepth 0 -type d -empty -delete 2>/dev/null || true
+    missing_tasks+=("$task_id")
+  done
 done
 
 common_export="ALL,ROOT_DIR=$ROOT_DIR,CONFIG=$CONFIG,DATASET=$DATASET,MODEL_ROOT=$MODEL_ROOT,CHECKPOINT=$CHECKPOINT,FEATURE_STATS=$FEATURE_STATS"
-nuts=$(sbatch --parsable --array=0-7%8 --time=06:00:00 \
-  --export="$common_export,MODE=pilot,SAMPLER=nuts,CHAINS=4,N_GALAXIES=2,NUTS_WARMUP=$NUTS_WARMUP,NUTS_MAX_DOUBLINGS=$NUTS_MAX_DOUBLINGS,SAMPLE_CHUNKS=$SAMPLE_CHUNKS" \
-  scripts/feniks_exact_chain_h100.slurm)
-nuts="${nuts%%;*}"
+dependency=()
+nuts=""
+if (( ${#missing_tasks[@]} > 0 )); then
+  array_spec=$(IFS=,; echo "${missing_tasks[*]}")
+  concurrency=${#missing_tasks[@]}
+  nuts=$(sbatch --parsable --array="${array_spec}%${concurrency}" --time=04:00:00 \
+    --export="$common_export,MODE=pilot,SAMPLER=nuts,CHAINS=4,N_GALAXIES=2,NUTS_WARMUP=$NUTS_WARMUP,NUTS_MAX_DOUBLINGS=$NUTS_MAX_DOUBLINGS,SAMPLE_CHUNKS=$SAMPLE_CHUNKS" \
+    scripts/feniks_exact_chain_h100.slurm)
+  nuts="${nuts%%;*}"
+  dependency=(--dependency="afterok:$nuts")
+fi
 finalize=$(sbatch --parsable --array=0-1%2 --time=02:00:00 \
-  --dependency="afterok:$nuts" \
-  --export="$common_export,MODE=pilot,FINAL_SAMPLERS=nuts" \
+  "${dependency[@]}" --export="$common_export,MODE=pilot,FINAL_SAMPLERS=nuts" \
   scripts/feniks_exact_finalize_h100.slurm)
 finalize="${finalize%%;*}"
 aggregate=$(sbatch --parsable --time=00:20:00 \
@@ -74,5 +102,6 @@ log="outputs/logs/submit_feniks_exact_two_galaxy_nuts_recovery_${STAMP}.log"
     "$nuts" "$finalize" "$aggregate"
 } | tee "$log"
 echo "monitor: squeue -j $nuts,$finalize,$aggregate"
-echo "requested_upper_bound_h100_hours=52.33 peak_h100=8"
+echo "missing_nuts_tasks=${#missing_tasks[@]} peak_h100=${#missing_tasks[@]}"
+echo "requested_upper_bound_h100_hours_at_most=36.33"
 echo "submission_log=$log"

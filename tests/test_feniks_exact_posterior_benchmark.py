@@ -10,6 +10,7 @@ import pandas as pd
 
 from scripts.run_feniks_exact_posterior_benchmark import (
     _all_finite_at_most,
+    _sample_chunks,
     _selected_samplers,
     _truth_theta,
     _write_run_comparison,
@@ -144,12 +145,25 @@ def test_two_galaxy_nuts_recovery_reuses_preparation_and_caps_tree_depth() -> No
 
     assert "PREP_DONE" in recovery
     assert "feniks_exact_prepare_h100.slurm" not in recovery
-    assert 'NUTS_WARMUP="${NUTS_WARMUP:-200}"' in recovery
-    assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-6}"' in recovery
-    assert 'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100,300}"' in recovery
-    assert "--array=0-7%8" in recovery
+    assert 'NUTS_WARMUP="${NUTS_WARMUP:-50}"' in recovery
+    assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-4}"' in recovery
+    assert 'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100}"' in recovery
+    assert "missing_tasks" in recovery
+    assert '--array="${array_spec}%${concurrency}"' in recovery
     assert "FINAL_SAMPLERS=nuts" in recovery
-    assert "requested_upper_bound_h100_hours=52.33" in recovery
+    assert "requested_upper_bound_h100_hours_at_most=36.33" in recovery
+
+
+def test_two_galaxy_nuts_probe_gates_the_parallel_recovery() -> None:
+    probe = (
+        ROOT / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts_probe.sh"
+    ).read_text()
+
+    assert "--array=0 --time=04:00:00" in probe
+    assert 'NUTS_WARMUP="${NUTS_WARMUP:-50}"' in probe
+    assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-4}"' in probe
+    assert 'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100}"' in probe
+    assert "requested_upper_bound_h100_hours=4.00" in probe
 
 
 def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> None:
@@ -165,6 +179,11 @@ def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> N
             pass
         else:
             raise AssertionError(f"Expected invalid sampler contract: {value!r}")
+
+
+def test_sample_chunks_accepts_slurm_safe_colon_separator() -> None:
+    args = SimpleNamespace(sample_chunks="100:300", mode="pilot")
+    assert _sample_chunks(args) == (100, 300)
 
 
 def test_adaptation_probe_summary_accepts_finite_adjusted_chain(

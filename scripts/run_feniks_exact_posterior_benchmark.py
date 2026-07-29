@@ -1388,7 +1388,8 @@ def _galaxy_dir(out: Path, item) -> Path:
 
 def _sample_chunks(args: argparse.Namespace) -> tuple[int, ...]:
     if args.sample_chunks:
-        chunks = tuple(int(value) for value in args.sample_chunks.split(","))
+        chunk_text = args.sample_chunks.replace(":", ",")
+        chunks = tuple(int(value) for value in chunk_text.split(","))
     elif args.mode == "smoke":
         chunks = (10,)
     elif args.mode == "pilot":

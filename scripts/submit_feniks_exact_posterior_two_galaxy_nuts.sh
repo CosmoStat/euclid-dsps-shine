@@ -12,7 +12,7 @@ STAMP="${STAMP:-$(date +%Y%m%d_%H%M%S)}"
 ROOT_DIR="${ROOT_DIR:-outputs/runs/feniks_exact_posterior_two_galaxy_nuts_${STAMP}}"
 NUTS_WARMUP="${NUTS_WARMUP:-500}"
 NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-6}"
-SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100,500}"
+SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-100:500}"
 
 cd "$REPO_DIR"
 mkdir -p outputs/logs
