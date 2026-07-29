@@ -11,8 +11,11 @@ import pandas as pd
 
 from euclid_dsps.cosmos2020 import (
     DEFAULT_SUBSET_SIZES,
+    SPECZ_MIN_CONFIDENCE,
+    attach_spectroscopic_redshifts,
     prepare_farmer_catalog,
     read_farmer_table,
+    read_spectroscopic_catalog,
     sha256_file,
     write_json,
     write_nested_subsets,
@@ -50,6 +53,16 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=0.99,
         help="Minimum usable fraction of the public cohort.",
+    )
+    parser.add_argument(
+        "--specz-catalog",
+        type=Path,
+        help="Public COSMOS spectroscopic compilation matched by Farmer ID.",
+    )
+    parser.add_argument(
+        "--specz-min-confidence",
+        type=float,
+        default=SPECZ_MIN_CONFIDENCE,
     )
     return parser.parse_args()
 
@@ -127,6 +140,24 @@ def main() -> None:
         public_catalog_rows=public_rows,
         min_public_retention=args.min_public_retention,
     )
+    if args.specz_catalog is not None:
+        spectroscopy = read_spectroscopic_catalog(args.specz_catalog)
+        public_summary = (
+            pd.read_csv(args.public_summary, sep=r"\s+", low_memory=False)
+            if args.public_summary is not None
+            else None
+        )
+        selected, specz_audit = attach_spectroscopic_redshifts(
+            selected,
+            spectroscopy,
+            public_summary=public_summary,
+            min_confidence=args.specz_min_confidence,
+        )
+        manifest["spectroscopic_redshifts"] = {
+            **specz_audit,
+            "path": str(args.specz_catalog),
+            "sha256": sha256_file(args.specz_catalog),
+        }
     if (
         args.expected_selected is not None
         and len(selected) != args.expected_selected

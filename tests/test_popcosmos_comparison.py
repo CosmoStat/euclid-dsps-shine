@@ -43,7 +43,7 @@ def test_photoz_metrics_use_normalized_residuals_and_coverage() -> None:
     module = _module()
     frame = pd.DataFrame(
         {
-            "a24_z_SPEC": [1.0, 2.0, np.nan],
+            "rws_redshift_true": [1.0, 2.0, np.nan],
             "rws_z_median": [1.0, 2.3, 0.4],
             "rws_z_q16": [0.8, 2.0, 0.2],
             "rws_z_q84": [1.2, 2.6, 0.6],

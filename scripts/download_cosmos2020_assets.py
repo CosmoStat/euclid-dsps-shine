@@ -28,6 +28,9 @@ from euclid_dsps.cosmos2020 import (
     ESO_TAP_URL,
     POPCOSMOS_COMMIT,
     POPCOSMOS_URL,
+    SPECZ_COMPILATION_SHA256,
+    SPECZ_COMPILATION_SIZE,
+    SPECZ_COMPILATION_URL,
     ZENODO_RECORD,
     farmer_adql,
     sha256_file,
@@ -46,6 +49,11 @@ def parse_args() -> argparse.Namespace:
         "--filters-only",
         action="store_true",
         help="Refresh filter curves in an existing completed asset manifest.",
+    )
+    parser.add_argument(
+        "--specz-only",
+        action="store_true",
+        help="Download/verify the public COSMOS spectroscopic compilation only.",
     )
     parser.add_argument("--timeout", type=int, default=7200)
     parser.add_argument(
@@ -69,11 +77,11 @@ def _download_direct(
 ) -> None:
     """Stream a public archive product with retry and HTTP range resume."""
     if path.is_file() and path.stat().st_size == expected_size:
-        print(f"[cosmos2020-download] reusing complete Farmer FITS: {path}")
+        print(f"[cosmos2020-download] reusing complete archive file: {path}")
         return
     if path.exists():
         raise ValueError(
-            f"Existing final Farmer file has size {path.stat().st_size}, "
+            f"Existing final archive file has size {path.stat().st_size}, "
             f"expected {expected_size}: {path}"
         )
 
@@ -82,7 +90,7 @@ def _download_direct(
         offset = partial.stat().st_size if partial.exists() else 0
         if offset > expected_size:
             raise ValueError(
-                f"Partial Farmer file exceeds expected size: {partial}"
+                f"Partial archive file exceeds expected size: {partial}"
             )
         request = urllib.request.Request(url)
         if offset:
@@ -110,7 +118,7 @@ def _download_direct(
                         if time.monotonic() - last_report >= 30:
                             fraction = 100.0 * downloaded / expected_size
                             print(
-                                "[cosmos2020-download] Farmer "
+                                "[cosmos2020-download] archive "
                                 f"{downloaded}/{expected_size} bytes "
                                 f"({fraction:.1f}%)",
                                 flush=True,
@@ -123,7 +131,7 @@ def _download_direct(
                 )
             partial.replace(path)
             print(
-                f"[cosmos2020-download] Farmer direct download complete: {path}",
+                f"[cosmos2020-download] direct download complete: {path}",
                 flush=True,
             )
             return
@@ -133,7 +141,7 @@ def _download_direct(
             delay = min(2 ** (attempt - 1), 60)
             current = partial.stat().st_size if partial.exists() else 0
             print(
-                "[cosmos2020-download] Farmer transfer interrupted "
+                "[cosmos2020-download] archive transfer interrupted "
                 f"at {current}/{expected_size} bytes ({error}); "
                 f"retry {attempt}/{attempts} in {delay}s",
                 flush=True,
@@ -346,6 +354,30 @@ def _download_zenodo(output: Path) -> list[dict[str, str]]:
     return rows
 
 
+def _download_spectroscopy(output: Path) -> dict[str, object]:
+    output.mkdir(parents=True, exist_ok=True)
+    target = output / "specz_compilation_COSMOS_DR1.1_unique.fits"
+    _download_direct(
+        target,
+        SPECZ_COMPILATION_URL,
+        expected_size=SPECZ_COMPILATION_SIZE,
+    )
+    digest = sha256_file(target)
+    if digest != SPECZ_COMPILATION_SHA256:
+        raise ValueError(
+            f"Spectroscopic compilation SHA256 mismatch: {digest}"
+        )
+    return {
+        "path": str(target),
+        "url": SPECZ_COMPILATION_URL,
+        "size_bytes": target.stat().st_size,
+        "sha256": digest,
+        "join_column": "Id_COS20_Farmer",
+        "redshift_column": "specz",
+        "confidence_column": "Confidence_level",
+    }
+
+
 def main() -> None:
     args = parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -362,12 +394,26 @@ def main() -> None:
         shutil.copyfile(manifest_path, args.out / "DOWNLOAD_COMPLETE.json")
         print(f"[cosmos2020-download] refreshed filters -> {args.out}")
         return
+    if args.specz_only:
+        manifest_path = args.out / "download_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"--specz-only requires an existing manifest: {manifest_path}"
+            )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["spectroscopy"] = _download_spectroscopy(args.out / "specz")
+        manifest["status"] = "complete"
+        write_json(manifest_path, manifest)
+        shutil.copyfile(manifest_path, args.out / "DOWNLOAD_COMPLETE.json")
+        print(f"[cosmos2020-download] refreshed spectroscopy -> {args.out}")
+        return
     manifest: dict[str, object] = {
         "status": "incomplete",
         "farmer": None,
         "filters": [],
         "popcosmos": None,
         "zenodo": [],
+        "spectroscopy": None,
     }
     if not args.skip_farmer:
         farmer = args.out / (
@@ -409,6 +455,7 @@ def main() -> None:
         manifest["popcosmos"] = _clone_popcosmos(args.out / "external/pop-cosmos")
     if not args.skip_zenodo:
         manifest["zenodo"] = _download_zenodo(args.out / "zenodo")
+    manifest["spectroscopy"] = _download_spectroscopy(args.out / "specz")
     manifest["status"] = "complete"
     write_json(args.out / "download_manifest.json", manifest)
     shutil.copyfile(

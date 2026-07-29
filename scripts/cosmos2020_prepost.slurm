@@ -80,6 +80,33 @@ then
   python scripts/download_cosmos2020_assets.py \
     --out "$ASSET_DIR" --filters-only
 fi
+if ! python - "$ASSET_DIR/download_manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from euclid_dsps.cosmos2020 import (
+    SPECZ_COMPILATION_SHA256,
+    SPECZ_COMPILATION_SIZE,
+    sha256_file,
+)
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+entry = manifest.get("spectroscopy") or {}
+path = Path(entry.get("path", ""))
+if (
+    not path.is_file()
+    or path.stat().st_size != SPECZ_COMPILATION_SIZE
+    or sha256_file(path) != SPECZ_COMPILATION_SHA256
+):
+    raise SystemExit(1)
+print("[cosmos2020-prepost] spectroscopy provenance: current")
+PY
+then
+  echo "[cosmos2020-prepost] downloading public COSMOS spectroscopy"
+  python scripts/download_cosmos2020_assets.py \
+    --out "$ASSET_DIR" --specz-only
+fi
 if [[ "$INSTALL" == "1" ]]; then
   pip_install_with_retry --no-deps -e "$ASSET_DIR/external/pop-cosmos"
   python - <<'PY'
@@ -93,6 +120,8 @@ PREPARE_ARGS=(
   --input "$ASSET_DIR/cosmos2020_farmer_v21.fits"
   --out "$PREPARED_DIR"
   --public-summary "$ASSET_DIR/zenodo/summaries.txt"
+  --specz-catalog \
+    "$ASSET_DIR/specz/specz_compilation_COSMOS_DR1.1_unique.fits"
   --expected-public "$EXPECTED_PUBLIC"
   --min-public-retention "$MIN_PUBLIC_RETENTION"
 )

@@ -23,6 +23,15 @@ ESO_FARMER_V21_SIZE = 2_923_603_200
 POPCOSMOS_COMMIT = "28690aab5ae1aeca01db1ceaf7bc7fe2a58378a7"
 POPCOSMOS_URL = "https://github.com/Cosmo-Pop/pop-cosmos.git"
 ZENODO_RECORD = "13820043"
+SPECZ_COMPILATION_URL = (
+    "https://media.githubusercontent.com/media/cosmosastro/speczcompilation/"
+    "main/specz_compilation/specz_compilation_COSMOS_DR1.1_unique.fits"
+)
+SPECZ_COMPILATION_SIZE = 70_223_040
+SPECZ_COMPILATION_SHA256 = (
+    "6ffd1145ed9caeba6c16f8e4267415682562b1a37549ac07a070ba5eb6336e99"
+)
+SPECZ_MIN_CONFIDENCE = 50.0
 
 
 @dataclass(frozen=True)
@@ -306,6 +315,118 @@ def prepare_farmer_catalog(
         ),
     }
     return selected_frame, manifest
+
+
+def read_spectroscopic_catalog(path: str | Path) -> pd.DataFrame:
+    """Read the public COSMOS spectroscopic compilation columns we use."""
+    columns = (
+        "Id_specz",
+        "specz",
+        "Confidence_level",
+        "survey",
+        "compilation_year",
+        "Id_COS20_Farmer",
+    )
+    with fits.open(path, memmap=True) as hdus:
+        data = hdus[1].data
+        missing = sorted(set(columns) - set(data.names))
+        if missing:
+            raise ValueError(
+                "Spectroscopic compilation is missing columns: "
+                + ", ".join(missing)
+            )
+        table = Table({name: data[name] for name in columns})
+    frame = table.to_pandas()
+    for column in ("survey",):
+        if column in frame:
+            frame[column] = frame[column].map(
+                lambda value: (
+                    value.decode("utf-8").strip()
+                    if isinstance(value, bytes)
+                    else str(value).strip()
+                )
+            )
+    return frame
+
+
+def attach_spectroscopic_redshifts(
+    selected: pd.DataFrame,
+    spectroscopy: pd.DataFrame,
+    *,
+    public_summary: pd.DataFrame | None = None,
+    min_confidence: float = SPECZ_MIN_CONFIDENCE,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Attach reliable public spec-z values by exact COSMOS2020 Farmer ID."""
+    spec = spectroscopy.copy()
+    spec["object_id"] = pd.to_numeric(
+        spec["Id_COS20_Farmer"], errors="coerce"
+    )
+    spec["redshift_spec"] = pd.to_numeric(spec["specz"], errors="coerce")
+    spec["specz_confidence_level"] = pd.to_numeric(
+        spec["Confidence_level"], errors="coerce"
+    )
+    valid = (
+        np.isfinite(spec["object_id"])
+        & (spec["object_id"] != -999)
+        & np.isfinite(spec["redshift_spec"])
+        & (spec["redshift_spec"] >= 0.0)
+        & np.isfinite(spec["specz_confidence_level"])
+        & (spec["specz_confidence_level"] >= float(min_confidence))
+    )
+    spec = spec.loc[valid].copy()
+    spec["object_id"] = spec["object_id"].astype(np.int64)
+    spec["specz_survey"] = spec.get("survey", "").astype(str)
+    spec["specz_compilation_year"] = pd.to_numeric(
+        spec.get("compilation_year"), errors="coerce"
+    )
+    spec["specz_id"] = pd.to_numeric(spec.get("Id_specz"), errors="coerce")
+    duplicate_rows = int(spec.duplicated("object_id", keep=False).sum())
+    spec = spec.sort_values(
+        ["object_id", "specz_confidence_level", "specz_compilation_year", "specz_id"],
+        ascending=[True, False, False, True],
+        na_position="last",
+    ).drop_duplicates("object_id", keep="first")
+
+    columns = [
+        "object_id",
+        "redshift_spec",
+        "specz_confidence_level",
+        "specz_survey",
+        "specz_compilation_year",
+        "specz_id",
+    ]
+    result = selected.merge(spec[columns], on="object_id", how="left", validate="one_to_one")
+    result["redshift_true"] = result["redshift_spec"]
+
+    flagged_ids: set[int] = set()
+    if public_summary is not None:
+        summary = public_summary.copy()
+        flag = summary["z_SPEC"].astype(str).str.upper().eq("Y")
+        flagged = pd.to_numeric(
+            summary.loc[flag, "INDEX_COSMOS"], errors="coerce"
+        ).dropna()
+        flagged_ids = set(flagged.astype(np.int64).tolist())
+    result["t24_specz_flag"] = result["object_id"].isin(flagged_ids)
+
+    matched = np.isfinite(result["redshift_spec"].to_numpy(float))
+    flagged = result["t24_specz_flag"].to_numpy(bool)
+    audit = {
+        "source": "cosmosastro/speczcompilation COSMOS DR1.1 unique",
+        "join": "object_id == Id_COS20_Farmer",
+        "minimum_confidence_level": float(min_confidence),
+        "input_rows": int(len(spectroscopy)),
+        "eligible_unique_farmer_ids": int(len(spec)),
+        "duplicate_candidate_rows": duplicate_rows,
+        "selected_rows": int(len(result)),
+        "matched_selected_rows": int(np.count_nonzero(matched)),
+        "t24_specz_flagged_selected_rows": int(np.count_nonzero(flagged)),
+        "matched_and_t24_flagged_rows": int(np.count_nonzero(matched & flagged)),
+        "t24_flagged_without_public_value": int(np.count_nonzero(flagged & ~matched)),
+        "redshift_true_semantics": (
+            "public spectroscopic redshift where available; NaN otherwise"
+        ),
+    }
+    return result, audit
 
 
 def deterministic_nested_order(object_ids: pd.Series, seed: int) -> np.ndarray:

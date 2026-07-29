@@ -11,6 +11,7 @@ from euclid_dsps.cosmos2020 import (
     ESO_FARMER_V21_URL,
     R_LIMIT_UJY,
     deterministic_nested_order,
+    attach_spectroscopic_redshifts,
     farmer_adql,
     farmer_columns,
     prepare_farmer_catalog,
@@ -227,6 +228,35 @@ def test_public_cohort_rejects_large_farmer_mismatch() -> None:
             fixture,
             public_catalog_rows=np.array([0, 2]),
         )
+
+
+def test_specz_join_uses_farmer_id_confidence_and_preserves_missing() -> None:
+    selected = pd.DataFrame({"object_id": [10, 11, 12]})
+    spectroscopy = pd.DataFrame(
+        {
+            "Id_specz": [1, 2, 3, 4],
+            "Id_COS20_Farmer": [10, 10, 11, -999],
+            "specz": [0.4, 0.5, 1.2, 2.0],
+            "Confidence_level": [60, 90, 40, 100],
+            "survey": ["old", "best", "low", "invalid"],
+            "compilation_year": [2020, 2022, 2024, 2024],
+        }
+    )
+    public = pd.DataFrame(
+        {
+            "INDEX_COSMOS": [10, 11, 12],
+            "z_SPEC": ["Y", "Y", "N"],
+        }
+    )
+    result, audit = attach_spectroscopic_redshifts(
+        selected, spectroscopy, public_summary=public
+    )
+    assert result["redshift_spec"].iloc[0] == pytest.approx(0.5)
+    assert result["redshift_true"].iloc[0] == pytest.approx(0.5)
+    assert np.isnan(result["redshift_true"].iloc[1])
+    assert result["t24_specz_flag"].tolist() == [True, True, False]
+    assert audit["matched_selected_rows"] == 1
+    assert audit["t24_flagged_without_public_value"] == 1
 
 
 def test_filter_download_retries_invalid_payload_and_writes_atomically(

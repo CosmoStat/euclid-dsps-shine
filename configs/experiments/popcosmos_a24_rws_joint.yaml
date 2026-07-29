@@ -3,7 +3,13 @@ extends: ../fs2_gpu.yaml
 catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
 runtime: gpu
 column_groups: []
-extra_columns: [lp_zbest, r_abmag_mw_corrected]
+extra_columns:
+  - lp_zbest
+  - r_abmag_mw_corrected
+  - redshift_true
+  - redshift_spec
+  - specz_confidence_level
+  - t24_specz_flag
 
 dataset:
   name: cosmos2020_farmer_a24
@@ -11,6 +17,7 @@ dataset:
 
 truth:
   __replace__: true
+  redshift_column: redshift_true
 
 selection:
   index: 0

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from scipy.spatial import cKDTree
 
 PARAMETER_MAP = {
@@ -78,8 +79,13 @@ def match_catalogs(
     return matched.reset_index(drop=True)
 
 
-def _photoz_metrics(frame: pd.DataFrame, prefix: str) -> dict[str, float | int]:
-    zspec = pd.to_numeric(frame["a24_z_SPEC"], errors="coerce").to_numpy(float)
+def _photoz_metrics(
+    frame: pd.DataFrame,
+    prefix: str,
+    *,
+    truth_column: str = "rws_redshift_true",
+) -> dict[str, float | int]:
+    zspec = pd.to_numeric(frame[truth_column], errors="coerce").to_numpy(float)
     median = frame[f"{prefix}_median"].to_numpy(float)
     q16 = frame[f"{prefix}_q16"].to_numpy(float)
     q84 = frame[f"{prefix}_q84"].to_numpy(float)
@@ -106,9 +112,20 @@ def _photoz_metrics(frame: pd.DataFrame, prefix: str) -> dict[str, float | int]:
 def main() -> None:
     args = parse_args()
     posterior = pd.read_parquet(args.inference / "posterior_summary.parquet")
-    positions = pd.read_parquet(
-        args.dataset, columns=["object_id", "ra_deg", "dec_deg"]
+    available = set(pq.ParquetFile(args.dataset).schema.names)
+    position_columns = ["object_id", "ra_deg", "dec_deg"]
+    position_columns.extend(
+        column
+        for column in (
+            "redshift_true",
+            "redshift_spec",
+            "specz_confidence_level",
+            "specz_survey",
+            "t24_specz_flag",
+        )
+        if column in available
     )
+    positions = pd.read_parquet(args.dataset, columns=position_columns)
     ours = posterior.merge(positions, on="object_id", validate="many_to_one")
     reference = pd.read_csv(
         args.a24_summaries,
@@ -163,13 +180,29 @@ def main() -> None:
         "rws": _photoz_metrics(matched, "rws_z"),
         "a24": _photoz_metrics(matched, "a24_z"),
     }
+    t24_flagged = (
+        matched.loc[matched["rws_t24_specz_flag"].fillna(False).astype(bool)]
+        if "rws_t24_specz_flag" in matched
+        else matched.iloc[0:0]
+    )
+    photoz_t24_flagged = {
+        method: _photoz_metrics(t24_flagged, f"{method}_z")
+        for method in ("rws", "a24")
+    }
     args.out.mkdir(parents=True, exist_ok=True)
     matched.to_parquet(args.out / "matched_posteriors.parquet", index=False)
     pd.DataFrame(parameter_rows).to_csv(
         args.out / "parameter_median_comparison.csv", index=False
     )
     pd.DataFrame(
-        [{"method": method, **metrics} for method, metrics in photoz.items()]
+        [
+            {"method": method, "sample": "public_specz_dr1p1", **metrics}
+            for method, metrics in photoz.items()
+        ]
+        + [
+            {"method": method, "sample": "t24_flagged_intersection", **metrics}
+            for method, metrics in photoz_t24_flagged.items()
+        ]
     ).to_csv(args.out / "photoz_metrics.csv", index=False)
     summary = {
         "status": "complete",
@@ -179,6 +212,17 @@ def main() -> None:
         "match_radius_arcsec": float(args.match_radius_arcsec),
         "max_match_arcsec": float(matched["match_arcsec"].max()),
         "photoz": photoz,
+        "photoz_t24_flagged_intersection": photoz_t24_flagged,
+        "spectroscopic_reference": {
+            "column": "rws_redshift_true",
+            "semantics": (
+                "COSMOS DR1.1 public spectroscopy with Confidence_level >= 50, "
+                "joined by Id_COS20_Farmer"
+            ),
+            "a24_z_SPEC_semantics": (
+                "Y/N availability flag only; never interpreted as a redshift"
+            ),
+        },
         "parameter_comparison": parameter_rows,
         "interpretation": (
             "Matched same-object total-method comparison. DSPS and A24 "
