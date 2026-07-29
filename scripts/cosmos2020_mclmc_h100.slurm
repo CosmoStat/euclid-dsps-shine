@@ -21,8 +21,8 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 DATASET="${DATASET:-Data/cosmos2020/prepared/farmer_a24_full.parquet}"
 MODEL_STAGE="${MODEL_STAGE:-n40k}"
-MODEL_ROOT="${MODEL_ROOT:-outputs/runs/popcosmos_a24_rws_v1/$MODEL_STAGE}"
-OUT="${OUT:-outputs/runs/popcosmos_a24_mclmc_v1}"
+MODEL_ROOT="${MODEL_ROOT:-outputs/runs/popcosmos_a24_rws_v2/$MODEL_STAGE}"
+OUT="${OUT:-outputs/runs/popcosmos_a24_mclmc_v2}"
 MODE="${MODE:-pilot}"
 INDEX="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
 

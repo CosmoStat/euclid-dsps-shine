@@ -4,8 +4,8 @@ set -Eeuo pipefail
 CONFIG="${CONFIG:-configs/experiments/popcosmos_a24_rws_joint.yaml}"
 DATASET="${DATASET:-Data/cosmos2020/prepared/farmer_a24_full.parquet}"
 MODEL_STAGE="${MODEL_STAGE:-n40k}"
-MODEL_ROOT="${MODEL_ROOT:-outputs/runs/popcosmos_a24_rws_v1/$MODEL_STAGE}"
-OUT="${OUT:-outputs/runs/popcosmos_a24_mclmc_v1}"
+MODEL_ROOT="${MODEL_ROOT:-outputs/runs/popcosmos_a24_rws_v2/$MODEL_STAGE}"
+OUT="${OUT:-outputs/runs/popcosmos_a24_mclmc_v2}"
 MODE="${MODE:-pilot}"
 ARRAY="0-5%2"
 if [[ "$MODE" == "smoke" ]]; then ARRAY="0-1%2"; fi

@@ -46,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--asset-dir", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--expected-full", type=int)
+    parser.add_argument(
+        "--allow-inference-fail",
+        action="store_true",
+        help="Smoke-only: require inference artifacts but do not promote on science fit.",
+    )
     return parser.parse_args()
 
 
@@ -73,7 +78,24 @@ def main() -> None:
     )
     if manifest["n_bands"] != 26:
         raise ValueError("Preparation manifest does not declare 26 bands")
+    spectroscopy = manifest.get("spectroscopic_redshifts") or {}
+    if int(spectroscopy.get("matched_selected_rows", 0)) <= 0:
+        raise ValueError(
+            "Prepared catalog has no validated public spectroscopic redshifts"
+        )
     full = args.data_dir / "farmer_a24_full.parquet"
+    full_columns = set(pq.ParquetFile(full).schema.names)
+    required_specz = {
+        "redshift_spec",
+        "redshift_true",
+        "specz_confidence_level",
+        "t24_specz_flag",
+    }
+    if not required_specz.issubset(full_columns):
+        raise ValueError(
+            "Prepared catalog is missing spectroscopy columns: "
+            + ", ".join(sorted(required_specz - full_columns))
+        )
     n_full = pq.ParquetFile(full).metadata.num_rows
     if args.expected_full is not None and n_full != args.expected_full:
         raise ValueError(f"Expected {args.expected_full} rows, found {n_full}")
@@ -111,14 +133,30 @@ def main() -> None:
 
     if args.run_dir is not None:
         checkpoint = args.run_dir / "train/checkpoints/best.eqx"
-        gate = args.run_dir / "train/training_collapse_gate.json"
-        done = args.run_dir / "DONE"
-        for path in (checkpoint, gate, done):
+        training_gate = args.run_dir / "train/training_collapse_gate.json"
+        inference_gate = args.run_dir / "inference/collapse_gate.json"
+        comparison = args.run_dir / "a24_comparison/comparison_summary.json"
+        for path in (checkpoint, training_gate, inference_gate, comparison):
             if not path.exists():
                 raise FileNotFoundError(path)
-        status = json.loads(gate.read_text(encoding="utf-8"))["status"]
-        if status == "FAIL":
-            raise RuntimeError(f"Training collapse gate failed in {args.run_dir}")
+        for label, path in (
+            ("training", training_gate),
+            ("inference", inference_gate),
+        ):
+            status = json.loads(path.read_text(encoding="utf-8"))["status"]
+            if status == "FAIL":
+                if label == "inference" and args.allow_inference_fail:
+                    print(
+                        "[cosmos2020-contract] smoke inference science gate: "
+                        "FAIL allowed for runtime validation"
+                    )
+                    continue
+                raise RuntimeError(
+                    f"{label.title()} collapse gate failed in {args.run_dir}"
+                )
+        comparison_payload = json.loads(comparison.read_text(encoding="utf-8"))
+        if int(comparison_payload.get("n_matched", 0)) <= 0:
+            raise RuntimeError(f"A24 comparison has no matches in {args.run_dir}")
     print(
         f"[cosmos2020-contract] valid rows={n_full} bands=26 "
         f"run={'checked' if args.run_dir else 'not-requested'}"

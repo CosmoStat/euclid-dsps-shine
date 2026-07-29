@@ -21,14 +21,14 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 DATA_DIR="${DATA_DIR:-Data/cosmos2020/prepared}"
 ASSET_DIR="${ASSET_DIR:-Data/cosmos2020/assets}"
-ROOT_DIR="${ROOT_DIR:-outputs/runs/popcosmos_a24_rws_v1}"
+ROOT_DIR="${ROOT_DIR:-outputs/runs/popcosmos_a24_rws_v2}"
 
 case "$STAGE" in
-  smoke) SIZE=512; EPOCHS=2; INFER_LIMIT=512; WALL_LABEL=smoke ;;
-  n5k) SIZE=5000; EPOCHS=4; INFER_LIMIT=512; WALL_LABEL=n5k ;;
-  n20k) SIZE=20000; EPOCHS=8; INFER_LIMIT=1000; WALL_LABEL=n20k ;;
-  n40k) SIZE=40000; EPOCHS=20; INFER_LIMIT=1000; WALL_LABEL=n40k ;;
-  full) SIZE=full; EPOCHS=40; INFER_LIMIT=5000; WALL_LABEL=full ;;
+  smoke) SIZE=512; EPOCHS=4; INFER_LIMIT=512; WALL_LABEL=smoke ;;
+  n5k) SIZE=5000; EPOCHS=12; INFER_LIMIT=512; WALL_LABEL=n5k ;;
+  n20k) SIZE=20000; EPOCHS=20; INFER_LIMIT=1000; WALL_LABEL=n20k ;;
+  n40k) SIZE=40000; EPOCHS=32; INFER_LIMIT=1000; WALL_LABEL=n40k ;;
+  full) SIZE=full; EPOCHS=48; INFER_LIMIT=5000; WALL_LABEL=full ;;
   *) echo "[cosmos-rws][error] STAGE must be smoke,n5k,n20k,n40k,full"; exit 2 ;;
 esac
 
@@ -84,9 +84,14 @@ DATA_PARALLEL=single
 N_GPUS=$(nvidia-smi --list-gpus | wc -l)
 if (( N_GPUS > 1 )); then DATA_PARALLEL=pmap; fi
 if [[ -n "$PREVIOUS" ]]; then
+  test -e "$PREVIOUS/DONE"
+  PREVIOUS_VALIDATE_ARGS=()
+  if [[ "$STAGE" == "n5k" ]]; then
+    PREVIOUS_VALIDATE_ARGS+=(--allow-inference-fail)
+  fi
   python scripts/validate_cosmos2020_reproduction.py \
     --config "$CONFIG" --data-dir "$DATA_DIR" --asset-dir "$ASSET_DIR" \
-    --run-dir "$PREVIOUS"
+    --run-dir "$PREVIOUS" "${PREVIOUS_VALIDATE_ARGS[@]}"
   INITIAL_ARGS=(--initial-checkpoint "$PREVIOUS/train/checkpoints/best.eqx")
 fi
 
@@ -113,7 +118,11 @@ python scripts/compare_popcosmos_a24.py \
   --dataset "$DATASET" --inference "$INFER_DIR" \
   --a24-summaries "$ASSET_DIR/zenodo/summaries.txt" \
   --out "$RUN_DIR/a24_comparison"
-touch "$RUN_DIR/DONE"
+CURRENT_VALIDATE_ARGS=()
+if [[ "$STAGE" == "smoke" ]]; then
+  CURRENT_VALIDATE_ARGS+=(--allow-inference-fail)
+fi
 python scripts/validate_cosmos2020_reproduction.py \
   --config "$CONFIG" --data-dir "$DATA_DIR" --asset-dir "$ASSET_DIR" \
-  --run-dir "$RUN_DIR"
+  --run-dir "$RUN_DIR" "${CURRENT_VALIDATE_ARGS[@]}"
+touch "$RUN_DIR/DONE"

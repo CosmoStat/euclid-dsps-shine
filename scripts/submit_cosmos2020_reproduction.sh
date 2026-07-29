@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 THROUGH="${1:-smoke}"
-ROOT_DIR="${ROOT_DIR:-outputs/runs/popcosmos_a24_rws_v1}"
+ROOT_DIR="${ROOT_DIR:-outputs/runs/popcosmos_a24_rws_v2}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 STAGES=(smoke n5k n20k n40k full)
 TIMES=(00:30:00 01:00:00 04:00:00 08:00:00 20:00:00)
@@ -12,6 +12,10 @@ mkdir -p "$LOG_DIR"
 test -s Data/cosmos2020/prepared/PREPOST_COMPLETE.json || {
   echo "[cosmos-submit][error] run and verify the prepost job first"; exit 2;
 }
+python scripts/validate_cosmos2020_reproduction.py \
+  --config configs/experiments/popcosmos_a24_rws_joint.yaml \
+  --data-dir Data/cosmos2020/prepared \
+  --asset-dir Data/cosmos2020/assets
 
 dependency=()
 jobs=()
