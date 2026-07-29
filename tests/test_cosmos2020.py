@@ -16,6 +16,7 @@ from euclid_dsps.cosmos2020 import (
     write_nested_subsets,
 )
 from scripts.download_cosmos2020_assets import _download_direct, parse_args
+from scripts.prepare_cosmos2020_farmer import _public_r25_non_xray_indices
 from scripts.validate_cosmos2020_reproduction import validate_spectral_assets
 
 
@@ -113,8 +114,35 @@ def test_prepare_farmer_applies_selection_and_extinction() -> None:
     assert selected["object_id"].tolist() == [10]
     assert manifest["selected_rows"] == 1
     assert manifest["selection_modelled_in_rws"] is False
-    assert selected.loc[0, "flux_hsc_g"] == 1.0
+    assert selected.loc[0, "flux_hsc_g"] == pytest.approx(
+        10.0 ** (-0.4 * 0.073)
+    )
     assert np.isnan(selected.loc[0, "fluxerr_hsc_g"])
+
+
+def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None:
+    fixture = _farmer_fixture()
+    fixture.loc[:, "FLAG_COMBINED"] = 0
+    fixture.loc[:, "lp_type"] = 0
+    summary = pd.DataFrame(
+        {
+            "INDEX_COSMOS": [0, 1, 2],
+            "RA": fixture.loc[[0, 1, 2], "ALPHA_J2000"],
+            "DEC": fixture.loc[[0, 1, 2], "DELTA_J2000"],
+            "XRAY": ["N", "N", "Y"],
+            "MAGCUT_r": ["Y", "N", "Y"],
+        }
+    )
+    path = tmp_path / "summaries.txt"
+    summary.to_csv(path, sep=" ", index=False)
+    indices = _public_r25_non_xray_indices(fixture, path)
+    np.testing.assert_array_equal(indices, [0])
+    selected, manifest = prepare_farmer_catalog(
+        fixture, public_catalog_indices=indices
+    )
+    assert selected["catalog_index"].tolist() == [0]
+    assert manifest["public_catalog_indices"] is True
+    assert manifest["catalog_valid_flags_applied"] is False
 
 
 def test_read_farmer_fits_only_materializes_required_columns(tmp_path) -> None:

@@ -1,8 +1,11 @@
 # Pop-COSMOS A24 comparison with joint RWS
 
 This workflow applies the repository's joint RWS method to the public
-COSMOS2020 Farmer v2.1 photometry used by Alsing et al. (2024). It does not
-retrain the Pop-COSMOS neural ODE. The comparison is:
+COSMOS2020 Farmer v2.1 photometry used by Alsing et al. (2024) and Thorp et al.
+(2024). It does not retrain the Pop-COSMOS neural ODE. The primary same-object
+cohort is the 139,489 public `r < 25`, non-X-ray posterior targets identified by
+`INDEX_COSMOS` in the T24 release. This is not presented as the unreleased
+140,938-object A24 population-training cohort. The comparison is:
 
 - same public catalog version and 26-band order;
 - same conservative mask, galaxy flag, and corrected `r < 25` selection;
@@ -111,8 +114,10 @@ Farmer v2.1 product `ADP.2022-06-21T19:13:38.112` directly, the 26 SVO curves,
 and Zenodo record `13820043`, then builds deterministic nested subsets. The
 2,923,603,200-byte FITS transfer is streamed to a `.part` file and resumed
 after transient failures. Full downloads do not use TAP; TAP remains available
-only for local `--max-rows` smokes. The job fails if the A24 selection does not
-yield exactly 140,938 rows.
+only for local `--max-rows` smokes. Preparation applies the official
+Farmer+LePhare readcat flux corrections, selects the published T24
+`MAGCUT_r=Y`, `XRAY=N` indices, and verifies their coordinates against Farmer
+v2.1. The job fails unless this yields exactly 139,489 rows.
 
 After it leaves `squeue`, verify terminal state and artifacts:
 
@@ -124,7 +129,7 @@ test -s Data/cosmos2020/prepared/PREPOST_COMPLETE.json
 python scripts/validate_cosmos2020_reproduction.py \
   --data-dir Data/cosmos2020/prepared \
   --asset-dir Data/cosmos2020/assets \
-  --expected-full 140938
+  --expected-full 139489
 ```
 
 Do not submit H100 jobs unless `sacct` reports `COMPLETED` and all three

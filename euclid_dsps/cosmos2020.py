@@ -30,6 +30,7 @@ class CosmosBand:
     name: str
     farmer_prefix: str
     extinction_coefficient: float
+    farmer_lephare_offset_mag: float
     svo_id: str
 
     @property
@@ -47,32 +48,32 @@ class CosmosBand:
 
 # Order is the public A24 Pop-COSMOS COSMOS_FILTERS order.
 COSMOS_BANDS = (
-    CosmosBand("u_megaprime_sagem", "CFHT_u", 4.807, "CFHT/MegaCam.u"),
-    CosmosBand("hsc_g", "HSC_g", 3.690, "Subaru/HSC.g"),
-    CosmosBand("hsc_r", "HSC_r", 2.715, "Subaru/HSC.r"),
-    CosmosBand("hsc_i", "HSC_i", 2.000, "Subaru/HSC.i"),
-    CosmosBand("hsc_z", "HSC_z", 1.515, "Subaru/HSC.z"),
-    CosmosBand("hsc_y", "HSC_y", 1.298, "Subaru/HSC.Y"),
-    CosmosBand("uvista_y_cosmos", "UVISTA_Y", 1.213, "Paranal/VISTA.Y"),
-    CosmosBand("uvista_j_cosmos", "UVISTA_J", 0.874, "Paranal/VISTA.J"),
-    CosmosBand("uvista_h_cosmos", "UVISTA_H", 0.565, "Paranal/VISTA.H"),
-    CosmosBand("uvista_ks_cosmos", "UVISTA_Ks", 0.365, "Paranal/VISTA.Ks"),
-    CosmosBand("ia427_cosmos", "SC_IB427", 4.261, "Subaru/Suprime.IB427"),
-    CosmosBand("ia464_cosmos", "SC_IB464", 3.844, "Subaru/Suprime.IB464"),
-    CosmosBand("ia484_cosmos", "SC_IA484", 3.622, "Subaru/Suprime.IB484"),
-    CosmosBand("ia505_cosmos", "SC_IB505", 3.425, "Subaru/Suprime.IB505"),
-    CosmosBand("ia527_cosmos", "SC_IA527", 3.265, "Subaru/Suprime.IB527"),
-    CosmosBand("ia574_cosmos", "SC_IB574", 2.938, "Subaru/Suprime.IB574"),
-    CosmosBand("ia624_cosmos", "SC_IA624", 2.694, "Subaru/Suprime.IB624"),
-    CosmosBand("ia679_cosmos", "SC_IA679", 2.431, "Subaru/Suprime.IB679"),
-    CosmosBand("ia709_cosmos", "SC_IB709", 2.290, "Subaru/Suprime.IB709"),
-    CosmosBand("ia738_cosmos", "SC_IA738", 2.151, "Subaru/Suprime.IB738"),
-    CosmosBand("ia767_cosmos", "SC_IA767", 1.997, "Subaru/Suprime.IB767"),
-    CosmosBand("ia827_cosmos", "SC_IB827", 1.748, "Subaru/Suprime.IB827"),
-    CosmosBand("NB711.SuprimeCam", "SC_NB711", 2.268, "Subaru/Suprime.NB711"),
-    CosmosBand("NB816.SuprimeCam", "SC_NB816", 1.787, "Subaru/Suprime.NB816"),
-    CosmosBand("irac1_cosmos", "IRAC_CH1", 0.163, "Spitzer/IRAC.I1"),
-    CosmosBand("irac2_cosmos", "IRAC_CH2", 0.112, "Spitzer/IRAC.I2"),
+    CosmosBand("u_megaprime_sagem", "CFHT_u", 4.807, -0.077, "CFHT/MegaCam.u"),
+    CosmosBand("hsc_g", "HSC_g", 3.690, 0.073, "Subaru/HSC.g"),
+    CosmosBand("hsc_r", "HSC_r", 2.715, 0.101, "Subaru/HSC.r"),
+    CosmosBand("hsc_i", "HSC_i", 2.000, 0.038, "Subaru/HSC.i"),
+    CosmosBand("hsc_z", "HSC_z", 1.515, 0.036, "Subaru/HSC.z"),
+    CosmosBand("hsc_y", "HSC_y", 1.298, 0.086, "Subaru/HSC.Y"),
+    CosmosBand("uvista_y_cosmos", "UVISTA_Y", 1.213, 0.054, "Paranal/VISTA.Y"),
+    CosmosBand("uvista_j_cosmos", "UVISTA_J", 0.874, 0.017, "Paranal/VISTA.J"),
+    CosmosBand("uvista_h_cosmos", "UVISTA_H", 0.565, -0.045, "Paranal/VISTA.H"),
+    CosmosBand("uvista_ks_cosmos", "UVISTA_Ks", 0.365, 0.000, "Paranal/VISTA.Ks"),
+    CosmosBand("ia427_cosmos", "SC_IB427", 4.261, -0.104, "Subaru/Suprime.IB427"),
+    CosmosBand("ia464_cosmos", "SC_IB464", 3.844, -0.044, "Subaru/Suprime.IB464"),
+    CosmosBand("ia484_cosmos", "SC_IA484", 3.622, -0.021, "Subaru/Suprime.IB484"),
+    CosmosBand("ia505_cosmos", "SC_IB505", 3.425, -0.018, "Subaru/Suprime.IB505"),
+    CosmosBand("ia527_cosmos", "SC_IA527", 3.265, -0.045, "Subaru/Suprime.IB527"),
+    CosmosBand("ia574_cosmos", "SC_IB574", 2.938, -0.084, "Subaru/Suprime.IB574"),
+    CosmosBand("ia624_cosmos", "SC_IA624", 2.694, 0.005, "Subaru/Suprime.IB624"),
+    CosmosBand("ia679_cosmos", "SC_IA679", 2.431, 0.166, "Subaru/Suprime.IB679"),
+    CosmosBand("ia709_cosmos", "SC_IB709", 2.290, -0.023, "Subaru/Suprime.IB709"),
+    CosmosBand("ia738_cosmos", "SC_IA738", 2.151, -0.034, "Subaru/Suprime.IB738"),
+    CosmosBand("ia767_cosmos", "SC_IA767", 1.997, -0.032, "Subaru/Suprime.IB767"),
+    CosmosBand("ia827_cosmos", "SC_IB827", 1.748, -0.069, "Subaru/Suprime.IB827"),
+    CosmosBand("NB711.SuprimeCam", "SC_NB711", 2.268, -0.010, "Subaru/Suprime.NB711"),
+    CosmosBand("NB816.SuprimeCam", "SC_NB816", 1.787, -0.064, "Subaru/Suprime.NB816"),
+    CosmosBand("irac1_cosmos", "IRAC_CH1", 0.163, -0.212, "Spitzer/IRAC.I1"),
+    CosmosBand("irac2_cosmos", "IRAC_CH2", 0.112, -0.219, "Spitzer/IRAC.I2"),
 )
 
 FARMER_METADATA_COLUMNS = (
@@ -121,16 +122,21 @@ def read_farmer_table(path: str | Path) -> pd.DataFrame:
     return frame
 
 
-def prepare_farmer_catalog(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, Any]]:
+def prepare_farmer_catalog(
+    frame: pd.DataFrame,
+    *,
+    public_catalog_indices: np.ndarray | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Apply the public A24 selection and produce generic DSPS columns.
 
-    Fluxes and errors are corrected for Milky Way extinction. They remain in
-    microJy in the parquet; the generic DSPS loader performs the final fnu_cgs
-    conversion declared in the YAML configuration.
+    Fluxes receive the official readcat Milky Way and Farmer+LePhare
+    corrections. Errors are left unchanged, matching the released notebook.
+    Values remain in microJy in the parquet.
     """
     ebv = pd.to_numeric(frame["EBV_MW"], errors="coerce").to_numpy(float)
     output = pd.DataFrame(
         {
+            "catalog_index": np.arange(len(frame), dtype=np.int64),
             "object_id": pd.to_numeric(frame["ID"], errors="raise").astype("int64"),
             "ra_deg": pd.to_numeric(frame["ALPHA_J2000"], errors="coerce"),
             "dec_deg": pd.to_numeric(frame["DELTA_J2000"], errors="coerce"),
@@ -143,7 +149,12 @@ def prepare_farmer_catalog(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
         }
     )
     for band in COSMOS_BANDS:
-        correction = np.power(10.0, 0.4 * band.extinction_coefficient * ebv)
+        mw_correction = np.power(
+            10.0, 0.4 * band.extinction_coefficient * ebv
+        )
+        zero_point_correction = np.power(
+            10.0, -0.4 * band.farmer_lephare_offset_mag
+        )
         flux = pd.to_numeric(frame[band.flux_column], errors="coerce").to_numpy(float)
         error = pd.to_numeric(
             frame[band.error_column], errors="coerce"
@@ -154,10 +165,15 @@ def prepare_farmer_catalog(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
             .to_numpy(int)
             > 0
         )
-        corrected_flux = flux * correction
-        corrected_error = error * correction
-        valid = (
+        measurement_admitted = (
             catalog_valid
+            if public_catalog_indices is None
+            else np.ones(len(frame), dtype=bool)
+        )
+        corrected_flux = flux * mw_correction * zero_point_correction
+        corrected_error = error
+        valid = (
+            measurement_admitted
             & np.isfinite(corrected_flux)
             & np.isfinite(corrected_error)
             & (corrected_error > 0.0)
@@ -165,20 +181,49 @@ def prepare_farmer_catalog(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
         output[f"flux_{band.name}"] = corrected_flux
         # The generic loader derives its mask from finite positive errors.
         output[f"fluxerr_{band.name}"] = np.where(
-            catalog_valid, corrected_error, np.nan
+            measurement_admitted, corrected_error, np.nan
         )
         output[f"valid_{band.name}"] = valid
 
-    selected = (
-        (output["flag_combined"].to_numpy() == 0)
-        & (output["lp_type"].to_numpy() == 0)
-        & np.isfinite(output["ebv_mw"].to_numpy())
-        & (
-            output["flux_hsc_r"].to_numpy()
-            > R_LIMIT_UJY
+    if public_catalog_indices is None:
+        selected = (
+            (output["flag_combined"].to_numpy() == 0)
+            & (output["lp_type"].to_numpy() == 0)
+            & np.isfinite(output["ebv_mw"].to_numpy())
+            & (
+                output["flux_hsc_r"].to_numpy()
+                > R_LIMIT_UJY
+            )
         )
-    )
+        selection = (
+            "FLAG_COMBINED == 0 and lp_type == 0 and official-readcat HSC r < 25"
+        )
+    else:
+        indices = np.asarray(public_catalog_indices, dtype=np.int64)
+        if len(np.unique(indices)) != len(indices):
+            raise ValueError("Public COSMOS cohort contains duplicate catalog indices")
+        if len(indices) and (indices.min() < 0 or indices.max() >= len(frame)):
+            raise IndexError("Public COSMOS cohort index is outside the Farmer catalog")
+        selected = np.zeros(len(frame), dtype=bool)
+        selected[indices] = True
+        selection = "published T24 MAGCUT_r == Y and XRAY == N catalog indices"
     selected_frame = output.loc[selected].copy()
+    if public_catalog_indices is not None:
+        if not np.all(selected_frame["flag_combined"].to_numpy() == 0):
+            raise ValueError("Published T24 cohort contains FLAG_COMBINED != 0")
+        if not np.all(selected_frame["lp_type"].to_numpy() == 0):
+            raise ValueError("Published non-X-ray T24 cohort contains lp_type != 0")
+        for band in COSMOS_BANDS:
+            flux = selected_frame[f"flux_{band.name}"].to_numpy(float)
+            error = selected_frame[f"fluxerr_{band.name}"].to_numpy(float)
+            if not np.all(np.isfinite(flux) & (flux > 0.0)):
+                raise ValueError(
+                    f"Published T24 cohort has non-positive {band.name} flux"
+                )
+            if not np.all(np.isfinite(error) & (error > 0.0)):
+                raise ValueError(
+                    f"Published T24 cohort has non-positive {band.name} error"
+                )
     selected_frame["r_abmag_mw_corrected"] = 23.9 - 2.5 * np.log10(
         selected_frame["flux_hsc_r"].to_numpy(float)
     )
@@ -187,9 +232,12 @@ def prepare_farmer_catalog(frame: pd.DataFrame) -> tuple[pd.DataFrame, dict[str,
     manifest = {
         "input_rows": int(len(frame)),
         "selected_rows": int(len(selected_frame)),
-        "selection": "FLAG_COMBINED == 0 and lp_type == 0 and corrected HSC r < 25",
+        "selection": selection,
         "r_limit_ujy": float(R_LIMIT_UJY),
-        "mw_extinction_applied_to": ["flux", "flux_error"],
+        "mw_extinction_applied_to": ["flux"],
+        "farmer_lephare_offsets_applied_to": ["flux"],
+        "public_catalog_indices": public_catalog_indices is not None,
+        "catalog_valid_flags_applied": public_catalog_indices is None,
         "output_flux_units": "microjy",
         "n_bands": len(COSMOS_BANDS),
         "band_order": [band.name for band in COSMOS_BANDS],

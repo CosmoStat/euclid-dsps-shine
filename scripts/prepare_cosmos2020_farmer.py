@@ -6,6 +6,9 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
+
 from euclid_dsps.cosmos2020 import (
     DEFAULT_SUBSET_SIZES,
     prepare_farmer_catalog,
@@ -26,6 +29,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=260727)
     parser.add_argument(
+        "--public-summary",
+        type=Path,
+        help="T24 summaries.txt used to select the published same-object cohort.",
+    )
+    parser.add_argument(
         "--expected-selected",
         type=int,
         default=None,
@@ -34,11 +42,59 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _public_r25_non_xray_indices(
+    frame: pd.DataFrame, summary_path: Path
+) -> np.ndarray:
+    reference = pd.read_csv(
+        summary_path,
+        sep=r"\s+",
+        usecols=["INDEX_COSMOS", "RA", "DEC", "XRAY", "MAGCUT_r"],
+    )
+    reference = reference.loc[
+        (reference["MAGCUT_r"] == "Y") & (reference["XRAY"] == "N")
+    ].copy()
+    indices = pd.to_numeric(
+        reference["INDEX_COSMOS"], errors="raise"
+    ).to_numpy(np.int64)
+    if len(np.unique(indices)) != len(indices):
+        raise ValueError("T24 r<25 non-X-ray cohort has duplicate catalog indices")
+    if len(indices) and (indices.min() < 0 or indices.max() >= len(frame)):
+        raise IndexError("T24 INDEX_COSMOS is outside the Farmer v2.1 catalog")
+
+    catalog_ra = pd.to_numeric(
+        frame.iloc[indices]["ALPHA_J2000"], errors="coerce"
+    ).to_numpy(float)
+    catalog_dec = pd.to_numeric(
+        frame.iloc[indices]["DELTA_J2000"], errors="coerce"
+    ).to_numpy(float)
+    reference_ra = pd.to_numeric(reference["RA"], errors="coerce").to_numpy(float)
+    reference_dec = pd.to_numeric(reference["DEC"], errors="coerce").to_numpy(float)
+    separation_arcsec = np.hypot(
+        (catalog_ra - reference_ra) * np.cos(np.deg2rad(reference_dec)),
+        catalog_dec - reference_dec,
+    ) * 3600.0
+    if not np.all(np.isfinite(separation_arcsec)):
+        raise ValueError("Non-finite coordinate match in the public T24 cohort")
+    if float(separation_arcsec.max(initial=0.0)) > 0.01:
+        raise ValueError(
+            "T24 INDEX_COSMOS does not match Farmer v2.1 coordinates: "
+            f"max separation={separation_arcsec.max():.6f} arcsec"
+        )
+    return indices
+
+
 def main() -> None:
     args = parse_args()
     sizes = tuple(int(value) for value in args.sizes.split(",") if value.strip())
     frame = read_farmer_table(args.input)
-    selected, manifest = prepare_farmer_catalog(frame)
+    public_indices = (
+        _public_r25_non_xray_indices(frame, args.public_summary)
+        if args.public_summary is not None
+        else None
+    )
+    selected, manifest = prepare_farmer_catalog(
+        frame, public_catalog_indices=public_indices
+    )
     if (
         args.expected_selected is not None
         and len(selected) != args.expected_selected

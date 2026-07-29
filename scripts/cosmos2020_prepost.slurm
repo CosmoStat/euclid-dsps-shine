@@ -17,7 +17,7 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 ASSET_DIR="${ASSET_DIR:-Data/cosmos2020/assets}"
 PREPARED_DIR="${PREPARED_DIR:-Data/cosmos2020/prepared}"
-EXPECTED_SELECTED="${EXPECTED_SELECTED:-140938}"
+EXPECTED_SELECTED="${EXPECTED_SELECTED:-139489}"
 INSTALL="${INSTALL:-1}"
 TAP_TIMEOUT="${TAP_TIMEOUT:-14400}"
 TAP_JOB_URL="${TAP_JOB_URL:-}"
@@ -67,6 +67,7 @@ fi
 python scripts/prepare_cosmos2020_farmer.py \
   --input "$ASSET_DIR/cosmos2020_farmer_v21.fits" \
   --out "$PREPARED_DIR" \
+  --public-summary "$ASSET_DIR/zenodo/summaries.txt" \
   --expected-selected "$EXPECTED_SELECTED"
 python scripts/validate_cosmos2020_reproduction.py \
   --data-dir "$PREPARED_DIR" --asset-dir "$ASSET_DIR" \
