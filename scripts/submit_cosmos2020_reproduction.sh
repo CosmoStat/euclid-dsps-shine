@@ -20,15 +20,21 @@ python scripts/validate_cosmos2020_reproduction.py \
 
 dependency=()
 jobs=()
-found=0
 start_index=0
-if [[ -e "$ROOT_DIR" ]]; then
-  for index in "${!STAGES[@]}"; do
-    if [[ "${STAGES[$index]}" == "$THROUGH" ]]; then start_index="$index"; found=1; fi
-  done
-  if [[ "$found" != "1" ]]; then
-    echo "[cosmos-submit][error] argument must be smoke,n5k,n20k,n40k,full"; exit 2
+target_index=-1
+for index in "${!STAGES[@]}"; do
+  if [[ "${STAGES[$index]}" == "$THROUGH" ]]; then
+    target_index="$index"
+    break
   fi
+done
+if (( target_index < 0 )); then
+  echo "[cosmos-submit][error] argument must be smoke,n5k,n20k,n40k,full"
+  exit 2
+fi
+
+if [[ -e "$ROOT_DIR" ]]; then
+  start_index="$target_index"
   if (( start_index == 0 )); then
     echo "[cosmos-submit][error] smoke root already exists: $ROOT_DIR"; exit 2
   fi
@@ -41,7 +47,7 @@ if [[ -e "$ROOT_DIR" ]]; then
   }
 fi
 
-for ((index=start_index; index<${#STAGES[@]}; index++)); do
+for ((index=start_index; index<=target_index; index++)); do
   stage="${STAGES[$index]}"
   job_raw=$(sbatch --parsable --time="${TIMES[$index]}" \
     --gres="${GRES[$index]}" \
@@ -51,11 +57,7 @@ for ((index=start_index; index<${#STAGES[@]}; index++)); do
   job="${job_raw%%;*}"
   jobs+=("$stage=$job")
   dependency=(--dependency="afterok:$job")
-  if [[ -e "$ROOT_DIR" || "$stage" == "$THROUGH" ]]; then found=1; break; fi
 done
-if [[ "$found" != "1" ]]; then
-  echo "[cosmos-submit][error] argument must be smoke,n5k,n20k,n40k,full"; exit 2
-fi
 
 stamp=$(date +%Y%m%d_%H%M%S)
 log="$LOG_DIR/submit_cosmos2020_${stamp}.log"

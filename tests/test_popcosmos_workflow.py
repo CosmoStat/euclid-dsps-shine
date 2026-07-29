@@ -56,6 +56,8 @@ def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
     assert 'test -s "$ROOT_DIR/$previous/DONE"' not in submit
     assert '--config "$CONFIG"' in submit
     assert 'CONFIG="$CONFIG"' in submit
+    assert "index<=target_index" in submit
+    assert '[[ -e "$ROOT_DIR" || "$stage" == "$THROUGH" ]]' not in submit
     assert "validate_cosmos2020_reproduction.py" in submit
     assert 'if [[ "$MODE" == "smoke" ]]; then ARRAY="0-1%2"; fi' in mclmc
     assert 'test -e "$MODEL_ROOT/DONE"' in mclmc
