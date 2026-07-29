@@ -10,7 +10,7 @@ MODE="${MODE:-pilot}"
 ARRAY="0-5%2"
 if [[ "$MODE" == "smoke" ]]; then ARRAY="0-1%2"; fi
 
-test -s "$MODEL_ROOT/DONE"
+test -e "$MODEL_ROOT/DONE"
 test ! -e "$OUT" || {
   echo "[cosmos-mclmc-submit][error] refusing to reuse $OUT"; exit 2;
 }

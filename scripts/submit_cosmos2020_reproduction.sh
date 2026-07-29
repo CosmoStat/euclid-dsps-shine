@@ -28,7 +28,7 @@ if [[ -e "$ROOT_DIR" ]]; then
     echo "[cosmos-submit][error] smoke root already exists: $ROOT_DIR"; exit 2
   fi
   previous="${STAGES[$((start_index - 1))]}"
-  test -s "$ROOT_DIR/$previous/DONE" || {
+  test -e "$ROOT_DIR/$previous/DONE" || {
     echo "[cosmos-submit][error] previous stage is incomplete: $previous"; exit 2;
   }
   test ! -e "$ROOT_DIR/$THROUGH" || {
