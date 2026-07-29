@@ -721,6 +721,9 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
         encoder=encoder,
         prior=StandardNormalPrior(latent_dim=4),
         sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+        band_calibration=PerBandFluxCalibrationState(
+            log_alpha_band=jnp.zeros(2)
+        ),
     )
     batch = LossBatch(
         flux=jnp.zeros((2, 2)),
@@ -750,7 +753,16 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
         1,
         1.0,
         {"type": "student_t", "student_t_dof": 2.0, "error_floor_frac": 0.0},
-        {},
+        {
+            "calibration": {
+                "per_band_zero_points": {
+                    "enabled": True,
+                    "mode": "learn_per_band",
+                    "trainable": True,
+                    "prior_sigma_mag": 0.05,
+                }
+            }
+        },
         {
             "mode": "reweighted_wake_sleep",
             "wake_active": True,
@@ -770,6 +782,7 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
     assert 0.0 <= float(metrics["smc_mala_acceptance_mean"]) <= 1.0
     assert float(metrics["wake_ess_mean"]) > 0.0
     assert metrics["wake_all_nonfinite_fraction"] == 0.0
+    assert jnp.isfinite(metrics["calibration_mstep_nll_per_band"])
 
     def smc_loss(candidate):
         return _loss_with_metrics(
@@ -783,7 +796,16 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
             1,
             1.0,
             {"type": "student_t", "student_t_dof": 2.0, "error_floor_frac": 0.0},
-            {},
+            {
+                "calibration": {
+                    "per_band_zero_points": {
+                        "enabled": True,
+                        "mode": "learn_per_band",
+                        "trainable": True,
+                        "prior_sigma_mag": 0.05,
+                    }
+                }
+            },
             {
                 "mode": "reweighted_wake_sleep",
                 "wake_active": True,
@@ -798,13 +820,16 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
             },
         )[0]
 
+    grads = eqx.filter_grad(smc_loss)(model)
     leaves = [
         leaf
-        for leaf in jax.tree_util.tree_leaves(eqx.filter_grad(smc_loss)(model))
+        for leaf in jax.tree_util.tree_leaves(grads)
         if leaf is not None
     ]
     assert leaves
     assert all(jnp.all(jnp.isfinite(leaf)) for leaf in leaves)
+    assert grads.band_calibration is not None
+    assert jnp.any(jnp.abs(grads.band_calibration.log_alpha_band) > 0.0)
 
 
 def test_reweighted_wake_updates_encoder_and_learned_prior(

@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 THROUGH="${1:-smoke}"
+CONFIG="${CONFIG:-configs/experiments/popcosmos_a24_rws_joint.yaml}"
 ROOT_DIR="${ROOT_DIR:-outputs/runs/popcosmos_a24_rws_v2}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 STAGES=(smoke n5k n20k n40k full)
@@ -13,7 +14,7 @@ test -s Data/cosmos2020/prepared/PREPOST_COMPLETE.json || {
   echo "[cosmos-submit][error] run and verify the prepost job first"; exit 2;
 }
 python scripts/validate_cosmos2020_reproduction.py \
-  --config configs/experiments/popcosmos_a24_rws_joint.yaml \
+  --config "$CONFIG" \
   --data-dir Data/cosmos2020/prepared \
   --asset-dir Data/cosmos2020/assets
 
@@ -44,7 +45,8 @@ for ((index=start_index; index<${#STAGES[@]}; index++)); do
   stage="${STAGES[$index]}"
   job_raw=$(sbatch --parsable --time="${TIMES[$index]}" \
     --gres="${GRES[$index]}" \
-    "${dependency[@]}" --export=ALL,STAGE="$stage",ROOT_DIR="$ROOT_DIR" \
+    "${dependency[@]}" \
+    --export=ALL,STAGE="$stage",ROOT_DIR="$ROOT_DIR",CONFIG="$CONFIG" \
     scripts/cosmos2020_rws_h100.slurm)
   job="${job_raw%%;*}"
   jobs+=("$stage=$job")

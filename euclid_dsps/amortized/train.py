@@ -785,12 +785,30 @@ def train_amortized_fs2(
             batch_size=catalog_batch_size,
             row_indices=split.validation_indices,
         )
-    _log(verbose, "[amortized] computing feature stats from train flux/errors...")
+    feature_stats_catalog = cfg["features"].get("stats_catalog_path")
+    stats_arrays = train_arrays
+    if feature_stats_catalog:
+        stats_config = dict(config)
+        stats_config["catalog_path"] = str(feature_stats_catalog)
+        _log(
+            verbose,
+            "[amortized] loading fixed feature-stats catalog: "
+            f"{feature_stats_catalog}",
+        )
+        stats_arrays = load_photometry_arrays_from_config(
+            stats_config,
+            batch_size=catalog_batch_size,
+        )
+        if stats_arrays.band_names != train_arrays.band_names:
+            raise ValueError(
+                "Feature-stats catalog band order does not match training data"
+            )
+    _log(verbose, "[amortized] computing feature stats from flux/errors...")
     feature_stats = compute_feature_stats(
-        train_arrays.flux,
-        train_arrays.flux_err,
-        train_arrays.mask,
-        band_names=train_arrays.band_names,
+        stats_arrays.flux,
+        stats_arrays.flux_err,
+        stats_arrays.mask,
+        band_names=stats_arrays.band_names,
         flux_transform=str(cfg["features"].get("flux_transform", "asinh")),
     )
     write_feature_stats(out / "feature_stats.json", feature_stats)
@@ -1612,6 +1630,10 @@ def train_amortized_fs2(
         "checkpoint_every": checkpoint_every,
         "diagnostics_every": diagnostics_every,
         "input_noise": input_noise_cfg,
+        "feature_stats_catalog_path": (
+            str(feature_stats_catalog) if feature_stats_catalog else None
+        ),
+        "feature_stats_catalog_rows": int(len(stats_arrays.object_id)),
         "initial_theta_diagnostics": {
             "path": "initial_theta_diagnostics.json",
             "n_near_boundary": int(initial_theta_diagnostics["n_near_boundary"]),
@@ -3240,7 +3262,49 @@ def _smc_wake_outputs(
     prior_nll = jnp.sum(jnp.where(valid_object, prior_nll_by_object, 0.0)) / valid_count
     data_nll = jnp.sum(jnp.where(valid_object, data_nll_by_object, 0.0)) / valid_count
     prior_weight = jnp.asarray(float(wake.get("prior_loss_weight", 1.0)), q_nll.dtype)
+    scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
+    alpha_prior_penalty = (
+        global_sed_scale_prior_penalty(
+            model.sed_scale.log_alpha_sed,
+            scale_cfg.prior_sigma_log_alpha,
+        )
+        if scale_cfg.enabled and scale_cfg.trainable
+        else jnp.asarray(0.0, dtype=q_nll.dtype)
+    )
+    log_alpha_band = (
+        model.band_calibration.log_alpha_band
+        if band_cfg.enabled and model.band_calibration is not None
+        else jnp.zeros((model_flux.shape[-1],), dtype=q_nll.dtype)
+    )
+    band_prior_penalty = (
+        per_band_flux_calibration_prior_penalty(
+            log_alpha_band,
+            band_cfg.prior_sigma_log_alpha,
+        )
+        if band_cfg.enabled and band_cfg.trainable
+        else jnp.asarray(0.0, dtype=q_nll.dtype)
+    )
+    mean_valid_bands = jnp.maximum(
+        jnp.sum(
+            jnp.where(valid_object[:, None], batch.mask, False).astype(jnp.float32)
+        )
+        / valid_count,
+        1.0,
+    )
+    calibration_mstep_nll_per_band = (
+        data_nll + alpha_prior_penalty + band_prior_penalty
+    ) / mean_valid_bands
+    calibration_loss_weight = jnp.asarray(
+        float(wake.get("calibration_loss_weight", 1.0)), dtype=q_nll.dtype
+    )
+    calibration_trainable = bool(
+        (scale_cfg.enabled and scale_cfg.trainable)
+        or (band_cfg.enabled and band_cfg.trainable)
+    )
     loss = q_nll + prior_weight * prior_nll
+    if calibration_trainable:
+        loss = loss + calibration_loss_weight * calibration_mstep_nll_per_band
     final_ess = ess_history[-1]
     mean_stage_ess = jnp.mean(jnp.stack(ess_history, axis=0))
     mean_acceptance = (
@@ -3290,9 +3354,11 @@ def _smc_wake_outputs(
         "mean_model_flux_scaled": jnp.mean(model_flux),
         "log_alpha_sed": model.sed_scale.log_alpha_sed,
         "alpha_sed": alpha_from_log_alpha(model.sed_scale.log_alpha_sed),
-        "alpha_prior_penalty": zero,
-        "band_alpha_prior_penalty": zero,
-        "max_abs_band_delta_mag": zero,
+        "alpha_prior_penalty": alpha_prior_penalty,
+        "band_alpha_prior_penalty": band_prior_penalty,
+        "max_abs_band_delta_mag": jnp.max(
+            jnp.abs(-2.5 * log_alpha_band / jnp.log(jnp.asarray(10.0)))
+        ),
         "residual_rms": jnp.sqrt(jnp.sum(chi**2) / n_valid_band),
         "flux_residual_rms": jnp.sqrt(jnp.sum(residual**2) / n_valid_band),
         "finite_fraction": jnp.mean(finite.astype(jnp.float32)),
@@ -3311,6 +3377,8 @@ def _smc_wake_outputs(
         "wake_base_temperature": zero,
         "prior_mstep_nll": prior_nll,
         "prior_loss_weight": prior_weight,
+        "calibration_mstep_nll_per_band": calibration_mstep_nll_per_band,
+        "calibration_loss_weight": calibration_loss_weight,
         "sleep_active": zero,
         "smc_active": jnp.asarray(1.0, dtype=q_nll.dtype),
         "smc_stage_ess_mean": mean_stage_ess,

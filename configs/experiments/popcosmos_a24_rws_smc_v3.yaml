@@ -1,0 +1,18 @@
+extends: popcosmos_a24_rws_joint.yaml
+
+amortized:
+  features:
+    # One fixed, unlabeled normalization contract for every scaling stage.
+    stats_catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
+  encoder:
+    base_components: 2
+  objective:
+    wake:
+      sampler: smc
+      n_particles: 8
+      smc_temperatures: [0.0, 0.10, 0.25, 0.50, 0.75, 1.0]
+      smc_mala_steps: 1
+      smc_mala_step_size: 0.02
+      train_prior: true
+      prior_loss_weight: 1.0
+      calibration_loss_weight: 1.0
