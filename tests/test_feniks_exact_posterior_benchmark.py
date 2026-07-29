@@ -222,6 +222,24 @@ def test_two_galaxy_big_nuts_is_probe_gated_resumable_and_provenanced() -> None:
     assert "FINAL_SAMPLERS=nuts" in submission
 
 
+def test_two_galaxy_big_can_be_submitted_after_the_running_probe() -> None:
+    submission = (
+        ROOT / "scripts/submit_feniks_exact_posterior_big_after_probe.sh"
+    ).read_text()
+    gate = (
+        ROOT / "scripts/feniks_exact_two_galaxy_big_gate.slurm"
+    ).read_text()
+
+    assert 'PROBE_JOB_ID="${PROBE_JOB_ID:?' in submission
+    assert '--dependency="afterok:$PROBE_JOB_ID"' in submission
+    assert "feniks_exact_two_galaxy_big_gate.slurm" in submission
+    assert "requested_upper_bound_h100_hours_after_gate=44.33" in submission
+    assert "#SBATCH --partition=prepost" in gate
+    assert "#SBATCH --account=jrx@cpu" in gate
+    assert "summarize_feniks_nuts_batched_probe.py" in gate
+    assert "submit_feniks_exact_posterior_two_galaxy_nuts_big.sh" in gate
+
+
 def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> None:
     assert _selected_samplers(SimpleNamespace(samplers="nuts")) == ("nuts",)
     assert _selected_samplers(SimpleNamespace(samplers="nuts,mclmc")) == (
