@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-farmer", action="store_true")
     parser.add_argument("--skip-external-repo", action="store_true")
     parser.add_argument("--skip-zenodo", action="store_true")
+    parser.add_argument(
+        "--filters-only",
+        action="store_true",
+        help="Refresh filter curves in an existing completed asset manifest.",
+    )
     parser.add_argument("--timeout", type=int, default=7200)
     parser.add_argument(
         "--farmer-url",
@@ -344,6 +349,19 @@ def _download_zenodo(output: Path) -> list[dict[str, str]]:
 def main() -> None:
     args = parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    if args.filters_only:
+        manifest_path = args.out / "download_manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"--filters-only requires an existing manifest: {manifest_path}"
+            )
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["filters"] = _download_filters(args.out / "filters")
+        manifest["status"] = "complete"
+        write_json(manifest_path, manifest)
+        shutil.copyfile(manifest_path, args.out / "DOWNLOAD_COMPLETE.json")
+        print(f"[cosmos2020-download] refreshed filters -> {args.out}")
+        return
     manifest: dict[str, object] = {
         "status": "incomplete",
         "farmer": None,

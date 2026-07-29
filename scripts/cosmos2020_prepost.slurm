@@ -61,6 +61,25 @@ if [[ -s "$ASSET_DIR/DOWNLOAD_COMPLETE.json" ]]; then
 else
   python scripts/download_cosmos2020_assets.py "${DOWNLOAD_ARGS[@]}"
 fi
+if ! python - "$ASSET_DIR/download_manifest.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from euclid_dsps.cosmos2020 import COSMOS_BANDS
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+found = {row["band"]: row["svo_id"] for row in manifest["filters"]}
+expected = {band.name: band.svo_id for band in COSMOS_BANDS}
+if found != expected:
+    raise SystemExit(1)
+print("[cosmos2020-prepost] filter provenance: current")
+PY
+then
+  echo "[cosmos2020-prepost] refreshing changed filter provenance"
+  python scripts/download_cosmos2020_assets.py \
+    --out "$ASSET_DIR" --filters-only
+fi
 if [[ "$INSTALL" == "1" ]]; then
   pip_install_with_retry --no-deps -e "$ASSET_DIR/external/pop-cosmos"
   python - <<'PY'

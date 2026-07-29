@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -20,6 +22,7 @@ from scripts.download_cosmos2020_assets import (
     _download_filters,
     parse_args,
 )
+from scripts.download_cosmos2020_assets import main as download_main
 from scripts.prepare_cosmos2020_farmer import _public_r25_non_xray_rows
 from scripts.validate_cosmos2020_reproduction import validate_spectral_assets
 
@@ -47,6 +50,10 @@ def _farmer_fixture(n_rows: int = 4) -> pd.DataFrame:
 def test_farmer_contract_has_public_a24_order_and_columns() -> None:
     assert len(COSMOS_BANDS) == 26
     assert COSMOS_BANDS[0].name == "u_megaprime_sagem"
+    assert COSMOS_BANDS[0].farmer_prefix == "CFHT_ustar"
+    assert COSMOS_BANDS[0].extinction_coefficient == pytest.approx(4.674)
+    assert COSMOS_BANDS[0].farmer_lephare_offset_mag == pytest.approx(-0.023)
+    assert COSMOS_BANDS[0].svo_id == "CFHT/MegaCam.u_1"
     assert COSMOS_BANDS[-1].name == "irac2_cosmos"
     assert len(farmer_columns()) == 7 + 3 * 26
     assert "COSMOS2020_FARMER_V1" in farmer_adql(32)
@@ -70,6 +77,54 @@ def test_downloader_exposes_async_tap_resume(monkeypatch) -> None:
     assert args.tap_job_url.endswith("/123")
     assert args.timeout == 14400
     assert args.farmer_url == ESO_FARMER_V21_URL
+
+
+def test_downloader_exposes_filter_only_refresh(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "download_cosmos2020_assets.py",
+            "--out",
+            "assets",
+            "--filters-only",
+        ],
+    )
+    assert parse_args().filters_only is True
+
+
+def test_filter_only_refresh_preserves_existing_manifest(tmp_path, monkeypatch) -> None:
+    manifest = {
+        "status": "complete",
+        "farmer": {"path": "farmer.fits", "sha256": "farmer-digest"},
+        "filters": [{"band": "old"}],
+        "popcosmos": {"commit": "pinned"},
+        "zenodo": [{"name": "summaries.txt"}],
+    }
+    manifest_path = tmp_path / "download_manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    refreshed = [{"band": "u_megaprime_sagem", "svo_id": "CFHT/MegaCam.u_1"}]
+    monkeypatch.setattr(
+        "scripts.download_cosmos2020_assets._download_filters",
+        lambda _: refreshed,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "download_cosmos2020_assets.py",
+            "--out",
+            str(tmp_path),
+            "--filters-only",
+        ],
+    )
+    download_main()
+    result = json.loads(manifest_path.read_text(encoding="utf-8"))
+    marker = json.loads(
+        (tmp_path / "DOWNLOAD_COMPLETE.json").read_text(encoding="utf-8")
+    )
+    assert result["farmer"] == manifest["farmer"]
+    assert result["zenodo"] == manifest["zenodo"]
+    assert result["filters"] == refreshed
+    assert marker == result
 
 
 class _FakeResponse:

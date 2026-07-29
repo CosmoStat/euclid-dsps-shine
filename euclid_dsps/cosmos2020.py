@@ -48,7 +48,13 @@ class CosmosBand:
 
 # Order is the public A24 Pop-COSMOS COSMOS_FILTERS order.
 COSMOS_BANDS = (
-    CosmosBand("u_megaprime_sagem", "CFHT_u", 4.807, -0.077, "CFHT/MegaCam.u"),
+    CosmosBand(
+        "u_megaprime_sagem",
+        "CFHT_ustar",
+        4.674,
+        -0.023,
+        "CFHT/MegaCam.u_1",
+    ),
     CosmosBand("hsc_g", "HSC_g", 3.690, 0.073, "Subaru/HSC.g"),
     CosmosBand("hsc_r", "HSC_r", 2.715, 0.101, "Subaru/HSC.r"),
     CosmosBand("hsc_i", "HSC_i", 2.000, 0.038, "Subaru/HSC.i"),
