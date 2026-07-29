@@ -4,7 +4,7 @@ This workflow applies the repository's joint RWS method to the public
 COSMOS2020 Farmer v2.1 photometry used by Alsing et al. (2024) and Thorp et al.
 (2024). It does not retrain the Pop-COSMOS neural ODE. The primary same-object
 cohort is the 139,489 public `r < 25`, non-X-ray posterior targets identified by
-`INDEX_COSMOS` in the T24 release. This is not presented as the unreleased
+Farmer IDs in `INDEX_COSMOS` in the T24 release. This is not presented as the unreleased
 140,938-object A24 population-training cohort. The comparison is:
 
 - same public catalog version and 26-band order;
@@ -116,7 +116,7 @@ and Zenodo record `13820043`, then builds deterministic nested subsets. The
 after transient failures. Full downloads do not use TAP; TAP remains available
 only for local `--max-rows` smokes. Preparation applies the official
 Farmer+LePhare readcat flux corrections, selects the published T24
-`MAGCUT_r=Y`, `XRAY=N` indices, and verifies their coordinates against Farmer
+`MAGCUT_r=Y`, `XRAY=N` Farmer IDs, and verifies their coordinates against Farmer
 v2.1. The job fails unless this yields exactly 139,489 rows.
 
 After it leaves `squeue`, verify terminal state and artifacts:

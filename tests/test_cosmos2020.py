@@ -16,7 +16,7 @@ from euclid_dsps.cosmos2020 import (
     write_nested_subsets,
 )
 from scripts.download_cosmos2020_assets import _download_direct, parse_args
-from scripts.prepare_cosmos2020_farmer import _public_r25_non_xray_indices
+from scripts.prepare_cosmos2020_farmer import _public_r25_non_xray_rows
 from scripts.validate_cosmos2020_reproduction import validate_spectral_assets
 
 
@@ -126,7 +126,7 @@ def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None
     fixture.loc[:, "lp_type"] = 0
     summary = pd.DataFrame(
         {
-            "INDEX_COSMOS": [0, 1, 2],
+            "INDEX_COSMOS": [10, 11, 12],
             "RA": fixture.loc[[0, 1, 2], "ALPHA_J2000"],
             "DEC": fixture.loc[[0, 1, 2], "DELTA_J2000"],
             "XRAY": ["N", "N", "Y"],
@@ -135,13 +135,13 @@ def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None
     )
     path = tmp_path / "summaries.txt"
     summary.to_csv(path, sep=" ", index=False)
-    indices = _public_r25_non_xray_indices(fixture, path)
-    np.testing.assert_array_equal(indices, [0])
+    rows = _public_r25_non_xray_rows(fixture, path)
+    np.testing.assert_array_equal(rows, [0])
     selected, manifest = prepare_farmer_catalog(
-        fixture, public_catalog_indices=indices
+        fixture, public_catalog_rows=rows
     )
     assert selected["catalog_index"].tolist() == [0]
-    assert manifest["public_catalog_indices"] is True
+    assert manifest["public_catalog_ids"] is True
     assert manifest["catalog_valid_flags_applied"] is False
 
 

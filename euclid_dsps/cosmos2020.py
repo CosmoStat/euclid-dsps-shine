@@ -125,7 +125,7 @@ def read_farmer_table(path: str | Path) -> pd.DataFrame:
 def prepare_farmer_catalog(
     frame: pd.DataFrame,
     *,
-    public_catalog_indices: np.ndarray | None = None,
+    public_catalog_rows: np.ndarray | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Apply the public A24 selection and produce generic DSPS columns.
 
@@ -167,7 +167,7 @@ def prepare_farmer_catalog(
         )
         measurement_admitted = (
             catalog_valid
-            if public_catalog_indices is None
+            if public_catalog_rows is None
             else np.ones(len(frame), dtype=bool)
         )
         corrected_flux = flux * mw_correction * zero_point_correction
@@ -185,7 +185,7 @@ def prepare_farmer_catalog(
         )
         output[f"valid_{band.name}"] = valid
 
-    if public_catalog_indices is None:
+    if public_catalog_rows is None:
         selected = (
             (output["flag_combined"].to_numpy() == 0)
             & (output["lp_type"].to_numpy() == 0)
@@ -199,16 +199,16 @@ def prepare_farmer_catalog(
             "FLAG_COMBINED == 0 and lp_type == 0 and official-readcat HSC r < 25"
         )
     else:
-        indices = np.asarray(public_catalog_indices, dtype=np.int64)
-        if len(np.unique(indices)) != len(indices):
-            raise ValueError("Public COSMOS cohort contains duplicate catalog indices")
-        if len(indices) and (indices.min() < 0 or indices.max() >= len(frame)):
-            raise IndexError("Public COSMOS cohort index is outside the Farmer catalog")
+        rows = np.asarray(public_catalog_rows, dtype=np.int64)
+        if len(np.unique(rows)) != len(rows):
+            raise ValueError("Public COSMOS cohort contains duplicate catalog rows")
+        if len(rows) and (rows.min() < 0 or rows.max() >= len(frame)):
+            raise IndexError("Public COSMOS cohort row is outside the Farmer catalog")
         selected = np.zeros(len(frame), dtype=bool)
-        selected[indices] = True
-        selection = "published T24 MAGCUT_r == Y and XRAY == N catalog indices"
+        selected[rows] = True
+        selection = "published T24 MAGCUT_r == Y and XRAY == N Farmer IDs"
     selected_frame = output.loc[selected].copy()
-    if public_catalog_indices is not None:
+    if public_catalog_rows is not None:
         if not np.all(selected_frame["flag_combined"].to_numpy() == 0):
             raise ValueError("Published T24 cohort contains FLAG_COMBINED != 0")
         if not np.all(selected_frame["lp_type"].to_numpy() == 0):
@@ -236,8 +236,8 @@ def prepare_farmer_catalog(
         "r_limit_ujy": float(R_LIMIT_UJY),
         "mw_extinction_applied_to": ["flux"],
         "farmer_lephare_offsets_applied_to": ["flux"],
-        "public_catalog_indices": public_catalog_indices is not None,
-        "catalog_valid_flags_applied": public_catalog_indices is None,
+        "public_catalog_ids": public_catalog_rows is not None,
+        "catalog_valid_flags_applied": public_catalog_rows is None,
         "output_flux_units": "microjy",
         "n_bands": len(COSMOS_BANDS),
         "band_order": [band.name for band in COSMOS_BANDS],

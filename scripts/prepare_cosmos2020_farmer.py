@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _public_r25_non_xray_indices(
+def _public_r25_non_xray_rows(
     frame: pd.DataFrame, summary_path: Path
 ) -> np.ndarray:
     reference = pd.read_csv(
@@ -53,19 +53,29 @@ def _public_r25_non_xray_indices(
     reference = reference.loc[
         (reference["MAGCUT_r"] == "Y") & (reference["XRAY"] == "N")
     ].copy()
-    indices = pd.to_numeric(
+    public_ids = pd.to_numeric(
         reference["INDEX_COSMOS"], errors="raise"
     ).to_numpy(np.int64)
-    if len(np.unique(indices)) != len(indices):
-        raise ValueError("T24 r<25 non-X-ray cohort has duplicate catalog indices")
-    if len(indices) and (indices.min() < 0 or indices.max() >= len(frame)):
-        raise IndexError("T24 INDEX_COSMOS is outside the Farmer v2.1 catalog")
+    if len(np.unique(public_ids)) != len(public_ids):
+        raise ValueError("T24 r<25 non-X-ray cohort has duplicate Farmer IDs")
+
+    catalog_ids = pd.to_numeric(frame["ID"], errors="raise").to_numpy(np.int64)
+    if len(np.unique(catalog_ids)) != len(catalog_ids):
+        raise ValueError("Farmer v2.1 catalog contains duplicate IDs")
+    row_by_id = pd.Series(np.arange(len(frame), dtype=np.int64), index=catalog_ids)
+    resolved = row_by_id.reindex(public_ids)
+    if resolved.isna().any():
+        missing = public_ids[resolved.isna().to_numpy()]
+        raise KeyError(
+            f"{len(missing)} T24 INDEX_COSMOS IDs are absent from Farmer v2.1"
+        )
+    rows = resolved.to_numpy(np.int64)
 
     catalog_ra = pd.to_numeric(
-        frame.iloc[indices]["ALPHA_J2000"], errors="coerce"
+        frame.iloc[rows]["ALPHA_J2000"], errors="coerce"
     ).to_numpy(float)
     catalog_dec = pd.to_numeric(
-        frame.iloc[indices]["DELTA_J2000"], errors="coerce"
+        frame.iloc[rows]["DELTA_J2000"], errors="coerce"
     ).to_numpy(float)
     reference_ra = pd.to_numeric(reference["RA"], errors="coerce").to_numpy(float)
     reference_dec = pd.to_numeric(reference["DEC"], errors="coerce").to_numpy(float)
@@ -77,23 +87,23 @@ def _public_r25_non_xray_indices(
         raise ValueError("Non-finite coordinate match in the public T24 cohort")
     if float(separation_arcsec.max(initial=0.0)) > 0.01:
         raise ValueError(
-            "T24 INDEX_COSMOS does not match Farmer v2.1 coordinates: "
+            "T24 INDEX_COSMOS IDs do not match Farmer v2.1 coordinates: "
             f"max separation={separation_arcsec.max():.6f} arcsec"
         )
-    return indices
+    return rows
 
 
 def main() -> None:
     args = parse_args()
     sizes = tuple(int(value) for value in args.sizes.split(",") if value.strip())
     frame = read_farmer_table(args.input)
-    public_indices = (
-        _public_r25_non_xray_indices(frame, args.public_summary)
+    public_rows = (
+        _public_r25_non_xray_rows(frame, args.public_summary)
         if args.public_summary is not None
         else None
     )
     selected, manifest = prepare_farmer_catalog(
-        frame, public_catalog_indices=public_indices
+        frame, public_catalog_rows=public_rows
     )
     if (
         args.expected_selected is not None
