@@ -19,6 +19,7 @@ from euclid_dsps.amortized.exact_posterior import (
     combine_chain_diagnostics,
     normalized_importance_weights,
     run_adjusted_mclmc_chain,
+    run_batched_nuts_chains,
     run_nuts_chain,
     systematic_resample,
 )
@@ -79,6 +80,48 @@ def test_nuts_chain_is_resumable_and_writes_diagnostics(tmp_path: Path) -> None:
     assert diagnostics["parameter"].tolist() == ["a", "b"]
     assert np.isfinite(summary["max_rhat"])
     assert summary["min_bulk_ess"] > 0
+
+
+def test_batched_nuts_writes_independent_standard_chain_artifacts(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("blackjax")
+    directories = tuple(tmp_path / f"chain_{index:02d}" for index in range(3))
+    manifests = run_batched_nuts_chains(
+        _normal_logdensity,
+        jnp.asarray(
+            [
+                [0.2, -0.1],
+                [-0.3, 0.4],
+                [0.1, 0.3],
+            ]
+        ),
+        seeds=(11, 12, 13),
+        settings=NUTSSettings(
+            warmup_steps=12,
+            sample_chunks=(6,),
+            max_num_doublings=3,
+        ),
+        out_dirs=directories,
+    )
+
+    assert len(manifests) == 3
+    assert all(row["execution"] == "vmap_batched_chains" for row in manifests)
+    frames = []
+    for directory in directories:
+        assert (directory / "warmup_summary.json").is_file()
+        assert (directory / "tuned_parameters.npz").is_file()
+        assert (directory / "sampling_state.pkl").is_file()
+        assert (directory / "chain_manifest.json").is_file()
+        frame = pd.read_parquet(
+            directory / "chunks" / "part_000000.parquet"
+        )
+        assert len(frame) == 6
+        frames.append(frame)
+    assert not np.array_equal(
+        frames[0][["x_00", "x_01"]].to_numpy(),
+        frames[1][["x_00", "x_01"]].to_numpy(),
+    )
 
 
 def test_chain_summary_serializes_nonfinite_smoke_diagnostics_as_null(

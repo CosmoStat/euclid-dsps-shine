@@ -166,6 +166,31 @@ def test_two_galaxy_nuts_probe_gates_the_parallel_recovery() -> None:
     assert "requested_upper_bound_h100_hours=4.00" in probe
 
 
+def test_batched_nuts_probe_and_finish_preserve_chain_artifact_contract() -> None:
+    wrapper = (
+        ROOT / "scripts/feniks_exact_nuts_batched_h100.slurm"
+    ).read_text()
+    probe = (
+        ROOT / "scripts/submit_feniks_exact_posterior_nuts_batched_probe.sh"
+    ).read_text()
+    finish = (
+        ROOT / "scripts/submit_feniks_exact_posterior_nuts_batched_finish.sh"
+    ).read_text()
+
+    assert "--gres=gpu:1" in wrapper
+    assert "sample-nuts-batched" in wrapper
+    assert "JAX_ENABLE_X64=true" in wrapper
+    assert "CHAIN_INDICES" in wrapper
+    assert "--array=0 --time=04:00:00" in probe
+    assert "CHAIN_INDICES=1:2:3" in probe
+    assert "chain_00/DONE" in probe
+    assert "summarize_feniks_nuts_batched_probe.py" not in probe
+    assert "--array=1 --time=04:00:00" in finish
+    assert '--dependency="afterok:$nuts"' in finish
+    assert "FINAL_SAMPLERS=nuts" in finish
+    assert "requested_upper_bound_h100_hours=8.33" in finish
+
+
 def test_selected_samplers_accepts_nuts_only_and_rejects_invalid_contract() -> None:
     assert _selected_samplers(SimpleNamespace(samplers="nuts")) == ("nuts",)
     assert _selected_samplers(SimpleNamespace(samplers="nuts,mclmc")) == (

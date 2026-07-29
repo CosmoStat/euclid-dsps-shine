@@ -31,6 +31,7 @@ from euclid_dsps.amortized.exact_posterior import (
     combine_chain_diagnostics,
     normalized_importance_weights,
     run_adjusted_mclmc_chain,
+    run_batched_nuts_chains,
     run_nuts_chain,
     run_unadjusted_mclmc_chain,
     systematic_resample,
@@ -105,6 +106,7 @@ def parse_args() -> argparse.Namespace:
             "prepare-cohort",
             "prepare-galaxy",
             "sample-chain",
+            "sample-nuts-batched",
             "finalize-mclmc",
             "finalize-galaxy",
             "finalize-run",
@@ -117,6 +119,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--galaxy-index", type=int)
     parser.add_argument("--chain-index", type=int)
+    parser.add_argument("--chain-indices")
     parser.add_argument("--sampler", choices=("nuts", "mclmc", "mclmc_unadjusted"))
     parser.add_argument("--sampler-label")
     parser.add_argument(
@@ -156,6 +159,8 @@ def main() -> None:
         prepare_galaxy(args, config)
     elif args.command == "sample-chain":
         sample_chain(args, config)
+    elif args.command == "sample-nuts-batched":
+        sample_nuts_batched(args, config)
     elif args.command == "finalize-mclmc":
         finalize_mclmc(args, config)
     elif args.command == "finalize-galaxy":
@@ -413,20 +418,7 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
     chain_dir = galaxy_dir / sampler_label / f"chain_{chain_index:02d}"
     seed = int(args.seed) + galaxy_index * 10_000 + chain_index * 101
     if args.sampler == "nuts":
-        settings = NUTSSettings(
-            warmup_steps=int(
-                args.nuts_warmup
-                if args.nuts_warmup is not None
-                else (10 if args.mode == "smoke" else 500)
-            ),
-            sample_chunks=chunks,
-            target_accept=0.65,
-            max_num_doublings=int(
-                args.nuts_max_doublings
-                if args.nuts_max_doublings is not None
-                else (4 if args.mode == "smoke" else 6)
-            ),
-        )
+        settings = _nuts_settings(args, chunks)
         print(
             f"[exact-chain] NUTS warmup={settings.warmup_steps} "
             f"max_doublings={settings.max_num_doublings} "
@@ -488,6 +480,76 @@ def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
         )
     (chain_dir / "DONE").touch()
     print(json.dumps(manifest, indent=2))
+
+
+def sample_nuts_batched(args: argparse.Namespace, config: dict[str, Any]) -> None:
+    """Run all requested missing chains for one galaxy in one vmapped program."""
+    galaxy_index = _required_index(args.galaxy_index, "galaxy-index")
+    item = _cohort_item(args.out, galaxy_index)
+    galaxy_dir = _galaxy_dir(args.out, item)
+    if not (galaxy_dir / "PREP_DONE").exists():
+        raise FileNotFoundError(f"Galaxy preparation is incomplete: {galaxy_dir}")
+    requested = (
+        tuple(
+            int(value)
+            for value in args.chain_indices.replace(":", ",").split(",")
+        )
+        if args.chain_indices
+        else (0, 1, 2, 3)
+    )
+    if not requested or len(set(requested)) != len(requested):
+        raise ValueError("--chain-indices must contain unique chain indices")
+    if min(requested) < 0 or max(requested) >= 4:
+        raise ValueError("--chain-indices must be in [0, 3]")
+    chunks = _sample_chunks(args)
+    settings = _nuts_settings(args, chunks)
+    missing = []
+    for chain_index in requested:
+        chain_dir = galaxy_dir / "nuts" / f"chain_{chain_index:02d}"
+        if (chain_dir / "DONE").exists():
+            _validate_completed_nuts_manifest(chain_dir, settings)
+            continue
+        if chain_dir.exists() and any(chain_dir.iterdir()):
+            raise FileExistsError(
+                f"Cannot batch-resume incomplete chain directory: {chain_dir}"
+            )
+        missing.append(chain_index)
+    if not missing:
+        print(
+            f"[exact-nuts-batched] galaxy={galaxy_index} already complete",
+            flush=True,
+        )
+        return
+
+    print(
+        "[exact-nuts-batched] "
+        f"galaxy={galaxy_index} row={int(item.row_index)} chains={missing} "
+        f"warmup={settings.warmup_steps} "
+        f"max_doublings={settings.max_num_doublings} "
+        f"chunks={settings.sample_chunks}",
+        flush=True,
+    )
+    runtime = _load_runtime(args, config, int(item.row_index))
+    logdensity_fn = _logdensity_fn(runtime)
+    initial = np.load(galaxy_dir / "initial_positions.npy")
+    seeds = tuple(
+        int(args.seed) + galaxy_index * 10_000 + chain_index * 101
+        for chain_index in missing
+    )
+    out_dirs = tuple(
+        galaxy_dir / "nuts" / f"chain_{chain_index:02d}"
+        for chain_index in missing
+    )
+    manifests = run_batched_nuts_chains(
+        logdensity_fn,
+        jnp.asarray(initial[missing]),
+        seeds=seeds,
+        settings=settings,
+        out_dirs=out_dirs,
+    )
+    for output in out_dirs:
+        (output / "DONE").touch()
+    print(json.dumps(manifests, indent=2))
 
 
 def finalize_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -1399,6 +1461,46 @@ def _sample_chunks(args: argparse.Namespace) -> tuple[int, ...]:
     if any(value <= 0 for value in chunks):
         raise ValueError("sample chunks must be positive")
     return chunks
+
+
+def _nuts_settings(
+    args: argparse.Namespace,
+    chunks: tuple[int, ...],
+) -> NUTSSettings:
+    return NUTSSettings(
+        warmup_steps=int(
+            args.nuts_warmup
+            if args.nuts_warmup is not None
+            else (10 if args.mode == "smoke" else 500)
+        ),
+        sample_chunks=chunks,
+        target_accept=0.65,
+        max_num_doublings=int(
+            args.nuts_max_doublings
+            if args.nuts_max_doublings is not None
+            else (4 if args.mode == "smoke" else 6)
+        ),
+    )
+
+
+def _validate_completed_nuts_manifest(
+    chain_dir: Path,
+    settings: NUTSSettings,
+) -> None:
+    manifest = json.loads(
+        (chain_dir / "chain_manifest.json").read_text(encoding="utf-8")
+    )
+    expected = {
+        "warmup_steps": int(settings.warmup_steps),
+        "max_num_doublings": int(settings.max_num_doublings),
+        "sample_chunks": list(settings.sample_chunks),
+    }
+    actual = {name: manifest.get(name) for name in expected}
+    if actual != expected:
+        raise ValueError(
+            f"Incompatible completed NUTS chain {chain_dir}: "
+            f"actual={actual} expected={expected}"
+        )
 
 
 def _selected_samplers(args: argparse.Namespace) -> tuple[str, ...]:

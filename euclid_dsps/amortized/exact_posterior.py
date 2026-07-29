@@ -298,6 +298,214 @@ def run_nuts_chain(
     return manifest
 
 
+def run_batched_nuts_chains(
+    logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    initial_positions: jnp.ndarray,
+    *,
+    seeds: tuple[int, ...],
+    settings: NUTSSettings,
+    out_dirs: tuple[str | Path, ...],
+) -> list[dict[str, Any]]:
+    """Adapt and sample independent NUTS chains in one vectorized JAX program."""
+    _enforce_float64_sampling()
+    import blackjax
+
+    positions = jnp.asarray(initial_positions, dtype=jnp.float64)
+    n_chains = int(positions.shape[0])
+    if positions.ndim != 2 or n_chains < 1:
+        raise ValueError("initial_positions must have shape [chain, parameter]")
+    if len(seeds) != n_chains or len(out_dirs) != n_chains:
+        raise ValueError("seeds and out_dirs must match the number of chains")
+    _validate_chunks(settings.sample_chunks)
+    outputs = tuple(Path(path) for path in out_dirs)
+    for output in outputs:
+        if output.exists() and any(output.iterdir()):
+            raise FileExistsError(f"Batched NUTS requires a fresh chain directory: {output}")
+        output.mkdir(parents=True, exist_ok=True)
+
+    sampling_logdensity = jax.jit(_float64_logdensity(logdensity_fn), inline=False)
+    target_started = time.perf_counter()
+    print(
+        f"[exact-sampler:nuts-batched] validating {n_chains} targets and gradients",
+        flush=True,
+    )
+    positions = jnp.stack(
+        [
+            _validate_sampling_target(sampling_logdensity, position)
+            for position in positions
+        ]
+    )
+    print(
+        "[exact-sampler:nuts-batched] targets ready "
+        f"elapsed_s={time.perf_counter() - target_started:.1f}",
+        flush=True,
+    )
+
+    base_keys = jnp.stack([jax.random.PRNGKey(int(seed)) for seed in seeds])
+    split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(base_keys)
+    keys = split_keys[:, 0]
+    warmup_keys = split_keys[:, 1]
+    adaptation = blackjax.window_adaptation(
+        blackjax.nuts,
+        sampling_logdensity,
+        is_mass_matrix_diagonal=True,
+        target_acceptance_rate=float(settings.target_accept),
+        max_num_doublings=int(settings.max_num_doublings),
+        initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
+    )
+
+    warmup_started = time.perf_counter()
+    print(
+        "[exact-sampler:nuts-batched] warmup start "
+        f"chains={n_chains} steps={settings.warmup_steps} "
+        f"max_doublings={settings.max_num_doublings}",
+        flush=True,
+    )
+
+    def adapt_one(key, position):
+        return adaptation.run(key, position, int(settings.warmup_steps))
+
+    (states, parameters), adaptation_info = jax.vmap(adapt_one)(
+        warmup_keys,
+        positions,
+    )
+    jax.block_until_ready(states.position)
+    warmup_elapsed = time.perf_counter() - warmup_started
+    print(
+        "[exact-sampler:nuts-batched] warmup done "
+        f"chains={n_chains} elapsed_s={warmup_elapsed:.1f}",
+        flush=True,
+    )
+
+    started = time.perf_counter()
+    for chain_index, output in enumerate(outputs):
+        chain_parameters = jax.tree.map(
+            lambda value, index=chain_index: value[index],
+            parameters,
+        )
+        chain_info = jax.tree.map(
+            lambda value, index=chain_index: value[index],
+            adaptation_info,
+        )
+        np.savez(
+            output / "tuned_parameters.npz",
+            step_size=np.asarray(
+                jax.device_get(chain_parameters["step_size"])
+            ),
+            inverse_mass_matrix=np.asarray(
+                jax.device_get(chain_parameters["inverse_mass_matrix"])
+            ),
+        )
+        _write_warmup_summary(
+            output / "warmup_summary.json",
+            sampler="nuts_batched",
+            elapsed_s=warmup_elapsed,
+            nominal_steps=int(settings.warmup_steps),
+            parameters=chain_parameters,
+            adaptation_info=chain_info,
+        )
+        _write_pickle_atomic(
+            output / "sampling_state.pkl",
+            {
+                "state": jax.tree.map(
+                    lambda value, index=chain_index: value[index],
+                    states,
+                ),
+                "key": keys[chain_index],
+                "warmup_elapsed_s": warmup_elapsed,
+            },
+        )
+
+    chunks_by_chain: list[list[dict[str, Any]]] = [
+        [] for _ in range(n_chains)
+    ]
+    for chunk_id, n_samples in enumerate(settings.sample_chunks):
+        key_pairs = jax.vmap(lambda key: jax.random.split(key, 2))(keys)
+        keys = key_pairs[:, 0]
+        chunk_keys = key_pairs[:, 1]
+        chunk_started = time.perf_counter()
+        print(
+            "[exact-sampler:nuts-batched] "
+            f"chunk={chunk_id} start chains={n_chains} draws={n_samples}",
+            flush=True,
+        )
+        states, (chunk_positions, infos) = _run_batched_nuts_steps(
+            sampling_logdensity,
+            states,
+            chunk_keys,
+            parameters["step_size"],
+            parameters["inverse_mass_matrix"],
+            n_samples=int(n_samples),
+            max_num_doublings=int(settings.max_num_doublings),
+        )
+        jax.block_until_ready(states.position)
+        elapsed = time.perf_counter() - chunk_started
+        print(
+            "[exact-sampler:nuts-batched] "
+            f"chunk={chunk_id} done chains={n_chains} elapsed_s={elapsed:.1f}",
+            flush=True,
+        )
+        for chain_index, output in enumerate(outputs):
+            chunk_path = output / "chunks" / f"part_{chunk_id:06d}.parquet"
+            info_path = (
+                output / "chunks" / f"part_{chunk_id:06d}_info.parquet"
+            )
+            _write_chain_chunk(
+                chunk_path,
+                info_path,
+                chunk_positions[:, chain_index],
+                jax.tree.map(
+                    lambda value, index=chain_index: value[:, index],
+                    infos,
+                ),
+                elapsed_s=elapsed,
+                thinning=1,
+            )
+            _write_pickle_atomic(
+                output / "sampling_state.pkl",
+                {
+                    "state": jax.tree.map(
+                        lambda value, index=chain_index: value[index],
+                        states,
+                    ),
+                    "key": keys[chain_index],
+                    "warmup_elapsed_s": warmup_elapsed,
+                },
+            )
+            chunks_by_chain[chain_index].append(
+                _chunk_record(
+                    chunk_id,
+                    n_samples,
+                    chunk_path,
+                    info_path,
+                )
+            )
+
+    total_elapsed = time.perf_counter() - started + warmup_elapsed
+    manifests = []
+    for chain_index, output in enumerate(outputs):
+        manifest = {
+            "sampler": "nuts",
+            "execution": "vmap_batched_chains",
+            "batched_chain_count": n_chains,
+            "sampling_dtype": "float64",
+            "target_dtype": "float32",
+            "seed": int(seeds[chain_index]),
+            "warmup_steps": int(settings.warmup_steps),
+            "target_accept": float(settings.target_accept),
+            "max_num_doublings": int(settings.max_num_doublings),
+            "sample_chunks": list(settings.sample_chunks),
+            "stored_samples": int(sum(settings.sample_chunks)),
+            "kernel_transitions": int(sum(settings.sample_chunks)),
+            "warmup_elapsed_s": warmup_elapsed,
+            "total_elapsed_s": total_elapsed,
+            "chunks": chunks_by_chain[chain_index],
+        }
+        _write_json_atomic(output / "chain_manifest.json", manifest)
+        manifests.append(manifest)
+    return manifests
+
+
 def run_adjusted_mclmc_chain(
     logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
     initial_position: jnp.ndarray,
@@ -912,6 +1120,51 @@ def _run_algorithm_steps(algorithm, state, key, n_samples: int, *, thinning: int
     return_value = jax.jit(lambda s, k: jax.lax.scan(stored_step, s, k))(state, keys)
     final_state, (positions, infos) = return_value
     return final_state, positions, infos
+
+
+def _run_batched_nuts_steps(
+    logdensity_fn,
+    states,
+    keys,
+    step_sizes,
+    inverse_mass_matrices,
+    *,
+    n_samples: int,
+    max_num_doublings: int,
+):
+    import blackjax
+
+    def one_step(key, state, step_size, inverse_mass_matrix):
+        algorithm = blackjax.nuts(
+            logdensity_fn,
+            step_size=step_size,
+            inverse_mass_matrix=inverse_mass_matrix,
+            max_num_doublings=int(max_num_doublings),
+        )
+        return algorithm.step(key, state)
+
+    batched_step = jax.vmap(one_step)
+    draw_keys = jax.vmap(
+        lambda key: jax.random.split(key, int(n_samples))
+    )(keys)
+    draw_keys = jnp.swapaxes(draw_keys, 0, 1)
+
+    def stored_step(current_states, current_keys):
+        next_states, infos = batched_step(
+            current_keys,
+            current_states,
+            step_sizes,
+            inverse_mass_matrices,
+        )
+        return next_states, (next_states.position, infos)
+
+    return jax.jit(
+        lambda initial_states, all_keys: jax.lax.scan(
+            stored_step,
+            initial_states,
+            all_keys,
+        )
+    )(states, draw_keys)
 
 
 def _write_chain_chunk(
