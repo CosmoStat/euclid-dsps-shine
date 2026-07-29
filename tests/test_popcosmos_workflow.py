@@ -48,6 +48,8 @@ def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
     assert "--allow-inference-fail" in rws
     assert 'test -e "$PREVIOUS/DONE"' in rws
     assert '--data-parallel "$DATA_PARALLEL"' in rws
+    assert "--selection-mode sequential" in rws
+    assert "--selection-mode random" not in rws
     assert "GRES=(gpu:1 gpu:1 gpu:1 gpu:4 gpu:4)" in submit
     assert "TIMES=(00:30:00 01:00:00 04:00:00 08:00:00 20:00:00)" in submit
     assert 'test -e "$ROOT_DIR/$previous/DONE"' in submit

@@ -110,7 +110,7 @@ python -m euclid_dsps.cli --config "$CONFIG" amortized-infer-cosmos \
   --limit "$INFER_LIMIT" --batch-size 256 --jax-batch-size 256 \
   --posterior-samples 64 --prior-samples 4096 \
   --decoder-sample-chunk-size 1 --prior-predictive-batch-size 128 \
-  --selection-mode random --selection-seed 260727 \
+  --selection-mode sequential \
   --shard-outputs --no-residual-samples
 python -m euclid_dsps.cli --config "$CONFIG" \
   amortized-finalize-inference --out "$INFER_DIR" --limit "$INFER_LIMIT"
