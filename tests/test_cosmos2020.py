@@ -149,14 +149,29 @@ def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None
     assert manifest["public_cohort_audit"]["lp_type_counts"] == {"0": 1}
 
 
-def test_public_cohort_audits_lp_type_without_changing_membership() -> None:
+def test_public_cohort_intersects_usable_farmer_rows_and_audits_exclusions() -> None:
     fixture = _farmer_fixture()
     fixture.loc[:, "FLAG_COMBINED"] = 0
     selected, manifest = prepare_farmer_catalog(
-        fixture, public_catalog_rows=np.array([0, 2])
+        fixture,
+        public_catalog_rows=np.array([0, 2]),
+        min_public_retention=0.5,
     )
-    assert selected["object_id"].tolist() == [10, 12]
+    assert selected["object_id"].tolist() == [10]
+    assert manifest["public_cohort_audit"]["requested_rows"] == 2
+    assert manifest["public_cohort_audit"]["retained_rows"] == 1
+    assert manifest["public_cohort_audit"]["excluded_lp_type"] == 1
     assert manifest["public_cohort_audit"]["lp_type_counts"] == {"0": 1, "1": 1}
+
+
+def test_public_cohort_rejects_large_farmer_mismatch() -> None:
+    fixture = _farmer_fixture()
+    fixture.loc[:, "FLAG_COMBINED"] = 0
+    with pytest.raises(ValueError, match="retains only 1/2"):
+        prepare_farmer_catalog(
+            fixture,
+            public_catalog_rows=np.array([0, 2]),
+        )
 
 
 def test_filter_download_retries_invalid_payload_and_writes_atomically(

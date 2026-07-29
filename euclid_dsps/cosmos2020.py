@@ -126,6 +126,7 @@ def prepare_farmer_catalog(
     frame: pd.DataFrame,
     *,
     public_catalog_rows: np.ndarray | None = None,
+    min_public_retention: float = 0.99,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Apply the public A24 selection and produce generic DSPS columns.
 
@@ -185,6 +186,7 @@ def prepare_farmer_catalog(
         )
         output[f"valid_{band.name}"] = valid
 
+    public_cohort_audit = None
     if public_catalog_rows is None:
         selected = (
             (output["flag_combined"].to_numpy() == 0)
@@ -204,45 +206,80 @@ def prepare_farmer_catalog(
             raise ValueError("Public COSMOS cohort contains duplicate catalog rows")
         if len(rows) and (rows.min() < 0 or rows.max() >= len(frame)):
             raise IndexError("Public COSMOS cohort row is outside the Farmer catalog")
-        selected = np.zeros(len(frame), dtype=bool)
-        selected[rows] = True
-        selection = "published T24 MAGCUT_r == Y and XRAY == N Farmer IDs"
-    selected_frame = output.loc[selected].copy()
-    if public_catalog_rows is not None:
+        requested = np.zeros(len(frame), dtype=bool)
+        requested[rows] = True
+        valid_metadata = (
+            (output["flag_combined"].to_numpy() == 0)
+            & (output["lp_type"].to_numpy() == 0)
+            & np.isfinite(output["ebv_mw"].to_numpy())
+        )
+        valid_photometry = np.ones(len(frame), dtype=bool)
+        invalid_photometry_by_band: dict[str, dict[str, int]] = {}
         for band in COSMOS_BANDS:
-            flux = selected_frame[f"flux_{band.name}"].to_numpy(float)
-            error = selected_frame[f"fluxerr_{band.name}"].to_numpy(float)
-            if not np.all(np.isfinite(flux) & (flux > 0.0)):
-                raise ValueError(
-                    f"Published T24 cohort has non-positive {band.name} flux"
+            flux = output[f"flux_{band.name}"].to_numpy(float)
+            error = output[f"fluxerr_{band.name}"].to_numpy(float)
+            valid_flux = np.isfinite(flux) & (flux > 0.0)
+            valid_error = np.isfinite(error) & (error > 0.0)
+            valid_photometry &= valid_flux & valid_error
+            invalid_photometry_by_band[band.name] = {
+                "flux": int(np.count_nonzero(requested & ~valid_flux)),
+                "error": int(np.count_nonzero(requested & ~valid_error)),
+            }
+        selected = requested & valid_metadata & valid_photometry
+        requested_count = int(np.count_nonzero(requested))
+        selected_count = int(np.count_nonzero(selected))
+        retention = selected_count / requested_count if requested_count else 1.0
+        requested_frame = output.loc[requested]
+        public_cohort_audit = {
+            "requested_rows": requested_count,
+            "retained_rows": selected_count,
+            "excluded_rows": requested_count - selected_count,
+            "retention_fraction": retention,
+            "excluded_flag_combined": int(
+                np.count_nonzero(
+                    requested & (output["flag_combined"].to_numpy() != 0)
                 )
-            if not np.all(np.isfinite(error) & (error > 0.0)):
-                raise ValueError(
-                    f"Published T24 cohort has non-positive {band.name} error"
+            ),
+            "excluded_lp_type": int(
+                np.count_nonzero(requested & (output["lp_type"].to_numpy() != 0))
+            ),
+            "excluded_nonfinite_ebv": int(
+                np.count_nonzero(
+                    requested & ~np.isfinite(output["ebv_mw"].to_numpy())
                 )
+            ),
+            "invalid_photometry_by_band": invalid_photometry_by_band,
+            "flag_combined_counts": {
+                str(key): int(value)
+                for key, value in requested_frame["flag_combined"]
+                .value_counts(dropna=False)
+                .items()
+            },
+            "lp_type_counts": {
+                str(key): int(value)
+                for key, value in requested_frame["lp_type"]
+                .value_counts(dropna=False)
+                .items()
+            },
+        }
+        if retention < min_public_retention:
+            raise ValueError(
+                "Usable Farmer intersection retains only "
+                f"{selected_count}/{requested_count} public T24 objects "
+                f"({retention:.3%}), below {min_public_retention:.1%}; "
+                f"audit={json.dumps(public_cohort_audit, sort_keys=True)}"
+            )
+        selection = (
+            "published T24 MAGCUT_r == Y and XRAY == N Farmer IDs intersected "
+            "with usable Phase-3 Farmer photometry, FLAG_COMBINED == 0, "
+            "and lp_type == 0"
+        )
+    selected_frame = output.loc[selected].copy()
     selected_frame["r_abmag_mw_corrected"] = 23.9 - 2.5 * np.log10(
         selected_frame["flux_hsc_r"].to_numpy(float)
     )
     selected_frame = selected_frame.sort_values("object_id").reset_index(drop=True)
     selected_frame.insert(0, "row_index", np.arange(len(selected_frame), dtype=np.int64))
-    public_cohort_audit = None
-    if public_catalog_rows is not None:
-        public_cohort_audit = {
-            "flag_combined_counts": {
-                str(key): int(value)
-                for key, value in selected_frame["flag_combined"]
-                .value_counts(dropna=False)
-                .sort_index()
-                .items()
-            },
-            "lp_type_counts": {
-                str(key): int(value)
-                for key, value in selected_frame["lp_type"]
-                .value_counts(dropna=False)
-                .sort_index()
-                .items()
-            },
-        }
     manifest = {
         "input_rows": int(len(frame)),
         "selected_rows": int(len(selected_frame)),

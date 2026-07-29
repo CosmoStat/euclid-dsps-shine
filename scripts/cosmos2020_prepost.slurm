@@ -17,7 +17,9 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 ASSET_DIR="${ASSET_DIR:-Data/cosmos2020/assets}"
 PREPARED_DIR="${PREPARED_DIR:-Data/cosmos2020/prepared}"
-EXPECTED_SELECTED="${EXPECTED_SELECTED:-139489}"
+EXPECTED_PUBLIC="${EXPECTED_PUBLIC:-139489}"
+EXPECTED_SELECTED="${EXPECTED_SELECTED:-}"
+MIN_PUBLIC_RETENTION="${MIN_PUBLIC_RETENTION:-0.99}"
 INSTALL="${INSTALL:-1}"
 TAP_TIMEOUT="${TAP_TIMEOUT:-14400}"
 TAP_JOB_URL="${TAP_JOB_URL:-}"
@@ -68,22 +70,32 @@ if len(COSMOS_FILTERS) != 26:
 print("[cosmos2020-prepost] Pop-COSMOS import: OK")
 PY
 fi
-python scripts/prepare_cosmos2020_farmer.py \
-  --input "$ASSET_DIR/cosmos2020_farmer_v21.fits" \
-  --out "$PREPARED_DIR" \
-  --public-summary "$ASSET_DIR/zenodo/summaries.txt" \
-  --expected-selected "$EXPECTED_SELECTED"
-python scripts/validate_cosmos2020_reproduction.py \
-  --data-dir "$PREPARED_DIR" --asset-dir "$ASSET_DIR" \
-  --expected-full "$EXPECTED_SELECTED"
+PREPARE_ARGS=(
+  --input "$ASSET_DIR/cosmos2020_farmer_v21.fits"
+  --out "$PREPARED_DIR"
+  --public-summary "$ASSET_DIR/zenodo/summaries.txt"
+  --expected-public "$EXPECTED_PUBLIC"
+  --min-public-retention "$MIN_PUBLIC_RETENTION"
+)
+VALIDATE_ARGS=(--data-dir "$PREPARED_DIR" --asset-dir "$ASSET_DIR")
+if [[ -n "$EXPECTED_SELECTED" ]]; then
+  PREPARE_ARGS+=(--expected-selected "$EXPECTED_SELECTED")
+  VALIDATE_ARGS+=(--expected-full "$EXPECTED_SELECTED")
+fi
+python scripts/prepare_cosmos2020_farmer.py "${PREPARE_ARGS[@]}"
+python scripts/validate_cosmos2020_reproduction.py "${VALIDATE_ARGS[@]}"
 python - <<PY
 import json
 from pathlib import Path
+manifest = json.loads(
+    Path("$PREPARED_DIR/preparation_manifest.json").read_text(encoding="utf-8")
+)
 path = Path("$PREPARED_DIR/PREPOST_COMPLETE.json")
 path.write_text(json.dumps({
     "status": "complete",
     "slurm_job_id": "${SLURM_JOB_ID:-local}",
-    "expected_selected": int("$EXPECTED_SELECTED"),
+    "expected_public": int("$EXPECTED_PUBLIC"),
+    "selected_rows": int(manifest["selected_rows"]),
 }, indent=2) + "\\n")
 print(f"[cosmos2020-prepost] completion marker -> {path}")
 PY

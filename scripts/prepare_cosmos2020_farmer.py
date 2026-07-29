@@ -34,10 +34,22 @@ def parse_args() -> argparse.Namespace:
         help="T24 summaries.txt used to select the published same-object cohort.",
     )
     parser.add_argument(
+        "--expected-public",
+        type=int,
+        default=None,
+        help="Fail unless the public summary supplies this many cohort IDs.",
+    )
+    parser.add_argument(
         "--expected-selected",
         type=int,
         default=None,
-        help="Fail unless the selected sample has this exact cardinality.",
+        help="Fail unless the usable Farmer intersection has this cardinality.",
+    )
+    parser.add_argument(
+        "--min-public-retention",
+        type=float,
+        default=0.99,
+        help="Minimum usable fraction of the public cohort.",
     )
     return parser.parse_args()
 
@@ -102,8 +114,18 @@ def main() -> None:
         if args.public_summary is not None
         else None
     )
+    if (
+        public_rows is not None
+        and args.expected_public is not None
+        and len(public_rows) != args.expected_public
+    ):
+        raise SystemExit(
+            f"Expected {args.expected_public} public rows, got {len(public_rows)}"
+        )
     selected, manifest = prepare_farmer_catalog(
-        frame, public_catalog_rows=public_rows
+        frame,
+        public_catalog_rows=public_rows,
+        min_public_retention=args.min_public_retention,
     )
     if (
         args.expected_selected is not None
@@ -118,6 +140,7 @@ def main() -> None:
             "input": str(args.input),
             "input_sha256": sha256_file(args.input),
             "subsets": subsets,
+            "expected_public": args.expected_public,
             "expected_selected": args.expected_selected,
         }
     )
