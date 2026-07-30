@@ -326,11 +326,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     map_prior = sub.add_parser(
         "diffsky-map-adam-prior",
-        help="Fit free-redshift MAP DSPS estimates under a learned RealNVP prior.",
+        help=(
+            "Fit free-redshift MAP DSPS estimates, optionally under a learned "
+            "RealNVP prior."
+        ),
     )
     map_prior.add_argument("--out", default="outputs/runs/dev_diffsky_map_prior")
     map_prior.add_argument("--dataset", help="Override config catalog_path.")
-    map_prior.add_argument("--checkpoint", required=True)
+    map_prior.add_argument(
+        "--checkpoint",
+        help=(
+            "Amortized checkpoint for encoder/prior initialization. Omit only "
+            "for likelihood-only MAP with prior_weight=0 and independent starts."
+        ),
+    )
     map_prior.add_argument("--feature-stats")
     map_prior.add_argument("--limit", type=int)
     map_prior.add_argument("--row-indices-file")
@@ -1624,7 +1633,7 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
     summary = run_map_adam_under_prior(
         config,
         Path(args.out),
-        checkpoint=Path(args.checkpoint),
+        checkpoint=Path(args.checkpoint) if args.checkpoint else None,
         feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
         limit=args.limit,
         batch_size=int(args.batch_size or map_cfg.get("batch_size", 128)),
