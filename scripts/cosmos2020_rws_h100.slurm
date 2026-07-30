@@ -51,6 +51,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
 export JAX_PLATFORMS=cuda
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TF_FORCE_GPU_ALLOW_GROWTH=true
+export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0
 export MPLBACKEND=Agg
 export MPLCONFIGDIR="/tmp/mpl-${USER}-${SLURM_JOB_ID:-local}"
@@ -83,6 +84,13 @@ INITIAL_ARGS=()
 DATA_PARALLEL=single
 N_GPUS=$(nvidia-smi --list-gpus | wc -l)
 if (( N_GPUS > 1 )); then DATA_PARALLEL=pmap; fi
+TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-256}"
+TRAIN_JAX_BATCH_SIZE="${TRAIN_JAX_BATCH_SIZE:-256}"
+if [[ -n "${TRAIN_PER_DEVICE_BATCH_SIZE:-}" ]]; then
+  TRAIN_JAX_BATCH_SIZE=$((TRAIN_PER_DEVICE_BATCH_SIZE * N_GPUS))
+fi
+INFER_BATCH_SIZE="${INFER_BATCH_SIZE:-256}"
+INFER_JAX_BATCH_SIZE="${INFER_JAX_BATCH_SIZE:-256}"
 if [[ -n "$PREVIOUS" ]]; then
   test -e "$PREVIOUS/DONE"
   PREVIOUS_VALIDATE_ARGS=()
@@ -97,17 +105,21 @@ fi
 
 echo "[cosmos-rws] stage=$STAGE dataset=$DATASET epochs=$EPOCHS"
 echo "[cosmos-rws] n_gpus=$N_GPUS data_parallel=$DATA_PARALLEL"
+echo "[cosmos-rws] train_batch=$TRAIN_BATCH_SIZE global_jax_batch=$TRAIN_JAX_BATCH_SIZE"
+echo "[cosmos-rws] infer_batch=$INFER_BATCH_SIZE infer_jax_batch=$INFER_JAX_BATCH_SIZE"
 nvidia-smi
 python -m euclid_dsps.cli --config "$CONFIG" amortized-train-cosmos \
   --runtime gpu --dataset "$DATASET" --out "$TRAIN_DIR" \
-  --batch-size 256 --jax-batch-size 256 --epochs "$EPOCHS" --n-samples 1 \
+  --batch-size "$TRAIN_BATCH_SIZE" --jax-batch-size "$TRAIN_JAX_BATCH_SIZE" \
+  --epochs "$EPOCHS" --n-samples 1 \
   --validation-every 1 --data-parallel "$DATA_PARALLEL" --no-progress \
   "${INITIAL_ARGS[@]}"
 
 python -m euclid_dsps.cli --config "$CONFIG" amortized-infer-cosmos \
   --dataset "$DATASET" --checkpoint "$TRAIN_DIR/checkpoints/best.eqx" \
   --feature-stats "$TRAIN_DIR/feature_stats.json" --out "$INFER_DIR" \
-  --limit "$INFER_LIMIT" --batch-size 256 --jax-batch-size 256 \
+  --limit "$INFER_LIMIT" --batch-size "$INFER_BATCH_SIZE" \
+  --jax-batch-size "$INFER_JAX_BATCH_SIZE" \
   --posterior-samples 64 --prior-samples 4096 \
   --decoder-sample-chunk-size 1 --prior-predictive-batch-size 128 \
   --selection-mode sequential \
