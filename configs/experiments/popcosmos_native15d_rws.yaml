@@ -1,0 +1,160 @@
+extends: feniks_selfsup_paper_rws_k8_t2_seed2.yaml
+
+# Native FENIKS/DSPS 15D transfer to the public COSMOS2020 Farmer photometry.
+# The SPS model, latent bounds and RWS objective come unchanged from the parent.
+catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
+runtime: gpu
+column_groups: []
+extra_columns:
+  - lp_zbest
+  - r_abmag_mw_corrected
+  - redshift_true
+  - redshift_spec
+  - specz_confidence_level
+  - t24_specz_flag
+
+dataset:
+  name: cosmos2020_farmer_native15d
+  id_column: object_id
+
+truth:
+  __replace__: true
+  schema: cosmos2020_public_specz
+  redshift_column: redshift_true
+  parameter_columns: {}
+
+selection:
+  index: 0
+  require_positive_flux: false
+  nondetection_policy: gaussian_flux
+
+redshift:
+  initial: random_uniform
+  column:
+  truth_column: redshift_true
+  fixed_value: 1.0
+  min: 0.001
+  max: 5.5
+  seed: 260730
+  prior_z:
+    mode: none
+
+# Public SVO curves downloaded and pinned by download_cosmos2020_assets.py.
+bands:
+  - {name: u_megaprime_sagem, column: flux_u_megaprime_sagem, error_column: fluxerr_u_megaprime_sagem, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/u_megaprime_sagem.dat}}
+  - {name: hsc_g, column: flux_hsc_g, error_column: fluxerr_hsc_g, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_g.dat}}
+  - {name: hsc_r, column: flux_hsc_r, error_column: fluxerr_hsc_r, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_r.dat}}
+  - {name: hsc_i, column: flux_hsc_i, error_column: fluxerr_hsc_i, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_i.dat}}
+  - {name: hsc_z, column: flux_hsc_z, error_column: fluxerr_hsc_z, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_z.dat}}
+  - {name: hsc_y, column: flux_hsc_y, error_column: fluxerr_hsc_y, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_y.dat}}
+  - {name: uvista_y_cosmos, column: flux_uvista_y_cosmos, error_column: fluxerr_uvista_y_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_y_cosmos.dat}}
+  - {name: uvista_j_cosmos, column: flux_uvista_j_cosmos, error_column: fluxerr_uvista_j_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_j_cosmos.dat}}
+  - {name: uvista_h_cosmos, column: flux_uvista_h_cosmos, error_column: fluxerr_uvista_h_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_h_cosmos.dat}}
+  - {name: uvista_ks_cosmos, column: flux_uvista_ks_cosmos, error_column: fluxerr_uvista_ks_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_ks_cosmos.dat}}
+  - {name: ia427_cosmos, column: flux_ia427_cosmos, error_column: fluxerr_ia427_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia427_cosmos.dat}}
+  - {name: ia464_cosmos, column: flux_ia464_cosmos, error_column: fluxerr_ia464_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia464_cosmos.dat}}
+  - {name: ia484_cosmos, column: flux_ia484_cosmos, error_column: fluxerr_ia484_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia484_cosmos.dat}}
+  - {name: ia505_cosmos, column: flux_ia505_cosmos, error_column: fluxerr_ia505_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia505_cosmos.dat}}
+  - {name: ia527_cosmos, column: flux_ia527_cosmos, error_column: fluxerr_ia527_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia527_cosmos.dat}}
+  - {name: ia574_cosmos, column: flux_ia574_cosmos, error_column: fluxerr_ia574_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia574_cosmos.dat}}
+  - {name: ia624_cosmos, column: flux_ia624_cosmos, error_column: fluxerr_ia624_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia624_cosmos.dat}}
+  - {name: ia679_cosmos, column: flux_ia679_cosmos, error_column: fluxerr_ia679_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia679_cosmos.dat}}
+  - {name: ia709_cosmos, column: flux_ia709_cosmos, error_column: fluxerr_ia709_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia709_cosmos.dat}}
+  - {name: ia738_cosmos, column: flux_ia738_cosmos, error_column: fluxerr_ia738_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia738_cosmos.dat}}
+  - {name: ia767_cosmos, column: flux_ia767_cosmos, error_column: fluxerr_ia767_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia767_cosmos.dat}}
+  - {name: ia827_cosmos, column: flux_ia827_cosmos, error_column: fluxerr_ia827_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia827_cosmos.dat}}
+  - {name: NB711.SuprimeCam, column: flux_NB711.SuprimeCam, error_column: fluxerr_NB711.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB711.SuprimeCam.dat}}
+  - {name: NB816.SuprimeCam, column: flux_NB816.SuprimeCam, error_column: fluxerr_NB816.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB816.SuprimeCam.dat}}
+  - {name: irac1_cosmos, column: flux_irac1_cosmos, error_column: fluxerr_irac1_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/irac1_cosmos.dat}}
+  - {name: irac2_cosmos, column: flux_irac2_cosmos, error_column: fluxerr_irac2_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/irac2_cosmos.dat}}
+
+fit:
+  photometric_likelihood: student_t
+  student_t_dof: 2.0
+  flux_error_floor_frac: 0.0
+  flux_error_jitter: 0.0
+
+calibration:
+  global_sed_scale:
+    enabled: false
+    mode: disabled
+    trainable: false
+  per_band_zero_points:
+    enabled: false
+    mode: disabled
+    trainable: false
+
+# COSMOS depths affect model-generated sleep observations only. Wake and MAP
+# use each Farmer object's reported flux uncertainties.
+synthetic_diffsky:
+  flux_error_model:
+    __replace__: true
+    type: m5_depth
+    m5:
+      u_megaprime_sagem: 27.8
+      hsc_g: 27.8
+      hsc_r: 27.4
+      hsc_i: 27.3
+      hsc_z: 26.8
+      hsc_y: 26.2
+      uvista_y_cosmos: 26.6
+      uvista_j_cosmos: 26.4
+      uvista_h_cosmos: 26.1
+      uvista_ks_cosmos: 25.6
+      ia427_cosmos: 26.0
+      ia464_cosmos: 26.0
+      ia484_cosmos: 26.0
+      ia505_cosmos: 26.0
+      ia527_cosmos: 26.0
+      ia574_cosmos: 25.8
+      ia624_cosmos: 25.8
+      ia679_cosmos: 25.7
+      ia709_cosmos: 25.7
+      ia738_cosmos: 25.6
+      ia767_cosmos: 25.5
+      ia827_cosmos: 25.4
+      NB711.SuprimeCam: 25.5
+      NB816.SuprimeCam: 25.4
+      irac1_cosmos: 25.5
+      irac2_cosmos: 25.3
+    default_eta: 1.0
+    sigma_sys_mag: 0.005
+
+amortized:
+  data:
+    expected_n_bands: 26
+    selection_mode: random
+    stratified_strategy: proportional
+    stratify_column: lp_zbest
+    redshift_bins: [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 5.5]
+    validation_fraction: 0.1
+    epoch_shuffle: true
+    catalog_batch_size: 10000
+  features:
+    type: flux_and_errors
+    n_flux_bands: 26
+    n_error_bands: 26
+    normalize_per_band: true
+    flux_transform: asinh
+    error_transform: log
+    stats_catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
+  encoder:
+    input_dim: 52
+    latent_dim: 15
+  objective:
+    sleep:
+      selection:
+        enabled: true
+        band: hsc_r
+        min_flux_fnu_cgs: 3.6307805477e-30
+        candidate_factor: 4
+  training:
+    seed: 260730
+  map_adam:
+    batch_size: 8
+    n_starts: 16
+    start_chunk_size: 4
+    maxiter: 400
+    learning_rate: 0.02
+    prior_weight: 0.0
+    start_mode: latin_hypercube
