@@ -36,6 +36,19 @@ class NUTSSettings:
 
 
 @dataclass(frozen=True)
+class BatchedTargetNUTSResult:
+    """In-memory result from a multi-target, multi-chain NUTS probe."""
+
+    positions: jnp.ndarray
+    infos: Any
+    step_size: jnp.ndarray
+    inverse_mass_matrix: jnp.ndarray
+    target_validation_elapsed_s: float
+    warmup_elapsed_s: float
+    sampling_elapsed_s: float
+
+
+@dataclass(frozen=True)
 class MCLMCSettings:
     tune_steps: int = 500
     sample_chunks: tuple[int, ...] = (100, 500, 1000)
@@ -684,6 +697,179 @@ def run_batched_nuts_chains(
         _write_json_atomic(output / "chain_manifest.json", manifest)
         manifests.append(manifest)
     return manifests
+
+
+def run_batched_nuts_targets(
+    logdensity_fn: Callable[[jnp.ndarray, Any], jnp.ndarray],
+    initial_positions: jnp.ndarray,
+    target_data: Any,
+    *,
+    seeds: jnp.ndarray,
+    settings: NUTSSettings,
+) -> BatchedTargetNUTSResult:
+    """Run a short NUTS probe over distinct targets and chains with ``vmap``.
+
+    ``initial_positions`` has shape ``[target, chain, parameter]``. Every leaf
+    in ``target_data`` has a matching leading target axis. This intentionally
+    keeps all results in memory: production runs should continue to use the
+    resumable chain writers above.
+    """
+    _enforce_float64_sampling()
+    import blackjax
+
+    positions = jnp.asarray(initial_positions, dtype=jnp.float64)
+    if positions.ndim != 3:
+        raise ValueError(
+            "initial_positions must have shape [target, chain, parameter]"
+        )
+    n_targets, n_chains, n_parameters = map(int, positions.shape)
+    if n_targets < 1 or n_chains < 1 or n_parameters < 1:
+        raise ValueError("initial_positions dimensions must all be positive")
+    if len(settings.sample_chunks) != 1:
+        raise ValueError(
+            "multi-target NUTS probes require exactly one sample chunk"
+        )
+    _validate_chunks(settings.sample_chunks)
+
+    leaves = jax.tree.leaves(target_data)
+    if not leaves:
+        raise ValueError("target_data must contain at least one array leaf")
+    for leaf in leaves:
+        value = jnp.asarray(leaf)
+        if value.ndim < 1 or int(value.shape[0]) != n_targets:
+            raise ValueError(
+                "every target_data leaf must have the target count as its "
+                "leading dimension"
+            )
+
+    seed_array = jnp.asarray(seeds, dtype=jnp.uint32)
+    if seed_array.shape != (n_targets, n_chains):
+        raise ValueError("seeds must have shape [target, chain]")
+
+    flat_positions = positions.reshape((-1, n_parameters))
+    flat_targets = jax.tree.map(
+        lambda value: jnp.repeat(jnp.asarray(value), n_chains, axis=0),
+        target_data,
+    )
+    flat_seeds = seed_array.reshape((-1,))
+    sampling_logdensity = _float64_conditional_logdensity(logdensity_fn)
+
+    target_started = time.perf_counter()
+    print(
+        "[exact-sampler:nuts-multitarget] validating "
+        f"targets={n_targets} chains_per_target={n_chains}",
+        flush=True,
+    )
+    value_and_grad = jax.jit(
+        jax.vmap(jax.value_and_grad(sampling_logdensity, argnums=0))
+    )
+    values, gradients = value_and_grad(flat_positions, flat_targets)
+    values, gradients = jax.device_get((values, gradients))
+    if np.asarray(values).dtype != np.dtype(np.float64):
+        raise TypeError(
+            f"logdensity dtype must be float64, got {np.asarray(values).dtype}"
+        )
+    if np.asarray(gradients).dtype != np.dtype(np.float64):
+        raise TypeError(
+            "logdensity gradient dtype must be float64, got "
+            f"{np.asarray(gradients).dtype}"
+        )
+    if not np.isfinite(values).all() or not np.isfinite(gradients).all():
+        raise ValueError("Initial sampling target values and gradients must be finite")
+    target_elapsed = time.perf_counter() - target_started
+    print(
+        "[exact-sampler:nuts-multitarget] targets ready "
+        f"elapsed_s={target_elapsed:.1f}",
+        flush=True,
+    )
+
+    base_keys = jax.vmap(jax.random.PRNGKey)(flat_seeds)
+    split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(base_keys)
+    sample_keys = split_keys[:, 0]
+    warmup_keys = split_keys[:, 1]
+
+    def adapt_one(key, position, target):
+        def conditional_logdensity(x):
+            return sampling_logdensity(x, target)
+
+        adaptation = blackjax.window_adaptation(
+            blackjax.nuts,
+            conditional_logdensity,
+            is_mass_matrix_diagonal=True,
+            target_acceptance_rate=float(settings.target_accept),
+            max_num_doublings=int(settings.max_num_doublings),
+            initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
+            adaptation_info_fn=lambda _state, info, _adaptation_state: (
+                info.acceptance_rate,
+                info.is_divergent,
+            ),
+        )
+        return adaptation.run(key, position, int(settings.warmup_steps))
+
+    warmup_started = time.perf_counter()
+    print(
+        "[exact-sampler:nuts-multitarget] warmup start "
+        f"targets={n_targets} total_chains={n_targets * n_chains} "
+        f"steps={settings.warmup_steps} "
+        f"max_doublings={settings.max_num_doublings}",
+        flush=True,
+    )
+    (states, parameters), _adaptation_info = jax.jit(jax.vmap(adapt_one))(
+        warmup_keys,
+        flat_positions,
+        flat_targets,
+    )
+    jax.block_until_ready(states.position)
+    warmup_elapsed = time.perf_counter() - warmup_started
+    print(
+        "[exact-sampler:nuts-multitarget] warmup done "
+        f"elapsed_s={warmup_elapsed:.1f}",
+        flush=True,
+    )
+
+    n_samples = int(settings.sample_chunks[0])
+    sampling_started = time.perf_counter()
+    print(
+        "[exact-sampler:nuts-multitarget] sampling start "
+        f"draws={n_samples}",
+        flush=True,
+    )
+    states, (sample_positions, infos) = _run_batched_nuts_target_steps(
+        sampling_logdensity,
+        states,
+        sample_keys,
+        parameters["step_size"],
+        parameters["inverse_mass_matrix"],
+        flat_targets,
+        n_samples=n_samples,
+        max_num_doublings=int(settings.max_num_doublings),
+    )
+    jax.block_until_ready(states.position)
+    sampling_elapsed = time.perf_counter() - sampling_started
+    print(
+        "[exact-sampler:nuts-multitarget] sampling done "
+        f"elapsed_s={sampling_elapsed:.1f}",
+        flush=True,
+    )
+
+    return BatchedTargetNUTSResult(
+        positions=sample_positions.reshape(
+            (n_samples, n_targets, n_chains, n_parameters)
+        ),
+        infos=jax.tree.map(
+            lambda value: value.reshape(
+                (n_samples, n_targets, n_chains, *value.shape[2:])
+            ),
+            infos,
+        ),
+        step_size=parameters["step_size"].reshape((n_targets, n_chains)),
+        inverse_mass_matrix=parameters["inverse_mass_matrix"].reshape(
+            (n_targets, n_chains, n_parameters)
+        ),
+        target_validation_elapsed_s=target_elapsed,
+        warmup_elapsed_s=warmup_elapsed,
+        sampling_elapsed_s=sampling_elapsed,
+    )
 
 
 def run_adjusted_mclmc_chain(
@@ -1347,6 +1533,65 @@ def _run_batched_nuts_steps(
     )(states, draw_keys)
 
 
+def _run_batched_nuts_target_steps(
+    logdensity_fn,
+    states,
+    keys,
+    step_sizes,
+    inverse_mass_matrices,
+    target_data,
+    *,
+    n_samples: int,
+    max_num_doublings: int,
+):
+    import blackjax
+
+    kernel = blackjax.nuts.build_kernel()
+
+    def one_step(
+        key,
+        state,
+        step_size,
+        inverse_mass_matrix,
+        target,
+    ):
+        def conditional_logdensity(x):
+            return logdensity_fn(x, target)
+
+        return kernel(
+            key,
+            state,
+            conditional_logdensity,
+            step_size,
+            inverse_mass_matrix,
+            max_num_doublings=int(max_num_doublings),
+        )
+
+    batched_step = jax.vmap(one_step)
+    draw_keys = jax.vmap(
+        lambda key: jax.random.split(key, int(n_samples))
+    )(keys)
+    draw_keys = jnp.swapaxes(draw_keys, 0, 1)
+
+    def stored_step(current_states, current_keys):
+        next_states, infos = batched_step(
+            current_keys,
+            current_states,
+            step_sizes,
+            inverse_mass_matrices,
+            target_data,
+        )
+        return next_states, (next_states.position, infos)
+
+    return jax.jit(
+        lambda initial_states, all_keys: jax.lax.scan(
+            stored_step,
+            initial_states,
+            all_keys,
+        )
+    )(states, draw_keys)
+
+
 def _write_chain_chunk(
     samples_path: Path,
     info_path: Path,
@@ -1396,6 +1641,21 @@ def _float64_logdensity(
 
     def wrapped(position):
         value = logdensity_fn(jnp.asarray(position, dtype=jnp.float32))
+        return jnp.asarray(value, dtype=jnp.float64)
+
+    return wrapped
+
+
+def _float64_conditional_logdensity(
+    logdensity_fn: Callable[[jnp.ndarray, Any], jnp.ndarray],
+) -> Callable[[jnp.ndarray, Any], jnp.ndarray]:
+    """Use a float64 sampler around a native float32 conditional target."""
+
+    def wrapped(position, target):
+        value = logdensity_fn(
+            jnp.asarray(position, dtype=jnp.float32),
+            target,
+        )
         return jnp.asarray(value, dtype=jnp.float64)
 
     return wrapped

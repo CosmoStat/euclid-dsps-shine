@@ -20,6 +20,7 @@ from euclid_dsps.amortized.exact_posterior import (
     normalized_importance_weights,
     run_adjusted_mclmc_chain,
     run_batched_nuts_chains,
+    run_batched_nuts_targets,
     run_nuts_chain,
     systematic_resample,
 )
@@ -149,6 +150,53 @@ def test_batched_nuts_writes_independent_standard_chain_artifacts(
         _sha256(directory / "chunks" / "part_000000.parquet")
         for directory in directories
     ] == digests
+
+
+def test_batched_nuts_targets_runs_distinct_targets_and_chains() -> None:
+    pytest.importorskip("blackjax")
+
+    def conditional_normal(x, target):
+        center, scale = target
+        return -0.5 * jnp.sum(((x - center) / scale) ** 2)
+
+    centers = jnp.asarray([[0.0, 0.0], [2.0, -1.0]])
+    scales = jnp.asarray([[1.0, 1.0], [0.7, 1.3]])
+    initial = jnp.asarray(
+        [
+            [[0.2, -0.1], [-0.2, 0.1]],
+            [[1.8, -0.8], [2.2, -1.2]],
+        ]
+    )
+    result = run_batched_nuts_targets(
+        conditional_normal,
+        initial,
+        (centers, scales),
+        seeds=jnp.asarray([[11, 12], [21, 22]], dtype=jnp.uint32),
+        settings=NUTSSettings(
+            warmup_steps=12,
+            sample_chunks=(5,),
+            max_num_doublings=3,
+        ),
+    )
+
+    assert result.positions.shape == (5, 2, 2, 2)
+    assert result.step_size.shape == (2, 2)
+    assert result.inverse_mass_matrix.shape == (2, 2, 2)
+    assert result.infos.acceptance_rate.shape == (5, 2, 2)
+    assert np.isfinite(np.asarray(result.positions)).all()
+    assert result.warmup_elapsed_s > 0.0
+    assert result.sampling_elapsed_s > 0.0
+
+
+def test_batched_nuts_targets_rejects_misaligned_target_data() -> None:
+    with pytest.raises(ValueError, match="leading dimension"):
+        run_batched_nuts_targets(
+            lambda x, center: -0.5 * jnp.sum((x - center) ** 2),
+            jnp.zeros((2, 2, 3)),
+            jnp.zeros((3, 3)),
+            seeds=jnp.zeros((2, 2), dtype=jnp.uint32),
+            settings=NUTSSettings(warmup_steps=2, sample_chunks=(2,)),
+        )
 
 
 def test_chain_summary_serializes_nonfinite_smoke_diagnostics_as_null(

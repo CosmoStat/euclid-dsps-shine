@@ -886,18 +886,53 @@ def _load_runtime(
     config: dict[str, Any],
     row_index: int,
 ) -> Runtime:
+    return _load_runtime_rows(
+        args,
+        config,
+        np.asarray([row_index], dtype=np.int64),
+    )
+
+
+def _load_runtime_rows(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    row_indices: np.ndarray,
+) -> Runtime:
+    requested_rows = np.asarray(row_indices, dtype=np.int64)
+    if requested_rows.ndim != 1 or len(requested_rows) < 1:
+        raise ValueError("row_indices must be a non-empty one-dimensional array")
+    if len(np.unique(requested_rows)) != len(requested_rows):
+        raise ValueError("row_indices must be unique")
     feature_stats = read_feature_stats(args.feature_stats)
     arrays = load_photometry_arrays_from_config(
         config,
         batch_size=10_000,
-        row_indices=np.asarray([row_index], dtype=np.int64),
+        row_indices=requested_rows,
+    )
+    if arrays.row_index is None:
+        raise ValueError("Selected photometry arrays do not expose row indices")
+    actual_rows = np.asarray(arrays.row_index, dtype=np.int64)
+    position_by_row = {
+        int(row_index): index for index, row_index in enumerate(actual_rows)
+    }
+    missing = [
+        int(row_index)
+        for row_index in requested_rows
+        if int(row_index) not in position_by_row
+    ]
+    if missing:
+        raise ValueError(f"Requested rows were not loaded: {missing}")
+    order = np.asarray(
+        [position_by_row[int(row_index)] for row_index in requested_rows],
+        dtype=np.int64,
     )
     batch = next(
         iter(
             iter_photometry_batches_from_arrays(
                 arrays,
-                batch_size=1,
+                batch_size=len(requested_rows),
                 feature_stats=feature_stats,
+                order=order,
             )
         )
     )
@@ -983,6 +1018,41 @@ def _logdensity_fn(runtime: Runtime):
 
     def logdensity(x):
         return components(x).logtarget
+
+    return logdensity
+
+
+def _conditional_logdensity_fn(runtime: Runtime):
+    """Return the learned-prior target parameterized by one observation."""
+
+    def logdensity(x, observation):
+        flux, flux_err, mask = observation
+        model_flux = model_flux_from_x(
+            x[None, None, :],
+            runtime.latent_spec,
+            runtime.context,
+            runtime.model_args,
+            runtime.latent_spec.names,
+        )
+        if runtime.use_global_scale:
+            model_flux = apply_global_sed_scale_to_flux(
+                model_flux, runtime.log_alpha_sed
+            )
+        if runtime.use_band_calibration:
+            model_flux = apply_per_band_flux_calibration_to_flux(
+                model_flux, runtime.log_alpha_band
+            )
+        loglike = photometric_loglike(
+            flux[None, :],
+            model_flux,
+            flux_err[None, :],
+            mask[None, :],
+            likelihood_type=str(runtime.likelihood["type"]),
+            student_t_dof=float(runtime.likelihood["student_t_dof"]),
+            error_floor_frac=float(runtime.likelihood["error_floor_frac"]),
+            error_jitter=float(runtime.likelihood["error_jitter"]),
+        )[0, 0]
+        return loglike + runtime.model.prior.log_prob(x)
 
     return logdensity
 

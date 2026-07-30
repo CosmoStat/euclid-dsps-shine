@@ -8,6 +8,11 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 
+from scripts.benchmark_feniks_nuts_multigalaxy import (
+    _gpu_summary,
+    _parse_batch_sizes,
+    summarize_probe,
+)
 from scripts.run_feniks_exact_posterior_benchmark import (
     _all_finite_at_most,
     _sample_chunks,
@@ -135,6 +140,77 @@ def test_two_galaxy_nuts_submission_has_no_mclmc_dependency() -> None:
     assert "SAMPLER=mclmc" not in submission
     assert "NUTS_MAX_DOUBLINGS" in submission
     assert "requested_upper_bound_h100_hours=60.33" in submission
+
+
+def test_multigalaxy_nuts_capacity_probe_is_short_and_measures_hbm(
+    tmp_path: Path,
+) -> None:
+    wrapper = (
+        ROOT / "scripts/feniks_nuts_multigalaxy_capacity_h100.slurm"
+    ).read_text()
+    submission = (
+        ROOT / "scripts/submit_feniks_nuts_multigalaxy_capacity.sh"
+    ).read_text()
+    aggregate = (
+        ROOT / "scripts/feniks_nuts_multigalaxy_capacity_aggregate.slurm"
+    ).read_text()
+
+    assert 'BATCH_SIZES="${BATCH_SIZES:-1:2:4:8}"' in submission
+    assert 'NUTS_WARMUP="${NUTS_WARMUP:-10}"' in submission
+    assert 'NUTS_DRAWS="${NUTS_DRAWS:-10}"' in submission
+    assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-4}"' in submission
+    assert '--dependency="afterany:$probe"' in submission
+    assert "requested_upper_bound_h100_hours=" in submission
+    assert "--gres=gpu:1" in wrapper
+    assert "nvidia-smi" in wrapper
+    assert "memory.used" in wrapper
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE=false" in wrapper
+    assert "#SBATCH --mem" not in wrapper
+    assert "#SBATCH --partition=prepost" in aggregate
+    assert "#SBATCH --mem" not in aggregate
+
+    metrics = tmp_path / "gpu_metrics.csv"
+    metrics.write_text(
+        "timestamp,index,memory_used_mib,memory_total_mib,"
+        "utilization_gpu_percent,power_draw_w\n"
+        "2026/07/30 10:00:00,0,1024,81920,50,300\n"
+        "2026/07/30 10:00:05,0,4096,81920,90,500\n",
+        encoding="utf-8",
+    )
+    summary = _gpu_summary(metrics)
+    assert summary["peak_memory_used_mib"] == 4096.0
+    assert summary["memory_total_mib"] == 81920.0
+    assert summary["peak_memory_fraction"] == 0.05
+    assert summary["median_utilization_gpu_percent"] == 70.0
+    assert _parse_batch_sizes("1:2:4:8") == [1, 2, 4, 8]
+
+
+def test_multigalaxy_capacity_summary_handles_all_failed_sizes(
+    tmp_path: Path,
+) -> None:
+    for batch_size in (1, 2):
+        directory = tmp_path / f"batch_g{batch_size:04d}"
+        directory.mkdir()
+        (directory / "failure.json").write_text(
+            json.dumps(
+                {
+                    "status": "failed",
+                    "exception_type": "RuntimeError",
+                    "exception": "synthetic failure",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    summarize_probe(SimpleNamespace(out=tmp_path, batch_sizes="1:2"))
+
+    summary = json.loads(
+        (tmp_path / "capacity_summary.json").read_text(encoding="utf-8")
+    )
+    assert summary["completed_batch_sizes"] == []
+    assert summary["failed_batch_sizes"] == [1, 2]
+    assert summary["largest_completed_batch_size"] is None
+    assert summary["throughput_optimal_tested_batch_size"] is None
 
 
 def test_two_galaxy_nuts_recovery_reuses_preparation_and_caps_tree_depth() -> None:
