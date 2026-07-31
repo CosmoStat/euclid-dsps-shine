@@ -2544,6 +2544,8 @@ def _configured_redshift_column(
     config: dict[str, Any],
     data_cfg: dict[str, Any],
 ) -> str | None:
+    if data_cfg.get("use_redshift_for_split") is False:
+        return None
     explicit = data_cfg.get("stratify_column")
     if explicit:
         return str(explicit)
@@ -3571,7 +3573,7 @@ def _model_generated_sleep_loss(
         model_flux_raw = jnp.take(model_flux_raw, selected, axis=0)
         model_flux = jnp.take(model_flux, selected, axis=0)
         physical_valid = jnp.take(physical_valid, selected, axis=0)
-    flux_err = _sleep_m5_flux_error(model_flux, sleep)
+    flux_err = _sleep_flux_error(model_flux, batch, sleep)
     noise, noise_family = _sample_sleep_noise(
         noise_key,
         flux_err,
@@ -3715,6 +3717,20 @@ def _sleep_m5_flux_error(model_flux, sleep_config):
     floor = float(sleep_config.get("min_sigma_fnu_cgs", 1.0e-40))
     floor_scaled = jnp.asarray(floor, dtype=model_flux.dtype) / unit
     return jnp.sqrt(jnp.maximum(sigma2, floor_scaled**2)) * unit
+
+
+def _sleep_flux_error(model_flux, batch, sleep_config):
+    error_model = str(sleep_config.get("error_model", "m5_depth"))
+    if error_model == "m5_depth":
+        return _sleep_m5_flux_error(model_flux, sleep_config)
+    if error_model != "observed_catalog":
+        raise ValueError(f"Unsupported sleep error model: {error_model}")
+    reported = jnp.asarray(batch.flux_err, dtype=model_flux.dtype)
+    fallback = jnp.asarray(
+        sleep_config["feature_err_scale"], dtype=model_flux.dtype
+    )[None, :]
+    valid = batch.mask & jnp.isfinite(reported) & (reported > 0.0)
+    return jnp.where(valid, reported, fallback)
 
 
 def _sleep_encoder_features(flux, flux_err, mask, sleep_config):
@@ -3892,33 +3908,15 @@ def _sleep_runtime_config(
     if not bool(sleep.get("enabled", False)):
         return {"enabled": False}
     requested = str(sleep.get("error_model", "m5_depth")).strip().lower()
-    model = dict(
-        ((config.get("synthetic_diffsky", {}) or {}).get("flux_error_model", {})) or {}
-    )
-    model_type = str(model.get("type", "")).strip().lower()
-    if requested != "m5_depth" or model_type != "m5_depth":
+    if requested not in {"m5_depth", "observed_catalog"}:
         raise ValueError(
-            "Self-supervised sleep currently requires the configured "
-            "synthetic_diffsky.flux_error_model.type=m5_depth"
+            "Self-supervised sleep error_model must be m5_depth or "
+            "observed_catalog"
         )
     bands = tuple(feature_stats.band_names)
-    m5 = tuple(_band_config_value(model, "m5", name) for name in bands)
-    gamma_values = []
-    for name in bands:
-        gamma = _optional_band_config_value(model, "gamma", name)
-        if gamma is None:
-            eta = _optional_band_config_value(model, "eta", name)
-            if eta is None:
-                eta = float(model.get("default_eta", 1.0))
-            gamma = 0.04 * float(eta)
-        gamma_values.append(float(gamma))
-    return {
+    runtime = {
         "enabled": True,
-        "error_model": "m5_depth",
-        "m5": m5,
-        "gamma": tuple(gamma_values),
-        "sigma_sys_mag": float(model.get("sigma_sys_mag", 0.0)),
-        "min_sigma_fnu_cgs": float(model.get("min_sigma_fnu_cgs", 1.0e-40)),
+        "error_model": requested,
         "feature_flux_scale": tuple(
             np.asarray(feature_stats.flux_scale, dtype=float).tolist()
         ),
@@ -3928,6 +3926,33 @@ def _sleep_runtime_config(
         "flux_transform": str(feature_stats.flux_transform),
         **_sleep_selection_config(sleep, bands),
     }
+    if requested == "observed_catalog":
+        return runtime
+    model = dict(
+        ((config.get("synthetic_diffsky", {}) or {}).get("flux_error_model", {})) or {}
+    )
+    model_type = str(model.get("type", "")).strip().lower()
+    if model_type != "m5_depth":
+        raise ValueError(
+            "Sleep error_model=m5_depth requires "
+            "synthetic_diffsky.flux_error_model.type=m5_depth"
+        )
+    runtime["m5"] = tuple(_band_config_value(model, "m5", name) for name in bands)
+    gamma_values = []
+    for name in bands:
+        gamma = _optional_band_config_value(model, "gamma", name)
+        if gamma is None:
+            eta = _optional_band_config_value(model, "eta", name)
+            if eta is None:
+                eta = float(model.get("default_eta", 1.0))
+            gamma = 0.04 * float(eta)
+        gamma_values.append(float(gamma))
+    runtime["gamma"] = tuple(gamma_values)
+    runtime["sigma_sys_mag"] = float(model.get("sigma_sys_mag", 0.0))
+    runtime["min_sigma_fnu_cgs"] = float(
+        model.get("min_sigma_fnu_cgs", 1.0e-40)
+    )
+    return runtime
 
 
 def _sleep_selection_config(
