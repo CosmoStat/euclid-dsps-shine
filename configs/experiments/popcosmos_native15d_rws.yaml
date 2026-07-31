@@ -6,16 +6,31 @@ catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
 runtime: gpu
 column_groups: []
 extra_columns:
-  - lp_zbest
-  - r_abmag_mw_corrected
   - redshift_true
-  - redshift_spec
   - specz_confidence_level
-  - t24_specz_flag
 
 dataset:
   name: cosmos2020_farmer_native15d
   id_column: object_id
+
+science_target:
+  reported_parameters: [z_obs]
+  truth_evaluated_parameters: [z_obs]
+  nuisance_parameters:
+    - log10_stellar_mass
+    - log10_stellar_metallicity
+    - dust_av
+    - dust_delta
+    - sfh_dlog_sfr_01
+    - sfh_dlog_sfr_02
+    - sfh_dlog_sfr_03
+    - sfh_dlog_sfr_04
+    - sfh_dlog_sfr_05
+    - sfh_dlog_sfr_06
+    - sfh_dlog_sfr_07
+    - sfh_dlog_sfr_08
+    - sfh_dlog_sfr_09
+    - sfh_dlog_sfr_10
 
 truth:
   __replace__: true
@@ -84,48 +99,15 @@ calibration:
     mode: disabled
     trainable: false
 
-# COSMOS depths affect model-generated sleep observations only. Wake and MAP
-# use each Farmer object's reported flux uncertainties.
-synthetic_diffsky:
-  flux_error_model:
-    __replace__: true
-    type: m5_depth
-    m5:
-      u_megaprime_sagem: 27.8
-      hsc_g: 27.8
-      hsc_r: 27.4
-      hsc_i: 27.3
-      hsc_z: 26.8
-      hsc_y: 26.2
-      uvista_y_cosmos: 26.6
-      uvista_j_cosmos: 26.4
-      uvista_h_cosmos: 26.1
-      uvista_ks_cosmos: 25.6
-      ia427_cosmos: 26.0
-      ia464_cosmos: 26.0
-      ia484_cosmos: 26.0
-      ia505_cosmos: 26.0
-      ia527_cosmos: 26.0
-      ia574_cosmos: 25.8
-      ia624_cosmos: 25.8
-      ia679_cosmos: 25.7
-      ia709_cosmos: 25.7
-      ia738_cosmos: 25.6
-      ia767_cosmos: 25.5
-      ia827_cosmos: 25.4
-      NB711.SuprimeCam: 25.5
-      NB816.SuprimeCam: 25.4
-      irac1_cosmos: 25.5
-      irac2_cosmos: 25.3
-    default_eta: 1.0
-    sigma_sys_mag: 0.005
-
 amortized:
   data:
     expected_n_bands: 26
     selection_mode: random
     stratified_strategy: proportional
-    stratify_column: lp_zbest
+    # Public spectroscopy is reserved for post-inference evaluation. It must
+    # not influence catalog selection or the train/validation split.
+    use_redshift_for_split: false
+    stratify_column:
     redshift_bins: [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 5.5]
     validation_fraction: 0.1
     epoch_shuffle: true
@@ -137,12 +119,17 @@ amortized:
     normalize_per_band: true
     flux_transform: asinh
     error_transform: log
-    stats_catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
+    # Fixed preprocessing population for comparable 5k/20k/40k curves. The
+    # evaluation cohort is chosen outside this 40k training pool.
+    stats_catalog_path: Data/cosmos2020/prepared/farmer_a24_n40000.parquet
   encoder:
     input_dim: 52
     latent_dim: 15
   objective:
     sleep:
+      # Pair every DSPS-generated SED with a real Farmer uncertainty vector.
+      # No observed flux or redshift label enters this model-generated target.
+      error_model: observed_catalog
       selection:
         enabled: true
         band: hsc_r
