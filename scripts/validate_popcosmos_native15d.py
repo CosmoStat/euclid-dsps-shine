@@ -218,6 +218,13 @@ def main() -> None:
         )
         if selection.get("selection_mode") != "row_indices_file":
             raise ValueError("Inference did not use the fixed held-out row indices")
+        if stage_contract.get("stage") == "n40k":
+            for path in (
+                args.run_dir.parent / "redshift_scaling/redshift_scaling_metrics.csv",
+                args.run_dir.parent
+                / "redshift_scaling/redshift_scaling_summary.json",
+            ):
+                _require_file(path)
 
     print(
         "[cosmos-native15d-contract] "

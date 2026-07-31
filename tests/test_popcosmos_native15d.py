@@ -58,6 +58,15 @@ def _load_eval_builder():
     return module
 
 
+def _load_scaling_summarizer():
+    path = ROOT / "scripts/summarize_popcosmos_native15d_scaling.py"
+    spec = importlib.util.spec_from_file_location("native15d_scaling", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_popcosmos_native_config_changes_observations_not_latent_physics() -> None:
     config = load_config(CONFIG)
     amortized = amortized_config(config)
@@ -156,9 +165,38 @@ def test_native_redshift_metrics_ignore_nuisance_latents() -> None:
         }
     )
     metrics = evaluator.redshift_metrics(frame)
+    intervals = evaluator.bootstrap_redshift_metrics(
+        frame, n_bootstrap=20, seed=7
+    )
     assert metrics["n_spec"] == 2
     assert metrics["coverage_68"] == 0.5
     assert metrics["outlier_fraction_0p15"] == 0.0
+    assert "nmad" in intervals
+
+
+def test_native_scaling_summary_collects_only_redshift_metrics(tmp_path) -> None:
+    summarizer = _load_scaling_summarizer()
+    for stage, size in summarizer.STAGES:
+        out = tmp_path / stage / "inference"
+        out.mkdir(parents=True)
+        payload = {
+            "n_inference": size // 10,
+            "metrics": {
+                "n_spec": size // 100,
+                "median_bias": 0.0,
+                "nmad": 0.1,
+                "rmse": 0.2,
+                "outlier_fraction_0p15": 0.05,
+                "coverage_68": 0.68,
+                "median_interval_width_68": 0.3,
+            },
+        }
+        (out / "redshift_metrics.json").write_text(
+            __import__("json").dumps(payload), encoding="utf-8"
+        )
+    rows = summarizer.collect_scaling_rows(tmp_path)
+    assert [row["train_catalog_size"] for row in rows] == [5000, 20000, 40000]
+    assert all("log10_stellar_mass" not in row for row in rows)
 
 
 def test_native_rws_stages_have_no_a24_parameter_comparison() -> None:
@@ -170,6 +208,7 @@ def test_native_rws_stages_have_no_a24_parameter_comparison() -> None:
     assert "science_target=z_obs" in wrapper
     assert "nuisance_latents=14" in wrapper
     assert "build_popcosmos_native15d_eval_indices.py" in wrapper
+    assert "summarize_popcosmos_native15d_scaling.py" in wrapper
     assert '--row-indices-file "$EVAL_INDICES"' in wrapper
     assert '--dataset "$FULL_DATASET"' in wrapper
     assert 'STAGE must be n5k,n20k,n40k' in wrapper

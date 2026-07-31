@@ -17,6 +17,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--inference", type=Path, required=True)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--bootstrap", type=int, default=2_000)
+    parser.add_argument("--bootstrap-seed", type=int, default=260731)
     return parser.parse_args()
 
 
@@ -54,6 +56,45 @@ def redshift_metrics(frame: pd.DataFrame) -> dict[str, float | int | None]:
         "median_interval_width_68": (
             float(np.median(widths)) if widths.size else None
         ),
+    }
+
+
+def bootstrap_redshift_metrics(
+    frame: pd.DataFrame,
+    *,
+    n_bootstrap: int,
+    seed: int,
+) -> dict[str, dict[str, float]]:
+    truth = pd.to_numeric(frame["redshift_true"], errors="coerce").to_numpy(float)
+    median = pd.to_numeric(frame["z_obs_median"], errors="coerce").to_numpy(float)
+    valid = np.isfinite(truth) & (truth >= 0.0) & np.isfinite(median)
+    sample = frame.loc[valid].reset_index(drop=True)
+    if len(sample) < 2 or n_bootstrap <= 0:
+        return {}
+    names = (
+        "median_bias",
+        "nmad",
+        "rmse",
+        "outlier_fraction_0p15",
+        "coverage_68",
+        "median_interval_width_68",
+    )
+    values: dict[str, list[float]] = {name: [] for name in names}
+    rng = np.random.default_rng(int(seed))
+    for _ in range(int(n_bootstrap)):
+        indices = rng.integers(0, len(sample), size=len(sample))
+        metrics = redshift_metrics(sample.iloc[indices])
+        for name in names:
+            value = metrics[name]
+            if value is not None and np.isfinite(value):
+                values[name].append(float(value))
+    return {
+        name: {
+            "low": float(np.quantile(metric_values, 0.025)),
+            "high": float(np.quantile(metric_values, 0.975)),
+        }
+        for name, metric_values in values.items()
+        if metric_values
     }
 
 
@@ -156,7 +197,16 @@ def main() -> None:
     merged.to_parquet(out / "redshift_predictions.parquet", index=False)
 
     metrics = redshift_metrics(merged)
-    pd.DataFrame([metrics]).to_csv(out / "photoz_metrics.csv", index=False)
+    intervals = bootstrap_redshift_metrics(
+        merged,
+        n_bootstrap=args.bootstrap,
+        seed=args.bootstrap_seed,
+    )
+    metric_row = dict(metrics)
+    for name, interval in intervals.items():
+        metric_row[f"{name}_ci95_low"] = interval["low"]
+        metric_row[f"{name}_ci95_high"] = interval["high"]
+    pd.DataFrame([metric_row]).to_csv(out / "photoz_metrics.csv", index=False)
     payload = {
         "status": "complete",
         "science_target": "z_obs_only",
@@ -165,6 +215,11 @@ def main() -> None:
         "posterior_summary": str(posterior_path),
         "n_inference": int(len(posterior)),
         "metrics": metrics,
+        "bootstrap": {
+            "n_resamples": int(args.bootstrap),
+            "seed": int(args.bootstrap_seed),
+            "confidence_intervals_95": intervals,
+        },
         "truth": {
             "column": "redshift_true",
             "semantics": (

@@ -242,6 +242,12 @@ with open(sys.argv[1], "w", encoding="utf-8") as stream:
     stream.write("\n")
 PY
 
+if [[ "$STAGE" == "n40k" ]]; then
+  python scripts/summarize_popcosmos_native15d_scaling.py --root "$ROOT_DIR"
+  test -s "$ROOT_DIR/redshift_scaling/redshift_scaling_metrics.csv"
+  test -s "$ROOT_DIR/redshift_scaling/redshift_scaling_summary.json"
+fi
+
 touch "$RUN_DIR/DONE"
 if ! python scripts/validate_popcosmos_native15d.py \
   --config "$CONFIG" \
