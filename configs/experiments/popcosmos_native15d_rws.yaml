@@ -145,3 +145,4 @@ amortized:
     learning_rate: 0.02
     prior_weight: 0.0
     start_mode: latin_hypercube
+    progress_interval: 50

@@ -77,6 +77,7 @@ def run_map_adam_under_prior(
     row_indices_file: str | Path | None = None,
     dataset_label: str = "Diffsky HLTDS",
     verbose: bool = True,
+    progress_interval: int = 0,
 ) -> dict[str, Any]:
     """Run per-object MAP optimization, optionally under a learned NF prior."""
     out = ensure_dir(out_dir)
@@ -183,6 +184,7 @@ def run_map_adam_under_prior(
         else jnp.zeros((len(config["bands"]),), dtype=jnp.float32)
     )
     start_chunk_size = _effective_start_chunk_size(start_chunk_size, int(n_starts))
+    progress_interval = _normalise_progress_interval(progress_interval)
     estimate_shard_dir = out / "map_estimates_shards"
     by_start_shard_dir = out / "map_estimates_by_start_shards"
     trace_shard_dir = out / "map_optimizer_trace_shards"
@@ -204,7 +206,21 @@ def run_map_adam_under_prior(
             f"maxiter={maxiter} lr={learning_rate} prior_weight={prior_weight} "
             f"prior_density_space={prior_density_space} "
             f"start_mode={start_mode} start_chunk_size={start_chunk_size} "
+            f"progress_interval={progress_interval} "
             f"shard_outputs={shard_outputs} resume={resume}"
+        )
+    total_objects = int(arrays.flux.shape[0])
+    total_batches = (
+        int(np.ceil(total_objects / max(int(batch_size), 1)))
+        if total_objects
+        else 0
+    )
+    if verbose:
+        print(
+            "[map-prior] progress: "
+            f"total_objects={total_objects} total_batches={total_batches} "
+            f"step_interval={progress_interval or 'disabled'}",
+            flush=True,
         )
     rows = []
     rows_by_start = []
@@ -212,6 +228,7 @@ def run_map_adam_under_prior(
     photometry_rows = []
     progress_rows = []
     started_at = time.perf_counter()
+    completed_objects = 0
     for batch_index, batch in enumerate(
         iter_photometry_batches_from_arrays(
             arrays,
@@ -230,10 +247,14 @@ def run_map_adam_under_prior(
             and estimate_shard.exists()
             and photometry_shard.exists()
         ):
+            completed_objects += int(batch.flux.shape[0])
             if verbose:
                 print(
                     "[map-prior] batch "
-                    f"{batch_index}: existing shard -> skip {estimate_shard}"
+                    f"{batch_index}/{total_batches}: existing shard -> "
+                    f"skip {estimate_shard} "
+                    f"progress={completed_objects}/{total_objects}",
+                    flush=True,
                 )
             progress_rows.append(
                 {
@@ -241,11 +262,20 @@ def run_map_adam_under_prior(
                     "n_objects": int(batch.flux.shape[0]),
                     "status": "skipped_existing_shard",
                     "elapsed_s": 0.0,
+                    "objects_done": completed_objects,
+                    "total_objects": total_objects,
+                    "total_batches": total_batches,
                 }
             )
+            pd.DataFrame(progress_rows).to_csv(out / "map_progress.csv", index=False)
             continue
         if verbose:
-            print(f"[map-prior] batch {batch_index}: n_objects={batch.flux.shape[0]}")
+            print(
+                "[map-prior] batch "
+                f"{batch_index}/{total_batches}: n_objects={batch.flux.shape[0]} "
+                f"objects_done={completed_objects}/{total_objects}",
+                flush=True,
+            )
         key, batch_key = jax.random.split(key)
         batch_started = time.perf_counter()
         result = _map_adam_batch(
@@ -268,6 +298,10 @@ def run_map_adam_under_prior(
             log_alpha_band=log_alpha_band,
             use_global_scale=bool(scale_cfg.enabled),
             use_band_calibration=bool(band_cfg.enabled),
+            batch_index=int(batch_index),
+            total_batches=int(total_batches),
+            progress_interval=int(progress_interval),
+            verbose=bool(verbose),
         )
         jax.block_until_ready(result["best_objective"])
         batch_elapsed = time.perf_counter() - batch_started
@@ -353,6 +387,17 @@ def run_map_adam_under_prior(
             if batch_elapsed > 0.0
             else float("nan")
         )
+        completed_objects += int(batch.flux.shape[0])
+        wall_elapsed = float(time.perf_counter() - started_at)
+        average_objects_per_s = (
+            float(completed_objects) / wall_elapsed if wall_elapsed > 0.0 else float("nan")
+        )
+        remaining_objects = max(total_objects - completed_objects, 0)
+        eta_s = (
+            float(remaining_objects) / average_objects_per_s
+            if average_objects_per_s > 0.0
+            else float("nan")
+        )
         progress_rows.append(
             {
                 "batch": batch_index,
@@ -360,15 +405,22 @@ def run_map_adam_under_prior(
                 "status": "completed",
                 "elapsed_s": float(batch_elapsed),
                 "objects_per_s": float(throughput),
-                "wall_elapsed_s": float(time.perf_counter() - started_at),
+                "wall_elapsed_s": wall_elapsed,
+                "objects_done": completed_objects,
+                "total_objects": total_objects,
+                "total_batches": total_batches,
+                "eta_s": eta_s,
             }
         )
         pd.DataFrame(progress_rows).to_csv(out / "map_progress.csv", index=False)
         if verbose:
             print(
                 "[map-prior] batch "
-                f"{batch_index} done in {batch_elapsed:.1f}s "
-                f"({throughput:.2f} objects/s)"
+                f"{batch_index}/{total_batches} done in {batch_elapsed:.1f}s "
+                f"({throughput:.2f} objects/s) "
+                f"progress={completed_objects}/{total_objects} "
+                f"eta={_format_eta(eta_s)}",
+                flush=True,
             )
     if shard_outputs:
         rows = _read_shard_frames(estimate_shard_dir)
@@ -412,6 +464,7 @@ def run_map_adam_under_prior(
         "prior_density_space": str(prior_density_space),
         "start_mode": str(start_mode),
         "start_chunk_size": int(start_chunk_size),
+        "progress_interval": int(progress_interval),
         "shard_outputs": bool(shard_outputs),
         "resume": bool(resume),
         "shard_paths": {
@@ -608,6 +661,10 @@ def _map_adam_batch(
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
+    batch_index: int = 0,
+    total_batches: int = 0,
+    progress_interval: int = 0,
+    verbose: bool = False,
 ) -> dict[str, jnp.ndarray]:
     mode = str(start_mode or "encoder").strip().lower()
     if mode in {"encoder", "mixed"}:
@@ -630,11 +687,20 @@ def _map_adam_batch(
         start_mode=start_mode,
     )
     chunk_size = _effective_start_chunk_size(start_chunk_size, n_starts)
+    n_chunks = int(np.ceil(n_starts / chunk_size))
     chunk_results = []
     weighted_trace = None
-    for start in range(0, n_starts, chunk_size):
+    for chunk_index, start in enumerate(range(0, n_starts, chunk_size), start=1):
         end = min(start + chunk_size, n_starts)
         chunk = starts[start:end]
+        if verbose and progress_interval > 0:
+            print(
+                "[map-prior] "
+                f"batch {batch_index}/{total_batches or '?'} "
+                f"chunk {chunk_index}/{n_chunks} start "
+                f"starts={start + 1}-{end}",
+                flush=True,
+            )
         chunk_result = _optimize_map_start_chunk(
             model,
             batch,
@@ -652,6 +718,11 @@ def _map_adam_batch(
             log_alpha_band=log_alpha_band,
             use_global_scale=use_global_scale,
             use_band_calibration=use_band_calibration,
+            batch_index=int(batch_index),
+            total_batches=int(total_batches),
+            chunk_index=int(chunk_index),
+            n_chunks=int(n_chunks),
+            progress_interval=int(progress_interval),
         )
         chunk_results.append(chunk_result)
         weight = float(end - start)
@@ -721,6 +792,11 @@ def _optimize_map_start_chunk(
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
+    batch_index: int = 0,
+    total_batches: int = 0,
+    chunk_index: int = 0,
+    n_chunks: int = 0,
+    progress_interval: int = 0,
 ) -> dict[str, jnp.ndarray]:
     density_space = _normalize_prior_density_space(prior_density_space)
     if density_space == "theta" and "log10_gas_metallicity" in parameter_names:
@@ -754,6 +830,11 @@ def _optimize_map_start_chunk(
         log_alpha_band=log_alpha_band,
         use_global_scale=bool(use_global_scale),
         use_band_calibration=bool(use_band_calibration),
+        batch_index=int(batch_index),
+        total_batches=int(total_batches),
+        chunk_index=int(chunk_index),
+        n_chunks=int(n_chunks),
+        progress_interval=int(progress_interval),
     )
 
 
@@ -781,6 +862,11 @@ def _optimize_map_start_chunk_jit(
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
+    batch_index: int = 0,
+    total_batches: int = 0,
+    chunk_index: int = 0,
+    n_chunks: int = 0,
+    progress_interval: int = 0,
 ) -> dict[str, jnp.ndarray]:
     actual_context = context.value if isinstance(context, _StaticArg) else context
 
@@ -854,6 +940,35 @@ def _optimize_map_start_chunk_jit(
         m_hat = m / (1.0 - beta1**iteration)
         v_hat = v / (1.0 - beta2**iteration)
         x = x - float(learning_rate) * m_hat / (jnp.sqrt(v_hat) + eps_adam)
+        if int(progress_interval) > 0:
+            should_report = (
+                (iteration == 1)
+                | (iteration % int(progress_interval) == 0)
+                | (iteration == int(maxiter))
+            )
+
+            def report(_):
+                jax.debug.print(
+                    "[map-prior] batch {batch}/{total_batches} "
+                    "chunk {chunk}/{n_chunks} step {step}/{maxiter} "
+                    "mean_obj={mean_obj} best_obj={best_obj} grad_norm={grad_norm}",
+                    batch=int(batch_index),
+                    total_batches=int(total_batches),
+                    chunk=int(chunk_index),
+                    n_chunks=int(n_chunks),
+                    step=iteration,
+                    maxiter=int(maxiter),
+                    mean_obj=value,
+                    best_obj=jnp.mean(best_obj),
+                    grad_norm=jnp.mean(jnp.linalg.norm(grad, axis=-1)),
+                    ordered=True,
+                )
+                return jnp.asarray(0, dtype=jnp.int32)
+
+            def skip(_):
+                return jnp.asarray(0, dtype=jnp.int32)
+
+            jax.lax.cond(should_report, report, skip, operand=None)
         return (x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2), value
 
     init = (x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2)
@@ -916,6 +1031,27 @@ def _effective_start_chunk_size(value: int | None, n_starts: int) -> int:
     if chunk <= 0:
         raise ValueError("MAP start_chunk_size must be positive")
     return max(1, min(chunk, int(n_starts)))
+
+
+def _normalise_progress_interval(value: int | None) -> int:
+    """Return the MAP step logging interval, with zero disabling step logs."""
+    interval = int(value or 0)
+    if interval < 0:
+        raise ValueError("MAP progress_interval must be non-negative")
+    return interval
+
+
+def _format_eta(value: float) -> str:
+    if not np.isfinite(value) or value < 0.0:
+        return "unknown"
+    seconds = int(round(value))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
 
 
 def _jit_latent_spec(latent_spec) -> JitLatentSpec:

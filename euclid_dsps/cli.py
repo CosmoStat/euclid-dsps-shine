@@ -365,6 +365,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Number of MAP starts optimized together on device.",
     )
+    map_prior.add_argument(
+        "--progress-interval",
+        type=int,
+        help=(
+            "Print JAX MAP optimization progress every N steps; zero disables "
+            "per-step logs."
+        ),
+    )
     map_prior.add_argument("--seed", type=int)
     map_prior.add_argument(
         "--selection-mode",
@@ -1661,6 +1669,11 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
             int(args.start_chunk_size)
             if getattr(args, "start_chunk_size", None) is not None
             else int(map_cfg.get("start_chunk_size", 1))
+        ),
+        progress_interval=(
+            int(args.progress_interval)
+            if getattr(args, "progress_interval", None) is not None
+            else int(map_cfg.get("progress_interval", 0))
         ),
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),

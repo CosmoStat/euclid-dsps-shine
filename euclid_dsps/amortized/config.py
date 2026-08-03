@@ -161,6 +161,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["map_adam"].setdefault("prior_density_space", "x")
     raw["map_adam"].setdefault("start_mode", "encoder")
     raw["map_adam"].setdefault("start_chunk_size", 4)
+    raw["map_adam"].setdefault("progress_interval", 0)
     raw["inference"].setdefault("posterior_samples", 32)
     raw["inference"].setdefault("prior_samples", 8192)
     raw["inference"].setdefault("decoder_sample_chunk_size", 1)

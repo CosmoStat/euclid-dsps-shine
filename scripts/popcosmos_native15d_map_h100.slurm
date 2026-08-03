@@ -30,6 +30,7 @@ START_CHUNK_SIZE="${START_CHUNK_SIZE:-4}"
 MAXITER="${MAXITER:-400}"
 LEARNING_RATE="${LEARNING_RATE:-0.02}"
 SEED="${SEED:-260730}"
+PROGRESS_INTERVAL="${PROGRESS_INTERVAL:-50}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -92,6 +93,7 @@ PY
 
 echo "[cosmos-map15] dataset=$DATASET limit=$LIMIT out=$OUT"
 echo "[cosmos-map15] likelihood-only MAP: prior_weight=0 checkpoint=none"
+echo "[cosmos-map15] batch_size=$BATCH_SIZE start_chunk_size=$START_CHUNK_SIZE progress_interval=$PROGRESS_INTERVAL"
 nvidia-smi
 
 python -m euclid_dsps.cli \
@@ -107,6 +109,7 @@ python -m euclid_dsps.cli \
   --learning-rate "$LEARNING_RATE" \
   --prior-weight 0 \
   --start-mode latin_hypercube \
+  --progress-interval "$PROGRESS_INTERVAL" \
   --seed "$SEED" \
   --selection-mode random \
   --selection-seed "$SEED"

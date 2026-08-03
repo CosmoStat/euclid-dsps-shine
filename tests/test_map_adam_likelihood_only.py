@@ -53,6 +53,17 @@ def test_map_cli_accepts_likelihood_only_mode_without_checkpoint() -> None:
     assert args.checkpoint is None
 
 
+def test_map_cli_accepts_progress_interval() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "diffsky-map-adam-prior",
+            "--progress-interval",
+            "25",
+        ]
+    )
+    assert args.progress_interval == 25
+
+
 def test_map_photometry_and_fit_summaries_expose_forward_fit_quality() -> None:
     batch = SimpleNamespace(
         object_id=np.asarray([101, 202]),
