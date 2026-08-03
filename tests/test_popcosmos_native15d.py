@@ -217,3 +217,4 @@ def test_native_rws_stages_have_no_a24_parameter_comparison() -> None:
     assert 'n40k|full) WALLTIME=15:00:00' in submit
     assert 'MAP_DIR' not in wrapper
     assert 'MAP_DIR' not in submit
+    assert 'SKIP_TRAINING' in wrapper

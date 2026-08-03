@@ -58,6 +58,7 @@ TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-256}"
 TRAIN_JAX_BATCH_SIZE="${TRAIN_JAX_BATCH_SIZE:-64}"
 INFER_BATCH_SIZE="${INFER_BATCH_SIZE:-256}"
 INFER_JAX_BATCH_SIZE="${INFER_JAX_BATCH_SIZE:-128}"
+SKIP_TRAINING="${SKIP_TRAINING:-0}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -85,10 +86,16 @@ test -s "$FULL_DATASET"
 test -s "$TRAIN_POOL"
 test -s "$NORMALIZATION_CHECKPOINT"
 test -s "${NORMALIZATION_CHECKPOINT}.json"
-test ! -e "$TRAIN_DIR" || {
-  echo "[cosmos-rws15][error] refusing to overwrite $TRAIN_DIR"
-  exit 2
-}
+if [[ "$SKIP_TRAINING" == "1" ]]; then
+  test -s "$TRAIN_DIR/training_summary.json"
+  test -s "$TRAIN_DIR/checkpoints/best.eqx"
+  echo "[cosmos-rws15] reusing completed training: $TRAIN_DIR"
+else
+  test ! -e "$TRAIN_DIR" || {
+    echo "[cosmos-rws15][error] refusing to overwrite $TRAIN_DIR"
+    exit 2
+  }
+fi
 
 INITIAL_ARGS=()
 if [[ "$STAGE" != "n5k" ]]; then
@@ -154,18 +161,20 @@ echo "[cosmos-rws15] train_batch=$TRAIN_BATCH_SIZE jax_batch=$TRAIN_JAX_BATCH_SI
 echo "[cosmos-rws15] science_target=z_obs nuisance_latents=14"
 nvidia-smi
 
-python -m euclid_dsps.cli --config "$CONFIG" amortized-train-cosmos \
-  --runtime gpu \
-  --dataset "$DATASET" \
-  --out "$TRAIN_DIR" \
-  --batch-size "$TRAIN_BATCH_SIZE" \
-  --jax-batch-size "$TRAIN_JAX_BATCH_SIZE" \
-  --epochs "$EPOCHS" \
-  --n-samples 1 \
-  --best-checkpoint-min-epoch "$BEST_MIN_EPOCH" \
-  --data-parallel single \
-  --no-progress \
-  "${INITIAL_ARGS[@]}"
+if [[ "$SKIP_TRAINING" != "1" ]]; then
+  python -m euclid_dsps.cli --config "$CONFIG" amortized-train-cosmos \
+    --runtime gpu \
+    --dataset "$DATASET" \
+    --out "$TRAIN_DIR" \
+    --batch-size "$TRAIN_BATCH_SIZE" \
+    --jax-batch-size "$TRAIN_JAX_BATCH_SIZE" \
+    --epochs "$EPOCHS" \
+    --n-samples 1 \
+    --best-checkpoint-min-epoch "$BEST_MIN_EPOCH" \
+    --data-parallel single \
+    --no-progress \
+    "${INITIAL_ARGS[@]}"
+fi
 
 python -m euclid_dsps.cli --config "$CONFIG" amortized-infer-cosmos \
   --dataset "$FULL_DATASET" \

@@ -62,6 +62,7 @@ def test_native_15d_band_ablation_and_h100_array_contract() -> None:
     assert "afterok:" in array_submit
     assert "MAP_26" not in array_submit
     assert "wake_particles=8" in array_submit
+    assert "RESUME_N5K" in array_submit
     assert "export BAND_VARIANT=26" in array_job
     assert "export BAND_VARIANT=24" in array_job
     assert "objective=reweighted_wake_sleep k=8" in array_job

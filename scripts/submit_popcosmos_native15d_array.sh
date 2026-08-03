@@ -17,6 +17,7 @@ TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-256}"
 TRAIN_JAX_BATCH_SIZE="${TRAIN_JAX_BATCH_SIZE:-64}"
 INFER_BATCH_SIZE="${INFER_BATCH_SIZE:-256}"
 INFER_JAX_BATCH_SIZE="${INFER_JAX_BATCH_SIZE:-128}"
+RESUME_N5K="${RESUME_N5K:-0}"
 
 ROOT_BASE="${ROOT_BASE:-outputs/runs/popcosmos_native15d_array_$(date +%Y%m%d_%H%M%S)}"
 ROOT_26="$ROOT_BASE/bands26"
@@ -30,10 +31,18 @@ test -s Data/cosmos2020/prepared/PREPOST_COMPLETE.json
 test -s Data/cosmos2020/prepared/farmer_a24_n40000.parquet
 test -s "$CONFIG_26"
 test -s "$CONFIG_24"
-test ! -e "$ROOT_BASE" || {
-  echo "[cosmos-rws15-array][error] run root already exists: $ROOT_BASE"
-  exit 2
-}
+if [[ "$RESUME_N5K" == "1" ]]; then
+  test -s "$ROOT_26/n5k/train/training_summary.json"
+  test -s "$ROOT_26/n5k/train/checkpoints/best.eqx"
+  test -s "$ROOT_24/n5k/train/training_summary.json"
+  test -s "$ROOT_24/n5k/train/checkpoints/best.eqx"
+  echo "[cosmos-rws15-array] resuming n5k inference from existing checkpoints"
+else
+  test ! -e "$ROOT_BASE" || {
+    echo "[cosmos-rws15-array][error] run root already exists: $ROOT_BASE"
+    exit 2
+  }
+fi
 
 export REPO_DIR MINICONDA_PATH CONDA_ENV CONFIG_26 CONFIG_24
 export ROOT_26 ROOT_24
@@ -43,12 +52,15 @@ COMMON_EXPORT="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$
 
 submit_stage() {
   local stage="$1" walltime="$2" dependency_arg="${3:-}"
-  local raw job
+  local raw job skip_training=0
+  if [[ "$stage" == "n5k" && "$RESUME_N5K" == "1" ]]; then
+    skip_training=1
+  fi
   raw=$(sbatch --parsable \
     --array="0-1%${ARRAY_CONCURRENCY}" \
     --time="$walltime" \
     ${dependency_arg:+--dependency="$dependency_arg"} \
-    --export="$COMMON_EXPORT,STAGE=$stage" \
+    --export="$COMMON_EXPORT,STAGE=$stage,SKIP_TRAINING=$skip_training" \
     scripts/popcosmos_native15d_array_h100.slurm)
   job="${raw%%;*}"
   printf '%s\n' "$job"
@@ -69,6 +81,7 @@ submission_log="$LOG_DIR/submit_popcosmos_native15d_array_${stamp}.log"
   echo "root_24=$ROOT_24"
   echo "objective=reweighted_wake_sleep"
   echo "wake_particles=8"
+  echo "resume_n5k=$RESUME_N5K"
   echo "config_26=$CONFIG_26"
   echo "config_24=$CONFIG_24"
   echo "train_jax_batch_size=$TRAIN_JAX_BATCH_SIZE"
@@ -76,9 +89,9 @@ submission_log="$LOG_DIR/submit_popcosmos_native15d_array_${stamp}.log"
 } | tee "$submission_log"
 
 job_ids="$n5k,$n20k,$full"
-printf 'export ROOT_BASE=%q\nexport ROOT_26=%q\nexport ROOT_24=%q\nexport CONFIG_26=%q\nexport CONFIG_24=%q\nexport JOB_IDS=%q\nexport SUBMISSION_LOG=%q\n' \
+printf 'export ROOT_BASE=%q\nexport ROOT_26=%q\nexport ROOT_24=%q\nexport CONFIG_26=%q\nexport CONFIG_24=%q\nexport RESUME_N5K=%q\nexport JOB_IDS=%q\nexport SUBMISSION_LOG=%q\n' \
   "$ROOT_BASE" "$ROOT_26" "$ROOT_24" "$CONFIG_26" "$CONFIG_24" \
-  "$job_ids" "$submission_log" \
+  "$RESUME_N5K" "$job_ids" "$submission_log" \
   > "$LATEST_ENV"
 
 echo "monitor: squeue -j $job_ids"
