@@ -35,6 +35,9 @@ test -e "$MAP_26/DONE"
 test -s "$MAP_26/map_summary.json"
 test -e "$MAP_24/DONE"
 test -s "$MAP_24/map_summary.json"
+if [[ "$MAP_24" == "$MAP_26" ]]; then
+  echo "[cosmos-rws15-array][warning] MAP_24 reuses MAP_26; use a dedicated 24-band MAP for the publication run" >&2
+fi
 test ! -e "$ROOT_BASE" || {
   echo "[cosmos-rws15-array][error] run root already exists: $ROOT_BASE"
   exit 2
