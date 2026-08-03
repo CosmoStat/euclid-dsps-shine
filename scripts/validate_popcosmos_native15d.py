@@ -53,6 +53,11 @@ def _require_file(path: Path) -> None:
         raise FileNotFoundError(path)
 
 
+def _require_marker(path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+
+
 def main() -> None:
     args = parse_args()
     _require_file(args.data_dir / "PREPOST_COMPLETE.json")
@@ -175,8 +180,8 @@ def main() -> None:
             raise ValueError(f"microJy to fnu-cgs conversion failed for {band['name']}")
 
     if args.run_dir is not None:
+        _require_marker(args.run_dir / "DONE")
         for path in (
-            args.run_dir / "DONE",
             args.run_dir / "stage_contract.json",
             args.run_dir / "train/checkpoints/best.eqx",
             args.run_dir / "train/training_summary.json",
