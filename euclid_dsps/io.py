@@ -264,8 +264,13 @@ def iter_catalog_batches(
 
 
 def load_row_indices(path: str | Path) -> list[int]:
-    """Load row indices from a one-column text or CSV file."""
-    rows = pd.read_csv(path, comment="#", header=None)
+    """Load row indices from a one-column text, CSV, or NumPy file."""
+    path = Path(path)
+    if path.suffix.lower() == ".npy":
+        values = np.asarray(np.load(path, allow_pickle=False)).reshape(-1)
+        rows = pd.DataFrame({"row_index": values})
+    else:
+        rows = pd.read_csv(path, comment="#", header=None)
     if rows.empty:
         return []
     values = pd.to_numeric(rows.iloc[:, 0], errors="coerce").dropna()

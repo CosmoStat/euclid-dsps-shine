@@ -67,6 +67,13 @@ def test_load_row_indices_deduplicates_and_sorts(tmp_path) -> None:
     assert load_row_indices(path) == [3, 7]
 
 
+def test_load_row_indices_accepts_numpy_arrays(tmp_path) -> None:
+    path = tmp_path / "rows.npy"
+    np.save(path, np.asarray([7, 3, 7], dtype=np.int64))
+
+    assert load_row_indices(path) == [3, 7]
+
+
 def test_iter_catalog_batches_supports_start_index_and_limit(tmp_path) -> None:
     path = tmp_path / "catalog.parquet"
     pd.DataFrame({"value": np.arange(10)}).to_parquet(path)
