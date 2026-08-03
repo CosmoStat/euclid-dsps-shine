@@ -87,5 +87,5 @@ printf 'export ROOT_BASE=%q\nexport ROOT_26=%q\nexport ROOT_24=%q\nexport MAP_26
   > "$LATEST_ENV"
 
 echo "monitor: squeue -j $job_ids"
-echo "logs: outputs/logs/cosmos15_array_<jobid>_<taskid>.out"
+echo "logs: outputs/logs/cosmos15_array-<arrayjob>_<taskid>.out"
 echo "latest_env=$LATEST_ENV"
