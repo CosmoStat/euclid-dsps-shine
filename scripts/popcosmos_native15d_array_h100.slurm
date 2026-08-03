@@ -40,4 +40,4 @@ export REPO_DIR
 echo "[cosmos-rws15-array] stage=${STAGE:-n5k} task=$TASK band_variant=$BAND_VARIANT"
 echo "[cosmos-rws15-array] config=$CONFIG root=$ROOT_DIR objective=reweighted_wake_sleep k=8"
 
-exec "$REPO_DIR/scripts/popcosmos_native15d_rws_h100.slurm"
+exec bash "$REPO_DIR/scripts/popcosmos_native15d_rws_h100.slurm"
