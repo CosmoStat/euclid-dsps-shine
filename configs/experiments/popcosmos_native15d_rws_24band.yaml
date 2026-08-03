@@ -1,61 +1,11 @@
-extends: feniks_selfsup_paper_rws_k8_t2_seed2.yaml
+extends: popcosmos_native15d_rws.yaml
 
-# Native FENIKS/DSPS 15D transfer to the public COSMOS2020 Farmer photometry.
-# The SPS model, latent bounds and RWS objective come unchanged from the parent.
-catalog_path: Data/cosmos2020/prepared/farmer_a24_full.parquet
-runtime: gpu
-column_groups: []
-extra_columns:
-  - redshift_true
-  - specz_confidence_level
-
+# Controlled ablation: remove only the two IRAC bands while keeping the
+# native 15D latent, filters, errors, likelihood and RWS schedule unchanged.
 dataset:
-  name: cosmos2020_farmer_native15d
-  id_column: object_id
-  band_subset: cosmos26
+  name: cosmos2020_farmer_native15d_24band_no_irac
+  band_subset: cosmos24_no_irac
 
-science_target:
-  reported_parameters: [z_obs]
-  truth_evaluated_parameters: [z_obs]
-  nuisance_parameters:
-    - log10_stellar_mass
-    - log10_stellar_metallicity
-    - dust_av
-    - dust_delta
-    - sfh_dlog_sfr_01
-    - sfh_dlog_sfr_02
-    - sfh_dlog_sfr_03
-    - sfh_dlog_sfr_04
-    - sfh_dlog_sfr_05
-    - sfh_dlog_sfr_06
-    - sfh_dlog_sfr_07
-    - sfh_dlog_sfr_08
-    - sfh_dlog_sfr_09
-    - sfh_dlog_sfr_10
-
-truth:
-  __replace__: true
-  schema: cosmos2020_public_specz
-  redshift_column: redshift_true
-  parameter_columns: {}
-
-selection:
-  index: 0
-  require_positive_flux: false
-  nondetection_policy: gaussian_flux
-
-redshift:
-  initial: random_uniform
-  column:
-  truth_column: redshift_true
-  fixed_value: 1.0
-  min: 0.001
-  max: 5.5
-  seed: 260730
-  prior_z:
-    mode: none
-
-# Public SVO curves downloaded and pinned by download_cosmos2020_assets.py.
 bands:
   - {name: u_megaprime_sagem, column: flux_u_megaprime_sagem, error_column: fluxerr_u_megaprime_sagem, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/u_megaprime_sagem.dat}}
   - {name: hsc_g, column: flux_hsc_g, error_column: fluxerr_hsc_g, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_g.dat}}
@@ -81,69 +31,12 @@ bands:
   - {name: ia827_cosmos, column: flux_ia827_cosmos, error_column: fluxerr_ia827_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia827_cosmos.dat}}
   - {name: NB711.SuprimeCam, column: flux_NB711.SuprimeCam, error_column: fluxerr_NB711.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB711.SuprimeCam.dat}}
   - {name: NB816.SuprimeCam, column: flux_NB816.SuprimeCam, error_column: fluxerr_NB816.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB816.SuprimeCam.dat}}
-  - {name: irac1_cosmos, column: flux_irac1_cosmos, error_column: fluxerr_irac1_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/irac1_cosmos.dat}}
-  - {name: irac2_cosmos, column: flux_irac2_cosmos, error_column: fluxerr_irac2_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/irac2_cosmos.dat}}
-
-fit:
-  photometric_likelihood: student_t
-  student_t_dof: 2.0
-  flux_error_floor_frac: 0.0
-  flux_error_jitter: 0.0
-
-calibration:
-  global_sed_scale:
-    enabled: false
-    mode: disabled
-    trainable: false
-  per_band_zero_points:
-    enabled: false
-    mode: disabled
-    trainable: false
 
 amortized:
   data:
-    expected_n_bands: 26
-    selection_mode: random
-    stratified_strategy: proportional
-    # Public spectroscopy is reserved for post-inference evaluation. It must
-    # not influence catalog selection or the train/validation split.
-    use_redshift_for_split: false
-    stratify_column:
-    redshift_bins: [0.0, 0.3, 0.6, 0.9, 1.2, 1.6, 2.0, 2.5, 3.5, 5.5]
-    validation_fraction: 0.1
-    epoch_shuffle: true
-    catalog_batch_size: 10000
+    expected_n_bands: 24
   features:
-    type: flux_and_errors
-    n_flux_bands: 26
-    n_error_bands: 26
-    normalize_per_band: true
-    flux_transform: asinh
-    error_transform: log
-    # Fixed preprocessing population for comparable 5k/20k/40k curves. The
-    # evaluation cohort is chosen outside this 40k training pool.
-    stats_catalog_path: Data/cosmos2020/prepared/farmer_a24_n40000.parquet
+    n_flux_bands: 24
+    n_error_bands: 24
   encoder:
-    input_dim: 52
-    latent_dim: 15
-  objective:
-    sleep:
-      # Pair every DSPS-generated SED with a real Farmer uncertainty vector.
-      # No observed flux or redshift label enters this model-generated target.
-      error_model: observed_catalog
-      selection:
-        enabled: true
-        band: hsc_r
-        min_flux_fnu_cgs: 3.6307805477e-30
-        candidate_factor: 4
-  training:
-    seed: 260730
-  map_adam:
-    batch_size: 8
-    n_starts: 16
-    start_chunk_size: 4
-    maxiter: 400
-    learning_rate: 0.02
-    prior_weight: 0.0
-    start_mode: latin_hypercube
-    progress_interval: 50
+    input_dim: 48

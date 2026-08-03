@@ -91,6 +91,27 @@ COSMOS_BANDS = (
     CosmosBand("irac2_cosmos", "IRAC_CH2", 0.112, -0.219, "Spitzer/IRAC.I2"),
 )
 
+COSMOS_BAND_SUBSETS = {
+    "cosmos26": tuple(band.name for band in COSMOS_BANDS),
+    "cosmos24_no_irac": tuple(
+        band.name
+        for band in COSMOS_BANDS
+        if band.name not in {"irac1_cosmos", "irac2_cosmos"}
+    ),
+}
+
+
+def cosmos_band_names_for_subset(subset: str | None) -> tuple[str, ...]:
+    """Return the supported ordered band names for a native COSMOS subset."""
+    name = str(subset or "cosmos26").strip().lower()
+    try:
+        return COSMOS_BAND_SUBSETS[name]
+    except KeyError as exc:
+        supported = ", ".join(sorted(COSMOS_BAND_SUBSETS))
+        raise ValueError(
+            f"Unsupported COSMOS band subset {subset!r}; expected one of {supported}"
+        ) from exc
+
 FARMER_METADATA_COLUMNS = (
     "ID",
     "ALPHA_J2000",

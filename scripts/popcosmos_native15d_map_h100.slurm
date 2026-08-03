@@ -68,6 +68,7 @@ import jax
 
 from euclid_dsps.amortized.config import amortized_config
 from euclid_dsps.config import load_config
+from euclid_dsps.cosmos2020 import cosmos_band_names_for_subset
 
 config = load_config(sys.argv[1])
 amortized = amortized_config(config)
@@ -80,13 +81,20 @@ if configured_checkpoint != sys.argv[2]:
 names = tuple(config["fit"]["free_parameters"])
 print("[cosmos-map15] latent:", len(names), names)
 print("[cosmos-map15] model:", config["model"]["sfh_model"])
+subset = (config.get("dataset", {}) or {}).get("band_subset", "cosmos26")
+expected_names = cosmos_band_names_for_subset(subset)
+configured_names = tuple(band["name"] for band in config["bands"])
+print("[cosmos-map15] band_subset:", subset)
 print("[cosmos-map15] bands:", len(config["bands"]))
 print("[cosmos-map15] backend:", jax.default_backend())
 print("[cosmos-map15] devices:", jax.devices())
 if len(names) != 15 or config["model"]["sfh_model"] != "spline15d":
     raise SystemExit("[cosmos-map15][error] native 15D contract is not active")
-if len(config["bands"]) != 26:
-    raise SystemExit("[cosmos-map15][error] expected 26 COSMOS bands")
+if configured_names != expected_names:
+    raise SystemExit(
+        "[cosmos-map15][error] unexpected ordered COSMOS band subset: "
+        f"subset={subset!r} expected={expected_names} got={configured_names}"
+    )
 if jax.default_backend() != "gpu":
     raise SystemExit("[cosmos-map15][error] JAX did not select the H100")
 PY

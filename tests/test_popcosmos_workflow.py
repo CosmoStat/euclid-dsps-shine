@@ -35,6 +35,35 @@ def test_cosmos_smc_pilot_has_stable_features_and_tempered_wake() -> None:
     assert wake["calibration_loss_weight"] == 1.0
 
 
+def test_native_15d_band_ablation_and_h100_array_contract() -> None:
+    native26 = load_config(
+        ROOT / "configs/experiments/popcosmos_native15d_rws.yaml"
+    )
+    native24 = load_config(
+        ROOT / "configs/experiments/popcosmos_native15d_rws_24band.yaml"
+    )
+    assert len(native26["bands"]) == 26
+    assert native26["dataset"]["band_subset"] == "cosmos26"
+    assert len(native24["bands"]) == 24
+    assert native24["dataset"]["band_subset"] == "cosmos24_no_irac"
+    assert native24["amortized"]["features"]["n_flux_bands"] == 24
+    assert native24["amortized"]["encoder"]["input_dim"] == 48
+
+    array_submit = (
+        ROOT / "scripts/submit_popcosmos_native15d_array.sh"
+    ).read_text()
+    array_job = (
+        ROOT / "scripts/popcosmos_native15d_array_h100.slurm"
+    ).read_text()
+    native_job = (ROOT / "scripts/popcosmos_native15d_rws_h100.slurm").read_text()
+    assert 'STAGE must be n5k,n20k,n40k,full' in native_job
+    assert "submit_stage full" in array_submit
+    assert '--array="0-1%' in array_submit
+    assert "afterok:" in array_submit
+    assert "export BAND_VARIANT=26" in array_job
+    assert "export BAND_VARIANT=24" in array_job
+
+
 def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
     rws = (ROOT / "scripts/cosmos2020_rws_h100.slurm").read_text()
     submit = (ROOT / "scripts/submit_cosmos2020_reproduction.sh").read_text()

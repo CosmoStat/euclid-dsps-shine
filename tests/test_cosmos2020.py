@@ -8,6 +8,7 @@ import pytest
 
 from euclid_dsps.cosmos2020 import (
     COSMOS_BANDS,
+    cosmos_band_names_for_subset,
     ESO_FARMER_V21_URL,
     R_LIMIT_UJY,
     deterministic_nested_order,
@@ -59,6 +60,18 @@ def test_farmer_contract_has_public_a24_order_and_columns() -> None:
     assert len(farmer_columns()) == 7 + 3 * 26
     assert "COSMOS2020_FARMER_V1" in farmer_adql(32)
     assert "TOP 32" in farmer_adql(32)
+
+
+def test_native_band_subsets_keep_order_and_only_drop_irac() -> None:
+    full = cosmos_band_names_for_subset("cosmos26")
+    no_irac = cosmos_band_names_for_subset("cosmos24_no_irac")
+    assert len(full) == 26
+    assert len(no_irac) == 24
+    assert no_irac == tuple(
+        name for name in full if name not in {"irac1_cosmos", "irac2_cosmos"}
+    )
+    with pytest.raises(ValueError, match="Unsupported COSMOS band subset"):
+        cosmos_band_names_for_subset("unknown")
 
 
 def test_downloader_exposes_async_tap_resume(monkeypatch) -> None:

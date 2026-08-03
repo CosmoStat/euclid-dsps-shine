@@ -211,7 +211,7 @@ def test_native_rws_stages_have_no_a24_parameter_comparison() -> None:
     assert "summarize_popcosmos_native15d_scaling.py" in wrapper
     assert '--row-indices-file "$EVAL_INDICES"' in wrapper
     assert '--dataset "$FULL_DATASET"' in wrapper
-    assert 'STAGE must be n5k,n20k,n40k' in wrapper
+    assert 'STAGE must be n5k,n20k,n40k,full' in wrapper
     assert 'n5k) WALLTIME=04:00:00' in submit
     assert 'n20k) WALLTIME=08:00:00' in submit
     assert 'n40k) WALLTIME=15:00:00' in submit

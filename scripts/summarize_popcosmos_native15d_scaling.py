@@ -9,7 +9,10 @@ from pathlib import Path
 
 import pandas as pd
 
-STAGES = (("n5k", 5_000), ("n20k", 20_000), ("n40k", 40_000))
+# ``full`` is the held-out-safe 40k pool in the publication workflow.  Keep
+# ``n40k`` as a read alias so older single-chain runs remain summarizable.
+STAGES = (("n5k", 5_000), ("n20k", 20_000), ("full", 40_000))
+STAGE_PATH_ALIASES = {"full": ("full", "n40k")}
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,8 +25,16 @@ def parse_args() -> argparse.Namespace:
 def collect_scaling_rows(root: Path) -> list[dict[str, float | int | str]]:
     rows = []
     for stage, train_catalog_size in STAGES:
-        path = root / stage / "inference/redshift_metrics.json"
-        if not path.is_file():
+        candidates = STAGE_PATH_ALIASES.get(stage, (stage,))
+        path = next(
+            (
+                root / candidate / "inference/redshift_metrics.json"
+                for candidate in candidates
+                if (root / candidate / "inference/redshift_metrics.json").is_file()
+            ),
+            None,
+        )
+        if path is None:
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         row: dict[str, float | int | str] = {

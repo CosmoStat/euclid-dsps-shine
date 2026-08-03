@@ -36,8 +36,13 @@ case "$STAGE" in
     SIZE=40000; EPOCHS=32; BEST_MIN_EPOCH=8; INFER_LIMIT=5000
     PREVIOUS="$ROOT_DIR/n20k"
     ;;
+  full)
+    # Full means the held-out-safe 40k training pool, not all 138,896 rows.
+    SIZE=40000; EPOCHS=32; BEST_MIN_EPOCH=8; INFER_LIMIT=5000
+    PREVIOUS="$ROOT_DIR/n20k"
+    ;;
   *)
-    echo "[cosmos-rws15][error] STAGE must be n5k,n20k,n40k"
+    echo "[cosmos-rws15][error] STAGE must be n5k,n20k,n40k,full"
     exit 2
     ;;
 esac
@@ -143,8 +148,14 @@ if len(names) != 15 or config["model"]["sfh_model"] != "spline15d":
     raise SystemExit("[cosmos-rws15][error] native spline15D is not active")
 if target.get("reported_parameters") != ["z_obs"]:
     raise SystemExit("[cosmos-rws15][error] science target is not redshift-only")
-if len(config["bands"]) != 26:
-    raise SystemExit("[cosmos-rws15][error] expected 26 COSMOS passbands")
+band_subset = (config.get("dataset", {}) or {}).get("band_subset", "cosmos26")
+expected_band_counts = {"cosmos26": 26, "cosmos24_no_irac": 24}
+if len(config["bands"]) != expected_band_counts.get(band_subset):
+    raise SystemExit(
+        "[cosmos-rws15][error] unsupported COSMOS band subset: "
+        f"{band_subset!r} with {len(config['bands'])} bands"
+    )
+print("[cosmos-rws15] band_subset:", band_subset, "n_bands:", len(config["bands"]))
 if amortized["likelihood"]["type"] != "student_t":
     raise SystemExit("[cosmos-rws15][error] Student-t likelihood is not active")
 PY
@@ -218,13 +229,23 @@ import os
 import subprocess
 import sys
 
+from euclid_dsps.config import load_config
+
+config = load_config(os.environ["CONFIG"])
+dataset_config = config.get("dataset", {}) or {}
 payload = {
     "status": "complete",
     "stage": os.environ["STAGE"],
     "science_target": "z_obs_only",
     "latent_model": "native_feniks_spline15d",
     "nuisance_latent_dimensions": 14,
-    "observations": "COSMOS2020 Farmer 26-band fluxes and reported errors",
+    "observations": (
+        f"COSMOS2020 Farmer {len(config['bands'])}-band fluxes and "
+        "reported errors"
+    ),
+    "band_subset": dataset_config.get("band_subset", "cosmos26"),
+    "training_catalog": "farmer_a24_n40000.parquet",
+    "stage_semantics": "full is the held-out-safe 40k training pool",
     "evaluation_cohort": {
         "row_indices": sys.argv[2],
         "selected_rows": int(sys.argv[3]),
@@ -242,7 +263,7 @@ with open(sys.argv[1], "w", encoding="utf-8") as stream:
     stream.write("\n")
 PY
 
-if [[ "$STAGE" == "n40k" ]]; then
+if [[ "$STAGE" == "n40k" || "$STAGE" == "full" ]]; then
   python scripts/summarize_popcosmos_native15d_scaling.py --root "$ROOT_DIR"
   test -s "$ROOT_DIR/redshift_scaling/redshift_scaling_metrics.csv"
   test -s "$ROOT_DIR/redshift_scaling/redshift_scaling_summary.json"

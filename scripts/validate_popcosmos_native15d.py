@@ -12,7 +12,7 @@ import pyarrow.parquet as pq
 
 from euclid_dsps.amortized.config import amortized_config
 from euclid_dsps.config import load_config
-from euclid_dsps.cosmos2020 import COSMOS_BANDS
+from euclid_dsps.cosmos2020 import cosmos_band_names_for_subset
 from euclid_dsps.filters import load_filters
 from euclid_dsps.observation_arrays import photometry_arrays_from_dataframe
 
@@ -128,9 +128,13 @@ def main() -> None:
         raise ValueError("Native transfer requires the RWS objective")
 
     band_names = tuple(band["name"] for band in config["bands"])
-    expected_names = tuple(band.name for band in COSMOS_BANDS)
+    subset = (config.get("dataset", {}) or {}).get("band_subset", "cosmos26")
+    expected_names = cosmos_band_names_for_subset(subset)
     if band_names != expected_names:
-        raise ValueError("Native config does not use the 26 COSMOS bands in order")
+        raise ValueError(
+            "Native config does not use the expected ordered COSMOS band subset: "
+            f"subset={subset!r} expected={expected_names} got={band_names}"
+        )
     if any(str(band.get("units", "")).lower() != "microjy" for band in config["bands"]):
         raise ValueError("All Farmer input bands must explicitly declare microjy")
     for band in config["bands"]:
@@ -155,7 +159,7 @@ def main() -> None:
         config["bands"],
         object_id_column="object_id",
     )
-    if arrays.flux.shape != (len(frame), 26):
+    if arrays.flux.shape != (len(frame), len(expected_names)):
         raise ValueError(f"Unexpected Farmer photometry shape: {arrays.flux.shape}")
     for index, band in enumerate(config["bands"]):
         raw = frame[band["column"]].to_numpy(float)
@@ -228,7 +232,8 @@ def main() -> None:
 
     print(
         "[cosmos-native15d-contract] "
-        f"rows={n_full} bands=26 latent=15 target=z_obs "
+        f"rows={n_full} bands={len(expected_names)} subset={subset} "
+        "latent=15 target=z_obs "
         f"run={'checked' if args.run_dir else 'not-requested'}"
     )
 
