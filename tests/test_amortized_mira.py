@@ -10,6 +10,8 @@ import pytest
 
 from euclid_dsps.amortized.mira import (
     FENIKS_SPLINE15D_PARAMETERS,
+    MIRA_STATISTIC_VARIANCE,
+    _bootstrap_mira_scores,
     evaluate_feniks_mira,
     mira_region_contributions,
     resolve_posterior_input,
@@ -86,6 +88,16 @@ def test_mira_region_contributions_match_direct_numpy() -> None:
     expected = _numpy_mira(truth, posterior, centers, reference_indices)
 
     np.testing.assert_allclose(actual, expected, rtol=1.0e-6, atol=1.0e-6)
+
+
+def test_mira_bootstrap_resamples_objects_and_regions_as_paired_scores() -> None:
+    contributions = np.arange(3 * 2 * 5, dtype=np.float64).reshape(3, 2, 5)
+    scores = _bootstrap_mira_scores(contributions, num_bootstrap=11, seed=7)
+
+    assert scores.shape == (11, 2)
+    assert np.isfinite(scores).all()
+    assert np.all(scores >= contributions.min())
+    assert np.all(scores <= contributions.max())
 
 
 def test_feniks_mira_parquet_workflow_writes_auditable_outputs(
@@ -171,10 +183,16 @@ def test_feniks_mira_parquet_workflow_writes_auditable_outputs(
     assert contributions.groupby(["model", "group"]).size().eq(n_objects).all()
     manifest = json.loads((out / "mira_manifest.json").read_text())
     assert manifest["status"] == "complete"
-    assert manifest["bootstrap_unit"] == "held_out_object"
+    assert manifest["bootstrap_unit"] == "held_out_object_plus_one_region_draw"
     assert manifest["shared_random_regions_across_models"] is True
     assert manifest["companion_truths"]["encoder"]["status"] == "primary_reference"
     assert summary["companion_truths_checked"] == 1
+    expected_variance = MIRA_STATISTIC_VARIANCE / n_objects
+    assert summary["theoretical_variance"] == pytest.approx(expected_variance)
+    assert summary["theoretical_sigma"] == pytest.approx(expected_variance**0.5)
+    assert scores["theoretical_variance"].eq(expected_variance).all()
+    assert scores["mira_std"].ge(0).all()
+    assert scores["bootstrap_std"].ge(0).all()
 
 
 def test_resolver_prefers_monolithic_samples_without_double_counting(

@@ -1,8 +1,9 @@
 """MIRA diagnostics for held-out amortized posterior samples.
 
 The implementation follows the finite-sample normalization used by
-``mira-score`` while retaining per-object contributions so uncertainty can be
-estimated by bootstrapping held-out objects rather than random regions.
+``mira-score``. It keeps the direct Monte Carlo mean/std and mirrors
+``mira_bootstrap`` by resampling held-out fiducials and drawing one random
+region for each resampled fiducial.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ FENIKS_SPLINE15D_PARAMETERS = (
 )
 
 MIRA_IDEAL_SCORE = 2.0 / 3.0
+MIRA_STATISTIC_VARIANCE = 1.0 / 18.0
 MIRA_PAPER_URL = "https://arxiv.org/abs/2605.02014"
 MIRA_UPSTREAM_COMMIT = "c57487198ac30711783b78ac2af6a76758544483"
 
@@ -254,6 +256,7 @@ def evaluate_feniks_mira(
         "parameters": list(parameters),
         "num_regions": int(num_regions),
         "num_bootstrap": int(num_bootstrap),
+        "bootstrap_method": "resample_fiducials_plus_one_region_draw",
         "samples_per_object_requested": samples_per_object,
         "seed": int(seed),
         "limit": limit,
@@ -327,6 +330,8 @@ def evaluate_feniks_mira(
         if "row_index" in truth
         else np.arange(len(truth), dtype=np.int64)
     )
+    theoretical_variance = MIRA_STATISTIC_VARIANCE / len(truth)
+    theoretical_sigma = float(np.sqrt(theoretical_variance))
 
     for group_index, (group_name, indices) in enumerate(group_definitions.items()):
         group_seed = _derived_seed(seed, group_index, 11)
@@ -355,16 +360,24 @@ def evaluate_feniks_mira(
             dtype=np.float64,
         )
         region_scores = contributions.mean(axis=2)
-        object_contributions = contributions.mean(axis=0)
-        bootstrap_scores = _bootstrap_object_scores(
-            object_contributions,
+        # Keep fiducial means for auditability; bootstrap resamples raw
+        # region contributions so it retains the Monte Carlo region variance.
+        fiducial_means = contributions.mean(axis=0)
+        score_values = region_scores.mean(axis=0)
+        score_stds = (
+            region_scores.std(axis=0, ddof=1)
+            if num_regions > 1
+            else np.zeros(len(model_names), dtype=np.float64)
+        )
+        bootstrap_scores = _bootstrap_mira_scores(
+            contributions,
             num_bootstrap=num_bootstrap,
             seed=bootstrap_seed,
         )
 
         for model_index, model_name in enumerate(model_names):
             model_bootstrap = bootstrap_scores[:, model_index]
-            score = float(object_contributions[model_index].mean())
+            score = float(score_values[model_index])
             score_rows.append(
                 {
                     "model": model_name,
@@ -377,12 +390,10 @@ def evaluate_feniks_mira(
                     "score": score,
                     "ideal_score": MIRA_IDEAL_SCORE,
                     "delta_from_ideal": score - MIRA_IDEAL_SCORE,
-                    "theoretical_sigma": float(np.sqrt(1.0 / (18.0 * len(truth)))),
-                    "region_mc_std": float(
-                        region_scores[:, model_index].std(ddof=1)
-                        if num_regions > 1
-                        else 0.0
-                    ),
+                    "theoretical_variance": theoretical_variance,
+                    "theoretical_sigma": theoretical_sigma,
+                    "mira_std": float(score_stds[model_index]),
+                    "region_mc_std": float(score_stds[model_index]),
                     **_bootstrap_summary(model_bootstrap),
                     "group_seed": int(group_seed),
                     "bootstrap_seed": int(bootstrap_seed),
@@ -404,7 +415,7 @@ def evaluate_feniks_mira(
                     "group": group_name,
                     "object_id": object_ids,
                     "row_index": row_indices,
-                    "mira_contribution": object_contributions[model_index],
+                    "mira_contribution": fiducial_means[model_index],
                 }
             )
             contribution_frames.append(contribution)
@@ -421,7 +432,7 @@ def evaluate_feniks_mira(
                 )
 
         for first, second in itertools.combinations(range(len(model_names)), 2):
-            delta = object_contributions[first] - object_contributions[second]
+            delta = fiducial_means[first] - fiducial_means[second]
             bootstrap_delta = bootstrap_scores[:, first] - bootstrap_scores[:, second]
             pairwise_rows.append(
                 {
@@ -450,7 +461,7 @@ def evaluate_feniks_mira(
     )
     bootstrap_frame.to_parquet(out / "mira_bootstrap_scores.parquet", index=False)
     pairwise.to_csv(out / "mira_pairwise_differences.csv", index=False)
-    _write_score_plot(scores, out / "mira_scores.png")
+    write_mira_score_plot(scores, out / "mira_scores.png")
 
     elapsed = time.perf_counter() - started
     summary = {
@@ -470,13 +481,18 @@ def evaluate_feniks_mira(
             [
                 "model",
                 "score",
+                "mira_std",
+                "bootstrap_mean",
+                "bootstrap_std",
                 "bootstrap_q025",
                 "bootstrap_q975",
                 "delta_from_ideal",
             ],
         ].to_dict(orient="records"),
         "ideal_score": MIRA_IDEAL_SCORE,
-        "theoretical_sigma": float(np.sqrt(1.0 / (18.0 * len(truth)))),
+        "theoretical_statistic_variance": MIRA_STATISTIC_VARIANCE,
+        "theoretical_variance": theoretical_variance,
+        "theoretical_sigma": theoretical_sigma,
         "elapsed_seconds": float(elapsed),
         "jax_backend": jax.default_backend(),
         "jax_devices": [str(device) for device in jax.devices()],
@@ -512,7 +528,8 @@ def evaluate_feniks_mira(
         "shared_random_regions_across_models": True,
         "reference_draw": "uniform_posterior_sample_index",
         "finite_sample_normalization": "divide by S/(S+1)",
-        "bootstrap_unit": "held_out_object",
+        "bootstrap_unit": "held_out_object_plus_one_region_draw",
+        "bootstrap_region_bank": int(num_regions),
         "git_sha": _git_sha(),
     }
     write_json(out / "mira_manifest.json", manifest)
@@ -732,26 +749,38 @@ def _read_dense_posterior(
     )
 
 
-def _bootstrap_object_scores(
-    object_contributions: np.ndarray,
+def _bootstrap_mira_scores(
+    contributions: np.ndarray,
     *,
     num_bootstrap: int,
     seed: int,
     batch_size: int = 100,
 ) -> np.ndarray:
-    n_models, n_objects = object_contributions.shape
+    """Approximate upstream ``mira_bootstrap`` with a shared region bank.
+
+    Each replicate resamples ``L`` fiducials and draws one region for each
+    resampled fiducial. The same indices are used for every model so paired
+    model differences retain common Monte Carlo randomness.
+    """
+    num_regions, n_models, n_objects = contributions.shape
     if num_bootstrap == 0:
         return np.empty((0, n_models), dtype=np.float64)
     rng = np.random.default_rng(seed)
     scores = np.empty((num_bootstrap, n_models), dtype=np.float64)
     for start in range(0, num_bootstrap, batch_size):
         stop = min(start + batch_size, num_bootstrap)
-        indices = rng.integers(
+        object_indices = rng.integers(
             0,
             n_objects,
             size=(stop - start, n_objects),
         )
-        scores[start:stop] = object_contributions[:, indices].mean(axis=2).T
+        region_indices = rng.integers(
+            0,
+            num_regions,
+            size=(stop - start, n_objects),
+        )
+        selected = contributions[region_indices, :, object_indices]
+        scores[start:stop] = selected.mean(axis=1)
     return scores
 
 
@@ -816,20 +845,39 @@ def _write_normalization_diagnostics(
     pd.DataFrame(rows).to_csv(out / "mira_normalization_diagnostics.csv", index=False)
 
 
-def _write_score_plot(scores: pd.DataFrame, path: Path) -> None:
+def write_mira_score_plot(scores: pd.DataFrame, path: str | Path) -> None:
+    """Write a score plot with the fiducial-level theoretical uncertainty."""
     import matplotlib
+    from matplotlib.patches import Patch
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    path = Path(path)
     groups = scores["group"].drop_duplicates().tolist()
     models = scores["model"].drop_duplicates().tolist()
+    num_fiducials = int(scores["num_objects"].iloc[0])
+    num_posterior_samples = int(scores["num_posterior_samples"].iloc[0])
+    num_regions = int(scores["num_regions"].iloc[0])
+    theoretical_variance = float(
+        scores["theoretical_variance"].iloc[0]
+        if "theoretical_variance" in scores
+        else MIRA_STATISTIC_VARIANCE / num_fiducials
+    )
+    theoretical_sigma = float(np.sqrt(theoretical_variance))
     figure, axes = plt.subplots(
         2,
         1,
         figsize=(12, 10),
         gridspec_kw={"height_ratios": [1, 2.4]},
-        constrained_layout=True,
+        constrained_layout=False,
+    )
+    figure.subplots_adjust(
+        left=0.08,
+        right=0.98,
+        top=0.82,
+        bottom=0.20,
+        hspace=0.30,
     )
     for axis, selected_groups, title in (
         (axes[0], groups[:3], "Joint latent-space scores"),
@@ -846,21 +894,26 @@ def _write_score_plot(scores: pd.DataFrame, path: Path) -> None:
                 .loc[selected_groups]
             )
             offset = (model_index - (len(models) - 1) / 2) * width
-            lower = subset["score"] - subset["bootstrap_q025"]
-            upper = subset["bootstrap_q975"] - subset["score"]
+            if {"bootstrap_mean", "bootstrap_std"} <= set(subset.columns):
+                centers = subset["bootstrap_mean"]
+                yerr = subset["bootstrap_std"]
+            else:
+                centers = subset["score"]
+                lower = centers - subset["bootstrap_q025"]
+                upper = subset["bootstrap_q975"] - centers
+                yerr = np.vstack([lower, upper])
             axis.errorbar(
                 x + offset,
-                subset["score"],
-                yerr=np.vstack([lower, upper]),
+                centers,
+                yerr=yerr,
                 marker="o",
                 linestyle="none",
                 capsize=3,
                 label=model,
             )
-        sigma = float(scores["theoretical_sigma"].iloc[0])
         axis.axhspan(
-            MIRA_IDEAL_SCORE - sigma,
-            MIRA_IDEAL_SCORE + sigma,
+            MIRA_IDEAL_SCORE - theoretical_sigma,
+            MIRA_IDEAL_SCORE + theoretical_sigma,
             color="#d8d8d8",
             alpha=0.65,
             linewidth=0,
@@ -873,9 +926,35 @@ def _write_score_plot(scores: pd.DataFrame, path: Path) -> None:
             ha="right" if len(selected_groups) > 5 else "center",
         )
         axis.set_ylabel("MIRA score")
-        axis.set_title(title)
+        axis.set_title(title, pad=8)
         axis.grid(axis="y", color="#e6e6e6", linewidth=0.8)
-    axes[0].legend(frameon=False, ncol=max(1, min(len(models), 3)))
+    theory_label = (
+        f"theory ref. (per-region): Var = 1/(18L) = {theoretical_variance:.2e}; "
+        f"band = +/-1 sigma = {theoretical_sigma:.3g}; "
+        "colored = bootstrap mean +/- std"
+    )
+    handles, labels = axes[0].get_legend_handles_labels()
+    handles.append(Patch(facecolor="#d8d8d8", edgecolor="none", alpha=0.65))
+    labels.append(theory_label)
+    axes[0].legend(
+        handles,
+        labels,
+        frameon=False,
+        ncol=1,
+        loc="upper left",
+        fontsize=9,
+    )
+    figure.text(
+        0.5,
+        0.965,
+        (
+            f"Fiducials L = {num_fiducials:,} | posterior samples/object "
+            f"N = {num_posterior_samples:,} | regions = {num_regions:,}"
+        ),
+        ha="center",
+        va="top",
+        fontsize=10,
+    )
     figure.savefig(path, dpi=180)
     plt.close(figure)
 
