@@ -4,15 +4,14 @@ set -Eeuo pipefail
 # Submit two synchronized native-15D scaling chains:
 #   array task 0 = all 26 COSMOS bands
 #   array task 1 = the 24-band no-IRAC ablation
-# Each task owns one H100; stages are chained 5k -> 20k -> full.
+# Each task owns one H100; stages are chained 5k -> 20k -> full. The
+# validated likelihood-only MAP is not an input to RWS training.
 
 REPO_DIR="${REPO_DIR:-$PWD}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 CONFIG_26="${CONFIG_26:-configs/experiments/popcosmos_native15d_rws.yaml}"
 CONFIG_24="${CONFIG_24:-configs/experiments/popcosmos_native15d_rws_24band.yaml}"
-MAP_26="${MAP_26:?Set MAP_26 to a completed native 15D MAP directory}"
-MAP_24="${MAP_24:-$MAP_26}"
 ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-2}"
 TRAIN_BATCH_SIZE="${TRAIN_BATCH_SIZE:-256}"
 TRAIN_JAX_BATCH_SIZE="${TRAIN_JAX_BATCH_SIZE:-64}"
@@ -31,23 +30,16 @@ test -s Data/cosmos2020/prepared/PREPOST_COMPLETE.json
 test -s Data/cosmos2020/prepared/farmer_a24_n40000.parquet
 test -s "$CONFIG_26"
 test -s "$CONFIG_24"
-test -e "$MAP_26/DONE"
-test -s "$MAP_26/map_summary.json"
-test -e "$MAP_24/DONE"
-test -s "$MAP_24/map_summary.json"
-if [[ "$MAP_24" == "$MAP_26" ]]; then
-  echo "[cosmos-rws15-array][warning] MAP_24 reuses MAP_26; use a dedicated 24-band MAP for the publication run" >&2
-fi
 test ! -e "$ROOT_BASE" || {
   echo "[cosmos-rws15-array][error] run root already exists: $ROOT_BASE"
   exit 2
 }
 
 export REPO_DIR MINICONDA_PATH CONDA_ENV CONFIG_26 CONFIG_24
-export ROOT_26 ROOT_24 MAP_26 MAP_24
+export ROOT_26 ROOT_24
 export TRAIN_BATCH_SIZE TRAIN_JAX_BATCH_SIZE INFER_BATCH_SIZE INFER_JAX_BATCH_SIZE
 
-COMMON_EXPORT="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,CONFIG_26=$CONFIG_26,CONFIG_24=$CONFIG_24,ROOT_26=$ROOT_26,ROOT_24=$ROOT_24,MAP_26=$MAP_26,MAP_24=$MAP_24,TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE,TRAIN_JAX_BATCH_SIZE=$TRAIN_JAX_BATCH_SIZE,INFER_BATCH_SIZE=$INFER_BATCH_SIZE,INFER_JAX_BATCH_SIZE=$INFER_JAX_BATCH_SIZE"
+COMMON_EXPORT="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,CONFIG_26=$CONFIG_26,CONFIG_24=$CONFIG_24,ROOT_26=$ROOT_26,ROOT_24=$ROOT_24,TRAIN_BATCH_SIZE=$TRAIN_BATCH_SIZE,TRAIN_JAX_BATCH_SIZE=$TRAIN_JAX_BATCH_SIZE,INFER_BATCH_SIZE=$INFER_BATCH_SIZE,INFER_JAX_BATCH_SIZE=$INFER_JAX_BATCH_SIZE"
 
 submit_stage() {
   local stage="$1" walltime="$2" dependency_arg="${3:-}"
@@ -75,8 +67,8 @@ submission_log="$LOG_DIR/submit_popcosmos_native15d_array_${stamp}.log"
   echo "root_base=$ROOT_BASE"
   echo "root_26=$ROOT_26"
   echo "root_24=$ROOT_24"
-  echo "map_26=$MAP_26"
-  echo "map_24=$MAP_24"
+  echo "objective=reweighted_wake_sleep"
+  echo "wake_particles=8"
   echo "config_26=$CONFIG_26"
   echo "config_24=$CONFIG_24"
   echo "train_jax_batch_size=$TRAIN_JAX_BATCH_SIZE"
@@ -84,9 +76,9 @@ submission_log="$LOG_DIR/submit_popcosmos_native15d_array_${stamp}.log"
 } | tee "$submission_log"
 
 job_ids="$n5k,$n20k,$full"
-printf 'export ROOT_BASE=%q\nexport ROOT_26=%q\nexport ROOT_24=%q\nexport MAP_26=%q\nexport MAP_24=%q\nexport CONFIG_26=%q\nexport CONFIG_24=%q\nexport JOB_IDS=%q\nexport SUBMISSION_LOG=%q\n' \
-  "$ROOT_BASE" "$ROOT_26" "$ROOT_24" "$MAP_26" "$MAP_24" \
-  "$CONFIG_26" "$CONFIG_24" "$job_ids" "$submission_log" \
+printf 'export ROOT_BASE=%q\nexport ROOT_26=%q\nexport ROOT_24=%q\nexport CONFIG_26=%q\nexport CONFIG_24=%q\nexport JOB_IDS=%q\nexport SUBMISSION_LOG=%q\n' \
+  "$ROOT_BASE" "$ROOT_26" "$ROOT_24" "$CONFIG_26" "$CONFIG_24" \
+  "$job_ids" "$submission_log" \
   > "$LATEST_ENV"
 
 echo "monitor: squeue -j $job_ids"

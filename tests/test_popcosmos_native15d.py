@@ -214,4 +214,6 @@ def test_native_rws_stages_have_no_a24_parameter_comparison() -> None:
     assert 'STAGE must be n5k,n20k,n40k,full' in wrapper
     assert 'n5k) WALLTIME=04:00:00' in submit
     assert 'n20k) WALLTIME=08:00:00' in submit
-    assert 'n40k) WALLTIME=15:00:00' in submit
+    assert 'n40k|full) WALLTIME=15:00:00' in submit
+    assert 'MAP_DIR' not in wrapper
+    assert 'MAP_DIR' not in submit

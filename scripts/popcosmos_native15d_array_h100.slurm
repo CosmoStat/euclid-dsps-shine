@@ -19,17 +19,15 @@ CONFIG_26="${CONFIG_26:-configs/experiments/popcosmos_native15d_rws.yaml}"
 CONFIG_24="${CONFIG_24:-configs/experiments/popcosmos_native15d_rws_24band.yaml}"
 ROOT_26="${ROOT_26:?Set ROOT_26 to the 26-band run root}"
 ROOT_24="${ROOT_24:?Set ROOT_24 to the 24-band run root}"
-MAP_26="${MAP_26:?Set MAP_26 to a completed native 15D MAP directory}"
-MAP_24="${MAP_24:-$MAP_26}"
 TASK="${SLURM_ARRAY_TASK_ID:-0}"
 
 case "$TASK" in
   0)
-    export CONFIG="$CONFIG_26" ROOT_DIR="$ROOT_26" MAP_DIR="$MAP_26"
+    export CONFIG="$CONFIG_26" ROOT_DIR="$ROOT_26"
     export BAND_VARIANT=26
     ;;
   1)
-    export CONFIG="$CONFIG_24" ROOT_DIR="$ROOT_24" MAP_DIR="$MAP_24"
+    export CONFIG="$CONFIG_24" ROOT_DIR="$ROOT_24"
     export BAND_VARIANT=24
     ;;
   *)
@@ -40,6 +38,6 @@ esac
 
 export REPO_DIR
 echo "[cosmos-rws15-array] stage=${STAGE:-n5k} task=$TASK band_variant=$BAND_VARIANT"
-echo "[cosmos-rws15-array] config=$CONFIG root=$ROOT_DIR map=$MAP_DIR"
+echo "[cosmos-rws15-array] config=$CONFIG root=$ROOT_DIR objective=reweighted_wake_sleep k=8"
 
 exec "$REPO_DIR/scripts/popcosmos_native15d_rws_h100.slurm"

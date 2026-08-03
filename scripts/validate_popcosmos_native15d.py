@@ -126,6 +126,8 @@ def main() -> None:
         raise ValueError("Native transfer requires a Student-t2 likelihood")
     if amortized["objective"].get("mode") != "reweighted_wake_sleep":
         raise ValueError("Native transfer requires the RWS objective")
+    if int(amortized["objective"].get("wake", {}).get("n_particles", 0)) != 8:
+        raise ValueError("Native transfer requires the RWS k=8 wake objective")
 
     band_names = tuple(band["name"] for band in config["bands"])
     subset = (config.get("dataset", {}) or {}).get("band_subset", "cosmos26")
@@ -233,7 +235,7 @@ def main() -> None:
     print(
         "[cosmos-native15d-contract] "
         f"rows={n_full} bands={len(expected_names)} subset={subset} "
-        "latent=15 target=z_obs "
+        "latent=15 target=z_obs objective=RWS-k8 "
         f"run={'checked' if args.run_dir else 'not-requested'}"
     )
 

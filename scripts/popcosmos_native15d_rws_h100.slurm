@@ -21,7 +21,6 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 DATA_DIR="${DATA_DIR:-Data/cosmos2020/prepared}"
 ROOT_DIR="${ROOT_DIR:?Set ROOT_DIR to an isolated native15d run root}"
-MAP_DIR="${MAP_DIR:-}"
 NORMALIZATION_CHECKPOINT="${NORMALIZATION_CHECKPOINT:-outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx}"
 
 case "$STAGE" in
@@ -92,23 +91,7 @@ test ! -e "$TRAIN_DIR" || {
 }
 
 INITIAL_ARGS=()
-if [[ "$STAGE" == "n5k" ]]; then
-  test -n "$MAP_DIR" || {
-    echo "[cosmos-rws15][error] n5k requires MAP_DIR"
-    exit 2
-  }
-  test -e "$MAP_DIR/DONE"
-  python - "$MAP_DIR/map_summary.json" <<'PY'
-import json
-import sys
-
-summary = json.load(open(sys.argv[1], encoding="utf-8"))
-if summary.get("checkpoint") is not None or summary.get("uses_learned_prior"):
-    raise SystemExit("[cosmos-rws15][error] MAP gate was not likelihood-only")
-if summary.get("photometric_fit", {}).get("n_parameters") != 15:
-    raise SystemExit("[cosmos-rws15][error] MAP gate was not native 15D")
-PY
-else
+if [[ "$STAGE" != "n5k" ]]; then
   test -e "$PREVIOUS/DONE"
   test -s "$PREVIOUS/train/checkpoints/best.eqx"
   INITIAL_ARGS=(--initial-checkpoint "$PREVIOUS/train/checkpoints/best.eqx")
@@ -158,6 +141,12 @@ if len(config["bands"]) != expected_band_counts.get(band_subset):
 print("[cosmos-rws15] band_subset:", band_subset, "n_bands:", len(config["bands"]))
 if amortized["likelihood"]["type"] != "student_t":
     raise SystemExit("[cosmos-rws15][error] Student-t likelihood is not active")
+if amortized["objective"].get("mode") != "reweighted_wake_sleep":
+    raise SystemExit("[cosmos-rws15][error] RWS objective is not active")
+wake = amortized["objective"].get("wake", {})
+if int(wake.get("n_particles", 0)) != 8:
+    raise SystemExit("[cosmos-rws15][error] expected RWS k=8")
+print("[cosmos-rws15] objective=reweighted_wake_sleep wake_particles=8")
 PY
 
 echo "[cosmos-rws15] stage=$STAGE dataset=$DATASET epochs=$EPOCHS"
