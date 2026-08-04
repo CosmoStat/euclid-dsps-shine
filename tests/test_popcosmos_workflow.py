@@ -68,6 +68,33 @@ def test_native_15d_band_ablation_and_h100_array_contract() -> None:
     assert "objective=reweighted_wake_sleep k=8" in array_job
 
 
+def test_native_15d_full_continuation_uses_four_h100s_and_fixed_cohorts() -> None:
+    worker = (
+        ROOT / "scripts/popcosmos_native15d_continue_full_h100.slurm"
+    ).read_text()
+    submit = (
+        ROOT / "scripts/submit_popcosmos_native15d_continuation.sh"
+    ).read_text()
+
+    assert "#SBATCH --gres=gpu:4" in worker
+    assert 'EXPECTED_GPUS="${EXPECTED_GPUS:-4}"' in worker
+    assert 'START_EPOCH="${START_EPOCH:-33}"' in worker
+    assert 'END_EPOCH="${END_EPOCH:-120}"' in worker
+    assert '--initial-checkpoint "$SOURCE_CHECKPOINT"' in worker
+    assert '--start-epoch "$START_EPOCH"' in worker
+    assert '--train-indices-file "$SOURCE_TRAIN_INDICES"' in worker
+    assert '--validation-indices-file "$SOURCE_VALIDATION_INDICES"' in worker
+    assert "--data-parallel pmap" in worker
+    assert '--row-indices-file "$EVAL_INDICES"' in worker
+    assert "held-out inference cohort: unchanged" in worker
+    assert "feature statistics changed during continuation" in worker
+    assert 'optimizer_state_resumed") is not False' in worker
+    assert '--array="0-1%${ARRAY_CONCURRENCY}"' in submit
+    assert "--gres=gpu:4" in submit
+    assert "END_EPOCH must be at least 100" in submit
+    assert "shared train/validation/evaluation cohorts: PASS" in submit
+
+
 def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
     rws = (ROOT / "scripts/cosmos2020_rws_h100.slurm").read_text()
     submit = (ROOT / "scripts/submit_cosmos2020_reproduction.sh").read_text()
