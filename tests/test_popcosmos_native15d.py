@@ -342,6 +342,18 @@ def test_native_timing_wrapper_requests_one_h100_per_variant() -> None:
     assert "LIMIT=\"${LIMIT:-128}\"" in submit
 
 
+def test_publication_checks_chain_comparison_audit_and_timing() -> None:
+    script = (
+        ROOT / "scripts/run_popcosmos_native15d_publication_checks.sh"
+    ).read_text()
+    assert "compare_popcosmos_redshift_only.py" in script
+    assert "audit_popcosmos_spectroscopic_cohort.py" in script
+    assert "submit_popcosmos_native15d_timing.sh" in script
+    assert "--expected-specz 1395" in script
+    assert "--expected-published 12014" in script
+    assert "sbatch" not in script
+
+
 def test_native_scaling_summary_collects_only_redshift_metrics(tmp_path) -> None:
     summarizer = _load_scaling_summarizer()
     for stage, size in summarizer.STAGES:
