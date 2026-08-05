@@ -11,6 +11,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+EXPECTED_DASHBOARD_RUNS = {
+    ("cosmos_public_specz", "rws26"),
+    ("cosmos_public_specz", "rws24"),
+    ("feniks_synthetic", "rws_k8_t2_seed2"),
+    ("feniks_synthetic", "rws_k8_t2_seed3"),
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -123,7 +130,49 @@ def _read_context(
     return merged
 
 
-def _write_plot(frame: pd.DataFrame, path: Path) -> None:
+def _read_tarp_coverage(path: Path, *, context: str) -> pd.DataFrame:
+    coverage_file = _resolve_table(path, "tarp_coverage.csv")
+    coverage = pd.read_csv(coverage_file)
+    coverage = coverage.loc[coverage["group"].eq("marginal_z_obs")].copy()
+    if coverage.empty:
+        raise ValueError(f"Missing marginal_z_obs TARP coverage for {context!r}")
+    coverage.insert(0, "context", context)
+    return coverage
+
+
+def _validate_dashboard_contract(
+    frame: pd.DataFrame,
+    tarp_coverage: pd.DataFrame,
+) -> None:
+    calibrated = frame.loc[
+        frame["mira_score"].notna() & frame["tarp_atc"].notna(),
+        ["context", "model"],
+    ]
+    observed = set(calibrated.itertuples(index=False, name=None))
+    if observed != EXPECTED_DASHBOARD_RUNS:
+        raise ValueError(
+            "Dashboard run contract mismatch: "
+            f"expected={sorted(EXPECTED_DASHBOARD_RUNS)!r}, observed={sorted(observed)!r}"
+        )
+    coverage_runs = set(
+        tarp_coverage.loc[:, ["context", "model"]].itertuples(index=False, name=None)
+    )
+    if coverage_runs != EXPECTED_DASHBOARD_RUNS:
+        raise ValueError(
+            "TARP coverage run contract mismatch: "
+            f"expected={sorted(EXPECTED_DASHBOARD_RUNS)!r}, "
+            f"observed={sorted(coverage_runs)!r}"
+        )
+    if tarp_coverage.duplicated(["context", "model", "alpha"]).any():
+        raise ValueError("Duplicate TARP alpha rows in dashboard inputs")
+
+
+def _write_plot(
+    frame: pd.DataFrame,
+    path: Path,
+    *,
+    tarp_coverage: pd.DataFrame | None = None,
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -142,57 +191,221 @@ def _write_plot(frame: pd.DataFrame, path: Path) -> None:
     calibrated["_context_order"] = calibrated["context"].map(context_order)
     calibrated["_model_order"] = calibrated["model"].map(model_order)
     calibrated = calibrated.sort_values(["_context_order", "_model_order"])
-    labels = [
-        f"{context.replace('_', ' ')}\n{model}"
-        for context, model in zip(
-            calibrated["context"], calibrated["model"], strict=True
+    plot_style = {
+        "rws26": {
+            "label": "COSMOS RWS\n26 bands",
+            "legend": "COSMOS RWS, 26 bands",
+            "color": "#0072B2",
+            "linestyle": "-",
+            "marker": "o",
+        },
+        "rws24": {
+            "label": "COSMOS RWS\n24 bands (no IRAC)",
+            "legend": "COSMOS RWS, 24 bands (no IRAC)",
+            "color": "#009E73",
+            "linestyle": "-",
+            "marker": "s",
+        },
+        "rws_k8_t2_seed2": {
+            "label": "FENIKS RWS\nseed 2",
+            "legend": "FENIKS RWS, seed 2",
+            "color": "#D55E00",
+            "linestyle": "--",
+            "marker": "D",
+        },
+        "rws_k8_t2_seed3": {
+            "label": "FENIKS RWS\nseed 3",
+            "legend": "FENIKS RWS, seed 3",
+            "color": "#CC79A7",
+            "linestyle": "--",
+            "marker": "^",
+        },
+    }
+    default_colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    models = calibrated["model"].tolist()
+    for index, model in enumerate(models):
+        plot_style.setdefault(
+            model,
+            {
+                "label": model,
+                "legend": model,
+                "color": default_colors[index % len(default_colors)],
+                "linestyle": "-",
+                "marker": "o",
+            },
         )
+    labels = [
+        f"{plot_style[row.model]['label']}\nN={int(row.num_objects):,}"
+        for row in calibrated.itertuples(index=False)
     ]
     x = np.arange(len(calibrated), dtype=float)
-    figure, axes = plt.subplots(1, 2, figsize=(14, 5.5), constrained_layout=False)
-    figure.subplots_adjust(left=0.08, right=0.98, top=0.88, bottom=0.25, wspace=0.25)
-
-    mira_center = calibrated["mira_bootstrap_mean"].to_numpy(float)
-    axes[0].errorbar(
-        x,
-        mira_center,
-        yerr=np.vstack(
-            [
-                mira_center - calibrated["mira_bootstrap_q025"].to_numpy(float),
-                calibrated["mira_bootstrap_q975"].to_numpy(float) - mira_center,
-            ]
-        ),
-        fmt="o",
-        capsize=4,
+    if len(x) > 2:
+        x[2:] += 0.45
+    figure, axes = plt.subplots(
+        1, 3, figsize=(18, 6.2), gridspec_kw={"width_ratios": [1.05, 1.25, 1.05]}
     )
-    axes[0].axhline(2.0 / 3.0, color="#202020", linestyle="--", linewidth=1.1)
-    axes[0].set_title("MIRA redshift calibration")
+    figure.subplots_adjust(
+        left=0.055, right=0.985, top=0.83, bottom=0.25, wspace=0.28
+    )
+
+    theoretical_sigma = np.sqrt(
+        (1.0 / 18.0) / calibrated["num_objects"].to_numpy(float)
+    )
+    for xi, sigma in zip(x, theoretical_sigma, strict=True):
+        axes[0].fill_between(
+            [xi - 0.24, xi + 0.24],
+            [2.0 / 3.0 - 1.96 * sigma] * 2,
+            [2.0 / 3.0 + 1.96 * sigma] * 2,
+            color="#B8B8B8",
+            alpha=0.42,
+            linewidth=0,
+            zorder=0,
+        )
+    for index, row in enumerate(calibrated.itertuples(index=False)):
+        style = plot_style[row.model]
+        axes[0].errorbar(
+            x[index],
+            row.mira_score,
+            yerr=np.asarray(
+                [
+                    [row.mira_score - row.mira_bootstrap_q025],
+                    [row.mira_bootstrap_q975 - row.mira_score],
+                ]
+            ),
+            fmt=style["marker"],
+            color=style["color"],
+            markeredgecolor="white",
+            markeredgewidth=0.7,
+            markersize=7,
+            capsize=4,
+            linewidth=1.5,
+            zorder=3,
+        )
+        axes[0].annotate(
+            f"{row.mira_score:.3f}",
+            (x[index], row.mira_score),
+            xytext=(0, 9),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            color=style["color"],
+        )
+    axes[0].axhline(
+        2.0 / 3.0,
+        color="#202020",
+        linestyle=(0, (5, 3)),
+        linewidth=1.2,
+        label="Ideal = 2/3",
+    )
+    axes[0].fill_between(
+        [], [], [], color="#B8B8B8", alpha=0.42, label="Ideal 95% range"
+    )
+    axes[0].set_title("MIRA score")
     axes[0].set_ylabel("MIRA score")
+    axes[0].legend(loc="lower right", frameon=False, fontsize=8.5)
 
-    tarp_center = calibrated["tarp_bootstrap_atc_mean"].to_numpy(float)
-    axes[1].errorbar(
-        x,
-        tarp_center,
-        yerr=np.vstack(
-            [
-                tarp_center - calibrated["tarp_bootstrap_atc_q025"].to_numpy(float),
-                calibrated["tarp_bootstrap_atc_q975"].to_numpy(float) - tarp_center,
-            ]
-        ),
-        fmt="o",
-        capsize=4,
+    axes[1].plot(
+        [0.0, 1.0],
+        [0.0, 1.0],
+        color="#202020",
+        linestyle=(0, (5, 3)),
+        linewidth=1.2,
+        label="Ideal",
+        zorder=1,
     )
-    axes[1].axhline(0.0, color="#202020", linestyle="--", linewidth=1.1)
-    axes[1].set_title("TARP redshift calibration")
-    axes[1].set_ylabel("Area to curve")
+    if tarp_coverage is not None:
+        for model in models:
+            context = calibrated.loc[calibrated["model"].eq(model), "context"].iloc[0]
+            curve = tarp_coverage.loc[
+                tarp_coverage["model"].eq(model)
+                & tarp_coverage["context"].eq(context)
+            ].sort_values("alpha")
+            if curve.empty:
+                raise ValueError(f"Missing TARP coverage curve for {context}/{model}")
+            style = plot_style[model]
+            axes[1].fill_between(
+                curve["alpha"],
+                curve["bootstrap_q025"],
+                curve["bootstrap_q975"],
+                color=style["color"],
+                alpha=0.10,
+                linewidth=0,
+            )
+            axes[1].plot(
+                curve["alpha"],
+                curve["ecp"],
+                color=style["color"],
+                linestyle=style["linestyle"],
+                linewidth=1.7,
+                label=style["legend"],
+            )
+    axes[1].set_xlim(0.0, 1.0)
+    axes[1].set_ylim(0.0, 1.0)
+    axes[1].set_aspect("equal", adjustable="box")
+    axes[1].set_title("TARP coverage")
+    axes[1].set_xlabel("Nominal coverage, alpha")
+    axes[1].set_ylabel("Expected coverage probability")
+    axes[1].legend(loc="lower right", frameon=False, fontsize=8.1)
 
-    for axis in axes:
+    for index, row in enumerate(calibrated.itertuples(index=False)):
+        style = plot_style[row.model]
+        axes[2].errorbar(
+            x[index],
+            row.tarp_atc,
+            yerr=np.asarray(
+                [
+                    [row.tarp_atc - row.tarp_bootstrap_atc_q025],
+                    [row.tarp_bootstrap_atc_q975 - row.tarp_atc],
+                ]
+            ),
+            fmt=style["marker"],
+            color=style["color"],
+            markeredgecolor="white",
+            markeredgewidth=0.7,
+            markersize=7,
+            capsize=4,
+            linewidth=1.5,
+            zorder=3,
+        )
+        axes[2].annotate(
+            f"{row.tarp_atc:+.3f}",
+            (x[index], row.tarp_atc),
+            xytext=(0, 9),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            color=style["color"],
+        )
+    axes[2].axhline(
+        0.0, color="#202020", linestyle=(0, (5, 3)), linewidth=1.2
+    )
+    axes[2].set_title("TARP area to curve")
+    axes[2].set_ylabel("ATC (ideal = 0)")
+
+    for axis in (axes[0], axes[2]):
         axis.set_xticks(x)
-        axis.set_xticklabels(labels, rotation=25, ha="right")
+        axis.set_xticklabels(labels, fontsize=8.5)
+        if len(x) > 2:
+            axis.axvline((x[1] + x[2]) / 2.0, color="#D6D6D6", linewidth=0.8)
         axis.margins(x=0.12)
+    for axis in axes:
         axis.grid(axis="y", color="#e6e6e6", linewidth=0.8)
-    figure.suptitle("Redshift posterior calibration on available truth cohorts")
+        axis.spines[["top", "right"]].set_visible(False)
+    figure.suptitle(
+        "Redshift posterior calibration: COSMOS spectroscopy and FENIKS closure",
+        fontsize=16,
+    )
+    figure.text(
+        0.5,
+        0.055,
+        "Points/curves: measured values; error bars and ribbons: object-bootstrap 95% CI. "
+        "MIRA gray ranges: 2/3 +/- 1.96 sqrt[(1/18)/N]. Cross-cohort comparisons are descriptive.",
+        ha="center",
+        fontsize=9,
+        color="#3F3F3F",
+    )
     figure.savefig(path, dpi=180)
+    figure.savefig(path.with_suffix(".pdf"))
     plt.close(figure)
 
 
@@ -243,7 +456,25 @@ def main() -> None:
     frame["has_dense_posterior_calibration"] = frame["mira_score"].notna()
     frame.to_csv(out / "redshift_calibration_comparison.csv", index=False)
     frame.to_parquet(out / "redshift_calibration_comparison.parquet", index=False)
-    _write_plot(frame, out / "redshift_calibration_comparison.png")
+    tarp_coverage = pd.concat(
+        [
+            _read_tarp_coverage(
+                args.feniks_tarp,
+                context="feniks_synthetic",
+            ),
+            _read_tarp_coverage(
+                args.cosmos_tarp,
+                context="cosmos_public_specz",
+            ),
+        ],
+        ignore_index=True,
+    )
+    _validate_dashboard_contract(frame, tarp_coverage)
+    _write_plot(
+        frame,
+        out / "redshift_calibration_dashboard.png",
+        tarp_coverage=tarp_coverage,
+    )
 
     summary = {
         "status": "complete",
@@ -257,6 +488,20 @@ def main() -> None:
             "Cross-context distances from the ideal are descriptive, not paired model comparisons.",
             "Public Pop-COSMOS quantiles support photo-z metrics but not MIRA/TARP without chains.",
         ],
+        "plot_contract": {
+            "runs": [
+                {"context": context, "model": model}
+                for context, model in sorted(EXPECTED_DASHBOARD_RUNS)
+            ],
+            "parameter": "z_obs",
+            "mira_point": "score",
+            "mira_errorbar": "object-bootstrap 95% interval",
+            "mira_ideal": 2.0 / 3.0,
+            "mira_ideal_variance": "(1/18) / num_objects",
+            "tarp_curve": "expected coverage probability versus alpha",
+            "tarp_errorbar": "object-bootstrap 95% interval for ATC",
+            "tarp_ideal_atc": 0.0,
+        },
     }
     (out / "redshift_calibration_comparison.json").write_text(
         json.dumps(summary, indent=2, allow_nan=False) + "\n",

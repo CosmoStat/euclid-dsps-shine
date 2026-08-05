@@ -147,8 +147,24 @@ def test_cross_cohort_comparator_reads_redshift_rows_and_writes_plot(
     )
     mira_path = tmp_path / "mira_scores.csv"
     tarp_path = tmp_path / "tarp_summary.csv"
+    coverage_path = tmp_path / "tarp_coverage.csv"
     mira.to_csv(mira_path, index=False)
     tarp.to_csv(tarp_path, index=False)
+    coverage = pd.DataFrame(
+        [
+            {
+                "model": model,
+                "group": "marginal_z_obs",
+                "alpha": alpha,
+                "ecp": alpha + offset,
+                "bootstrap_q025": max(0.0, alpha + offset - 0.02),
+                "bootstrap_q975": min(1.0, alpha + offset + 0.02),
+            }
+            for model, offset in [("rws26", 0.01), ("rws24", -0.01)]
+            for alpha in [0.0, 0.5, 1.0]
+        ]
+    )
+    coverage.to_csv(coverage_path, index=False)
 
     frame = comparator._read_context(
         context="cosmos_public_specz",
@@ -159,6 +175,39 @@ def test_cross_cohort_comparator_reads_redshift_rows_and_writes_plot(
     assert frame["model"].tolist() == ["rws26", "rws24"]
     assert frame["mira_score"].tolist() == [0.66, 0.64]
     assert frame["tarp_atc"].tolist() == [0.01, -0.02]
+    coverage = comparator._read_tarp_coverage(
+        coverage_path, context="cosmos_public_specz"
+    )
     plot = tmp_path / "comparison.png"
-    comparator._write_plot(frame, plot)
+    comparator._write_plot(frame, plot, tarp_coverage=coverage)
     assert plot.is_file() and plot.stat().st_size > 0
+    assert plot.with_suffix(".pdf").is_file()
+
+
+def test_dashboard_contract_requires_all_four_redshift_runs() -> None:
+    comparator = _load_comparator()
+    runs = [
+        ("cosmos_public_specz", "rws26"),
+        ("cosmos_public_specz", "rws24"),
+        ("feniks_synthetic", "rws_k8_t2_seed2"),
+        ("feniks_synthetic", "rws_k8_t2_seed3"),
+    ]
+    frame = pd.DataFrame(
+        {
+            "context": [context for context, _ in runs],
+            "model": [model for _, model in runs],
+            "mira_score": [0.63, 0.62, 0.67, 0.66],
+            "tarp_atc": [-0.03, -0.05, 0.01, 0.0],
+        }
+    )
+    coverage = pd.DataFrame(
+        [
+            {"context": context, "model": model, "alpha": alpha}
+            for context, model in runs
+            for alpha in (0.0, 0.5, 1.0)
+        ]
+    )
+    comparator._validate_dashboard_contract(frame, coverage)
+
+    with np.testing.assert_raises_regex(ValueError, "run contract mismatch"):
+        comparator._validate_dashboard_contract(frame.iloc[:-1], coverage)
