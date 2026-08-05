@@ -20,7 +20,7 @@ CONDA_ENV="${CONDA_ENV:-shine}"
 ROOT_BASE="${ROOT_BASE:?Set ROOT_BASE to the completed native15d array root}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_BASE/publication_checks/timing_h100_v1}"
 DATASET="${DATASET:-Data/cosmos2020/prepared/farmer_a24_full.parquet}"
-EVAL_INDICES="${EVAL_INDICES:-Data/cosmos2020/prepared/evaluation_indices_n5000.npy}"
+EVAL_INDICES="${EVAL_INDICES:-}"
 LIMIT="${LIMIT:-128}"
 POSTERIOR_SAMPLES="${POSTERIOR_SAMPLES:-128}"
 DECODER_SAMPLE_CHUNK_SIZE="${DECODER_SAMPLE_CHUNK_SIZE:-1}"
@@ -64,13 +64,42 @@ module load arch/h100
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 
-test -e "$RUN/DONE"
-test -s "$CHECKPOINT"
-test -s "${CHECKPOINT}.json"
-test -s "$FEATURE_STATS"
-test -s "$DATASET"
-test -s "$EVAL_INDICES"
-test ! -e "$OUT"
+if [[ -z "$EVAL_INDICES" ]]; then
+  EVAL_INDICES=$(python - "$RUN/stage_contract.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["evaluation_cohort"]["row_indices"])
+PY
+  )
+fi
+
+require_file() {
+  if [[ ! -s "$1" ]]; then
+    echo "[cosmos-timing][error] missing or empty file: $1" >&2
+    exit 2
+  fi
+}
+
+if [[ ! -e "$RUN/DONE" ]]; then
+  echo "[cosmos-timing][error] missing completion marker: $RUN/DONE" >&2
+  exit 2
+fi
+require_file "$RUN/stage_contract.json"
+require_file "$CHECKPOINT"
+require_file "${CHECKPOINT}.json"
+require_file "$FEATURE_STATS"
+require_file "$DATASET"
+require_file "$EVAL_INDICES"
+if [[ -e "$OUT" ]]; then
+  echo "[cosmos-timing][error] refusing to overwrite: $OUT" >&2
+  exit 2
+fi
+
+echo "[cosmos-timing] variant=$VARIANT"
+echo "[cosmos-timing] evaluation_indices=$EVAL_INDICES"
+echo "[cosmos-timing] output=$OUT"
 
 python scripts/benchmark_popcosmos_native15d_inference.py \
   --config "$CONFIG" \

@@ -338,6 +338,9 @@ def test_native_timing_wrapper_requests_one_h100_per_variant() -> None:
     assert "#SBATCH --gres=gpu:1" in wrapper
     assert "--posterior-samples \"$POSTERIOR_SAMPLES\"" in wrapper
     assert "--require-gpu" in wrapper
+    assert 'json.load(stream)["evaluation_cohort"]["row_indices"]' in wrapper
+    assert "missing or empty file" in wrapper
+    assert "Data/cosmos2020/prepared/evaluation_indices_n5000.npy" not in wrapper
     assert "--array=0-1%2" in submit
     assert "LIMIT=\"${LIMIT:-128}\"" in submit
 
