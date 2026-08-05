@@ -239,13 +239,14 @@ def test_redshift_only_comparator_uses_exact_ids_and_paired_bootstrap(
 
     paired = comparator.build_paired_table(rws26, rws24, popcosmos)
     specz = paired.loc[paired["has_public_specz"]].reset_index(drop=True)
-    differences, intervals = comparator.paired_bootstrap(
+    differences, intervals, method_intervals = comparator.paired_bootstrap(
         specz, n_resamples=50, seed=7
     )
     assert paired["object_id"].tolist() == object_ids.tolist()
     assert len(specz) == 3
     assert len(differences) == 3 * len(comparator.METRIC_NAMES)
     assert "rws26_minus_rws24" in intervals
+    assert "nmad" in method_intervals["popcosmos"]
     assert comparator.redshift_metrics(specz, "popcosmos")["rmse"] == 0.0
 
 

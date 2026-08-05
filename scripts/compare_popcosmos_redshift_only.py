@@ -186,7 +186,11 @@ def paired_bootstrap(
     *,
     n_resamples: int,
     seed: int,
-) -> tuple[pd.DataFrame, dict[str, dict[str, dict[str, float]]]]:
+) -> tuple[
+    pd.DataFrame,
+    dict[str, dict[str, dict[str, float]]],
+    dict[str, dict[str, dict[str, float]]],
+]:
     """Return paired method differences using shared object resamples."""
     if n_resamples <= 0:
         raise ValueError("n_resamples must be positive")
@@ -203,6 +207,16 @@ def paired_bootstrap(
             for metric in METRIC_NAMES:
                 method_draws[method][metric][draw] = float(metrics[metric])
 
+    method_intervals = {
+        method: {
+            metric: {
+                "ci95_low": float(np.quantile(values, 0.025)),
+                "ci95_high": float(np.quantile(values, 0.975)),
+            }
+            for metric, values in metric_draws.items()
+        }
+        for method, metric_draws in method_draws.items()
+    }
     rows: list[dict[str, float | str | int]] = []
     intervals: dict[str, dict[str, dict[str, float]]] = {}
     for left, right in PAIRWISE_COMPARISONS:
@@ -231,7 +245,141 @@ def paired_bootstrap(
                     "n_objects": int(len(frame)),
                 }
             )
-    return pd.DataFrame(rows), intervals
+    return pd.DataFrame(rows), intervals, method_intervals
+
+
+def write_comparison_figure(
+    frame: pd.DataFrame,
+    metrics: dict[str, dict[str, float | int]],
+    method_intervals: dict[str, dict[str, dict[str, float]]],
+    out: Path,
+) -> None:
+    """Write the primary same-cohort redshift comparison figure."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+
+    methods = ("rws26", "rws24", "popcosmos")
+    labels = {
+        "rws26": "RWS, 26 bands",
+        "rws24": "RWS, 24 bands",
+        "popcosmos": "Pop-COSMOS",
+    }
+    colors = {
+        "rws26": "#0072B2",
+        "rws24": "#D55E00",
+        "popcosmos": "#333333",
+    }
+    truth = frame["redshift_true"].to_numpy(float)
+    finite_truth = truth[np.isfinite(truth)]
+    upper = max(4.0, float(np.quantile(finite_truth, 0.995)))
+    upper = min(5.5, np.ceil(upper * 2.0) / 2.0)
+
+    fig = plt.figure(figsize=(13.2, 7.6), constrained_layout=True)
+    grid = fig.add_gridspec(2, 3, height_ratios=(1.05, 0.8))
+    for index, method in enumerate(methods):
+        ax = fig.add_subplot(grid[0, index])
+        prediction = frame[f"{method}_median"].to_numpy(float)
+        valid = np.isfinite(truth) & np.isfinite(prediction)
+        ax.scatter(
+            truth[valid],
+            prediction[valid],
+            s=8,
+            alpha=0.28,
+            color=colors[method],
+            edgecolors="none",
+            rasterized=True,
+        )
+        ax.plot([0.0, upper], [0.0, upper], color="black", lw=1.0, ls="--")
+        ax.set_xlim(0.0, upper)
+        ax.set_ylim(0.0, upper)
+        ax.set_aspect("equal", adjustable="box")
+        ax.set_title(labels[method], fontsize=12)
+        ax.set_xlabel(r"$z_{\rm spec}$")
+        if index == 0:
+            ax.set_ylabel(r"posterior median $z$")
+        values = metrics[method]
+        ax.text(
+            0.04,
+            0.96,
+            (
+                f"NMAD = {values['nmad']:.3f}\n"
+                f"outliers = {100.0 * values['outlier_fraction_0p15']:.1f}%"
+            ),
+            transform=ax.transAxes,
+            va="top",
+            fontsize=9,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.82},
+        )
+        ax.grid(alpha=0.18)
+
+    error_ax = fig.add_subplot(grid[1, :2])
+    bins = np.linspace(-0.35, 0.35, 100)
+    for method in methods:
+        prediction = frame[f"{method}_median"].to_numpy(float)
+        dz = (prediction - truth) / (1.0 + truth)
+        error_ax.hist(
+            dz[np.isfinite(dz)],
+            bins=bins,
+            density=True,
+            histtype="step",
+            lw=1.8,
+            color=colors[method],
+            label=labels[method],
+        )
+    error_ax.axvline(0.0, color="black", lw=1.0)
+    error_ax.axvline(-0.15, color="0.5", lw=0.9, ls="--")
+    error_ax.axvline(0.15, color="0.5", lw=0.9, ls="--")
+    error_ax.set_xlabel(r"$(z_{\rm med}-z_{\rm spec})/(1+z_{\rm spec})$")
+    error_ax.set_ylabel("density")
+    error_ax.set_yscale("log")
+    error_ax.set_ylim(bottom=0.08)
+    error_ax.legend(frameon=False, ncol=3, fontsize=9)
+    error_ax.grid(alpha=0.18)
+
+    metric_ax = fig.add_subplot(grid[1, 2])
+    displayed_metrics = (
+        ("nmad", "NMAD"),
+        ("outlier_fraction_0p15", "outlier fraction"),
+        ("rmse", "RMSE"),
+    )
+    offsets = {"rws26": -0.18, "rws24": 0.0, "popcosmos": 0.18}
+    for method in methods:
+        for row, (metric, _label) in enumerate(displayed_metrics):
+            value = float(metrics[method][metric])
+            interval = method_intervals[method][metric]
+            metric_ax.errorbar(
+                value,
+                row + offsets[method],
+                xerr=np.asarray(
+                    [
+                        [value - interval["ci95_low"]],
+                        [interval["ci95_high"] - value],
+                    ]
+                ),
+                fmt="o",
+                ms=5,
+                capsize=2,
+                color=colors[method],
+                label=labels[method] if row == 0 else None,
+            )
+    metric_ax.set_yticks(
+        np.arange(len(displayed_metrics)),
+        [label for _metric, label in displayed_metrics],
+    )
+    metric_ax.invert_yaxis()
+    metric_ax.set_xlabel("metric value with paired-bootstrap 95% CI")
+    metric_ax.grid(axis="x", alpha=0.18)
+    metric_ax.legend(frameon=False, fontsize=8, loc="upper right")
+
+    fig.suptitle(
+        f"COSMOS2020 matched redshift benchmark (N_spec = {len(frame):,})",
+        fontsize=14,
+    )
+    fig.savefig(out / "redshift_method_comparison.png", dpi=220)
+    fig.savefig(out / "redshift_method_comparison.pdf")
+    plt.close(fig)
 
 
 def main() -> None:
@@ -258,7 +406,7 @@ def main() -> None:
     metrics = {
         method: redshift_metrics(spec, method) for method in METHOD_COLUMNS
     }
-    differences, intervals = paired_bootstrap(
+    differences, intervals, method_intervals = paired_bootstrap(
         spec,
         n_resamples=args.bootstrap,
         seed=args.bootstrap_seed,
@@ -267,9 +415,14 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     paired.to_parquet(out / "paired_evaluation_objects.parquet", index=False)
     spec.to_parquet(out / "paired_public_specz_objects.parquet", index=False)
-    pd.DataFrame(
-        [{"method": method, **values} for method, values in metrics.items()]
-    ).to_csv(out / "redshift_method_metrics.csv", index=False)
+    metric_rows = []
+    for method, values in metrics.items():
+        row = {"method": method, **values}
+        for metric, interval in method_intervals[method].items():
+            row[f"{metric}_ci95_low"] = interval["ci95_low"]
+            row[f"{metric}_ci95_high"] = interval["ci95_high"]
+        metric_rows.append(row)
+    pd.DataFrame(metric_rows).to_csv(out / "redshift_method_metrics.csv", index=False)
     differences.to_csv(out / "redshift_paired_bootstrap_differences.csv", index=False)
 
     provenance = {
@@ -307,6 +460,7 @@ def main() -> None:
     summary = {
         **provenance,
         "metrics": metrics,
+        "method_bootstrap_intervals": method_intervals,
         "paired_bootstrap_differences": intervals,
         "scope": (
             "All methods are evaluated on the same reproducible public-specz "
@@ -317,6 +471,7 @@ def main() -> None:
     (out / "comparison_summary.json").write_text(
         json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8"
     )
+    write_comparison_figure(spec, metrics, method_intervals, out)
     (out / "DONE").touch()
     print(
         "[cosmos-redshift-comparison] "
