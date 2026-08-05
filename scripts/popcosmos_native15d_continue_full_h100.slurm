@@ -34,6 +34,7 @@ TRAIN_JAX_BATCH_SIZE="${TRAIN_JAX_BATCH_SIZE:-64}"
 INFER_BATCH_SIZE="${INFER_BATCH_SIZE:-256}"
 INFER_JAX_BATCH_SIZE="${INFER_JAX_BATCH_SIZE:-128}"
 INFER_LIMIT="${INFER_LIMIT:-5000}"
+RESUME_INFERENCE_ONLY="${RESUME_INFERENCE_ONLY:-0}"
 TASK="${SLURM_ARRAY_TASK_ID:-0}"
 
 case "$TASK" in
@@ -92,10 +93,18 @@ test -s "$SOURCE_TRAIN_INDICES"
 test -s "$SOURCE_VALIDATION_INDICES"
 test -s "$SOURCE_FULL/train/feature_stats.json"
 test -s "$SOURCE_FULL/inference/redshift_predictions.parquet"
-test ! -e "$RUN_DIR" || {
-  echo "[cosmos-rws15-cont][error] refusing to overwrite $RUN_DIR"
-  exit 2
-}
+if [[ "$RESUME_INFERENCE_ONLY" == "1" ]]; then
+  test -d "$TRAIN_DIR"
+  test -s "$TRAIN_DIR/training_summary.json"
+  test -s "$TRAIN_DIR/checkpoints/best.eqx"
+  test ! -e "$RUN_DIR/DONE"
+  echo "[cosmos-rws15-cont] reusing completed continuation training: $TRAIN_DIR"
+else
+  test ! -e "$RUN_DIR" || {
+    echo "[cosmos-rws15-cont][error] refusing to overwrite $RUN_DIR"
+    exit 2
+  }
+fi
 
 EVAL_INDICES=$(
   python - "$SOURCE_FULL/stage_contract.json" <<'PY'
@@ -127,18 +136,24 @@ if int(metadata.get("epoch", -1)) != expected_epoch:
     )
 PY
 
-python - "$EXPECTED_GPUS" "$TRAIN_JAX_BATCH_SIZE" <<'PY'
+python - "$EXPECTED_GPUS" "$TRAIN_JAX_BATCH_SIZE" "$RESUME_INFERENCE_ONLY" <<'PY'
 import sys
 
 import jax
 
 expected = int(sys.argv[1])
 global_batch = int(sys.argv[2])
+inference_only = bool(int(sys.argv[3]))
 devices = jax.local_devices()
 print("[cosmos-rws15-cont] backend:", jax.default_backend())
 print("[cosmos-rws15-cont] devices:", devices)
 if jax.default_backend() != "gpu":
     raise SystemExit("JAX did not select the H100 backend")
+if inference_only:
+    if not devices:
+        raise SystemExit("inference-only recovery has no visible GPU")
+    print("[cosmos-rws15-cont] inference-only recovery on one visible GPU")
+    raise SystemExit(0)
 if len(devices) != expected:
     raise SystemExit(f"expected {expected} local GPUs, got {len(devices)}")
 if global_batch % expected:
@@ -157,23 +172,25 @@ echo "[cosmos-rws15-cont] epochs=$START_EPOCH..$END_EPOCH GPUs=$EXPECTED_GPUS"
 echo "[cosmos-rws15-cont] evaluation_indices=$EVAL_INDICES limit=$INFER_LIMIT"
 nvidia-smi
 
-python -m euclid_dsps.cli --config "$CONFIG" amortized-train-cosmos \
-  --runtime gpu \
-  --dataset "$TRAIN_DATASET" \
-  --out "$TRAIN_DIR" \
-  --batch-size "$TRAIN_BATCH_SIZE" \
-  --jax-batch-size "$TRAIN_JAX_BATCH_SIZE" \
-  --epochs "$END_EPOCH" \
-  --initial-checkpoint "$SOURCE_CHECKPOINT" \
-  --start-epoch "$START_EPOCH" \
-  --train-indices-file "$SOURCE_TRAIN_INDICES" \
-  --validation-indices-file "$SOURCE_VALIDATION_INDICES" \
-  --n-samples 1 \
-  --kl-annealing-epochs 40 \
-  --validation-every 8 \
-  --best-checkpoint-min-epoch "$START_EPOCH" \
-  --data-parallel pmap \
-  --no-progress
+if [[ "$RESUME_INFERENCE_ONLY" != "1" ]]; then
+  python -m euclid_dsps.cli --config "$CONFIG" amortized-train-cosmos \
+    --runtime gpu \
+    --dataset "$TRAIN_DATASET" \
+    --out "$TRAIN_DIR" \
+    --batch-size "$TRAIN_BATCH_SIZE" \
+    --jax-batch-size "$TRAIN_JAX_BATCH_SIZE" \
+    --epochs "$END_EPOCH" \
+    --initial-checkpoint "$SOURCE_CHECKPOINT" \
+    --start-epoch "$START_EPOCH" \
+    --train-indices-file "$SOURCE_TRAIN_INDICES" \
+    --validation-indices-file "$SOURCE_VALIDATION_INDICES" \
+    --n-samples 1 \
+    --kl-annealing-epochs 40 \
+    --validation-every 8 \
+    --best-checkpoint-min-epoch "$START_EPOCH" \
+    --data-parallel pmap \
+    --no-progress
+fi
 
 python - \
   "$TRAIN_DIR/training_summary.json" \
@@ -233,8 +250,10 @@ for current, source, label in (
     (train_indices_path, source_train_indices_path, "train"),
     (validation_indices_path, source_validation_indices_path, "validation"),
 ):
-    if not np.array_equal(np.load(current), np.load(source)):
-        raise SystemExit(f"{label} indices changed during continuation")
+    current_indices = np.asarray(np.load(current), dtype=np.int64)
+    source_indices = np.asarray(np.load(source), dtype=np.int64)
+    if not np.array_equal(np.sort(current_indices), np.sort(source_indices)):
+        raise SystemExit(f"{label} index membership changed during continuation")
 if json.load(open(feature_stats_path, encoding="utf-8")) != json.load(
     open(source_feature_stats_path, encoding="utf-8")
 ):

@@ -19,6 +19,7 @@ INFER_BATCH_SIZE="${INFER_BATCH_SIZE:-256}"
 INFER_JAX_BATCH_SIZE="${INFER_JAX_BATCH_SIZE:-128}"
 WALLTIME="${WALLTIME:-15:00:00}"
 ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-2}"
+RESUME_INFERENCE_ONLY="${RESUME_INFERENCE_ONLY:-0}"
 LOG_DIR="${LOG_DIR:-outputs/logs}"
 
 case "$OUTPUT_STAGE" in
@@ -64,10 +65,16 @@ for variant in bands26 bands24_no_irac; do
   test -s "$source_full/train/feature_stats.json"
   test -s "$source_full/inference/redshift_predictions.parquet"
   test -s "$source_full/stage_contract.json"
-  test ! -e "$output" || {
-    echo "[cosmos-rws15-cont-submit][error] output already exists: $output"
-    exit 2
-  }
+  if [[ "$RESUME_INFERENCE_ONLY" == "1" ]]; then
+    test -s "$output/train/training_summary.json"
+    test -s "$output/train/checkpoints/best.eqx"
+    test ! -e "$output/DONE"
+  else
+    test ! -e "$output" || {
+      echo "[cosmos-rws15-cont-submit][error] output already exists: $output"
+      exit 2
+    }
+  fi
   evaluation_file=$(
     python - "$source_full/stage_contract.json" <<'PY'
 import json
@@ -108,14 +115,22 @@ python scripts/validate_popcosmos_native15d.py \
   --data-dir Data/cosmos2020/prepared \
   --asset-dir Data/cosmos2020/assets
 
+if [[ "$RESUME_INFERENCE_ONLY" == "1" ]]; then
+  GRES="gpu:1"
+  CPUS_PER_TASK=24
+else
+  GRES="gpu:4"
+  CPUS_PER_TASK=96
+fi
+
 raw=$(sbatch --parsable \
   --array="0-1%${ARRAY_CONCURRENCY}" \
   --nodes=1 \
   --ntasks=1 \
-  --gres=gpu:4 \
-  --cpus-per-task=96 \
+  --gres="$GRES" \
+  --cpus-per-task="$CPUS_PER_TASK" \
   --time="$WALLTIME" \
-  --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",SOURCE_ROOT_BASE="$SOURCE_ROOT_BASE",OUTPUT_ROOT_BASE="$OUTPUT_ROOT_BASE",OUTPUT_STAGE="$OUTPUT_STAGE",CONFIG_26="$CONFIG_26",CONFIG_24="$CONFIG_24",START_EPOCH="$START_EPOCH",END_EPOCH="$END_EPOCH",EXPECTED_SOURCE_EPOCH="$EXPECTED_SOURCE_EPOCH",EXPECTED_GPUS="$EXPECTED_GPUS",TRAIN_BATCH_SIZE="$TRAIN_BATCH_SIZE",TRAIN_JAX_BATCH_SIZE="$TRAIN_JAX_BATCH_SIZE",INFER_BATCH_SIZE="$INFER_BATCH_SIZE",INFER_JAX_BATCH_SIZE="$INFER_JAX_BATCH_SIZE" \
+  --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",SOURCE_ROOT_BASE="$SOURCE_ROOT_BASE",OUTPUT_ROOT_BASE="$OUTPUT_ROOT_BASE",OUTPUT_STAGE="$OUTPUT_STAGE",CONFIG_26="$CONFIG_26",CONFIG_24="$CONFIG_24",START_EPOCH="$START_EPOCH",END_EPOCH="$END_EPOCH",EXPECTED_SOURCE_EPOCH="$EXPECTED_SOURCE_EPOCH",EXPECTED_GPUS="$EXPECTED_GPUS",TRAIN_BATCH_SIZE="$TRAIN_BATCH_SIZE",TRAIN_JAX_BATCH_SIZE="$TRAIN_JAX_BATCH_SIZE",INFER_BATCH_SIZE="$INFER_BATCH_SIZE",INFER_JAX_BATCH_SIZE="$INFER_JAX_BATCH_SIZE",RESUME_INFERENCE_ONLY="$RESUME_INFERENCE_ONLY" \
   scripts/popcosmos_native15d_continue_full_h100.slurm)
 job="${raw%%;*}"
 
@@ -131,12 +146,13 @@ latest_env="$LOG_DIR/popcosmos_native15d_continuation_latest.env"
   echo "h100_per_model=$EXPECTED_GPUS"
   echo "global_jax_batch=$TRAIN_JAX_BATCH_SIZE"
   echo "per_device_batch=$((TRAIN_JAX_BATCH_SIZE / EXPECTED_GPUS))"
+  echo "resume_inference_only=$RESUME_INFERENCE_ONLY"
   echo "submission_log=$submission_log"
 } | tee "$submission_log"
 
-printf 'export CONTINUATION_JOB=%q\nexport SOURCE_ROOT_BASE=%q\nexport OUTPUT_ROOT_BASE=%q\nexport OUTPUT_STAGE=%q\nexport START_EPOCH=%q\nexport END_EPOCH=%q\nexport JOB_IDS=%q\nexport SUBMISSION_LOG=%q\n' \
+printf 'export CONTINUATION_JOB=%q\nexport SOURCE_ROOT_BASE=%q\nexport OUTPUT_ROOT_BASE=%q\nexport OUTPUT_STAGE=%q\nexport START_EPOCH=%q\nexport END_EPOCH=%q\nexport RESUME_INFERENCE_ONLY=%q\nexport JOB_IDS=%q\nexport SUBMISSION_LOG=%q\n' \
   "$job" "$SOURCE_ROOT_BASE" "$OUTPUT_ROOT_BASE" "$OUTPUT_STAGE" \
-  "$START_EPOCH" "$END_EPOCH" "$job" "$submission_log" \
+  "$START_EPOCH" "$END_EPOCH" "$RESUME_INFERENCE_ONLY" "$job" "$submission_log" \
   > "$latest_env"
 
 echo "monitor: squeue -r -j $job -o '%.18i %.10T %.20j %.12R'"

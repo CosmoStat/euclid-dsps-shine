@@ -88,11 +88,16 @@ def test_native_15d_full_continuation_uses_four_h100s_and_fixed_cohorts() -> Non
     assert '--row-indices-file "$EVAL_INDICES"' in worker
     assert "held-out inference cohort: unchanged" in worker
     assert "feature statistics changed during continuation" in worker
+    assert "reusing completed continuation training" in worker
+    assert "np.sort(current_indices)" in worker
     assert 'optimizer_state_resumed") is not False' in worker
     assert '--array="0-1%${ARRAY_CONCURRENCY}"' in submit
-    assert "--gres=gpu:4" in submit
+    assert 'GRES="gpu:4"' in submit
+    assert '--gres="$GRES"' in submit
     assert "END_EPOCH must be at least 100" in submit
     assert "shared train/validation/evaluation cohorts: PASS" in submit
+    assert 'GRES="gpu:1"' in submit
+    assert 'RESUME_INFERENCE_ONLY="${RESUME_INFERENCE_ONLY:-0}"' in submit
 
 
 def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
