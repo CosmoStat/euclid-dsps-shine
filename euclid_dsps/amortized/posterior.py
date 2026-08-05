@@ -27,6 +27,16 @@ class PosteriorSample(NamedTuple):
     residual_logdet: jnp.ndarray
 
 
+class PosteriorEncoderState(NamedTuple):
+    """Encoder outputs sufficient for posterior generation without reevaluation."""
+
+    mean: jnp.ndarray
+    log_std: jnp.ndarray
+    mixture_logits: jnp.ndarray | None
+    mixture_means: jnp.ndarray | None
+    mixture_log_stds: jnp.ndarray | None
+
+
 class PriorTransportGaussianEncoder(eqx.Module):
     """Diagonal Gaussian in the frozen prior's standard-normal coordinates."""
 
@@ -255,7 +265,54 @@ def sample_posterior(
     base_temperature: float = 1.0,
 ) -> PosteriorSample:
     """Sample any configured posterior and return exact densities in x-space."""
+    state = posterior_encoder_state(model, features)
+    return sample_posterior_from_state(
+        model,
+        key,
+        state,
+        n_samples,
+        sample_strategy=sample_strategy,
+        base_temperature=base_temperature,
+    )
+
+
+def posterior_encoder_state(model, features) -> PosteriorEncoderState:
+    """Evaluate the encoder once and retain everything required for sampling."""
+    if _is_mixture_encoder(model.encoder):
+        logits, component_means, component_log_stds = (
+            model.encoder.base.mixture_parameters(features)
+        )
+        weights = jax.nn.softmax(logits, axis=-1)
+        mean = jnp.sum(weights[..., :, None] * component_means, axis=-2)
+        second = jnp.sum(
+            weights[..., :, None]
+            * (jnp.exp(2.0 * component_log_stds) + component_means**2),
+            axis=-2,
+        )
+        variance = jnp.maximum(second - mean**2, jnp.asarray(1.0e-12))
+        log_std = 0.5 * jnp.log(variance)
+        return PosteriorEncoderState(
+            mean,
+            log_std,
+            logits,
+            component_means,
+            component_log_stds,
+        )
     mean, log_std = model.encoder(features)
+    return PosteriorEncoderState(mean, log_std, None, None, None)
+
+
+def sample_posterior_from_state(
+    model,
+    key,
+    state: PosteriorEncoderState,
+    n_samples: int,
+    *,
+    sample_strategy: str = "random",
+    base_temperature: float = 1.0,
+) -> PosteriorSample:
+    """Generate posterior samples from a precomputed encoder state."""
+    mean, log_std = state.mean, state.log_std
     n_samples = int(n_samples)
     temperature = float(base_temperature)
     if temperature <= 0.0:
@@ -266,9 +323,11 @@ def sample_posterior(
                 "Mixture posterior sampling currently requires random sampling"
             )
         component_key, normal_key = jax.random.split(key)
-        logits, component_means, component_log_stds = (
-            model.encoder.base.mixture_parameters(features)
-        )
+        logits = state.mixture_logits
+        component_means = state.mixture_means
+        component_log_stds = state.mixture_log_stds
+        if logits is None or component_means is None or component_log_stds is None:
+            raise ValueError("Mixture encoder state is missing component parameters")
         component = jax.random.categorical(
             component_key,
             logits,

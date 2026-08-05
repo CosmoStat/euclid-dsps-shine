@@ -18,9 +18,11 @@ if HAS_EQUINOX:
     from euclid_dsps.amortized.flows import RealNVPPrior, StandardNormalPrior
     from euclid_dsps.amortized.posterior import (
         ConditionalFlowEncoder,
+        posterior_encoder_state,
         posterior_log_prob,
         posterior_reference_from_base_mean,
         sample_posterior,
+        sample_posterior_from_state,
     )
     from euclid_dsps.amortized.train import (
         JitLatentSpec,
@@ -73,6 +75,35 @@ def test_conditional_flow_roundtrip_and_log_prob(family: str) -> None:
     assert posterior.logq.shape == (3, 5)
     assert jnp.all(jnp.isfinite(posterior.logq))
     assert jnp.allclose(evaluated, posterior.logq, atol=2.0e-4)
+
+
+def test_precomputed_encoder_state_matches_composed_sampling() -> None:
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        init_scale=0.0,
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.ones((3, 6), dtype=jnp.float32)
+    key = jax.random.PRNGKey(7)
+    composed = sample_posterior(model, key, features, 5)
+    state = posterior_encoder_state(model, features)
+    split = sample_posterior_from_state(model, key, state, 5)
+    for composed_value, split_value in zip(composed, split, strict=True):
+        assert jnp.array_equal(composed_value, split_value)
 
 
 def test_antithetic_gaussian_posterior_pairs_base_noise() -> None:

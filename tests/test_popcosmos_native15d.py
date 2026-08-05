@@ -85,6 +85,15 @@ def _load_specz_auditor():
     return module
 
 
+def _load_inference_benchmark():
+    path = ROOT / "scripts/benchmark_popcosmos_native15d_inference.py"
+    spec = importlib.util.spec_from_file_location("popcosmos_timing", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_popcosmos_native_config_changes_observations_not_latent_physics() -> None:
     config = load_config(CONFIG)
     amortized = amortized_config(config)
@@ -306,6 +315,31 @@ def test_spectroscopic_audit_separates_ids_from_numeric_truth() -> None:
     assert payload["published_cohort"]["id_and_source_contract_reproduced"]
     assert not payload["numeric_truth"]["exact_12014_numeric_truth_ready"]
     assert payload["decision"] == "public_dr1p1_paired_3"
+
+
+def test_inference_benchmark_keeps_compile_and_steady_state_separate() -> None:
+    benchmark = _load_inference_benchmark()
+    records = pd.DataFrame(
+        [
+            benchmark._record("encoder_only", 0, 2.0, 4),
+            benchmark._record("encoder_only", 1, 4.0, 4),
+            benchmark._record("posterior_draws", 0, 8.0, 4),
+        ]
+    )
+    summary = benchmark.summarize_timings(records)
+    assert summary["encoder_only"]["median_seconds"] == 3.0
+    assert summary["encoder_only"]["median_seconds_per_object"] == 0.75
+    assert "compile" not in summary
+
+
+def test_native_timing_wrapper_requests_one_h100_per_variant() -> None:
+    wrapper = (ROOT / "scripts/popcosmos_native15d_timing_h100.slurm").read_text()
+    submit = (ROOT / "scripts/submit_popcosmos_native15d_timing.sh").read_text()
+    assert "#SBATCH --gres=gpu:1" in wrapper
+    assert "--posterior-samples \"$POSTERIOR_SAMPLES\"" in wrapper
+    assert "--require-gpu" in wrapper
+    assert "--array=0-1%2" in submit
+    assert "LIMIT=\"${LIMIT:-128}\"" in submit
 
 
 def test_native_scaling_summary_collects_only_redshift_metrics(tmp_path) -> None:
