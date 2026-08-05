@@ -76,6 +76,15 @@ def _load_redshift_comparator():
     return module
 
 
+def _load_specz_auditor():
+    path = ROOT / "scripts/audit_popcosmos_spectroscopic_cohort.py"
+    spec = importlib.util.spec_from_file_location("popcosmos_specz_audit", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_popcosmos_native_config_changes_observations_not_latent_physics() -> None:
     config = load_config(CONFIG)
     amortized = amortized_config(config)
@@ -262,6 +271,41 @@ def test_redshift_only_comparator_rejects_different_rws_order(tmp_path) -> None:
     ).to_csv(summary, sep=" ", index=False)
     with __import__("pytest").raises(RuntimeError, match="ordering differs"):
         comparator.build_paired_table(first, second, summary)
+
+
+def test_spectroscopic_audit_separates_ids_from_numeric_truth() -> None:
+    auditor = _load_specz_auditor()
+    rows = []
+    object_id = 0
+    for source, count in auditor.PUBLISHED_SOURCE_COUNTS.items():
+        for _ in range(count):
+            rows.append(
+                {
+                    "INDEX_COSMOS": object_id,
+                    "MAGCUT_r": "Y",
+                    "XRAY": "Y" if object_id < 501 else "N",
+                    "z_SPEC": "Y",
+                    "z_SPECSOURCE": source,
+                }
+            )
+            object_id += 1
+    summary = pd.DataFrame(rows)
+    evaluation = pd.DataFrame(
+        {"object_id": np.arange(3), "redshift_true": [0.1, 0.2, 0.3]}
+    )
+    cohort, sources, payload = auditor.audit_cohort(
+        summary,
+        evaluation,
+        expected_published=12_014,
+        expected_xray=501,
+        expected_fallback=3,
+        prepared_truth_ids=np.arange(100),
+    )
+    assert len(cohort) == 12_014
+    assert sources["matches_paper"].all()
+    assert payload["published_cohort"]["id_and_source_contract_reproduced"]
+    assert not payload["numeric_truth"]["exact_12014_numeric_truth_ready"]
+    assert payload["decision"] == "public_dr1p1_paired_3"
 
 
 def test_native_scaling_summary_collects_only_redshift_metrics(tmp_path) -> None:
