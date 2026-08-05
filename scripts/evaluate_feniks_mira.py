@@ -11,8 +11,10 @@ from pathlib import Path
 os.environ.setdefault("EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD", "0")
 
 from euclid_dsps.amortized.mira import (  # noqa: E402
+    FENIKS_SPLINE15D_PARAMETERS,
     evaluate_feniks_mira,
     parse_posterior_spec,
+    parse_truth_column_spec,
 )
 
 
@@ -41,6 +43,26 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument(
+        "--parameter",
+        action="append",
+        help=(
+            "Posterior parameter to evaluate. Repeat for multiple dimensions; "
+            "the default is the canonical FENIKS spline15d contract."
+        ),
+    )
+    parser.add_argument(
+        "--truth-column",
+        action="append",
+        default=[],
+        metavar="PARAMETER=SOURCE_COLUMN",
+        help="Map a posterior parameter to a differently named truth column.",
+    )
+    parser.add_argument(
+        "--drop-nonfinite-truth",
+        action="store_true",
+        help="Restrict evaluation to objects finite in every requested truth parameter.",
+    )
     parser.add_argument("--num-regions", type=int, default=100)
     parser.add_argument("--num-bootstrap", type=int, default=1000)
     parser.add_argument(
@@ -61,6 +83,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     posterior_specs = [parse_posterior_spec(value) for value in args.posterior]
+    parameters = tuple(args.parameter or FENIKS_SPLINE15D_PARAMETERS)
+    truth_column_map = dict(
+        parse_truth_column_spec(value) for value in args.truth_column
+    )
+    if len(truth_column_map) != len(args.truth_column):
+        raise ValueError("Each --truth-column target parameter must be unique")
     samples_per_object = (
         None if args.samples_per_object == 0 else args.samples_per_object
     )
@@ -73,6 +101,9 @@ def main() -> None:
         samples_per_object=samples_per_object,
         seed=args.seed,
         limit=args.limit,
+        parameters=parameters,
+        truth_column_map=truth_column_map,
+        drop_nonfinite_truth=args.drop_nonfinite_truth,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     print(f"[mira] complete: {args.out / 'DONE'}")

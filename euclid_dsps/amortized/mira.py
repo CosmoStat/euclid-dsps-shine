@@ -12,7 +12,7 @@ import hashlib
 import itertools
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -84,6 +84,41 @@ def parse_posterior_spec(spec: str) -> tuple[str, Path]:
     return name, Path(raw_path)
 
 
+def parse_truth_column_spec(spec: str) -> tuple[str, str]:
+    """Parse ``PARAMETER=SOURCE_COLUMN`` used by standalone evaluators."""
+    if "=" not in spec:
+        raise ValueError(
+            "Truth-column specification must be PARAMETER=SOURCE_COLUMN, "
+            f"received {spec!r}"
+        )
+    parameter, source_column = (part.strip() for part in spec.split("=", 1))
+    if not parameter or not source_column:
+        raise ValueError(
+            "Truth-column specification must be PARAMETER=SOURCE_COLUMN, "
+            f"received {spec!r}"
+        )
+    return parameter, source_column
+
+
+def _validate_truth_column_map(
+    parameters: Sequence[str],
+    truth_column_map: Mapping[str, str] | None,
+) -> dict[str, str]:
+    result = dict(truth_column_map or {})
+    unknown = sorted(set(result) - set(parameters))
+    if unknown:
+        raise ValueError(f"Truth-column mappings target unknown parameters: {unknown}")
+    if any(not str(source).strip() for source in result.values()):
+        raise ValueError("Truth source-column names must be non-empty")
+    source_parameters = [result.get(parameter, parameter) for parameter in parameters]
+    if len(source_parameters) != len(set(source_parameters)):
+        raise ValueError(
+            "Truth-column mappings must resolve to unique source columns: "
+            f"{source_parameters}"
+        )
+    return result
+
+
 def resolve_truth_path(path: str | Path) -> Path:
     """Resolve a truth parquet supplied directly or through an inference dir."""
     source = Path(path)
@@ -134,17 +169,22 @@ def resolve_companion_truth(source: PosteriorInput) -> Path | None:
 def feniks_mira_groups(
     parameters: Sequence[str] = FENIKS_SPLINE15D_PARAMETERS,
 ) -> dict[str, tuple[int, ...]]:
-    """Return the full, physical, SFH, and marginal FENIKS score groups."""
+    """Return canonical FENIKS groups or generic joint/marginal groups."""
     names = tuple(parameters)
-    if names != FENIKS_SPLINE15D_PARAMETERS:
-        raise ValueError(
-            "FENIKS MIRA currently requires the canonical spline15d parameter order"
-        )
-    groups: dict[str, tuple[int, ...]] = {
-        "full_15d": tuple(range(len(names))),
-        "physical_5d": tuple(range(5)),
-        "sfh_contrasts_10d": tuple(range(5, len(names))),
-    }
+    if not names:
+        raise ValueError("At least one posterior parameter is required")
+    if len(names) != len(set(names)):
+        raise ValueError(f"Posterior parameters must be unique: {names}")
+    if names == FENIKS_SPLINE15D_PARAMETERS:
+        groups: dict[str, tuple[int, ...]] = {
+            "full_15d": tuple(range(len(names))),
+            "physical_5d": tuple(range(5)),
+            "sfh_contrasts_10d": tuple(range(5, len(names))),
+        }
+    elif len(names) == 1:
+        groups = {}
+    else:
+        groups = {f"joint_{len(names)}d": tuple(range(len(names)))}
     groups.update({f"marginal_{name}": (index,) for index, name in enumerate(names)})
     return groups
 
@@ -220,8 +260,11 @@ def evaluate_feniks_mira(
     samples_per_object: int | None = 128,
     seed: int = 260730,
     limit: int | None = None,
+    parameters: Sequence[str] = FENIKS_SPLINE15D_PARAMETERS,
+    truth_column_map: Mapping[str, str] | None = None,
+    drop_nonfinite_truth: bool = False,
 ) -> dict[str, Any]:
-    """Evaluate FENIKS encoder posteriors and write reproducible artifacts."""
+    """Evaluate held-out amortized posteriors and write reproducible artifacts."""
     if num_regions <= 0:
         raise ValueError("num_regions must be positive")
     if num_bootstrap < 0:
@@ -233,12 +276,15 @@ def evaluate_feniks_mira(
     if not posterior_specs:
         raise ValueError("At least one posterior specification is required")
 
+    parameters = tuple(parameters)
+    group_definitions = feniks_mira_groups(parameters)
+    truth_column_map = _validate_truth_column_map(parameters, truth_column_map)
+
     out = Path(out_dir)
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"Refusing to overwrite non-empty output: {out}")
     ensure_dir(out)
     started = time.perf_counter()
-    parameters = FENIKS_SPLINE15D_PARAMETERS
     truth_file = resolve_truth_path(truth_path)
     posterior_inputs = [
         resolve_posterior_input(name, source) for name, source in posterior_specs
@@ -254,6 +300,8 @@ def evaluate_feniks_mira(
             item.name: [str(path) for path in item.files] for item in posterior_inputs
         },
         "parameters": list(parameters),
+        "truth_column_map": truth_column_map,
+        "drop_nonfinite_truth": bool(drop_nonfinite_truth),
         "num_regions": int(num_regions),
         "num_bootstrap": int(num_bootstrap),
         "bootstrap_method": "resample_fiducials_plus_one_region_draw",
@@ -265,13 +313,21 @@ def evaluate_feniks_mira(
     }
     write_json(out / "mira_manifest.json", initial_manifest)
 
-    truth = _read_truth(truth_file, parameters, limit=limit)
+    truth = _read_truth(
+        truth_file,
+        parameters,
+        limit=limit,
+        truth_column_map=truth_column_map,
+        drop_nonfinite=drop_nonfinite_truth,
+    )
     companion_truths = _validate_companion_truths(
         truth,
         truth_file,
         posterior_inputs,
         parameters,
         limit=limit,
+        truth_column_map=truth_column_map,
+        drop_nonfinite=drop_nonfinite_truth,
     )
     dense_models = [
         _read_dense_posterior(
@@ -279,10 +335,13 @@ def evaluate_feniks_mira(
             truth,
             parameters,
             samples_per_object=samples_per_object,
-            require_exact_object_set=limit is None,
+            require_exact_object_set=limit is None and not drop_nonfinite_truth,
         )
         for item in posterior_inputs
     ]
+    selected_sample_ids = dense_models[0].sample_ids
+    if any(model.sample_ids != selected_sample_ids for model in dense_models[1:]):
+        raise ValueError("All posterior models must select identical sample IDs")
     sample_counts = {model.values.shape[1] for model in dense_models}
     if len(sample_counts) != 1:
         raise ValueError(
@@ -318,7 +377,6 @@ def evaluate_feniks_mira(
         model_names,
     )
 
-    group_definitions = feniks_mira_groups(parameters)
     score_rows: list[dict[str, Any]] = []
     region_frames: list[pd.DataFrame] = []
     bootstrap_frames: list[pd.DataFrame] = []
@@ -464,6 +522,17 @@ def evaluate_feniks_mira(
     write_mira_score_plot(scores, out / "mira_scores.png")
 
     elapsed = time.perf_counter() - started
+    primary_group = next(iter(group_definitions))
+    primary_columns = [
+        "model",
+        "score",
+        "mira_std",
+        "bootstrap_mean",
+        "bootstrap_std",
+        "bootstrap_q025",
+        "bootstrap_q975",
+        "delta_from_ideal",
+    ]
     summary = {
         "status": "complete",
         "models": model_names,
@@ -471,23 +540,19 @@ def evaluate_feniks_mira(
         "num_posterior_samples": int(posterior.shape[2]),
         "num_regions": int(num_regions),
         "num_bootstrap": int(num_bootstrap),
+        "selected_sample_ids": [_json_scalar(value) for value in selected_sample_ids],
         "companion_truths_checked": sum(
             record["status"] in {"primary_reference", "validated"}
             for record in companion_truths.values()
         ),
         "score_groups": list(group_definitions),
+        "primary_group": primary_group,
+        "primary": scores.loc[
+            scores["group"].eq(primary_group), primary_columns
+        ].to_dict(orient="records"),
         "full_15d": scores.loc[
             scores["group"].eq("full_15d"),
-            [
-                "model",
-                "score",
-                "mira_std",
-                "bootstrap_mean",
-                "bootstrap_std",
-                "bootstrap_q025",
-                "bootstrap_q975",
-                "delta_from_ideal",
-            ],
+            primary_columns,
         ].to_dict(orient="records"),
         "ideal_score": MIRA_IDEAL_SCORE,
         "theoretical_statistic_variance": MIRA_STATISTIC_VARIANCE,
@@ -530,6 +595,11 @@ def evaluate_feniks_mira(
         "finite_sample_normalization": "divide by S/(S+1)",
         "bootstrap_unit": "held_out_object_plus_one_region_draw",
         "bootstrap_region_bank": int(num_regions),
+        "truth_selection": {
+            "column_map": truth_column_map,
+            "drop_nonfinite_parameters": bool(drop_nonfinite_truth),
+            "selected_objects": len(truth),
+        },
         "git_sha": _git_sha(),
     }
     write_json(out / "mira_manifest.json", manifest)
@@ -542,26 +612,38 @@ def _read_truth(
     parameters: Sequence[str],
     *,
     limit: int | None,
+    truth_column_map: Mapping[str, str] | None = None,
+    drop_nonfinite: bool = False,
 ) -> pd.DataFrame:
     truth = pd.read_parquet(path)
-    required = {"object_id", *parameters}
+    column_map = _validate_truth_column_map(parameters, truth_column_map)
+    source_parameters = [
+        column_map.get(parameter, parameter) for parameter in parameters
+    ]
+    required = {"object_id", *source_parameters}
     missing = sorted(required - set(truth.columns))
     if missing:
         raise ValueError(f"Truth parquet is missing columns: {missing}")
     keep = ["object_id"]
     if "row_index" in truth:
         keep.append("row_index")
-    keep.extend(parameters)
+    keep.extend(source_parameters)
     truth = truth.loc[:, keep]
+    truth = truth.rename(
+        columns={source: parameter for parameter, source in column_map.items()}
+    )
     if truth["object_id"].isna().any() or truth["object_id"].duplicated().any():
         raise ValueError("Truth object_id values must be finite and unique")
     if "row_index" in truth and truth["row_index"].duplicated().any():
         raise ValueError("Truth row_index values must be unique")
+    values = truth.loc[:, parameters].to_numpy(dtype=float)
+    finite = np.all(np.isfinite(values), axis=1)
+    if drop_nonfinite:
+        truth = truth.loc[finite]
+    elif not np.all(finite):
+        raise ValueError("Truth parameter matrix contains non-finite values")
     if limit is not None:
         truth = truth.iloc[:limit]
-    values = truth.loc[:, parameters].to_numpy(dtype=float)
-    if not np.all(np.isfinite(values)):
-        raise ValueError("Truth parameter matrix contains non-finite values")
     if len(truth) < 2:
         raise ValueError("MIRA requires at least two held-out truth objects")
     return truth.reset_index(drop=True)
@@ -574,6 +656,8 @@ def _validate_companion_truths(
     parameters: Sequence[str],
     *,
     limit: int | None,
+    truth_column_map: Mapping[str, str] | None = None,
+    drop_nonfinite: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Check truth tables shipped beside posterior sources against the reference."""
     records: dict[str, dict[str, Any]] = {}
@@ -589,7 +673,13 @@ def _validate_companion_truths(
             records[source.name] = {"status": "primary_reference", **record}
             continue
 
-        companion = _read_truth(candidate, parameters, limit=None)
+        companion = _read_truth(
+            candidate,
+            parameters,
+            limit=None,
+            truth_column_map=truth_column_map,
+            drop_nonfinite=drop_nonfinite,
+        )
         companion_ids = set(companion["object_id"].tolist())
         missing = truth_id_set - companion_ids
         extra = companion_ids - truth_id_set
@@ -865,24 +955,31 @@ def write_mira_score_plot(scores: pd.DataFrame, path: str | Path) -> None:
         else MIRA_STATISTIC_VARIANCE / num_fiducials
     )
     theoretical_sigma = float(np.sqrt(theoretical_variance))
-    figure, axes = plt.subplots(
-        2,
-        1,
-        figsize=(12, 10),
-        gridspec_kw={"height_ratios": [1, 2.4]},
-        constrained_layout=False,
-    )
-    figure.subplots_adjust(
-        left=0.08,
-        right=0.98,
-        top=0.82,
-        bottom=0.20,
-        hspace=0.30,
-    )
-    for axis, selected_groups, title in (
-        (axes[0], groups[:3], "Joint latent-space scores"),
-        (axes[1], groups[3:], "One-dimensional marginal scores"),
-    ):
+    if len(groups) <= 3:
+        panels = [(groups, "Posterior calibration scores")]
+        figure, axes = plt.subplots(1, 1, figsize=(10, 5.5), constrained_layout=False)
+        figure.subplots_adjust(left=0.10, right=0.98, top=0.82, bottom=0.18)
+    else:
+        panels = [
+            (groups[:3], "Joint latent-space scores"),
+            (groups[3:], "One-dimensional marginal scores"),
+        ]
+        figure, axes = plt.subplots(
+            2,
+            1,
+            figsize=(12, 10),
+            gridspec_kw={"height_ratios": [1, 2.4]},
+            constrained_layout=False,
+        )
+        figure.subplots_adjust(
+            left=0.08,
+            right=0.98,
+            top=0.82,
+            bottom=0.20,
+            hspace=0.30,
+        )
+    axes_array = np.atleast_1d(axes)
+    for axis, (selected_groups, title) in zip(axes_array, panels, strict=True):
         x = np.arange(len(selected_groups), dtype=float)
         width = 0.7 / max(len(models), 1)
         for model_index, model in enumerate(models):
@@ -933,13 +1030,16 @@ def write_mira_score_plot(scores: pd.DataFrame, path: str | Path) -> None:
         f"band = +/-1 sigma = {theoretical_sigma:.3g}; "
         "colored = bootstrap mean +/- std"
     )
-    handles, labels = axes[0].get_legend_handles_labels()
+    handles, labels = axes_array[0].get_legend_handles_labels()
     handles.append(Patch(facecolor="#d8d8d8", edgecolor="none", alpha=0.65))
     labels.append(theory_label)
-    axes[0].legend(
+    axes_array[0].legend(
         handles,
         labels,
-        frameon=False,
+        frameon=len(groups) <= 3,
+        facecolor="white",
+        framealpha=0.92,
+        edgecolor="none",
         ncol=1,
         loc="upper left",
         fontsize=9,
@@ -969,6 +1069,10 @@ def _file_record(path: Path) -> dict[str, Any]:
         "size_bytes": path.stat().st_size,
         "sha256": digest.hexdigest(),
     }
+
+
+def _json_scalar(value: Any) -> Any:
+    return value.item() if isinstance(value, np.generic) else value
 
 
 def _derived_seed(seed: int, group_index: int, stream: int) -> int:

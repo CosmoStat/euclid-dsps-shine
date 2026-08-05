@@ -13,7 +13,7 @@ from __future__ import annotations
 import itertools
 import subprocess
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +29,7 @@ from euclid_dsps.amortized.mira import (
     _read_dense_posterior,
     _read_truth,
     _validate_companion_truths,
+    _validate_truth_column_map,
     feniks_mira_groups,
     resolve_posterior_input,
     resolve_truth_path,
@@ -77,6 +78,9 @@ def evaluate_feniks_tarp(
     samples_per_object: int | None = 128,
     seed: int = 260730,
     limit: int | None = None,
+    parameters: Sequence[str] = FENIKS_SPLINE15D_PARAMETERS,
+    truth_column_map: Mapping[str, str] | None = None,
+    drop_nonfinite_truth: bool = False,
 ) -> dict[str, Any]:
     """Evaluate TARP and write ECP curves, bands, and provenance artifacts."""
     if num_alpha_bins is not None and num_alpha_bins < 2:
@@ -90,12 +94,15 @@ def evaluate_feniks_tarp(
     if not posterior_specs:
         raise ValueError("At least one posterior specification is required")
 
+    parameters = tuple(parameters)
+    group_definitions = feniks_mira_groups(parameters)
+    truth_column_map = _validate_truth_column_map(parameters, truth_column_map)
+
     out = Path(out_dir)
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"Refusing to overwrite non-empty output: {out}")
     ensure_dir(out)
     started = time.perf_counter()
-    parameters = FENIKS_SPLINE15D_PARAMETERS
     truth_file = resolve_truth_path(truth_path)
     posterior_inputs = [
         resolve_posterior_input(name, source) for name, source in posterior_specs
@@ -111,6 +118,8 @@ def evaluate_feniks_tarp(
             item.name: [str(path) for path in item.files] for item in posterior_inputs
         },
         "parameters": list(parameters),
+        "truth_column_map": truth_column_map,
+        "drop_nonfinite_truth": bool(drop_nonfinite_truth),
         "num_alpha_bins_requested": num_alpha_bins,
         "num_bootstrap": int(num_bootstrap),
         "samples_per_object_requested": samples_per_object,
@@ -123,13 +132,21 @@ def evaluate_feniks_tarp(
     }
     write_json(out / "tarp_manifest.json", initial_manifest)
 
-    truth = _read_truth(truth_file, parameters, limit=limit)
+    truth = _read_truth(
+        truth_file,
+        parameters,
+        limit=limit,
+        truth_column_map=truth_column_map,
+        drop_nonfinite=drop_nonfinite_truth,
+    )
     companion_truths = _validate_companion_truths(
         truth,
         truth_file,
         posterior_inputs,
         parameters,
         limit=limit,
+        truth_column_map=truth_column_map,
+        drop_nonfinite=drop_nonfinite_truth,
     )
     dense_models = [
         _read_dense_posterior(
@@ -137,7 +154,7 @@ def evaluate_feniks_tarp(
             truth,
             parameters,
             samples_per_object=samples_per_object,
-            require_exact_object_set=limit is None,
+            require_exact_object_set=limit is None and not drop_nonfinite_truth,
         )
         for item in posterior_inputs
     ]
@@ -179,7 +196,6 @@ def evaluate_feniks_tarp(
         model_names,
     )
 
-    group_definitions = feniks_mira_groups(parameters)
     resolved_bins = num_alpha_bins or max(2, len(truth) // 10)
     curve_rows: list[dict[str, Any]] = []
     coverage_value_frames: list[pd.DataFrame] = []
@@ -317,9 +333,13 @@ def evaluate_feniks_tarp(
     _write_tarp_plot(coverage_frame, out / "tarp_coverage.png")
 
     elapsed = time.perf_counter() - started
+    primary_group = next(iter(group_definitions))
     summary = {
         "status": "complete",
-        "companion_truths_checked": len(companion_truths),
+        "companion_truths_checked": sum(
+            record["status"] in {"primary_reference", "validated"}
+            for record in companion_truths.values()
+        ),
         "elapsed_seconds": float(elapsed),
         "models": model_names,
         "num_objects": len(truth),
@@ -328,6 +348,10 @@ def evaluate_feniks_tarp(
         "num_bootstrap": int(num_bootstrap),
         "selected_sample_ids": [_json_scalar(value) for value in sample_ids],
         "score_groups": list(group_definitions),
+        "primary_group": primary_group,
+        "primary": summary_frame.loc[summary_frame["group"].eq(primary_group)].to_dict(
+            orient="records"
+        ),
         "full_15d": summary_frame.loc[summary_frame["group"].eq("full_15d")].to_dict(
             orient="records"
         ),
@@ -374,6 +398,11 @@ def evaluate_feniks_tarp(
             "posterior_clipped": False,
         },
         "bootstrap_unit": "held_out_object",
+        "truth_selection": {
+            "column_map": truth_column_map,
+            "drop_nonfinite_parameters": bool(drop_nonfinite_truth),
+            "selected_objects": len(truth),
+        },
         "git_sha": _git_sha(),
     }
     write_json(out / "tarp_summary.json", summary)
@@ -534,7 +563,7 @@ def _write_tarp_plot(coverage: pd.DataFrame, path: Path) -> None:
         if "num_posterior_samples" in coverage
         else None
     )
-    n_columns = 3
+    n_columns = min(3, len(groups))
     n_rows = int(np.ceil(len(groups) / n_columns))
     figure, axes = plt.subplots(
         n_rows,
@@ -545,7 +574,7 @@ def _write_tarp_plot(coverage: pd.DataFrame, path: Path) -> None:
     figure.subplots_adjust(
         left=0.07,
         right=0.98,
-        top=0.94,
+        top=0.84 if len(groups) == 1 else 0.94,
         bottom=0.06,
         hspace=0.38,
         wspace=0.28,
