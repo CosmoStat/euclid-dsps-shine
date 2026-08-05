@@ -67,6 +67,15 @@ def _load_scaling_summarizer():
     return module
 
 
+def _load_redshift_comparator():
+    path = ROOT / "scripts/compare_popcosmos_redshift_only.py"
+    spec = importlib.util.spec_from_file_location("native15d_comparator", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_popcosmos_native_config_changes_observations_not_latent_physics() -> None:
     config = load_config(CONFIG)
     amortized = amortized_config(config)
@@ -172,6 +181,87 @@ def test_native_redshift_metrics_ignore_nuisance_latents() -> None:
     assert metrics["coverage_68"] == 0.5
     assert metrics["outlier_fraction_0p15"] == 0.0
     assert "nmad" in intervals
+
+
+def test_redshift_only_comparator_uses_exact_ids_and_paired_bootstrap(
+    tmp_path,
+) -> None:
+    comparator = _load_redshift_comparator()
+    object_ids = np.array([11, 12, 13, 14])
+    truth = np.array([0.5, 1.0, 1.5, np.nan])
+    base = pd.DataFrame(
+        {
+            "object_id": object_ids,
+            "row_index": np.arange(4),
+            "redshift_true": truth,
+            "z_obs_q16": [0.4, 0.8, 1.3, 0.0],
+            "z_obs_median": [0.5, 1.1, 1.6, 0.2],
+            "z_obs_q84": [0.6, 1.2, 1.7, 0.4],
+        }
+    )
+    rws26 = tmp_path / "rws26.parquet"
+    rws24 = tmp_path / "rws24.parquet"
+    base.to_parquet(rws26, index=False)
+    variant = base.copy()
+    variant["z_obs_median"] += 0.1
+    variant.to_parquet(rws24, index=False)
+    popcosmos = tmp_path / "summaries.txt"
+    pd.DataFrame(
+        {
+            "INDEX_COSMOS": object_ids,
+            "MAGCUT_r": ["Y"] * 4,
+            "XRAY": ["N"] * 4,
+            "z_SPEC": ["Y", "Y", "Y", "N"],
+            "z_SPECSOURCE": ["A", "A", "B", "None"],
+            "z_pc_160": [0.4, 0.9, 1.4, 0.0],
+            "z_pc_500": [0.5, 1.0, 1.5, 0.2],
+            "z_pc_840": [0.6, 1.1, 1.6, 0.4],
+        }
+    ).to_csv(popcosmos, sep=" ", index=False)
+
+    paired = comparator.build_paired_table(rws26, rws24, popcosmos)
+    specz = paired.loc[paired["has_public_specz"]].reset_index(drop=True)
+    differences, intervals = comparator.paired_bootstrap(
+        specz, n_resamples=50, seed=7
+    )
+    assert paired["object_id"].tolist() == object_ids.tolist()
+    assert len(specz) == 3
+    assert len(differences) == 3 * len(comparator.METRIC_NAMES)
+    assert "rws26_minus_rws24" in intervals
+    assert comparator.redshift_metrics(specz, "popcosmos")["rmse"] == 0.0
+
+
+def test_redshift_only_comparator_rejects_different_rws_order(tmp_path) -> None:
+    comparator = _load_redshift_comparator()
+    frame = pd.DataFrame(
+        {
+            "object_id": [1, 2],
+            "row_index": [0, 1],
+            "redshift_true": [0.2, 0.3],
+            "z_obs_q16": [0.1, 0.2],
+            "z_obs_median": [0.2, 0.3],
+            "z_obs_q84": [0.3, 0.4],
+        }
+    )
+    first = tmp_path / "first.parquet"
+    second = tmp_path / "second.parquet"
+    frame.to_parquet(first, index=False)
+    frame.iloc[::-1].to_parquet(second, index=False)
+    summary = tmp_path / "summary.txt"
+    pd.DataFrame(
+        {
+            "INDEX_COSMOS": [1, 2],
+            "MAGCUT_r": ["Y", "Y"],
+            "XRAY": ["N", "N"],
+            "z_SPEC": ["Y", "Y"],
+            "z_SPECSOURCE": ["A", "A"],
+            "z_pc_160": [0.1, 0.2],
+            "z_pc_500": [0.2, 0.3],
+            "z_pc_840": [0.3, 0.4],
+        }
+    ).to_csv(summary, sep=" ", index=False)
+    with __import__("pytest").raises(RuntimeError, match="ordering differs"):
+        comparator.build_paired_table(first, second, summary)
 
 
 def test_native_scaling_summary_collects_only_redshift_metrics(tmp_path) -> None:
