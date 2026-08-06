@@ -184,11 +184,12 @@ def test_cross_cohort_comparator_reads_redshift_rows_and_writes_plot(
     assert plot.with_suffix(".pdf").is_file()
 
 
-def test_dashboard_contract_requires_all_four_redshift_runs() -> None:
+def test_dashboard_contract_requires_all_five_redshift_runs() -> None:
     comparator = _load_comparator()
     runs = [
         ("cosmos_public_specz", "rws26"),
         ("cosmos_public_specz", "rws24"),
+        ("cosmos_public_specz", "popcosmos"),
         ("feniks_synthetic", "rws_k8_t2_seed2"),
         ("feniks_synthetic", "rws_k8_t2_seed3"),
     ]
@@ -196,8 +197,8 @@ def test_dashboard_contract_requires_all_four_redshift_runs() -> None:
         {
             "context": [context for context, _ in runs],
             "model": [model for _, model in runs],
-            "mira_score": [0.63, 0.62, 0.67, 0.66],
-            "tarp_atc": [-0.03, -0.05, 0.01, 0.0],
+            "mira_score": [0.63, 0.62, 0.62, 0.67, 0.66],
+            "tarp_atc": [-0.03, -0.05, -0.04, 0.01, 0.0],
         }
     )
     coverage = pd.DataFrame(

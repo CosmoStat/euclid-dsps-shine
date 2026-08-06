@@ -26,6 +26,7 @@ POPCOSMOS_PAPER = {
 EXPECTED_CALIBRATION_RUNS = {
     ("cosmos_public_specz", "rws26"),
     ("cosmos_public_specz", "rws24"),
+    ("cosmos_public_specz", "popcosmos"),
     ("feniks_synthetic", "rws_k8_t2_seed2"),
     ("feniks_synthetic", "rws_k8_t2_seed3"),
 }
@@ -364,10 +365,22 @@ def _write_dashboard(
             value_format=value_format,
         )
 
-    calibration_order = ["rws26", "rws24", "rws_k8_t2_seed2", "rws_k8_t2_seed3"]
+    calibration_order = [
+        "rws26",
+        "rws24",
+        "popcosmos",
+        "rws_k8_t2_seed2",
+        "rws_k8_t2_seed3",
+    ]
     calibration = calibration.set_index("model").loc[calibration_order].reset_index()
-    labels = ["COSMOS 26", "COSMOS 24", "FENIKS seed 2", "FENIKS seed 3"]
-    x = np.asarray([0.0, 1.0, 2.45, 3.45])
+    labels = [
+        "COSMOS 26",
+        "COSMOS 24",
+        "Pop-COSMOS",
+        "FENIKS seed 2",
+        "FENIKS seed 3",
+    ]
+    x = np.asarray([0.0, 1.0, 2.0, 3.45, 4.45])
 
     mira_axis = figure.add_subplot(grid[1, 0])
     for index, row in enumerate(calibration.itertuples(index=False)):
@@ -430,7 +443,7 @@ def _write_dashboard(
     curve_labels = dict(zip(calibration_order, labels, strict=True))
     for model in calibration_order:
         context = (
-            "cosmos_public_specz" if model in {"rws26", "rws24"}
+            "cosmos_public_specz" if model in {"rws26", "rws24", "popcosmos"}
             else "feniks_synthetic"
         )
         curve = tarp_coverage.loc[
@@ -513,8 +526,8 @@ def _write_dashboard(
         (
             "Top: FENIKS synthetic closure, matched COSMOS public spectroscopy (N=1,395), "
             "and the external Pop-COSMOS paper cohort are separated by gray rules. "
-            "Bottom: redshift-only MIRA/TARP uses dense 128-draw posteriors; Pop-COSMOS "
-            "public quantiles cannot supply these calibration scores."
+            "Bottom: redshift-only MIRA/TARP uses 128 dense draws for RWS and thinned "
+            "public Pop-COSMOS chains on the same 1,395 objects."
         ),
         ha="center",
         fontsize=9,
@@ -585,7 +598,7 @@ def main() -> None:
             "FENIKS is synthetic closure; COSMOS uses real public spectroscopy.",
             "The matched COSMOS benchmark and published Pop-COSMOS cohort differ.",
             "The speed ratio compares different inference algorithms, forward models, and GPUs.",
-            "Public Pop-COSMOS quantiles do not permit MIRA or TARP evaluation.",
+            "Pop-COSMOS MIRA/TARP uses public dense chains thinned deterministically to 128 draws on the matched cohort.",
         ],
     }
     (args.out / "publication_dashboard_summary.json").write_text(

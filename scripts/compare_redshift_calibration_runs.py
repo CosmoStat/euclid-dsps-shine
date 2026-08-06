@@ -14,6 +14,7 @@ import pandas as pd
 EXPECTED_DASHBOARD_RUNS = {
     ("cosmos_public_specz", "rws26"),
     ("cosmos_public_specz", "rws24"),
+    ("cosmos_public_specz", "popcosmos"),
     ("feniks_synthetic", "rws_k8_t2_seed2"),
     ("feniks_synthetic", "rws_k8_t2_seed3"),
 }
@@ -185,26 +186,34 @@ def _write_plot(
     model_order = {
         "rws26": 0,
         "rws24": 1,
-        "rws_k8_t2_seed2": 2,
-        "rws_k8_t2_seed3": 3,
+        "popcosmos": 2,
+        "rws_k8_t2_seed2": 3,
+        "rws_k8_t2_seed3": 4,
     }
     calibrated["_context_order"] = calibrated["context"].map(context_order)
     calibrated["_model_order"] = calibrated["model"].map(model_order)
     calibrated = calibrated.sort_values(["_context_order", "_model_order"])
     plot_style = {
         "rws26": {
-            "label": "COSMOS RWS\n26 bands",
+            "label": "COSMOS RWS 26",
             "legend": "COSMOS RWS, 26 bands",
             "color": "#0072B2",
             "linestyle": "-",
             "marker": "o",
         },
         "rws24": {
-            "label": "COSMOS RWS\n24 bands (no IRAC)",
+            "label": "COSMOS RWS 24",
             "legend": "COSMOS RWS, 24 bands (no IRAC)",
             "color": "#009E73",
             "linestyle": "-",
             "marker": "s",
+        },
+        "popcosmos": {
+            "label": "Pop-COSMOS chains",
+            "legend": "Pop-COSMOS public chains",
+            "color": "#303030",
+            "linestyle": "-",
+            "marker": "P",
         },
         "rws_k8_t2_seed2": {
             "label": "FENIKS RWS\nseed 2",
@@ -239,8 +248,9 @@ def _write_plot(
         for row in calibrated.itertuples(index=False)
     ]
     x = np.arange(len(calibrated), dtype=float)
-    if len(x) > 2:
-        x[2:] += 0.45
+    first_feniks = int(calibrated["context"].eq("feniks_synthetic").to_numpy().argmax())
+    if calibrated["context"].eq("feniks_synthetic").any():
+        x[first_feniks:] += 0.45
     figure, axes = plt.subplots(
         1, 3, figsize=(18, 6.2), gridspec_kw={"width_ratios": [1.05, 1.25, 1.05]}
     )
@@ -384,9 +394,13 @@ def _write_plot(
 
     for axis in (axes[0], axes[2]):
         axis.set_xticks(x)
-        axis.set_xticklabels(labels, fontsize=8.5)
-        if len(x) > 2:
-            axis.axvline((x[1] + x[2]) / 2.0, color="#D6D6D6", linewidth=0.8)
+        axis.set_xticklabels(labels, fontsize=8.2, rotation=18, ha="right")
+        if first_feniks > 0:
+            axis.axvline(
+                (x[first_feniks - 1] + x[first_feniks]) / 2.0,
+                color="#D6D6D6",
+                linewidth=0.8,
+            )
         axis.margins(x=0.12)
     for axis in axes:
         axis.grid(axis="y", color="#e6e6e6", linewidth=0.8)
@@ -486,7 +500,7 @@ def main() -> None:
         "limitations": [
             "FENIKS is synthetic held-out closure; COSMOS is a spectroscopy-selected real subset.",
             "Cross-context distances from the ideal are descriptive, not paired model comparisons.",
-            "Public Pop-COSMOS quantiles support photo-z metrics but not MIRA/TARP without chains.",
+            "Pop-COSMOS calibration uses public dense chains on the same 1395 spectroscopy-selected objects as RWS.",
         ],
         "plot_contract": {
             "runs": [
