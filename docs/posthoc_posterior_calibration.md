@@ -8,6 +8,11 @@ keeping the DSPS forward model and likelihood fixed:
 
 It does not test or change the forward model.
 
+For a local `uv` checkout, install the optional inference and test stacks with
+`uv sync --extra amortized --extra samplers --extra dev`. Jean-Zay production
+uses the existing `conda shine` environment and must not attempt networked
+package installation from a GPU node.
+
 ## Distribution contract
 
 Every calculation consumes joint posterior draws. The workflow writes the raw
