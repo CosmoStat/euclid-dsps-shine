@@ -425,6 +425,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "pyyaml" },
+    { name = "scipy" },
     { name = "setuptools" },
     { name = "tqdm" },
 ]
@@ -481,6 +482,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pyyaml" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.8" },
+    { name = "scipy" },
     { name = "setuptools", specifier = "<81" },
     { name = "sphinx", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
