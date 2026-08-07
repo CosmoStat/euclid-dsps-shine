@@ -180,3 +180,59 @@ Promotion gates:
 | Synthetic passes but Pop-COSMOS fails after exact inference | real-data forward/noise/selection mismatch is likely |
 | Several interventions improve different metrics | multiple failure sources coexist |
 
+## Implemented workflows
+
+The current implementation covers Experiments 1 and 2 only. Experiment 3 is
+deliberately not launched by these wrappers.
+
+### Importance correction
+
+`scripts/importance_correct_posterior.py` consumes an inference directory, a
+`posterior_samples` shard directory, or one parquet file. It writes:
+
+- the original joint draws with raw and PSIS weights;
+- a seeded joint PSIS-resampled bank for MIRA/TARP or plotting code that cannot
+  consume weights directly;
+- per-object ESS, maximum-weight, Pareto-k, and IS evidence diagnostics;
+- weighted redshift PIT, coverage, widths, and photo-z metrics when truth is
+  supplied;
+- input hashes, a summary, and a terminal `DONE` marker.
+
+The optional `--config --target-checkpoint` pair evaluates a different learned
+prior on the cached proposal draws. Without those arguments, the stored
+`logprior` is used and the correction isolates amortized-inference error under
+the source prior.
+
+The Jean-Zay array `scripts/submit_posthoc_importance_probes.sh` runs both the
+synthetic FENIKS test set and held-out COSMOS cohort at configurable proposal
+budgets. Its default matrix is `K={128,512,2048}` on 256 fixed objects.
+
+### Fixed-proposal generalized EM
+
+`scripts/train_posthoc_empirical_bayes_prior.py` recomputes the exact current
+prior density at every E-step, freezes the per-object self-normalized weights
+during each M-step, and updates only the population flow. A cross-entropy term
+under draws from the preceding prior implements a `KL(old || new)` trust
+penalty up to a constant. Each iteration writes its own checkpoint, E-step
+diagnostics, held-out IS evidence estimate, and support gate.
+
+The default support gate refuses an update when the median raw ESS fraction is
+below 0.01 or more than half of objects have Pareto-k above 0.7. The
+`--allow-low-ess` option exists only for technical diagnostics; a result made
+under that override must not be promoted as an empirical-Bayes result.
+
+`scripts/submit_posthoc_empirical_bayes.sh` runs one FENIKS and one COSMOS task.
+Each task builds a proposal bank only on frozen training indices, updates the
+prior, and performs controlled source-prior versus updated-prior inference on
+the same evaluation indices. The encoder is preserved, but because this
+posterior family is expressed in learned-prior base coordinates, regenerating
+the evaluation bank with the updated checkpoint refreshes the transported
+proposal and its exact `logq`.
+
+### Execution order
+
+Run the importance-budget matrix first. Promote generalized EM only when a
+budget has adequate support diagnostics. Start EM with small training and
+evaluation limits, then increase them in a new output root; never overwrite a
+failed or completed root. Spectroscopic COSMOS truth is read only after
+inference and is never passed to the prior M-step.
