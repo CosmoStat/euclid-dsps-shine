@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -151,3 +153,26 @@ def test_empirical_bayes_mstep_improves_weighted_prior_objective() -> None:
     final, _ = _prior_loss_and_grad(prior, x, weights, trust_x, 0.0)
 
     assert float(final) < float(first)
+
+
+def test_jean_zay_workflows_preserve_train_eval_and_distribution_contracts() -> None:
+    root = Path(__file__).resolve().parents[1]
+    importance = (root / "scripts/posthoc_importance_probe_h100.slurm").read_text()
+    empirical_bayes = (
+        root / "scripts/posthoc_empirical_bayes_h100.slurm"
+    ).read_text()
+
+    assert "--no-posterior-predictive" in importance
+    assert "importance_correct_posterior.py" in importance
+    assert "TRAIN_INDICES" in empirical_bayes
+    assert "EVAL_INDICES" in empirical_bayes
+    assert "farmer_a24_n40000.parquet" in empirical_bayes
+    assert "farmer_a24_full.parquet" in empirical_bayes
+    assert "alternating_em_summary.json" in empirical_bayes
+    assert "evaluate_feniks_mira.py" in empirical_bayes
+    assert "evaluate_feniks_tarp.py" in empirical_bayes
+    assert "median" not in " ".join(
+        line
+        for line in empirical_bayes.splitlines()
+        if "posterior" in line.lower()
+    ).lower()

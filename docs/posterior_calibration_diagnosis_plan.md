@@ -207,7 +207,7 @@ The Jean-Zay array `scripts/submit_posthoc_importance_probes.sh` runs both the
 synthetic FENIKS test set and held-out COSMOS cohort at configurable proposal
 budgets. Its default matrix is `K={128,512,2048}` on 256 fixed objects.
 
-### Fixed-proposal generalized EM
+### Generalized EM with proposal refresh
 
 `scripts/train_posthoc_empirical_bayes_prior.py` recomputes the exact current
 prior density at every E-step, freezes the per-object self-normalized weights
@@ -216,18 +216,24 @@ under draws from the preceding prior implements a `KL(old || new)` trust
 penalty up to a constant. Each iteration writes its own checkpoint, E-step
 diagnostics, held-out IS evidence estimate, and support gate.
 
+Within one call the proposal bank is fixed. The Jean-Zay wrapper calls a
+single E/M update at a time and regenerates the proposal bank between calls,
+so it implements the alternating proposal-refresh variant.
+
 The default support gate refuses an update when the median raw ESS fraction is
 below 0.01 or more than half of objects have Pareto-k above 0.7. The
 `--allow-low-ess` option exists only for technical diagnostics; a result made
 under that override must not be promoted as an empirical-Bayes result.
 
 `scripts/submit_posthoc_empirical_bayes.sh` runs one FENIKS and one COSMOS task.
-Each task builds a proposal bank only on frozen training indices, updates the
-prior, and performs controlled source-prior versus updated-prior inference on
-the same evaluation indices. The encoder is preserved, but because this
-posterior family is expressed in learned-prior base coordinates, regenerating
-the evaluation bank with the updated checkpoint refreshes the transported
-proposal and its exact `logq`.
+Each outer iteration rebuilds a proposal bank only on frozen training indices,
+performs one generalized-EM prior update, and then uses that checkpoint to
+refresh the next proposal. After the last iteration it performs controlled
+source-prior versus updated-prior inference on the same evaluation indices and
+writes MIRA/TARP comparisons from the joint PSIS-resampled distributions. The
+encoder is preserved, but because this posterior family is expressed in
+learned-prior base coordinates, regenerating a bank with the updated checkpoint
+refreshes the transported proposal and its exact `logq`.
 
 ### Execution order
 
