@@ -319,8 +319,18 @@ def run_importance_correction(
     resample_count: int = 128,
     seed: int = 42,
     prior_eval_batch_size: int = 65_536,
+    min_median_ess_fraction: float = 0.01,
+    max_fraction_pareto_k_gt_0p7: float = 0.5,
 ) -> dict[str, Any]:
     """Run a complete, auditable importance-correction workflow."""
+    if int(resample_count) <= 0:
+        raise ValueError("resample_count must be positive")
+    if int(prior_eval_batch_size) <= 0:
+        raise ValueError("prior_eval_batch_size must be positive")
+    _validate_support_thresholds(
+        min_median_ess_fraction=min_median_ess_fraction,
+        max_fraction_pareto_k_gt_0p7=max_fraction_pareto_k_gt_0p7,
+    )
     out = Path(out_dir)
     _refuse_nonempty_output(out)
     ensure_dir(out)
@@ -354,16 +364,49 @@ def run_importance_correction(
     resampled.to_parquet(resampled_dir / "batch_000000.parquet", index=False)
     diagnostics.to_parquet(out / "importance_diagnostics.parquet", index=False)
     diagnostics.to_csv(out / "importance_diagnostics.csv", index=False)
+    median_raw_ess_fraction = float(diagnostics["raw_ess_fraction"].median())
+    fraction_bad_k = float(np.nanmean(diagnostics["pareto_k"] > 0.7))
+    support_pass = median_raw_ess_fraction >= float(
+        min_median_ess_fraction
+    ) and fraction_bad_k <= float(max_fraction_pareto_k_gt_0p7)
+    support_gate = {
+        "status": "PASS" if support_pass else "FAIL",
+        "median_raw_ess_fraction": median_raw_ess_fraction,
+        "min_median_raw_ess_fraction": float(min_median_ess_fraction),
+        "fraction_pareto_k_gt_0p7": fraction_bad_k,
+        "max_fraction_pareto_k_gt_0p7": float(max_fraction_pareto_k_gt_0p7),
+        "interpretation": (
+            "A failed gate makes the importance-corrected result inconclusive; "
+            "PSIS cannot restore target support absent from the proposal bank."
+        ),
+    }
+    write_json(out / "support_gate.json", support_gate)
     redshift_summary = None
+    redshift_metrics_by_weight: dict[str, Any] | None = None
     if truth_path is not None:
         truth = pd.read_parquet(truth_path)
-        objects, redshift_summary = weighted_redshift_metrics(
-            weighted,
-            truth,
-            truth_column=truth_column,
-        )
-        objects.to_parquet(out / "redshift_weighted_objects.parquet", index=False)
-        objects.to_csv(out / "redshift_weighted_objects.csv", index=False)
+        redshift_metrics_by_weight = {}
+        psis_objects = None
+        for label, weight_column in (("raw", "raw_weight"), ("psis", "psis_weight")):
+            objects, weight_summary = weighted_redshift_metrics(
+                weighted,
+                truth,
+                weight_column=weight_column,
+                truth_column=truth_column,
+            )
+            objects.to_parquet(
+                out / f"redshift_{label}_weighted_objects.parquet", index=False
+            )
+            objects.to_csv(out / f"redshift_{label}_weighted_objects.csv", index=False)
+            write_json(out / f"redshift_{label}_weighted_summary.json", weight_summary)
+            redshift_metrics_by_weight[label] = weight_summary
+            if label == "psis":
+                psis_objects = objects
+        # Backward-compatible aliases are explicitly the stabilized PSIS result.
+        redshift_summary = redshift_metrics_by_weight["psis"]
+        assert psis_objects is not None
+        psis_objects.to_parquet(out / "redshift_weighted_objects.parquet", index=False)
+        psis_objects.to_csv(out / "redshift_weighted_objects.csv", index=False)
         write_json(out / "redshift_weighted_summary.json", redshift_summary)
     summary = {
         "status": "complete",
@@ -371,13 +414,20 @@ def run_importance_correction(
         "n_joint_draws": int(len(weighted)),
         "resample_count_per_object": int(resample_count),
         "target_prior": "checkpoint" if target_checkpoint is not None else "source",
-        "median_raw_ess_fraction": float(diagnostics["raw_ess_fraction"].median()),
+        "median_raw_ess_fraction": median_raw_ess_fraction,
         "median_psis_ess_fraction": float(diagnostics["psis_ess_fraction"].median()),
-        "fraction_pareto_k_gt_0p7": float(np.nanmean(diagnostics["pareto_k"] > 0.7)),
+        "fraction_pareto_k_gt_0p7": fraction_bad_k,
         "fraction_pareto_k_gt_1": float(np.nanmean(diagnostics["pareto_k"] > 1.0)),
         "parameter_names": list(bank.parameter_names),
+        "density_space": "network_latent_x",
         "distribution_contract": "All latent comparisons use weighted or resampled joint draws; q50 is restricted to redshift point metrics.",
+        "support_gate": support_gate,
         "redshift_metrics": redshift_summary,
+        "redshift_metrics_contract": (
+            "redshift_metrics is the backward-compatible PSIS alias; "
+            "redshift_metrics_by_weight reports raw self-normalized IW and PSIS separately."
+        ),
+        "redshift_metrics_by_weight": redshift_metrics_by_weight,
         "inputs": {
             "posterior": [_file_receipt(path) for path in bank.source_files],
             "config": _optional_file_receipt(config_path),
@@ -413,6 +463,20 @@ def run_generalized_em(
     """Fit a learned population prior with fixed-proposal generalized EM."""
     if weight_kind not in {"raw", "psis"}:
         raise ValueError("weight_kind must be 'raw' or 'psis'")
+    if int(iterations) <= 0:
+        raise ValueError("iterations must be positive")
+    if int(mstep_epochs) <= 0:
+        raise ValueError("mstep_epochs must be positive")
+    if int(object_batch_size) <= 0:
+        raise ValueError("object_batch_size must be positive")
+    if int(trust_samples) <= 0:
+        raise ValueError("trust_samples must be positive")
+    if not 0.0 < float(validation_fraction) < 1.0:
+        raise ValueError("validation_fraction must lie strictly between 0 and 1")
+    _validate_support_thresholds(
+        min_median_ess_fraction=min_median_ess_fraction,
+        max_fraction_pareto_k_gt_0p7=max_fraction_pareto_k_gt_0p7,
+    )
     out = Path(out_dir)
     _refuse_nonempty_output(out)
     ensure_dir(out / "checkpoints")
@@ -450,6 +514,19 @@ def run_generalized_em(
     prior = model.prior
     history: list[dict[str, Any]] = []
     key = jax.random.PRNGKey(int(seed))
+    initial_logprob = _evaluate_prior_array(prior, x)
+    initial_train_evidence = _mean_log_evidence(
+        loglike[train_objects], logq[train_objects], initial_logprob[train_objects]
+    )
+    initial_validation_evidence = _mean_log_evidence(
+        loglike[validation_objects],
+        logq[validation_objects],
+        initial_logprob[validation_objects],
+    )
+    best_iteration = 0
+    best_validation_evidence = initial_validation_evidence
+    best_source = Path(checkpoint)
+    stopping_reason = "requested_iterations_completed"
     for iteration in range(1, int(iterations) + 1):
         prior_logprob = _evaluate_prior_array(prior, x)
         raw_weights, psis_weights, diagnostic = _em_e_step(loglike, logq, prior_logprob)
@@ -491,6 +568,14 @@ def run_generalized_em(
                 prior = eqx.apply_updates(prior, updates)
                 epoch_losses.append(float(jax.device_get(loss)))
         updated_logprob = _evaluate_prior_array(prior, x)
+        _updated_raw, _updated_psis, updated_diagnostic = _em_e_step(
+            loglike, logq, updated_logprob
+        )
+        updated_median_ess = float(np.median(updated_diagnostic["raw_ess_fraction"]))
+        updated_bad_k = float(np.nanmean(updated_diagnostic["pareto_k"] > 0.7))
+        updated_gate_pass = updated_median_ess >= float(
+            min_median_ess_fraction
+        ) and updated_bad_k <= float(max_fraction_pareto_k_gt_0p7)
         train_evidence = _mean_log_evidence(
             loglike[train_objects], logq[train_objects], updated_logprob[train_objects]
         )
@@ -504,9 +589,19 @@ def run_generalized_em(
             "mstep_mean_loss": float(np.mean(epoch_losses)),
             "train_mean_log_evidence_is": train_evidence,
             "validation_mean_log_evidence_is": validation_evidence,
+            "validation_log_evidence_delta": float(
+                validation_evidence - best_validation_evidence
+            ),
             "median_raw_ess_fraction": median_ess,
             "fraction_pareto_k_gt_0p7": bad_k,
             "support_gate": "PASS" if gate_pass else "OVERRIDDEN",
+            "updated_median_raw_ess_fraction": updated_median_ess,
+            "updated_fraction_pareto_k_gt_0p7": updated_bad_k,
+            "updated_support_gate": (
+                "PASS"
+                if updated_gate_pass
+                else ("OVERRIDDEN" if allow_low_ess else "FAIL")
+            ),
         }
         history.append(record)
         diagnostic.to_parquet(
@@ -519,6 +614,9 @@ def run_generalized_em(
             source_checkpoint=checkpoint,
             metadata=record,
         )
+        updated_diagnostic.to_parquet(
+            out / f"updated_prior_{iteration:03d}_diagnostics.parquet", index=False
+        )
         print(
             "[posthoc-em] "
             f"iteration={iteration}/{iterations} loss={record['mstep_mean_loss']:.6g} "
@@ -526,14 +624,23 @@ def run_generalized_em(
             f"median_ess_fraction={median_ess:.4g} pareto_k_bad={bad_k:.4g}",
             flush=True,
         )
-    best_index = int(
-        np.nanargmax([row["validation_mean_log_evidence_is"] for row in history])
-    )
-    best_iteration = int(history[best_index]["iteration"])
-    best_source = out / "checkpoints" / f"iteration_{best_iteration:03d}.eqx"
+        if not updated_gate_pass and not allow_low_ess:
+            prior = old_prior
+            stopping_reason = "updated_prior_support_gate_failed"
+            break
+        if np.isfinite(validation_evidence) and validation_evidence > float(
+            best_validation_evidence
+        ):
+            best_iteration = iteration
+            best_validation_evidence = validation_evidence
+            best_source = out / "checkpoints" / f"iteration_{iteration:03d}.eqx"
+        else:
+            prior = old_prior
+            stopping_reason = "heldout_evidence_did_not_improve"
+            break
     shutil.copy2(best_source, out / "checkpoints" / "best.eqx")
     shutil.copy2(
-        best_source.with_suffix(".eqx.json"),
+        Path(str(best_source) + ".json"),
         out / "checkpoints" / "best.eqx.json",
     )
     pd.DataFrame(history).to_csv(out / "em_history.csv", index=False)
@@ -541,15 +648,22 @@ def run_generalized_em(
         "status": "complete",
         "algorithm": "fixed-proposal generalized EM",
         "weight_kind": weight_kind,
+        "density_space": "network_latent_x",
         "n_objects": n_objects,
         "proposal_samples_per_object": n_samples,
-        "iterations": int(iterations),
+        "iterations": int(len(history)),
+        "requested_iterations": int(iterations),
+        "completed_iterations": int(len(history)),
         "mstep_epochs": int(mstep_epochs),
         "trust_strength": float(trust_strength),
         "best_iteration": best_iteration,
-        "best_validation_mean_log_evidence_is": history[best_index][
-            "validation_mean_log_evidence_is"
-        ],
+        "selected_candidate": (
+            "source_prior" if best_iteration == 0 else "updated_prior"
+        ),
+        "initial_train_mean_log_evidence_is": initial_train_evidence,
+        "initial_validation_mean_log_evidence_is": initial_validation_evidence,
+        "best_validation_mean_log_evidence_is": best_validation_evidence,
+        "stopping_reason": stopping_reason,
         "proposal_refresh_required_if_support_fails": True,
         "distribution_contract": "M-step consumes stopped per-object joint importance weights; no marginal posterior medians are used.",
         "inputs": {
@@ -623,6 +737,17 @@ def _object_split(n_objects: int, *, validation_fraction: float, seed: int):
         n_objects - 1, max(1, int(round(float(validation_fraction) * n_objects)))
     )
     return np.sort(order[n_validation:]), np.sort(order[:n_validation])
+
+
+def _validate_support_thresholds(
+    *,
+    min_median_ess_fraction: float,
+    max_fraction_pareto_k_gt_0p7: float,
+) -> None:
+    if not 0.0 <= float(min_median_ess_fraction) <= 1.0:
+        raise ValueError("min_median_ess_fraction must lie between 0 and 1")
+    if not 0.0 <= float(max_fraction_pareto_k_gt_0p7) <= 1.0:
+        raise ValueError("max_fraction_pareto_k_gt_0p7 must lie between 0 and 1")
 
 
 def _mean_log_evidence(loglike, logq, logprior) -> float:

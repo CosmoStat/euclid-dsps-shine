@@ -57,6 +57,7 @@ from .features import (
     FeatureStats,
     compute_feature_stats,
     make_encoder_features,
+    read_feature_stats,
     write_feature_stats,
 )
 from .flows import (
@@ -701,6 +702,7 @@ def train_amortized_fs2(
     validation_indices_file: str | Path | None = None,
     initial_checkpoint: str | Path | None = None,
     start_epoch: int = 1,
+    fixed_feature_stats: str | Path | None = None,
 ) -> None:
     """Train encoder and RealNVP prior jointly on configured photometry."""
     out = ensure_dir(out_dir)
@@ -785,32 +787,49 @@ def train_amortized_fs2(
             batch_size=catalog_batch_size,
             row_indices=split.validation_indices,
         )
-    feature_stats_catalog = cfg["features"].get("stats_catalog_path")
-    stats_arrays = train_arrays
-    if feature_stats_catalog:
-        stats_config = dict(config)
-        stats_config["catalog_path"] = str(feature_stats_catalog)
+    feature_stats_catalog = None
+    feature_stats_catalog_rows = None
+    if fixed_feature_stats is not None:
+        fixed_feature_stats = Path(fixed_feature_stats)
+        if not fixed_feature_stats.is_file():
+            raise FileNotFoundError(fixed_feature_stats)
+        feature_stats = read_feature_stats(fixed_feature_stats)
+        if tuple(feature_stats.band_names) != tuple(train_arrays.band_names):
+            raise ValueError(
+                "Fixed feature-stat band order does not match training data"
+            )
         _log(
             verbose,
-            "[amortized] loading fixed feature-stats catalog: "
-            f"{feature_stats_catalog}",
+            f"[amortized] reusing fixed feature stats: {fixed_feature_stats}",
         )
-        stats_arrays = load_photometry_arrays_from_config(
-            stats_config,
-            batch_size=catalog_batch_size,
-        )
-        if stats_arrays.band_names != train_arrays.band_names:
-            raise ValueError(
-                "Feature-stats catalog band order does not match training data"
+    else:
+        feature_stats_catalog = cfg["features"].get("stats_catalog_path")
+        stats_arrays = train_arrays
+        if feature_stats_catalog:
+            stats_config = dict(config)
+            stats_config["catalog_path"] = str(feature_stats_catalog)
+            _log(
+                verbose,
+                "[amortized] loading fixed feature-stats catalog: "
+                f"{feature_stats_catalog}",
             )
-    _log(verbose, "[amortized] computing feature stats from flux/errors...")
-    feature_stats = compute_feature_stats(
-        stats_arrays.flux,
-        stats_arrays.flux_err,
-        stats_arrays.mask,
-        band_names=stats_arrays.band_names,
-        flux_transform=str(cfg["features"].get("flux_transform", "asinh")),
-    )
+            stats_arrays = load_photometry_arrays_from_config(
+                stats_config,
+                batch_size=catalog_batch_size,
+            )
+            if stats_arrays.band_names != train_arrays.band_names:
+                raise ValueError(
+                    "Feature-stats catalog band order does not match training data"
+                )
+        _log(verbose, "[amortized] computing feature stats from flux/errors...")
+        feature_stats = compute_feature_stats(
+            stats_arrays.flux,
+            stats_arrays.flux_err,
+            stats_arrays.mask,
+            band_names=stats_arrays.band_names,
+            flux_transform=str(cfg["features"].get("flux_transform", "asinh")),
+        )
+        feature_stats_catalog_rows = int(len(stats_arrays.object_id))
     write_feature_stats(out / "feature_stats.json", feature_stats)
     _log(
         verbose,
@@ -1547,6 +1566,9 @@ def train_amortized_fs2(
         "initial_checkpoint": (
             str(initial_checkpoint) if initial_checkpoint is not None else None
         ),
+        "fixed_feature_stats": (
+            str(fixed_feature_stats) if fixed_feature_stats is not None else None
+        ),
         "optimizer_state_resumed": False,
         "batch_size": int(batch_size),
         "jax_batch_size": int(jax_batch_size),
@@ -1633,7 +1655,7 @@ def train_amortized_fs2(
         "feature_stats_catalog_path": (
             str(feature_stats_catalog) if feature_stats_catalog else None
         ),
-        "feature_stats_catalog_rows": int(len(stats_arrays.object_id)),
+        "feature_stats_catalog_rows": feature_stats_catalog_rows,
         "initial_theta_diagnostics": {
             "path": "initial_theta_diagnostics.json",
             "n_near_boundary": int(initial_theta_diagnostics["n_near_boundary"]),
@@ -4464,8 +4486,8 @@ def _log_prior_safety_messages(
         _log(
             True,
             "[amortized] WARNING: joint flow prior is fixed while KL is "
-            "enabled. This is a random fixed flow prior unless a checkpoint was "
-            "loaded explicitly.",
+            "enabled. Confirm that an intended learned checkpoint was loaded; "
+            "otherwise this is a random fixed flow prior.",
         )
     if source == "standard_normal" and float(kl_weight_max) > 0.0:
         _log(

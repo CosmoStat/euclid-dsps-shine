@@ -21,6 +21,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resample-count", type=int, default=128)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--prior-eval-batch-size", type=int, default=65_536)
+    parser.add_argument("--min-median-ess-fraction", type=float, default=0.01)
+    parser.add_argument("--max-fraction-pareto-k-gt-0p7", type=float, default=0.5)
     return parser.parse_args()
 
 
@@ -36,6 +38,8 @@ def main() -> None:
         resample_count=args.resample_count,
         seed=args.seed,
         prior_eval_batch_size=args.prior_eval_batch_size,
+        min_median_ess_fraction=args.min_median_ess_fraction,
+        max_fraction_pareto_k_gt_0p7=args.max_fraction_pareto_k_gt_0p7,
     )
     print(json.dumps(summary, indent=2), flush=True)
 

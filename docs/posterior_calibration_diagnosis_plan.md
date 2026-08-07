@@ -195,7 +195,9 @@ deliberately not launched by these wrappers.
   consume weights directly;
 - per-object ESS, maximum-weight, Pareto-k, and IS evidence diagnostics;
 - weighted redshift PIT, coverage, widths, and photo-z metrics when truth is
-  supplied;
+  supplied, written separately for raw IW and PSIS;
+- an explicit support gate; workflow completion means the diagnostic executed,
+  while gate failure means the corrected result remains inconclusive;
 - input hashes, a summary, and a terminal `DONE` marker.
 
 The optional `--config --target-checkpoint` pair evaluates a different learned
@@ -215,10 +217,17 @@ during each M-step, and updates only the population flow. A cross-entropy term
 under draws from the preceding prior implements a `KL(old || new)` trust
 penalty up to a constant. Each iteration writes its own checkpoint, E-step
 diagnostics, held-out IS evidence estimate, and support gate.
+The source prior participates in model selection. A candidate update is retained
+only if held-out IS evidence improves and its post-update proposal-support gate
+remains acceptable; otherwise `best.eqx` is a copy of the source checkpoint.
 
 Within one call the proposal bank is fixed. The Jean-Zay wrapper calls a
-single E/M update at a time and regenerates the proposal bank between calls,
-so it implements the alternating proposal-refresh variant.
+single E/M update at a time, then runs short RWS wake refinement of the encoder
+with the selected prior frozen and the original feature normalization reused.
+It regenerates the proposal bank from that refined encoder between calls, so it
+implements the alternating proposal-refresh variant. This explicit refinement
+is required because the production encoders output directly in `latent_x`;
+changing only the prior leaves their `q(theta | x)` unchanged.
 
 The default support gate refuses an update when the median raw ESS fraction is
 below 0.01 or more than half of objects have Pareto-k above 0.7. The
@@ -227,13 +236,16 @@ under that override must not be promoted as an empirical-Bayes result.
 
 `scripts/submit_posthoc_empirical_bayes.sh` runs one FENIKS and one COSMOS task.
 Each outer iteration rebuilds a proposal bank only on frozen training indices,
-performs one generalized-EM prior update, and then uses that checkpoint to
-refresh the next proposal. After the last iteration it performs controlled
+performs one generalized-EM prior update, and then refines only the encoder with
+that prior frozen. After the last iteration it performs controlled
 source-prior versus updated-prior inference on the same evaluation indices and
 writes MIRA/TARP comparisons from the joint PSIS-resampled distributions. The
-encoder is preserved, but because this posterior family is expressed in
-learned-prior base coordinates, regenerating a bank with the updated checkpoint
-refreshes the transported proposal and its exact `logq`.
+encoder starts from the source checkpoint and is refreshed by RWS wake updates;
+the prior is verified unchanged during that phase. Setting
+`PROPOSAL_REFRESH_EPOCHS=0` gives the fixed-`q` ablation rather than a robust
+proposal refresh.
+The outer loop stops early when an inner update selects the source prior, and a
+stable `checkpoints/best.eqx` records the actually selected final checkpoint.
 
 ### Execution order
 

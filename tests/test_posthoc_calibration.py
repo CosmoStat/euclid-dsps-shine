@@ -113,7 +113,14 @@ def test_importance_correction_writes_auditable_joint_outputs(tmp_path) -> None:
 
     assert summary["status"] == "complete"
     assert (out / "DONE").is_file()
+    assert (out / "support_gate.json").is_file()
     assert (out / "importance_diagnostics.parquet").is_file()
+    assert (out / "redshift_raw_weighted_objects.parquet").is_file()
+    assert (out / "redshift_psis_weighted_objects.parquet").is_file()
+    assert (out / "redshift_raw_weighted_summary.json").is_file()
+    assert (out / "redshift_psis_weighted_summary.json").is_file()
+    assert set(summary["redshift_metrics_by_weight"]) == {"raw", "psis"}
+    assert summary["redshift_metrics"] == summary["redshift_metrics_by_weight"]["psis"]
     samples = pd.read_parquet(out / "resampled_samples" / "batch_000000.parquet")
     assert len(samples) == 32
     assert "source_sample_id" in samples
@@ -167,6 +174,13 @@ def test_jean_zay_workflows_preserve_train_eval_and_distribution_contracts() -> 
     assert "farmer_a24_n40000.parquet" in empirical_bayes
     assert "farmer_a24_full.parquet" in empirical_bayes
     assert "alternating_em_summary.json" in empirical_bayes
+    assert "selected_candidate" in empirical_bayes
+    assert "heldout_evidence_or_support_rejected_update" in empirical_bayes
+    assert 'UPDATED_CHECKPOINT="$OUT/checkpoints/best.eqx"' in empirical_bayes
+    assert "--fixed-feature-stats" in empirical_bayes
+    assert "--freeze-prior" in empirical_bayes
+    assert "--wake-every-encoder-epochs 1" in empirical_bayes
+    assert "prior_frozen_exactly" in empirical_bayes
     assert "evaluate_feniks_mira.py" in empirical_bayes
     assert "evaluate_feniks_tarp.py" in empirical_bayes
     assert (

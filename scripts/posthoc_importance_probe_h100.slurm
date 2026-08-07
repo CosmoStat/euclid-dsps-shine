@@ -22,11 +22,20 @@ LIMIT="${LIMIT:-256}"
 BUDGETS_CSV="${BUDGETS_CSV:-128,512,2048}"
 TASK="${SLURM_ARRAY_TASK_ID:-0}"
 
+[[ "$LIMIT" =~ ^[1-9][0-9]*$ ]] || {
+  echo "[posthoc-iw][error] LIMIT must be a positive integer" >&2
+  exit 2
+}
+
 IFS=',' read -r -a BUDGETS <<< "$BUDGETS_CSV"
 N_BUDGETS="${#BUDGETS[@]}"
 DOMAIN_INDEX=$((TASK / N_BUDGETS))
 BUDGET_INDEX=$((TASK % N_BUDGETS))
 BUDGET="${BUDGETS[$BUDGET_INDEX]}"
+[[ "$BUDGET" =~ ^[1-9][0-9]*$ ]] || {
+  echo "[posthoc-iw][error] every posterior budget must be a positive integer" >&2
+  exit 2
+}
 
 FENIKS_ROOT="${FENIKS_ROOT:-outputs/runs/feniks_selfsup_learned_t2_jaxcosmo_v1/selfsup_rws_k8_t2}"
 POPCOSMOS_ROOT="${POPCOSMOS_ROOT:-outputs/runs/popcosmos_native15d_rws_k8_array_20260803_162536/bands26/full_cont120}"
@@ -146,7 +155,10 @@ python scripts/evaluate_feniks_tarp.py \
   --seed 260807
 
 test -e "$CORRECTION/DONE"
+test -s "$CORRECTION/support_gate.json"
 test -s "$CORRECTION/importance_summary.json"
+test -s "$CORRECTION/redshift_raw_weighted_summary.json"
+test -s "$CORRECTION/redshift_psis_weighted_summary.json"
 test -s "$CORRECTION/redshift_weighted_summary.json"
 printf '{"status":"complete","domain":"%s","posterior_samples":%s,"objects":%s}\n' \
   "$DOMAIN" "$BUDGET" "$LIMIT" > "$OUT/DONE"

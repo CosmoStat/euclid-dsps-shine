@@ -640,6 +640,13 @@ def _add_amortized_train_arguments(
         ),
     )
     parser.add_argument(
+        "--fixed-feature-stats",
+        help=(
+            "Reuse an existing feature-stat JSON during warm-start training instead "
+            "of recomputing normalization from the selected rows."
+        ),
+    )
+    parser.add_argument(
         "--start-epoch",
         type=int,
         default=1,
@@ -694,6 +701,11 @@ def _add_amortized_train_arguments(
         "--prior-freeze-epochs",
         type=int,
         help="Freeze RealNVP prior gradients for this many initial epochs.",
+    )
+    parser.add_argument(
+        "--freeze-prior",
+        action="store_true",
+        help="Freeze all learned-prior parameters for the complete training call.",
     )
     parser.add_argument(
         "--prior-update-schedule",
@@ -1197,6 +1209,7 @@ def _run_amortized_train(
         validation_indices_file=getattr(args, "validation_indices_file", None),
         initial_checkpoint=getattr(args, "initial_checkpoint", None),
         start_epoch=int(getattr(args, "start_epoch", 1)),
+        fixed_feature_stats=getattr(args, "fixed_feature_stats", None),
     )
 
 
@@ -1420,6 +1433,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         training["data_parallel"] = str(args.data_parallel)
     if getattr(args, "prior_freeze_epochs", None) is not None:
         prior["freeze_epochs"] = int(args.prior_freeze_epochs)
+    if bool(getattr(args, "freeze_prior", False)):
+        prior["train_jointly"] = False
     if getattr(args, "prior_update_schedule", None) is not None:
         prior["update_schedule"] = str(args.prior_update_schedule)
     if getattr(args, "prior_update_every_epochs", None) is not None:
