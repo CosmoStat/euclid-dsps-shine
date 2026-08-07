@@ -27,9 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     parser.add_argument("--min-median-ess-fraction", type=float, default=0.01)
-    parser.add_argument(
-        "--max-fraction-pareto-k-gt-0p7", type=float, default=0.5
-    )
+    parser.add_argument("--max-fraction-pareto-k-gt-0p7", type=float, default=0.5)
     parser.add_argument("--allow-low-ess", action="store_true")
     return parser.parse_args()
 

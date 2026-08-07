@@ -28,20 +28,12 @@ def main() -> None:
                 "artifact": str(path.relative_to(args.root)),
                 "n_objects": payload.get("n_objects"),
                 "n_joint_draws": payload.get("n_joint_draws"),
-                "median_raw_ess_fraction": payload.get(
-                    "median_raw_ess_fraction"
-                ),
-                "median_psis_ess_fraction": payload.get(
-                    "median_psis_ess_fraction"
-                ),
-                "fraction_pareto_k_gt_0p7": payload.get(
-                    "fraction_pareto_k_gt_0p7"
-                ),
+                "median_raw_ess_fraction": payload.get("median_raw_ess_fraction"),
+                "median_psis_ess_fraction": payload.get("median_psis_ess_fraction"),
+                "fraction_pareto_k_gt_0p7": payload.get("fraction_pareto_k_gt_0p7"),
                 "redshift_n": redshift.get("n_objects"),
                 "redshift_nmad": redshift.get("nmad"),
-                "redshift_outlier_fraction_0p15": redshift.get(
-                    "outlier_fraction_0p15"
-                ),
+                "redshift_outlier_fraction_0p15": redshift.get("outlier_fraction_0p15"),
                 "redshift_coverage_68": redshift.get("coverage_68"),
                 "redshift_coverage_95": redshift.get("coverage_95"),
                 "redshift_pit_ks_uniform": redshift.get("pit_ks_uniform"),
@@ -67,7 +59,9 @@ def main() -> None:
                 "weight_kind": payload.get("weight_kind"),
             }
         )
-    pd.DataFrame(em).to_csv(args.out / "empirical_bayes_decision_table.csv", index=False)
+    pd.DataFrame(em).to_csv(
+        args.out / "empirical_bayes_decision_table.csv", index=False
+    )
     summary = {
         "status": "complete",
         "importance_artifacts": len(rows),

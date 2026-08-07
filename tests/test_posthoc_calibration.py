@@ -158,9 +158,7 @@ def test_empirical_bayes_mstep_improves_weighted_prior_objective() -> None:
 def test_jean_zay_workflows_preserve_train_eval_and_distribution_contracts() -> None:
     root = Path(__file__).resolve().parents[1]
     importance = (root / "scripts/posthoc_importance_probe_h100.slurm").read_text()
-    empirical_bayes = (
-        root / "scripts/posthoc_empirical_bayes_h100.slurm"
-    ).read_text()
+    empirical_bayes = (root / "scripts/posthoc_empirical_bayes_h100.slurm").read_text()
 
     assert "--no-posterior-predictive" in importance
     assert "importance_correct_posterior.py" in importance
@@ -171,8 +169,9 @@ def test_jean_zay_workflows_preserve_train_eval_and_distribution_contracts() -> 
     assert "alternating_em_summary.json" in empirical_bayes
     assert "evaluate_feniks_mira.py" in empirical_bayes
     assert "evaluate_feniks_tarp.py" in empirical_bayes
-    assert "median" not in " ".join(
-        line
-        for line in empirical_bayes.splitlines()
-        if "posterior" in line.lower()
-    ).lower()
+    assert (
+        "median"
+        not in " ".join(
+            line for line in empirical_bayes.splitlines() if "posterior" in line.lower()
+        ).lower()
+    )

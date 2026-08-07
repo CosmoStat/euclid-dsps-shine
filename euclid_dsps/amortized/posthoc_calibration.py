@@ -189,9 +189,9 @@ def importance_weight_bank(
         diagnostics.append(
             {
                 bank.identity_column: identity,
-                "object_id": group["object_id"].iloc[0]
-                if "object_id" in group
-                else identity,
+                "object_id": (
+                    group["object_id"].iloc[0] if "object_id" in group else identity
+                ),
                 "n_proposal_samples": int(len(group)),
                 "n_finite_logweights": int(finite.sum()),
                 "raw_ess": float(result["raw_ess"]),
@@ -222,13 +222,21 @@ def weighted_redshift_metrics(
     truth_column: str = "redshift_true",
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Compute weighted PIT, coverage, widths, and point photo-z diagnostics."""
-    identity = "row_index" if "row_index" in weighted_samples and "row_index" in truth else "object_id"
+    identity = (
+        "row_index"
+        if "row_index" in weighted_samples and "row_index" in truth
+        else "object_id"
+    )
     required_samples = {identity, z_parameter, weight_column}
     required_truth = {identity, truth_column}
     if not required_samples <= set(weighted_samples):
-        raise ValueError(f"Missing posterior columns: {sorted(required_samples - set(weighted_samples))}")
+        raise ValueError(
+            f"Missing posterior columns: {sorted(required_samples - set(weighted_samples))}"
+        )
     if not required_truth <= set(truth):
-        raise ValueError(f"Missing truth columns: {sorted(required_truth - set(truth))}")
+        raise ValueError(
+            f"Missing truth columns: {sorted(required_truth - set(truth))}"
+        )
     if truth.duplicated(identity).any():
         raise ValueError(f"Truth contains duplicate {identity} values")
     truth_lookup = truth.set_index(identity, drop=False)
@@ -250,11 +258,16 @@ def weighted_redshift_metrics(
             values, weights, (0.025, 0.16, 0.50, 0.84, 0.975)
         )
         delta = (q50 - z_true) / (1.0 + z_true)
-        pit = float(weights[values < z_true].sum() + 0.5 * weights[values == z_true].sum())
+        pit = float(
+            weights[values < z_true].sum() + 0.5 * weights[values == z_true].sum()
+        )
         rows.append(
             {
                 identity: identity_value,
-                "object_id": truth_row.get("object_id", group.get("object_id", pd.Series([identity_value])).iloc[0]),
+                "object_id": truth_row.get(
+                    "object_id",
+                    group.get("object_id", pd.Series([identity_value])).iloc[0],
+                ),
                 "z_true": z_true,
                 "z_pred_q50": float(q50),
                 "z_q025": float(q025),
@@ -418,17 +431,19 @@ def run_generalized_em(
     n_objects = int(len(identities))
     n_samples = int(counts[0])
     x = x.reshape(n_objects, n_samples, x.shape[-1])
-    loglike = bank.frame["loglike"].to_numpy(dtype=np.float64).reshape(n_objects, n_samples)
+    loglike = (
+        bank.frame["loglike"].to_numpy(dtype=np.float64).reshape(n_objects, n_samples)
+    )
     logq = bank.frame["logq"].to_numpy(dtype=np.float64).reshape(n_objects, n_samples)
     train_objects, validation_objects = _object_split(
         n_objects, validation_fraction=validation_fraction, seed=seed
     )
-    pd.DataFrame(
-        {bank.identity_column: identities[train_objects]}
-    ).to_parquet(out / "train_object_identities.parquet", index=False)
-    pd.DataFrame(
-        {bank.identity_column: identities[validation_objects]}
-    ).to_parquet(out / "validation_object_identities.parquet", index=False)
+    pd.DataFrame({bank.identity_column: identities[train_objects]}).to_parquet(
+        out / "train_object_identities.parquet", index=False
+    )
+    pd.DataFrame({bank.identity_column: identities[validation_objects]}).to_parquet(
+        out / "validation_object_identities.parquet", index=False
+    )
     optimizer = optax.adamw(
         learning_rate=float(learning_rate), weight_decay=float(weight_decay)
     )
@@ -437,14 +452,11 @@ def run_generalized_em(
     key = jax.random.PRNGKey(int(seed))
     for iteration in range(1, int(iterations) + 1):
         prior_logprob = _evaluate_prior_array(prior, x)
-        raw_weights, psis_weights, diagnostic = _em_e_step(
-            loglike, logq, prior_logprob
-        )
+        raw_weights, psis_weights, diagnostic = _em_e_step(loglike, logq, prior_logprob)
         median_ess = float(np.median(diagnostic["raw_ess_fraction"]))
         bad_k = float(np.nanmean(diagnostic["pareto_k"] > 0.7))
-        gate_pass = (
-            median_ess >= float(min_median_ess_fraction)
-            and bad_k <= float(max_fraction_pareto_k_gt_0p7)
+        gate_pass = median_ess >= float(min_median_ess_fraction) and bad_k <= float(
+            max_fraction_pareto_k_gt_0p7
         )
         if not gate_pass and not allow_low_ess:
             diagnostic.to_parquet(
@@ -514,7 +526,9 @@ def run_generalized_em(
             f"median_ess_fraction={median_ess:.4g} pareto_k_bad={bad_k:.4g}",
             flush=True,
         )
-    best_index = int(np.nanargmax([row["validation_mean_log_evidence_is"] for row in history]))
+    best_index = int(
+        np.nanargmax([row["validation_mean_log_evidence_is"] for row in history])
+    )
     best_iteration = int(history[best_index]["iteration"])
     best_source = out / "checkpoints" / f"iteration_{best_iteration:03d}.eqx"
     shutil.copy2(best_source, out / "checkpoints" / "best.eqx")
@@ -533,7 +547,9 @@ def run_generalized_em(
         "mstep_epochs": int(mstep_epochs),
         "trust_strength": float(trust_strength),
         "best_iteration": best_iteration,
-        "best_validation_mean_log_evidence_is": history[best_index]["validation_mean_log_evidence_is"],
+        "best_validation_mean_log_evidence_is": history[best_index][
+            "validation_mean_log_evidence_is"
+        ],
         "proposal_refresh_required_if_support_fails": True,
         "distribution_contract": "M-step consumes stopped per-object joint importance weights; no marginal posterior medians are used.",
         "inputs": {
@@ -558,7 +574,9 @@ def _prior_loss_and_grad(prior, x, weights, trust_x, trust_strength):
     return eqx.filter_value_and_grad(loss_fn)(prior)
 
 
-def _evaluate_prior_array(prior, x: np.ndarray, batch_size: int = 262_144) -> np.ndarray:
+def _evaluate_prior_array(
+    prior, x: np.ndarray, batch_size: int = 262_144
+) -> np.ndarray:
     flat = x.reshape(-1, x.shape[-1])
     evaluate = eqx.filter_jit(prior.log_prob)
     result = []
@@ -666,7 +684,11 @@ def _file_receipt(path: Path) -> dict[str, Any]:
     with path.open("rb") as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
-    return {"path": str(path), "size_bytes": path.stat().st_size, "sha256": digest.hexdigest()}
+    return {
+        "path": str(path),
+        "size_bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
+    }
 
 
 def _optional_file_receipt(path):
