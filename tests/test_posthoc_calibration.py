@@ -165,6 +165,9 @@ def test_empirical_bayes_mstep_improves_weighted_prior_objective() -> None:
 def test_jean_zay_workflows_preserve_train_eval_and_distribution_contracts() -> None:
     root = Path(__file__).resolve().parents[1]
     importance = (root / "scripts/posthoc_importance_probe_h100.slurm").read_text()
+    submit_importance = (root / "scripts/submit_posthoc_importance_probes.sh").read_text()
+    assert "BUDGETS_EXPORT" in submit_importance
+    assert 'BUDGETS_CSV="${BUDGETS_CSV//:/,}"' in importance
     empirical_bayes = (root / "scripts/posthoc_empirical_bayes_h100.slurm").read_text()
 
     assert "--no-posterior-predictive" in importance

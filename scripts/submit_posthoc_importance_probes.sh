@@ -15,9 +15,12 @@ mkdir -p outputs/logs
 IFS=',' read -r -a budgets <<< "$BUDGETS_CSV"
 n_tasks=$((2 * ${#budgets[@]}))
 last_task=$((n_tasks - 1))
+# Slurm uses commas as --export separators. Encode the budget list before
+# exporting it, then decode it in the worker script.
+BUDGETS_EXPORT="${BUDGETS_CSV//,/:}"
 
 raw=$(sbatch --parsable --array="0-${last_task}%${ARRAY_CONCURRENCY}" \
-  --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",OUTPUT_ROOT="$OUTPUT_ROOT",BUDGETS_CSV="$BUDGETS_CSV",LIMIT="$LIMIT" \
+  --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",OUTPUT_ROOT="$OUTPUT_ROOT",BUDGETS_CSV="$BUDGETS_EXPORT",LIMIT="$LIMIT" \
   scripts/posthoc_importance_probe_h100.slurm)
 job="${raw%%;*}"
 
