@@ -423,8 +423,12 @@ def run_generalized_em(
     train_objects, validation_objects = _object_split(
         n_objects, validation_fraction=validation_fraction, seed=seed
     )
-    np.save(out / "train_object_identities.npy", identities[train_objects])
-    np.save(out / "validation_object_identities.npy", identities[validation_objects])
+    pd.DataFrame(
+        {bank.identity_column: identities[train_objects]}
+    ).to_parquet(out / "train_object_identities.parquet", index=False)
+    pd.DataFrame(
+        {bank.identity_column: identities[validation_objects]}
+    ).to_parquet(out / "validation_object_identities.parquet", index=False)
     optimizer = optax.adamw(
         learning_rate=float(learning_rate), weight_decay=float(weight_decay)
     )
@@ -621,7 +625,14 @@ def _write_updated_checkpoint(path, model, prior, *, source_checkpoint, metadata
         if source_sidecar.is_file()
         else {}
     )
-    sidecar["posthoc_empirical_bayes"] = metadata
+    feature_stats = sidecar.get("feature_stats_path")
+    if feature_stats and not Path(str(feature_stats)).is_absolute():
+        feature_stats = (Path(source_checkpoint).parent / str(feature_stats)).resolve()
+        sidecar["feature_stats_path"] = str(feature_stats)
+    sidecar["posthoc_empirical_bayes"] = {
+        **metadata,
+        "source_checkpoint": _file_receipt(Path(source_checkpoint)),
+    }
     write_json(str(path) + ".json", sidecar)
 
 
