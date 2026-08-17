@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--out", type=Path)
+    parser.add_argument("--variants", default=",".join(VARIANTS))
     parser.add_argument("--max-median-abs-logz-seed-delta", type=float, default=0.5)
     parser.add_argument("--max-median-chi2-per-band", type=float, default=10.0)
     parser.add_argument("--max-median-frac-abs-gt-5", type=float, default=0.25)
@@ -25,6 +26,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    variants = tuple(item.strip() for item in args.variants.split(",") if item.strip())
+    unsupported = sorted(set(variants) - set(VARIANTS))
+    if not variants or unsupported:
+        raise ValueError(f"Invalid SMC variants: {unsupported or variants}")
     out = args.out or args.root / "pilot_selection"
     if out.exists():
         raise FileExistsError(f"Refusing to overwrite pilot summary: {out}")
@@ -32,7 +37,7 @@ def main() -> None:
     rows = []
     candidates = []
     expected_rows = None
-    for variant in VARIANTS:
+    for variant in variants:
         runs = sorted((args.root / variant).glob("seed_*"))
         if len(runs) != 2:
             raise RuntimeError(
@@ -129,6 +134,7 @@ def main() -> None:
             "photometric adequacy; rank eligible likelihoods by mean seed mean log evidence"
         ),
         "spectroscopy_used": False,
+        "evaluated_variants": list(variants),
         "thresholds": {
             "max_median_abs_logz_seed_delta": args.max_median_abs_logz_seed_delta,
             "max_median_chi2_per_band": args.max_median_chi2_per_band,

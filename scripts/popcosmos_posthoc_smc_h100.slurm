@@ -29,17 +29,26 @@ MALA_STEPS="${MALA_STEPS:-2}"
 MALA_STEP_SIZE="${MALA_STEP_SIZE:-0.02}"
 MALA_PARTICLE_CHUNK_SIZE="${MALA_PARTICLE_CHUNK_SIZE:-64}"
 TASK="${SLURM_ARRAY_TASK_ID:-0}"
+SMC_VARIANTS_CSV="${SMC_VARIANTS_CSV:-floor_0p00,floor_0p02,floor_0p05}"
+SMC_SEEDS_CSV="${SMC_SEEDS_CSV:-260817,260818}"
+IFS=',' read -r -a SMC_VARIANTS <<< "$SMC_VARIANTS_CSV"
+IFS=',' read -r -a SMC_SEEDS <<< "$SMC_SEEDS_CSV"
+N_SEEDS="${#SMC_SEEDS[@]}"
 GROUP=$((TASK / N_SHARDS))
 SHARD=$((TASK % N_SHARDS))
-
-case "$GROUP" in
-  0) VARIANT=floor_0p00; CONFIG=configs/experiments/popcosmos_native15d_rws.yaml; SEED=260817 ;;
-  1) VARIANT=floor_0p00; CONFIG=configs/experiments/popcosmos_native15d_rws.yaml; SEED=260818 ;;
-  2) VARIANT=floor_0p02; CONFIG=configs/experiments/popcosmos_native15d_rws_floor02.yaml; SEED=260817 ;;
-  3) VARIANT=floor_0p02; CONFIG=configs/experiments/popcosmos_native15d_rws_floor02.yaml; SEED=260818 ;;
-  4) VARIANT=floor_0p05; CONFIG=configs/experiments/popcosmos_native15d_rws_floor05.yaml; SEED=260817 ;;
-  5) VARIANT=floor_0p05; CONFIG=configs/experiments/popcosmos_native15d_rws_floor05.yaml; SEED=260818 ;;
-  *) echo "[posthoc-smc][error] invalid array task: $TASK" >&2; exit 2 ;;
+VARIANT_INDEX=$((GROUP / N_SEEDS))
+SEED_INDEX=$((GROUP % N_SEEDS))
+if (( VARIANT_INDEX >= ${#SMC_VARIANTS[@]} )); then
+  echo "[posthoc-smc][error] invalid array task: $TASK" >&2
+  exit 2
+fi
+VARIANT="${SMC_VARIANTS[$VARIANT_INDEX]}"
+SEED="${SMC_SEEDS[$SEED_INDEX]}"
+case "$VARIANT" in
+  floor_0p00) CONFIG=configs/experiments/popcosmos_native15d_rws.yaml ;;
+  floor_0p02) CONFIG=configs/experiments/popcosmos_native15d_rws_floor02.yaml ;;
+  floor_0p05) CONFIG=configs/experiments/popcosmos_native15d_rws_floor05.yaml ;;
+  *) echo "[posthoc-smc][error] unsupported variant: $VARIANT" >&2; exit 2 ;;
 esac
 
 DATASET="Data/cosmos2020/prepared/farmer_a24_full.parquet"

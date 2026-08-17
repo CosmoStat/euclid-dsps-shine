@@ -11,6 +11,21 @@ LIMIT="${LIMIT:-256}"
 PROBE_LIMIT="${PROBE_LIMIT:-256}"
 N_SHARDS="${N_SHARDS:-4}"
 ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-12}"
+SMC_VARIANTS_CSV="${SMC_VARIANTS_CSV:-floor_0p00,floor_0p02,floor_0p05}"
+SMC_SEEDS_CSV="${SMC_SEEDS_CSV:-260817,260818}"
+export SMC_VARIANTS_CSV SMC_SEEDS_CSV
+IFS=',' read -r -a SMC_VARIANTS <<< "$SMC_VARIANTS_CSV"
+IFS=',' read -r -a SMC_SEEDS <<< "$SMC_SEEDS_CSV"
+for variant in "${SMC_VARIANTS[@]}"; do
+  case "$variant" in
+    floor_0p00|floor_0p02|floor_0p05) ;;
+    *) echo "[posthoc-smc-submit][error] unsupported variant: $variant" >&2; exit 2 ;;
+  esac
+done
+if (( ${#SMC_VARIANTS[@]} < 1 || ${#SMC_SEEDS[@]} != 2 )); then
+  echo "[posthoc-smc-submit][error] require at least one variant and exactly two seeds" >&2
+  exit 2
+fi
 
 cd "$REPO_DIR"
 test ! -e "$OUTPUT_ROOT" || {
@@ -75,7 +90,8 @@ payload = {
 (out / "cohort_manifest.json").write_text(json.dumps(payload, indent=2) + "\n")
 PY
 
-array_max=$((6 * N_SHARDS - 1))
+array_tasks=$((${#SMC_VARIANTS[@]} * ${#SMC_SEEDS[@]} * N_SHARDS))
+array_max=$((array_tasks - 1))
 pilot_raw=$(sbatch --parsable --array="0-${array_max}%${ARRAY_CONCURRENCY}" \
   --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",SOURCE_ROOT="$SOURCE_ROOT",OUTPUT_ROOT="$OUTPUT_ROOT",LIMIT="$LIMIT",N_SHARDS="$N_SHARDS",PARTICLES="${PARTICLES:-1024}",OBJECT_BATCH_SIZE="${OBJECT_BATCH_SIZE:-4}",TARGET_ESS_FRACTION="${TARGET_ESS_FRACTION:-0.5}",MAX_STAGES="${MAX_STAGES:-64}",MALA_STEPS="${MALA_STEPS:-2}",MALA_STEP_SIZE="${MALA_STEP_SIZE:-0.02}",MALA_PARTICLE_CHUNK_SIZE="${MALA_PARTICLE_CHUNK_SIZE:-64}" \
   scripts/popcosmos_posthoc_smc_h100.slurm)
@@ -87,14 +103,16 @@ final_raw=$(sbatch --parsable --dependency="afterok:${pilot_job}" \
 final_job="${final_raw%%;*}"
 
 env_file=outputs/logs/popcosmos_posthoc_smc_latest.env
-printf 'export SMC_PILOT_JOB=%q\nexport SMC_FINALIZER_JOB=%q\nexport SMC_OUTPUT_ROOT=%q\nexport SOURCE_ROOT=%q\nexport SMC_CALIBRATION_INDICES=%q\nexport SMC_PROBE_INDICES=%q\nexport SMC_N_SHARDS=%q\n' \
+printf 'export SMC_PILOT_JOB=%q\nexport SMC_FINALIZER_JOB=%q\nexport SMC_OUTPUT_ROOT=%q\nexport SOURCE_ROOT=%q\nexport SMC_CALIBRATION_INDICES=%q\nexport SMC_PROBE_INDICES=%q\nexport SMC_N_SHARDS=%q\nexport SMC_VARIANTS_CSV=%q\nexport SMC_SEEDS_CSV=%q\n' \
   "$pilot_job" "$final_job" "$OUTPUT_ROOT" "$SOURCE_ROOT" \
   "$OUTPUT_ROOT/cohorts/smc_calibration_indices.npy" \
-  "$OUTPUT_ROOT/cohorts/proposal_probe_indices.npy" "$N_SHARDS" > "$env_file"
+  "$OUTPUT_ROOT/cohorts/proposal_probe_indices.npy" "$N_SHARDS" \
+  "$SMC_VARIANTS_CSV" "$SMC_SEEDS_CSV" > "$env_file"
 echo "smc_pilot_job=$pilot_job"
 echo "smc_finalizer_job=$final_job"
 echo "smc_output_root=$OUTPUT_ROOT"
-echo "array_tasks=$((array_max + 1)) concurrency=$ARRAY_CONCURRENCY shards_per_seed=$N_SHARDS"
+echo "variants=$SMC_VARIANTS_CSV seeds=$SMC_SEEDS_CSV"
+echo "array_tasks=$array_tasks concurrency=$ARRAY_CONCURRENCY shards_per_seed=$N_SHARDS"
 echo "monitor: squeue -j $pilot_job,$final_job"
 echo "logs: outputs/logs/cosmos_smc-${pilot_job}_<taskid>.out"
 echo "latest_env=$env_file"

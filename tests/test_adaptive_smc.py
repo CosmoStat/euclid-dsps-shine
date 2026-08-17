@@ -181,11 +181,18 @@ def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     pilot = (root / "scripts/popcosmos_posthoc_smc_h100.slurm").read_text()
     refresh = (root / "scripts/popcosmos_posthoc_smc_refresh_h100.slurm").read_text()
     submit = (root / "scripts/submit_popcosmos_posthoc_smc_pilot.sh").read_text()
-    assert "array_max=$((6 * N_SHARDS - 1))" in submit
+    assert (
+        "array_tasks=$((${#SMC_VARIANTS[@]} * ${#SMC_SEEDS[@]} * N_SHARDS))" in submit
+    )
     assert 'ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-12}"' in submit
     assert 'CALIBRATION_INDICES="$SOURCE_ROOT/train/validation_indices.npy"' in submit
     assert "proposal_probe_indices.npy" in submit
     assert "floor_0p00" in pilot and "floor_0p02" in pilot and "floor_0p05" in pilot
+    assert 'SMC_VARIANTS_CSV="${SMC_VARIANTS_CSV:-' in pilot
+    assert (
+        '--variants "$SMC_VARIANTS_CSV"'
+        in (root / "scripts/popcosmos_posthoc_smc_finalize.slurm").read_text()
+    )
     assert "--constraint=h100" in pilot
     assert "--gres=gpu:1" in pilot
     assert "selection_status" in refresh
@@ -319,3 +326,41 @@ def test_smc_summary_selects_only_stable_adequate_variant(tmp_path: Path) -> Non
     assert summary["selection_status"] == "PASS"
     assert summary["selected_variant"] == "floor_0p02"
     assert summary["spectroscopy_used"] is False
+
+
+def test_smc_summary_accepts_preselected_variant(tmp_path: Path) -> None:
+    root = tmp_path / "pilot"
+    variant = "floor_0p05"
+    for seed, offset in ((260817, -0.05), (260818, 0.05)):
+        run = root / variant / f"seed_{seed}"
+        run.mkdir(parents=True)
+        (run / "DONE").touch()
+        pd.DataFrame(
+            {"row_index": [10, 20], "log_evidence": [2.0 + offset, 2.2 + offset]}
+        ).to_parquet(run / "smc_object_diagnostics.parquet", index=False)
+        (run / "smc_summary.json").write_text(
+            json.dumps(
+                {
+                    "seed": seed,
+                    "support_gate": {"status": "PASS"},
+                    "metrics": {
+                        "mean_log_evidence": 2.0 + offset,
+                        "median_log_evidence": 2.0 + offset,
+                        "median_chi2_per_valid_band": 2.0,
+                        "median_fraction_abs_gt_5": 0.02,
+                    },
+                }
+            )
+        )
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/summarize_popcosmos_posthoc_smc.py"
+    )
+    subprocess.run(
+        [sys.executable, str(script), "--root", str(root), "--variants", variant],
+        check=True,
+    )
+    summary = json.loads((root / "pilot_selection/selection_summary.json").read_text())
+    assert summary["selection_status"] == "PASS"
+    assert summary["selected_variant"] == variant
+    assert summary["evaluated_variants"] == [variant]
