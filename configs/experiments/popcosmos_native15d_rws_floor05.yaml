@@ -1,0 +1,9 @@
+extends: popcosmos_native15d_rws.yaml
+
+# Likelihood-adequacy branch paired with the zero-floor and 2% configurations.
+fit:
+  flux_error_floor_frac: 0.05
+
+amortized:
+  likelihood:
+    error_floor_frac: 0.05

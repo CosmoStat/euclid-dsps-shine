@@ -1,0 +1,11 @@
+extends: popcosmos_native15d_rws.yaml
+
+# Likelihood-adequacy branch. This changes only the relative photometric error
+# floor; the frozen encoder, learned prior, filters, latent space and cohort are
+# identical to the zero-floor control.
+fit:
+  flux_error_floor_frac: 0.02
+
+amortized:
+  likelihood:
+    error_floor_frac: 0.02
