@@ -62,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-stages", type=int, default=64)
     parser.add_argument("--mala-steps", type=int, default=2)
     parser.add_argument("--mala-step-size", type=float, default=0.02)
+    parser.add_argument("--mala-particle-chunk-size", type=int, default=64)
     parser.add_argument("--seed", type=int, default=260817)
     parser.add_argument("--require-gpu", action="store_true")
     return parser.parse_args()
@@ -160,7 +161,8 @@ def main() -> None:
         "[posthoc-smc] "
         f"objects={args.limit} particles={args.particles} "
         f"floor={likelihood['error_floor_frac']} seed={args.seed} "
-        f"batch={args.object_batch_size}",
+        f"batch={args.object_batch_size} "
+        f"mala_particle_chunk={args.mala_particle_chunk_size}",
         flush=True,
     )
     key = jax.random.PRNGKey(args.seed)
@@ -190,6 +192,7 @@ def main() -> None:
             max_stages=args.max_stages,
             mala_steps=args.mala_steps,
             mala_step_size=args.mala_step_size,
+            mala_particle_chunk_size=args.mala_particle_chunk_size,
             density_args=density_args,
             kernels=kernels,
         )
@@ -442,6 +445,7 @@ def _summary(args, config, likelihood, objects, stages, start_time):
         "target_ess_fraction": float(args.target_ess_fraction),
         "mala_steps": int(args.mala_steps),
         "mala_step_size": float(args.mala_step_size),
+        "mala_particle_chunk_size": int(args.mala_particle_chunk_size),
         "wall_seconds": float(time.perf_counter() - start_time),
         "metrics": {
             "mean_log_evidence": float(objects["log_evidence"].mean()),

@@ -40,6 +40,7 @@ def test_adaptive_smc_transports_proposal_and_preserves_normalization() -> None:
         max_stages=32,
         mala_steps=2,
         mala_step_size=0.15,
+        mala_particle_chunk_size=64,
     )
 
     means = jnp.sum(result.weights[..., None] * result.particles, axis=0)[:, 0]
@@ -49,6 +50,18 @@ def test_adaptive_smc_transports_proposal_and_preserves_normalization() -> None:
     assert result.beta_to.shape[0] >= 2
     assert np.all(result.pre_resample_ess > 0.0)
     assert np.all((result.mala_acceptance >= 0.0) & (result.mala_acceptance <= 1.0))
+
+
+def test_adaptive_smc_rejects_invalid_mala_particle_chunk_size() -> None:
+    particles = jnp.zeros((8, 1, 1))
+    with pytest.raises(ValueError, match="chunk size must be positive"):
+        run_adaptive_smc(
+            key=jax.random.PRNGKey(1),
+            initial_particles=particles,
+            proposal_logdensity_fn=lambda value: _normal_logpdf(value, 0.0),
+            target_logdensity_fn=lambda value: _normal_logpdf(value, 1.0),
+            mala_particle_chunk_size=0,
+        )
 
 
 def test_adaptive_smc_reuses_kernels_with_dynamic_density_arguments() -> None:

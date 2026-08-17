@@ -27,6 +27,7 @@ TARGET_ESS_FRACTION="${TARGET_ESS_FRACTION:-0.5}"
 MAX_STAGES="${MAX_STAGES:-64}"
 MALA_STEPS="${MALA_STEPS:-2}"
 MALA_STEP_SIZE="${MALA_STEP_SIZE:-0.02}"
+MALA_PARTICLE_CHUNK_SIZE="${MALA_PARTICLE_CHUNK_SIZE:-64}"
 TASK="${SLURM_ARRAY_TASK_ID:-0}"
 GROUP=$((TASK / N_SHARDS))
 SHARD=$((TASK % N_SHARDS))
@@ -93,5 +94,6 @@ python scripts/run_popcosmos_posthoc_smc.py \
   --max-stages "$MAX_STAGES" \
   --mala-steps "$MALA_STEPS" \
   --mala-step-size "$MALA_STEP_SIZE" \
+  --mala-particle-chunk-size "$MALA_PARTICLE_CHUNK_SIZE" \
   --seed "$SEED" \
   --require-gpu

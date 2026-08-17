@@ -54,6 +54,7 @@ def run_adaptive_smc(
     max_stages: int = 64,
     mala_steps: int = 2,
     mala_step_size: float = 0.02,
+    mala_particle_chunk_size: int | None = None,
     density_args: tuple = (),
     kernels: AdaptiveSMCKernels | None = None,
 ) -> AdaptiveSMCResult:
@@ -79,6 +80,8 @@ def run_adaptive_smc(
         raise ValueError("max_stages must be positive")
     if int(mala_steps) < 0 or float(mala_step_size) <= 0.0:
         raise ValueError("MALA steps must be non-negative and step size positive")
+    if mala_particle_chunk_size is not None and int(mala_particle_chunk_size) < 1:
+        raise ValueError("MALA particle chunk size must be positive")
 
     if kernels is None:
         kernels = build_adaptive_smc_kernels(
@@ -151,15 +154,27 @@ def run_adaptive_smc(
 
         stage_acceptance = []
         for _ in range(int(mala_steps)):
-            key, proposal_key, accept_key = jax.random.split(key, 3)
-            particles, accepted = kernels.mala_move(
-                particles,
-                jnp.asarray(next_beta, dtype=particles.dtype),
-                jnp.asarray(active),
-                proposal_key,
-                accept_key,
-                *density_args,
+            chunk_size = min(
+                n_particles,
+                int(mala_particle_chunk_size or n_particles),
             )
+            moved_chunks = []
+            accepted_chunks = []
+            for start in range(0, n_particles, chunk_size):
+                stop = min(start + chunk_size, n_particles)
+                key, proposal_key, accept_key = jax.random.split(key, 3)
+                moved, accepted = kernels.mala_move(
+                    particles[start:stop],
+                    jnp.asarray(next_beta, dtype=particles.dtype),
+                    jnp.asarray(active),
+                    proposal_key,
+                    accept_key,
+                    *density_args,
+                )
+                moved_chunks.append(moved)
+                accepted_chunks.append(accepted)
+            particles = jnp.concatenate(moved_chunks, axis=0)
+            accepted = jnp.concatenate(accepted_chunks, axis=0)
             stage_acceptance.append(np.asarray(jnp.mean(accepted, axis=0)))
 
         beta_from_history.append(beta.copy())
