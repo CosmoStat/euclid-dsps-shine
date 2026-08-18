@@ -106,6 +106,49 @@ def test_precomputed_encoder_state_matches_composed_sampling() -> None:
         assert jnp.array_equal(composed_value, split_value)
 
 
+def test_tempered_posterior_samples_match_exact_tempered_log_prob() -> None:
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(0),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        init_scale=0.2,
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=4),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.ones((3, 6), dtype=jnp.float32)
+    key = jax.random.PRNGKey(8)
+    unit = sample_posterior(model, key, features, 5)
+    tempered = sample_posterior(
+        model,
+        key,
+        features,
+        5,
+        base_temperature=1.5,
+    )
+    evaluated = jax.vmap(
+        lambda value: posterior_log_prob(
+            model,
+            features,
+            value,
+            base_temperature=1.5,
+        )
+    )(tempered.x)
+
+    assert not jnp.allclose(unit.x, tempered.x)
+    assert jnp.allclose(evaluated, tempered.logq, atol=2.0e-4)
+
+
 def test_antithetic_gaussian_posterior_pairs_base_noise() -> None:
     from euclid_dsps.amortized.encoder import GaussianEncoder
 
@@ -585,9 +628,7 @@ def test_periodic_wake_loss_is_finite_and_reports_ess(
             init_scale=0.0,
         ),
         sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
-        band_calibration=PerBandFluxCalibrationState(
-            log_alpha_band=jnp.zeros(2)
-        ),
+        band_calibration=PerBandFluxCalibrationState(log_alpha_band=jnp.zeros(2)),
     )
     batch = LossBatch(
         flux=jnp.ones((3, 2)),
@@ -752,9 +793,7 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
         encoder=encoder,
         prior=StandardNormalPrior(latent_dim=4),
         sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
-        band_calibration=PerBandFluxCalibrationState(
-            log_alpha_band=jnp.zeros(2)
-        ),
+        band_calibration=PerBandFluxCalibrationState(log_alpha_band=jnp.zeros(2)),
     )
     batch = LossBatch(
         flux=jnp.zeros((2, 2)),
@@ -852,11 +891,7 @@ def test_smc_wake_is_finite_and_reports_sampler_diagnostics(
         )[0]
 
     grads = eqx.filter_grad(smc_loss)(model)
-    leaves = [
-        leaf
-        for leaf in jax.tree_util.tree_leaves(grads)
-        if leaf is not None
-    ]
+    leaves = [leaf for leaf in jax.tree_util.tree_leaves(grads) if leaf is not None]
     assert leaves
     assert all(jnp.all(jnp.isfinite(leaf)) for leaf in leaves)
     assert grads.band_calibration is not None

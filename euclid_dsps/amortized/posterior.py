@@ -422,9 +422,9 @@ def posterior_log_prob(
     temperature = float(base_temperature)
     if temperature <= 0.0:
         raise ValueError("base_temperature must be positive")
-    log_std = log_std + jnp.log(jnp.asarray(temperature, dtype=log_std.dtype))
+    proposal_log_std = log_std + jnp.log(jnp.asarray(temperature, dtype=log_std.dtype))
     if isinstance(model.encoder, GaussianEncoder):
-        return _diag_normal_log_prob(x, mean, log_std)
+        return _diag_normal_log_prob(x, mean, proposal_log_std)
     context = jnp.concatenate([mean, log_std], axis=-1)
     if isinstance(model.encoder, ConditionalFlowEncoder) and (
         model.encoder.output_space == "latent_x"
@@ -435,7 +435,7 @@ def posterior_log_prob(
                 model.encoder, features, base, temperature
             )
             if _is_mixture_encoder(model.encoder)
-            else _diag_normal_log_prob(base, mean, log_std)
+            else _diag_normal_log_prob(base, mean, proposal_log_std)
         )
         return base_log_prob + inverse_logdet
     u, prior_inverse_logdet = model.prior.inverse(x)
@@ -446,7 +446,7 @@ def posterior_log_prob(
     base_log_prob = (
         _mixture_base_log_prob_from_encoder(model.encoder, features, base, temperature)
         if _is_mixture_encoder(model.encoder)
-        else _diag_normal_log_prob(base, mean, log_std)
+        else _diag_normal_log_prob(base, mean, proposal_log_std)
     )
     return base_log_prob + residual_inverse_logdet + prior_inverse_logdet
 

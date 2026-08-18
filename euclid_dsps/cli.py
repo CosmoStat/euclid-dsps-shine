@@ -252,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--batch-size", type=int)
     infer.add_argument("--jax-batch-size", type=int)
     infer.add_argument("--posterior-samples", type=int)
+    infer.add_argument("--posterior-base-temperature", type=float)
     infer.add_argument("--row-indices-file")
     infer.add_argument(
         "--prior-samples",
@@ -806,6 +807,14 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
     parser.add_argument("--posterior-samples", type=int)
+    parser.add_argument(
+        "--posterior-base-temperature",
+        type=float,
+        help=(
+            "Scale the encoder base standard deviation while retaining the exact "
+            "tempered proposal density in posterior logq (default: config or 1)."
+        ),
+    )
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--decoder-sample-chunk-size", type=int)
     parser.add_argument("--prior-predictive-batch-size", type=int)
@@ -1534,6 +1543,11 @@ def _run_amortized_infer(
             args.posterior_samples
             if args.posterior_samples is not None
             else inference.get("posterior_samples", 32)
+        ),
+        posterior_base_temperature=float(
+            args.posterior_base_temperature
+            if getattr(args, "posterior_base_temperature", None) is not None
+            else inference.get("posterior_base_temperature", 1.0)
         ),
         prior_samples=int(
             args.prior_samples

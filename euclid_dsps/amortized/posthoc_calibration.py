@@ -430,6 +430,12 @@ def run_importance_correction(
         "redshift_metrics_by_weight": redshift_metrics_by_weight,
         "inputs": {
             "posterior": [_file_receipt(path) for path in bank.source_files],
+            "posterior_inference_summary": _optional_file_receipt(
+                Path(posterior) / "inference_summary.json"
+                if Path(posterior).is_dir()
+                and (Path(posterior) / "inference_summary.json").is_file()
+                else None
+            ),
             "config": _optional_file_receipt(config_path),
             "target_checkpoint": _optional_file_receipt(target_checkpoint),
             "truth": _optional_file_receipt(truth_path),

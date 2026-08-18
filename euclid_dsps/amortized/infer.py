@@ -73,6 +73,7 @@ def infer_amortized_fs2(
     limit: int | None,
     batch_size: int,
     posterior_samples: int,
+    posterior_base_temperature: float = 1.0,
     prior_samples: int = 8192,
     seed: int,
     feature_stats_path: Path | None = None,
@@ -96,6 +97,8 @@ def infer_amortized_fs2(
         raise ValueError("batch_size must be positive")
     if int(posterior_samples) <= 0:
         raise ValueError("posterior_samples must be positive")
+    if float(posterior_base_temperature) <= 0.0:
+        raise ValueError("posterior_base_temperature must be positive")
     if int(prior_samples) <= 0:
         raise ValueError("prior_samples must be positive")
     if int(decoder_sample_chunk_size) <= 0:
@@ -206,6 +209,7 @@ def infer_amortized_fs2(
             "[amortized] run config: "
             f"limit={limit} batch_size={int(batch_size)} "
             f"posterior_samples={int(posterior_samples)} "
+            f"posterior_base_temperature={float(posterior_base_temperature):.6g} "
             f"prior_samples={int(prior_samples)} "
             f"decoder_sample_chunk_size={int(decoder_sample_chunk_size)} "
             f"prior_predictive_batch_size={int(prior_predictive_batch_size)} "
@@ -319,6 +323,7 @@ def infer_amortized_fs2(
         "selection_seed": int(selection_seed),
         "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "posterior_samples": int(posterior_samples),
+        "posterior_base_temperature": float(posterior_base_temperature),
         "effective_posterior_samples": (
             1 if deterministic_reconstruction else int(posterior_samples)
         ),
@@ -408,7 +413,11 @@ def infer_amortized_fs2(
             logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
         else:
             posterior = sample_posterior(
-                model, sample_key, batch.features, int(posterior_samples)
+                model,
+                sample_key,
+                batch.features,
+                int(posterior_samples),
+                base_temperature=float(posterior_base_temperature),
             )
             x_samples, logq = posterior.x, posterior.logq
         theta = x_to_theta(x_samples, latent_spec)
@@ -771,6 +780,7 @@ def infer_amortized_fs2(
             "objective_mode": objective_mode_name,
             "deterministic_reconstruction": bool(deterministic_reconstruction),
             "requested_posterior_samples": int(posterior_samples),
+            "posterior_base_temperature": float(posterior_base_temperature),
             "effective_posterior_samples": (
                 1 if deterministic_reconstruction else int(posterior_samples)
             ),
@@ -822,6 +832,7 @@ def infer_amortized_fs2(
             "batch_size": int(batch_size),
             "jax_batch_size": int(jax_batch_size),
             "posterior_samples": int(posterior_samples),
+            "posterior_base_temperature": float(posterior_base_temperature),
             "prior_samples": int(prior_samples),
             "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
             "prior_predictive_batch_size": int(prior_predictive_batch_size),
@@ -928,10 +939,13 @@ def finalize_amortized_inference(
         verbose=verbose,
     )
     selection = _read_json_if_exists(out / "inference_selection.json")
+    initial_summary = _read_json_if_exists(out / "inference_summary.json")
+    initial_manifest = _read_json_if_exists(out / "posterior_shards_manifest.json")
     expected = selection.get("selected_rows")
     processed = int(len(frames.get("summary", pd.DataFrame())))
     row_indices = _load_inference_indices(out)
     manifest_payload = {
+        **initial_manifest,
         "shard_outputs": True,
         "finalized": True,
         "n_shards": int(len(complete_records)),
@@ -988,6 +1002,7 @@ def finalize_amortized_inference(
         row_indices=row_indices,
     )
     payload = {
+        **initial_summary,
         "run_dir": str(out),
         "n_processed": processed,
         "expected_selected_rows": int(expected) if expected is not None else None,

@@ -200,6 +200,21 @@ def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     assert "posthoc_empirical_bayes" not in pilot
     assert "ALLOW_LOW_ESS" not in pilot
 
+    temperature = (
+        root / "scripts/popcosmos_posthoc_temperature_scan_h100.slurm"
+    ).read_text()
+    temperature_submit = (
+        root / "scripts/submit_popcosmos_posthoc_temperature_scan.sh"
+    ).read_text()
+    temperature_finalize = (
+        root / "scripts/popcosmos_posthoc_temperature_finalize.slurm"
+    ).read_text()
+    assert "--posterior-base-temperature" in temperature
+    assert "PROPOSAL_TEMPERATURES_CSV" in temperature_submit
+    assert "--partition=cpu_p1" in temperature_finalize
+    assert '"ready_for_empirical_bayes": False' in temperature
+    assert "posthoc_empirical_bayes" not in temperature
+
 
 def test_smc_shards_are_combined_with_exact_cohort(tmp_path: Path) -> None:
     root = tmp_path / "seed_260817"
@@ -364,3 +379,77 @@ def test_smc_summary_accepts_preselected_variant(tmp_path: Path) -> None:
     assert summary["selection_status"] == "PASS"
     assert summary["selected_variant"] == variant
     assert summary["evaluated_variants"] == [variant]
+
+
+def test_proposal_temperature_scan_selects_supported_candidate_but_blocks_em(
+    tmp_path: Path,
+) -> None:
+    refresh = tmp_path / "refresh"
+    scan = tmp_path / "scan"
+    probe_samples = 16
+
+    def write_candidate(root: Path, *, raw_ess: float, bad_k: float) -> None:
+        root.mkdir(parents=True)
+        support = {"status": "PASS" if raw_ess >= 0.05 and bad_k <= 0.2 else "FAIL"}
+        (root / "importance_summary.json").write_text(
+            json.dumps(
+                {
+                    "n_objects": 2,
+                    "n_joint_draws": 2 * probe_samples,
+                    "median_raw_ess_fraction": raw_ess,
+                    "median_psis_ess_fraction": raw_ess * 0.9,
+                    "fraction_pareto_k_gt_0p7": bad_k,
+                    "fraction_pareto_k_gt_1": bad_k / 2.0,
+                    "inputs": {"truth": None},
+                }
+            )
+        )
+        (root / "support_gate.json").write_text(json.dumps(support))
+        (root / "DONE").touch()
+
+    write_candidate(
+        refresh / f"moderate_k{probe_samples}_importance",
+        raw_ess=0.02,
+        bad_k=0.6,
+    )
+    for temperature, raw_ess, bad_k in (
+        (1.25, 0.07, 0.15),
+        (1.5, 0.09, 0.10),
+    ):
+        slug = str(temperature).replace(".", "p")
+        candidate = scan / f"temperature_{slug}"
+        write_candidate(
+            candidate / f"importance_k{probe_samples}",
+            raw_ess=raw_ess,
+            bad_k=bad_k,
+        )
+        proposal = candidate / f"proposal_k{probe_samples}"
+        proposal.mkdir()
+        (proposal / "inference_summary.json").write_text(
+            json.dumps({"posterior_base_temperature": temperature})
+        )
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/select_popcosmos_proposal_temperature.py"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--refresh-root",
+            str(refresh),
+            "--scan-root",
+            str(scan),
+            "--temperatures",
+            "1.25,1.5",
+            "--probe-samples",
+            str(probe_samples),
+        ],
+        check=True,
+    )
+    selection = json.loads((scan / "temperature_selection.json").read_text())
+    assert selection["selection_status"] == "PASS"
+    assert selection["selected_posterior_base_temperature"] == 1.5
+    assert selection["confirmation_required"] is True
+    assert selection["ready_for_empirical_bayes"] is False
