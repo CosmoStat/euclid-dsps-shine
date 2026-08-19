@@ -1,0 +1,7 @@
+extends: popcosmos_native15d_rws_floor05.yaml
+
+# Controlled proposal-capacity repair. The likelihood, prior, conditional flow,
+# latent contract, features, and cohorts are inherited unchanged.
+amortized:
+  encoder:
+    base_components: 2

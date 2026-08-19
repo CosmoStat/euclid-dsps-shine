@@ -13,17 +13,25 @@ import jax
 import numpy as np
 import pandas as pd
 
-from euclid_dsps.amortized.config import require_amortized_dependencies
+from euclid_dsps.amortized.config import (
+    amortized_config,
+    require_amortized_dependencies,
+)
 from euclid_dsps.amortized.data import (
     iter_photometry_batches_from_arrays,
     load_photometry_arrays_from_config,
 )
 from euclid_dsps.amortized.features import read_feature_stats
+from euclid_dsps.amortized.latent import latent_spec_hash
+from euclid_dsps.amortized.posterior import posterior_mixture_diagnostics
 from euclid_dsps.amortized.proposal_refresh import (
+    expand_conditional_flow_base,
     refresh_encoder_from_weighted_particles,
 )
 from euclid_dsps.amortized.train import (
     _latent_spec_for_amortized_config,
+    architecture_summary,
+    build_amortized_model,
     load_checkpoint,
 )
 from euclid_dsps.config import load_config
@@ -34,6 +42,7 @@ eqx, _optax = require_amortized_dependencies()
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--source-config", type=Path)
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--feature-stats", type=Path, required=True)
@@ -45,13 +54,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1.0e-6)
     parser.add_argument("--validation-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=260817)
+    parser.add_argument("--mixture-mean-offset", type=float, default=0.05)
     parser.add_argument("--require-gpu", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    for path in (args.config, args.dataset, args.checkpoint, args.feature_stats):
+    source_config_path = args.source_config or args.config
+    for path in (
+        args.config,
+        source_config_path,
+        args.dataset,
+        args.checkpoint,
+        args.feature_stats,
+    ):
         if not path.is_file():
             raise FileNotFoundError(path)
     if len(args.bank) < 1:
@@ -64,8 +81,13 @@ def main() -> None:
     (args.out / "checkpoints").mkdir()
 
     config = load_config(args.config)
+    source_config = load_config(source_config_path)
     config["catalog_path"] = str(args.dataset)
+    source_config["catalog_path"] = str(args.dataset)
     latent_spec = _latent_spec_for_amortized_config(config)
+    source_latent_spec = _latent_spec_for_amortized_config(source_config)
+    if latent_spec_hash(source_latent_spec) != latent_spec_hash(latent_spec):
+        raise ValueError("source and target configs use different latent contracts")
     row_indices, particles, weights = _load_banks(args.bank, latent_spec.names)
     feature_stats = read_feature_stats(args.feature_stats)
     arrays = load_photometry_arrays_from_config(
@@ -85,7 +107,33 @@ def main() -> None:
     )
     if not np.array_equal(np.asarray(batch.row_index), row_indices):
         raise RuntimeError("Feature cohort/order does not match the SMC banks")
-    source_model = load_checkpoint(args.checkpoint, config)
+    checkpoint_model = load_checkpoint(args.checkpoint, source_config)
+    source_components = int(
+        amortized_config(source_config)["encoder"].get("base_components", 1)
+    )
+    target_components = int(
+        amortized_config(config)["encoder"].get("base_components", 1)
+    )
+    if source_components == target_components:
+        source_model = checkpoint_model
+        initialization = "checkpoint_exact"
+    else:
+        if source_components != 1 or target_components < 2:
+            raise ValueError(
+                "only controlled expansion from one to multiple base components "
+                "is supported"
+            )
+        target_model = build_amortized_model(
+            config,
+            jax.random.PRNGKey(args.seed),
+            latent_spec=latent_spec,
+        )
+        source_model = expand_conditional_flow_base(
+            checkpoint_model,
+            target_model,
+            mean_offset=args.mixture_mean_offset,
+        )
+        initialization = "expanded_from_unimodal_checkpoint"
     result = refresh_encoder_from_weighted_particles(
         source_model,
         features=batch.features,
@@ -98,6 +146,12 @@ def main() -> None:
         validation_fraction=args.validation_fraction,
         seed=args.seed,
     )
+    mixture = posterior_mixture_diagnostics(result.model, batch.features)
+    mixture_diagnostics = {
+        "components": int(np.asarray(jax.device_get(mixture["components"]))),
+        "mean_entropy": float(np.asarray(jax.device_get(mixture["entropy"]))),
+        "mean_max_weight": float(np.asarray(jax.device_get(mixture["max_weight"]))),
+    }
     prior_unchanged = _trees_equal(source_model.prior, result.model.prior)
     if not prior_unchanged:
         raise RuntimeError("Population prior changed during encoder-only refresh")
@@ -105,10 +159,21 @@ def main() -> None:
     eqx.tree_serialise_leaves(checkpoint, result.model)
     source_sidecar = Path(str(args.checkpoint) + ".json")
     sidecar = json.loads(source_sidecar.read_text()) if source_sidecar.is_file() else {}
+    sidecar["amortized"] = amortized_config(config)
+    sidecar["architecture"] = architecture_summary(config)
     sidecar["posthoc_smc_encoder_refresh"] = {
         "source_checkpoint": _receipt(args.checkpoint),
+        "source_config": _receipt(source_config_path),
+        "target_config": _receipt(args.config),
         "weighted_banks": [_directory_receipt(path) for path in args.bank],
         "prior_frozen_exactly": True,
+        "source_base_components": source_components,
+        "target_base_components": target_components,
+        "initialization": initialization,
+        "mixture_mean_offset": (
+            float(args.mixture_mean_offset) if target_components > 1 else None
+        ),
+        "mixture_diagnostics": mixture_diagnostics,
         "best_epoch": result.best_epoch,
         "initial_validation_weighted_nll": result.initial_validation_nll,
         "best_validation_weighted_nll": result.best_validation_nll,
@@ -127,6 +192,13 @@ def main() -> None:
         "n_objects": int(len(row_indices)),
         "particles_per_object": int(particles.shape[0]),
         "n_banks": int(len(args.bank)),
+        "source_base_components": source_components,
+        "target_base_components": target_components,
+        "initialization": initialization,
+        "mixture_mean_offset": (
+            float(args.mixture_mean_offset) if target_components > 1 else None
+        ),
+        "mixture_diagnostics": mixture_diagnostics,
         "prior_frozen_exactly": prior_unchanged,
         "initial_validation_weighted_nll": result.initial_validation_nll,
         "best_validation_weighted_nll": result.best_validation_nll,
@@ -142,7 +214,8 @@ def main() -> None:
         ),
         "distribution_contract": "joint SMC particles with per-object normalized weights; no posterior medians",
         "inputs": {
-            "config": _receipt(args.config),
+            "source_config": _receipt(source_config_path),
+            "target_config": _receipt(args.config),
             "dataset": _receipt(args.dataset),
             "checkpoint": _receipt(args.checkpoint),
             "feature_stats": _receipt(args.feature_stats),

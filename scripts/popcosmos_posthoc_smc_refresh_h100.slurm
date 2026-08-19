@@ -23,6 +23,9 @@ REFRESH_EPOCHS="${REFRESH_EPOCHS:-20}"
 PROBE_SAMPLES="${PROBE_SAMPLES:-2048}"
 MIN_MEDIAN_ESS_FRACTION="${MIN_MEDIAN_ESS_FRACTION:-0.05}"
 MAX_FRACTION_PARETO_K_GT_0P7="${MAX_FRACTION_PARETO_K_GT_0P7:-0.2}"
+BASE_COMPONENTS="${BASE_COMPONENTS:-1}"
+MIXTURE_MEAN_OFFSET="${MIXTURE_MEAN_OFFSET:-0.05}"
+BASELINE_REFRESH_OUT="${BASELINE_REFRESH_OUT:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -54,10 +57,21 @@ print(payload["selected_variant"])
 PY
 )
 case "$variant" in
-  floor_0p00) CONFIG=configs/experiments/popcosmos_native15d_rws.yaml ;;
-  floor_0p02) CONFIG=configs/experiments/popcosmos_native15d_rws_floor02.yaml ;;
-  floor_0p05) CONFIG=configs/experiments/popcosmos_native15d_rws_floor05.yaml ;;
+  floor_0p00) SOURCE_CONFIG=configs/experiments/popcosmos_native15d_rws.yaml ;;
+  floor_0p02) SOURCE_CONFIG=configs/experiments/popcosmos_native15d_rws_floor02.yaml ;;
+  floor_0p05) SOURCE_CONFIG=configs/experiments/popcosmos_native15d_rws_floor05.yaml ;;
   *) echo "[proposal-refresh][error] unsupported selected variant: $variant" >&2; exit 2 ;;
+esac
+case "$BASE_COMPONENTS" in
+  1) CONFIG="$SOURCE_CONFIG" ;;
+  2)
+    if [[ "$variant" != floor_0p05 ]]; then
+      echo "[proposal-refresh][error] mix2 is frozen to selected floor_0p05" >&2
+      exit 2
+    fi
+    CONFIG=configs/experiments/popcosmos_native15d_rws_floor05_mix2.yaml
+    ;;
+  *) echo "[proposal-refresh][error] BASE_COMPONENTS must be 1 or 2" >&2; exit 2 ;;
 esac
 
 DATASET=Data/cosmos2020/prepared/farmer_a24_full.parquet
@@ -78,6 +92,23 @@ import sys
 print(len(np.load(sys.argv[1])))
 PY
 )
+if [[ "$BASE_COMPONENTS" -gt 1 ]]; then
+  test -n "$BASELINE_REFRESH_OUT"
+  BASELINE_IMPORTANCE="$BASELINE_REFRESH_OUT/moderate_k${PROBE_SAMPLES}_importance/importance_summary.json"
+  BASELINE_PROBE_INDICES="$BASELINE_REFRESH_OUT/moderate_k${PROBE_SAMPLES}_proposal/inference_indices.npy"
+  test -s "$BASELINE_IMPORTANCE"
+  test -s "$BASELINE_PROBE_INDICES"
+  python - "$ROW_INDICES" "$BASELINE_PROBE_INDICES" <<'PY'
+import numpy as np
+import sys
+
+expected, baseline = (np.load(path) for path in sys.argv[1:])
+if not np.array_equal(expected, baseline):
+    raise SystemExit("mixture candidate and unimodal baseline probe cohorts differ")
+PY
+else
+  BASELINE_IMPORTANCE=""
+fi
 python - "$BANK_A/row_indices.npy" "$ROW_INDICES" "$SOURCE_ROOT/inference/inference_indices.npy" <<'PY'
 import numpy as np
 import sys
@@ -88,10 +119,11 @@ if np.intersect1d(probe, evaluation).size:
     raise SystemExit("Ordinary-IS probe overlaps the spectroscopic evaluation cohort")
 PY
 
-echo "[proposal-refresh] selected_variant=$variant banks=$BANK_A,$BANK_B"
+echo "[proposal-refresh] selected_variant=$variant base_components=$BASE_COMPONENTS banks=$BANK_A,$BANK_B"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 python scripts/refresh_popcosmos_encoder_from_smc.py \
   --config "$CONFIG" \
+  --source-config "$SOURCE_CONFIG" \
   --dataset "$DATASET" \
   --checkpoint "$SOURCE_CHECKPOINT" \
   --feature-stats "$SOURCE_STATS" \
@@ -102,6 +134,7 @@ python scripts/refresh_popcosmos_encoder_from_smc.py \
   --object-batch-size 32 \
   --learning-rate 2e-5 \
   --seed 260817 \
+  --mixture-mean-offset "$MIXTURE_MEAN_OFFSET" \
   --require-gpu
 
 python - "$REFRESH/refresh_summary.json" <<'PY'
@@ -142,27 +175,48 @@ python scripts/importance_correct_posterior.py \
   --min-median-ess-fraction "$MIN_MEDIAN_ESS_FRACTION" \
   --max-fraction-pareto-k-gt-0p7 "$MAX_FRACTION_PARETO_K_GT_0P7"
 
-python - "$variant" "$REFRESH/refresh_summary.json" "$CORRECTION/support_gate.json" "$OUT" "$MIN_MEDIAN_ESS_FRACTION" "$MAX_FRACTION_PARETO_K_GT_0P7" <<'PY'
+python - "$variant" "$REFRESH/refresh_summary.json" "$CORRECTION/importance_summary.json" "$OUT" "$MIN_MEDIAN_ESS_FRACTION" "$MAX_FRACTION_PARETO_K_GT_0P7" "$BASELINE_IMPORTANCE" <<'PY'
 import json
 import sys
 from pathlib import Path
-variant, refresh_path, support_path, out, min_ess, max_bad_k = sys.argv[1:]
+variant, refresh_path, importance_path, out, min_ess, max_bad_k, baseline_path = sys.argv[1:]
 refresh = json.load(open(refresh_path))
-support = json.load(open(support_path))
+importance = json.load(open(importance_path))
+support = importance["support_gate"]
+metrics = {
+    key: importance[key]
+    for key in (
+        "median_raw_ess_fraction",
+        "median_psis_ess_fraction",
+        "fraction_pareto_k_gt_0p7",
+        "fraction_pareto_k_gt_1",
+    )
+}
 payload = {
     "status": "complete",
     "selected_likelihood_variant": variant,
     "encoder_refresh_gate": refresh["refresh_gate"],
     "ordinary_importance_support_gate": support["status"],
+    "proposal_base_components": refresh["target_base_components"],
     "proposal_probe_cohort": "disjoint frozen validation rows",
+    "cohort_role": "proposal-capacity tuning; spectroscopy unused",
     "ordinary_importance_thresholds": {
         "min_median_ess_fraction": float(min_ess),
         "max_fraction_pareto_k_gt_0p7": float(max_bad_k),
     },
-    "ready_for_empirical_bayes": (
+    "candidate_metrics": metrics,
+    "confirmation_required": (
         refresh["refresh_gate"] == "PASS" and support["status"] == "PASS"
     ),
+    "ready_for_empirical_bayes": False,
 }
+if baseline_path:
+    baseline = json.load(open(baseline_path))
+    baseline_metrics = {key: baseline[key] for key in metrics}
+    payload["unimodal_baseline_metrics"] = baseline_metrics
+    payload["candidate_minus_baseline"] = {
+        key: metrics[key] - baseline_metrics[key] for key in metrics
+    }
 Path(out, "refresh_validation_summary.json").write_text(
     json.dumps(payload, indent=2) + "\n", encoding="utf-8"
 )

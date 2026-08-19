@@ -176,6 +176,86 @@ def test_weighted_refresh_updates_encoder_but_not_prior() -> None:
     assert result.best_validation_nll <= result.initial_validation_nll
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("equinox") is None, reason="equinox is not installed"
+)
+def test_unimodal_checkpoint_expands_to_exact_symmetry_broken_mixture(
+    tmp_path: Path,
+) -> None:
+    import equinox as eqx
+
+    from euclid_dsps.amortized.elbo import AmortizedModel
+    from euclid_dsps.amortized.flows import StandardNormalPrior
+    from euclid_dsps.amortized.posterior import (
+        ConditionalFlowEncoder,
+        posterior_log_prob,
+        sample_posterior,
+    )
+    from euclid_dsps.amortized.proposal_refresh import (
+        expand_conditional_flow_base,
+    )
+    from euclid_dsps.calibration import GlobalSedScaleState
+
+    def encoder(key, components):
+        return ConditionalFlowEncoder(
+            key,
+            input_dim=3,
+            latent_dim=2,
+            hidden_sizes=(6,),
+            activation="gelu",
+            log_std_min=-6.0,
+            log_std_max=2.0,
+            initial_log_std=-1.0,
+            family="realnvp",
+            n_layers=2,
+            hidden_size=6,
+            output_space="latent_x",
+            base_components=components,
+        )
+
+    source = AmortizedModel(
+        encoder=encoder(jax.random.PRNGKey(1), 1),
+        prior=StandardNormalPrior(latent_dim=2),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.2)),
+    )
+    target = AmortizedModel(
+        encoder=encoder(jax.random.PRNGKey(2), 2),
+        prior=StandardNormalPrior(latent_dim=2),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(-0.4)),
+    )
+    expanded = expand_conditional_flow_base(source, target, mean_offset=0.05)
+    features = jnp.ones((4, 3), dtype=jnp.float32)
+    source_mean, source_log_std = source.encoder.base(features)
+    logits, means, log_stds = expanded.encoder.base.mixture_parameters(features)
+
+    np.testing.assert_allclose(np.asarray(logits), 0.0)
+    np.testing.assert_allclose(
+        np.asarray(means.mean(axis=-2)), np.asarray(source_mean), atol=1.0e-6
+    )
+    np.testing.assert_allclose(
+        np.asarray(log_stds[:, 0]), np.asarray(source_log_std), atol=1.0e-6
+    )
+    assert not np.allclose(np.asarray(means[:, 0]), np.asarray(means[:, 1]))
+    np.testing.assert_array_equal(
+        np.asarray(expanded.sed_scale.log_alpha_sed),
+        np.asarray(source.sed_scale.log_alpha_sed),
+    )
+
+    draws = sample_posterior(expanded, jax.random.PRNGKey(3), features, 8)
+    evaluated = jax.vmap(lambda values: posterior_log_prob(expanded, features, values))(
+        draws.x
+    )
+    np.testing.assert_allclose(np.asarray(evaluated), np.asarray(draws.logq), atol=3e-4)
+
+    checkpoint = tmp_path / "mix2.eqx"
+    eqx.tree_serialise_leaves(checkpoint, expanded)
+    restored = eqx.tree_deserialise_leaves(checkpoint, target)
+    restored_density = posterior_log_prob(restored, features, draws.x[0])
+    np.testing.assert_allclose(
+        np.asarray(restored_density), np.asarray(draws.logq[0]), atol=3e-4
+    )
+
+
 def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     root = Path(__file__).resolve().parents[1]
     pilot = (root / "scripts/popcosmos_posthoc_smc_h100.slurm").read_text()
@@ -214,6 +294,14 @@ def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     assert "--partition=cpu_p1" in temperature_finalize
     assert '"ready_for_empirical_bayes": False' in temperature
     assert "posthoc_empirical_bayes" not in temperature
+
+    mix2_config = root / "configs/experiments/popcosmos_native15d_rws_floor05_mix2.yaml"
+    assert amortized_config(load_config(mix2_config))["encoder"]["base_components"] == 2
+    assert 'BASE_COMPONENTS="${BASE_COMPONENTS:-1}"' in refresh
+    assert '--source-config "$SOURCE_CONFIG"' in refresh
+    assert "BASELINE_REFRESH_OUT" in refresh
+    assert "popcosmos_native15d_rws_floor05_mix2.yaml" in refresh
+    assert '"ready_for_empirical_bayes": False' in refresh
 
 
 def test_smc_shards_are_combined_with_exact_cohort(tmp_path: Path) -> None:

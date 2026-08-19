@@ -8,7 +8,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from .config import require_amortized_dependencies
-from .posterior import posterior_log_prob
+from .encoder import GaussianEncoder, MixtureGaussianEncoder
+from .posterior import ConditionalFlowEncoder, posterior_log_prob
 
 eqx, optax = require_amortized_dependencies()
 
@@ -22,6 +23,99 @@ class ProposalRefreshResult:
     initial_validation_nll: float
     best_validation_nll: float
     best_epoch: int
+
+
+def expand_conditional_flow_base(
+    source_model,
+    target_model,
+    *,
+    mean_offset: float = 0.05,
+):
+    """Initialize a mixture-base model from a trained unimodal model.
+
+    The source trunk, conditional flow, prior, and calibration state are copied
+    exactly. Mixture heads replicate the trained Gaussian base, with small
+    antisymmetric mean offsets to break otherwise permanent component symmetry.
+    """
+    source_encoder = source_model.encoder
+    target_encoder = target_model.encoder
+    if not isinstance(source_encoder, ConditionalFlowEncoder) or not isinstance(
+        target_encoder, ConditionalFlowEncoder
+    ):
+        raise TypeError("base expansion requires conditional-flow encoders")
+    if not isinstance(source_encoder.base, GaussianEncoder):
+        raise TypeError("source encoder base must be a single diagonal Gaussian")
+    if not isinstance(target_encoder.base, MixtureGaussianEncoder):
+        raise TypeError("target encoder base must be a Gaussian mixture")
+    if float(mean_offset) <= 0.0:
+        raise ValueError("mean_offset must be positive to break mixture symmetry")
+    if (
+        source_encoder.family != target_encoder.family
+        or source_encoder.latent_dim != target_encoder.latent_dim
+        or source_encoder.output_space != target_encoder.output_space
+        or len(source_encoder.layers) != len(target_encoder.layers)
+    ):
+        raise ValueError("source and target conditional-flow architectures differ")
+
+    source_base = source_encoder.base
+    target_base = target_encoder.base
+    if len(source_base.trunk) != len(target_base.trunk):
+        raise ValueError("source and target encoder trunks differ")
+    for source_layer, target_layer in zip(
+        source_base.trunk, target_base.trunk, strict=True
+    ):
+        if source_layer.weight.shape != target_layer.weight.shape:
+            raise ValueError("source and target encoder trunk shapes differ")
+
+    n_components = target_base.n_components
+    latent_dim = target_base.latent_dim
+    offsets = jnp.linspace(
+        -float(mean_offset),
+        float(mean_offset),
+        n_components,
+        dtype=source_base.mean_head.bias.dtype,
+    )[:, None]
+    direction = jnp.where(
+        jnp.arange(latent_dim) % 2 == 0,
+        1.0,
+        -1.0,
+    )[None, :]
+    mean_weight = jnp.tile(source_base.mean_head.weight, (n_components, 1))
+    mean_bias = (source_base.mean_head.bias[None, :] + offsets * direction).reshape(-1)
+    log_std_weight = jnp.tile(source_base.log_std_head.weight, (n_components, 1))
+    log_std_bias = jnp.tile(source_base.log_std_head.bias, n_components)
+    expanded_base = eqx.tree_at(
+        lambda base: (
+            base.trunk,
+            base.logits_head.weight,
+            base.logits_head.bias,
+            base.mean_head.weight,
+            base.mean_head.bias,
+            base.log_std_head.weight,
+            base.log_std_head.bias,
+        ),
+        target_base,
+        (
+            source_base.trunk,
+            jnp.zeros_like(target_base.logits_head.weight),
+            jnp.zeros_like(target_base.logits_head.bias),
+            mean_weight,
+            mean_bias,
+            log_std_weight,
+            log_std_bias,
+        ),
+    )
+    expanded_encoder = eqx.tree_at(
+        lambda encoder: (encoder.base, encoder.layers),
+        target_encoder,
+        (expanded_base, source_encoder.layers),
+    )
+    return type(target_model)(
+        encoder=expanded_encoder,
+        prior=source_model.prior,
+        sed_scale=source_model.sed_scale,
+        band_calibration=source_model.band_calibration,
+    )
 
 
 def refresh_encoder_from_weighted_particles(
