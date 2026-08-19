@@ -103,8 +103,22 @@ import numpy as np
 import sys
 
 expected, baseline = (np.load(path) for path in sys.argv[1:])
-if not np.array_equal(expected, baseline):
-    raise SystemExit("mixture candidate and unimodal baseline probe cohorts differ")
+if np.unique(expected).size != expected.size or np.unique(baseline).size != baseline.size:
+    raise SystemExit("mixture candidate or unimodal baseline probe contains duplicates")
+if expected.size != baseline.size or not np.array_equal(
+    np.sort(expected), np.sort(baseline)
+):
+    only_expected = np.setdiff1d(expected, baseline)
+    only_baseline = np.setdiff1d(baseline, expected)
+    raise SystemExit(
+        "mixture candidate and unimodal baseline probe cohorts differ: "
+        f"only_candidate={only_expected[:10].tolist()} "
+        f"only_baseline={only_baseline[:10].tolist()}"
+    )
+print(
+    "[proposal-refresh] unimodal/mix2 probe cohort set: PASS "
+    f"objects={expected.size} same_order={np.array_equal(expected, baseline)}"
+)
 PY
 else
   BASELINE_IMPORTANCE=""

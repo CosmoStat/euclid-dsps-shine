@@ -300,6 +300,7 @@ def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     assert 'BASE_COMPONENTS="${BASE_COMPONENTS:-1}"' in refresh
     assert '--source-config "$SOURCE_CONFIG"' in refresh
     assert "BASELINE_REFRESH_OUT" in refresh
+    assert "np.sort(expected), np.sort(baseline)" in refresh
     assert "popcosmos_native15d_rws_floor05_mix2.yaml" in refresh
     assert '"ready_for_empirical_bayes": False' in refresh
 
