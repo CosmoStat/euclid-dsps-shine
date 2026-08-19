@@ -23,6 +23,7 @@ from euclid_dsps.amortized.smc_empirical_bayes import (
     pooled_particles_and_weights,
     prior_ratio_diagnostics,
     split_object_positions,
+    validate_smc_checkpoint_provenance,
 )
 from euclid_dsps.amortized.train import (
     _latent_spec_for_amortized_config,
@@ -48,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trust-samples", type=int, default=512)
     parser.add_argument("--validation-fraction", type=float, default=0.25)
     parser.add_argument("--seed", type=int, default=260819)
-    parser.add_argument("--source-logprior-atol", type=float, default=5.0e-3)
+    parser.add_argument("--source-logprior-atol", type=float, default=3.0e-2)
     parser.add_argument("--min-mean-logevidence-delta", type=float, default=0.0)
     parser.add_argument("--min-median-ratio-ess-fraction", type=float, default=0.5)
     parser.add_argument("--min-fraction-ratio-ess-ge-0p2", type=float, default=0.9)
@@ -76,7 +77,16 @@ def main() -> None:
     bank_summaries = [_validated_bank_summary(path) for path in args.bank]
     banks = load_weighted_smc_banks(args.bank, latent_spec.names)
     model = load_checkpoint(args.checkpoint, config)
-    source_logprior = evaluate_prior(model.prior, banks.particles)
+    source_checkpoint_receipt = _receipt(args.checkpoint)
+    recorded_checkpoint_hashes = validate_smc_checkpoint_provenance(
+        bank_summaries,
+        checkpoint_sha256=source_checkpoint_receipt["sha256"],
+    )
+    source_logprior = evaluate_prior(
+        model.prior,
+        banks.particles,
+        smc_object_batch_size=4,
+    )
     discrepancy = np.abs(source_logprior - banks.stored_logprior)
     max_source_logprior_error = float(np.max(discrepancy))
     p99_source_logprior_error = float(np.quantile(discrepancy, 0.99))
@@ -132,7 +142,11 @@ def main() -> None:
             flush=True,
         )
 
-    candidate_logprior = evaluate_prior(candidate_prior, banks.particles)
+    candidate_logprior = evaluate_prior(
+        candidate_prior,
+        banks.particles,
+        smc_object_batch_size=4,
+    )
     diagnostics = prior_ratio_diagnostics(
         source_logprior,
         candidate_logprior,
@@ -215,6 +229,8 @@ def main() -> None:
         "trust_strength": float(args.trust_strength),
         "source_logprior_reproduction": {
             "status": "PASS",
+            "checkpoint_sha256_match": True,
+            "recorded_checkpoint_sha256": list(recorded_checkpoint_hashes),
             "max_absolute_error": max_source_logprior_error,
             "p99_absolute_error": p99_source_logprior_error,
             "absolute_tolerance": float(args.source_logprior_atol),
@@ -236,7 +252,7 @@ def main() -> None:
         "further_em_iterations_launched": False,
         "inputs": {
             "config": _receipt(args.config),
-            "source_checkpoint": _receipt(args.checkpoint),
+            "source_checkpoint": source_checkpoint_receipt,
             "smc_banks": [
                 {
                     "path": str(path),

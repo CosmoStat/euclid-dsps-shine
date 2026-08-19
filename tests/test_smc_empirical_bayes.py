@@ -28,6 +28,7 @@ if HAS_DEPS:
         pooled_particles_and_weights,
         prior_ratio_diagnostics,
         split_object_positions,
+        validate_smc_checkpoint_provenance,
     )
 
 
@@ -166,3 +167,33 @@ def test_object_split_is_reproducible_and_disjoint() -> None:
     assert np.array_equal(validation_a, validation_b)
     assert len(validation_a) == 4
     assert np.intersect1d(train_a, validation_a).size == 0
+
+
+def test_smc_layout_prior_evaluation_matches_flat_evaluation() -> None:
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(5),
+        latent_dim=2,
+        n_layers=2,
+        hidden_size=8,
+    )
+    particles = np.random.default_rng(4).normal(size=(2, 4, 6, 2)).astype(np.float32)
+
+    flat = evaluate_prior(prior, particles)
+    smc_layout = evaluate_prior(prior, particles, smc_object_batch_size=2)
+
+    assert flat.shape == smc_layout.shape == (2, 4, 6)
+    assert np.allclose(flat, smc_layout, atol=1.0e-5)
+
+
+def test_smc_checkpoint_provenance_requires_exact_hash() -> None:
+    summaries = [
+        {"inputs": {"checkpoint": {"sha256": "abc"}}},
+        {"inputs": {"checkpoint": {"sha256": "abc"}}},
+    ]
+
+    assert validate_smc_checkpoint_provenance(summaries, checkpoint_sha256="abc") == (
+        "abc",
+        "abc",
+    )
+    with pytest.raises(ValueError, match="requested source checkpoint"):
+        validate_smc_checkpoint_provenance(summaries, checkpoint_sha256="def")

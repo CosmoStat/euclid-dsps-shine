@@ -220,8 +220,32 @@ def fit_smc_weighted_prior(
     return prior, history
 
 
-def evaluate_prior(prior, particles: np.ndarray, *, batch_size: int = 262_144):
-    """Evaluate an exact prior density on a bank without device over-allocation."""
+def evaluate_prior(
+    prior,
+    particles: np.ndarray,
+    *,
+    batch_size: int = 262_144,
+    smc_object_batch_size: int | None = None,
+):
+    """Evaluate a prior, optionally reproducing the SMC tensor layout."""
+    if smc_object_batch_size is not None:
+        if particles.ndim != 4:
+            raise ValueError(
+                "SMC-layout prior evaluation expects (bank, object, particle, latent)"
+            )
+        if int(smc_object_batch_size) <= 0:
+            raise ValueError("smc_object_batch_size must be positive")
+        evaluate = eqx.filter_jit(prior.log_prob)
+        result = np.empty(particles.shape[:-1], dtype=np.float64)
+        for bank_index in range(particles.shape[0]):
+            for start in range(0, particles.shape[1], int(smc_object_batch_size)):
+                stop = min(start + int(smc_object_batch_size), particles.shape[1])
+                values = np.swapaxes(particles[bank_index, start:stop], 0, 1)
+                logprob = evaluate(jnp.asarray(values))
+                result[bank_index, start:stop] = np.swapaxes(
+                    np.asarray(jax.device_get(logprob), dtype=np.float64), 0, 1
+                )
+        return result
     flat = particles.reshape(-1, particles.shape[-1])
     evaluate = eqx.filter_jit(prior.log_prob)
     result = []
@@ -229,6 +253,25 @@ def evaluate_prior(prior, particles: np.ndarray, *, batch_size: int = 262_144):
         value = evaluate(jnp.asarray(flat[start : start + int(batch_size)]))
         result.append(np.asarray(jax.device_get(value), dtype=np.float64))
     return np.concatenate(result).reshape(particles.shape[:-1])
+
+
+def validate_smc_checkpoint_provenance(
+    bank_summaries: list[dict[str, Any]], *, checkpoint_sha256: str
+) -> tuple[str, ...]:
+    """Require every SMC bank to name the exact source checkpoint bytes."""
+    recorded = []
+    for index, summary in enumerate(bank_summaries):
+        digest = summary.get("inputs", {}).get("checkpoint", {}).get("sha256")
+        if not digest:
+            raise ValueError(f"SMC bank {index} has no source-checkpoint SHA-256")
+        recorded.append(str(digest))
+    mismatched = [digest for digest in recorded if digest != str(checkpoint_sha256)]
+    if mismatched:
+        raise ValueError(
+            "SMC banks were not generated from the requested source checkpoint: "
+            f"requested={checkpoint_sha256} recorded={sorted(set(mismatched))}"
+        )
+    return tuple(recorded)
 
 
 def prior_ratio_diagnostics(
