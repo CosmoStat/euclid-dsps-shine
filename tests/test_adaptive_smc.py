@@ -542,3 +542,107 @@ def test_proposal_temperature_scan_selects_supported_candidate_but_blocks_em(
     assert selection["selected_posterior_base_temperature"] == 1.5
     assert selection["confirmation_required"] is True
     assert selection["ready_for_empirical_bayes"] is False
+
+
+def test_defensive_scan_selects_supported_candidate_but_blocks_em(
+    tmp_path: Path,
+) -> None:
+    scan = tmp_path / "scan"
+    baseline = tmp_path / "baseline_importance.json"
+    probe_samples = 16
+    baseline.write_text(
+        json.dumps(
+            {
+                "n_objects": 2,
+                "n_joint_draws": 2 * probe_samples,
+                "median_raw_ess_fraction": 0.02,
+                "median_psis_ess_fraction": 0.018,
+                "fraction_pareto_k_gt_0p7": 0.6,
+                "fraction_pareto_k_gt_1": 0.3,
+                "support_gate": {
+                    "status": "FAIL",
+                    "min_median_raw_ess_fraction": 0.05,
+                    "max_fraction_pareto_k_gt_0p7": 0.2,
+                },
+                "inputs": {"truth": None},
+            }
+        )
+    )
+    for temperature in (1.25, 1.5):
+        for fraction in (0.05, 0.1):
+            root = (
+                scan
+                / f"tail_temperature_{str(temperature).replace('.', 'p')}"
+                / f"epsilon_{str(fraction).replace('.', 'p')}"
+            )
+            root.mkdir(parents=True)
+            passing = temperature == 1.25 and fraction == 0.1
+            raw_ess = 0.08 if passing else 0.03
+            bad_k = 0.1 if passing else 0.4
+            summary = {
+                "tail_temperature": temperature,
+                "allocation": {
+                    "requested_tail_fraction": fraction,
+                    "realized_tail_fraction": fraction,
+                },
+                "n_objects": 2,
+                "n_joint_draws": 2 * probe_samples,
+                "median_raw_ess_fraction": raw_ess,
+                "median_psis_ess_fraction": raw_ess * 0.9,
+                "fraction_pareto_k_gt_0p7": bad_k,
+                "fraction_pareto_k_gt_1": bad_k / 2,
+                "spectroscopy_used": False,
+            }
+            (root / "importance_summary.json").write_text(json.dumps(summary))
+            (root / "support_gate.json").write_text(
+                json.dumps(
+                    {
+                        "status": "PASS" if passing else "FAIL",
+                        "min_median_raw_ess_fraction": 0.05,
+                        "max_fraction_pareto_k_gt_0p7": 0.2,
+                    }
+                )
+            )
+            (root / "DONE").touch()
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/select_popcosmos_defensive_proposal.py"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--baseline-importance",
+            str(baseline),
+            "--scan-root",
+            str(scan),
+            "--tail-temperatures",
+            "1.25,1.5",
+            "--tail-fractions",
+            "0.05,0.1",
+            "--probe-samples",
+            str(probe_samples),
+        ],
+        check=True,
+    )
+    selection = json.loads((scan / "defensive_selection.json").read_text())
+    assert selection["selection_status"] == "PASS"
+    assert selection["selected_tail_temperature"] == 1.25
+    assert selection["selected_requested_tail_fraction"] == 0.1
+    assert selection["confirmation_required"] is True
+    assert selection["ready_for_empirical_bayes"] is False
+
+
+def test_defensive_scan_jean_zay_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    task = (root / "scripts/popcosmos_posthoc_defensive_scan_h100.slurm").read_text()
+    submit = (root / "scripts/submit_popcosmos_posthoc_defensive_scan.sh").read_text()
+    finalize = (root / "scripts/popcosmos_posthoc_defensive_finalize.slurm").read_text()
+
+    assert "#SBATCH --constraint=h100" in task
+    assert "#SBATCH --gres=gpu:1" in task
+    assert "evaluate_popcosmos_defensive_proposal.py" in task
+    assert '--dependency="afterok:${DEFENSIVE_SCAN_JOB}"' in submit
+    assert "#SBATCH --partition=cpu_p1" in finalize
+    assert "select_popcosmos_defensive_proposal.py" in finalize

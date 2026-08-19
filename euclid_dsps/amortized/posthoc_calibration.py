@@ -42,6 +42,164 @@ class PosteriorBank:
     source_files: tuple[Path, ...]
 
 
+def defensive_mixture_log_prob(
+    base_logq: np.ndarray,
+    tail_logq: np.ndarray,
+    *,
+    tail_fraction: float,
+) -> np.ndarray:
+    """Evaluate ``log((1-epsilon) q_base + epsilon q_tail)`` exactly."""
+    epsilon = float(tail_fraction)
+    if not 0.0 < epsilon < 1.0:
+        raise ValueError("tail_fraction must lie strictly between zero and one")
+    base_logq = np.asarray(base_logq, dtype=np.float64)
+    tail_logq = np.asarray(tail_logq, dtype=np.float64)
+    if base_logq.shape != tail_logq.shape:
+        raise ValueError("base_logq and tail_logq must have the same shape")
+    return np.logaddexp(
+        math.log1p(-epsilon) + base_logq,
+        math.log(epsilon) + tail_logq,
+    )
+
+
+def build_defensive_mixture_bank(
+    base_bank: PosteriorBank,
+    tail_bank: PosteriorBank,
+    *,
+    base_logq_on_base: np.ndarray,
+    tail_logq_on_base: np.ndarray,
+    base_logq_on_tail: np.ndarray,
+    tail_logq_on_tail: np.ndarray,
+    base_target_logprior: np.ndarray,
+    tail_target_logprior: np.ndarray,
+    requested_tail_fraction: float,
+    seed: int,
+) -> tuple[PosteriorBank, dict[str, Any]]:
+    """Build a fixed-allocation defensive deterministic-mixture MIS bank.
+
+    Each source bank must contain the same objects and proposal count. The
+    realized source allocation is used in the mixture density, so the resulting
+    fixed-allocation estimator obeys the deterministic-mixture MIS contract.
+    """
+    if base_bank.identity_column != tail_bank.identity_column:
+        raise ValueError("defensive proposal banks use different identity columns")
+    if base_bank.parameter_names != tail_bank.parameter_names:
+        raise ValueError("defensive proposal banks use different latent parameters")
+    identity_column = base_bank.identity_column
+    base_counts = base_bank.frame.groupby(identity_column, sort=False).size()
+    tail_counts = tail_bank.frame.groupby(identity_column, sort=False).size()
+    if not np.array_equal(base_counts.index.to_numpy(), tail_counts.index.to_numpy()):
+        raise ValueError("defensive proposal banks use different object cohorts")
+    if base_counts.nunique() != 1 or tail_counts.nunique() != 1:
+        raise ValueError("defensive proposal banks require equal counts per object")
+    base_k = int(base_counts.iloc[0])
+    tail_k = int(tail_counts.iloc[0])
+    if base_k != tail_k:
+        raise ValueError("defensive proposal banks use different proposal counts")
+    requested = float(requested_tail_fraction)
+    if not 0.0 < requested < 1.0:
+        raise ValueError(
+            "requested_tail_fraction must lie strictly between zero and one"
+        )
+    n_tail = int(round(requested * base_k))
+    if not 0 < n_tail < base_k:
+        raise ValueError(
+            "requested_tail_fraction must allocate at least one draw to each source"
+        )
+    n_base = base_k - n_tail
+    realized = float(n_tail / base_k)
+
+    arrays = {
+        "base_logq_on_base": np.asarray(base_logq_on_base, dtype=np.float64),
+        "tail_logq_on_base": np.asarray(tail_logq_on_base, dtype=np.float64),
+        "base_logq_on_tail": np.asarray(base_logq_on_tail, dtype=np.float64),
+        "tail_logq_on_tail": np.asarray(tail_logq_on_tail, dtype=np.float64),
+        "base_target_logprior": np.asarray(base_target_logprior, dtype=np.float64),
+        "tail_target_logprior": np.asarray(tail_target_logprior, dtype=np.float64),
+    }
+    base_array_names = {
+        "base_logq_on_base",
+        "tail_logq_on_base",
+        "base_target_logprior",
+    }
+    for name, values in arrays.items():
+        expected = (
+            len(base_bank.frame) if name in base_array_names else len(tail_bank.frame)
+        )
+        if values.shape != (expected,):
+            raise ValueError(
+                f"{name} must have shape {(expected,)}, got {values.shape}"
+            )
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"{name} contains non-finite values")
+
+    base_frame = base_bank.frame.copy()
+    tail_frame = tail_bank.frame.copy()
+    base_frame["source_logq"] = base_frame["logq"].to_numpy(dtype=np.float64)
+    tail_frame["source_logq"] = tail_frame["logq"].to_numpy(dtype=np.float64)
+    base_frame["source_logprior"] = base_frame["logprior"].to_numpy(dtype=np.float64)
+    tail_frame["source_logprior"] = tail_frame["logprior"].to_numpy(dtype=np.float64)
+    base_frame["logq_base"] = arrays["base_logq_on_base"]
+    base_frame["logq_tail"] = arrays["tail_logq_on_base"]
+    base_frame["logprior"] = arrays["base_target_logprior"]
+    tail_frame["logq_base"] = arrays["base_logq_on_tail"]
+    tail_frame["logq_tail"] = arrays["tail_logq_on_tail"]
+    tail_frame["logprior"] = arrays["tail_target_logprior"]
+
+    selected_frames: list[pd.DataFrame] = []
+    base_groups = list(base_frame.groupby(identity_column, sort=False))
+    tail_groups = list(tail_frame.groupby(identity_column, sort=False))
+    grouped_pairs = zip(base_groups, tail_groups, strict=True)
+    for object_number, (
+        (base_identity, base_group),
+        (tail_identity, tail_group),
+    ) in enumerate(grouped_pairs):
+        if base_identity != tail_identity:
+            raise ValueError("defensive proposal bank object ordering differs")
+        rng = np.random.default_rng(int(seed) + object_number)
+        base_order = rng.permutation(base_k)[:n_base]
+        tail_order = rng.permutation(tail_k)[:n_tail]
+        selected_base = base_group.iloc[np.sort(base_order)].copy()
+        selected_tail = tail_group.iloc[np.sort(tail_order)].copy()
+        selected_base["proposal_component"] = "base"
+        selected_tail["proposal_component"] = "tail"
+        selected = pd.concat([selected_base, selected_tail], ignore_index=True)
+        selected["source_sample_id"] = selected["sample_id"].to_numpy()
+        selected["sample_id"] = np.arange(base_k, dtype=np.int64)
+        selected["defensive_tail_fraction"] = realized
+        selected["logq"] = defensive_mixture_log_prob(
+            selected["logq_base"].to_numpy(),
+            selected["logq_tail"].to_numpy(),
+            tail_fraction=realized,
+        )
+        selected_frames.append(selected)
+    frame = pd.concat(selected_frames, ignore_index=True)
+    contract = {
+        "requested_tail_fraction": requested,
+        "realized_tail_fraction": realized,
+        "base_draws_per_object": n_base,
+        "tail_draws_per_object": n_tail,
+        "total_draws_per_object": base_k,
+        "sampling": (
+            "fixed-allocation deterministic-mixture MIS without replacement "
+            "from immutable source banks"
+        ),
+        "density": "logaddexp(log(1-epsilon)+logq_base, log(epsilon)+logq_tail)",
+        "seed": int(seed),
+    }
+    return (
+        PosteriorBank(
+            frame=frame,
+            identity_column=identity_column,
+            parameter_names=base_bank.parameter_names,
+            source_files=tuple(
+                dict.fromkeys((*base_bank.source_files, *tail_bank.source_files))
+            ),
+        ),
+        contract,
+    )
+
+
 def posterior_sample_paths(source: str | Path) -> tuple[Path, ...]:
     """Resolve a posterior-sample file, inference directory, or shard directory."""
     source = Path(source)

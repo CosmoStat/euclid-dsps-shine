@@ -12,6 +12,8 @@ from euclid_dsps.amortized.flows import RealNVPPrior
 from euclid_dsps.amortized.posthoc_calibration import (
     PosteriorBank,
     _prior_loss_and_grad,
+    build_defensive_mixture_bank,
+    defensive_mixture_log_prob,
     importance_weight_bank,
     posterior_sample_paths,
     run_importance_correction,
@@ -63,6 +65,60 @@ def test_importance_weights_are_per_object_and_resampling_is_joint() -> None:
         resampled["z_obs"].to_numpy()
         - resampled["row_index"].map({10: 0.5, 20: 1.0}).to_numpy(),
     )
+
+
+def test_defensive_mixture_uses_realized_allocation_in_exact_density() -> None:
+    base_frame = _proposal_frame(n_samples=8)
+    tail_frame = _proposal_frame(n_samples=8)
+    tail_frame["z_obs"] += 0.05
+    base_bank = PosteriorBank(
+        frame=base_frame,
+        identity_column="row_index",
+        parameter_names=("z_obs", "nuisance"),
+        source_files=(),
+    )
+    tail_bank = PosteriorBank(
+        frame=tail_frame,
+        identity_column="row_index",
+        parameter_names=("z_obs", "nuisance"),
+        source_files=(),
+    )
+    base_q_base = np.linspace(-2.0, -1.0, len(base_frame))
+    tail_q_base = base_q_base - 0.5
+    base_q_tail = np.linspace(-3.0, -2.0, len(tail_frame))
+    tail_q_tail = base_q_tail + 0.25
+
+    bank, contract = build_defensive_mixture_bank(
+        base_bank,
+        tail_bank,
+        base_logq_on_base=base_q_base,
+        tail_logq_on_base=tail_q_base,
+        base_logq_on_tail=base_q_tail,
+        tail_logq_on_tail=tail_q_tail,
+        base_target_logprior=np.full(len(base_frame), -4.0),
+        tail_target_logprior=np.full(len(tail_frame), -5.0),
+        requested_tail_fraction=0.26,
+        seed=7,
+    )
+
+    assert contract["tail_draws_per_object"] == 2
+    assert contract["base_draws_per_object"] == 6
+    assert contract["realized_tail_fraction"] == 0.25
+    counts = bank.frame.groupby(["row_index", "proposal_component"]).size()
+    assert set(counts.xs("base", level="proposal_component")) == {6}
+    assert set(counts.xs("tail", level="proposal_component")) == {2}
+    expected = defensive_mixture_log_prob(
+        bank.frame["logq_base"].to_numpy(),
+        bank.frame["logq_tail"].to_numpy(),
+        tail_fraction=0.25,
+    )
+    np.testing.assert_allclose(bank.frame["logq"], expected)
+    assert set(
+        bank.frame.loc[bank.frame["proposal_component"] == "base", "logprior"]
+    ) == {-4.0}
+    assert set(
+        bank.frame.loc[bank.frame["proposal_component"] == "tail", "logprior"]
+    ) == {-5.0}
 
 
 def test_weighted_redshift_metrics_use_distributional_weights() -> None:
@@ -165,7 +221,9 @@ def test_empirical_bayes_mstep_improves_weighted_prior_objective() -> None:
 def test_jean_zay_workflows_preserve_train_eval_and_distribution_contracts() -> None:
     root = Path(__file__).resolve().parents[1]
     importance = (root / "scripts/posthoc_importance_probe_h100.slurm").read_text()
-    submit_importance = (root / "scripts/submit_posthoc_importance_probes.sh").read_text()
+    submit_importance = (
+        root / "scripts/submit_posthoc_importance_probes.sh"
+    ).read_text()
     assert "BUDGETS_EXPORT" in submit_importance
     assert 'BUDGETS_CSV="${BUDGETS_CSV//:/,}"' in importance
     empirical_bayes = (root / "scripts/posthoc_empirical_bayes_h100.slurm").read_text()
