@@ -57,8 +57,14 @@ temperatures = [float(item.strip()) for item in sys.argv[3].split(",") if item.s
 k = int(sys.argv[4])
 base = baseline_root / f"moderate_k{k}_proposal"
 base_summary = json.loads((base / "inference_summary.json").read_text())
-if float(base_summary["posterior_base_temperature"]) != 1.0:
+base_temperature = base_summary.get("posterior_base_temperature")
+if base_temperature is not None and float(base_temperature) != 1.0:
     raise SystemExit("baseline proposal is not the unit-temperature bank")
+if base_temperature is None:
+    print(
+        "[defensive-proposal-submit] baseline uses legacy implicit T=1; "
+        "the H100 task will verify its saved logq against recomputed q1"
+    )
 base_rows = np.load(base / "inference_indices.npy")
 if np.unique(base_rows).size != base_rows.size:
     raise SystemExit("baseline proposal cohort contains duplicates")

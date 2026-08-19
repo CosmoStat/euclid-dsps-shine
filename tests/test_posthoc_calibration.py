@@ -19,6 +19,9 @@ from euclid_dsps.amortized.posthoc_calibration import (
     run_importance_correction,
     weighted_redshift_metrics,
 )
+from scripts.evaluate_popcosmos_defensive_proposal import (
+    _validate_inference_temperature,
+)
 
 eqx, optax = require_amortized_dependencies()
 
@@ -119,6 +122,24 @@ def test_defensive_mixture_uses_realized_allocation_in_exact_density() -> None:
     assert set(
         bank.frame.loc[bank.frame["proposal_component"] == "tail", "logprior"]
     ) == {-5.0}
+
+
+def test_defensive_scan_accepts_legacy_implicit_unit_temperature(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "legacy"
+    legacy.mkdir()
+    (legacy / "inference_summary.json").write_text("{}")
+
+    contract = _validate_inference_temperature(
+        legacy,
+        expected=1.0,
+        allow_implicit_unit=True,
+    )
+
+    assert contract["recorded"] is None
+    assert contract["expected"] == 1.0
+    assert contract["validated_by_recomputed_density"] is True
 
 
 def test_weighted_redshift_metrics_use_distributional_weights() -> None:

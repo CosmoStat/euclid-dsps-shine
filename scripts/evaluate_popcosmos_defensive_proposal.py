@@ -85,8 +85,14 @@ def main() -> None:
         args.tail_posterior, parameter_names=latent_spec.names
     )
     identities = _validate_bank_contract(base_bank, tail_bank)
-    _validate_inference_temperature(args.base_posterior, expected=1.0)
-    _validate_inference_temperature(args.tail_posterior, expected=args.tail_temperature)
+    base_temperature_contract = _validate_inference_temperature(
+        args.base_posterior,
+        expected=1.0,
+        allow_implicit_unit=True,
+    )
+    tail_temperature_contract = _validate_inference_temperature(
+        args.tail_posterior, expected=args.tail_temperature
+    )
 
     features = _load_features(
         config,
@@ -219,6 +225,10 @@ def main() -> None:
     task_summary = {
         "status": "complete",
         "tail_temperature": float(args.tail_temperature),
+        "source_temperature_contracts": {
+            "base": base_temperature_contract,
+            "tail": tail_temperature_contract,
+        },
         "tail_fractions": fractions,
         "n_objects": int(len(identities)),
         "proposal_samples_per_object": int(
@@ -269,14 +279,34 @@ def _slug(value: float) -> str:
     return f"{value:.8g}".replace(".", "p")
 
 
-def _validate_inference_temperature(root: Path, *, expected: float) -> None:
+def _validate_inference_temperature(
+    root: Path,
+    *,
+    expected: float,
+    allow_implicit_unit: bool = False,
+) -> dict[str, object]:
     summary_path = root / "inference_summary.json"
     if not summary_path.is_file():
         raise FileNotFoundError(summary_path)
     summary = json.loads(summary_path.read_text())
+    if "posterior_base_temperature" not in summary:
+        if allow_implicit_unit and float(expected) == 1.0:
+            return {
+                "expected": 1.0,
+                "recorded": None,
+                "source": "implicit unit temperature from legacy inference",
+                "validated_by_recomputed_density": True,
+            }
+        raise ValueError(f"proposal temperature missing from {summary_path}")
     actual = float(summary["posterior_base_temperature"])
     if actual != float(expected):
         raise ValueError(f"proposal temperature mismatch: {actual} != {expected}")
+    return {
+        "expected": float(expected),
+        "recorded": actual,
+        "source": "inference_summary",
+        "validated_by_recomputed_density": True,
+    }
 
 
 def _validate_bank_contract(base_bank, tail_bank) -> np.ndarray:
