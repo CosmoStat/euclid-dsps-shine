@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-shards", type=int, required=True)
     parser.add_argument("--seed", type=int, default=260817)
     parser.add_argument("--parent-smc-root", type=Path)
+    parser.add_argument("--exclude-indices", type=Path, action="append", default=[])
     return parser.parse_args()
 
 
@@ -34,6 +35,7 @@ def build_cohorts(
     n_shards: int,
     seed: int,
     parent_root: Path | None = None,
+    exclude_paths: tuple[Path, ...] = (),
 ) -> dict[str, object]:
     if min(smc_objects, probe_objects, n_shards) <= 0:
         raise ValueError("SMC objects, probe objects and shards must be positive")
@@ -42,20 +44,33 @@ def build_cohorts(
 
     calibration = _load_unique_indices(calibration_path, "calibration")
     evaluation = _load_unique_indices(evaluation_path, "evaluation")
-    if calibration.size < smc_objects + probe_objects:
+    exclusions = [
+        _load_unique_indices(path, f"excluded cohort {index}")
+        for index, path in enumerate(exclude_paths)
+    ]
+    excluded = (
+        np.unique(np.concatenate(exclusions))
+        if exclusions
+        else np.empty(0, dtype=np.int64)
+    )
+    available = np.random.default_rng(seed).permutation(calibration)
+    if excluded.size:
+        available = available[~np.isin(available, excluded)]
+    if available.size < smc_objects + probe_objects:
         raise ValueError(
-            "Not enough calibration rows for disjoint SMC and probe cohorts"
+            "Not enough non-excluded calibration rows for disjoint SMC and "
+            "probe cohorts"
         )
 
-    selected = np.random.default_rng(seed).permutation(calibration)[
-        : smc_objects + probe_objects
-    ]
+    selected = available[: smc_objects + probe_objects]
     smc = selected[:smc_objects]
     probe = selected[smc_objects:]
     if np.intersect1d(smc, probe).size:
         raise ValueError("SMC and proposal-probe cohorts overlap")
     if np.intersect1d(selected, evaluation).size:
         raise ValueError("SMC or proposal-probe cohort overlaps evaluation")
+    if np.intersect1d(selected, excluded).size:
+        raise ValueError("SMC or proposal-probe cohort overlaps excluded rows")
 
     progressive_parent = None
     if parent_root is not None:
@@ -79,6 +94,9 @@ def build_cohorts(
         "proposal_probe_objects": probe_objects,
         "n_shards": n_shards,
         "spectroscopic_evaluation_overlap": 0,
+        "excluded_row_overlap": 0,
+        "excluded_unique_rows": int(excluded.size),
+        "excluded_indices": [_receipt(path) for path in exclude_paths],
         "source_calibration_indices": _receipt(calibration_path),
         "source_evaluation_indices": _receipt(evaluation_path),
     }
@@ -151,6 +169,7 @@ def main() -> None:
         n_shards=args.n_shards,
         seed=args.seed,
         parent_root=args.parent_smc_root,
+        exclude_paths=tuple(args.exclude_indices),
     )
 
 

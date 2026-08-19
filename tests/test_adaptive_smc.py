@@ -316,6 +316,20 @@ def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     assert 'REFRESH_DEPENDENCY="$scale_finalizer_job"' in scale
     assert "Parent ordinary-IS support did not pass; stop before 1024" in scale
     assert '--dependency="afterok:${REFRESH_DEPENDENCY}"' in refresh_submit
+    assert "SMC_CHECKPOINT" in submit
+    assert "EXCLUDE_INDICES_CSV" in submit
+    assert "REFRESH_SOURCE_CHECKPOINT" in refresh
+    assert "PRIOR_CONFIRMATION_SUMMARY" in refresh
+    assert '"ready_for_fast_amortized_inference"' in refresh
+
+    followup = (
+        root / "scripts/submit_popcosmos_smc_empirical_bayes_followup.sh"
+    ).read_text()
+    assert 'SMC_CHECKPOINT="$CANDIDATE_CHECKPOINT"' in followup
+    assert 'EXCLUDE_INDICES_CSV="$PARENT_SMC_INDICES,$PARENT_PROBE_INDICES"' in followup
+    assert '--dependency="afterok:${confirmation_finalizer_job}"' in followup
+    assert 'REFRESH_DEPENDENCY="$prior_confirmation_job"' in followup
+    assert "popcosmos_smc_empirical_bayes_confirm.slurm" in followup
 
 
 def test_progressive_smc_cohorts_consume_parent_probe_and_reserve_new_probe(
@@ -379,6 +393,56 @@ def test_progressive_smc_cohorts_consume_parent_probe_and_reserve_new_probe(
     manifest = json.loads((child / "cohorts/cohort_manifest.json").read_text())
     assert manifest["progressive_parent"]["smc_objects"] == 4
     assert manifest["progressive_parent"]["proposal_probe_objects"] == 4
+
+
+def test_smc_cohorts_exclude_multiple_previous_cohorts(tmp_path: Path) -> None:
+    calibration = tmp_path / "calibration.npy"
+    evaluation = tmp_path / "evaluation.npy"
+    first_exclusion = tmp_path / "teacher.npy"
+    second_exclusion = tmp_path / "probe.npy"
+    np.save(calibration, np.arange(40, dtype=np.int64))
+    np.save(evaluation, np.arange(100, 110, dtype=np.int64))
+    np.save(first_exclusion, np.arange(0, 4, dtype=np.int64))
+    np.save(second_exclusion, np.arange(4, 8, dtype=np.int64))
+    out = tmp_path / "fresh"
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/build_popcosmos_posthoc_smc_cohorts.py"
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--calibration-indices",
+            str(calibration),
+            "--evaluation-indices",
+            str(evaluation),
+            "--out",
+            str(out),
+            "--smc-objects",
+            "8",
+            "--probe-objects",
+            "8",
+            "--n-shards",
+            "4",
+            "--exclude-indices",
+            str(first_exclusion),
+            "--exclude-indices",
+            str(second_exclusion),
+        ],
+        check=True,
+    )
+
+    smc = np.load(out / "smc_calibration_indices.npy")
+    probe = np.load(out / "proposal_probe_indices.npy")
+    excluded = np.concatenate((np.load(first_exclusion), np.load(second_exclusion)))
+    assert np.intersect1d(smc, excluded).size == 0
+    assert np.intersect1d(probe, excluded).size == 0
+    assert np.intersect1d(smc, probe).size == 0
+    manifest = json.loads((out / "cohort_manifest.json").read_text())
+    assert manifest["excluded_unique_rows"] == 8
+    assert len(manifest["excluded_indices"]) == 2
 
 
 def test_smc_shards_are_combined_with_exact_cohort(tmp_path: Path) -> None:

@@ -122,6 +122,23 @@ def test_prior_ratio_gate_requires_both_seed_evidence_gains() -> None:
     assert not gate["checks"]["every_seed_mean_logevidence_delta_positive"]
 
 
+def test_reverse_prior_ratio_recovers_candidate_evidence_direction() -> None:
+    candidate = np.zeros((2, 3, 16), dtype=np.float64)
+    source = candidate - 0.2
+    candidate_weights = np.full((2, 3, 16), 1.0 / 16.0)
+    reverse = prior_ratio_diagnostics(
+        candidate,
+        source,
+        candidate_weights,
+        row_indices=np.arange(3),
+        bank_names=("seed_a", "seed_b"),
+    )
+
+    candidate_minus_source = -reverse["log_evidence_delta"].to_numpy()
+    np.testing.assert_allclose(candidate_minus_source, 0.2)
+    np.testing.assert_allclose(reverse["prior_ratio_ess_fraction"], 1.0)
+
+
 def test_direct_smc_mstep_improves_weighted_prior_fit() -> None:
     prior = RealNVPPrior(
         jax.random.PRNGKey(1),

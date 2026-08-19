@@ -19,6 +19,8 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 OUTPUT_ROOT="${OUTPUT_ROOT:?Set OUTPUT_ROOT}"
 SOURCE_ROOT="${SOURCE_ROOT:?Set SOURCE_ROOT}"
+SMC_CHECKPOINT="${SMC_CHECKPOINT:-$SOURCE_ROOT/train/checkpoints/best.eqx}"
+SMC_FEATURE_STATS="${SMC_FEATURE_STATS:-$SOURCE_ROOT/train/feature_stats.json}"
 LIMIT="${LIMIT:-256}"
 N_SHARDS="${N_SHARDS:-4}"
 PARTICLES="${PARTICLES:-1024}"
@@ -52,8 +54,8 @@ case "$VARIANT" in
 esac
 
 DATASET="Data/cosmos2020/prepared/farmer_a24_full.parquet"
-CHECKPOINT="$SOURCE_ROOT/train/checkpoints/best.eqx"
-FEATURE_STATS="$SOURCE_ROOT/train/feature_stats.json"
+CHECKPOINT="$SMC_CHECKPOINT"
+FEATURE_STATS="$SMC_FEATURE_STATS"
 printf -v SHARD_TAG '%03d' "$SHARD"
 ROW_INDICES="$OUTPUT_ROOT/cohorts/smc_calibration_indices_shard_${SHARD_TAG}.npy"
 OUT="$OUTPUT_ROOT/$VARIANT/seed_$SEED/shard_${SHARD_TAG}"

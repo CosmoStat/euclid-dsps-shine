@@ -12,6 +12,9 @@ PROBE_LIMIT="${PROBE_LIMIT:-256}"
 N_SHARDS="${N_SHARDS:-4}"
 ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-12}"
 PARENT_SMC_ROOT="${PARENT_SMC_ROOT:-}"
+SMC_CHECKPOINT="${SMC_CHECKPOINT:-$SOURCE_ROOT/train/checkpoints/best.eqx}"
+SMC_FEATURE_STATS="${SMC_FEATURE_STATS:-$SOURCE_ROOT/train/feature_stats.json}"
+EXCLUDE_INDICES_CSV="${EXCLUDE_INDICES_CSV:-}"
 SMC_VARIANTS_CSV="${SMC_VARIANTS_CSV:-floor_0p00,floor_0p02,floor_0p05}"
 SMC_SEEDS_CSV="${SMC_SEEDS_CSV:-260817,260818}"
 export SMC_VARIANTS_CSV SMC_SEEDS_CSV
@@ -36,7 +39,7 @@ test ! -e "$OUTPUT_ROOT" || {
 mkdir -p outputs/logs "$OUTPUT_ROOT"
 CALIBRATION_INDICES="$SOURCE_ROOT/train/validation_indices.npy"
 EVALUATION_INDICES="$SOURCE_ROOT/inference/inference_indices.npy"
-for path in "$CALIBRATION_INDICES" "$EVALUATION_INDICES"; do
+for path in "$CALIBRATION_INDICES" "$EVALUATION_INDICES" "$SMC_CHECKPOINT" "$SMC_FEATURE_STATS"; do
   test -s "$path" || { echo "[posthoc-smc-submit][error] missing: $path" >&2; exit 2; }
 done
 cohort_args=(
@@ -50,12 +53,22 @@ cohort_args=(
 if [[ -n "$PARENT_SMC_ROOT" ]]; then
   cohort_args+=(--parent-smc-root "$PARENT_SMC_ROOT")
 fi
+if [[ -n "$EXCLUDE_INDICES_CSV" ]]; then
+  IFS=',' read -r -a EXCLUDE_INDICES <<< "$EXCLUDE_INDICES_CSV"
+  for path in "${EXCLUDE_INDICES[@]}"; do
+    test -s "$path" || {
+      echo "[posthoc-smc-submit][error] missing exclusion cohort: $path" >&2
+      exit 2
+    }
+    cohort_args+=(--exclude-indices "$path")
+  done
+fi
 python scripts/build_popcosmos_posthoc_smc_cohorts.py "${cohort_args[@]}"
 
 array_tasks=$((${#SMC_VARIANTS[@]} * ${#SMC_SEEDS[@]} * N_SHARDS))
 array_max=$((array_tasks - 1))
 pilot_raw=$(sbatch --parsable --array="0-${array_max}%${ARRAY_CONCURRENCY}" \
-  --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",SOURCE_ROOT="$SOURCE_ROOT",OUTPUT_ROOT="$OUTPUT_ROOT",LIMIT="$LIMIT",N_SHARDS="$N_SHARDS",PARTICLES="${PARTICLES:-1024}",OBJECT_BATCH_SIZE="${OBJECT_BATCH_SIZE:-4}",TARGET_ESS_FRACTION="${TARGET_ESS_FRACTION:-0.5}",MAX_STAGES="${MAX_STAGES:-64}",MALA_STEPS="${MALA_STEPS:-2}",MALA_STEP_SIZE="${MALA_STEP_SIZE:-0.02}",MALA_PARTICLE_CHUNK_SIZE="${MALA_PARTICLE_CHUNK_SIZE:-64}" \
+  --export=ALL,REPO_DIR="$REPO_DIR",MINICONDA_PATH="$MINICONDA_PATH",CONDA_ENV="$CONDA_ENV",SOURCE_ROOT="$SOURCE_ROOT",SMC_CHECKPOINT="$SMC_CHECKPOINT",SMC_FEATURE_STATS="$SMC_FEATURE_STATS",OUTPUT_ROOT="$OUTPUT_ROOT",LIMIT="$LIMIT",N_SHARDS="$N_SHARDS",PARTICLES="${PARTICLES:-1024}",OBJECT_BATCH_SIZE="${OBJECT_BATCH_SIZE:-4}",TARGET_ESS_FRACTION="${TARGET_ESS_FRACTION:-0.5}",MAX_STAGES="${MAX_STAGES:-64}",MALA_STEPS="${MALA_STEPS:-2}",MALA_STEP_SIZE="${MALA_STEP_SIZE:-0.02}",MALA_PARTICLE_CHUNK_SIZE="${MALA_PARTICLE_CHUNK_SIZE:-64}" \
   scripts/popcosmos_posthoc_smc_h100.slurm)
 pilot_job="${pilot_raw%%;*}"
 
@@ -65,11 +78,13 @@ final_raw=$(sbatch --parsable --dependency="afterok:${pilot_job}" \
 final_job="${final_raw%%;*}"
 
 env_file=outputs/logs/popcosmos_posthoc_smc_latest.env
-printf 'export SMC_PILOT_JOB=%q\nexport SMC_FINALIZER_JOB=%q\nexport SMC_OUTPUT_ROOT=%q\nexport SOURCE_ROOT=%q\nexport SMC_CALIBRATION_INDICES=%q\nexport SMC_PROBE_INDICES=%q\nexport SMC_N_SHARDS=%q\nexport SMC_VARIANTS_CSV=%q\nexport SMC_SEEDS_CSV=%q\nexport PARENT_SMC_ROOT=%q\n' \
+printf 'export SMC_PILOT_JOB=%q\nexport SMC_FINALIZER_JOB=%q\nexport SMC_OUTPUT_ROOT=%q\nexport SOURCE_ROOT=%q\nexport SMC_CHECKPOINT=%q\nexport SMC_FEATURE_STATS=%q\nexport SMC_CALIBRATION_INDICES=%q\nexport SMC_PROBE_INDICES=%q\nexport SMC_N_SHARDS=%q\nexport SMC_VARIANTS_CSV=%q\nexport SMC_SEEDS_CSV=%q\nexport PARENT_SMC_ROOT=%q\nexport EXCLUDE_INDICES_CSV=%q\n' \
   "$pilot_job" "$final_job" "$OUTPUT_ROOT" "$SOURCE_ROOT" \
+  "$SMC_CHECKPOINT" "$SMC_FEATURE_STATS" \
   "$OUTPUT_ROOT/cohorts/smc_calibration_indices.npy" \
   "$OUTPUT_ROOT/cohorts/proposal_probe_indices.npy" "$N_SHARDS" \
-  "$SMC_VARIANTS_CSV" "$SMC_SEEDS_CSV" "$PARENT_SMC_ROOT" > "$env_file"
+  "$SMC_VARIANTS_CSV" "$SMC_SEEDS_CSV" "$PARENT_SMC_ROOT" \
+  "$EXCLUDE_INDICES_CSV" > "$env_file"
 echo "smc_pilot_job=$pilot_job"
 echo "smc_finalizer_job=$final_job"
 echo "smc_output_root=$OUTPUT_ROOT"

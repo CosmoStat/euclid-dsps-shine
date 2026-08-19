@@ -26,6 +26,10 @@ MAX_FRACTION_PARETO_K_GT_0P7="${MAX_FRACTION_PARETO_K_GT_0P7:-0.2}"
 BASE_COMPONENTS="${BASE_COMPONENTS:-1}"
 MIXTURE_MEAN_OFFSET="${MIXTURE_MEAN_OFFSET:-0.05}"
 BASELINE_REFRESH_OUT="${BASELINE_REFRESH_OUT:-}"
+REFRESH_SOURCE_CHECKPOINT="${REFRESH_SOURCE_CHECKPOINT:-$SOURCE_ROOT/train/checkpoints/best.eqx}"
+REFRESH_FEATURE_STATS="${REFRESH_FEATURE_STATS:-$SOURCE_ROOT/train/feature_stats.json}"
+PRIOR_CONFIRMATION_SUMMARY="${PRIOR_CONFIRMATION_SUMMARY:-}"
+REFRESH_ROLE="${REFRESH_ROLE:-proposal-capacity-tuning}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-24}"
@@ -75,8 +79,8 @@ case "$BASE_COMPONENTS" in
 esac
 
 DATASET=Data/cosmos2020/prepared/farmer_a24_full.parquet
-SOURCE_CHECKPOINT="$SOURCE_ROOT/train/checkpoints/best.eqx"
-SOURCE_STATS="$SOURCE_ROOT/train/feature_stats.json"
+SOURCE_CHECKPOINT="$REFRESH_SOURCE_CHECKPOINT"
+SOURCE_STATS="$REFRESH_FEATURE_STATS"
 BANK_A="$SMC_ROOT/$variant/seed_260817"
 BANK_B="$SMC_ROOT/$variant/seed_260818"
 REFRESH="$OUT/encoder_refresh"
@@ -86,6 +90,17 @@ ROW_INDICES="$SMC_ROOT/cohorts/proposal_probe_indices.npy"
 test ! -e "$OUT"
 mkdir -p "$OUT"
 test -s "$ROW_INDICES"
+if [[ -n "$PRIOR_CONFIRMATION_SUMMARY" ]]; then
+  test -s "$PRIOR_CONFIRMATION_SUMMARY"
+  python - "$PRIOR_CONFIRMATION_SUMMARY" <<'PY'
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+if payload.get("confirmation_status") != "PASS":
+    raise SystemExit("Updated-prior independent SMC confirmation did not pass")
+PY
+fi
 PROBE_LIMIT=$(python - "$ROW_INDICES" <<'PY'
 import numpy as np
 import sys
@@ -189,11 +204,21 @@ python scripts/importance_correct_posterior.py \
   --min-median-ess-fraction "$MIN_MEDIAN_ESS_FRACTION" \
   --max-fraction-pareto-k-gt-0p7 "$MAX_FRACTION_PARETO_K_GT_0P7"
 
-python - "$variant" "$REFRESH/refresh_summary.json" "$CORRECTION/importance_summary.json" "$OUT" "$MIN_MEDIAN_ESS_FRACTION" "$MAX_FRACTION_PARETO_K_GT_0P7" "$BASELINE_IMPORTANCE" <<'PY'
+python - "$variant" "$REFRESH/refresh_summary.json" "$CORRECTION/importance_summary.json" "$OUT" "$MIN_MEDIAN_ESS_FRACTION" "$MAX_FRACTION_PARETO_K_GT_0P7" "$BASELINE_IMPORTANCE" "$REFRESH_ROLE" "$PRIOR_CONFIRMATION_SUMMARY" <<'PY'
 import json
 import sys
 from pathlib import Path
-variant, refresh_path, importance_path, out, min_ess, max_bad_k, baseline_path = sys.argv[1:]
+(
+    variant,
+    refresh_path,
+    importance_path,
+    out,
+    min_ess,
+    max_bad_k,
+    baseline_path,
+    refresh_role,
+    confirmation_path,
+) = sys.argv[1:]
 refresh = json.load(open(refresh_path))
 importance = json.load(open(importance_path))
 support = importance["support_gate"]
@@ -213,7 +238,7 @@ payload = {
     "ordinary_importance_support_gate": support["status"],
     "proposal_base_components": refresh["target_base_components"],
     "proposal_probe_cohort": "disjoint frozen validation rows",
-    "cohort_role": "proposal-capacity tuning; spectroscopy unused",
+    "cohort_role": f"{refresh_role}; spectroscopy unused",
     "ordinary_importance_thresholds": {
         "min_median_ess_fraction": float(min_ess),
         "max_fraction_pareto_k_gt_0p7": float(max_bad_k),
@@ -223,6 +248,10 @@ payload = {
         refresh["refresh_gate"] == "PASS" and support["status"] == "PASS"
     ),
     "ready_for_empirical_bayes": False,
+    "ready_for_fast_amortized_inference": (
+        refresh["refresh_gate"] == "PASS" and support["status"] == "PASS"
+    ),
+    "prior_confirmation_summary": confirmation_path or None,
 }
 if baseline_path:
     baseline = json.load(open(baseline_path))
