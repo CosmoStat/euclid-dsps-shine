@@ -304,6 +304,82 @@ def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
     assert "popcosmos_native15d_rws_floor05_mix2.yaml" in refresh
     assert '"ready_for_empirical_bayes": False' in refresh
 
+    scale = (root / "scripts/submit_popcosmos_posthoc_smc_scale.sh").read_text()
+    refresh_submit = (
+        root / "scripts/submit_popcosmos_posthoc_smc_refresh.sh"
+    ).read_text()
+    assert "SCALE_OBJECTS must be 512 or 1024" in scale
+    assert "PARENT_SMC_ROOT" in scale
+    assert "MALA_STEP_SIZE=0.005" in scale
+    assert "SMC_VARIANTS_CSV=floor_0p05" in scale
+    assert "BASE_COMPONENTS=1" in scale
+    assert 'REFRESH_DEPENDENCY="$scale_finalizer_job"' in scale
+    assert "Parent ordinary-IS support did not pass; stop before 1024" in scale
+    assert '--dependency="afterok:${REFRESH_DEPENDENCY}"' in refresh_submit
+
+
+def test_progressive_smc_cohorts_consume_parent_probe_and_reserve_new_probe(
+    tmp_path: Path,
+) -> None:
+    calibration = tmp_path / "calibration.npy"
+    evaluation = tmp_path / "evaluation.npy"
+    np.save(calibration, np.arange(40, dtype=np.int64))
+    np.save(evaluation, np.arange(100, 110, dtype=np.int64))
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/build_popcosmos_posthoc_smc_cohorts.py"
+    )
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    common = [
+        sys.executable,
+        str(script),
+        "--calibration-indices",
+        str(calibration),
+        "--evaluation-indices",
+        str(evaluation),
+    ]
+    subprocess.run(
+        [
+            *common,
+            "--out",
+            str(parent / "cohorts"),
+            "--smc-objects",
+            "4",
+            "--probe-objects",
+            "4",
+            "--n-shards",
+            "2",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            *common,
+            "--out",
+            str(child / "cohorts"),
+            "--smc-objects",
+            "8",
+            "--probe-objects",
+            "8",
+            "--n-shards",
+            "4",
+            "--parent-smc-root",
+            str(parent),
+        ],
+        check=True,
+    )
+
+    parent_smc = np.load(parent / "cohorts/smc_calibration_indices.npy")
+    parent_probe = np.load(parent / "cohorts/proposal_probe_indices.npy")
+    child_smc = np.load(child / "cohorts/smc_calibration_indices.npy")
+    child_probe = np.load(child / "cohorts/proposal_probe_indices.npy")
+    np.testing.assert_array_equal(child_smc, np.concatenate((parent_smc, parent_probe)))
+    assert np.intersect1d(child_probe, child_smc).size == 0
+    manifest = json.loads((child / "cohorts/cohort_manifest.json").read_text())
+    assert manifest["progressive_parent"]["smc_objects"] == 4
+    assert manifest["progressive_parent"]["proposal_probe_objects"] == 4
+
 
 def test_smc_shards_are_combined_with_exact_cohort(tmp_path: Path) -> None:
     root = tmp_path / "seed_260817"
