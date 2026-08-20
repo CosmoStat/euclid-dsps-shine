@@ -8,7 +8,12 @@ import jax
 import jax.numpy as jnp
 
 from .config import require_equinox
-from .encoder import GaussianEncoder, MixtureGaussianEncoder, _diag_normal_log_prob
+from .encoder import (
+    GaussianEncoder,
+    MixtureGaussianEncoder,
+    PassbandSetEncoder,
+    _diag_normal_log_prob,
+)
 from .flows import (
     _apply_net,
     _rational_quadratic_spline,
@@ -35,6 +40,7 @@ class PosteriorEncoderState(NamedTuple):
     mixture_logits: jnp.ndarray | None
     mixture_means: jnp.ndarray | None
     mixture_log_stds: jnp.ndarray | None
+    flow_context: jnp.ndarray
 
 
 class PriorTransportGaussianEncoder(eqx.Module):
@@ -143,6 +149,103 @@ class _ConditionalCoupling(eqx.Module):
         return masked + active * transformed, logdet
 
 
+class _ConditionalAutoregressiveSpline(eqx.Module):
+    """Exact scalar-autoregressive RQ-spline transform.
+
+    Sampling is sequential in the 15 latent coordinates. Density evaluation is
+    exact and uses the same conditioners, preserving the ordinary-IW contract.
+    """
+
+    conditioners: tuple
+    latent_dim: int = eqx.field(static=True)
+    n_bins: int = eqx.field(static=True)
+    tail_bound: float = eqx.field(static=True)
+    min_bin_width: float = eqx.field(static=True)
+    min_bin_height: float = eqx.field(static=True)
+    min_derivative: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key,
+        *,
+        latent_dim: int,
+        context_dim: int,
+        hidden_size: int,
+        n_bins: int,
+        tail_bound: float,
+        min_bin_width: float,
+        min_bin_height: float,
+        min_derivative: float,
+        init_scale: float,
+    ) -> None:
+        keys = jax.random.split(key, int(latent_dim))
+        output_dim = 3 * int(n_bins) + 1
+        self.conditioners = tuple(
+            _scale_last_linear(
+                eqx.nn.MLP(
+                    in_size=int(context_dim) + coordinate,
+                    out_size=output_dim,
+                    width_size=int(hidden_size),
+                    depth=2,
+                    activation=jax.nn.gelu,
+                    key=keys[coordinate],
+                ),
+                float(init_scale),
+            )
+            for coordinate in range(int(latent_dim))
+        )
+        self.latent_dim = int(latent_dim)
+        self.n_bins = int(n_bins)
+        self.tail_bound = float(tail_bound)
+        self.min_bin_width = float(min_bin_width)
+        self.min_bin_height = float(min_bin_height)
+        self.min_derivative = float(min_derivative)
+
+    def forward(self, value, context):
+        value = jnp.asarray(value, dtype=jnp.float32)
+        context = _broadcast_context(context, value.shape[:-1])
+        transformed = jnp.zeros_like(value)
+        logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
+        for coordinate, conditioner in enumerate(self.conditioners):
+            inputs = jnp.concatenate((context, transformed[..., :coordinate]), axis=-1)
+            params = _apply_net(conditioner, inputs)
+            output, delta = _rational_quadratic_spline(
+                value[..., coordinate],
+                params,
+                inverse=False,
+                n_bins=self.n_bins,
+                tail_bound=self.tail_bound,
+                min_bin_width=self.min_bin_width,
+                min_bin_height=self.min_bin_height,
+                min_derivative=self.min_derivative,
+            )
+            transformed = transformed.at[..., coordinate].set(output)
+            logdet = logdet + delta
+        return transformed, logdet
+
+    def inverse(self, value, context):
+        value = jnp.asarray(value, dtype=jnp.float32)
+        context = _broadcast_context(context, value.shape[:-1])
+        base = jnp.zeros_like(value)
+        logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
+        for coordinate, conditioner in enumerate(self.conditioners):
+            inputs = jnp.concatenate((context, value[..., :coordinate]), axis=-1)
+            params = _apply_net(conditioner, inputs)
+            output, delta = _rational_quadratic_spline(
+                value[..., coordinate],
+                params,
+                inverse=True,
+                n_bins=self.n_bins,
+                tail_bound=self.tail_bound,
+                min_bin_width=self.min_bin_width,
+                min_bin_height=self.min_bin_height,
+                min_derivative=self.min_derivative,
+            )
+            base = base.at[..., coordinate].set(output)
+            logdet = logdet + delta
+        return base, logdet
+
+
 class ConditionalFlowEncoder(eqx.Module):
     """MLP Gaussian base followed by a conditional residual coupling flow."""
 
@@ -152,6 +255,8 @@ class ConditionalFlowEncoder(eqx.Module):
     inverse_permutations: tuple
     family: str = eqx.field(static=True)
     latent_dim: int = eqx.field(static=True)
+    context_dim: int = eqx.field(static=True)
+    context_encoder_type: str = eqx.field(static=True)
     output_space: str = eqx.field(static=True)
     base_components: int = eqx.field(static=True)
 
@@ -179,12 +284,16 @@ class ConditionalFlowEncoder(eqx.Module):
         init_scale: float = 0.0,
         output_space: str = "prior_base",
         base_components: int = 1,
+        context_encoder_type: str = "base_moments",
+        set_n_bands: int | None = None,
+        set_token_dim: int = 64,
+        set_context_dim: int = 128,
+        set_num_heads: int = 4,
+        set_num_layers: int = 2,
     ) -> None:
         keys = jax.random.split(key, int(n_layers) + 1)
         self.base_components = int(base_components)
-        base_class = (
-            GaussianEncoder if self.base_components == 1 else MixtureGaussianEncoder
-        )
+        context_encoder_type = _normalize_context_encoder(context_encoder_type)
         base_kwargs = dict(
             input_dim=input_dim,
             latent_dim=latent_dim,
@@ -194,44 +303,97 @@ class ConditionalFlowEncoder(eqx.Module):
             log_std_max=log_std_max,
             initial_log_std=initial_log_std,
         )
-        if self.base_components > 1:
-            base_kwargs["n_components"] = self.base_components
-        self.base = base_class(keys[0], **base_kwargs)
+        if context_encoder_type == "passband_set_transformer":
+            if self.base_components != 1:
+                raise ValueError(
+                    "passband-set conditional flows currently require base_components=1"
+                )
+            if set_n_bands is None:
+                raise ValueError("set_n_bands is required for passband-set context")
+            self.base = PassbandSetEncoder(
+                keys[0],
+                input_dim=input_dim,
+                latent_dim=latent_dim,
+                n_bands=int(set_n_bands),
+                token_dim=int(set_token_dim),
+                context_dim=int(set_context_dim),
+                n_heads=int(set_num_heads),
+                n_layers=int(set_num_layers),
+                log_std_min=log_std_min,
+                log_std_max=log_std_max,
+                initial_log_std=initial_log_std,
+            )
+            context_dim = int(set_context_dim)
+        else:
+            base_class = (
+                GaussianEncoder if self.base_components == 1 else MixtureGaussianEncoder
+            )
+            if self.base_components > 1:
+                base_kwargs["n_components"] = self.base_components
+            self.base = base_class(keys[0], **base_kwargs)
+            context_dim = 2 * int(latent_dim)
         masks = tuple(
             (jnp.arange(int(latent_dim)) % 2 == index % 2)
             for index in range(int(n_layers))
         )
-        self.layers = tuple(
-            _ConditionalCoupling(
-                keys[index + 1],
-                latent_dim=latent_dim,
-                context_dim=2 * int(latent_dim),
-                hidden_size=hidden_size,
-                mask=masks[index],
-                family=family,
-                n_bins=n_bins,
-                scale_clamp=scale_clamp,
-                shift_clamp=shift_clamp,
-                tail_bound=tail_bound,
-                min_bin_width=min_bin_width,
-                min_bin_height=min_bin_height,
-                min_derivative=min_derivative,
-                init_scale=init_scale,
+        normalized_family = _normalize_family(family)
+        if normalized_family == "autoregressive_rq_spline":
+            self.layers = tuple(
+                _ConditionalAutoregressiveSpline(
+                    keys[index + 1],
+                    latent_dim=latent_dim,
+                    context_dim=context_dim,
+                    hidden_size=hidden_size,
+                    n_bins=n_bins,
+                    tail_bound=tail_bound,
+                    min_bin_width=min_bin_width,
+                    min_bin_height=min_bin_height,
+                    min_derivative=min_derivative,
+                    init_scale=init_scale,
+                )
+                for index in range(int(n_layers))
             )
-            for index in range(int(n_layers))
-        )
+        else:
+            self.layers = tuple(
+                _ConditionalCoupling(
+                    keys[index + 1],
+                    latent_dim=latent_dim,
+                    context_dim=context_dim,
+                    hidden_size=hidden_size,
+                    mask=masks[index],
+                    family=normalized_family,
+                    n_bins=n_bins,
+                    scale_clamp=scale_clamp,
+                    shift_clamp=shift_clamp,
+                    tail_bound=tail_bound,
+                    min_bin_width=min_bin_width,
+                    min_bin_height=min_bin_height,
+                    min_derivative=min_derivative,
+                    init_scale=init_scale,
+                )
+                for index in range(int(n_layers))
+            )
         permutations = tuple(
             jnp.roll(jnp.arange(int(latent_dim)), index + 1)
             for index in range(int(n_layers))
         )
         self.permutations = permutations
         self.inverse_permutations = tuple(jnp.argsort(value) for value in permutations)
-        self.family = _normalize_family(family)
+        self.family = normalized_family
         self.latent_dim = int(latent_dim)
+        self.context_dim = int(context_dim)
+        self.context_encoder_type = context_encoder_type
         self.output_space = _normalize_output_space(output_space)
 
     def __call__(self, features):
         return self.base(features)
+
+    def flow_context(self, features, mean=None, log_std=None):
+        if self.context_encoder_type == "passband_set_transformer":
+            return self.base.context(features)
+        if mean is None or log_std is None:
+            mean, log_std = self.base(features)
+        return jnp.concatenate((mean, log_std), axis=-1)
 
     def forward(self, value, context):
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
@@ -297,9 +459,15 @@ def posterior_encoder_state(model, features) -> PosteriorEncoderState:
             logits,
             component_means,
             component_log_stds,
+            model.encoder.flow_context(features, mean, log_std),
         )
     mean, log_std = model.encoder(features)
-    return PosteriorEncoderState(mean, log_std, None, None, None)
+    context = (
+        model.encoder.flow_context(features, mean, log_std)
+        if isinstance(model.encoder, ConditionalFlowEncoder)
+        else jnp.concatenate((mean, log_std), axis=-1)
+    )
+    return PosteriorEncoderState(mean, log_std, None, None, None, context)
 
 
 def sample_posterior_from_state(
@@ -373,12 +541,12 @@ def sample_posterior_from_state(
     elif isinstance(model.encoder, ConditionalFlowEncoder) and (
         model.encoder.output_space == "latent_x"
     ):
-        context = jnp.concatenate([mean, log_std], axis=-1)
+        context = state.flow_context
         x, residual_logdet = model.encoder.forward(base, context)
         logq = logq_base - residual_logdet
         logprior = model.prior.log_prob(x)
     else:
-        context = jnp.concatenate([mean, log_std], axis=-1)
+        context = state.flow_context
         u = base
         if isinstance(model.encoder, ConditionalFlowEncoder):
             u, residual_logdet = model.encoder.forward(u, context)
@@ -400,7 +568,11 @@ def posterior_reference_from_base_mean(model, features) -> jnp.ndarray:
     mean, log_std = model.encoder(features)
     if isinstance(model.encoder, GaussianEncoder):
         return mean
-    context = jnp.concatenate([mean, log_std], axis=-1)
+    context = (
+        model.encoder.flow_context(features, mean, log_std)
+        if isinstance(model.encoder, ConditionalFlowEncoder)
+        else jnp.concatenate([mean, log_std], axis=-1)
+    )
     transformed = mean
     if isinstance(model.encoder, ConditionalFlowEncoder):
         transformed, _ = model.encoder.forward(transformed, context)
@@ -425,7 +597,11 @@ def posterior_log_prob(
     proposal_log_std = log_std + jnp.log(jnp.asarray(temperature, dtype=log_std.dtype))
     if isinstance(model.encoder, GaussianEncoder):
         return _diag_normal_log_prob(x, mean, proposal_log_std)
-    context = jnp.concatenate([mean, log_std], axis=-1)
+    context = (
+        model.encoder.flow_context(features, mean, log_std)
+        if isinstance(model.encoder, ConditionalFlowEncoder)
+        else jnp.concatenate([mean, log_std], axis=-1)
+    )
     if isinstance(model.encoder, ConditionalFlowEncoder) and (
         model.encoder.output_space == "latent_x"
     ):
@@ -532,10 +708,35 @@ def _normalize_family(value: str) -> str:
         "rq_spline": "rq_spline",
         "rqspline": "rq_spline",
         "neural_spline": "rq_spline",
+        "autoregressive_rq_spline": "autoregressive_rq_spline",
+        "autoregressive_rqspline": "autoregressive_rq_spline",
+        "masked_autoregressive_spline": "autoregressive_rq_spline",
+        "maf_rq_spline": "autoregressive_rq_spline",
     }
     if family not in aliases:
-        raise ValueError("Conditional flow family must be realnvp or rq_spline")
+        raise ValueError(
+            "Conditional flow family must be realnvp, rq_spline, or "
+            "autoregressive_rq_spline"
+        )
     return aliases[family]
+
+
+def _normalize_context_encoder(value: str) -> str:
+    normalized = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "base_moments": "base_moments",
+        "compressed_moments": "base_moments",
+        "current": "base_moments",
+        "passband_set_transformer": "passband_set_transformer",
+        "set_transformer": "passband_set_transformer",
+        "band_set": "passband_set_transformer",
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "Conditional context encoder must be base_moments or "
+            "passband_set_transformer"
+        )
+    return aliases[normalized]
 
 
 def _normalize_output_space(value: str) -> str:

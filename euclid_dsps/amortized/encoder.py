@@ -166,6 +166,169 @@ class MixtureGaussianEncoder(eqx.Module):
         return logits, means, log_stds
 
 
+class _SetAttentionBlock(eqx.Module):
+    """Small pre-normalized multi-head self-attention block."""
+
+    query: object
+    key: object
+    value: object
+    attention_output: object
+    feed_forward_in: object
+    feed_forward_out: object
+    norm_attention: object
+    norm_feed_forward: object
+    token_dim: int = eqx.field(static=True)
+    n_heads: int = eqx.field(static=True)
+
+    def __init__(self, key, *, token_dim: int, n_heads: int) -> None:
+        if int(token_dim) % int(n_heads):
+            raise ValueError("set token_dim must be divisible by set_num_heads")
+        keys = jax.random.split(key, 6)
+        self.query = eqx.nn.Linear(token_dim, token_dim, key=keys[0])
+        self.key = eqx.nn.Linear(token_dim, token_dim, key=keys[1])
+        self.value = eqx.nn.Linear(token_dim, token_dim, key=keys[2])
+        self.attention_output = eqx.nn.Linear(token_dim, token_dim, key=keys[3])
+        self.feed_forward_in = eqx.nn.Linear(token_dim, 2 * token_dim, key=keys[4])
+        self.feed_forward_out = eqx.nn.Linear(2 * token_dim, token_dim, key=keys[5])
+        self.norm_attention = eqx.nn.LayerNorm((int(token_dim),))
+        self.norm_feed_forward = eqx.nn.LayerNorm((int(token_dim),))
+        self.token_dim = int(token_dim)
+        self.n_heads = int(n_heads)
+
+    def __call__(self, tokens):
+        normalized = jax.vmap(self.norm_attention)(tokens)
+        query = jax.vmap(self.query)(normalized)
+        key = jax.vmap(self.key)(normalized)
+        value = jax.vmap(self.value)(normalized)
+        head_dim = self.token_dim // self.n_heads
+        query = query.reshape(query.shape[0], self.n_heads, head_dim)
+        key = key.reshape(key.shape[0], self.n_heads, head_dim)
+        value = value.reshape(value.shape[0], self.n_heads, head_dim)
+        scores = jnp.einsum("ihd,jhd->hij", query, key) / jnp.sqrt(
+            jnp.asarray(head_dim, dtype=tokens.dtype)
+        )
+        weights = jax.nn.softmax(scores, axis=-1)
+        attended = jnp.einsum("hij,jhd->ihd", weights, value).reshape(
+            tokens.shape[0], self.token_dim
+        )
+        tokens = tokens + jax.vmap(self.attention_output)(attended)
+        normalized = jax.vmap(self.norm_feed_forward)(tokens)
+        hidden = jax.nn.gelu(jax.vmap(self.feed_forward_in)(normalized))
+        return tokens + jax.vmap(self.feed_forward_out)(hidden)
+
+
+class PassbandSetEncoder(eqx.Module):
+    """Set-attention photometry encoder with a direct flow context.
+
+    Each FENIKS band is represented by its normalized flux/error pair plus a
+    learned passband identity. The context is consumed directly by conditional
+    flow transforms; it is not compressed through posterior base moments.
+    """
+
+    input_projection: object
+    band_embedding: jnp.ndarray
+    blocks: tuple
+    pool_query: jnp.ndarray
+    context_projection: object
+    mean_head: object
+    log_std_head: object
+    n_bands: int = eqx.field(static=True)
+    token_dim: int = eqx.field(static=True)
+    context_dim: int = eqx.field(static=True)
+    log_std_min: float = eqx.field(static=True)
+    log_std_max: float = eqx.field(static=True)
+    initial_log_std: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key,
+        *,
+        input_dim: int,
+        latent_dim: int,
+        n_bands: int,
+        token_dim: int,
+        context_dim: int,
+        n_heads: int,
+        n_layers: int,
+        log_std_min: float,
+        log_std_max: float,
+        initial_log_std: float,
+    ) -> None:
+        if int(input_dim) != 2 * int(n_bands):
+            raise ValueError(
+                "passband-set context requires flux then error features for every band"
+            )
+        if min(n_bands, token_dim, context_dim, n_heads, n_layers) <= 0:
+            raise ValueError("passband-set dimensions must be positive")
+        keys = jax.random.split(key, int(n_layers) + 6)
+        self.input_projection = eqx.nn.Linear(2, token_dim, key=keys[0])
+        scale = 1.0 / jnp.sqrt(jnp.asarray(token_dim, dtype=jnp.float32))
+        self.band_embedding = scale * jax.random.normal(
+            keys[1], (int(n_bands), int(token_dim)), dtype=jnp.float32
+        )
+        self.blocks = tuple(
+            _SetAttentionBlock(keys[index + 2], token_dim=token_dim, n_heads=n_heads)
+            for index in range(int(n_layers))
+        )
+        self.pool_query = scale * jax.random.normal(
+            keys[-4], (int(token_dim),), dtype=jnp.float32
+        )
+        self.context_projection = eqx.nn.MLP(
+            in_size=2 * int(token_dim),
+            out_size=int(context_dim),
+            width_size=max(int(token_dim), int(context_dim)),
+            depth=2,
+            activation=jax.nn.gelu,
+            key=keys[-3],
+        )
+        self.mean_head = eqx.nn.Linear(context_dim, latent_dim, key=keys[-2])
+        self.log_std_head = eqx.nn.Linear(context_dim, latent_dim, key=keys[-1])
+        self.n_bands = int(n_bands)
+        self.token_dim = int(token_dim)
+        self.context_dim = int(context_dim)
+        self.log_std_min = float(log_std_min)
+        self.log_std_max = float(log_std_max)
+        self.initial_log_std = float(initial_log_std)
+
+    def __call__(self, features):
+        context = self.context(features)
+        if context.ndim == 1:
+            return self._moments(context)
+        return jax.vmap(self._moments)(context)
+
+    def context(self, features):
+        features = jnp.asarray(features, dtype=jnp.float32)
+        if features.shape[-1] != 2 * self.n_bands:
+            raise ValueError(
+                f"expected {2 * self.n_bands} passband features, "
+                f"got {features.shape[-1]}"
+            )
+        if features.ndim == 1:
+            return self._single_context(features)
+        return jax.vmap(self._single_context)(features)
+
+    def _single_context(self, features):
+        token_input = jnp.stack(
+            (features[: self.n_bands], features[self.n_bands :]), axis=-1
+        )
+        tokens = jax.vmap(self.input_projection)(token_input) + self.band_embedding
+        for block in self.blocks:
+            tokens = block(tokens)
+        score = (
+            tokens
+            @ self.pool_query
+            / jnp.sqrt(jnp.asarray(self.token_dim, dtype=tokens.dtype))
+        )
+        pooled = jnp.sum(jax.nn.softmax(score)[:, None] * tokens, axis=0)
+        maximum = jnp.max(tokens, axis=0)
+        return self.context_projection(jnp.concatenate((pooled, maximum)))
+
+    def _moments(self, context):
+        mean = self.mean_head(context)
+        raw = self.log_std_head(context) + self.initial_log_std
+        return mean, jnp.clip(raw, self.log_std_min, self.log_std_max)
+
+
 def _diag_normal_log_prob(x, mean, log_std):
     var_term = ((x - mean) / jnp.exp(log_std)) ** 2
     return -0.5 * jnp.sum(

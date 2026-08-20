@@ -1,0 +1,16 @@
+extends: feniks_architecture_20k_common.yaml
+
+amortized:
+  encoder:
+    type: conditional_flow
+    context_encoder: passband_set_transformer
+    set_n_bands: 18
+    set_token_dim: 96
+    set_context_dim: 192
+    set_num_heads: 4
+    set_num_layers: 3
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_init_scale: 0.0

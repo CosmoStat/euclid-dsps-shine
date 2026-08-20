@@ -1,0 +1,20 @@
+extends: feniks_selfsup_paper_fixed_prior_rws_k8_t2.yaml
+
+# Architecture discrimination only. The launcher supplies immutable 18k/2k
+# row manifests from the same FENIKS training catalog and a separate blind test
+# probe. Catalog truth never enters the objective or checkpoint selection.
+amortized:
+  prior:
+    train_jointly: false
+  objective:
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    wake:
+      train_prior: false
+  encoder:
+    base_components: 1
+  training:
+    epochs: 80
+    validation_every: 5
+    best_checkpoint_metric: validation_negative_loglike
+    best_checkpoint_min_epoch: 10

@@ -52,7 +52,7 @@ from .elbo import (
     objective_mode,
     objective_uses_truth,
 )
-from .encoder import GaussianEncoder, MixtureGaussianEncoder
+from .encoder import GaussianEncoder, MixtureGaussianEncoder, PassbandSetEncoder
 from .features import (
     FeatureStats,
     compute_feature_stats,
@@ -209,6 +209,16 @@ def build_amortized_model(
             init_scale=float(encoder_cfg.get("flow_init_scale", 0.0)),
             output_space=str(encoder_cfg.get("flow_output_space", "prior_base")),
             base_components=int(encoder_cfg.get("base_components", 1)),
+            context_encoder_type=str(
+                encoder_cfg.get("context_encoder", "base_moments")
+            ),
+            set_n_bands=int(
+                encoder_cfg.get("set_n_bands", cfg["features"].get("n_flux_bands", 10))
+            ),
+            set_token_dim=int(encoder_cfg.get("set_token_dim", 64)),
+            set_context_dim=int(encoder_cfg.get("set_context_dim", 128)),
+            set_num_heads=int(encoder_cfg.get("set_num_heads", 4)),
+            set_num_layers=int(encoder_cfg.get("set_num_layers", 2)),
         )
     else:
         raise ValueError(f"Unsupported amortized encoder type: {encoder_type}")
@@ -555,7 +565,7 @@ def _initialize_encoder_mean_if_possible(
             ),
         )
         return eqx.tree_at(lambda enc: enc.base, encoder, updated)
-    if not isinstance(base, GaussianEncoder):
+    if not isinstance(base, (GaussianEncoder, PassbandSetEncoder)):
         return encoder
     zero_mean_weight = jnp.zeros_like(base.mean_head.weight)
     zero_log_std_weight = jnp.zeros_like(base.log_std_head.weight)
@@ -4701,6 +4711,12 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             ),
             "base_components": int(cfg["encoder"].get("base_components", 1)),
             "flow_family": cfg["encoder"].get("flow_family"),
+            "context_encoder": cfg["encoder"].get("context_encoder"),
+            "set_n_bands": int(cfg["encoder"].get("set_n_bands", 0)),
+            "set_token_dim": int(cfg["encoder"].get("set_token_dim", 0)),
+            "set_context_dim": int(cfg["encoder"].get("set_context_dim", 0)),
+            "set_num_heads": int(cfg["encoder"].get("set_num_heads", 0)),
+            "set_num_layers": int(cfg["encoder"].get("set_num_layers", 0)),
             "flow_layers": int(cfg["encoder"].get("flow_layers", 0)),
             "flow_hidden_size": int(cfg["encoder"].get("flow_hidden_size", 0)),
             "flow_output_space": str(
