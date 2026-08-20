@@ -140,6 +140,120 @@ class BandTokenContextEncoder(eqx.Module):
         return self.output(jnp.concatenate((pooled, maximum)))
 
 
+class FreeResidualContextAdapter(eqx.Module):
+    """Zero-initialized per-object context corrections for an oracle test."""
+
+    delta: jnp.ndarray
+    one_hot_offset: int = eqx.field(static=True)
+    n_objects: int = eqx.field(static=True)
+    context_dim: int = eqx.field(static=True)
+
+    def __init__(self, *, one_hot_offset: int, n_objects: int, context_dim: int):
+        if min(n_objects, context_dim) <= 0 or int(one_hot_offset) < 0:
+            raise ValueError("invalid free-adapter dimensions")
+        self.delta = jnp.zeros((int(n_objects), int(context_dim)), dtype=jnp.float32)
+        self.one_hot_offset = int(one_hot_offset)
+        self.n_objects = int(n_objects)
+        self.context_dim = int(context_dim)
+
+    def __call__(self, observations):
+        observations = jnp.asarray(observations, dtype=jnp.float32)
+        one_hot = observations[
+            ..., self.one_hot_offset : self.one_hot_offset + self.n_objects
+        ]
+        return one_hot @ self.delta
+
+
+class WarmStartResidualProposal(eqx.Module):
+    """Current conditional flow plus a zero-initialized context correction."""
+
+    source_encoder: object
+    adapter: object
+    feature_dim: int = eqx.field(static=True)
+    context_dim: int = eqx.field(static=True)
+    latent_dim: int = eqx.field(static=True)
+
+    def __init__(self, source_encoder, adapter, *, feature_dim: int) -> None:
+        if source_encoder.output_space != "latent_x":
+            raise ValueError("warm-start adapters require latent_x flow output")
+        if int(source_encoder.base_components) != 1:
+            raise ValueError("warm-start adapters currently require a Gaussian base")
+        self.source_encoder = source_encoder
+        self.adapter = adapter
+        self.feature_dim = int(feature_dim)
+        self.latent_dim = int(source_encoder.latent_dim)
+        self.context_dim = 2 * self.latent_dim
+
+    def base_parameters(self, observations):
+        observations = jnp.asarray(observations, dtype=jnp.float32)
+        features = observations[..., : self.feature_dim]
+        mean, log_std = self.source_encoder.base(features)
+        base_context = jnp.concatenate((mean, log_std), axis=-1)
+        delta = self.adapter(observations)
+        if delta.shape != base_context.shape:
+            raise ValueError(
+                f"adapter context shape {delta.shape} != {base_context.shape}"
+            )
+        return base_context + delta, mean, log_std
+
+    def forward(self, value, context):
+        return self.source_encoder.forward(value, context)
+
+    def inverse(self, value, context):
+        return self.source_encoder.inverse(value, context)
+
+
+def zero_residual_mlp_adapter(
+    key,
+    *,
+    input_dim: int,
+    context_dim: int,
+    hidden_size: int = 128,
+    depth: int = 3,
+):
+    """Build an MLP adapter whose initial output is exactly zero."""
+    adapter = ResidualContextEncoder(
+        key,
+        input_dim=input_dim,
+        context_dim=context_dim,
+        hidden_size=hidden_size,
+        depth=depth,
+    )
+    return eqx.tree_at(
+        lambda item: (item.output_layer.weight, item.output_layer.bias),
+        adapter,
+        (
+            jnp.zeros_like(adapter.output_layer.weight),
+            jnp.zeros_like(adapter.output_layer.bias),
+        ),
+    )
+
+
+def zero_band_token_adapter(
+    key,
+    *,
+    n_bands: int,
+    token_dim: int,
+    context_dim: int,
+):
+    """Build a band-token adapter whose initial output is exactly zero."""
+    adapter = BandTokenContextEncoder(
+        key,
+        n_bands=n_bands,
+        token_dim=token_dim,
+        context_dim=context_dim,
+    )
+    last = adapter.output.layers[-1]
+    return eqx.tree_at(
+        lambda item: (
+            item.output.layers[-1].weight,
+            item.output.layers[-1].bias,
+        ),
+        adapter,
+        (jnp.zeros_like(last.weight), jnp.zeros_like(last.bias)),
+    )
+
+
 class ContextualFlowProposal(eqx.Module):
     """Diagonal Gaussian base plus exact conditional coupling transforms."""
 
@@ -295,6 +409,7 @@ def fit_contextual_proposal(
     weight_decay: float,
     seed: int,
     progress_label: str,
+    freeze_source_encoder: bool = False,
 ) -> ProposalFitResult:
     """Fit inclusive KL on bank A and select on independent bank B."""
     observations = jnp.asarray(observations, dtype=jnp.float32)
@@ -336,7 +451,9 @@ def fit_contextual_proposal(
     optimizer = optax.adamw(
         learning_rate=float(learning_rate), weight_decay=float(weight_decay)
     )
-    opt_state = optimizer.init(eqx.filter(proposal, eqx.is_inexact_array))
+    opt_state = optimizer.init(
+        _trainable_tree(proposal, freeze_source_encoder=bool(freeze_source_encoder))
+    )
     best = proposal
     best_validation = initial_validation
     best_train = initial_train
@@ -354,8 +471,15 @@ def fit_contextual_proposal(
                 train_particles[:, index],
                 train_weights[:, index],
             )
+            grads = _trainable_tree(
+                grads, freeze_source_encoder=bool(freeze_source_encoder)
+            )
             updates, opt_state = optimizer.update(
-                grads, opt_state, eqx.filter(proposal, eqx.is_inexact_array)
+                grads,
+                opt_state,
+                _trainable_tree(
+                    proposal, freeze_source_encoder=bool(freeze_source_encoder)
+                ),
             )
             proposal = eqx.apply_updates(proposal, updates)
             losses.append(float(loss))
@@ -419,6 +543,20 @@ def make_band_token_observations(features, mask):
 def _normalized_weights(values):
     values = jnp.asarray(values, dtype=jnp.float32)
     return values / jnp.sum(values, axis=0, keepdims=True)
+
+
+def _trainable_tree(value, *, freeze_source_encoder):
+    filtered = eqx.filter(value, eqx.is_inexact_array)
+    if freeze_source_encoder:
+        if not isinstance(value, WarmStartResidualProposal):
+            raise TypeError("freeze_source_encoder requires WarmStartResidualProposal")
+        filtered = eqx.tree_at(
+            lambda item: item.source_encoder,
+            filtered,
+            None,
+            is_leaf=lambda item: item is None,
+        )
+    return filtered
 
 
 def _validate_arrays(
