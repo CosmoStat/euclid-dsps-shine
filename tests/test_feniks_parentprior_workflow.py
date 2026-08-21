@@ -404,7 +404,11 @@ def test_encoder_diagnostic_launcher_is_not_blocked_by_prior_validation() -> Non
     root = Path(__file__).resolve().parents[1]
     launcher = (root / "scripts/submit_feniks_encoder_diagnostic_exact.sh").read_text()
     exact = (root / "scripts/feniks_parentprior_exact_h100.slurm").read_text()
+    prepare = (
+        root / "scripts/feniks_encoder_diagnostic_prepare_h100.slurm"
+    ).read_text()
     assert "parentprior_training_validation.json" not in launcher
     assert "prior PASS is not required" in launcher
     assert "ENCODER_DIAGNOSTIC_ONLY=1" in launcher
     assert '"${ENCODER_DIAGNOSTIC_ONLY:-0}" != "1"' in exact
+    assert "EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0" in prepare

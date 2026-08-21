@@ -2,8 +2,12 @@
 
 ## 2026-08-21 Exact encoder diagnostic after support-gated wake failure
 
-- Status: implementation complete and locally validated; Jean-Zay smoke and
-  full diagnostic remain unexecuted. Evaluate the final sleep-NPE encoder
+- Status: implementation complete and locally validated. The first Jean-Zay
+  smoke preparation failed before generating data because its H100 wrapper did
+  not re-enable the JAX CUDA plugin autoload; the dependent array therefore
+  never started. Align the preparation environment with the already-correct
+  exact wrapper, then relaunch the smoke in a fresh root. Full diagnostic
+  remains unexecuted. Evaluate the final sleep-NPE encoder
   without pretending that the parent prior was updated or validated.
 - Build one immutable 32-object benchmark containing 16 stratified observed
   FENIKS rows and 16 synthetic pairs drawn from the exact configured sleep
