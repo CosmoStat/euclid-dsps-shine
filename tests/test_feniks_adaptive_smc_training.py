@@ -169,7 +169,8 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             make_component_optimizer, make_pmap_q_smc_step, snapshot_model
         )
         from euclid_dsps.amortized.adaptive_smc_trainer import (
-            _replicate_tree, _shard_posterior, _unreplicate_tree
+            _replicate_model_for_pmap, _replicate_tree, _shard_posterior,
+            _unreplicate_tree
         )
         from euclid_dsps.amortized.elbo import AmortizedModel
         from euclid_dsps.amortized.flows import RealNVPPrior
@@ -260,6 +261,12 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             max_alpha_mc_relative_error=0.15, gradient_clip_norm=5.0
         )
         assert prior_metrics.update_applied
+        model_rep = _replicate_model_for_pmap(model, devices)
+        model_rep, qstate_rep, _metrics, second_step_metrics = pstep(
+            model_rep, qstate_rep, features, _shard_posterior(posterior, 2)
+        )
+        assert jnp.all(second_step_metrics.update_applied)
+        model = _unreplicate_tree(model_rep)
         bundle = (model, _unreplicate_tree(qstate_rep), pstate)
         path = pathlib.Path({str(tmp_path / 'state.eqx')!r})
         eqx.tree_serialise_leaves(path, bundle)

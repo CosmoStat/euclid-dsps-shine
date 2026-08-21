@@ -501,6 +501,27 @@ def _concat_posteriors(values: list[SMCPosteriorBatch]) -> SMCPosteriorBatch:
     )
 
 
+def _replicate_model_for_pmap(model, devices: tuple[Any, ...]):
+    """Build a fresh leading device axis without retaining an old mesh.
+
+    Indexing a ``filter_pmap`` result can leave its leaves committed to a
+    replicated named mesh. Broadcasting those leaves directly preserves that
+    mesh and conflicts with the internal axis of the next ``filter_pmap``.
+    A host round trip deliberately removes the stale sharding annotation before
+    the model is replicated again after a prior macro-update.
+    """
+    n_devices = len(tuple(devices))
+
+    def replicate_leaf(leaf):
+        if not eqx.is_array(leaf):
+            return leaf
+        host = np.asarray(jax.device_get(leaf))
+        replicated = np.broadcast_to(host, (n_devices, *host.shape)).copy()
+        return jnp.asarray(replicated)
+
+    return jax.tree_util.tree_map(replicate_leaf, model)
+
+
 def _run_training_e_step(
     *,
     model_replicated,
@@ -1052,7 +1073,7 @@ def train_feniks_adaptive_smc(
     )
     q_sleep_state_replicated = _replicate_tree(q_sleep_state, devices)
     q_smc_state_replicated = _replicate_tree(q_smc_state, devices)
-    model_replicated = _replicate_tree(model, devices)
+    model_replicated = _replicate_model_for_pmap(model, devices)
     primary_step = make_pmap_e_step(
         latent_spec=runtime.jit_latent_spec,
         context=runtime.context,
@@ -1481,7 +1502,7 @@ def _apply_prior_macro(
     payload["update_applied"] = bool(payload["update_applied"])
     payload["grads_finite"] = bool(payload["grads_finite"])
     payload["rejection_code"] = int(payload["rejection_code"])
-    return _replicate_tree(model, devices), prior_state, payload, key
+    return _replicate_model_for_pmap(model, devices), prior_state, payload, key
 
 
 def _write_progress_tables(out, log_rows, validation_rows, prior_rows, hard_rows):

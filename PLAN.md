@@ -1,5 +1,21 @@
 # Plan
 
+## 2026-08-21 Adaptive-SMC smoke replica-sharding recovery
+
+- Status: implemented and locally validated. Jean-Zay smoke job `1254124`
+  reached two observed SMC batches, then failed immediately after the first
+  prior macro-update because
+  the rebuilt model retained a replicated `NamedSharding(mesh='devices',
+  P())`; the next `filter_pmap` expected its leading internal pmap axis to be
+  sharded. This is a runtime replica-layout bug, not an SMC target/support
+  failure.
+- Materialize the post-M-step model leaves through host arrays before rebuilding
+  the leading device axis. Add a two-device regression that performs q-SMC,
+  prior M-step, replica refresh, then a second q-SMC step.
+- Local regression and the complete focused suite pass (`58 passed`), together
+  with Ruff, compileall and diff checks. Publish the fix, then launch a fresh
+  smoke root; the failed root is diagnostic only and must not be resumed.
+
 ## 2026-08-21 Adaptive bridge SMC production training
 
 - Status: implementation complete and locally validated. Static-SNIS wake and
