@@ -1,5 +1,16 @@
 # Plan
 
+## 2026-08-21 Sleep-NPE negative-result handoff
+
+- Status: remote production completed all 80 epochs but every defensive wake
+  batch through the last scheduled wake was support-gated. Preserve the best
+  encoder checkpoint as a diagnostic artifact; do not promote the run as a
+  learned selection-corrected parent prior.
+- Export a self-contained scientific handoff with immutable commit/run paths,
+  objective and proposal definitions, observed metrics, conclusions that are
+  already justified, unresolved hypotheses, and the exact-posterior analyses
+  required before another training change.
+
 ## 2026-08-21 Jean-Zay prior-wake NaN recovery
 
 - Status: implementation complete and locally validated (`ruff`, `compileall`,
