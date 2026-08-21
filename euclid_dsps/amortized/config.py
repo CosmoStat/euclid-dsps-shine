@@ -116,6 +116,9 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["objective"]["selection_correction"].setdefault("n_prior_samples", 4096)
     raw["objective"]["selection_correction"].setdefault("prior_sample_batch_size", 64)
     raw["objective"]["selection_correction"].setdefault("common_random_numbers", True)
+    raw["objective"]["selection_correction"].setdefault(
+        "gradient_preflight_samples", 0
+    )
     raw["prior"].setdefault("type", "realnvp")
     raw["prior"].setdefault("source", "joint_realnvp")
     raw["prior"].setdefault("checkpoint", None)

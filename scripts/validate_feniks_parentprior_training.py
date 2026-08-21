@@ -26,6 +26,8 @@ def validate(
     smoke: bool,
 ) -> dict[str, object]:
     summary = json.loads((train / "training_summary.json").read_text())
+    preflight_path = train / "selection_gradient_preflight.json"
+    preflight = json.loads(preflight_path.read_text()) if preflight_path.is_file() else {}
     contract = json.loads(manifest.read_text())
     history = pd.read_csv(train / "training_log.csv")
     fit = history.loc[history["split"] == "train"].copy()
@@ -46,6 +48,11 @@ def validate(
         == "spline15d_mixed",
         "selection_correction_enabled": bool(
             summary["selection_correction"].get("enabled", False)
+        ),
+        "selection_gradient_preflight_passed": bool(
+            preflight.get("status") == "PASS"
+            and preflight.get("forward_finite") is True
+            and preflight.get("prior_gradients_finite") is True
         ),
         "sleep_uses_observed_catalog_errors": summary["sleep"].get("error_model")
         == "observed_catalog",
@@ -69,6 +76,14 @@ def validate(
             )
         ),
         "best_sleep_nll_finite": bool(np.isfinite(float(summary["best_loss"]))),
+        "all_training_gradients_finite": bool(
+            "grads_finite" in fit
+            and not fit.empty
+            and np.all(
+                pd.to_numeric(fit["grads_finite"], errors="coerce").to_numpy()
+                > 0.5
+            )
+        ),
     }
     if smoke:
         checks["wake_rows_exist"] = not wake.empty
@@ -82,9 +97,19 @@ def validate(
                 "wake_selection_alpha_finite": bool(
                     not wake.empty
                     and "selection/alpha" in wake
+                    and "selection/evaluated" in wake
                     and np.all(
                         np.isfinite(
-                            pd.to_numeric(wake["selection/alpha"], errors="coerce")
+                            pd.to_numeric(
+                                wake.loc[
+                                    pd.to_numeric(
+                                        wake["selection/evaluated"], errors="coerce"
+                                    )
+                                    > 0.5,
+                                    "selection/alpha",
+                                ],
+                                errors="coerce",
+                            )
                         )
                     )
                 ),
@@ -92,15 +117,36 @@ def validate(
         )
     encoder_clip_fraction = _finite_mean(sleep, "encoder_grad_clipped_fraction")
     wake_ess_fraction = _finite_mean(wake, "wake_median_ess_fraction")
-    wake_updates = int(
-        np.sum(
-            pd.to_numeric(
-                wake.get("wake_prior_update_applied", pd.Series(dtype=float)),
-                errors="coerce",
-            ).fillna(0.0)
-            > 0.5
+    wake_supported = pd.to_numeric(
+        wake.get("wake_prior_update_applied", pd.Series(dtype=float)),
+        errors="coerce",
+    ).fillna(0.0)
+    wake_applied = pd.to_numeric(
+        wake.get("update_applied", pd.Series(index=wake.index, dtype=float)),
+        errors="coerce",
+    ).fillna(0.0)
+    wake_updates = int(np.sum((wake_supported > 0.5) & (wake_applied > 0.5)))
+    evaluated_wake = wake.loc[
+        pd.to_numeric(
+            wake.get("selection/evaluated", pd.Series(index=wake.index, dtype=float)),
+            errors="coerce",
+        ).fillna(0.0)
+        > 0.5
+    ]
+    alpha_relative_errors = pd.to_numeric(
+        evaluated_wake.get(
+            "selection/alpha_mc_relative_error",
+            pd.Series(index=evaluated_wake.index, dtype=float),
+        ),
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    alpha_relative_errors = alpha_relative_errors[np.isfinite(alpha_relative_errors)]
+    if not smoke:
+        checks["wake_prior_update_applied"] = wake_updates > 0
+        checks["selection_alpha_mc_relative_error_adequate"] = bool(
+            len(alpha_relative_errors) > 0
+            and np.all(alpha_relative_errors <= 0.15)
         )
-    )
     entropy_first = (
         _finite_mean(
             sleep.loc[sleep["epoch"] == sleep["epoch"].min()],
@@ -122,11 +168,6 @@ def validate(
         warnings.append(
             "encoder gradients are clipped in more than half of sleep updates"
         )
-    if not smoke and wake_updates == 0:
-        warnings.append(
-            "all defensive wake prior updates were support-gated; exact q validation "
-            "is still useful but the parent prior was not updated"
-        )
     payload = {
         "status": "PASS" if all(checks.values()) else "FAIL",
         "contract": (
@@ -139,6 +180,11 @@ def validate(
             "sleep_updates": int(len(sleep)),
             "wake_batches": int(len(wake)),
             "wake_prior_updates_applied": wake_updates,
+            "selection_alpha_mc_relative_error_max": (
+                None
+                if len(alpha_relative_errors) == 0
+                else float(np.max(alpha_relative_errors))
+            ),
             "mean_wake_median_ess_fraction": wake_ess_fraction,
             "encoder_grad_clipped_fraction": encoder_clip_fraction,
             "posterior_full_entropy_mc_first": entropy_first,
@@ -150,7 +196,7 @@ def validate(
             ),
         },
         "next_action": (
-            "RUN_EXACT_POSTERIOR_BENCHMARK"
+            ("RUN_RECOVERY_PRODUCTION" if smoke else "RUN_EXACT_POSTERIOR_BENCHMARK")
             if all(checks.values())
             else "STOP_FIX_TRAINING_CONTRACT"
         ),

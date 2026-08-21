@@ -1006,6 +1006,35 @@ def train_amortized_fs2(
             f"n_prior_samples={selection_runtime_cfg['n_prior_samples']} "
             "survey_noise=gaussian_m5",
         )
+        preflight_samples = int(
+            selection_runtime_cfg.get("gradient_preflight_samples", 0)
+        )
+        if preflight_samples > 0:
+            preflight_objective = _objective_config_for_epoch(cfg, start_epoch)
+            preflight_objective["selection_correction"] = {
+                **dict(preflight_objective.get("selection_correction", {}) or {}),
+                **selection_runtime_cfg,
+            }
+            preflight_objective["prior_train_jointly"] = bool(train_prior)
+            receipt = _selection_alpha_gradient_preflight(
+                model,
+                latent_spec,
+                context,
+                model_args,
+                latent_spec.names,
+                calibration_runtime_config,
+                preflight_objective,
+                sample_count=preflight_samples,
+            )
+            (out / "selection_gradient_preflight.json").write_text(
+                json.dumps(receipt, indent=2, sort_keys=True), encoding="utf-8"
+            )
+            _log(
+                verbose,
+                "[amortized] selection gradient preflight: "
+                f"status={receipt['status']} samples={preflight_samples} "
+                f"grad_norm={receipt['prior_gradient_norm']:.6g}",
+            )
     optimizer = make_optimizer(config)
     gradient_clip_norm = float(cfg["training"].get("gradient_clip_norm", 1.0))
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
@@ -1320,10 +1349,18 @@ def train_amortized_fs2(
                             train_band_calibration=bool(train_band_calibration),
                         )
                 if not update_applied and verbose:
+                    support_rejected = bool(
+                        optimizer_phase == "prior_wake"
+                        and float(record.get("wake_prior_update_applied", 0.0)) < 0.5
+                    )
                     _log(
                         verbose,
-                        "[amortized] skipped non-finite update: "
-                        f"epoch={epoch} batch={batch_index} "
+                        (
+                            "[amortized] skipped support-gated prior update: "
+                            if support_rejected and loss_finite and grads_finite
+                            else "[amortized] skipped non-finite update: "
+                        )
+                        + f"epoch={epoch} batch={batch_index} "
                         f"loss_finite={loss_finite} grads_finite={grads_finite} "
                         f"finite_fraction={record.get('finite_fraction', float('nan')):.3g}",
                     )
@@ -3184,10 +3221,9 @@ def _importance_weighted_wake_outputs(
     wake_nll = jnp.sum(jnp.where(valid_object, wake_nll_by_object, 0.0))
     wake_nll = wake_nll / valid_object_count
     prior_nll_by_object = -jnp.sum(weighted_logprior, axis=0)
-    prior_mstep_nll_uncorrected = jnp.sum(
+    diagnostic_prior_mstep_nll = jnp.sum(
         jnp.where(eligible_object, prior_nll_by_object, 0.0)
-    )
-    prior_mstep_nll_uncorrected = prior_mstep_nll_uncorrected / eligible_object_count
+    ) / eligible_object_count
     train_prior = bool(wake.get("train_prior", False))
     train_encoder = bool(wake.get("train_encoder", True))
     prior_update_applied = (
@@ -3195,28 +3231,68 @@ def _importance_weighted_wake_outputs(
         & prior_batch_supported
         & (jnp.sum(eligible_object) > 0)
     )
-    selection_log_alpha = jnp.asarray(0.0, dtype=wake_nll.dtype)
-    selection_metrics = disabled_selection_metrics(wake_nll.dtype)
     selection_trains_prior = train_prior and bool(
         objective_config.get("prior_train_jointly", True)
     )
-    if selection_trains_prior and bool(
-        (objective_config.get("selection_correction", {}) or {}).get("enabled", False)
-    ):
-        selection_log_alpha, selection_metrics = _estimate_selection_log_alpha(
-            model,
-            latent_spec,
-            context,
-            model_args,
-            parameter_names,
-            key,
-            calibration_config,
-            objective_config,
-        )
-    prior_mstep_nll = prior_mstep_nll_uncorrected + selection_log_alpha
     prior_loss_weight = jnp.asarray(
         float(wake.get("prior_loss_weight", 1.0)), dtype=wake_nll.dtype
     )
+
+    def supported_prior_mstep(_operand):
+        # Recompute the prior density inside the active branch. Keeping both
+        # this term and log(alpha_eta) out of the rejected branch is essential:
+        # jnp.where(mask, bad_gradient, 0) can still propagate 0 * NaN.
+        differentiable_logprior = model.prior.log_prob(samples)
+        weighted = stopped_weight * jnp.where(
+            finite_weight, differentiable_logprior, 0.0
+        )
+        by_object = -jnp.sum(weighted, axis=0)
+        uncorrected = jnp.sum(jnp.where(eligible_object, by_object, 0.0))
+        uncorrected = uncorrected / eligible_object_count
+        log_alpha = jnp.asarray(0.0, dtype=wake_nll.dtype)
+        selection_metrics = disabled_selection_metrics(wake_nll.dtype)
+        if selection_trains_prior and bool(
+            (objective_config.get("selection_correction", {}) or {}).get(
+                "enabled", False
+            )
+        ):
+            log_alpha, selection_metrics = _estimate_selection_log_alpha(
+                model,
+                latent_spec,
+                context,
+                model_args,
+                parameter_names,
+                key,
+                calibration_config,
+                objective_config,
+            )
+        selection_metrics = _complete_selection_metrics(
+            selection_metrics, dtype=wake_nll.dtype, evaluated=True
+        )
+        corrected = uncorrected + log_alpha
+        return prior_loss_weight * corrected, uncorrected, log_alpha, selection_metrics
+
+    def rejected_prior_mstep(_operand):
+        zero = jnp.asarray(0.0, dtype=wake_nll.dtype)
+        metrics = _unevaluated_selection_metrics(
+            objective_config, dtype=wake_nll.dtype
+        )
+        return (
+            zero,
+            jax.lax.stop_gradient(diagnostic_prior_mstep_nll),
+            zero,
+            metrics,
+        )
+
+    prior_loss, prior_mstep_nll_uncorrected, selection_log_alpha, selection_metrics = (
+        jax.lax.cond(
+            prior_update_applied,
+            supported_prior_mstep,
+            rejected_prior_mstep,
+            operand=None,
+        )
+    )
+    prior_mstep_nll = prior_mstep_nll_uncorrected + selection_log_alpha
     alpha_prior_penalty = (
         global_sed_scale_prior_penalty(
             log_alpha_sed,
@@ -3254,11 +3330,6 @@ def _importance_weighted_wake_outputs(
         weighted_nll + alpha_prior_penalty + band_prior_penalty
     ) / mean_valid_bands
     encoder_loss = wake_nll if train_encoder else jax.lax.stop_gradient(wake_nll)
-    prior_loss = jnp.where(
-        prior_update_applied,
-        prior_loss_weight * prior_mstep_nll,
-        jnp.asarray(0.0, dtype=wake_nll.dtype),
-    )
     loss = encoder_loss + prior_loss
     if calibration_trainable:
         loss = loss + calibration_loss_weight * calibration_mstep_nll_per_band
@@ -3985,6 +4056,33 @@ def _sleep_observed_selection_mask(
     return selected
 
 
+def _complete_selection_metrics(metrics, *, dtype, evaluated: bool):
+    """Return a fixed metric pytree suitable for ``jax.lax.cond``."""
+    complete = disabled_selection_metrics(dtype)
+    complete.update(metrics)
+    complete["selection/evaluated"] = jnp.asarray(float(evaluated), dtype=dtype)
+    complete.setdefault("selection/flux_limit_fnu_cgs", jnp.asarray(0.0, dtype=dtype))
+    complete.setdefault("selection/max_mag_ab", jnp.asarray(0.0, dtype=dtype))
+    return complete
+
+
+def _unevaluated_selection_metrics(objective_config, *, dtype):
+    """Describe a selection correction skipped by the proposal support gate."""
+    selection = dict(objective_config.get("selection_correction", {}) or {})
+    metrics = disabled_selection_metrics(dtype)
+    metrics["selection/enabled"] = jnp.asarray(
+        float(bool(selection.get("enabled", False))), dtype=dtype
+    )
+    metrics["selection/evaluated"] = jnp.asarray(0.0, dtype=dtype)
+    metrics["selection/flux_limit_fnu_cgs"] = jnp.asarray(
+        float(selection.get("flux_limit_fnu_cgs", 0.0)), dtype=dtype
+    )
+    metrics["selection/max_mag_ab"] = jnp.asarray(
+        float(selection.get("max_mag_ab", 0.0)), dtype=dtype
+    )
+    return metrics
+
+
 def _estimate_selection_log_alpha(
     model,
     latent_spec,
@@ -4068,7 +4166,78 @@ def _estimate_selection_log_alpha(
             ),
         }
     )
-    return log_alpha, metrics
+    return log_alpha, _complete_selection_metrics(
+        metrics, dtype=log_alpha.dtype, evaluated=True
+    )
+
+
+def _selection_alpha_gradient_preflight(
+    model,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    calibration_config,
+    objective_config,
+    *,
+    sample_count: int,
+):
+    """Fail before training when the real selection graph has invalid gradients."""
+    preflight_objective = dict(objective_config)
+    selection = dict(preflight_objective.get("selection_correction", {}) or {})
+    selection["n_prior_samples"] = int(sample_count)
+    selection["prior_sample_batch_size"] = min(
+        int(sample_count), int(selection.get("prior_sample_batch_size", sample_count))
+    )
+    preflight_objective["selection_correction"] = selection
+
+    def objective(candidate_model):
+        return _estimate_selection_log_alpha(
+            candidate_model,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            jax.random.PRNGKey(int(selection.get("rng_seed", 0))),
+            calibration_config,
+            preflight_objective,
+        )[0]
+
+    log_alpha, grads = eqx.filter_value_and_grad(objective)(model)
+    prior_leaves = [
+        leaf
+        for leaf in jax.tree_util.tree_leaves(grads.prior)
+        if leaf is not None
+    ]
+    forward_finite = bool(np.isfinite(float(np.asarray(jax.device_get(log_alpha)))))
+    gradients_finite = bool(
+        prior_leaves
+        and all(
+            np.all(np.isfinite(np.asarray(jax.device_get(leaf))))
+            for leaf in prior_leaves
+        )
+    )
+    gradient_norm = float(
+        np.sqrt(
+            sum(
+                np.sum(np.square(np.asarray(jax.device_get(leaf), dtype=np.float64)))
+                for leaf in prior_leaves
+            )
+        )
+    )
+    payload = {
+        "status": "PASS" if forward_finite and gradients_finite else "FAIL",
+        "sample_count": int(sample_count),
+        "log_alpha": float(np.asarray(jax.device_get(log_alpha))),
+        "forward_finite": forward_finite,
+        "prior_gradients_finite": gradients_finite,
+        "prior_gradient_norm": gradient_norm,
+    }
+    if payload["status"] != "PASS":
+        raise FloatingPointError(
+            "Selection alpha gradient preflight failed: " + json.dumps(payload)
+        )
+    return payload
 
 
 def _sleep_m5_flux_error(model_flux, sleep_config):
@@ -4368,6 +4537,12 @@ def _selection_correction_runtime_config(
         raise ValueError(
             "objective.selection_correction.prior_sample_batch_size must be positive"
         )
+    gradient_preflight_samples = int(selection.get("gradient_preflight_samples", 0))
+    if gradient_preflight_samples < 0:
+        raise ValueError(
+            "objective.selection_correction.gradient_preflight_samples must be "
+            "non-negative"
+        )
     model = dict(
         ((config.get("synthetic_diffsky", {}) or {}).get("flux_error_model", {})) or {}
     )
@@ -4413,6 +4588,7 @@ def _selection_correction_runtime_config(
             prior_sample_batch_size,
             n_prior_samples,
         ),
+        "gradient_preflight_samples": gradient_preflight_samples,
         "common_random_numbers": bool(selection.get("common_random_numbers", True)),
         "rng_seed": int(
             selection.get("seed", int(cfg["training"].get("seed", 42)) + 7919)

@@ -38,6 +38,7 @@ if HAS_EQUINOX:
         _normalized_particle_weights,
         _prior_mstep_loss,
         _sample_sleep_noise,
+        _selection_alpha_gradient_preflight,
         _sleep_encoder_features,
         _sleep_flux_error,
         _sleep_m5_flux_error,
@@ -516,6 +517,18 @@ def test_selection_log_alpha_reaches_flow_prior_through_decoder(
     assert leaves
     assert all(jnp.all(jnp.isfinite(leaf)) for leaf in leaves)
     assert any(jnp.any(jnp.abs(leaf) > 0.0) for leaf in leaves)
+    receipt = _selection_alpha_gradient_preflight(
+        model,
+        spec,
+        None,
+        None,
+        spec.names,
+        {},
+        objective,
+        sample_count=32,
+    )
+    assert receipt["status"] == "PASS"
+    assert receipt["prior_gradients_finite"] is True
 
 
 def test_conditional_flow_gradients_are_finite() -> None:
@@ -1353,6 +1366,122 @@ def test_reweighted_wake_updates_encoder_and_learned_prior(
         - corrected_metrics["prior_mstep_nll_uncorrected"],
         log_alpha,
     )
+
+
+def test_support_rejected_wake_does_not_differentiate_bad_prior_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import euclid_dsps.amortized.train as train_module
+
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(10),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        output_space="latent_x",
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=RealNVPPrior(
+            jax.random.PRNGKey(11),
+            latent_dim=4,
+            n_layers=2,
+            hidden_size=8,
+            init="identity",
+            init_scale=0.0,
+        ),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    batch = LossBatch(
+        flux=jnp.ones((3, 2)),
+        flux_err=0.1 * jnp.ones((3, 2)),
+        mask=jnp.ones((3, 2), dtype=bool),
+        features=jnp.ones((3, 6)),
+        truth_theta=jnp.zeros((3, 0)),
+    )
+    spec = JitLatentSpec(
+        names=("a", "b", "c", "d"),
+        lower=jnp.zeros(4),
+        upper=jnp.ones(4),
+        raw_center=jnp.zeros(4),
+        raw_scale=jnp.ones(4),
+    )
+    monkeypatch.setattr(
+        train_module, "model_flux_from_x", lambda x, *_args, **_kwargs: x[..., :2]
+    )
+
+    @jax.custom_jvp
+    def finite_value_bad_gradient(value):
+        return -0.4 + 0.0 * value
+
+    @finite_value_bad_gradient.defjvp
+    def finite_value_bad_gradient_jvp(primals, tangents):
+        (value,), (tangent,) = primals, tangents
+        return finite_value_bad_gradient(value), jnp.nan * tangent
+
+    def fake_selection(candidate, *_args, **_kwargs):
+        leaf = next(
+            leaf
+            for leaf in jax.tree_util.tree_leaves(candidate.prior)
+            if eqx.is_inexact_array(leaf)
+        )
+        log_alpha = finite_value_bad_gradient(jnp.sum(leaf))
+        return log_alpha, {
+            "selection/enabled": jnp.asarray(1.0),
+            "selection/alpha": jnp.exp(log_alpha),
+            "selection/log_alpha": log_alpha,
+        }
+
+    monkeypatch.setattr(train_module, "_estimate_selection_log_alpha", fake_selection)
+    objective = {
+        "mode": "reweighted_wake_sleep",
+        "wake_active": True,
+        "prior_train_jointly": True,
+        "wake": {
+            "n_particles": 4,
+            "n_tempered_particles": 1,
+            "base_temperature": 2.0,
+            "train_encoder": False,
+            "train_prior": True,
+            "support_gate_enabled": True,
+            "fail_median_ess_fraction": 1.1,
+        },
+        "selection_correction": {"enabled": True},
+    }
+
+    def loss_fn(candidate):
+        return _loss_with_metrics(
+            candidate,
+            batch,
+            spec,
+            None,
+            None,
+            spec.names,
+            jax.random.PRNGKey(12),
+            1,
+            1.0,
+            {"type": "gaussian", "error_floor_frac": 0.0},
+            {},
+            objective,
+        )
+
+    (loss, metrics), grads = eqx.filter_value_and_grad(loss_fn, has_aux=True)(model)
+    prior_leaves = [
+        leaf for leaf in jax.tree_util.tree_leaves(grads.prior) if leaf is not None
+    ]
+    assert jnp.isfinite(loss)
+    assert metrics["wake_prior_update_applied"] == 0.0
+    assert metrics["selection/evaluated"] == 0.0
+    assert prior_leaves
+    assert all(jnp.all(jnp.isfinite(leaf)) for leaf in prior_leaves)
+    assert all(jnp.all(leaf == 0.0) for leaf in prior_leaves)
 
 
 def test_reweighted_sleep_is_finite_and_only_trains_encoder(

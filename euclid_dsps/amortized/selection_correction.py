@@ -73,6 +73,7 @@ def selection_log_alpha_from_log_beta(
     mc_error = jnp.sqrt(variance / float(n_samples))
     metrics = {
         "selection/enabled": jnp.asarray(1.0, dtype=values.dtype),
+        "selection/evaluated": jnp.asarray(1.0, dtype=values.dtype),
         "selection/alpha": jnp.exp(log_alpha),
         "selection/log_alpha": log_alpha,
         "selection/beta_mean": beta_mean,
@@ -86,6 +87,8 @@ def selection_log_alpha_from_log_beta(
         ),
         "selection/n_prior_samples": jnp.asarray(n_samples, dtype=values.dtype),
         "selection/alpha_mc_error": mc_error,
+        "selection/alpha_mc_relative_error": mc_error
+        / jnp.maximum(beta_mean, jnp.asarray(1.0e-12, dtype=values.dtype)),
     }
     return log_alpha, metrics
 
@@ -145,6 +148,7 @@ def disabled_selection_metrics(dtype: Any = jnp.float32) -> dict[str, jnp.ndarra
     zero = jnp.asarray(0.0, dtype=dtype)
     return {
         "selection/enabled": zero,
+        "selection/evaluated": zero,
         "selection/alpha": jnp.asarray(1.0, dtype=dtype),
         "selection/log_alpha": zero,
         "selection/beta_mean": jnp.asarray(1.0, dtype=dtype),
@@ -157,4 +161,5 @@ def disabled_selection_metrics(dtype: Any = jnp.float32) -> dict[str, jnp.ndarra
         "selection/n_prior_samples": zero,
         "selection/prior_sample_batch_size": zero,
         "selection/alpha_mc_error": zero,
+        "selection/alpha_mc_relative_error": zero,
     }

@@ -176,6 +176,115 @@ def test_training_snapshot_corner_like_handles_diagonal_histograms(tmp_path) -> 
     assert path.exists()
 
 
+def test_pmap_support_gate_skips_bad_selection_gradient_on_all_devices() -> None:
+    code = textwrap.dedent("""
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import optax
+
+        import euclid_dsps.amortized.train as train_module
+        from euclid_dsps.amortized.elbo import AmortizedModel
+        from euclid_dsps.amortized.flows import RealNVPPrior
+        from euclid_dsps.amortized.posterior import ConditionalFlowEncoder
+        from euclid_dsps.amortized.train import (
+            JitLatentSpec,
+            LossBatch,
+            _make_pmap_train_step,
+            _replicate_tree,
+            _shard_loss_batch,
+        )
+        from euclid_dsps.calibration import GlobalSedScaleState
+
+        devices = tuple(jax.local_devices())
+        assert len(devices) == 2, devices
+        encoder = ConditionalFlowEncoder(
+            jax.random.PRNGKey(0), input_dim=6, latent_dim=4,
+            hidden_sizes=(8,), activation="gelu", log_std_min=-6.0,
+            log_std_max=2.0, initial_log_std=-1.0, family="realnvp",
+            n_layers=2, hidden_size=8, output_space="latent_x",
+        )
+        model = AmortizedModel(
+            encoder=encoder,
+            prior=RealNVPPrior(
+                jax.random.PRNGKey(1), latent_dim=4, n_layers=2,
+                hidden_size=8, init="identity", init_scale=0.0,
+            ),
+            sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+        )
+        batch = LossBatch(
+            flux=jnp.ones((4, 2)), flux_err=0.1 * jnp.ones((4, 2)),
+            mask=jnp.ones((4, 2), dtype=bool), features=jnp.ones((4, 6)),
+            truth_theta=jnp.zeros((4, 0)),
+        )
+        spec = JitLatentSpec(
+            names=("a", "b", "c", "d"), lower=jnp.zeros(4),
+            upper=jnp.ones(4), raw_center=jnp.zeros(4), raw_scale=jnp.ones(4),
+        )
+        train_module.model_flux_from_x = lambda x, *_args, **_kwargs: x[..., :2]
+
+        @jax.custom_jvp
+        def bad(value):
+            return -0.4 + 0.0 * value
+
+        @bad.defjvp
+        def bad_jvp(primals, tangents):
+            (value,), (tangent,) = primals, tangents
+            return bad(value), jnp.nan * tangent
+
+        def fake_selection(candidate, *_args, **_kwargs):
+            leaf = next(
+                leaf for leaf in jax.tree_util.tree_leaves(candidate.prior)
+                if eqx.is_inexact_array(leaf)
+            )
+            value = bad(jnp.sum(leaf))
+            return value, {
+                "selection/enabled": jnp.asarray(1.0),
+                "selection/alpha": jnp.exp(value),
+                "selection/log_alpha": value,
+            }
+
+        train_module._estimate_selection_log_alpha = fake_selection
+        objective = {
+            "mode": "reweighted_wake_sleep", "wake_active": True,
+            "prior_train_jointly": True,
+            "wake": {
+                "n_particles": 4, "n_tempered_particles": 1,
+                "base_temperature": 2.0, "train_encoder": False,
+                "train_prior": True, "support_gate_enabled": True,
+                "fail_median_ess_fraction": 1.1,
+            },
+            "selection_correction": {"enabled": True},
+        }
+        optimizer = optax.adam(1e-3)
+        state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
+        step = _make_pmap_train_step(optimizer, gradient_clip_norm=5.0)
+        result = step(
+            _replicate_tree(model, devices), _replicate_tree(state, devices),
+            _shard_loss_batch(batch, 2), spec, None, None, spec.names,
+            jax.random.split(jax.random.PRNGKey(3), 2), 1, 1.0,
+            {"type": "gaussian", "error_floor_frac": 0.0}, {}, objective,
+            "prior_wake", False, False,
+        )
+        metrics, grads_finite, update_applied = result[3], result[6], result[7]
+        assert jnp.all(grads_finite)
+        assert jnp.all(~update_applied)
+        assert jnp.all(metrics["selection/evaluated"] == 0.0)
+    """)
+    env = os.environ.copy()
+    env["JAX_PLATFORMS"] = "cpu"
+    env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        env=env,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_train_parser_accepts_data_parallel_override() -> None:
     args = build_parser().parse_args(
         [

@@ -15,6 +15,7 @@ from scripts.evaluate_feniks_parent_population import (
     _summary,
 )
 from scripts.validate_feniks_parentprior_exact import validate as validate_exact
+from scripts.validate_feniks_parentprior_training import validate as validate_training
 
 
 def _catalog(path: Path, *, rows: int) -> None:
@@ -87,6 +88,109 @@ def test_population_comparisons_keep_parent_and_selected_contracts_separate() ->
     }
     assert np.allclose(comparisons["median_quantile_l1_over_truth_q90_width"], 0.0)
     assert np.allclose(comparisons["correlation_rmse"], 0.0)
+
+
+def test_training_validator_rejects_nan_or_missing_prior_updates(tmp_path: Path) -> None:
+    train = tmp_path / "train"
+    checkpoints = train / "checkpoints"
+    checkpoints.mkdir(parents=True)
+    (checkpoints / "best.eqx").write_bytes(b"checkpoint")
+    (train / "selection_gradient_preflight.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "forward_finite": True,
+                "prior_gradients_finite": True,
+            }
+        )
+    )
+    (train / "training_summary.json").write_text(
+        json.dumps(
+            {
+                "train_rows": 8,
+                "validation_rows": 2,
+                "best_checkpoint_metric": "validation_sleep_nll",
+                "effective_latent_spec": {"normalization": "spline15d_mixed"},
+                "selection_correction": {"enabled": True},
+                "sleep": {"error_model": "observed_catalog"},
+                "wake": {"train_encoder": False, "train_prior": True},
+                "best_loss": 1.0,
+            }
+        )
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "manifests": {
+                    "train": {"count": 8},
+                    "validation": {"count": 2},
+                }
+            }
+        )
+    )
+    rows = [
+        {
+            "split": "train",
+            "update_phase": "encoder_sleep",
+            "epoch": 24,
+            "prior_raw_grad_norm": 0.0,
+            "encoder_raw_grad_norm": 1.0,
+            "encoder_grad_clipped_fraction": 0.0,
+            "posterior_full_entropy_mc": 2.0,
+            "grads_finite": 1.0,
+            "update_applied": 1.0,
+        },
+        {
+            "split": "train",
+            "update_phase": "prior_wake",
+            "epoch": 25,
+            "prior_raw_grad_norm": 1.0,
+            "encoder_raw_grad_norm": 0.0,
+            "wake_prior_update_applied": 0.0,
+            "wake_median_ess_fraction": 0.05,
+            "selection/evaluated": 0.0,
+            "selection/alpha": 1.0,
+            "selection/alpha_mc_relative_error": 0.0,
+            "grads_finite": 1.0,
+            "update_applied": 0.0,
+        },
+    ]
+    pd.DataFrame(rows).to_csv(train / "training_log.csv", index=False)
+    payload = validate_training(train=train, manifest=manifest, smoke=False)
+    assert payload["status"] == "FAIL"
+    assert payload["checks"]["wake_prior_update_applied"] is False
+
+    rows[1].update(
+        {
+            "wake_prior_update_applied": 1.0,
+            "selection/evaluated": 1.0,
+            "selection/alpha": 0.4,
+            "selection/alpha_mc_relative_error": 0.05,
+            "update_applied": 1.0,
+        }
+    )
+    pd.DataFrame(rows).to_csv(train / "training_log.csv", index=False)
+    payload = validate_training(train=train, manifest=manifest, smoke=False)
+    assert payload["status"] == "PASS"
+
+    rows[1]["grads_finite"] = 0.0
+    pd.DataFrame(rows).to_csv(train / "training_log.csv", index=False)
+    payload = validate_training(train=train, manifest=manifest, smoke=False)
+    assert payload["status"] == "FAIL"
+    assert payload["checks"]["all_training_gradients_finite"] is False
+
+
+def test_recovery_launcher_preserves_epoch24_state_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    launcher = (root / "scripts/submit_feniks_parentprior_sleepnpe_recovery.sh").read_text()
+    slurm = (root / "scripts/feniks_parentprior_sleepnpe_h100.slurm").read_text()
+    assert "checkpoints/epoch_0024.eqx" in launcher
+    assert 'START_EPOCH="${START_EPOCH:-25}"' in launcher
+    assert "SOURCE_SMOKE_MANIFEST_ROOT" in launcher
+    assert "--initial-checkpoint" in slurm
+    assert "--fixed-feature-stats" in slurm
+    assert "optimizer_state_resumed=0" in slurm
 
 
 def test_exact_finalizer_requires_is_target_and_population_gates(

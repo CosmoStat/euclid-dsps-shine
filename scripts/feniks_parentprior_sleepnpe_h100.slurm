@@ -23,6 +23,9 @@ REFERENCE_CHECKPOINT="${REFERENCE_CHECKPOINT:-outputs/runs/feniks_spline15d_jaxc
 TRAIN_ROOT="${TRAIN_ROOT:?TRAIN_ROOT is required}"
 MANIFEST_ROOT="${MANIFEST_ROOT:?MANIFEST_ROOT is required}"
 SMOKE="${SMOKE:-0}"
+START_EPOCH="${START_EPOCH:-1}"
+INITIAL_CHECKPOINT="${INITIAL_CHECKPOINT:-}"
+FIXED_FEATURE_STATS="${FIXED_FEATURE_STATS:-}"
 
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-48}"
@@ -51,6 +54,20 @@ for path in "$CONFIG" "$TRAIN_CATALOG" "$REFERENCE_CHECKPOINT" \
   "$TRAIN_INDICES" "$VALIDATION_INDICES"; do
   test -s "$path" || { echo "[feniks-sleepnpe][error] missing: $path" >&2; exit 2; }
 done
+if [[ "$START_EPOCH" -gt 1 ]]; then
+  test -s "$INITIAL_CHECKPOINT" || {
+    echo "[feniks-sleepnpe][error] missing restart checkpoint: $INITIAL_CHECKPOINT" >&2
+    exit 2
+  }
+  test -s "${INITIAL_CHECKPOINT}.json" || {
+    echo "[feniks-sleepnpe][error] missing restart sidecar: ${INITIAL_CHECKPOINT}.json" >&2
+    exit 2
+  }
+  test -s "$FIXED_FEATURE_STATS" || {
+    echo "[feniks-sleepnpe][error] missing fixed feature stats: $FIXED_FEATURE_STATS" >&2
+    exit 2
+  }
+fi
 test ! -e "$TRAIN_ROOT/DONE" || {
   echo "[feniks-sleepnpe][error] already complete: $TRAIN_ROOT" >&2; exit 2;
 }
@@ -72,20 +89,33 @@ JAX_BATCH_SIZE=256
 VALIDATION_EVERY=4
 EXTRA_ARGS=()
 if [[ "$SMOKE" == "1" ]]; then
-  EPOCHS=2
   BATCH_SIZE=256
   JAX_BATCH_SIZE=128
   VALIDATION_EVERY=1
+  if [[ "$START_EPOCH" -gt 1 ]]; then
+    EPOCHS=$((START_EPOCH + 1))
+  else
+    EPOCHS=2
+    EXTRA_ARGS+=(
+      --wake-start-encoder-epoch 2
+      --wake-every-encoder-epochs 1
+      --best-checkpoint-min-epoch 1
+    )
+  fi
+fi
+
+if [[ "$START_EPOCH" -gt 1 ]]; then
   EXTRA_ARGS+=(
-    --wake-start-encoder-epoch 2
-    --wake-every-encoder-epochs 1
-    --best-checkpoint-min-epoch 1
+    --initial-checkpoint "$INITIAL_CHECKPOINT"
+    --start-epoch "$START_EPOCH"
+    --fixed-feature-stats "$FIXED_FEATURE_STATS"
   )
 fi
 
 echo "[feniks-sleepnpe] smoke=$SMOKE epochs=$EPOCHS out=$TRAIN_ROOT"
 echo "[feniks-sleepnpe] train_indices=$TRAIN_INDICES"
 echo "[feniks-sleepnpe] validation_indices=$VALIDATION_INDICES"
+echo "[feniks-sleepnpe] start_epoch=$START_EPOCH optimizer_state_resumed=0"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 
 python -m euclid_dsps.cli --config "$CONFIG" amortized-train-diffsky \

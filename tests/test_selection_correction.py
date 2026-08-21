@@ -165,6 +165,7 @@ def test_selection_correction_defaults_to_disabled() -> None:
     assert selection["kind"] == "observed_magnitude_limit"
     assert selection["n_prior_samples"] == 4096
     assert selection["prior_sample_batch_size"] == 64
+    assert selection["gradient_preflight_samples"] == 0
 
 
 def test_selection_aware_feniks_config_separates_likelihood_and_survey_noise() -> None:
@@ -210,3 +211,6 @@ def test_parentprior_sleepnpe_config_has_disjoint_q_and_prior_updates() -> None:
     ]
     assert cfg["training"]["best_checkpoint_metric"] == "validation_sleep_nll"
     assert cfg["objective"]["selection_correction"]["enabled"] is True
+    assert cfg["objective"]["selection_correction"]["n_prior_samples"] == 1024
+    assert cfg["objective"]["selection_correction"]["prior_sample_batch_size"] == 256
+    assert cfg["objective"]["selection_correction"]["gradient_preflight_samples"] == 64

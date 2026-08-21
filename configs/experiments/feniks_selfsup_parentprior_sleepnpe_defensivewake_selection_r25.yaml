@@ -80,8 +80,11 @@ amortized:
       band: lsst_r
       max_mag_ab: 25.0
       survey_noise: gaussian_m5
-      n_prior_samples: 4096
-      prior_sample_batch_size: 64
+      # Fixed common random numbers make this approximation deterministic. The
+      # final population diagnostic still uses 8192 independent prior draws.
+      n_prior_samples: 1024
+      prior_sample_batch_size: 256
+      gradient_preflight_samples: 64
       common_random_numbers: true
       seed: 260821
 

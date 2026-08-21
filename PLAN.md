@@ -1,5 +1,30 @@
 # Plan
 
+## 2026-08-21 Jean-Zay prior-wake NaN recovery
+
+- Status: implementation complete and locally validated (`ruff`, `compileall`,
+  shell syntax, and 100 posterior/selection/workflow tests pass, including the
+  two-device pmap NaN regression). Jean-Zay recovery smoke and production
+  remain unexecuted. The interrupted run must not be continued because every
+  observed epoch 25 wake update had non-finite prior gradients and was skipped.
+- Root cause: the support gate masked the prior loss with `jnp.where` only after
+  differentiating the selection-normalization graph. JAX can propagate
+  `0 * NaN` from that inactive branch. Move both the differentiable prior
+  density and `log(alpha_eta)` computation inside the accepted branch of
+  `jax.lax.cond`; rejected batches now have exactly finite zero prior gradients
+  and do not evaluate alpha.
+- Add a real prior-to-DSPS-to-PhotoErr selection-gradient preflight before the
+  optimizer and make the production finalizer fail if any gradient is
+  non-finite, no wake prior update is actually applied, or alpha Monte Carlo
+  relative error exceeds 15 percent.
+- Reduce the fixed common-random-number alpha bank from 4096 draws in 64-draw
+  chunks to 1024 draws in 256-draw chunks. This changes 64 decoder chunks to 4;
+  the final population diagnostic retains 8192 independent draws.
+- Resume parameters and fixed feature statistics from the exact epoch 24
+  checkpoint in a new output tree. The optimizer state is intentionally
+  reinitialized. Run an epoch 25 wake plus epoch 26 sleep smoke before the
+  dependent epoch 25-to-80 recovery job.
+
 ## 2026-08-21 Mass-covering sleep NPE and selection-corrected parent prior
 
 - Status: implementation complete and locally validated; Jean-Zay smoke,
