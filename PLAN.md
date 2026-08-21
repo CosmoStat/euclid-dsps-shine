@@ -42,14 +42,16 @@
   evaluates parent prior, beta-weighted forward-selected prior, aggregate q,
   parent truth and selected truth without adding a third compute stage.
 - The finalizer fails closed on target support, NUTS convergence, raw-q and
-  defensive-IS ESS/Pareto gates, prior physical support, parent-population
+  defensive-IS ESS/Pareto gates, generalized covariance coverage, full-15D
+  TARP/MIRA agreement with NUTS, prior physical support, parent-population
   closure and forward-selected population closure. Truth enters only this
   synthetic closure stage.
 - Local verification: `compileall`, Ruff, `bash -n`, `git diff --check`, and
-  131 focused target, posterior, selection, exact-inference, MAP, config and
-  workflow tests pass. A real local training smoke was not possible because
-  the FENIKS train/test parquet files are not present in this checkout; the
-  dependency-gated Jean-Zay smoke is therefore mandatory before production.
+  144 focused target, posterior, selection, exact-inference, MAP, config and
+  workflow tests pass; two environment-dependent tests are skipped. A real
+  local training smoke was not possible because the FENIKS train/test parquet
+  files are not present in this checkout; the dependency-gated Jean-Zay smoke
+  is therefore mandatory before production.
 
 ## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
 

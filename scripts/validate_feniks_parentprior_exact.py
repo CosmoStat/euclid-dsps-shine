@@ -24,6 +24,66 @@ def _support(values: pd.DataFrame, prefix: str) -> dict[str, object]:
     }
 
 
+def _calibration(root: Path) -> dict[str, object]:
+    tarp = pd.read_csv(root / "calibration/tarp/tarp_summary.csv")
+    mira = pd.read_csv(root / "calibration/mira/mira_scores.csv")
+    models = ("q", "q_is", "defensive_is", "nuts")
+    tarp = tarp.loc[tarp["group"].eq("full_15d")].set_index("model")
+    mira = mira.loc[mira["group"].eq("full_15d")].set_index("model")
+    missing = sorted(set(models) - set(tarp.index)) + sorted(
+        set(models) - set(mira.index)
+    )
+    if missing:
+        raise ValueError(f"missing full-15D calibration rows: {missing}")
+
+    thresholds = {
+        "tarp_coverage_rmse_margin_over_nuts": 0.10,
+        "tarp_max_abs_error_margin_over_nuts": 0.15,
+        "mira_minimum_absolute_margin": 0.10,
+        "mira_theoretical_sigma_multiplier": 3.0,
+    }
+    nuts_tarp_rmse = float(tarp.loc["nuts", "coverage_rmse"])
+    nuts_tarp_max = float(tarp.loc["nuts", "coverage_max_abs_error"])
+    nuts_mira_delta = abs(float(mira.loc["nuts", "delta_from_ideal"]))
+    theoretical_sigma = float(mira.loc["nuts", "theoretical_sigma"])
+    mira_margin = max(
+        thresholds["mira_minimum_absolute_margin"],
+        thresholds["mira_theoretical_sigma_multiplier"] * theoretical_sigma,
+    )
+    checks: dict[str, bool] = {}
+    metrics: dict[str, dict[str, float]] = {}
+    for model in models:
+        tarp_rmse = float(tarp.loc[model, "coverage_rmse"])
+        tarp_max = float(tarp.loc[model, "coverage_max_abs_error"])
+        mira_score = float(mira.loc[model, "score"])
+        mira_delta = float(mira.loc[model, "delta_from_ideal"])
+        metrics[model] = {
+            "tarp_coverage_rmse": tarp_rmse,
+            "tarp_coverage_max_abs_error": tarp_max,
+            "mira_score": mira_score,
+            "mira_delta_from_ideal": mira_delta,
+        }
+        if model == "nuts":
+            continue
+        checks[f"{model}_tarp_close_to_nuts"] = bool(
+            tarp_rmse
+            <= nuts_tarp_rmse
+            + thresholds["tarp_coverage_rmse_margin_over_nuts"]
+            and tarp_max
+            <= nuts_tarp_max
+            + thresholds["tarp_max_abs_error_margin_over_nuts"]
+        )
+        checks[f"{model}_mira_close_to_nuts"] = bool(
+            abs(mira_delta) <= nuts_mira_delta + mira_margin
+        )
+    return {
+        "checks": checks,
+        "metrics": metrics,
+        "thresholds": thresholds,
+        "mira_effective_margin": mira_margin,
+    }
+
+
 def validate(*, root: Path) -> dict[str, object]:
     scoreboard = pd.read_parquet(root / "scoreboard.parquet")
     summary = json.loads((root / "benchmark_summary.json").read_text())
@@ -67,6 +127,7 @@ def validate(*, root: Path) -> dict[str, object]:
         ],
         dtype=float,
     )
+    calibration = _calibration(root)
     nuts_convergence = all(
         bool(summary.get(key, False)) for key in summary if key.startswith("all_nuts_")
     )
@@ -75,6 +136,14 @@ def validate(*, root: Path) -> dict[str, object]:
         "nuts_rhat_gate": nuts_convergence,
         "raw_q_is_support": raw["status"] == "PASS",
         "defensive_is_support": defensive["status"] == "PASS",
+        "q_covariance_mass_covering": bool(
+            np.median(q_max_ratio) < 2.0 and np.mean(q_max_ratio >= 2.0) <= 0.20
+        ),
+        "defensive_covariance_mass_covering": bool(
+            np.median(defensive_max_ratio) < 2.0
+            and np.mean(defensive_max_ratio >= 2.0) <= 0.20
+        ),
+        **calibration["checks"],
         "parent_prior_population_closure": bool(
             parent_comparison["median_quantile_l1_over_truth_q90_width"] <= 0.50
             and parent_comparison["correlation_rmse"] <= 0.35
@@ -102,7 +171,11 @@ def validate(*, root: Path) -> dict[str, object]:
             "median_defensive_generalized_variance_ratio_max": float(
                 np.median(defensive_max_ratio)
             ),
+            "fraction_defensive_generalized_variance_ratio_max_ge_2": float(
+                np.mean(defensive_max_ratio >= 2.0)
+            ),
         },
+        "calibration": calibration,
         "target_support": {
             "maximum_nuts_fraction_outside_fit_bounds": float(np.max(nuts_outside))
         },

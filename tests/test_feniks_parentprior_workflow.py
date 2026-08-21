@@ -95,8 +95,12 @@ def test_exact_finalizer_requires_is_target_and_population_gates(
     root = tmp_path / "exact"
     galaxy = root / "galaxies/00_typical_row7"
     population = root / "population"
+    tarp = root / "calibration/tarp"
+    mira = root / "calibration/mira"
     galaxy.mkdir(parents=True)
     population.mkdir()
+    tarp.mkdir(parents=True)
+    mira.mkdir(parents=True)
     pd.DataFrame(
         {
             "importance_raw_ess_fraction": [0.20],
@@ -144,6 +148,36 @@ def test_exact_finalizer_requires_is_target_and_population_gates(
             "min_std_ratio": [0.8, 0.8, 0.8],
         }
     ).to_csv(population / "population_comparisons.csv", index=False)
+    models = ["q", "q_is", "defensive_is", "nuts"]
+    pd.DataFrame(
+        {
+            "model": models,
+            "group": ["full_15d"] * len(models),
+            "coverage_rmse": [0.08, 0.07, 0.06, 0.05],
+            "coverage_max_abs_error": [0.16, 0.14, 0.12, 0.10],
+        }
+    ).to_csv(tarp / "tarp_summary.csv", index=False)
+    pd.DataFrame(
+        {
+            "model": models,
+            "group": ["full_15d"] * len(models),
+            "score": [0.64, 0.65, 0.66, 2.0 / 3.0],
+            "delta_from_ideal": [
+                0.64 - 2.0 / 3.0,
+                0.65 - 2.0 / 3.0,
+                0.66 - 2.0 / 3.0,
+                0.0,
+            ],
+            "theoretical_sigma": [0.04] * len(models),
+        }
+    ).to_csv(mira / "mira_scores.csv", index=False)
     payload = validate_exact(root=root)
     assert payload["status"] == "PASS"
     assert payload["ready_for_production"] is True
+
+    failed_tarp = pd.read_csv(tarp / "tarp_summary.csv")
+    failed_tarp.loc[failed_tarp["model"].eq("q"), "coverage_rmse"] = 0.50
+    failed_tarp.to_csv(tarp / "tarp_summary.csv", index=False)
+    payload = validate_exact(root=root)
+    assert payload["status"] == "FAIL"
+    assert payload["checks"]["q_tarp_close_to_nuts"] is False
