@@ -198,6 +198,7 @@ def test_pmap_support_gate_skips_bad_selection_gradient_on_all_devices() -> None
 
         devices = tuple(jax.local_devices())
         assert len(devices) == 2, devices
+        assert jax.config.x64_enabled
         encoder = ConditionalFlowEncoder(
             jax.random.PRNGKey(0), input_dim=6, latent_dim=4,
             hidden_sizes=(8,), activation="gelu", log_std_min=-6.0,
@@ -273,6 +274,7 @@ def test_pmap_support_gate_skips_bad_selection_gradient_on_all_devices() -> None
     """)
     env = os.environ.copy()
     env["JAX_PLATFORMS"] = "cpu"
+    env["JAX_ENABLE_X64"] = "true"
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
     result = subprocess.run(
         [sys.executable, "-c", code],

@@ -17,6 +17,10 @@
   optimizer and make the production finalizer fail if any gradient is
   non-finite, no wake prior update is actually applied, or alpha Monte Carlo
   relative error exceeds 15 percent.
+- The first remote recovery smoke exposed a compile-time branch mismatch only
+  when JAX x64 is enabled: the wake loss was float64 while selection metrics
+  were float32. Cast every `lax.cond` output to the wake dtype and cover the
+  exact x64 plus pmap combination in the multi-device regression test.
 - Reduce the fixed common-random-number alpha bank from 4096 draws in 64-draw
   chunks to 1024 draws in 256-draw chunks. This changes 64 decoder chunks to 4;
   the final population diagnostic retains 8192 independent draws.

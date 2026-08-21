@@ -3266,6 +3266,7 @@ def _importance_weighted_wake_outputs(
                 calibration_config,
                 objective_config,
             )
+        log_alpha = jnp.asarray(log_alpha, dtype=wake_nll.dtype)
         selection_metrics = _complete_selection_metrics(
             selection_metrics, dtype=wake_nll.dtype, evaluated=True
         )
@@ -4060,6 +4061,9 @@ def _complete_selection_metrics(metrics, *, dtype, evaluated: bool):
     """Return a fixed metric pytree suitable for ``jax.lax.cond``."""
     complete = disabled_selection_metrics(dtype)
     complete.update(metrics)
+    complete = jax.tree_util.tree_map(
+        lambda value: jnp.asarray(value, dtype=dtype), complete
+    )
     complete["selection/evaluated"] = jnp.asarray(float(evaluated), dtype=dtype)
     complete.setdefault("selection/flux_limit_fnu_cgs", jnp.asarray(0.0, dtype=dtype))
     complete.setdefault("selection/max_mag_ab", jnp.asarray(0.0, dtype=dtype))
