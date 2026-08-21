@@ -8,8 +8,8 @@ source "${SMOKE_ENV:-outputs/logs/feniks_adaptive_smcwake_smoke_latest.env}"
 
 CONFIG="${CONFIG:-configs/experiments/feniks_selfsup_adaptive_smcwake_parentprior_selection_r25.yaml}"
 CATALOG_DIR="${CATALOG_DIR:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized}"
-RUN_TAG="${RUN_TAG:-feniks_adaptive_smcwake_$(date +%Y%m%d_%H%M%S)}"
-RUN_ROOT="${RUN_ROOT:-outputs/runs/$RUN_TAG}"
+BIG_RUN_TAG="${BIG_RUN_TAG:-feniks_adaptive_smcwake_$(date +%Y%m%d_%H%M%S)}"
+RUN_ROOT="${RUN_ROOT:-outputs/runs/$BIG_RUN_TAG}"
 TRAIN_ROOT="$RUN_ROOT/train"
 MANIFEST_ROOT="$RUN_ROOT/manifests"
 
