@@ -1,5 +1,23 @@
 # Plan
 
+## 2026-08-21 Adaptive-SMC scientific smoke gate
+
+- Status: remote smoke completed the intended training and checkpoint path,
+  then the fail-closed validator exited with code 3 because the scientific
+  receipt was `FAIL`; this is no longer a software crash.
+- Held-out validation reached `beta=1` with finite SMC cross-entropy, but only
+  5/8 objects were eligible after fallback (`hard_fraction=0.375`). Mutation
+  acceptance was only 0.061 and q-only IS remained collapsed
+  (`ESS/K=0.0156255`, maximum weight 0.999983). Final equal SMC weights after
+  resampling do not establish mixing or q calibration.
+- Both prior macro-updates were rejected. Inspect `prior_macro_log.csv` before
+  changing the trust region or selection estimator; the receipt's downstream
+  prior checks are necessarily false when no update was applied and do not by
+  themselves identify the rejection cause.
+- Do not submit the big run. The next patch must address the measured q/SMC
+  bootstrap and mutation deficiencies without weakening the hard-object gate,
+  then rerun one fresh smoke.
+
 ## 2026-08-21 Adaptive-SMC checkpoint-mode recovery
 
 - Status: implemented and locally validated. The fresh 12-epoch Jean-Zay smoke
