@@ -1,5 +1,44 @@
 # Plan
 
+## 2026-08-21 Adaptive bridge SMC production training
+
+- Status: implementation complete and locally validated. Static-SNIS wake and
+  the older x-space MALA SMC remain diagnostic ablations; the production
+  trainer uses only the new exact-target adaptive bridge SMC. Jean-Zay smoke,
+  big training and final exact validation remain unexecuted.
+- Keep the canonical learned-prior posterior target and selection contract:
+  object weights contain only likelihood, prior and full proposal density;
+  `log(alpha_eta)` enters the averaged prior M-step once and remains fully
+  differentiable through prior, DSPS and Gaussian PhotoErr.
+- Add exact single-component conditional-RealNVP transport helpers between
+  standard-normal epsilon and latent x. Implement a JAX-native adaptive bridge
+  from the exact defensive r0 mixture to the canonical target, conditional-ESS
+  bisection, systematic resampling, exact epsilon-space random-walk MH, logZ,
+  fixed-budget histories and explicit hard-object output/fallback.
+- Add a dedicated no-truth production trainer with an initial sleep bootstrap,
+  observed adaptive-SMC sweeps, stopped inclusive q distillation, macro-batch
+  prior updates, `log(alpha_eta)`, prior trust region, distinct q/prior
+  optimizers and fixed observed validation cohorts.
+- Use bounds/fit-initial-only standardized-logit coordinates and a broad
+  identity-initialized joint RealNVP population prior. Do not reuse the
+  truth-trained spline15d prior weights or its truth-standardized coordinates.
+- Deliver separate 4-H100 smoke and big-run submissions so the big job is not
+  submitted until the smoke receipt is `PASS`. The exact 32-object workflow
+  adds adaptive SMC to q/raw-IS/defensive-IS/MAP/NUTS, central coverage,
+  full-15D TARP/MIRA, covariance geometry and population closure.
+- Cost accounting counts batched latent-object DSPS evaluations. Per object
+  and observed sweep the configured primary costs 128 evaluations with no
+  resampling, 256 with one resampling, and 384 with two. The absolute primary
+  plus fallback configured upper bound is 4,480; the smoke must measure actual
+  stage/resampling/hard rates before accepting the theoretical big-job budget.
+- Local verification: Ruff, `compileall`, shell syntax, `git diff --check`, and
+  58 focused tests pass. These cover 1D, correlated-2D, 15D and multimodal
+  targets, exact nominal r0 sampling, adaptive beta, epsilon-MH invariance,
+  transport/Jacobians, hard fallback, stopped q/prior losses, selection,
+  target consistency, no-truth config, two-device pmap, checkpoint restore and
+  exact-workflow compatibility. The FENIKS parquet and DSPS SSP assets are
+  absent locally, so no real FENIKS scientific smoke result is claimed.
+
 ## 2026-08-21 Exact encoder diagnostic after support-gated wake failure
 
 - Status: implementation complete and locally validated. The first Jean-Zay

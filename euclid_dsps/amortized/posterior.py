@@ -56,6 +56,13 @@ class DefensiveProposalSample(NamedTuple):
     maximum_posterior_temperature: jnp.ndarray
 
 
+class PosteriorTransportValue(NamedTuple):
+    """A value mapped through q together with ``log|dx / d epsilon|``."""
+
+    value: jnp.ndarray
+    logabsdet_dx_depsilon: jnp.ndarray
+
+
 class PriorTransportGaussianEncoder(eqx.Module):
     """Diagonal Gaussian in the frozen prior's standard-normal coordinates."""
 
@@ -638,6 +645,59 @@ def posterior_log_prob(
         else _diag_normal_log_prob(base, mean, proposal_log_std)
     )
     return base_log_prob + residual_inverse_logdet + prior_inverse_logdet
+
+
+def posterior_standard_base_to_x(
+    model,
+    features: jnp.ndarray,
+    epsilon: jnp.ndarray,
+) -> PosteriorTransportValue:
+    """Map standard-normal coordinates through a single-base conditional q.
+
+    This transform is the preconditioner used by adaptive bridge SMC. It is
+    intentionally restricted to the production contract: a single diagonal
+    Gaussian base followed by a conditional flow in ``latent_x`` space.
+    """
+    if _is_mixture_encoder(model.encoder):
+        raise ValueError("posterior transport requires base_components=1")
+    if not isinstance(model.encoder, ConditionalFlowEncoder):
+        raise ValueError("posterior transport requires ConditionalFlowEncoder")
+    if model.encoder.output_space != "latent_x":
+        raise ValueError("posterior transport requires flow_output_space=latent_x")
+    state = posterior_encoder_state(model, features)
+    epsilon = jnp.asarray(epsilon)
+    mean = _broadcast_context(state.mean, epsilon.shape[:-1])
+    log_std = _broadcast_context(state.log_std, epsilon.shape[:-1])
+    base = mean + jnp.exp(log_std) * epsilon
+    x, flow_logdet = model.encoder.forward(base, state.flow_context)
+    return PosteriorTransportValue(
+        value=x,
+        logabsdet_dx_depsilon=jnp.sum(log_std, axis=-1) + flow_logdet,
+    )
+
+
+def posterior_x_to_standard_base(
+    model,
+    features: jnp.ndarray,
+    x: jnp.ndarray,
+) -> PosteriorTransportValue:
+    """Invert the production conditional q transport exactly."""
+    if _is_mixture_encoder(model.encoder):
+        raise ValueError("posterior transport requires base_components=1")
+    if not isinstance(model.encoder, ConditionalFlowEncoder):
+        raise ValueError("posterior transport requires ConditionalFlowEncoder")
+    if model.encoder.output_space != "latent_x":
+        raise ValueError("posterior transport requires flow_output_space=latent_x")
+    state = posterior_encoder_state(model, features)
+    x = jnp.asarray(x)
+    mean = _broadcast_context(state.mean, x.shape[:-1])
+    log_std = _broadcast_context(state.log_std, x.shape[:-1])
+    base, inverse_flow_logdet = model.encoder.inverse(x, state.flow_context)
+    epsilon = (base - mean) * jnp.exp(-log_std)
+    return PosteriorTransportValue(
+        value=epsilon,
+        logabsdet_dx_depsilon=jnp.sum(log_std, axis=-1) - inverse_flow_logdet,
+    )
 
 
 def posterior_mixture_diagnostics(model, features) -> dict[str, jnp.ndarray]:

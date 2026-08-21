@@ -24,10 +24,13 @@ def _support(values: pd.DataFrame, prefix: str) -> dict[str, object]:
     }
 
 
-def _calibration(root: Path) -> dict[str, object]:
+def _calibration(root: Path, *, include_adaptive_smc: bool) -> dict[str, object]:
     tarp = pd.read_csv(root / "calibration/tarp/tarp_summary.csv")
     mira = pd.read_csv(root / "calibration/mira/mira_scores.csv")
-    models = ("q", "q_is", "defensive_is", "nuts")
+    models = ["q", "q_is", "defensive_is"]
+    if include_adaptive_smc:
+        models.append("adaptive_smc")
+    models.append("nuts")
     tarp = tarp.loc[tarp["group"].eq("full_15d")].set_index("model")
     mira = mira.loc[mira["group"].eq("full_15d")].set_index("model")
     missing = sorted(set(models) - set(tarp.index)) + sorted(
@@ -127,7 +130,112 @@ def validate(*, root: Path) -> dict[str, object]:
         ],
         dtype=float,
     )
-    calibration = _calibration(root)
+    adaptive_available = bool(
+        "adaptive_smc_eligible" in scoreboard
+        and all("adaptive_smc" in item for item in geometry)
+    )
+    adaptive_checks: dict[str, bool] = {}
+    adaptive_payload: dict[str, object] = {"available": adaptive_available}
+    adaptive_geometry: dict[str, float] = {}
+    central_payload: dict[str, object] = {}
+    if adaptive_available:
+        adaptive_max_ratio = np.asarray(
+            [
+                item["adaptive_smc"]["generalized_variance_ratio_max"]
+                for item in geometry
+            ],
+            dtype=float,
+        )
+        adaptive_eligible = scoreboard["adaptive_smc_eligible"].astype(bool).to_numpy()
+        adaptive_beta = pd.to_numeric(
+            scoreboard["adaptive_smc_beta_final"], errors="coerce"
+        ).to_numpy(dtype=float)
+        adaptive_ess = pd.to_numeric(
+            scoreboard["adaptive_smc_final_ess_fraction"], errors="coerce"
+        ).to_numpy(dtype=float)
+        agreement = pd.read_parquet(root / "posterior_agreement.parquet")
+        adaptive_agreement = agreement.loc[agreement["method"].eq("Adaptive SMC")]
+        adaptive_mean_offset = pd.to_numeric(
+            adaptive_agreement["nuts_standardized_mean_offset"], errors="coerce"
+        ).to_numpy(dtype=float)
+        adaptive_width_ratio = pd.to_numeric(
+            adaptive_agreement["std_ratio_to_nuts"], errors="coerce"
+        ).to_numpy(dtype=float)
+        central = pd.read_csv(root / "calibration/central_coverage.csv")
+        central_summary = central.groupby("method")[["coverage_68", "coverage_95"]].mean()
+        central_required = {"encoder", "adaptive_smc", "nuts"}
+        if not central_required <= set(central_summary.index):
+            raise ValueError("central coverage is missing q, adaptive SMC, or NUTS")
+        q_coverage_delta = np.abs(
+            central_summary.loc["encoder"].to_numpy(dtype=float)
+            - central_summary.loc["nuts"].to_numpy(dtype=float)
+        )
+        adaptive_coverage_delta = np.abs(
+            central_summary.loc["adaptive_smc"].to_numpy(dtype=float)
+            - central_summary.loc["nuts"].to_numpy(dtype=float)
+        )
+        adaptive_checks = {
+            "adaptive_smc_reaches_target": bool(
+                np.mean(adaptive_eligible) >= 0.70
+                and np.mean(np.isclose(adaptive_beta, 1.0, atol=1.0e-6)) >= 0.70
+                and np.nanmedian(adaptive_ess) >= 0.30
+            ),
+            "adaptive_smc_matches_nuts_means": bool(
+                np.isfinite(adaptive_mean_offset).all()
+                and np.median(np.abs(adaptive_mean_offset)) <= 0.50
+            ),
+            "adaptive_smc_matches_nuts_widths": bool(
+                np.isfinite(adaptive_width_ratio).all()
+                and 0.70 <= np.median(adaptive_width_ratio) <= 1.30
+            ),
+            "adaptive_smc_covariance_mass_covering": bool(
+                np.median(adaptive_max_ratio) < 2.0
+                and np.mean(adaptive_max_ratio >= 2.0) <= 0.20
+            ),
+            "q_central_coverage_close_to_nuts": bool(
+                np.max(q_coverage_delta) <= 0.20
+            ),
+            "adaptive_smc_central_coverage_close_to_nuts": bool(
+                np.max(adaptive_coverage_delta) <= 0.20
+            ),
+        }
+        adaptive_geometry = {
+            "median_adaptive_smc_generalized_variance_ratio_max": float(
+                np.median(adaptive_max_ratio)
+            ),
+            "fraction_adaptive_smc_generalized_variance_ratio_max_ge_2": float(
+                np.mean(adaptive_max_ratio >= 2.0)
+            ),
+        }
+        adaptive_payload = {
+            "available": True,
+            "eligible_fraction": float(np.mean(adaptive_eligible)),
+            "fraction_beta_final_one": float(
+                np.mean(np.isclose(adaptive_beta, 1.0, atol=1.0e-6))
+            ),
+            "median_final_ess_fraction": float(np.nanmedian(adaptive_ess)),
+            "median_absolute_nuts_standardized_mean_offset": float(
+                np.median(np.abs(adaptive_mean_offset))
+            ),
+            "median_width_ratio_to_nuts": float(np.median(adaptive_width_ratio)),
+            "central_coverage_68": float(
+                central_summary.loc["adaptive_smc", "coverage_68"]
+            ),
+            "central_coverage_95": float(
+                central_summary.loc["adaptive_smc", "coverage_95"]
+            ),
+        }
+        central_payload = {
+            "q_central_coverage": {
+                "coverage_68": float(central_summary.loc["encoder", "coverage_68"]),
+                "coverage_95": float(central_summary.loc["encoder", "coverage_95"]),
+            },
+            "nuts_central_coverage": {
+                "coverage_68": float(central_summary.loc["nuts", "coverage_68"]),
+                "coverage_95": float(central_summary.loc["nuts", "coverage_95"]),
+            },
+        }
+    calibration = _calibration(root, include_adaptive_smc=adaptive_available)
     nuts_convergence = all(
         bool(summary.get(key, False)) for key in summary if key.startswith("all_nuts_")
     )
@@ -143,6 +251,7 @@ def validate(*, root: Path) -> dict[str, object]:
             np.median(defensive_max_ratio) < 2.0
             and np.mean(defensive_max_ratio >= 2.0) <= 0.20
         ),
+        **adaptive_checks,
         **calibration["checks"],
         "parent_prior_population_closure": bool(
             parent_comparison["median_quantile_l1_over_truth_q90_width"] <= 0.50
@@ -156,6 +265,12 @@ def validate(*, root: Path) -> dict[str, object]:
         ),
         "parent_prior_physical_support": bool(
             population_summary["selection"]["prior_physical_valid_fraction"] >= 0.99
+        ),
+        "parent_prior_identifiable_mass": bool(
+            population_summary["selection"].get(
+                "fraction_prior_mass_beta_lt_1e-3", 0.0
+            )
+            <= 0.50
         ),
     }
     payload = {
@@ -174,13 +289,22 @@ def validate(*, root: Path) -> dict[str, object]:
             "fraction_defensive_generalized_variance_ratio_max_ge_2": float(
                 np.mean(defensive_max_ratio >= 2.0)
             ),
+            **adaptive_geometry,
         },
+        "adaptive_smc": adaptive_payload,
+        **central_payload,
         "calibration": calibration,
         "target_support": {
             "maximum_nuts_fraction_outside_fit_bounds": float(np.max(nuts_outside))
         },
         "population": {
             "selection_alpha_mc": population_summary["selection"]["alpha_mc"],
+            "fraction_prior_mass_beta_lt_1e-3": population_summary[
+                "selection"
+            ].get("fraction_prior_mass_beta_lt_1e-3"),
+            "fraction_prior_mass_beta_lt_1e-2": population_summary[
+                "selection"
+            ].get("fraction_prior_mass_beta_lt_1e-2"),
             "parent_prior_vs_parent_truth": parent_comparison.to_dict(),
             "forward_selected_prior_vs_selected_truth": selected_comparison.to_dict(),
             "catalog_inferred_vs_selected_truth": population_comparisons.loc[

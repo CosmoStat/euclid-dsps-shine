@@ -1,0 +1,152 @@
+extends: feniks_selfsup_parentprior_sleepnpe_defensivewake_selection_r25.yaml
+
+# Final production contract. The trainer removes the truth mapping before any
+# catalog read; truth is permitted only in the later closure benchmark.
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized/train.parquet
+
+amortized:
+  latent:
+    # Deterministic coordinates from fit bounds and fit initial values only.
+    # The previous spline15d checkpoint normalization was fitted on truth and
+    # is intentionally not reused by this strict self-supervised run.
+    normalization: standardized_logit
+    normalization_checkpoint: null
+    center_source: fit_initial
+    default_physical_scale_fraction: 0.15
+    min_raw_scale: 0.05
+    max_raw_scale: 5.0
+    geometry_samples: 20000
+
+  encoder:
+    type: conditional_flow
+    flow_family: realnvp
+    flow_output_space: latent_x
+    base_components: 1
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_scale_clamp: 0.5
+    flow_shift_clamp: 3.0
+    flow_init_scale: 0.0
+    log_std_min: -4.0
+    log_std_max: 3.0
+    initial_log_std: 0.0
+
+  prior:
+    type: realnvp
+    source: joint_realnvp
+    checkpoint: null
+    train_jointly: true
+    n_layers: 8
+    hidden_size: 128
+    scale_clamp: 0.25
+    shift_clamp: 3.0
+    permutation: roll
+    init: identity
+    init_scale: 0.0
+
+  likelihood:
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+
+  objective:
+    mode: adaptive_smc_wake
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sleep:
+      enabled: true
+      error_model: observed_catalog
+      noise_family: match_likelihood
+      entropy_samples: 4
+      selection:
+        enabled: true
+        band: lsst_r
+        max_mag_ab: 25.0
+        candidate_factor: 8
+    # Retained only as an explicit diagnostic/ablation. The production trainer
+    # never uses raw-SNIS particles for q or prior gradients.
+    wake:
+      sampler: importance
+      train_encoder: false
+      train_prior: false
+      n_particles: 32
+      proposal:
+        components:
+          - {source: posterior, temperature: 1.0, fraction: 0.50}
+          - {source: posterior, temperature: 2.0, fraction: 0.25}
+          - {source: posterior, temperature: 4.0, fraction: 0.15}
+          - {source: prior, fraction: 0.10}
+    adaptive_smc:
+      sampler: adaptive_bridge_smc
+      n_particles: 64
+      target_conditional_ess: 0.75
+      resample_ess_fraction: 0.50
+      max_stages: 8
+      steps_after_resample: 2
+      final_steps_at_beta1: 1
+      rw_scale: 0.60
+      hard_final_ess_fraction: 0.30
+      hard_min_mutation_acceptance: 0.05
+      bisection_steps: 32
+      initial_proposal:
+        posterior_unit_fraction: 0.70
+        posterior_tempered_fraction: 0.20
+        posterior_temperature: 1.50
+        prior_fraction: 0.10
+      hard_fallback:
+        n_particles: 128
+        target_conditional_ess: 0.75
+        resample_ess_fraction: 0.50
+        max_stages: 12
+        steps_after_resample: 2
+        final_steps_at_beta1: 1
+        rw_scale: 0.60
+        hard_final_ess_fraction: 0.30
+        hard_min_mutation_acceptance: 0.05
+        bisection_steps: 32
+    selection_correction:
+      enabled: true
+      kind: observed_magnitude_limit
+      band: lsst_r
+      max_mag_ab: 25.0
+      survey_noise: gaussian_m5
+      n_prior_samples: 2048
+      prior_sample_batch_size: 256
+      gradient_preflight_samples: 64
+      common_random_numbers: true
+      seed: 260821
+
+  training:
+    seed: 260821
+    data_parallel: pmap
+    best_checkpoint_metric: validation_smc_cross_entropy
+    best_checkpoint_min_epoch: 0
+    adaptive_smc:
+      bootstrap_sleep_epochs: 12
+      observed_sweeps: 3
+      micro_batch_size: 128
+      prior_macro_objects: 512
+      min_prior_macro_objects: 128
+      fallback_batch_size: 32
+      sleep_replay_every_smc_updates: 4
+      q_sleep_learning_rate: 5.0e-5
+      q_smc_learning_rate: 2.0e-5
+      prior_learning_rate: 1.0e-5
+      weight_decay: 1.0e-6
+      gradient_clip_norm: 5.0
+      trust_strength: 0.2
+      trust_samples: 512
+      max_prior_kl_per_dimension: 0.05
+      max_alpha_mc_relative_error: 0.15
+      validation_objects: 32
+      validation_q_is_particles: 64
+      hard_fraction_fail: 0.30
+
+calibration:
+  global_sed_scale:
+    enabled: false
+    trainable: false
+  per_band_zero_points:
+    enabled: false
+    trainable: false

@@ -9,6 +9,7 @@ import pandas as pd
 from euclid_dsps.photometry import abmag_to_fnu_cgs
 from scripts.build_feniks_encoder_diagnostic_dataset import _take_stratified
 from scripts.build_feniks_parentprior_r25_manifests import build
+from scripts.collect_feniks_parentprior_exact_calibration import collect
 from scripts.evaluate_feniks_parent_population import (
     _correlations,
     _distribution_frame,
@@ -105,6 +106,49 @@ def test_population_comparisons_keep_parent_and_selected_contracts_separate() ->
     }
     assert np.allclose(comparisons["median_quantile_l1_over_truth_q90_width"], 0.0)
     assert np.allclose(comparisons["correlation_rmse"], 0.0)
+
+
+def test_exact_calibration_collects_adaptive_smc_only_when_complete(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "exact"
+    root.mkdir()
+    cohort = pd.DataFrame(
+        {
+            "order": [0],
+            "example_key": ["easy"],
+            "row_index": [7],
+            "object_id": ["object-7"],
+        }
+    )
+    cohort.to_parquet(root / "cohort.parquet", index=False)
+    galaxy = root / "galaxies/00_easy_row7"
+    (galaxy / "nuts").mkdir(parents=True)
+    (galaxy / "prepare_manifest.json").write_text(
+        json.dumps({"latent_spec": {"names": ["a", "b"]}}),
+        encoding="utf-8",
+    )
+    pd.DataFrame({"a": [0.0], "b": [1.0]}).to_parquet(
+        galaxy / "truth.parquet", index=False
+    )
+    draws = pd.DataFrame(
+        {"a": np.linspace(-1.0, 1.0, 8), "b": np.linspace(0.0, 2.0, 8)}
+    )
+    for relative in (
+        "encoder_samples.parquet",
+        "importance_resampled_samples.parquet",
+        "defensive_importance_resampled_samples.parquet",
+        "nuts/samples.parquet",
+    ):
+        draws.to_parquet(galaxy / relative, index=False)
+
+    legacy = collect(root=root, samples_per_object=4)
+    assert "adaptive_smc" not in legacy["methods"]
+
+    draws.to_parquet(galaxy / "adaptive_smc_resampled_samples.parquet", index=False)
+    adaptive = collect(root=root, samples_per_object=4)
+    assert "adaptive_smc" in adaptive["methods"]
+    assert (root / "calibration/adaptive_smc/posterior_samples.parquet").is_file()
 
 
 def test_training_validator_rejects_nan_or_missing_prior_updates(

@@ -48,6 +48,11 @@ POSTERIORS=(
   --posterior "defensive_is=$EXACT_ROOT/calibration/defensive_is"
   --posterior "nuts=$EXACT_ROOT/calibration/nuts"
 )
+if [[ -s "$EXACT_ROOT/calibration/adaptive_smc/posterior_samples.parquet" ]]; then
+  POSTERIORS+=(
+    --posterior "adaptive_smc=$EXACT_ROOT/calibration/adaptive_smc"
+  )
+fi
 python scripts/evaluate_feniks_tarp.py \
   --truth "$TRUTH" "${POSTERIORS[@]}" \
   --out "$EXACT_ROOT/calibration/tarp" \

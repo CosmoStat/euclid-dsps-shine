@@ -317,6 +317,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, object]:
             "max_mag_ab": 25.0,
             "probability_model": "gaussian_m5",
             "alpha_mc": float(np.mean(beta)),
+            "fraction_prior_mass_beta_lt_1e-3": float(np.mean(beta < 1.0e-3)),
+            "fraction_prior_mass_beta_lt_1e-2": float(np.mean(beta < 1.0e-2)),
             "prior_physical_valid_fraction": float(np.mean(np.asarray(prior_valid))),
         },
         "artifacts": {

@@ -8,17 +8,28 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 os.environ.setdefault("EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD", "0")
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.amortized.adaptive_smc_trainer import adaptive_smc_configs
+from euclid_dsps.amortized.adaptive_smc_training import (
+    merge_hard_fallback,
+    primary_posterior_batch,
+    run_model_adaptive_smc_e_step,
+    snapshot_model,
+)
 from euclid_dsps.amortized.data import (
     iter_photometry_batches_from_arrays,
     load_photometry_arrays_from_config,
@@ -50,6 +61,7 @@ from euclid_dsps.amortized.map_adam import (
 )
 from euclid_dsps.amortized.posterior import (
     defensive_posterior_proposal,
+    posterior_log_prob,
     sample_posterior,
 )
 from euclid_dsps.amortized.posterior_target import (
@@ -293,6 +305,15 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
             if np.isscalar(value)
         },
     )
+    adaptive_smc_manifest = None
+    if _adaptive_smc_enabled(runtime.config):
+        key, adaptive_smc_key = jax.random.split(key)
+        adaptive_smc_manifest = _run_adaptive_smc_benchmark(
+            runtime,
+            adaptive_smc_key,
+            galaxy_dir,
+            seed=int(args.seed) + galaxy_index * 10_000 + 75_000,
+        )
     proposal_components = (
         ((runtime.config.get("amortized", {}) or {}).get("objective", {}) or {})
         .get("wake", {})
@@ -463,10 +484,147 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
         "target_audit_finite": finite_audit,
         "roundtrip_max_abs_error": roundtrip_error,
         "truth_available": truth_theta is not None,
+        "adaptive_smc": adaptive_smc_manifest,
     }
     _write_json(galaxy_dir / "prepare_manifest.json", manifest)
     done.touch()
     print(json.dumps(manifest, indent=2))
+
+
+def _run_adaptive_smc_benchmark(
+    runtime: Runtime,
+    key: jax.Array,
+    galaxy_dir: Path,
+    *,
+    seed: int,
+) -> dict[str, object]:
+    """Run the production bridge and persist a weighted exact-target posterior."""
+    primary_config, fallback_config, proposal_config = adaptive_smc_configs(
+        runtime.config
+    )
+    model_snapshot = snapshot_model(runtime.model)
+    primary_key, fallback_key, resample_key = jax.random.split(key, 3)
+    target_kwargs = {
+        "model_snapshot": model_snapshot,
+        "batch": runtime.batch,
+        "latent_spec": runtime.latent_spec,
+        "context": runtime.context,
+        "model_args": runtime.model_args,
+        "parameter_names": runtime.latent_spec.names,
+        "likelihood_config": runtime.likelihood,
+        "calibration_config": {
+            "calibration": runtime.config.get("calibration", {}) or {}
+        },
+        "proposal_config": proposal_config,
+    }
+    primary = run_model_adaptive_smc_e_step(
+        **target_kwargs,
+        key=primary_key,
+        smc_config=primary_config,
+    )
+    posterior = primary_posterior_batch(primary)
+    fallback = None
+    if bool(np.asarray(jax.device_get(primary.hard_object_flag[0]))):
+        fallback = run_model_adaptive_smc_e_step(
+            **target_kwargs,
+            key=fallback_key,
+            smc_config=fallback_config,
+        )
+        posterior = merge_hard_fallback(
+            key=resample_key,
+            primary=posterior,
+            fallback=fallback,
+            hard_object_indices=np.asarray([0], dtype=np.int32),
+        )
+
+    x = posterior.particles[:, 0, :]
+    weights = posterior.normalized_weights[:, 0]
+    theta = np.asarray(jax.device_get(x_to_theta(x, runtime.latent_spec)))
+    target = _evaluate_target_chunks(
+        _target_components_fn(runtime),
+        x,
+        chunk_size=256,
+    )
+    logq = posterior_log_prob(runtime.model, runtime.batch.features, x[:, None, :])[
+        :, 0
+    ]
+    frame = _sample_frame(
+        np.asarray(jax.device_get(x)),
+        theta,
+        runtime.latent_spec.names,
+        logq=np.asarray(jax.device_get(logq)),
+        target=target,
+    )
+    frame["smc_weight"] = np.asarray(jax.device_get(weights))
+    frame["smc_eligible"] = bool(
+        np.asarray(jax.device_get(posterior.eligible[0]))
+    )
+    _write_parquet(frame, galaxy_dir / "adaptive_smc_weighted_samples.parquet")
+    n_resampled = max(128, min(8192, int(len(frame)) * 128))
+    positions = systematic_resample(
+        frame["smc_weight"].to_numpy(),
+        n_resampled,
+        seed=seed,
+    )
+    resampled = frame.iloc[positions].reset_index(drop=True)
+    resampled.insert(0, "resample_draw", np.arange(len(resampled)))
+    _write_parquet(resampled, galaxy_dir / "adaptive_smc_resampled_samples.parquet")
+
+    def result_payload(result):
+        return {
+            "beta_final": float(np.asarray(jax.device_get(result.beta_final[0]))),
+            "beta_path": np.asarray(
+                jax.device_get(result.beta_path[:, 0]), dtype=float
+            ).tolist(),
+            "final_ess": float(np.asarray(jax.device_get(result.final_ess[0]))),
+            "final_ess_fraction": float(
+                np.asarray(jax.device_get(result.final_ess[0]))
+                / result.final_particles.shape[0]
+            ),
+            "final_max_weight": float(
+                np.asarray(jax.device_get(result.final_max_weight[0]))
+            ),
+            "number_of_stages": int(
+                np.asarray(jax.device_get(result.number_of_stages[0]))
+            ),
+            "number_of_resamples": int(
+                np.asarray(jax.device_get(result.number_of_resamples[0]))
+            ),
+            "mutation_acceptance": float(
+                np.asarray(jax.device_get(result.mutation_acceptance[0]))
+            ),
+            "hard": bool(
+                np.asarray(jax.device_get(result.hard_object_flag[0]))
+            ),
+            "finite_target_fraction": float(
+                np.asarray(jax.device_get(result.finite_target_fraction[0]))
+            ),
+            "logZ_estimate": float(
+                np.asarray(jax.device_get(result.logZ_estimate[0]))
+            ),
+        }
+
+    payload = {
+        "status": "complete",
+        "target": "canonical_posterior_log_target",
+        "initial_proposal": "0.70 q_T1 + 0.20 q_T1.5 + 0.10 p_eta",
+        "primary": result_payload(primary),
+        "fallback_attempted": fallback is not None,
+        "fallback": result_payload(fallback) if fallback is not None else None,
+        "eligible_after_fallback": bool(
+            np.asarray(jax.device_get(posterior.eligible[0]))
+        ),
+        "final_particle_count": int(posterior.particles.shape[0]),
+        "resampled_draw_count": int(n_resampled),
+    }
+    _write_json(galaxy_dir / "adaptive_smc_diagnostics.json", payload)
+    return payload
+
+
+def _adaptive_smc_enabled(config: dict[str, Any]) -> bool:
+    objective = ((config.get("amortized", {}) or {}).get("objective", {}) or {})
+    adaptive = dict(objective.get("adaptive_smc", {}) or {})
+    return adaptive.get("sampler") == "adaptive_bridge_smc"
 
 
 def sample_chain(args: argparse.Namespace, config: dict[str, Any]) -> None:
@@ -741,6 +899,22 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             row["defensive_importance_pareto_k"] = defensive["pareto_k"]
             row["defensive_importance_raw_ess"] = defensive["raw_ess"]
             row["defensive_importance_raw_ess_fraction"] = defensive["raw_ess_fraction"]
+        adaptive_path = galaxy_dir / "adaptive_smc_diagnostics.json"
+        if adaptive_path.exists():
+            adaptive = json.loads(adaptive_path.read_text())
+            selected_smc = adaptive["fallback"] or adaptive["primary"]
+            row["adaptive_smc_beta_final"] = selected_smc["beta_final"]
+            row["adaptive_smc_final_ess_fraction"] = selected_smc[
+                "final_ess_fraction"
+            ]
+            row["adaptive_smc_mutation_acceptance"] = selected_smc[
+                "mutation_acceptance"
+            ]
+            row["adaptive_smc_logZ"] = selected_smc["logZ_estimate"]
+            row["adaptive_smc_fallback_attempted"] = adaptive[
+                "fallback_attempted"
+            ]
+            row["adaptive_smc_eligible"] = adaptive["eligible_after_fallback"]
         rows.append(row)
     scoreboard = pd.DataFrame(rows)
     _write_parquet(scoreboard, args.out / "scoreboard.parquet")
@@ -756,6 +930,8 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
         for sampler in samplers
     }
     methods = ["encoder", "importance", "map", *samplers, "truth"]
+    if "adaptive_smc_final_ess_fraction" in scoreboard:
+        methods.insert(2, "adaptive_smc")
     if "defensive_importance_raw_ess" in scoreboard:
         methods.insert(2, "defensive_importance")
     _write_json(
@@ -796,6 +972,11 @@ def _write_run_comparison(
         "Encoder": "encoder_samples.parquet",
         "Encoder + IS": "importance_resampled_samples.parquet",
     }
+    if all(
+        (_galaxy_dir(out, item) / "adaptive_smc_resampled_samples.parquet").exists()
+        for item in cohort.itertuples(index=False)
+    ):
+        methods["Adaptive SMC"] = "adaptive_smc_resampled_samples.parquet"
     if all(
         (
             _galaxy_dir(out, item) / "defensive_importance_resampled_samples.parquet"
@@ -901,6 +1082,7 @@ def _write_run_comparison(
         "Encoder",
         "Encoder + IS",
         "Defensive + IS",
+        "Adaptive SMC",
         *[sampler.upper() for sampler in samplers if sampler != "nuts"],
         "MAP",
     ]
@@ -956,6 +1138,7 @@ def _write_run_comparison(
         "Encoder",
         "Encoder + IS",
         "Defensive + IS",
+        "Adaptive SMC",
         "NUTS",
         "MCLMC",
     ]
@@ -1323,6 +1506,9 @@ def _write_bounds_and_geometry_diagnostics(
         "encoder": galaxy_dir / "encoder_samples.parquet",
         **{sampler: galaxy_dir / sampler / "samples.parquet" for sampler in samplers},
     }
+    adaptive_path = galaxy_dir / "adaptive_smc_resampled_samples.parquet"
+    if adaptive_path.exists():
+        method_paths["adaptive_smc"] = adaptive_path
     defensive_path = galaxy_dir / "defensive_encoder_samples.parquet"
     if defensive_path.exists():
         method_paths["defensive_encoder"] = defensive_path
@@ -1337,7 +1523,7 @@ def _write_bounds_and_geometry_diagnostics(
     if "nuts" not in arrays:
         return
     geometry = {}
-    for method in ("encoder", "defensive_encoder"):
+    for method in ("encoder", "defensive_encoder", "adaptive_smc"):
         if method not in arrays:
             continue
         ratios = _generalized_covariance_ratios(arrays[method], arrays["nuts"])
@@ -1386,6 +1572,9 @@ def _write_corner_plots(
             galaxy_dir / "importance_resampled_samples.parquet"
         ),
     }
+    adaptive_path = galaxy_dir / "adaptive_smc_resampled_samples.parquet"
+    if adaptive_path.exists():
+        methods["Adaptive SMC"] = pd.read_parquet(adaptive_path)
     defensive_path = galaxy_dir / "defensive_importance_resampled_samples.parquet"
     if defensive_path.exists():
         methods["Defensive + IS"] = pd.read_parquet(defensive_path)
@@ -1405,6 +1594,7 @@ def _write_corner_plots(
         "Encoder": "#0072B2",
         "Encoder + IS": "#009E73",
         "Defensive + IS": "#56B4E9",
+        "Adaptive SMC": "#AA4499",
         "NUTS": "#D55E00",
         "MCLMC": "#CC79A7",
     }
@@ -1495,6 +1685,12 @@ def _write_sed_and_photometry(
             32,
         ),
     }
+    adaptive_path = galaxy_dir / "adaptive_smc_resampled_samples.parquet"
+    if adaptive_path.exists():
+        sources["Adaptive SMC"] = _even_subsample(
+            pd.read_parquet(adaptive_path)[list(names)],
+            32,
+        )
     defensive_path = galaxy_dir / "defensive_importance_resampled_samples.parquet"
     if defensive_path.exists():
         sources["Defensive + IS"] = _even_subsample(
@@ -1516,6 +1712,7 @@ def _write_sed_and_photometry(
         "Encoder": "#0072B2",
         "Encoder + IS": "#009E73",
         "Defensive + IS": "#56B4E9",
+        "Adaptive SMC": "#AA4499",
         "NUTS": "#D55E00",
         "MCLMC": "#CC79A7",
     }
