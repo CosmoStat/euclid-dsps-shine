@@ -731,6 +731,12 @@ def train_amortized_fs2(
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
     objective_mode_name = objective_mode(cfg.get("objective", {}))
+    if objective_mode_name == "adaptive_smc_wake":
+        raise ValueError(
+            "adaptive_smc_wake requires the dedicated "
+            "train_feniks_adaptive_smc workflow; the generic amortized trainer "
+            "must not fall through to an ELBO update"
+        )
     redshift_bins_for_fingerprint = (
         (config.get("amortized", {}) or {}).get("data", {}) or {}
     ).get(
@@ -5343,6 +5349,7 @@ def tree_all_finite(tree) -> bool:
 def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
     """Return a compact JSON architecture summary for checkpoint sidecars."""
     cfg = amortized_config(config)
+    objective_mode_name = objective_mode(cfg.get("objective", {}))
     train_prior = _train_prior_jointly(cfg["prior"])
     scale_cfg = global_sed_scale_config(config)
     band_cfg = per_band_flux_calibration_config(config)
@@ -5442,16 +5449,23 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "loss": str(cfg["objective"].get("mode", "stochastic_elbo")),
             "kl_estimator": (
                 "reweighted_wake_sleep"
-                if objective_mode(cfg.get("objective", {})) == "reweighted_wake_sleep"
+                if objective_mode_name == "reweighted_wake_sleep"
                 else (
                     "periodic_self_normalized_importance_wake"
-                    if objective_mode(cfg.get("objective", {})) == "periodic_wake"
-                    else "monte_carlo_logq_minus_logp"
+                    if objective_mode_name == "periodic_wake"
+                    else (
+                        "adaptive_bridge_smc_inclusive_distillation"
+                        if objective_mode_name == "adaptive_smc_wake"
+                        else "monte_carlo_logq_minus_logp"
+                    )
                 )
             ),
             "sample_strategy": str(cfg["objective"].get("sample_strategy", "random")),
             "wake": dict(cfg["objective"].get("wake", {}) or {}),
             "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
+            "adaptive_smc": dict(
+                cfg["objective"].get("adaptive_smc", {}) or {}
+            ),
             "selection_correction": dict(
                 cfg["objective"].get("selection_correction", {}) or {}
             ),

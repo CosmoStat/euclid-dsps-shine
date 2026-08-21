@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-08-21 Adaptive-SMC checkpoint-mode recovery
+
+- Status: implemented and locally validated. The fresh 12-epoch Jean-Zay smoke
+  completed bootstrap and all three observed SMC batches, then failed while
+  writing `best.eqx`:
+  the shared checkpoint architecture summary rejected the dedicated
+  `adaptive_smc_wake` objective mode. No training receipt was written, so this
+  root remains incomplete even though the sampler itself ran.
+- Registered the dedicated mode for config/checkpoint/inference metadata,
+  recorded its adaptive-SMC block and inclusive-distillation semantics in
+  sidecars, and explicitly rejected it in the legacy generic trainer so it
+  cannot silently fall through to an ELBO objective.
+- Added a regression that exercises the production config through objective
+  normalization and architecture-summary construction. The expanded focused
+  suite passes (`86 passed`), together with Ruff, compileall and diff checks.
+  Publish this isolated fix and launch a new smoke root rather than reusing the
+  checkpoint-sidecar-incomplete run.
+- Do not weaken the scientific gate: the observed post-fallback hard fractions
+  were 0.344, 0.375 and 0.406, all above the strict `<0.30` threshold. The
+  corrected workflow must reach the receipt and report `PASS` or `FAIL` from
+  the complete held-out validation metrics before any big job is submitted.
+
 ## 2026-08-21 Adaptive-SMC smoke replica-sharding recovery
 
 - Status: implemented and locally validated. Jean-Zay smoke job `1254124`

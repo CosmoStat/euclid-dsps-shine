@@ -22,6 +22,8 @@ from euclid_dsps.amortized.adaptive_smc_trainer import (
 from euclid_dsps.amortized.adaptive_smc_training import (
     _select_exact_mixture_candidates,
 )
+from euclid_dsps.amortized.elbo import objective_mode, objective_uses_truth
+from euclid_dsps.amortized.train import architecture_summary
 from euclid_dsps.config import load_config
 from scripts.estimate_feniks_adaptive_smc_cost import estimate
 
@@ -68,6 +70,23 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert cfg["training"]["best_checkpoint_metric"] == (
         "validation_smc_cross_entropy"
     )
+
+
+def test_adaptive_smc_mode_is_checkpoint_and_inference_metadata_compatible() -> None:
+    config = _production_config()
+    objective = config["amortized"]["objective"]
+
+    assert objective_mode(objective) == "adaptive_smc_wake"
+    assert not objective_uses_truth(objective)
+    summary = architecture_summary(config)
+    assert summary["objective"]["loss"] == "adaptive_smc_wake"
+    assert summary["objective"]["kl_estimator"] == (
+        "adaptive_bridge_smc_inclusive_distillation"
+    )
+    assert summary["objective"]["adaptive_smc"]["n_particles"] == 64
+    assert summary["objective"]["adaptive_smc"]["hard_fallback"][
+        "n_particles"
+    ] == 128
 
 
 def test_selection_normalizer_does_not_change_normalized_object_weights() -> None:
