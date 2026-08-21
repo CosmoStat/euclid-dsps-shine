@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from euclid_dsps.photometry import abmag_to_fnu_cgs
+from scripts.build_feniks_encoder_diagnostic_dataset import _take_stratified
 from scripts.build_feniks_parentprior_r25_manifests import build
 from scripts.evaluate_feniks_parent_population import (
     _correlations,
@@ -14,6 +15,7 @@ from scripts.evaluate_feniks_parent_population import (
     _population_comparisons,
     _summary,
 )
+from scripts.validate_feniks_encoder_diagnostic import validate as validate_encoder
 from scripts.validate_feniks_parentprior_exact import validate as validate_exact
 from scripts.validate_feniks_parentprior_training import validate as validate_training
 
@@ -66,6 +68,21 @@ def test_parentprior_manifests_use_only_observed_r_cut(tmp_path: Path) -> None:
     assert "z_obs" not in manifest["observed_columns_read"]
 
 
+def test_encoder_diagnostic_stratification_preserves_observed_groups() -> None:
+    cohort = pd.DataFrame(
+        {
+            "example_key": ["easy"] * 4 + ["low_snr"] * 4 + ["near_cut"] * 4,
+            "row_index": np.arange(12),
+        }
+    )
+    selected = _take_stratified(cohort, 6)
+    assert selected["example_key"].value_counts().to_dict() == {
+        "easy": 2,
+        "low_snr": 2,
+        "near_cut": 2,
+    }
+
+
 def test_population_comparisons_keep_parent_and_selected_contracts_separate() -> None:
     names = ("a", "b")
     values = np.asarray([[0.0, 1.0], [1.0, 0.0], [2.0, 2.0], [3.0, 4.0]])
@@ -90,7 +107,9 @@ def test_population_comparisons_keep_parent_and_selected_contracts_separate() ->
     assert np.allclose(comparisons["correlation_rmse"], 0.0)
 
 
-def test_training_validator_rejects_nan_or_missing_prior_updates(tmp_path: Path) -> None:
+def test_training_validator_rejects_nan_or_missing_prior_updates(
+    tmp_path: Path,
+) -> None:
     train = tmp_path / "train"
     checkpoints = train / "checkpoints"
     checkpoints.mkdir(parents=True)
@@ -183,7 +202,9 @@ def test_training_validator_rejects_nan_or_missing_prior_updates(tmp_path: Path)
 
 def test_recovery_launcher_preserves_epoch24_state_contract() -> None:
     root = Path(__file__).resolve().parents[1]
-    launcher = (root / "scripts/submit_feniks_parentprior_sleepnpe_recovery.sh").read_text()
+    launcher = (
+        root / "scripts/submit_feniks_parentprior_sleepnpe_recovery.sh"
+    ).read_text()
     slurm = (root / "scripts/feniks_parentprior_sleepnpe_h100.slurm").read_text()
     assert "checkpoints/epoch_0024.eqx" in launcher
     assert 'START_EPOCH="${START_EPOCH:-25}"' in launcher
@@ -285,3 +306,105 @@ def test_exact_finalizer_requires_is_target_and_population_gates(
     payload = validate_exact(root=root)
     assert payload["status"] == "FAIL"
     assert payload["checks"]["q_tarp_close_to_nuts"] is False
+
+
+def test_encoder_diagnostic_separates_sleep_and_observed_closure(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "diagnostic"
+    root.mkdir()
+    cohort_rows = []
+    score_rows = []
+    for order, domain in enumerate(("observed_catalog", "sleep_synthetic")):
+        example = f"example_{order}"
+        cohort_rows.append(
+            {
+                "order": order,
+                "example_key": example,
+                "row_index": order,
+                "object_id": f"object-{order}",
+                "domain": domain,
+            }
+        )
+        score_rows.append(
+            {
+                "domain": domain,
+                "nuts_max_rhat": 1.0,
+                "importance_raw_ess_fraction": 0.01 if order == 0 else 0.20,
+                "importance_pareto_k": 1.0 if order == 0 else 0.2,
+                "defensive_importance_raw_ess_fraction": (0.02 if order == 0 else 0.30),
+                "defensive_importance_pareto_k": 0.9 if order == 0 else 0.1,
+            }
+        )
+        galaxy = root / "galaxies" / f"{order:02d}_{example}_row{order}"
+        galaxy.mkdir(parents=True)
+        (galaxy / "fit_bounds_diagnostics.json").write_text(
+            json.dumps({"nuts": {"fraction_of_samples_outside_fit_bounds": 0.0}})
+        )
+        (galaxy / "posterior_geometry_diagnostics.json").write_text(
+            json.dumps(
+                {
+                    "encoder": {"generalized_variance_ratio_max": 1.5},
+                    "defensive_encoder": {"generalized_variance_ratio_max": 1.2},
+                }
+            )
+        )
+    pd.DataFrame(cohort_rows).to_parquet(root / "cohort.parquet", index=False)
+    pd.DataFrame(score_rows).to_parquet(root / "scoreboard.parquet", index=False)
+    agreement = []
+    for domain in ("observed_catalog", "sleep_synthetic"):
+        for method in ("Encoder", "Encoder + IS", "Defensive + IS"):
+            agreement.append(
+                {
+                    "domain": domain,
+                    "method": method,
+                    "wasserstein_to_nuts_in_nuts_std": 0.2,
+                    "std_ratio_to_nuts": 1.0,
+                    "nuts_standardized_mean_offset": 0.1,
+                }
+            )
+    pd.DataFrame(agreement).to_parquet(
+        root / "posterior_agreement.parquet", index=False
+    )
+    (root / "contract.json").write_text(
+        json.dumps({"analysis_contract": "ENCODER_DIAGNOSTIC_ONLY"})
+    )
+    models = ["q", "q_is", "defensive_is", "nuts"]
+    for domain in ("observed_catalog", "sleep_synthetic"):
+        tarp = root / f"calibration_{domain}/tarp"
+        mira = root / f"calibration_{domain}/mira"
+        tarp.mkdir(parents=True)
+        mira.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "model": models,
+                "group": ["full_15d"] * 4,
+                "coverage_rmse": [0.1] * 4,
+                "coverage_max_abs_error": [0.2] * 4,
+            }
+        ).to_csv(tarp / "tarp_summary.csv", index=False)
+        pd.DataFrame(
+            {
+                "model": models,
+                "group": ["full_15d"] * 4,
+                "score": [2 / 3] * 4,
+                "delta_from_ideal": [0.0] * 4,
+            }
+        ).to_csv(mira / "mira_scores.csv", index=False)
+    payload = validate_encoder(root=root)
+    assert payload["status"] == "complete"
+    assert payload["scientific_diagnosis"] == "SIMULATION_TO_OBSERVATION_GAP"
+    assert payload["ready_for_prior_promotion"] is False
+    assert (
+        payload["domains"]["sleep_synthetic"]["q_only_importance"]["status"] == "PASS"
+    )
+
+
+def test_encoder_diagnostic_launcher_is_not_blocked_by_prior_validation() -> None:
+    root = Path(__file__).resolve().parents[1]
+    launcher = (root / "scripts/submit_feniks_encoder_diagnostic_exact.sh").read_text()
+    exact = (root / "scripts/feniks_parentprior_exact_h100.slurm").read_text()
+    assert "parentprior_training_validation.json" not in launcher
+    assert "prior PASS is not required" in launcher
+    assert "ENCODER_DIAGNOSTIC_ONLY=1" in launcher
+    assert '"${ENCODER_DIAGNOSTIC_ONLY:-0}" != "1"' in exact

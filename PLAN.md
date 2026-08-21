@@ -1,5 +1,25 @@
 # Plan
 
+## 2026-08-21 Exact encoder diagnostic after support-gated wake failure
+
+- Status: implementation complete and locally validated; Jean-Zay smoke and
+  full diagnostic remain unexecuted. Evaluate the final sleep-NPE encoder
+  without pretending that the parent prior was updated or validated.
+- Build one immutable 32-object benchmark containing 16 stratified observed
+  FENIKS rows and 16 synthetic pairs drawn from the exact configured sleep
+  joint with observed error covariates and selection applied after noise.
+- Reuse the canonical exact-posterior workflow to compare raw q, q-only IS,
+  defensive-mixture IS, MAP and NUTS under the same target and physical bounds.
+- Aggregate support, covariance geometry, TARP and MIRA separately for the
+  observed and sleep-synthetic domains. The final receipt is diagnostic only:
+  it cannot promote a prior or mark the failed training run production-ready.
+- Deliver separate smoke and full launch modes. The smoke uses four galaxies
+  and short NUTS chains; the full run uses 32 galaxies and clean chains.
+- Local verification: Ruff, compileall, shell syntax, diff checks and 51
+  focused posterior-target, selection, TARP/MIRA and workflow tests pass. The
+  local checkout has no FENIKS parquet/checkpoint assets, so the four-object
+  Jean-Zay smoke remains mandatory before the 32-object array.
+
 ## 2026-08-21 Sleep-NPE negative-result handoff
 
 - Status: remote production completed all 80 epochs but every defensive wake

@@ -190,6 +190,11 @@ def prepare_cohort(args: argparse.Namespace, config: dict[str, Any]) -> None:
     cohort.to_csv(out / "cohort.csv", index=False)
     contract = {
         "status": "prepared",
+        "analysis_contract": (
+            "ENCODER_DIAGNOSTIC_ONLY"
+            if "domain" in cohort.columns
+            else "PARENT_PRIOR_PRODUCTION"
+        ),
         "config": str(args.config),
         "dataset": str(args.dataset),
         "checkpoint": str(args.checkpoint),
@@ -204,6 +209,11 @@ def prepare_cohort(args: argparse.Namespace, config: dict[str, Any]) -> None:
         "code_commit": _git_commit(),
         "selected_rows": cohort["row_index"].astype(int).tolist(),
         "selection_labels": cohort["example_key"].astype(str).tolist(),
+        "domain_counts": (
+            cohort["domain"].astype(str).value_counts().sort_index().to_dict()
+            if "domain" in cohort.columns
+            else {}
+        ),
         "mode": args.mode,
         "likelihood": {
             "type": config["amortized"]["likelihood"]["type"],
@@ -709,6 +719,9 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "example_key": item.example_key,
             "row_index": int(item.row_index),
         }
+        for column in ("domain", "source_row_index"):
+            if hasattr(item, column):
+                row[column] = getattr(item, column)
         for sampler in samplers:
             diagnostics = json.loads(
                 (galaxy_dir / sampler / "diagnostics.json").read_text()
@@ -749,6 +762,8 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
         args.out / "benchmark_summary.json",
         {
             "galaxies": int(len(scoreboard)),
+            "analysis_contract": contract.get("analysis_contract"),
+            "domain_counts": contract.get("domain_counts", {}),
             "methods": methods,
             **convergence,
             "code_commit": _git_commit(),
@@ -819,6 +834,11 @@ def _write_run_comparison(
                     {
                         "example_key": item.example_key,
                         "row_index": int(item.row_index),
+                        **(
+                            {"domain": str(item.domain)}
+                            if hasattr(item, "domain")
+                            else {}
+                        ),
                         "parameter": name,
                         "method": label,
                         "mean": np.mean(values),
@@ -837,6 +857,7 @@ def _write_run_comparison(
                 {
                     "example_key": item.example_key,
                     "row_index": int(item.row_index),
+                    **({"domain": str(item.domain)} if hasattr(item, "domain") else {}),
                     "parameter": name,
                     "method": "MAP",
                     "mean": map_best[name],
@@ -861,6 +882,7 @@ def _write_run_comparison(
                 {
                     "example_key": item.example_key,
                     "row_index": int(item.row_index),
+                    **({"domain": str(item.domain)} if hasattr(item, "domain") else {}),
                     "method": label,
                     "chi2_median_prediction": float(np.sum(residual**2)),
                     "residual_rms": float(np.sqrt(np.mean(residual**2))),

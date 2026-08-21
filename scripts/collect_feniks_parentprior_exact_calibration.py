@@ -26,8 +26,19 @@ def _galaxy_dir(root: Path, item) -> Path:
     )
 
 
-def collect(*, root: Path, samples_per_object: int) -> dict[str, object]:
+def collect(
+    *,
+    root: Path,
+    samples_per_object: int,
+    domain: str | None = None,
+) -> dict[str, object]:
     cohort = pd.read_parquet(root / "cohort.parquet")
+    if domain is not None:
+        if "domain" not in cohort:
+            raise ValueError("cohort has no domain column")
+        cohort = cohort.loc[cohort["domain"].astype(str).eq(domain)].copy()
+        if cohort.empty:
+            raise ValueError(f"cohort has no rows for domain={domain}")
     truth_rows = []
     posterior_rows = {name: [] for name in METHODS}
     for item in cohort.itertuples(index=False):
@@ -54,7 +65,7 @@ def collect(*, root: Path, samples_per_object: int) -> dict[str, object]:
             selected.insert(0, "row_index", int(item.row_index))
             selected.insert(0, "object_id", str(item.object_id))
             posterior_rows[name].append(selected)
-    out = root / "calibration"
+    out = root / ("calibration" if domain is None else f"calibration_{domain}")
     out.mkdir(parents=True, exist_ok=True)
     truth = pd.concat(truth_rows, ignore_index=True)
     truth.to_parquet(out / "inference_truth.parquet", index=False)
@@ -68,6 +79,7 @@ def collect(*, root: Path, samples_per_object: int) -> dict[str, object]:
     payload = {
         "status": "complete",
         "objects": int(len(cohort)),
+        "domain": domain or "all",
         "samples_per_object": int(samples_per_object),
         "methods": list(METHODS),
         "artifacts": artifacts,
@@ -83,6 +95,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--samples-per-object", type=int, default=128)
+    parser.add_argument("--domain")
     args = parser.parse_args()
     print(json.dumps(collect(**vars(args)), indent=2), flush=True)
 

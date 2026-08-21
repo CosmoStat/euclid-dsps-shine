@@ -58,20 +58,37 @@ COMMON=(
   --feature-stats "$FEATURE_STATS"
   --out "$EXACT_ROOT"
   --galaxy-index "$GALAXY_INDEX"
-  --mode full
+  --mode "${DIAGNOSTIC_MODE:-full}"
 )
 
+if [[ "${DIAGNOSTIC_MODE:-full}" == "smoke" ]]; then
+  ENCODER_SAMPLES=256
+  MAP_STARTS=4
+  MAP_ITERATIONS=20
+  NUTS_WARMUP=10
+  NUTS_MAX_DOUBLINGS=3
+  SAMPLE_CHUNKS=10
+else
+  ENCODER_SAMPLES=8192
+  MAP_STARTS=16
+  MAP_ITERATIONS=2000
+  NUTS_WARMUP=500
+  NUTS_MAX_DOUBLINGS=6
+  SAMPLE_CHUNKS=100,500,1000
+fi
+
 python scripts/run_feniks_exact_posterior_benchmark.py prepare-galaxy \
-  "${COMMON[@]}" --encoder-samples 8192 --map-starts 16 --map-iterations 2000
+  "${COMMON[@]}" --encoder-samples "$ENCODER_SAMPLES" \
+  --map-starts "$MAP_STARTS" --map-iterations "$MAP_ITERATIONS"
 
 python scripts/run_feniks_exact_posterior_benchmark.py sample-nuts-batched \
-  "${COMMON[@]}" --nuts-warmup 500 --nuts-max-doublings 6 \
-  --sample-chunks 100,500,1000
+  "${COMMON[@]}" --nuts-warmup "$NUTS_WARMUP" \
+  --nuts-max-doublings "$NUTS_MAX_DOUBLINGS" --sample-chunks "$SAMPLE_CHUNKS"
 
 python scripts/run_feniks_exact_posterior_benchmark.py finalize-galaxy \
   "${COMMON[@]}" --samplers nuts
 
-if [[ "$GALAXY_INDEX" == "0" ]]; then
+if [[ "$GALAXY_INDEX" == "0" && "${ENCODER_DIAGNOSTIC_ONLY:-0}" != "1" ]]; then
   python scripts/evaluate_feniks_parent_population.py \
     --config "$CONFIG" --dataset "$DATASET" --checkpoint "$CHECKPOINT" \
     --feature-stats "$FEATURE_STATS" \
