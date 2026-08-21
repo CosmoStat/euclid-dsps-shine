@@ -15,6 +15,10 @@
 - Local regression and the complete focused suite pass (`58 passed`), together
   with Ruff, compileall and diff checks. Publish the fix, then launch a fresh
   smoke root; the failed root is diagnostic only and must not be resumed.
+- Keep the production 12-epoch sleep bootstrap in the smoke. The failed run's
+  two-epoch shortcut left q cross-entropy near 22 and post-fallback hard
+  fractions at 0.375 and 0.344; retaining the full bootstrap tests the intended
+  production state without weakening the hard-object gate.
 
 ## 2026-08-21 Adaptive bridge SMC production training
 

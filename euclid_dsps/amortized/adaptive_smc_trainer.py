@@ -961,7 +961,7 @@ def train_feniks_adaptive_smc(
     if smoke:
         training = replace(
             training,
-            bootstrap_sleep_epochs=2,
+            bootstrap_sleep_epochs=min(training.bootstrap_sleep_epochs, 12),
             observed_sweeps=1,
             micro_batch_size=min(training.micro_batch_size, 32),
             prior_macro_objects=min(training.prior_macro_objects, 64),
