@@ -86,6 +86,8 @@ def normalized_importance_weights(
         "weight": raw,
         "raw_ess": float(raw_ess),
         "raw_ess_fraction": float(raw_ess / len(raw)),
+        "raw_max_weight": float(np.max(raw)),
+        "raw_weight_entropy": float(-np.sum(raw[raw > 0.0] * np.log(raw[raw > 0.0]))),
         "psis_weight": smoothed,
         "psis_ess": float(effective_sample_size_from_weights(smoothed)),
         "pareto_k": float(pareto_k),
@@ -414,10 +416,7 @@ def run_batched_nuts_chains(
             payloads = [_read_pickle(path) for path in state_paths]
             states = jax.tree.map(
                 lambda *values: jnp.stack(values),
-                *[
-                    _float64_sampling_state(payload["state"])
-                    for payload in payloads
-                ],
+                *[_float64_sampling_state(payload["state"]) for payload in payloads],
             )
             keys = jnp.stack([jnp.asarray(payload["key"]) for payload in payloads])
             loaded_parameters = [np.load(path) for path in parameter_paths]
@@ -430,16 +429,13 @@ def run_batched_nuts_chains(
                 ),
                 "inverse_mass_matrix": jnp.stack(
                     [
-                        jnp.asarray(
-                            values["inverse_mass_matrix"], dtype=jnp.float64
-                        )
+                        jnp.asarray(values["inverse_mass_matrix"], dtype=jnp.float64)
                         for values in loaded_parameters
                     ]
                 ),
             }
             warmup_elapsed = max(
-                float(payload.get("warmup_elapsed_s", 0.0))
-                for payload in payloads
+                float(payload.get("warmup_elapsed_s", 0.0)) for payload in payloads
             )
             completed_chunks, sampling_elapsed = _completed_batched_nuts_chunks(
                 outputs,
@@ -465,12 +461,8 @@ def run_batched_nuts_chains(
                 + ", ".join(map(str, outputs))
             )
         else:
-            base_keys = jnp.stack(
-                [jax.random.PRNGKey(int(seed)) for seed in seeds]
-            )
-            split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(
-                base_keys
-            )
+            base_keys = jnp.stack([jax.random.PRNGKey(int(seed)) for seed in seeds])
+            split_keys = jax.vmap(lambda key: jax.random.split(key, 2))(base_keys)
             keys = split_keys[:, 0]
             warmup_keys = split_keys[:, 1]
             adaptation = blackjax.window_adaptation(
@@ -491,9 +483,7 @@ def run_batched_nuts_chains(
             )
 
             def adapt_one(key, position):
-                return adaptation.run(
-                    key, position, int(settings.warmup_steps)
-                )
+                return adaptation.run(key, position, int(settings.warmup_steps))
 
             (states, parameters), adaptation_info = jax.vmap(adapt_one)(
                 warmup_keys,
@@ -519,9 +509,7 @@ def run_batched_nuts_chains(
             )
 
     if completed_chunks < 0 or completed_chunks > len(settings.sample_chunks):
-        raise ValueError(
-            f"Invalid completed batched chunk count: {completed_chunks}"
-        )
+        raise ValueError(f"Invalid completed batched chunk count: {completed_chunks}")
     if resumed:
         print(
             "[exact-sampler:nuts-batched] resume "
@@ -542,9 +530,7 @@ def run_batched_nuts_chains(
         )
         np.savez(
             output / "tuned_parameters.npz",
-            step_size=np.asarray(
-                jax.device_get(chain_parameters["step_size"])
-            ),
+            step_size=np.asarray(jax.device_get(chain_parameters["step_size"])),
             inverse_mass_matrix=np.asarray(
                 jax.device_get(chain_parameters["inverse_mass_matrix"])
             ),
@@ -625,9 +611,7 @@ def run_batched_nuts_chains(
         )
         for chain_index, output in enumerate(outputs):
             chunk_path = output / "chunks" / f"part_{chunk_id:06d}.parquet"
-            info_path = (
-                output / "chunks" / f"part_{chunk_id:06d}_info.parquet"
-            )
+            info_path = output / "chunks" / f"part_{chunk_id:06d}_info.parquet"
             _write_chain_chunk(
                 chunk_path,
                 info_path,
@@ -719,16 +703,12 @@ def run_batched_nuts_targets(
 
     positions = jnp.asarray(initial_positions, dtype=jnp.float64)
     if positions.ndim != 3:
-        raise ValueError(
-            "initial_positions must have shape [target, chain, parameter]"
-        )
+        raise ValueError("initial_positions must have shape [target, chain, parameter]")
     n_targets, n_chains, n_parameters = map(int, positions.shape)
     if n_targets < 1 or n_chains < 1 or n_parameters < 1:
         raise ValueError("initial_positions dimensions must all be positive")
     if len(settings.sample_chunks) != 1:
-        raise ValueError(
-            "multi-target NUTS probes require exactly one sample chunk"
-        )
+        raise ValueError("multi-target NUTS probes require exactly one sample chunk")
     _validate_chunks(settings.sample_chunks)
 
     leaves = jax.tree.leaves(target_data)
@@ -822,16 +802,14 @@ def run_batched_nuts_targets(
     jax.block_until_ready(states.position)
     warmup_elapsed = time.perf_counter() - warmup_started
     print(
-        "[exact-sampler:nuts-multitarget] warmup done "
-        f"elapsed_s={warmup_elapsed:.1f}",
+        f"[exact-sampler:nuts-multitarget] warmup done elapsed_s={warmup_elapsed:.1f}",
         flush=True,
     )
 
     n_samples = int(settings.sample_chunks[0])
     sampling_started = time.perf_counter()
     print(
-        "[exact-sampler:nuts-multitarget] sampling start "
-        f"draws={n_samples}",
+        f"[exact-sampler:nuts-multitarget] sampling start draws={n_samples}",
         flush=True,
     )
     states, (sample_positions, infos) = _run_batched_nuts_target_steps(
@@ -921,9 +899,7 @@ def run_adjusted_mclmc_chain(
         warmup_elapsed = float(payload.get("warmup_elapsed_s", 0.0))
         tuning_integrator_steps = int(payload.get("tuning_integrator_steps", 0))
     else:
-        state = blackjax.mcmc.adjusted_mclmc.init(
-            initial_position, sampling_logdensity
-        )
+        state = blackjax.mcmc.adjusted_mclmc.init(initial_position, sampling_logdensity)
         initial_params = MCLMCAdaptationState(
             L=jnp.asarray(max(math.sqrt(dim), 1.0), dtype=jnp.float64),
             step_size=jnp.asarray(settings.initial_step_size, dtype=jnp.float64),
@@ -1380,12 +1356,8 @@ def combine_chain_diagnostics(
         "chains": int(values.shape[0]),
         "draws_per_chain": int(values.shape[1]),
         "max_rhat": float(np.max(rhat)) if finite_rhat.all() else None,
-        "min_bulk_ess": (
-            float(np.min(bulk_ess)) if finite_bulk_ess.all() else None
-        ),
-        "min_tail_ess": (
-            float(np.min(tail_ess)) if finite_tail_ess.all() else None
-        ),
+        "min_bulk_ess": (float(np.min(bulk_ess)) if finite_bulk_ess.all() else None),
+        "min_tail_ess": (float(np.min(tail_ess)) if finite_tail_ess.all() else None),
         "finite_rhat_parameters": int(finite_rhat.sum()),
         "finite_bulk_ess_parameters": int(finite_bulk_ess.sum()),
         "finite_tail_ess_parameters": int(finite_tail_ess.sum()),
@@ -1510,9 +1482,7 @@ def _run_batched_nuts_steps(
         return algorithm.step(key, state)
 
     batched_step = jax.vmap(one_step)
-    draw_keys = jax.vmap(
-        lambda key: jax.random.split(key, int(n_samples))
-    )(keys)
+    draw_keys = jax.vmap(lambda key: jax.random.split(key, int(n_samples)))(keys)
     draw_keys = jnp.swapaxes(draw_keys, 0, 1)
 
     def stored_step(current_states, current_keys):
@@ -1568,9 +1538,7 @@ def _run_batched_nuts_target_steps(
         )
 
     batched_step = jax.vmap(one_step)
-    draw_keys = jax.vmap(
-        lambda key: jax.random.split(key, int(n_samples))
-    )(keys)
+    draw_keys = jax.vmap(lambda key: jax.random.split(key, int(n_samples)))(keys)
     draw_keys = jnp.swapaxes(draw_keys, 0, 1)
 
     def stored_step(current_states, current_keys):
@@ -1678,7 +1646,9 @@ def _validate_sampling_target(
     value, gradient = jax.value_and_grad(logdensity_fn)(position)
     value, gradient = jax.device_get((value, gradient))
     if np.asarray(value).dtype != np.dtype(np.float64):
-        raise TypeError(f"logdensity dtype must be float64, got {np.asarray(value).dtype}")
+        raise TypeError(
+            f"logdensity dtype must be float64, got {np.asarray(value).dtype}"
+        )
     if np.asarray(gradient).dtype != np.dtype(np.float64):
         raise TypeError(
             f"logdensity gradient dtype must be float64, got {np.asarray(gradient).dtype}"
@@ -1793,12 +1763,8 @@ def _completed_batched_nuts_chunks(
             )
             for output in outputs
         ]
-        pair_complete = [
-            samples.exists() and info.exists() for samples, info in pairs
-        ]
-        pair_partial = [
-            samples.exists() != info.exists() for samples, info in pairs
-        ]
+        pair_complete = [samples.exists() and info.exists() for samples, info in pairs]
+        pair_partial = [samples.exists() != info.exists() for samples, info in pairs]
         if any(pair_partial) or (any(pair_complete) and not all(pair_complete)):
             raise RuntimeError(
                 f"Partial legacy batched NUTS chunk {chunk_id}; "
@@ -1808,9 +1774,7 @@ def _completed_batched_nuts_chunks(
             found_gap = True
             continue
         if found_gap:
-            raise RuntimeError(
-                f"Non-contiguous legacy batched NUTS chunk {chunk_id}"
-            )
+            raise RuntimeError(f"Non-contiguous legacy batched NUTS chunk {chunk_id}")
         for samples, info in pairs:
             _validate_nuts_chunk_rows(samples, info, n_samples)
         timing = pd.read_parquet(pairs[0][0], columns=["elapsed_s"])
@@ -1830,17 +1794,14 @@ def _validate_or_rollback_batched_nuts_chunks(
     """Validate committed chunks and remove files beyond the batch checkpoint."""
     for chunk_id, n_samples in enumerate(sample_chunks):
         for output in outputs:
-            for temporary in (output / "chunks").glob(
-                f"part_{chunk_id:06d}*.tmp-*"
-            ):
+            for temporary in (output / "chunks").glob(f"part_{chunk_id:06d}*.tmp-*"):
                 temporary.unlink(missing_ok=True)
             samples = output / "chunks" / f"part_{chunk_id:06d}.parquet"
             info = output / "chunks" / f"part_{chunk_id:06d}_info.parquet"
             if chunk_id < completed_chunks:
                 if not samples.exists() or not info.exists():
                     raise FileNotFoundError(
-                        "Committed batched NUTS chunk is incomplete: "
-                        f"{samples}, {info}"
+                        f"Committed batched NUTS chunk is incomplete: {samples}, {info}"
                     )
                 _validate_nuts_chunk_rows(samples, info, n_samples)
             else:

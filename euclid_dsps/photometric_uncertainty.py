@@ -6,7 +6,11 @@ from typing import Any
 
 import numpy as np
 
-from .photometry import abmag_to_fnu_cgs, magerr_to_fluxerr_fnu_cgs
+from .photometry import (
+    AB_ZEROPOINT_FNU_CGS,
+    abmag_to_fnu_cgs,
+    magerr_to_fluxerr_fnu_cgs,
+)
 
 DEFAULT_MIN_SIGMA_FNU_CGS = 1.0e-40
 DEFAULT_PHOTERR_SIGMA_SYS_MAG = 0.005
@@ -156,6 +160,47 @@ def _m5_depth_flux_error(
         sys_frac = np.expm1(np.log(10.0) * sigma_sys_mag / 2.5)
         sigma2 = sigma2 + (sys_frac * flux) ** 2
     return np.sqrt(np.maximum(sigma2, 0.0))
+
+
+def m5_depth_flux_error_jax(
+    flux_fnu_cgs: Any,
+    m5: Any,
+    gamma: Any,
+    *,
+    sigma_sys_mag: float = 0.0,
+    min_sigma_fnu_cgs: float = DEFAULT_MIN_SIGMA_FNU_CGS,
+) -> Any:
+    """Return the m5-depth flux error with JAX-compatible operations.
+
+    The calculation is performed in units of ``1e-32`` fnu cgs. This avoids
+    materializing variances near ``1e-60``, which underflow in float32 under
+    JIT/pmap even though the final standard deviation is representable.
+    """
+    import jax.numpy as jnp
+
+    flux = jnp.asarray(flux_fnu_cgs)
+    if not jnp.issubdtype(flux.dtype, jnp.inexact):
+        flux = flux.astype(jnp.float32)
+    dtype = flux.dtype
+    m5_array = jnp.asarray(m5, dtype=dtype)
+    gamma_array = jnp.asarray(gamma, dtype=dtype)
+    unit = jnp.asarray(1.0e-32, dtype=dtype)
+    flux_scaled = jnp.abs(flux) / unit
+    f5_scaled = (
+        jnp.asarray(AB_ZEROPOINT_FNU_CGS, dtype=dtype)
+        / unit
+        * jnp.power(jnp.asarray(10.0, dtype=dtype), -0.4 * m5_array)
+    )
+    sigma2_scaled = (
+        0.04 - gamma_array
+    ) * flux_scaled * f5_scaled + gamma_array * f5_scaled**2
+    if float(sigma_sys_mag) > 0.0:
+        sys_frac = jnp.expm1(
+            jnp.log(jnp.asarray(10.0, dtype=dtype)) * float(sigma_sys_mag) / 2.5
+        )
+        sigma2_scaled = sigma2_scaled + (sys_frac * flux_scaled) ** 2
+    floor_scaled = jnp.asarray(min_sigma_fnu_cgs, dtype=dtype) / unit
+    return jnp.sqrt(jnp.maximum(sigma2_scaled, floor_scaled**2)) * unit
 
 
 def _sigma_sys_mag_for_model(model: dict[str, Any]) -> float:

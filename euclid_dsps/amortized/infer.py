@@ -52,8 +52,11 @@ from .diagnostics import (
 from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
 from .latent import latent_spec_hash, x_to_theta
-from .likelihood import photometric_loglike
 from .posterior import sample_posterior
+from .posterior_target import (
+    posterior_log_target_from_model_flux,
+    safe_decoder_inputs,
+)
 from .redshift_metrics import write_redshift_metrics_for_run
 from .train import (
     _effective_jax_batch_size,
@@ -445,19 +448,19 @@ def infer_amortized_fs2(
             if band_calibration_cfg.enabled
             else model_flux
         )
+        target = posterior_log_target_from_model_flux(
+            model,
+            x_samples,
+            batch,
+            latent_spec,
+            model_flux,
+            likelihood_cfg,
+            model_flux_raw=model_flux_raw,
+        )
         logprior = (
-            jnp.zeros_like(logq) if deterministic_reconstruction else posterior.logprior
+            jnp.zeros_like(logq) if deterministic_reconstruction else target.logprior
         )
-        loglike = photometric_loglike(
-            obs_flux=batch.flux,
-            model_flux=model_flux,
-            obs_err=batch.flux_err,
-            mask=batch.mask,
-            likelihood_type=str(likelihood_cfg.get("type", "student_t")),
-            student_t_dof=float(likelihood_cfg.get("student_t_dof", 2.0)),
-            error_floor_frac=float(likelihood_cfg.get("error_floor_frac", 0.02)),
-            error_jitter=float(likelihood_cfg.get("error_jitter", 0.0)),
-        )
+        loglike = target.loglike
         chi2 = _posterior_predictive_chi2(batch, model_flux, likelihood_cfg)
         object_id = np.asarray(batch.object_id)
         theta_np = jax.device_get(theta)
@@ -1502,8 +1505,9 @@ def _model_flux_from_x_sample_chunks(
     if int(sample_chunk_size) <= 0:
         raise ValueError("sample_chunk_size must be positive")
     if x_samples.ndim != 3:
+        safe_x, _physical_valid = safe_decoder_inputs(x_samples, latent_spec)
         return model_flux_from_x(
-            x_samples,
+            safe_x,
             latent_spec,
             context,
             model_args,
@@ -1512,8 +1516,9 @@ def _model_flux_from_x_sample_chunks(
     chunks = []
     for start in range(0, int(x_samples.shape[0]), int(sample_chunk_size)):
         x_chunk = x_samples[start : start + int(sample_chunk_size)]
+        safe_x_chunk, _physical_valid = safe_decoder_inputs(x_chunk, latent_spec)
         flux_chunk = model_flux_from_x(
-            x_chunk,
+            safe_x_chunk,
             latent_spec,
             context,
             model_args,
@@ -1541,8 +1546,9 @@ def _model_flux_from_x_2d_chunks(
     chunks = []
     for start in range(0, int(x.shape[0]), int(batch_size)):
         x_chunk = x[start : start + int(batch_size)]
+        safe_x_chunk, _physical_valid = safe_decoder_inputs(x_chunk, latent_spec)
         flux_chunk = model_flux_from_x(
-            x_chunk,
+            safe_x_chunk,
             latent_spec,
             context,
             model_args,

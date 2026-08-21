@@ -1,0 +1,45 @@
+extends: feniks_selfsup_learned_rws_mix2_k8_t2.yaml
+
+# This catalog must be generated with the observed-flux selection below. It is
+# intentionally a new path so an unselected legacy catalog cannot be reused by
+# accident.
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_r_obs_lt25/train.parquet
+
+synthetic_diffsky:
+  output_dir: Data/diffsky/synthetic/feniks_260617_spline15d_r_obs_lt25
+  selection:
+    observed_magnitude_limits:
+      lsst_r: 25.0
+
+amortized:
+  likelihood:
+    # Robust wake likelihood; this is not the physical survey-noise family.
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+  prior:
+    train_jointly: true
+  objective:
+    selection_correction:
+      enabled: true
+      kind: observed_magnitude_limit
+      band: lsst_r
+      max_mag_ab: 25.0
+      survey_noise: gaussian_m5
+      n_prior_samples: 4096
+      prior_sample_batch_size: 64
+      common_random_numbers: true
+    sleep:
+      enabled: true
+      error_model: m5_depth
+      noise_family: gaussian
+      selection:
+        enabled: true
+        band: lsst_r
+        min_flux_fnu_cgs: 3.631e-30
+        candidate_factor: 4
+    wake:
+      train_prior: true
+      prior_loss_weight: 1.0
+      sampler: importance

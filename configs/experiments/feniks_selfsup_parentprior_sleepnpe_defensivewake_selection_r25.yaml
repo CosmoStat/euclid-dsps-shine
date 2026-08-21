@@ -1,0 +1,121 @@
+extends: feniks_selfsup_learned_t2_common.yaml
+
+# Production contract: the launcher supplies immutable row manifests selected
+# only with observed flux_lsst_r > f_nu(25 AB). Catalog truth is not read by
+# training or checkpoint selection.
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized/train.parquet
+
+synthetic_diffsky:
+  selection:
+    observed_magnitude_limits:
+      lsst_r: 25.0
+
+amortized:
+  encoder:
+    type: conditional_flow
+    flow_family: realnvp
+    flow_output_space: latent_x
+    base_components: 1
+    log_std_min: -4.0
+    log_std_max: 3.0
+    initial_log_std: 0.0
+
+  prior:
+    type: realnvp
+    source: spline15d_checkpoint
+    checkpoint: outputs/runs/feniks_spline15d_jaxcosmo_prior_v1/checkpoints/best.eqx
+    train_jointly: true
+    update_schedule: joint
+    mstep_only: false
+
+  likelihood:
+    # Working robust posterior target. Selection completeness is separately
+    # evaluated with the Gaussian PhotoErr survey model below.
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+
+  objective:
+    mode: reweighted_wake_sleep
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sleep:
+      enabled: true
+      error_model: observed_catalog
+      noise_family: match_likelihood
+      entropy_samples: 4
+      selection:
+        enabled: true
+        band: lsst_r
+        max_mag_ab: 25.0
+        candidate_factor: 8
+    wake:
+      # Epochs 1-24 are sleep-only. Epoch 25 is prior-only wake, followed by
+      # seven sleep epochs and one prior wake epoch.
+      start_encoder_epoch: 25
+      every_encoder_epochs: 8
+      n_particles: 32
+      n_tempered_particles: 8
+      base_temperature: 2.0
+      train_encoder: false
+      train_prior: true
+      prior_loss_weight: 1.0
+      sampler: importance
+      proposal:
+        components:
+          - {source: posterior, temperature: 1.0, fraction: 0.50}
+          - {source: posterior, temperature: 2.0, fraction: 0.25}
+          - {source: posterior, temperature: 4.0, fraction: 0.15}
+          - {source: prior, fraction: 0.10}
+      support_gate_enabled: true
+      min_object_ess_fraction_for_prior_update: 0.10
+      max_object_weight_for_prior_update: 0.80
+      warn_median_ess_fraction: 0.25
+      fail_median_ess_fraction: 0.10
+      fail_fraction_max_weight_above_0p8: 0.50
+    selection_correction:
+      enabled: true
+      kind: observed_magnitude_limit
+      band: lsst_r
+      max_mag_ab: 25.0
+      survey_noise: gaussian_m5
+      n_prior_samples: 4096
+      prior_sample_batch_size: 64
+      common_random_numbers: true
+      seed: 260821
+
+  training:
+    epochs: 80
+    batch_size: 1024
+    jax_batch_size: 256
+    n_samples: 1
+    learning_rate: 5.0e-5
+    gradient_clip_norm: 5.0
+    validation_every: 4
+    validation_sleep_seed: 260821
+    best_checkpoint_metric: validation_sleep_nll
+    best_checkpoint_min_epoch: 24
+    data_parallel: pmap
+
+  inference:
+    posterior_samples: 2048
+    prior_samples: 8192
+    decoder_sample_chunk_size: 1
+    prior_predictive_batch_size: 128
+    shard_outputs: true
+    resume_shards: true
+    write_posterior_predictive: false
+    write_residual_samples: false
+
+  map_adam:
+    prior_weight: 1.0
+    prior_density_space: x
+
+calibration:
+  global_sed_scale:
+    enabled: false
+    trainable: false
+  per_band_zero_points:
+    enabled: false
+    trainable: false

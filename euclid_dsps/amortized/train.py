@@ -34,6 +34,7 @@ from euclid_dsps.io import (
     write_json,
 )
 from euclid_dsps.model import dynamic_model_args, load_context
+from euclid_dsps.photometric_uncertainty import m5_depth_flux_error_jax
 
 from .catalog_identity import write_catalog_fingerprint
 from .collapse_gates import write_training_collapse_gate
@@ -80,9 +81,21 @@ from .likelihood import photometric_loglike, photometric_normalized_residual
 from .posterior import (
     ConditionalFlowEncoder,
     PriorTransportGaussianEncoder,
+    defensive_posterior_proposal,
+    posterior_entropy_diagnostics,
     posterior_log_prob,
     posterior_mixture_diagnostics,
     sample_posterior,
+)
+from .posterior_target import (
+    posterior_log_target,
+    safe_decoder_inputs,
+)
+from .selection_correction import (
+    disabled_selection_metrics,
+    estimate_log_alpha_reparameterized,
+    observed_flux_selection_log_beta,
+    observed_magnitude_flux_limit_jax,
 )
 
 eqx, optax = require_amortized_dependencies()
@@ -972,6 +985,10 @@ def train_amortized_fs2(
     )
     input_noise_cfg = _input_noise_config(cfg.get("input_noise", {}))
     sleep_runtime_cfg = _sleep_runtime_config(config, feature_stats)
+    selection_runtime_cfg = _selection_correction_runtime_config(
+        config,
+        feature_stats,
+    )
     if input_noise_cfg["enabled"]:
         _log(
             verbose,
@@ -980,13 +997,26 @@ def train_amortized_fs2(
             f"sigma_scale={input_noise_cfg['sigma_scale']} "
             f"apply_to={input_noise_cfg['apply_to']}",
         )
+    if selection_runtime_cfg["enabled"]:
+        _log(
+            verbose,
+            "[amortized] selection correction enabled: "
+            f"band={selection_runtime_cfg['band']} "
+            f"max_mag_ab={selection_runtime_cfg['max_mag_ab']} "
+            f"n_prior_samples={selection_runtime_cfg['n_prior_samples']} "
+            "survey_noise=gaussian_m5",
+        )
     optimizer = make_optimizer(config)
+    gradient_clip_norm = float(cfg["training"].get("gradient_clip_norm", 1.0))
     opt_state = optimizer.init(eqx.filter(model, eqx.is_inexact_array))
     pmap_train_step = None
     model_replicated = None
     opt_state_replicated = None
     if bool(data_parallel["enabled"]):
-        pmap_train_step = _make_pmap_train_step(optimizer)
+        pmap_train_step = _make_pmap_train_step(
+            optimizer,
+            gradient_clip_norm=gradient_clip_norm,
+        )
         model_replicated = _replicate_tree(model, data_parallel["devices"])
         opt_state_replicated = _replicate_tree(opt_state, data_parallel["devices"])
 
@@ -1096,6 +1126,11 @@ def train_amortized_fs2(
             **dict(objective_config.get("sleep", {}) or {}),
             **sleep_runtime_cfg,
         }
+        objective_config["selection_correction"] = {
+            **dict(objective_config.get("selection_correction", {}) or {}),
+            **selection_runtime_cfg,
+        }
+        objective_config["prior_train_jointly"] = bool(train_prior)
         wake_active = _wake_update_active(
             objective_config,
             encoder_epoch=encoder_epoch,
@@ -1103,11 +1138,21 @@ def train_amortized_fs2(
         )
         objective_config["wake_active"] = bool(wake_active)
         if wake_active:
+            train_encoder_on_wake = bool(
+                (objective_config.get("wake", {}) or {}).get("train_encoder", True)
+            )
             train_prior_on_wake = bool(
                 train_prior
                 and (objective_config.get("wake", {}) or {}).get("train_prior", False)
             )
-            optimizer_phase = "joint_wake" if train_prior_on_wake else "encoder_wake"
+            if train_encoder_on_wake and train_prior_on_wake:
+                optimizer_phase = "joint_wake"
+            elif train_prior_on_wake:
+                optimizer_phase = "prior_wake"
+            elif train_encoder_on_wake:
+                optimizer_phase = "encoder_wake"
+            else:
+                raise ValueError("A wake epoch must train the encoder or the prior")
         elif (
             objective_mode(objective_config) == "reweighted_wake_sleep"
             and update_phase != "prior"
@@ -1243,12 +1288,23 @@ def train_amortized_fs2(
                         train_band_calibration=bool(train_band_calibration),
                     )
                     record = _metrics_record(metrics)
-                    record.update(component_grad_norms(grads))
+                    record.update(
+                        component_grad_norms(
+                            grads,
+                            gradient_clip_norm=gradient_clip_norm,
+                        )
+                    )
                     loss_finite = bool(
                         np.isfinite(float(np.asarray(jax.device_get(loss))))
                     )
                     grads_finite = tree_all_finite(grads)
-                    update_applied = bool(loss_finite and grads_finite)
+                    support_allows_update = not (
+                        optimizer_phase == "prior_wake"
+                        and float(record.get("wake_prior_update_applied", 0.0)) < 0.5
+                    )
+                    update_applied = bool(
+                        loss_finite and grads_finite and support_allows_update
+                    )
                     if update_applied:
                         updates, opt_state = optimizer.update(
                             grads,
@@ -1331,6 +1387,12 @@ def train_amortized_fs2(
                         "loss_finite": float(loss_finite),
                         "grads_finite": float(grads_finite),
                         "update_applied": float(update_applied),
+                        "update_skipped_for_support": float(
+                            optimizer_phase == "prior_wake"
+                            and not update_applied
+                            and loss_finite
+                            and grads_finite
+                        ),
                     }
                 )
                 epoch_rows.append(record)
@@ -1416,13 +1478,18 @@ def train_amortized_fs2(
                 f"[amortized] epoch {epoch}/{int(epochs)} validation start",
             )
             key, val_key = jax.random.split(key)
+            if objective_mode(objective_config) == "reweighted_wake_sleep":
+                val_key = jax.random.PRNGKey(
+                    int(cfg["training"].get("validation_sleep_seed", 260821))
+                )
             validation_objective_config = {
                 **objective_config,
                 "update_phase": "validation",
                 "prior_mstep_only": False,
             }
             if objective_mode(objective_config) == "reweighted_wake_sleep":
-                validation_objective_config["wake_active"] = True
+                validation_objective_config["wake_active"] = False
+                validation_objective_config["update_phase"] = "validation_sleep"
             validation_rows, epoch_bin_rows = evaluate_validation_epoch(
                 model,
                 validation_arrays,
@@ -1627,18 +1694,21 @@ def train_amortized_fs2(
         ),
         "wake": dict(cfg["objective"].get("wake", {}) or {}),
         "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
+        "selection_correction": dict(selection_runtime_cfg),
         "wake_updates": int(
             sum(
                 row.get("update_applied", 0.0)
                 for row in _training_rows(rows)
-                if row.get("update_phase") in {"encoder_wake", "joint_wake"}
+                if row.get("update_phase")
+                in {"encoder_wake", "prior_wake", "joint_wake"}
             )
         ),
         "wake_ess_fraction_mean": _finite_mean(
             [
                 float(row.get("wake_ess_fraction_mean", float("nan")))
                 for row in _training_rows(rows)
-                if row.get("update_phase") in {"encoder_wake", "joint_wake"}
+                if row.get("update_phase")
+                in {"encoder_wake", "prior_wake", "joint_wake"}
             ]
         ),
         "sleep_updates": int(
@@ -2230,6 +2300,12 @@ def evaluate_validation_epoch(
                     "update_applied": 0.0,
                     "encoder_grad_norm": 0.0,
                     "prior_grad_norm": 0.0,
+                    "encoder_raw_grad_norm": 0.0,
+                    "encoder_clipped_grad_norm": 0.0,
+                    "encoder_grad_clipped_fraction": 0.0,
+                    "prior_raw_grad_norm": 0.0,
+                    "prior_clipped_grad_norm": 0.0,
+                    "prior_grad_clipped_fraction": 0.0,
                     "alpha_grad_norm": 0.0,
                     "band_alpha_grad_norm": 0.0,
                     "joint_grad_norm": 0.0,
@@ -2318,6 +2394,29 @@ def _evaluation_metrics(
             objective_config,
         )
         return metrics, object_metrics
+    if objective_mode(objective_config) == "reweighted_wake_sleep":
+        _loss, metrics = _model_generated_sleep_loss(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+        )
+        n_objects = int(batch.flux.shape[0])
+        sleep_nll = jnp.asarray(metrics["sleep_nll"])
+        values = jnp.full((n_objects,), sleep_nll, dtype=sleep_nll.dtype)
+        zeros = jnp.zeros_like(values)
+        return metrics, {
+            "loss": values,
+            "negative_loglike": values,
+            "kl_mc_mean": zeros,
+            "posterior_predictive_chi2": zeros,
+        }
     deterministic = is_deterministic_reconstruction(objective_config)
     mean, log_std = model.encoder(batch.features)
     if deterministic:
@@ -2843,6 +2942,30 @@ def _loss_with_metrics(
         calibration_config,
         objective_config,
     )
+    selection = dict(objective_config.get("selection_correction", {}) or {})
+    update_phase = str(objective_config.get("update_phase", "joint"))
+    selection_active = bool(selection.get("enabled", False)) and bool(
+        objective_config.get("prior_train_jointly", False)
+    )
+    selection_active &= update_phase in {"joint", "prior", "validation"}
+    if selection_active:
+        selection_log_alpha, selection_metrics = _estimate_selection_log_alpha(
+            model,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            calibration_config,
+            objective_config,
+        )
+        loss = loss + selection_log_alpha
+        metrics = dict(metrics)
+        metrics["loss"] = loss
+        metrics.update(selection_metrics)
+    else:
+        metrics = dict(metrics)
+        metrics.update(disabled_selection_metrics(loss.dtype))
     if objective_mode(objective_config) != "hybrid_elbo":
         return loss, metrics
     if batch.truth_theta.shape[-1] != len(latent_spec.names):
@@ -2911,7 +3034,7 @@ def _importance_weighted_wake_outputs(
     calibration_config,
     objective_config,
 ):
-    """Fit q to self-normalized posterior particles without truth labels."""
+    """Compute stopped wake particles for encoder and/or prior updates."""
     if isinstance(model.encoder, ConditionalFlowEncoder) and (
         model.encoder.output_space != "latent_x"
     ):
@@ -2940,75 +3063,77 @@ def _importance_weighted_wake_outputs(
     if temperature <= 1.0:
         raise ValueError("Periodic wake base_temperature must be greater than one")
 
-    normal_key, tempered_key = jax.random.split(key)
-    normal = sample_posterior(
-        model,
-        normal_key,
-        batch.features,
-        n_particles - n_tempered,
-    )
-    tempered = sample_posterior(
-        model,
-        tempered_key,
-        batch.features,
-        n_tempered,
-        base_temperature=temperature,
-    )
-    samples = jax.lax.stop_gradient(jnp.concatenate((normal.x, tempered.x), axis=0))
+    proposal_components = wake.get("proposal", {}).get("components")
+    if proposal_components:
+        proposal = defensive_posterior_proposal(
+            model,
+            key,
+            batch.features,
+            n_particles,
+            proposal_components,
+        )
+        samples = proposal.x
+        logproposal = proposal.logproposal
+        tempered_fraction = proposal.posterior_tempered_fraction
+        temperature_metric = proposal.maximum_posterior_temperature
+    else:
+        normal_key, tempered_key = jax.random.split(key)
+        normal = sample_posterior(
+            model,
+            normal_key,
+            batch.features,
+            n_particles - n_tempered,
+        )
+        tempered = sample_posterior(
+            model,
+            tempered_key,
+            batch.features,
+            n_tempered,
+            base_temperature=temperature,
+        )
+        samples = jax.lax.stop_gradient(jnp.concatenate((normal.x, tempered.x), axis=0))
+        logq_unit = posterior_log_prob(model, batch.features, samples)
+        logq_tempered = posterior_log_prob(
+            model,
+            batch.features,
+            samples,
+            base_temperature=temperature,
+        )
+        tempered_fraction = jnp.asarray(
+            float(n_tempered) / float(n_particles), dtype=logq_unit.dtype
+        )
+        logproposal = jnp.logaddexp(
+            jnp.log1p(-tempered_fraction) + logq_unit,
+            jnp.log(tempered_fraction) + logq_tempered,
+        )
+        temperature_metric = jnp.asarray(temperature, dtype=logq_unit.dtype)
+    samples = jax.lax.stop_gradient(samples)
     logq = posterior_log_prob(model, batch.features, samples)
-    logq_tempered = posterior_log_prob(
+    target = posterior_log_target(
         model,
-        batch.features,
         samples,
-        base_temperature=temperature,
-    )
-    tempered_fraction = jnp.asarray(
-        float(n_tempered) / float(n_particles), dtype=logq.dtype
-    )
-    logproposal = jnp.logaddexp(
-        jnp.log1p(-tempered_fraction) + logq,
-        jnp.log(tempered_fraction) + logq_tempered,
-    )
-    logprior = model.prior.log_prob(samples)
-
-    safe_samples, physical_valid = _safe_decoder_inputs(samples, latent_spec)
-    model_flux_raw = model_flux_from_x(
-        safe_samples,
+        batch,
         latent_spec,
         context,
         model_args,
         parameter_names,
+        likelihood_config,
+        calibration_config,
+        model_flux_fn=model_flux_from_x,
     )
+    logprior = target.logprior
+    model_flux_raw = target.model_flux_raw
+    model_flux = target.model_flux
+    physical_valid = target.physical_valid
+    loglike = target.loglike
     scale_cfg = global_sed_scale_config(calibration_config)
     band_cfg = per_band_flux_calibration_config(calibration_config)
     log_alpha_sed = model.sed_scale.log_alpha_sed
-    model_flux = (
-        apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
-        if scale_cfg.enabled
-        else model_flux_raw
-    )
     log_alpha_band = (
         model.band_calibration.log_alpha_band
         if band_cfg.enabled and model.band_calibration is not None
         else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
     )
-    model_flux = (
-        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
-        if band_cfg.enabled
-        else model_flux
-    )
-    physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
-    loglike = photometric_loglike(
-        obs_flux=batch.flux,
-        model_flux=model_flux,
-        obs_err=batch.flux_err,
-        mask=batch.mask,
-        likelihood_type=str(likelihood_config.get("type", "student_t")),
-        student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
-        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
-        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
-    )
-    loglike = jnp.where(physical_valid, loglike, -jnp.inf)
     likelihood_temperature = jnp.asarray(
         max(float(objective_config.get("likelihood_temperature", 1.0)), 1.0e-6),
         dtype=loglike.dtype,
@@ -3022,6 +3147,36 @@ def _importance_weighted_wake_outputs(
     stopped_weight = jax.lax.stop_gradient(weight)
     valid_object = jnp.squeeze(any_finite, axis=0)
     valid_object_count = jnp.maximum(jnp.sum(valid_object), 1)
+    ess = 1.0 / jnp.sum(jnp.square(weight), axis=0)
+    ess_fraction = ess / float(n_particles)
+    maximum_weight = jnp.max(weight, axis=0)
+    weight_entropy = -jnp.sum(
+        jnp.where(weight > 0.0, weight * jnp.log(weight), 0.0), axis=0
+    )
+    support_gate_enabled = bool(wake.get("support_gate_enabled", False))
+    min_object_ess = float(wake.get("min_object_ess_fraction_for_prior_update", 0.10))
+    max_object_weight = float(wake.get("max_object_weight_for_prior_update", 0.80))
+    min_median_ess = float(wake.get("fail_median_ess_fraction", 0.10))
+    warn_median_ess = float(wake.get("warn_median_ess_fraction", 0.25))
+    max_bad_weight_fraction = float(
+        wake.get("fail_fraction_max_weight_above_0p8", 0.50)
+    )
+    eligible_object = valid_object
+    if support_gate_enabled:
+        eligible_object &= ess_fraction >= min_object_ess
+        eligible_object &= maximum_weight <= max_object_weight
+    median_ess_fraction = jnp.nanmedian(jnp.where(valid_object, ess_fraction, jnp.nan))
+    fraction_max_weight_above_0p8 = (
+        jnp.sum(valid_object & (maximum_weight > 0.8)) / valid_object_count
+    )
+    prior_batch_supported = jnp.asarray(True)
+    if support_gate_enabled:
+        prior_batch_supported = median_ess_fraction >= min_median_ess
+        prior_batch_supported &= (
+            fraction_max_weight_above_0p8 <= max_bad_weight_fraction
+        )
+    eligible_object &= prior_batch_supported
+    eligible_object_count = jnp.maximum(jnp.sum(eligible_object), 1)
     weighted_logq = stopped_weight * jnp.where(finite_weight, logq, 0.0)
     weighted_logprior = stopped_weight * jnp.where(finite_weight, logprior, 0.0)
     weighted_loglike = stopped_weight * jnp.where(finite_weight, loglike, 0.0)
@@ -3029,9 +3184,36 @@ def _importance_weighted_wake_outputs(
     wake_nll = jnp.sum(jnp.where(valid_object, wake_nll_by_object, 0.0))
     wake_nll = wake_nll / valid_object_count
     prior_nll_by_object = -jnp.sum(weighted_logprior, axis=0)
-    prior_mstep_nll = jnp.sum(jnp.where(valid_object, prior_nll_by_object, 0.0))
-    prior_mstep_nll = prior_mstep_nll / valid_object_count
+    prior_mstep_nll_uncorrected = jnp.sum(
+        jnp.where(eligible_object, prior_nll_by_object, 0.0)
+    )
+    prior_mstep_nll_uncorrected = prior_mstep_nll_uncorrected / eligible_object_count
     train_prior = bool(wake.get("train_prior", False))
+    train_encoder = bool(wake.get("train_encoder", True))
+    prior_update_applied = (
+        jnp.asarray(train_prior)
+        & prior_batch_supported
+        & (jnp.sum(eligible_object) > 0)
+    )
+    selection_log_alpha = jnp.asarray(0.0, dtype=wake_nll.dtype)
+    selection_metrics = disabled_selection_metrics(wake_nll.dtype)
+    selection_trains_prior = train_prior and bool(
+        objective_config.get("prior_train_jointly", True)
+    )
+    if selection_trains_prior and bool(
+        (objective_config.get("selection_correction", {}) or {}).get("enabled", False)
+    ):
+        selection_log_alpha, selection_metrics = _estimate_selection_log_alpha(
+            model,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            calibration_config,
+            objective_config,
+        )
+    prior_mstep_nll = prior_mstep_nll_uncorrected + selection_log_alpha
     prior_loss_weight = jnp.asarray(
         float(wake.get("prior_loss_weight", 1.0)), dtype=wake_nll.dtype
     )
@@ -3051,19 +3233,13 @@ def _importance_weighted_wake_outputs(
         if band_cfg.enabled and band_cfg.trainable
         else jnp.asarray(0.0, dtype=wake_nll.dtype)
     )
-    ess = 1.0 / jnp.sum(jnp.square(weight), axis=0)
-    weight_entropy = -jnp.sum(
-        jnp.where(weight > 0.0, weight * jnp.log(weight), 0.0), axis=0
-    )
     weighted_nll_by_object = -jnp.sum(weighted_loglike, axis=0)
     weighted_nll = (
         jnp.sum(jnp.where(valid_object, weighted_nll_by_object, 0.0))
         / valid_object_count
     )
     mean_valid_bands = jnp.maximum(
-        jnp.sum(
-            jnp.where(valid_object[:, None], batch.mask, False).astype(jnp.float32)
-        )
+        jnp.sum(jnp.where(valid_object[:, None], batch.mask, False).astype(jnp.float32))
         / valid_object_count,
         1.0,
     )
@@ -3077,9 +3253,13 @@ def _importance_weighted_wake_outputs(
     calibration_mstep_nll_per_band = (
         weighted_nll + alpha_prior_penalty + band_prior_penalty
     ) / mean_valid_bands
-    loss = wake_nll + (
-        prior_loss_weight * prior_mstep_nll if train_prior else 0.0
+    encoder_loss = wake_nll if train_encoder else jax.lax.stop_gradient(wake_nll)
+    prior_loss = jnp.where(
+        prior_update_applied,
+        prior_loss_weight * prior_mstep_nll,
+        jnp.asarray(0.0, dtype=wake_nll.dtype),
     )
+    loss = encoder_loss + prior_loss
     if calibration_trainable:
         loss = loss + calibration_loss_weight * calibration_mstep_nll_per_band
     weighted_kl_by_object = jnp.sum(weighted_logq - weighted_logprior, axis=0)
@@ -3109,7 +3289,7 @@ def _importance_weighted_wake_outputs(
         "loss": loss,
         "negative_loglike": weighted_nll,
         "loglike_mean": -weighted_nll,
-        "logprior_mean": -prior_mstep_nll,
+        "logprior_mean": -prior_mstep_nll_uncorrected,
         "logq_mean": -wake_nll,
         "kl_mc_mean": weighted_kl,
         "likelihood_temperature": likelihood_temperature,
@@ -3149,11 +3329,28 @@ def _importance_weighted_wake_outputs(
             jnp.where(valid_object, weight_entropy, 0.0)
         )
         / valid_object_count,
+        "wake_median_ess_fraction": median_ess_fraction,
+        "wake_fraction_ess_below_0p1": jnp.sum(valid_object & (ess_fraction < 0.1))
+        / valid_object_count,
+        "wake_fraction_max_weight_above_0p8": fraction_max_weight_above_0p8,
+        "wake_prior_eligible_object_fraction": jnp.sum(eligible_object)
+        / valid_object_count,
+        "wake_prior_batch_supported": prior_batch_supported.astype(jnp.float32),
+        "wake_prior_support_warning": (median_ess_fraction < warn_median_ess).astype(
+            jnp.float32
+        ),
+        "wake_prior_update_applied": prior_update_applied.astype(jnp.float32),
+        "wake_train_encoder": jnp.asarray(float(train_encoder), dtype=wake_nll.dtype),
+        "wake_train_prior": jnp.asarray(float(train_prior), dtype=wake_nll.dtype),
+        "wake_support_gate_enabled": jnp.asarray(
+            float(support_gate_enabled), dtype=wake_nll.dtype
+        ),
         "wake_all_nonfinite_fraction": jnp.mean((~any_finite).astype(jnp.float32)),
         "wake_physical_valid_fraction": jnp.mean(physical_valid.astype(jnp.float32)),
         "wake_tempered_fraction": tempered_fraction,
-        "wake_base_temperature": jnp.asarray(temperature, dtype=wake_nll.dtype),
+        "wake_base_temperature": jnp.asarray(temperature_metric, dtype=wake_nll.dtype),
         "prior_mstep_nll": prior_mstep_nll,
+        "prior_mstep_nll_uncorrected": prior_mstep_nll_uncorrected,
         "prior_loss_weight": prior_loss_weight,
         "calibration_mstep_nll_per_band": calibration_mstep_nll_per_band,
         "calibration_loss_weight": calibration_loss_weight,
@@ -3162,9 +3359,14 @@ def _importance_weighted_wake_outputs(
         "posterior_mixture_entropy": mixture["entropy"],
         "posterior_mixture_max_weight": mixture["max_weight"],
     }
+    metrics.update(selection_metrics)
     invalid_value = jnp.asarray(jnp.inf, dtype=wake_nll.dtype)
     object_loss = wake_nll_by_object + (
-        prior_loss_weight * prior_nll_by_object if train_prior else 0.0
+        jnp.where(
+            prior_update_applied & eligible_object,
+            prior_loss_weight * (prior_nll_by_object + selection_log_alpha),
+            0.0,
+        )
     )
     object_metrics = {
         "loss": jnp.where(valid_object, object_loss, invalid_value),
@@ -3219,7 +3421,7 @@ def _smc_wake_outputs(
     acceptance_history = []
     previous_beta = temperatures[0]
     for stage, beta in enumerate(temperatures[1:], start=1):
-        loglike, _raw, _flux, _valid = _smc_tempered_terms(
+        loglike, _logprior, _raw, _flux, _valid = _smc_tempered_terms(
             model,
             samples,
             batch,
@@ -3271,8 +3473,7 @@ def _smc_wake_outputs(
     weight = jax.lax.stop_gradient(weight)
     valid_object = jax.lax.stop_gradient(valid_object)
     logq = posterior_log_prob(model, batch.features, samples)
-    logprior = model.prior.log_prob(samples)
-    loglike, model_flux_raw, model_flux, physical_valid = _smc_tempered_terms(
+    loglike, logprior, model_flux_raw, model_flux, physical_valid = _smc_tempered_terms(
         model,
         samples,
         batch,
@@ -3293,9 +3494,30 @@ def _smc_wake_outputs(
     prior_nll_by_object = -jnp.sum(weighted_logprior, axis=0)
     data_nll_by_object = -jnp.sum(weighted_loglike, axis=0)
     q_nll = jnp.sum(jnp.where(valid_object, q_nll_by_object, 0.0)) / valid_count
-    prior_nll = jnp.sum(jnp.where(valid_object, prior_nll_by_object, 0.0)) / valid_count
+    prior_nll_uncorrected = (
+        jnp.sum(jnp.where(valid_object, prior_nll_by_object, 0.0)) / valid_count
+    )
     data_nll = jnp.sum(jnp.where(valid_object, data_nll_by_object, 0.0)) / valid_count
     prior_weight = jnp.asarray(float(wake.get("prior_loss_weight", 1.0)), q_nll.dtype)
+    selection_log_alpha = jnp.asarray(0.0, dtype=q_nll.dtype)
+    selection_metrics = disabled_selection_metrics(q_nll.dtype)
+    selection_trains_prior = bool(wake.get("train_prior", False)) and bool(
+        objective_config.get("prior_train_jointly", True)
+    )
+    if selection_trains_prior and bool(
+        (objective_config.get("selection_correction", {}) or {}).get("enabled", False)
+    ):
+        selection_log_alpha, selection_metrics = _estimate_selection_log_alpha(
+            model,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            calibration_config,
+            objective_config,
+        )
+    prior_nll = prior_nll_uncorrected + selection_log_alpha
     scale_cfg = global_sed_scale_config(calibration_config)
     band_cfg = per_band_flux_calibration_config(calibration_config)
     alpha_prior_penalty = (
@@ -3320,9 +3542,7 @@ def _smc_wake_outputs(
         else jnp.asarray(0.0, dtype=q_nll.dtype)
     )
     mean_valid_bands = jnp.maximum(
-        jnp.sum(
-            jnp.where(valid_object[:, None], batch.mask, False).astype(jnp.float32)
-        )
+        jnp.sum(jnp.where(valid_object[:, None], batch.mask, False).astype(jnp.float32))
         / valid_count,
         1.0,
     )
@@ -3336,7 +3556,15 @@ def _smc_wake_outputs(
         (scale_cfg.enabled and scale_cfg.trainable)
         or (band_cfg.enabled and band_cfg.trainable)
     )
-    loss = q_nll + prior_weight * prior_nll
+    train_encoder = bool(wake.get("train_encoder", True))
+    train_prior = bool(wake.get("train_prior", False))
+    encoder_loss = q_nll if train_encoder else jax.lax.stop_gradient(q_nll)
+    prior_loss = (
+        prior_weight * prior_nll
+        if train_prior
+        else jax.lax.stop_gradient(prior_weight * prior_nll)
+    )
+    loss = encoder_loss + prior_loss
     if calibration_trainable:
         loss = loss + calibration_loss_weight * calibration_mstep_nll_per_band
     final_ess = ess_history[-1]
@@ -3369,7 +3597,7 @@ def _smc_wake_outputs(
         "loss": loss,
         "negative_loglike": data_nll,
         "loglike_mean": -data_nll,
-        "logprior_mean": -prior_nll,
+        "logprior_mean": -prior_nll_uncorrected,
         "logq_mean": -q_nll,
         "kl_mc_mean": jnp.sum(
             jnp.where(valid_object, -q_nll_by_object + prior_nll_by_object, 0.0)
@@ -3409,7 +3637,10 @@ def _smc_wake_outputs(
         "wake_physical_valid_fraction": jnp.mean(physical_valid.astype(jnp.float32)),
         "wake_tempered_fraction": zero,
         "wake_base_temperature": zero,
+        "wake_train_encoder": jnp.asarray(float(train_encoder), dtype=q_nll.dtype),
+        "wake_train_prior": jnp.asarray(float(train_prior), dtype=q_nll.dtype),
         "prior_mstep_nll": prior_nll,
+        "prior_mstep_nll_uncorrected": prior_nll_uncorrected,
         "prior_loss_weight": prior_weight,
         "calibration_mstep_nll_per_band": calibration_mstep_nll_per_band,
         "calibration_loss_weight": calibration_loss_weight,
@@ -3422,10 +3653,14 @@ def _smc_wake_outputs(
         "posterior_mixture_entropy": mixture["entropy"],
         "posterior_mixture_max_weight": mixture["max_weight"],
     }
+    metrics.update(selection_metrics)
     invalid = jnp.asarray(jnp.inf, dtype=q_nll.dtype)
     object_metrics = {
         "loss": jnp.where(
-            valid_object, q_nll_by_object + prior_weight * prior_nll_by_object, invalid
+            valid_object,
+            q_nll_by_object
+            + prior_weight * (prior_nll_by_object + selection_log_alpha),
+            invalid,
         ),
         "negative_loglike": jnp.where(valid_object, data_nll_by_object, invalid),
         "kl_mc_mean": jnp.where(
@@ -3455,33 +3690,25 @@ def _smc_tempered_terms(
     likelihood_config,
     calibration_config,
 ):
-    safe_samples, valid = _safe_decoder_inputs(samples, latent_spec)
-    raw = model_flux_from_x(
-        safe_samples, latent_spec, context, model_args, parameter_names
+    target = posterior_log_target(
+        model,
+        samples,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        likelihood_config,
+        calibration_config,
+        model_flux_fn=model_flux_from_x,
     )
-    scale_cfg = global_sed_scale_config(calibration_config)
-    band_cfg = per_band_flux_calibration_config(calibration_config)
-    flux = (
-        apply_global_sed_scale_to_flux(raw, model.sed_scale.log_alpha_sed)
-        if scale_cfg.enabled
-        else raw
+    return (
+        target.loglike,
+        target.logprior,
+        target.model_flux_raw,
+        target.model_flux,
+        target.physical_valid,
     )
-    if band_cfg.enabled and model.band_calibration is not None:
-        flux = apply_per_band_flux_calibration_to_flux(
-            flux, model.band_calibration.log_alpha_band
-        )
-    valid &= jnp.all(jnp.isfinite(flux), axis=-1)
-    loglike = photometric_loglike(
-        obs_flux=batch.flux,
-        model_flux=flux,
-        obs_err=batch.flux_err,
-        mask=batch.mask,
-        likelihood_type=str(likelihood_config.get("type", "student_t")),
-        student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
-        error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.0)),
-        error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
-    )
-    return jnp.where(valid, loglike, -jnp.inf), raw, flux, valid
 
 
 def _smc_mala_move(
@@ -3500,7 +3727,7 @@ def _smc_mala_move(
     accept_key,
 ):
     def target(values):
-        loglike, _raw, _flux, _valid = _smc_tempered_terms(
+        loglike, logprior, _raw, _flux, _valid = _smc_tempered_terms(
             model,
             values,
             batch,
@@ -3511,7 +3738,7 @@ def _smc_mala_move(
             likelihood_config,
             calibration_config,
         )
-        return model.prior.log_prob(values) + beta * loglike
+        return logprior + beta * loglike
 
     def safe_target(values):
         return jnp.sum(jnp.nan_to_num(target(values), neginf=-1.0e30))
@@ -3552,12 +3779,12 @@ def _model_generated_sleep_loss(
     sleep = dict(objective_config.get("sleep", {}) or {})
     if not bool(sleep.get("enabled", False)):
         raise ValueError("reweighted_wake_sleep requires objective.sleep.enabled=true")
-    prior_key, noise_key = jax.random.split(key)
+    prior_key, noise_key, entropy_key = jax.random.split(key, 3)
     n_objects = int(batch.features.shape[0])
     candidate_factor = int(sleep.get("selection_candidate_factor", 1))
     n_candidates = n_objects * max(candidate_factor, 1)
     samples = jax.lax.stop_gradient(model.prior.sample(prior_key, n_candidates))
-    safe_samples, physical_valid = _safe_decoder_inputs(samples, latent_spec)
+    safe_samples, physical_valid = safe_decoder_inputs(samples, latent_spec)
     model_flux_raw = model_flux_from_x(
         safe_samples,
         latent_spec,
@@ -3584,27 +3811,7 @@ def _model_generated_sleep_loss(
         else model_flux
     )
     physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
-    selection_band_index = sleep.get("selection_band_index")
-    if selection_band_index is not None:
-        selection_flux_min = jnp.asarray(
-            sleep["selection_flux_min_fnu_cgs"], dtype=model_flux.dtype
-        )
-        physical_valid &= (
-            model_flux[:, int(selection_band_index)] > selection_flux_min
-        )
-        # Approximate rejection sampling with a fixed-shape candidate pool so
-        # the sleep step remains JIT-compatible. Prior draws are exchangeable;
-        # top_k selects up to n_objects valid draws without sorting by flux.
-        tie_break = jnp.linspace(
-            0.0, 1.0e-6, n_candidates, dtype=model_flux.dtype
-        )
-        _, selected = jax.lax.top_k(
-            physical_valid.astype(model_flux.dtype) + tie_break, n_objects
-        )
-        samples = jnp.take(samples, selected, axis=0)
-        model_flux_raw = jnp.take(model_flux_raw, selected, axis=0)
-        model_flux = jnp.take(model_flux, selected, axis=0)
-        physical_valid = jnp.take(physical_valid, selected, axis=0)
+    candidate_mask = _repeat_sleep_rows(batch.mask, n_candidates)
     flux_err = _sleep_flux_error(model_flux, batch, sleep)
     noise, noise_family = _sample_sleep_noise(
         noise_key,
@@ -3613,7 +3820,39 @@ def _model_generated_sleep_loss(
         likelihood_config=likelihood_config,
     )
     noisy_flux = model_flux + noise
-    features = _sleep_encoder_features(noisy_flux, flux_err, batch.mask, sleep)
+    physical_valid &= jnp.all(jnp.isfinite(flux_err) & (flux_err > 0.0), axis=-1)
+    physical_valid &= jnp.all(jnp.isfinite(noisy_flux), axis=-1)
+    selection_band_index = sleep.get("selection_band_index")
+    if selection_band_index is not None:
+        selection_flux_min = jnp.asarray(
+            sleep["selection_flux_min_fnu_cgs"], dtype=model_flux.dtype
+        )
+        physical_valid = _sleep_observed_selection_mask(
+            noisy_flux,
+            physical_valid,
+            band_index=int(selection_band_index),
+            flux_min=selection_flux_min,
+            observed_mask=candidate_mask,
+        )
+        candidate_valid_fraction = jnp.mean(physical_valid.astype(jnp.float32))
+        # Approximate rejection sampling with a fixed-shape candidate pool so
+        # the sleep step remains JIT-compatible. Prior draws are exchangeable;
+        # top_k selects up to n_objects valid draws without sorting by flux.
+        tie_break = jnp.linspace(0.0, 1.0e-6, n_candidates, dtype=model_flux.dtype)
+        _, selected = jax.lax.top_k(
+            physical_valid.astype(model_flux.dtype) + tie_break, n_objects
+        )
+        samples = jnp.take(samples, selected, axis=0)
+        model_flux_raw = jnp.take(model_flux_raw, selected, axis=0)
+        model_flux = jnp.take(model_flux, selected, axis=0)
+        flux_err = jnp.take(flux_err, selected, axis=0)
+        noise = jnp.take(noise, selected, axis=0)
+        noisy_flux = jnp.take(noisy_flux, selected, axis=0)
+        candidate_mask = jnp.take(candidate_mask, selected, axis=0)
+        physical_valid = jnp.take(physical_valid, selected, axis=0)
+    else:
+        candidate_valid_fraction = jnp.mean(physical_valid.astype(jnp.float32))
+    features = _sleep_encoder_features(noisy_flux, flux_err, candidate_mask, sleep)
     logq = posterior_log_prob(model, features, samples)
     valid = physical_valid & jnp.isfinite(logq)
     valid_count = jnp.maximum(jnp.sum(valid), 1)
@@ -3621,7 +3860,13 @@ def _model_generated_sleep_loss(
     logprior = model.prior.log_prob(samples)
     _mean, log_std = model.encoder(features)
     mixture = posterior_mixture_diagnostics(model, features)
-    valid_band = batch.mask & physical_valid[:, None]
+    entropy_metrics = posterior_entropy_diagnostics(
+        model,
+        features,
+        entropy_key,
+        n_samples=int(sleep.get("entropy_samples", 1)),
+    )
+    valid_band = candidate_mask & physical_valid[:, None]
     normalized_noise = jnp.where(valid_band, noise / flux_err, 0.0)
     abs_normalized_noise = jnp.where(valid_band, jnp.abs(normalized_noise), jnp.nan)
     valid_band_count = jnp.maximum(jnp.sum(valid_band), 1)
@@ -3635,7 +3880,7 @@ def _model_generated_sleep_loss(
         "kl_mc_mean": zero,
         "likelihood_temperature": jnp.asarray(1.0, dtype=sleep_nll.dtype),
         "entropy_floor_penalty": zero,
-        "posterior_entropy_mean": _diag_gaussian_entropy_train(log_std).mean(),
+        "posterior_entropy_mean": entropy_metrics["posterior_full_entropy_mc"],
         "posterior_min_log_std": jnp.min(log_std),
         "posterior_median_log_std": jnp.median(log_std),
         "posterior_max_log_std": jnp.max(log_std),
@@ -3671,6 +3916,14 @@ def _model_generated_sleep_loss(
         "sleep_active": jnp.asarray(1.0, dtype=sleep_nll.dtype),
         "sleep_nll": sleep_nll,
         "sleep_physical_valid_fraction": jnp.mean(physical_valid.astype(jnp.float32)),
+        "sleep_selection_candidate_valid_fraction": candidate_valid_fraction,
+        "sleep_selection_acceptance_fraction": candidate_valid_fraction,
+        "sleep_selection_candidate_count": jnp.asarray(
+            n_candidates, dtype=sleep_nll.dtype
+        ),
+        "sleep_selection_selected_count": jnp.sum(
+            physical_valid.astype(sleep_nll.dtype)
+        ),
         "sleep_noise_rms": jnp.sqrt(jnp.sum(normalized_noise**2) / valid_band_count),
         "sleep_noise_abs_median": jnp.nanmedian(abs_normalized_noise),
         "sleep_noise_abs_q90": jnp.nanquantile(abs_normalized_noise, 0.90),
@@ -3684,6 +3937,7 @@ def _model_generated_sleep_loss(
         "posterior_mixture_components": mixture["components"],
         "posterior_mixture_entropy": mixture["entropy"],
         "posterior_mixture_max_weight": mixture["max_weight"],
+        **entropy_metrics,
     }
 
 
@@ -3714,41 +3968,125 @@ def _sample_sleep_noise(
     )
 
 
-def _safe_decoder_inputs(samples, latent_spec):
-    """Return finite in-bound decoder inputs and the original support mask."""
-    theta = x_to_theta(samples, latent_spec)
-    lower = jnp.asarray(latent_spec.lower, dtype=theta.dtype)
-    upper = jnp.asarray(latent_spec.upper, dtype=theta.dtype)
-    finite = jnp.all(jnp.isfinite(theta), axis=-1)
-    in_bounds = jnp.all((theta >= lower) & (theta <= upper), axis=-1)
-    valid = finite & in_bounds
-    midpoint = 0.5 * (lower + upper)
-    sanitized = jnp.where(jnp.isfinite(theta), theta, midpoint)
-    margin = jnp.maximum((upper - lower) * 1.0e-6, 1.0e-7)
-    safe_theta = jnp.clip(sanitized, lower + margin, upper - margin)
-    safe_samples = theta_to_x(safe_theta, latent_spec)
-    return safe_samples, valid
+def _sleep_observed_selection_mask(
+    noisy_flux: jnp.ndarray,
+    physical_valid: jnp.ndarray,
+    *,
+    band_index: int,
+    flux_min: Any,
+    observed_mask: jnp.ndarray | None = None,
+) -> jnp.ndarray:
+    """Apply the hard sleep cut to simulated observed, post-noise flux."""
+    selected_flux = noisy_flux[:, int(band_index)]
+    selected = physical_valid & jnp.isfinite(selected_flux)
+    selected &= selected_flux > flux_min
+    if observed_mask is not None:
+        selected &= observed_mask[:, int(band_index)]
+    return selected
+
+
+def _estimate_selection_log_alpha(
+    model,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    calibration_config,
+    objective_config,
+):
+    """Estimate selected-sample normalization with prior-flow gradients."""
+    selection = dict(objective_config.get("selection_correction", {}) or {})
+    if not bool(selection.get("enabled", False)):
+        dtype = model.sed_scale.log_alpha_sed.dtype
+        return jnp.asarray(0.0, dtype=dtype), disabled_selection_metrics(dtype)
+    selection_key = (
+        jax.random.PRNGKey(int(selection["rng_seed"]))
+        if bool(selection.get("common_random_numbers", True))
+        else jax.random.fold_in(key, 7919)
+    )
+    band_index = int(selection["band_index"])
+    flux_limit = float(selection["flux_limit_fnu_cgs"])
+    scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
+
+    def log_beta_from_prior_samples(prior_samples):
+        safe_samples, physical_valid = safe_decoder_inputs(
+            prior_samples,
+            latent_spec,
+        )
+        model_flux = model_flux_from_x(
+            safe_samples,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+        )
+        if scale_cfg.enabled:
+            model_flux = apply_global_sed_scale_to_flux(
+                model_flux,
+                jax.lax.stop_gradient(model.sed_scale.log_alpha_sed),
+            )
+        if band_cfg.enabled and model.band_calibration is not None:
+            model_flux = apply_per_band_flux_calibration_to_flux(
+                model_flux,
+                jax.lax.stop_gradient(model.band_calibration.log_alpha_band),
+            )
+        physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
+        selected_flux = model_flux[:, band_index]
+        flux_error = m5_depth_flux_error_jax(
+            selected_flux,
+            selection["m5"],
+            selection["gamma"],
+            sigma_sys_mag=float(selection.get("sigma_sys_mag", 0.0)),
+            min_sigma_fnu_cgs=float(selection.get("min_sigma_fnu_cgs", 1.0e-40)),
+        )
+        log_beta = observed_flux_selection_log_beta(
+            selected_flux,
+            flux_error,
+            flux_limit,
+        )
+        return jnp.where(physical_valid, log_beta, -jnp.inf)
+
+    log_alpha, metrics = estimate_log_alpha_reparameterized(
+        model.prior,
+        selection_key,
+        n_prior_samples=int(selection["n_prior_samples"]),
+        log_beta_fn=log_beta_from_prior_samples,
+        prior_sample_batch_size=int(
+            selection.get("prior_sample_batch_size", selection["n_prior_samples"])
+        ),
+    )
+    metrics = dict(metrics)
+    metrics.update(
+        {
+            "selection/flux_limit_fnu_cgs": jnp.asarray(
+                flux_limit, dtype=log_alpha.dtype
+            ),
+            "selection/max_mag_ab": jnp.asarray(
+                selection["max_mag_ab"], dtype=log_alpha.dtype
+            ),
+        }
+    )
+    return log_alpha, metrics
 
 
 def _sleep_m5_flux_error(model_flux, sleep_config):
-    m5 = jnp.asarray(sleep_config["m5"], dtype=model_flux.dtype)
-    gamma = jnp.asarray(sleep_config["gamma"], dtype=model_flux.dtype)
-    unit = jnp.asarray(1.0e-32, dtype=model_flux.dtype)
-    # Evaluate directly in 1e-32 flux units. Materializing the ~1e-30 cgs
-    # intermediate before division underflows under XLA JIT/pmap on some devices.
-    f5 = jnp.power(
-        jnp.asarray(10.0, dtype=model_flux.dtype),
-        -0.4 * (m5 + 48.6) + 32.0,
+    return m5_depth_flux_error_jax(
+        model_flux,
+        sleep_config["m5"],
+        sleep_config["gamma"],
+        sigma_sys_mag=float(sleep_config.get("sigma_sys_mag", 0.0)),
+        min_sigma_fnu_cgs=float(sleep_config.get("min_sigma_fnu_cgs", 1.0e-40)),
     )
-    flux = jnp.abs(model_flux) / unit
-    sigma2 = (0.04 - gamma) * flux * f5 + gamma * f5**2
-    sigma_sys_mag = float(sleep_config.get("sigma_sys_mag", 0.0))
-    if sigma_sys_mag > 0.0:
-        sys_frac = jnp.expm1(jnp.log(10.0) * sigma_sys_mag / 2.5)
-        sigma2 = sigma2 + (sys_frac * flux) ** 2
-    floor = float(sleep_config.get("min_sigma_fnu_cgs", 1.0e-40))
-    floor_scaled = jnp.asarray(floor, dtype=model_flux.dtype) / unit
-    return jnp.sqrt(jnp.maximum(sigma2, floor_scaled**2)) * unit
+
+
+def _repeat_sleep_rows(value: jnp.ndarray, n_rows: int) -> jnp.ndarray:
+    """Repeat catalog-shaped rows to match a fixed sleep candidate pool."""
+    array = jnp.asarray(value)
+    repeats = (int(n_rows) + int(array.shape[0]) - 1) // int(array.shape[0])
+    tile_shape = (repeats,) + (1,) * (array.ndim - 1)
+    return jnp.tile(array, tile_shape)[: int(n_rows)]
 
 
 def _sleep_flux_error(model_flux, batch, sleep_config):
@@ -3757,11 +4095,15 @@ def _sleep_flux_error(model_flux, batch, sleep_config):
         return _sleep_m5_flux_error(model_flux, sleep_config)
     if error_model != "observed_catalog":
         raise ValueError(f"Unsupported sleep error model: {error_model}")
-    reported = jnp.asarray(batch.flux_err, dtype=model_flux.dtype)
-    fallback = jnp.asarray(
-        sleep_config["feature_err_scale"], dtype=model_flux.dtype
-    )[None, :]
-    valid = batch.mask & jnp.isfinite(reported) & (reported > 0.0)
+    reported = _repeat_sleep_rows(
+        jnp.asarray(batch.flux_err, dtype=model_flux.dtype),
+        int(model_flux.shape[0]),
+    )
+    reported_mask = _repeat_sleep_rows(batch.mask, int(model_flux.shape[0]))
+    fallback = jnp.asarray(sleep_config["feature_err_scale"], dtype=model_flux.dtype)[
+        None, :
+    ]
+    valid = reported_mask & jnp.isfinite(reported) & (reported > 0.0)
     return jnp.where(valid, reported, fallback)
 
 
@@ -3942,8 +4284,7 @@ def _sleep_runtime_config(
     requested = str(sleep.get("error_model", "m5_depth")).strip().lower()
     if requested not in {"m5_depth", "observed_catalog"}:
         raise ValueError(
-            "Self-supervised sleep error_model must be m5_depth or "
-            "observed_catalog"
+            "Self-supervised sleep error_model must be m5_depth or observed_catalog"
         )
     bands = tuple(feature_stats.band_names)
     runtime = {
@@ -3981,10 +4322,102 @@ def _sleep_runtime_config(
         gamma_values.append(float(gamma))
     runtime["gamma"] = tuple(gamma_values)
     runtime["sigma_sys_mag"] = float(model.get("sigma_sys_mag", 0.0))
-    runtime["min_sigma_fnu_cgs"] = float(
-        model.get("min_sigma_fnu_cgs", 1.0e-40)
-    )
+    runtime["min_sigma_fnu_cgs"] = float(model.get("min_sigma_fnu_cgs", 1.0e-40))
     return runtime
+
+
+def _selection_correction_runtime_config(
+    config: dict[str, Any],
+    feature_stats: FeatureStats,
+) -> dict[str, Any]:
+    """Resolve the differentiable observed-flux selection contract."""
+    cfg = amortized_config(config)
+    selection = dict(cfg["objective"].get("selection_correction", {}) or {})
+    if not bool(selection.get("enabled", False)):
+        return {"enabled": False}
+    kind = str(selection.get("kind", "observed_magnitude_limit"))
+    kind = kind.strip().lower().replace("-", "_")
+    if kind != "observed_magnitude_limit":
+        raise ValueError(
+            "objective.selection_correction.kind must be observed_magnitude_limit"
+        )
+    survey_noise = str(selection.get("survey_noise", "gaussian_m5"))
+    survey_noise = survey_noise.strip().lower().replace("-", "_")
+    if survey_noise != "gaussian_m5":
+        raise ValueError(
+            "objective.selection_correction.survey_noise must be gaussian_m5"
+        )
+    bands = tuple(feature_stats.band_names)
+    band = str(selection.get("band", "lsst_r"))
+    if band not in bands:
+        raise ValueError(
+            f"objective.selection_correction.band={band!r} is not in configured bands"
+        )
+    max_mag_ab = float(selection.get("max_mag_ab", 25.0))
+    if not np.isfinite(max_mag_ab):
+        raise ValueError("objective.selection_correction.max_mag_ab must be finite")
+    n_prior_samples = int(selection.get("n_prior_samples", 4096))
+    if n_prior_samples <= 0:
+        raise ValueError(
+            "objective.selection_correction.n_prior_samples must be positive"
+        )
+    prior_sample_batch_size = int(
+        selection.get("prior_sample_batch_size", min(64, n_prior_samples))
+    )
+    if prior_sample_batch_size <= 0:
+        raise ValueError(
+            "objective.selection_correction.prior_sample_batch_size must be positive"
+        )
+    model = dict(
+        ((config.get("synthetic_diffsky", {}) or {}).get("flux_error_model", {})) or {}
+    )
+    if str(model.get("type", "")).strip().lower() != "m5_depth":
+        raise ValueError(
+            "Selection correction with gaussian_m5 requires "
+            "synthetic_diffsky.flux_error_model.type=m5_depth"
+        )
+    gamma = _optional_band_config_value(model, "gamma", band)
+    if gamma is None:
+        eta = _optional_band_config_value(model, "eta", band)
+        if eta is None:
+            eta = float(model.get("default_eta", 1.0))
+        gamma = 0.04 * float(eta)
+    gamma = float(gamma)
+    if not np.isfinite(gamma) or gamma < 0.0 or gamma > 0.04:
+        raise ValueError("Selection correction gaussian_m5 requires 0 <= gamma <= 0.04")
+    sigma_sys_mag = float(model.get("sigma_sys_mag", 0.0))
+    if not np.isfinite(sigma_sys_mag) or sigma_sys_mag < 0.0:
+        raise ValueError("Selection correction gaussian_m5 requires sigma_sys_mag >= 0")
+    min_sigma = float(model.get("min_sigma_fnu_cgs", 1.0e-40))
+    if not np.isfinite(min_sigma) or min_sigma <= 0.0:
+        raise ValueError(
+            "Selection correction gaussian_m5 requires min_sigma_fnu_cgs > 0"
+        )
+    flux_limit = float(
+        np.asarray(observed_magnitude_flux_limit_jax(max_mag_ab), dtype=float)
+    )
+    return {
+        "enabled": True,
+        "kind": kind,
+        "band": band,
+        "band_index": bands.index(band),
+        "max_mag_ab": max_mag_ab,
+        "flux_limit_fnu_cgs": flux_limit,
+        "survey_noise": survey_noise,
+        "m5": _band_config_value(model, "m5", band),
+        "gamma": gamma,
+        "sigma_sys_mag": sigma_sys_mag,
+        "min_sigma_fnu_cgs": min_sigma,
+        "n_prior_samples": n_prior_samples,
+        "prior_sample_batch_size": min(
+            prior_sample_batch_size,
+            n_prior_samples,
+        ),
+        "common_random_numbers": bool(selection.get("common_random_numbers", True)),
+        "rng_seed": int(
+            selection.get("seed", int(cfg["training"].get("seed", 42)) + 7919)
+        ),
+    }
 
 
 def _sleep_selection_config(
@@ -3999,10 +4432,19 @@ def _sleep_selection_config(
         raise ValueError(
             f"objective.sleep.selection.band={band!r} is not in configured bands"
         )
-    threshold = float(selection.get("min_flux_fnu_cgs", np.nan))
+    threshold_value = selection.get("min_flux_fnu_cgs")
+    max_mag_ab = selection.get("max_mag_ab")
+    if threshold_value is not None and max_mag_ab is not None:
+        raise ValueError(
+            "objective.sleep.selection must define only one of "
+            "min_flux_fnu_cgs or max_mag_ab"
+        )
+    if max_mag_ab is not None:
+        threshold_value = observed_magnitude_flux_limit_jax(float(max_mag_ab))
+    threshold = float(np.asarray(threshold_value, dtype=float))
     if not np.isfinite(threshold):
         raise ValueError(
-            "objective.sleep.selection.min_flux_fnu_cgs must be finite"
+            "objective.sleep.selection requires finite min_flux_fnu_cgs or max_mag_ab"
         )
     return {
         "selection_band": band,
@@ -4065,7 +4507,7 @@ def _loss_and_grads_jit(
     )
 
 
-def _make_pmap_train_step(optimizer):
+def _make_pmap_train_step(optimizer, *, gradient_clip_norm: float):
     pmap_array_axis = eqx.if_array(0)
 
     @eqx.filter_pmap(
@@ -4147,13 +4589,18 @@ def _make_pmap_train_step(optimizer):
             train_alpha=bool(train_alpha),
             train_band_calibration=bool(train_band_calibration),
         )
-        grad_norms = _component_grad_norms_jax(grads)
+        grad_norms = _component_grad_norms_jax(
+            grads,
+            gradient_clip_norm=float(gradient_clip_norm),
+        )
         loss_finite = jnp.isfinite(loss)
         grads_finite = _tree_all_finite_jax(grads)
         update_applied = jax.lax.pmin(
             (loss_finite & grads_finite).astype(jnp.int32),
             axis_name="devices",
         ).astype(jnp.bool_)
+        if update_phase == "prior_wake":
+            update_applied &= metrics["wake_prior_update_applied"] >= 1.0 - 1.0e-6
         safe_grads = _zero_tree_when_false(grads, update_applied)
         updates, new_opt_state = optimizer.update(
             safe_grads,
@@ -4199,7 +4646,7 @@ def _apply_training_grad_masks(
         "frozen_prior",
     }:
         grads = zero_prior_grads(grads)
-    if update_phase == "prior":
+    if update_phase in {"prior", "prior_wake"}:
         grads = zero_encoder_grads(grads)
         grads = zero_sed_scale_grads(grads)
         grads = zero_band_calibration_grads(grads)
@@ -4230,8 +4677,8 @@ def _restore_frozen_model_components(
         "frozen_prior",
     }:
         new_model = eqx.tree_at(lambda tree: tree.prior, new_model, old_model.prior)
-    if update_phase in {"prior", "encoder_sleep", "encoder_wake"}:
-        if update_phase == "prior":
+    if update_phase in {"prior", "prior_wake", "encoder_sleep", "encoder_wake"}:
+        if update_phase in {"prior", "prior_wake"}:
             new_model = eqx.tree_at(
                 lambda tree: tree.encoder, new_model, old_model.encoder
             )
@@ -4260,17 +4707,39 @@ def _restore_frozen_model_components(
     return new_model
 
 
-def _component_grad_norms_jax(grads: AmortizedModel) -> dict[str, jnp.ndarray]:
+def _component_grad_norms_jax(
+    grads: AmortizedModel,
+    *,
+    gradient_clip_norm: float = 0.0,
+) -> dict[str, jnp.ndarray]:
     encoder_norm = _tree_l2_norm_jax(getattr(grads, "encoder", None))
     prior_norm = _tree_l2_norm_jax(getattr(grads, "prior", None))
     alpha_norm = _tree_l2_norm_jax(getattr(grads, "sed_scale", None))
     band_alpha_norm = _tree_l2_norm_jax(getattr(grads, "band_calibration", None))
+    joint_norm = _tree_l2_norm_jax(grads)
+    clip = jnp.asarray(float(gradient_clip_norm), dtype=joint_norm.dtype)
+    clip_scale = jnp.where(
+        clip > 0.0,
+        jnp.minimum(1.0, clip / jnp.maximum(joint_norm, 1.0e-30)),
+        1.0,
+    )
+    clipped = (clip > 0.0) & (joint_norm > clip)
     return {
         "encoder_grad_norm": encoder_norm,
         "prior_grad_norm": prior_norm,
         "alpha_grad_norm": alpha_norm,
         "band_alpha_grad_norm": band_alpha_norm,
-        "joint_grad_norm": _tree_l2_norm_jax(grads),
+        "joint_grad_norm": joint_norm,
+        "encoder_raw_grad_norm": encoder_norm,
+        "encoder_clipped_grad_norm": encoder_norm * clip_scale,
+        "encoder_grad_clipped_fraction": (clipped & (encoder_norm > 0.0)).astype(
+            jnp.float32
+        ),
+        "prior_raw_grad_norm": prior_norm,
+        "prior_clipped_grad_norm": prior_norm * clip_scale,
+        "prior_grad_clipped_fraction": (clipped & (prior_norm > 0.0)).astype(
+            jnp.float32
+        ),
         "encoder_grad_nonzero": (encoder_norm > 0.0).astype(jnp.float32),
         "prior_grad_nonzero": (prior_norm > 0.0).astype(jnp.float32),
         "alpha_grad_nonzero": (alpha_norm > 0.0).astype(jnp.float32),
@@ -4362,18 +4831,32 @@ def _metrics_record(metrics: dict[str, jnp.ndarray]) -> dict[str, float]:
     }
 
 
-def component_grad_norms(grads: AmortizedModel) -> dict[str, float]:
+def component_grad_norms(
+    grads: AmortizedModel,
+    *,
+    gradient_clip_norm: float = 0.0,
+) -> dict[str, float]:
     """Return L2 gradient norms for the jointly trained neural components."""
     encoder_norm = _tree_l2_norm(getattr(grads, "encoder", None))
     prior_norm = _tree_l2_norm(getattr(grads, "prior", None))
     alpha_norm = _tree_l2_norm(getattr(grads, "sed_scale", None))
     band_alpha_norm = _tree_l2_norm(getattr(grads, "band_calibration", None))
+    joint_norm = _tree_l2_norm(grads)
+    clip = float(gradient_clip_norm)
+    clip_scale = min(1.0, clip / max(joint_norm, 1.0e-30)) if clip > 0.0 else 1.0
+    clipped = bool(clip > 0.0 and joint_norm > clip)
     return {
         "encoder_grad_norm": encoder_norm,
         "prior_grad_norm": prior_norm,
         "alpha_grad_norm": alpha_norm,
         "band_alpha_grad_norm": band_alpha_norm,
-        "joint_grad_norm": _tree_l2_norm(grads),
+        "joint_grad_norm": joint_norm,
+        "encoder_raw_grad_norm": encoder_norm,
+        "encoder_clipped_grad_norm": encoder_norm * clip_scale,
+        "encoder_grad_clipped_fraction": float(clipped and encoder_norm > 0.0),
+        "prior_raw_grad_norm": prior_norm,
+        "prior_clipped_grad_norm": prior_norm * clip_scale,
+        "prior_grad_clipped_fraction": float(clipped and prior_norm > 0.0),
         "encoder_grad_nonzero": float(encoder_norm > 0.0),
         "prior_grad_nonzero": float(prior_norm > 0.0),
         "alpha_grad_nonzero": float(alpha_norm > 0.0),
@@ -4626,6 +5109,7 @@ def _objective_config_for_epoch(
         "sample_strategy": str(objective.get("sample_strategy", "random")),
         "wake": dict(objective.get("wake", {}) or {}),
         "sleep": dict(objective.get("sleep", {}) or {}),
+        "selection_correction": dict(objective.get("selection_correction", {}) or {}),
     }
 
 
@@ -4788,6 +5272,9 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "sample_strategy": str(cfg["objective"].get("sample_strategy", "random")),
             "wake": dict(cfg["objective"].get("wake", {}) or {}),
             "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
+            "selection_correction": dict(
+                cfg["objective"].get("selection_correction", {}) or {}
+            ),
             "likelihood": cfg["likelihood"].get("type", "student_t"),
             "jointly_optimized_components": optimized,
         },

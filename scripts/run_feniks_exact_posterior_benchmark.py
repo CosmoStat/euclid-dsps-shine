@@ -43,21 +43,26 @@ from euclid_dsps.amortized.latent import (
     theta_to_x,
     x_to_theta,
 )
-from euclid_dsps.amortized.likelihood import photometric_loglike
 from euclid_dsps.amortized.map_adam import (
     _jit_latent_spec,
     _make_map_starts,
     _optimize_map_start_chunk_jit,
 )
-from euclid_dsps.amortized.posterior import sample_posterior
+from euclid_dsps.amortized.posterior import (
+    defensive_posterior_proposal,
+    sample_posterior,
+)
+from euclid_dsps.amortized.posterior_target import (
+    PosteriorObservation,
+    physical_bounds_diagnostics,
+    posterior_log_target,
+)
 from euclid_dsps.amortized.train import (
     _latent_spec_for_amortized_config,
     _StaticArg,
     load_checkpoint,
 )
 from euclid_dsps.calibration import (
-    apply_global_sed_scale_to_flux,
-    apply_per_band_flux_calibration_to_flux,
     global_sed_scale_config,
     per_band_flux_calibration_config,
 )
@@ -203,9 +208,7 @@ def prepare_cohort(args: argparse.Namespace, config: dict[str, Any]) -> None:
         "likelihood": {
             "type": config["amortized"]["likelihood"]["type"],
             "student_t_dof": config["amortized"]["likelihood"]["student_t_dof"],
-            "error_floor_frac": config["amortized"]["likelihood"][
-                "error_floor_frac"
-            ],
+            "error_floor_frac": config["amortized"]["likelihood"]["error_floor_frac"],
             "error_jitter": config["amortized"]["likelihood"]["error_jitter"],
         },
     }
@@ -275,13 +278,78 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     _write_json(
         galaxy_dir / "importance_diagnostics.json",
         {
-            key_name: (
-                float(value) if np.isfinite(float(value)) else None
-            )
+            key_name: (float(value) if np.isfinite(float(value)) else None)
             for key_name, value in importance.items()
             if np.isscalar(value)
         },
     )
+    proposal_components = (
+        ((runtime.config.get("amortized", {}) or {}).get("objective", {}) or {})
+        .get("wake", {})
+        .get("proposal", {})
+        .get("components")
+    )
+    if proposal_components:
+        key, defensive_key = jax.random.split(key)
+        defensive = defensive_posterior_proposal(
+            runtime.model,
+            defensive_key,
+            runtime.batch.features,
+            n_encoder,
+            proposal_components,
+        )
+        defensive_x = defensive.x[:, 0, :]
+        defensive_logq = defensive.logproposal[:, 0]
+        defensive_target = _evaluate_target_chunks(
+            target_fn,
+            defensive_x,
+            chunk_size=256,
+        )
+        defensive_theta = np.asarray(
+            jax.device_get(x_to_theta(defensive_x, runtime.latent_spec))
+        )
+        defensive_frame = _sample_frame(
+            np.asarray(jax.device_get(defensive_x)),
+            defensive_theta,
+            runtime.latent_spec.names,
+            logq=np.asarray(jax.device_get(defensive_logq)),
+            target=defensive_target,
+        )
+        defensive_frame["proposal_component"] = np.asarray(
+            jax.device_get(defensive.component_index[:, 0]), dtype=np.int32
+        )
+        _write_parquet(
+            defensive_frame,
+            galaxy_dir / "defensive_encoder_samples.parquet",
+        )
+        defensive_importance = normalized_importance_weights(
+            defensive_frame["logtarget"].to_numpy(),
+            defensive_frame["logq"].to_numpy(),
+        )
+        defensive_weighted = defensive_frame.copy()
+        for name in ("log_weight", "weight", "psis_weight"):
+            defensive_weighted[name] = defensive_importance[name]
+        _write_parquet(
+            defensive_weighted,
+            galaxy_dir / "defensive_importance_weighted_samples.parquet",
+        )
+        defensive_index = systematic_resample(
+            np.asarray(defensive_importance["psis_weight"]),
+            min(n_encoder, 8_192),
+            seed=int(args.seed) + galaxy_index + 50_000,
+        )
+        _write_parquet(
+            defensive_weighted.iloc[defensive_index].reset_index(drop=True),
+            galaxy_dir / "defensive_importance_resampled_samples.parquet",
+        )
+        _write_json(
+            galaxy_dir / "defensive_importance_diagnostics.json",
+            {
+                key_name: (float(value) if np.isfinite(float(value)) else None)
+                for key_name, value in defensive_importance.items()
+                if np.isscalar(value)
+            },
+        )
     key, map_key = jax.random.split(key)
     map_frame, map_trace, best_x = _run_map(
         runtime,
@@ -332,7 +400,9 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     audit = _evaluate_target_chunks(target_fn, jnp.asarray(audit_points), chunk_size=8)
     logdensity = _logdensity_fn(runtime)
     gradients = np.asarray(
-        jax.device_get(jax.jit(jax.vmap(jax.grad(logdensity)))(jnp.asarray(audit_points)))
+        jax.device_get(
+            jax.jit(jax.vmap(jax.grad(logdensity)))(jnp.asarray(audit_points))
+        )
     )
     roundtrip = np.asarray(
         jax.device_get(
@@ -350,9 +420,7 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
             "logprior": audit.logprior,
             "logtarget": audit.logtarget,
             "gradient_norm": gradient_norm,
-            "roundtrip_max_abs_error": np.max(
-                np.abs(roundtrip - audit_points), axis=1
-            ),
+            "roundtrip_max_abs_error": np.max(np.abs(roundtrip - audit_points), axis=1),
         }
     )
     for index, name in enumerate(runtime.latent_spec.names):
@@ -490,10 +558,7 @@ def sample_nuts_batched(args: argparse.Namespace, config: dict[str, Any]) -> Non
     if not (galaxy_dir / "PREP_DONE").exists():
         raise FileNotFoundError(f"Galaxy preparation is incomplete: {galaxy_dir}")
     requested = (
-        tuple(
-            int(value)
-            for value in args.chain_indices.replace(":", ",").split(",")
-        )
+        tuple(int(value) for value in args.chain_indices.replace(":", ",").split(","))
         if args.chain_indices
         else (0, 1, 2, 3)
     )
@@ -534,8 +599,7 @@ def sample_nuts_batched(args: argparse.Namespace, config: dict[str, Any]) -> Non
         for chain_index in requested
     )
     out_dirs = tuple(
-        galaxy_dir / "nuts" / f"chain_{chain_index:02d}"
-        for chain_index in requested
+        galaxy_dir / "nuts" / f"chain_{chain_index:02d}" for chain_index in requested
     )
     manifests = run_batched_nuts_chains(
         logdensity_fn,
@@ -557,9 +621,7 @@ def finalize_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
     samplers = _selected_samplers(args)
     for sampler in samplers:
         n_chains = 2 if args.mode == "smoke" and sampler == "mclmc" else 4
-        directories = [
-            galaxy_dir / sampler / f"chain_{i:02d}" for i in range(n_chains)
-        ]
+        directories = [galaxy_dir / sampler / f"chain_{i:02d}" for i in range(n_chains)]
         missing = [path for path in directories if not (path / "DONE").exists()]
         if missing:
             raise FileNotFoundError(
@@ -573,6 +635,11 @@ def finalize_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
         _write_json(galaxy_dir / sampler / "diagnostics.json", summary)
         samples = _combine_physical_chains(directories, runtime.latent_spec)
         _write_parquet(samples, galaxy_dir / sampler / "samples.parquet")
+    _write_bounds_and_geometry_diagnostics(
+        galaxy_dir,
+        runtime.latent_spec,
+        samplers=samplers,
+    )
     if args.mode != "smoke":
         _write_corner_plots(galaxy_dir, runtime, item, samplers=samplers)
         _write_sed_and_photometry(galaxy_dir, runtime, item, samplers=samplers)
@@ -654,6 +721,13 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
         )
         row["importance_pareto_k"] = importance["pareto_k"]
         row["importance_raw_ess"] = importance["raw_ess"]
+        row["importance_raw_ess_fraction"] = importance["raw_ess_fraction"]
+        defensive_path = galaxy_dir / "defensive_importance_diagnostics.json"
+        if defensive_path.exists():
+            defensive = json.loads(defensive_path.read_text())
+            row["defensive_importance_pareto_k"] = defensive["pareto_k"]
+            row["defensive_importance_raw_ess"] = defensive["raw_ess"]
+            row["defensive_importance_raw_ess_fraction"] = defensive["raw_ess_fraction"]
         rows.append(row)
     scoreboard = pd.DataFrame(rows)
     _write_parquet(scoreboard, args.out / "scoreboard.parquet")
@@ -668,11 +742,14 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
         )
         for sampler in samplers
     }
+    methods = ["encoder", "importance", "map", *samplers, "truth"]
+    if "defensive_importance_raw_ess" in scoreboard:
+        methods.insert(2, "defensive_importance")
     _write_json(
         args.out / "benchmark_summary.json",
         {
             "galaxies": int(len(scoreboard)),
-            "methods": ["encoder", "importance", "map", *samplers, "truth"],
+            "methods": methods,
             **convergence,
             "code_commit": _git_commit(),
         },
@@ -704,11 +781,15 @@ def _write_run_comparison(
         "Encoder": "encoder_samples.parquet",
         "Encoder + IS": "importance_resampled_samples.parquet",
     }
+    if all(
+        (
+            _galaxy_dir(out, item) / "defensive_importance_resampled_samples.parquet"
+        ).exists()
+        for item in cohort.itertuples(index=False)
+    ):
+        methods["Defensive + IS"] = "defensive_importance_resampled_samples.parquet"
     methods.update(
-        {
-            sampler.upper(): f"{sampler}/samples.parquet"
-            for sampler in samplers
-        }
+        {sampler.upper(): f"{sampler}/samples.parquet" for sampler in samplers}
     )
     for item in cohort.itertuples(index=False):
         galaxy_dir = _galaxy_dir(out, item)
@@ -769,9 +850,7 @@ def _write_run_comparison(
                 }
             )
         observation = pd.read_parquet(galaxy_dir / "observation.parquet")
-        predictions = pd.read_parquet(
-            galaxy_dir / "photometric_predictions.parquet"
-        )
+        predictions = pd.read_parquet(galaxy_dir / "photometric_predictions.parquet")
         for label, frame in predictions.groupby("method"):
             merged = observation.merge(frame, on="band", validate="one_to_one")
             valid = merged["mask"].astype(bool) & (merged["flux_err"] > 0)
@@ -799,6 +878,7 @@ def _write_run_comparison(
     shown_methods = [
         "Encoder",
         "Encoder + IS",
+        "Defensive + IS",
         *[sampler.upper() for sampler in samplers if sampler != "nuts"],
         "MAP",
     ]
@@ -828,13 +908,11 @@ def _write_run_comparison(
         for row, method in enumerate(shown_methods):
             subset = posterior.loc[posterior["method"] == method]
             for col, name in enumerate(names):
-                values = subset.loc[
-                    subset["parameter"] == name, column
-                ].to_numpy(dtype=float)
-                finite = values[np.isfinite(values)]
-                matrix[row, col] = (
-                    np.median(finite) if finite.size else np.nan
+                values = subset.loc[subset["parameter"] == name, column].to_numpy(
+                    dtype=float
                 )
+                finite = values[np.isfinite(values)]
+                matrix[row, col] = np.median(finite) if finite.size else np.nan
         image = ax.imshow(
             matrix,
             aspect="auto",
@@ -850,7 +928,15 @@ def _write_run_comparison(
     fig.savefig(out / "posterior_method_agreement.pdf")
     plt.close(fig)
 
-    order = ["Truth", "MAP", "Encoder", "Encoder + IS", "NUTS", "MCLMC"]
+    order = [
+        "Truth",
+        "MAP",
+        "Encoder",
+        "Encoder + IS",
+        "Defensive + IS",
+        "NUTS",
+        "MCLMC",
+    ]
     summary = (
         photometry.groupby("method")["chi2_median_prediction"]
         .agg(["median", "min", "max"])
@@ -982,33 +1068,27 @@ def _load_runtime_rows(
 
 def _target_components_fn(runtime: Runtime):
     def components(x):
-        model_flux = model_flux_from_x(
+        target = posterior_log_target(
+            runtime.model,
             x[None, None, :],
+            PosteriorObservation(
+                runtime.batch.flux,
+                runtime.batch.flux_err,
+                runtime.batch.mask,
+            ),
             runtime.latent_spec,
             runtime.context,
             runtime.model_args,
             runtime.latent_spec.names,
+            runtime.likelihood,
+            {"calibration": runtime.config.get("calibration", {}) or {}},
+            model_flux_fn=model_flux_from_x,
         )
-        if runtime.use_global_scale:
-            model_flux = apply_global_sed_scale_to_flux(
-                model_flux, runtime.log_alpha_sed
-            )
-        if runtime.use_band_calibration:
-            model_flux = apply_per_band_flux_calibration_to_flux(
-                model_flux, runtime.log_alpha_band
-            )
-        loglike = photometric_loglike(
-            runtime.batch.flux,
-            model_flux,
-            runtime.batch.flux_err,
-            runtime.batch.mask,
-            likelihood_type=str(runtime.likelihood["type"]),
-            student_t_dof=float(runtime.likelihood["student_t_dof"]),
-            error_floor_frac=float(runtime.likelihood["error_floor_frac"]),
-            error_jitter=float(runtime.likelihood["error_jitter"]),
-        )[0, 0]
-        logprior = runtime.model.prior.log_prob(x)
-        return TargetValues(loglike, logprior, loglike + logprior)
+        return TargetValues(
+            target.loglike[0, 0],
+            target.logprior[0, 0],
+            target.logtarget[0, 0],
+        )
 
     return components
 
@@ -1027,32 +1107,19 @@ def _conditional_logdensity_fn(runtime: Runtime):
 
     def logdensity(x, observation):
         flux, flux_err, mask = observation
-        model_flux = model_flux_from_x(
+        target = posterior_log_target(
+            runtime.model,
             x[None, None, :],
+            PosteriorObservation(flux[None, :], flux_err[None, :], mask[None, :]),
             runtime.latent_spec,
             runtime.context,
             runtime.model_args,
             runtime.latent_spec.names,
+            runtime.likelihood,
+            {"calibration": runtime.config.get("calibration", {}) or {}},
+            model_flux_fn=model_flux_from_x,
         )
-        if runtime.use_global_scale:
-            model_flux = apply_global_sed_scale_to_flux(
-                model_flux, runtime.log_alpha_sed
-            )
-        if runtime.use_band_calibration:
-            model_flux = apply_per_band_flux_calibration_to_flux(
-                model_flux, runtime.log_alpha_band
-            )
-        loglike = photometric_loglike(
-            flux[None, :],
-            model_flux,
-            flux_err[None, :],
-            mask[None, :],
-            likelihood_type=str(runtime.likelihood["type"]),
-            student_t_dof=float(runtime.likelihood["student_t_dof"]),
-            error_floor_frac=float(runtime.likelihood["error_floor_frac"]),
-            error_jitter=float(runtime.likelihood["error_jitter"]),
-        )[0, 0]
-        return loglike + runtime.model.prior.log_prob(x)
+        return target.logtarget[0, 0]
 
     return logdensity
 
@@ -1106,9 +1173,9 @@ def _run_map(runtime: Runtime, key, *, n_starts: int, maxiter: int):
         use_band_calibration=runtime.use_band_calibration,
     )
     x = np.asarray(jax.device_get(result["best_x"]))[:, 0, :]
-    theta = np.asarray(jax.device_get(x_to_theta(result["best_x"], runtime.latent_spec)))[
-        :, 0, :
-    ]
+    theta = np.asarray(
+        jax.device_get(x_to_theta(result["best_x"], runtime.latent_spec))
+    )[:, 0, :]
     objective = np.asarray(jax.device_get(result["best_objective"]))[:, 0]
     rows = {
         "start": np.arange(n_starts),
@@ -1222,6 +1289,64 @@ def _combine_physical_chains(directories, latent_spec) -> pd.DataFrame:
     return pd.concat(pieces, ignore_index=True)
 
 
+def _write_bounds_and_geometry_diagnostics(
+    galaxy_dir: Path,
+    latent_spec,
+    *,
+    samplers: tuple[str, ...],
+) -> None:
+    """Audit physical support and q/NUTS covariance mismatch per galaxy."""
+    x_columns = [f"x_{name}" for name in latent_spec.names]
+    method_paths = {
+        "encoder": galaxy_dir / "encoder_samples.parquet",
+        **{sampler: galaxy_dir / sampler / "samples.parquet" for sampler in samplers},
+    }
+    defensive_path = galaxy_dir / "defensive_encoder_samples.parquet"
+    if defensive_path.exists():
+        method_paths["defensive_encoder"] = defensive_path
+    bounds = {}
+    arrays = {}
+    for method, path in method_paths.items():
+        frame = pd.read_parquet(path, columns=x_columns)
+        x = frame[x_columns].to_numpy(dtype=np.float64)
+        arrays[method] = x
+        bounds[method] = physical_bounds_diagnostics(x, latent_spec)
+    _write_json(galaxy_dir / "fit_bounds_diagnostics.json", bounds)
+    if "nuts" not in arrays:
+        return
+    geometry = {}
+    for method in ("encoder", "defensive_encoder"):
+        if method not in arrays:
+            continue
+        ratios = _generalized_covariance_ratios(arrays[method], arrays["nuts"])
+        geometry[method] = {
+            "definition": "Sigma_NUTS v = lambda Sigma_q v",
+            "generalized_variance_ratio_min": float(np.min(ratios)),
+            "generalized_variance_ratio_median": float(np.median(ratios)),
+            "generalized_variance_ratio_max": float(np.max(ratios)),
+            "bad_max_ratio_ge_2": bool(np.max(ratios) >= 2.0),
+        }
+    _write_json(galaxy_dir / "posterior_geometry_diagnostics.json", geometry)
+
+
+def _generalized_covariance_ratios(
+    q_samples: np.ndarray,
+    nuts_samples: np.ndarray,
+) -> np.ndarray:
+    from scipy.linalg import eigvalsh
+
+    q_cov = np.cov(np.asarray(q_samples, dtype=np.float64), rowvar=False)
+    nuts_cov = np.cov(np.asarray(nuts_samples, dtype=np.float64), rowvar=False)
+    dimension = int(q_cov.shape[0])
+    scale = max(
+        float(np.trace(q_cov) + np.trace(nuts_cov)) / max(2 * dimension, 1),
+        1.0e-8,
+    )
+    ridge = 1.0e-6 * scale
+    identity = np.eye(dimension, dtype=np.float64)
+    return eigvalsh(nuts_cov + ridge * identity, q_cov + ridge * identity)
+
+
 def _write_corner_plots(
     galaxy_dir: Path,
     runtime: Runtime,
@@ -1239,11 +1364,12 @@ def _write_corner_plots(
             galaxy_dir / "importance_resampled_samples.parquet"
         ),
     }
+    defensive_path = galaxy_dir / "defensive_importance_resampled_samples.parquet"
+    if defensive_path.exists():
+        methods["Defensive + IS"] = pd.read_parquet(defensive_path)
     methods.update(
         {
-            sampler.upper(): pd.read_parquet(
-                galaxy_dir / sampler / "samples.parquet"
-            )
+            sampler.upper(): pd.read_parquet(galaxy_dir / sampler / "samples.parquet")
             for sampler in samplers
         }
     )
@@ -1256,11 +1382,15 @@ def _write_corner_plots(
     colors = {
         "Encoder": "#0072B2",
         "Encoder + IS": "#009E73",
+        "Defensive + IS": "#56B4E9",
         "NUTS": "#D55E00",
         "MCLMC": "#CC79A7",
     }
     for subset_name, subset in (
-        ("corner_key5", ("z_obs", "log10_stellar_mass", "dust_av", "dust_delta", "sfh_dlog_sfr_01")),
+        (
+            "corner_key5",
+            ("z_obs", "log10_stellar_mass", "dust_av", "dust_delta", "sfh_dlog_sfr_01"),
+        ),
         ("corner_full15", names),
     ):
         labels = list(subset)
@@ -1343,12 +1473,16 @@ def _write_sed_and_photometry(
             32,
         ),
     }
+    defensive_path = galaxy_dir / "defensive_importance_resampled_samples.parquet"
+    if defensive_path.exists():
+        sources["Defensive + IS"] = _even_subsample(
+            pd.read_parquet(defensive_path)[list(names)],
+            32,
+        )
     sources.update(
         {
             sampler.upper(): _even_subsample(
-                pd.read_parquet(galaxy_dir / sampler / "samples.parquet")[
-                    list(names)
-                ],
+                pd.read_parquet(galaxy_dir / sampler / "samples.parquet")[list(names)],
                 32,
             )
             for sampler in samplers
@@ -1359,6 +1493,7 @@ def _write_sed_and_photometry(
         "MAP": "#E69F00",
         "Encoder": "#0072B2",
         "Encoder + IS": "#009E73",
+        "Defensive + IS": "#56B4E9",
         "NUTS": "#D55E00",
         "MCLMC": "#CC79A7",
     }
@@ -1386,7 +1521,9 @@ def _write_sed_and_photometry(
         galaxy_dir / "sed_draws.npz",
         wave=next(iter(sed_artifacts.values()))[0].wave,
         **{
-            f"{label.lower().replace(' ', '_').replace('+', 'plus')}_dusted_rest_sed": value[0].dusted_rest_sed
+            f"{label.lower().replace(' ', '_').replace('+', 'plus')}_dusted_rest_sed": value[
+                0
+            ].dusted_rest_sed
             for label, value in sed_artifacts.items()
         },
     )
@@ -1477,10 +1614,14 @@ def _write_convergence_plots(
     for sampler in samplers:
         frame = pd.read_parquet(galaxy_dir / sampler / "samples.parquet")
         shown = names[:5]
-        fig, axes = plt.subplots(len(shown), 1, figsize=(10, 1.8 * len(shown)), sharex=True)
+        fig, axes = plt.subplots(
+            len(shown), 1, figsize=(10, 1.8 * len(shown)), sharex=True
+        )
         for ax, name in zip(np.atleast_1d(axes), shown, strict=True):
             for chain, group in frame.groupby("chain"):
-                ax.plot(group["draw"], group[name], lw=0.55, alpha=0.75, label=f"c{chain}")
+                ax.plot(
+                    group["draw"], group[name], lw=0.55, alpha=0.75, label=f"c{chain}"
+                )
             ax.set_ylabel(name)
         axes[0].legend(ncol=4, fontsize=7)
         axes[-1].set_xlabel("stored draw")
@@ -1512,7 +1653,11 @@ def _cohort_item(out: Path, galaxy_index: int):
 
 
 def _galaxy_dir(out: Path, item) -> Path:
-    return out / "galaxies" / f"{int(item.order):02d}_{item.example_key}_row{int(item.row_index)}"
+    return (
+        out
+        / "galaxies"
+        / f"{int(item.order):02d}_{item.example_key}_row{int(item.row_index)}"
+    )
 
 
 def _sample_chunks(args: argparse.Namespace) -> tuple[int, ...]:
@@ -1608,9 +1753,7 @@ def _sha256(path: Path) -> str:
 
 
 def _git_commit() -> str:
-    return subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], text=True
-    ).strip()
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:

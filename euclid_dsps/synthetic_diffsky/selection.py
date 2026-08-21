@@ -7,6 +7,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.photometry import abmag_to_fnu_cgs
+
 DEFAULT_SELECTION: dict[str, Any] = {
     "min_logsm": None,
     "max_logsm": None,
@@ -16,6 +18,7 @@ DEFAULT_SELECTION: dict[str, Any] = {
     "min_true_snr_bands": 0,
     "min_observed_snr_bands": 0,
     "magnitude_limits": {},
+    "observed_magnitude_limits": {},
     "min_magnitude_limit_bands": 0,
     "required_magnitude_limit_bands": [],
     "photometric_oversample_factor": 1.0,
@@ -37,6 +40,10 @@ def normalize_selection(selection: dict[str, Any] | None) -> dict[str, Any]:
         str(band): float(limit)
         for band, limit in dict(out.get("magnitude_limits") or {}).items()
     }
+    out["observed_magnitude_limits"] = {
+        str(band): float(limit)
+        for band, limit in dict(out.get("observed_magnitude_limits") or {}).items()
+    }
     out["min_magnitude_limit_bands"] = int(out["min_magnitude_limit_bands"])
     out["required_magnitude_limit_bands"] = [
         str(band) for band in list(out.get("required_magnitude_limit_bands") or [])
@@ -48,13 +55,14 @@ def normalize_selection(selection: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def photometric_selection_enabled(selection: dict[str, Any] | None) -> bool:
-    """Return True when S/N cuts must be applied after DSPS photometry."""
+    """Return True when observable-space cuts follow DSPS photometry."""
     cfg = normalize_selection(selection)
     return bool(
         cfg["min_true_snr_bands"] > 0
         or cfg["min_observed_snr_bands"] > 0
         or cfg["min_magnitude_limit_bands"] > 0
         or len(cfg["required_magnitude_limit_bands"]) > 0
+        or len(cfg["observed_magnitude_limits"]) > 0
     )
 
 
@@ -115,15 +123,35 @@ def append_snr_selection_columns(
 ) -> pd.DataFrame:
     """Add compact photometric-selection diagnostics."""
     cfg = normalize_selection(selection)
+    observed_flux_limits = _observed_flux_limits(cfg["observed_magnitude_limits"])
+    return _append_photometric_selection_columns(
+        frame,
+        bands,
+        cfg,
+        observed_flux_limits,
+    )
+
+
+def _append_photometric_selection_columns(
+    frame: pd.DataFrame,
+    bands: list[str],
+    cfg: dict[str, Any],
+    observed_flux_limits: dict[str, float],
+) -> pd.DataFrame:
     out = frame.copy()
     threshold = float(cfg["snr_threshold"])
     true_counts = _snr_counts(out, bands, threshold=threshold, observed=False)
     observed_counts = _snr_counts(out, bands, threshold=threshold, observed=True)
     mag_counts = _magnitude_limit_counts(out, cfg["magnitude_limits"])
+    observed_mag_counts = _observed_magnitude_limit_counts(
+        out,
+        observed_flux_limits,
+    )
     out["snr_selection_threshold"] = threshold
     out["n_bands_true_snr_ge_threshold"] = true_counts
     out["n_bands_observed_snr_ge_threshold"] = observed_counts
     out["n_bands_mag_true_le_limit"] = mag_counts
+    out["n_bands_mag_observed_lt_limit"] = observed_mag_counts
     return out
 
 
@@ -132,9 +160,15 @@ def apply_photometric_selection(
     bands: list[str],
     selection: dict[str, Any] | None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """Apply S/N gates to DSPS-photometered candidate rows."""
+    """Apply observable-space gates to DSPS-photometered candidate rows."""
     cfg = normalize_selection(selection)
-    with_counts = append_snr_selection_columns(frame, bands, cfg)
+    observed_flux_limits = _observed_flux_limits(cfg["observed_magnitude_limits"])
+    with_counts = _append_photometric_selection_columns(
+        frame,
+        bands,
+        cfg,
+        observed_flux_limits,
+    )
     selected = pd.Series(True, index=with_counts.index)
     summary: dict[str, Any] = {
         "input_size": int(len(with_counts)),
@@ -142,6 +176,8 @@ def apply_photometric_selection(
         "min_true_snr_bands": int(cfg["min_true_snr_bands"]),
         "min_observed_snr_bands": int(cfg["min_observed_snr_bands"]),
         "magnitude_limits": dict(cfg["magnitude_limits"]),
+        "observed_magnitude_limits": dict(cfg["observed_magnitude_limits"]),
+        "observed_flux_limits_fnu_cgs": dict(observed_flux_limits),
         "min_magnitude_limit_bands": int(cfg["min_magnitude_limit_bands"]),
         "required_magnitude_limit_bands": list(cfg["required_magnitude_limit_bands"]),
         "cuts": {},
@@ -191,6 +227,19 @@ def apply_photometric_selection(
             **_cut_summary(mask),
             "threshold": float(cfg["magnitude_limits"][band]),
         }
+    for band, flux_limit in observed_flux_limits.items():
+        flux_col = f"flux_{band}"
+        if flux_col not in with_counts:
+            raise ValueError(f"Photometric selection requires {flux_col}")
+        flux = pd.to_numeric(with_counts[flux_col], errors="coerce").to_numpy(float)
+        mask = np.isfinite(flux) & (flux > float(flux_limit))
+        selected &= mask
+        summary["cuts"][f"observed_magnitude_limit_{band}"] = {
+            **_cut_summary(mask),
+            "max_mag_ab": float(cfg["observed_magnitude_limits"][band]),
+            "flux_min_fnu_cgs": float(flux_limit),
+            "source_column": flux_col,
+        }
     selected_frame = with_counts.loc[selected.to_numpy()].reset_index(drop=True)
     summary["selected_size"] = int(len(selected_frame))
     summary["selected_fraction"] = (
@@ -205,6 +254,9 @@ def apply_photometric_selection(
         )
         summary["magnitude_limit_band_count_quantiles"] = _quantiles(
             with_counts["n_bands_mag_true_le_limit"].to_numpy(float)
+        )
+        summary["observed_magnitude_limit_band_count_quantiles"] = _quantiles(
+            with_counts["n_bands_mag_observed_lt_limit"].to_numpy(float)
         )
     return selected_frame, summary
 
@@ -244,6 +296,29 @@ def _magnitude_limit_counts(
             raise ValueError(f"Photometric selection requires {mag_col}")
         mag = pd.to_numeric(frame[mag_col], errors="coerce").to_numpy(float)
         counts += (np.isfinite(mag) & (mag <= float(limit))).astype(np.int16)
+    return counts
+
+
+def _observed_flux_limits(
+    observed_magnitude_limits: dict[str, float],
+) -> dict[str, float]:
+    return {
+        band: float(np.asarray(abmag_to_fnu_cgs(limit), dtype=float))
+        for band, limit in observed_magnitude_limits.items()
+    }
+
+
+def _observed_magnitude_limit_counts(
+    frame: pd.DataFrame,
+    observed_flux_limits: dict[str, float],
+) -> np.ndarray:
+    counts = np.zeros(len(frame), dtype=np.int16)
+    for band, flux_limit in observed_flux_limits.items():
+        flux_col = f"flux_{band}"
+        if flux_col not in frame:
+            raise ValueError(f"Photometric selection requires {flux_col}")
+        flux = pd.to_numeric(frame[flux_col], errors="coerce").to_numpy(float)
+        counts += (np.isfinite(flux) & (flux > float(flux_limit))).astype(np.int16)
     return counts
 
 

@@ -1,5 +1,56 @@
 # Plan
 
+## 2026-08-21 Mass-covering sleep NPE and selection-corrected parent prior
+
+- Status: implementation complete and locally validated; Jean-Zay smoke,
+  production training and exact-posterior confirmation remain unexecuted. The
+  completed 20k architecture battle is diagnostic only: all three posterior
+  families collapsed to roughly one to three effective samples out of 2048
+  with catastrophic Pareto tails. Do not run another architecture sweep; keep
+  the established conditional RealNVP and change the training objective and
+  target contract.
+- Introduce one canonical learned-prior posterior target, including the common
+  physical-bounds mask, fixed DSPS decoder, fixed calibration, robust
+  likelihood and learned-prior density. Reuse it in wake/SMC, stored inference
+  targets, MAP and the exact NUTS/MCLMC benchmark. Persist per-chain bounds
+  audits.
+- Train the encoder only with model-generated inclusive-KL sleep using observed
+  catalog errors as fixed covariates. Apply the observed `lsst_r < 25` cut only
+  after drawing noisy photometry. Select encoder checkpoints with held-out
+  sleep NLL and log full-flow entropy diagnostics.
+- Freeze the prior for the first 24 epochs. Thereafter alternate seven sleep
+  epochs with one defensive wake epoch. Wake freezes the encoder and updates
+  only the learned parent-population prior with stopped normalized weights from
+  the exact mixture `0.50 q_T1 + 0.25 q_T2 + 0.15 q_T4 + 0.10 p_eta`.
+- Keep normalized wake/IS weights exactly
+  `softmax(loglike + logprior - logproposal)`. Correct the mean prior M-step as
+  `-E_w[log p_eta(x)] + log(alpha_eta)`, with differentiable Gaussian-PhotoErr
+  survey completeness. Never add `beta(x)` or `log(alpha_eta)` to per-object
+  normalized particle weights.
+- Fail closed on poor wake support: record ESS, maximum weight and weight
+  entropy, exclude unsupported objects, and skip the whole prior update when
+  the batch median ESS fraction is below the configured floor. A falling
+  photometric objective alone is not a success criterion.
+- Deliver one production config and one four-H100 training job, preceded by a
+  tiny smoke. Use the second compute stage only for a stratified exact-posterior
+  array comparing raw q, q-only IS, defensive IS, MAP and NUTS, including
+  generalized covariance-ratio diagnostics.
+- The production launcher builds immutable manifests from observed
+  `flux_lsst_r` and errors only, submits a two-epoch four-H100 smoke, then one
+  80-epoch four-H100 run. The exact launcher submits 32 one-galaxy H100 tasks
+  with at most eight concurrent tasks and one CPU finalizer. Task zero also
+  evaluates parent prior, beta-weighted forward-selected prior, aggregate q,
+  parent truth and selected truth without adding a third compute stage.
+- The finalizer fails closed on target support, NUTS convergence, raw-q and
+  defensive-IS ESS/Pareto gates, prior physical support, parent-population
+  closure and forward-selected population closure. Truth enters only this
+  synthetic closure stage.
+- Local verification: `compileall`, Ruff, `bash -n`, `git diff --check`, and
+  131 focused target, posterior, selection, exact-inference, MAP, config and
+  workflow tests pass. A real local training smoke was not possible because
+  the FENIKS train/test parquet files are not present in this checkout; the
+  dependency-gated Jean-Zay smoke is therefore mandatory before production.
+
 ## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
 
 - Status: smoke training, inference, Jacobian Lens, and finalization completed;

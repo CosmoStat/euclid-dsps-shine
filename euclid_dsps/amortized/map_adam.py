@@ -40,7 +40,10 @@ from .latent import (
     theta_to_x,
     x_to_theta,
 )
-from .likelihood import photometric_loglike
+from .posterior_target import (
+    PosteriorObservation,
+    posterior_log_target,
+)
 from .train import (
     JitLatentSpec,
     _latent_spec_for_amortized_config,
@@ -211,9 +214,7 @@ def run_map_adam_under_prior(
         )
     total_objects = int(arrays.flux.shape[0])
     total_batches = (
-        int(np.ceil(total_objects / max(int(batch_size), 1)))
-        if total_objects
-        else 0
+        int(np.ceil(total_objects / max(int(batch_size), 1))) if total_objects else 0
     )
     if verbose:
         print(
@@ -390,7 +391,9 @@ def run_map_adam_under_prior(
         completed_objects += int(batch.flux.shape[0])
         wall_elapsed = float(time.perf_counter() - started_at)
         average_objects_per_s = (
-            float(completed_objects) / wall_elapsed if wall_elapsed > 0.0 else float("nan")
+            float(completed_objects) / wall_elapsed
+            if wall_elapsed > 0.0
+            else float("nan")
         )
         remaining_objects = max(total_objects - completed_objects, 0)
         eta_s = (
@@ -514,9 +517,7 @@ def _validate_checkpoint_free_map(
     if checkpoint is not None:
         return
     if not np.isclose(float(prior_weight), 0.0):
-        raise ValueError(
-            "MAP without an amortized checkpoint requires prior_weight=0"
-        )
+        raise ValueError("MAP without an amortized checkpoint requires prior_weight=0")
     mode = str(start_mode or "").strip().lower()
     if mode not in {"latin_hypercube", "z_grid", "lowz_grid"}:
         raise ValueError(
@@ -871,38 +872,42 @@ def _optimize_map_start_chunk_jit(
     actual_context = context.value if isinstance(context, _StaticArg) else context
 
     def metrics_for_x(x):
-        model_flux_raw = model_flux_from_x(
+        target = posterior_log_target(
+            model,
             x,
+            PosteriorObservation(flux, flux_err, mask),
             latent_spec,
             actual_context,
             model_args,
             parameter_names,
+            {
+                "type": likelihood_type,
+                "student_t_dof": float(student_t_dof),
+                "error_floor_frac": float(error_floor_frac),
+                "error_jitter": float(error_jitter),
+            },
+            {
+                "calibration": {
+                    "global_sed_scale": {"enabled": use_global_scale},
+                    "per_band_zero_points": {"enabled": use_band_calibration},
+                }
+            },
         )
-        model_flux = (
-            apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
-            if use_global_scale
-            else model_flux_raw
-        )
-        model_flux = (
-            apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
-            if use_band_calibration
-            else model_flux
-        )
-        loglike = photometric_loglike(
-            obs_flux=flux,
-            model_flux=model_flux,
-            obs_err=flux_err,
-            mask=mask,
-            likelihood_type=likelihood_type,
-            student_t_dof=float(student_t_dof),
-            error_floor_frac=float(error_floor_frac),
-            error_jitter=float(error_jitter),
-        )
-        logprior = _prior_log_prob_for_map(
-            model,
-            x,
-            latent_spec,
-            prior_density_space=prior_density_space,
+        model_flux = target.model_flux
+        loglike = target.loglike
+        logprior = (
+            target.logprior
+            if _normalize_prior_density_space(prior_density_space) == "x"
+            else jnp.where(
+                target.physical_valid,
+                _prior_log_prob_for_map(
+                    model,
+                    x,
+                    latent_spec,
+                    prior_density_space=prior_density_space,
+                ),
+                -jnp.inf,
+            )
         )
         chi = (model_flux - flux[None, :, :]) / flux_err[None, :, :]
         chi = jnp.where(mask[None, :, :], chi, 0.0)

@@ -1,158 +1,177 @@
 from __future__ import annotations
 
-import jax
+import inspect
+from types import SimpleNamespace
+
 import jax.numpy as jnp
 import numpy as np
 
-from euclid_dsps.model import DspsContext
-from euclid_dsps.posterior_target import (
-    BoundedParameterTransform,
-    build_posterior_target,
-    initial_unconstrained_position,
+import euclid_dsps.amortized.map_adam as map_module
+import euclid_dsps.amortized.train as train_module
+import scripts.run_feniks_exact_posterior_benchmark as exact_module
+from euclid_dsps.amortized.flows import StandardNormalPrior
+from euclid_dsps.amortized.posterior_target import (
+    PosteriorObservation,
+    physical_bounds_diagnostics,
+    posterior_log_target,
+    posterior_log_target_from_model_flux,
 )
+from euclid_dsps.amortized.train import JitLatentSpec, LossBatch
+from euclid_dsps.calibration import GlobalSedScaleState
 
 
-def test_bounded_parameter_transform_roundtrip_and_logjacobian() -> None:
-    transform = BoundedParameterTransform(
-        names=("x", "y"),
-        lower=jnp.asarray([-2.0, 0.0]),
-        upper=jnp.asarray([2.0, 5.0]),
-    )
-    theta = jnp.asarray([-0.4, 2.0])
-    y = transform.to_unconstrained(theta)
-
-    roundtrip = transform.to_bounded(y)
-
-    np.testing.assert_allclose(np.asarray(roundtrip), np.asarray(theta), rtol=1e-5)
-    assert np.isfinite(float(transform.log_abs_det_jacobian(y)))
-
-
-def test_posterior_target_logdensity_has_finite_gradient(monkeypatch) -> None:
-    from euclid_dsps import posterior_target as target_module
-
-    def fake_model_mags_dynamic(context, model_args, params):
-        del context, model_args
-        return jnp.asarray([20.0 + 0.1 * params["x"] + 0.2 * params["y"]])
-
-    monkeypatch.setattr(
-        target_module, "model_mags_jax_dynamic", fake_model_mags_dynamic
-    )
-    target = build_posterior_target(
-        context=DspsContext(ssp=None, filters={}, model_config={}),
-        model_args=(),
-        base_params={"x": 0.0, "y": 0.0},
-        fit_config={
-            "likelihood_space": "mag",
-            "photometric_likelihood": "gaussian",
-            "free_parameters": {
-                "x": {"initial": 0.0, "bounds": [-1.0, 1.0]},
-                "y": {"initial": 0.0, "bounds": [-1.0, 1.0]},
-            },
-        },
-        sample_config={"priors": {"x": {"type": "uniform"}, "y": {"type": "uniform"}}},
-        observed_mag=np.asarray([20.0]),
-        sigma_mag=np.asarray([0.1]),
-        observed_flux=np.asarray([1.0]),
-        flux_error=np.asarray([0.1]),
-    )
-    y0 = initial_unconstrained_position(target, {"x": 0.0, "y": 0.0}, target.fit_config)
-
-    value, grad = jax.value_and_grad(target.logdensity)(y0)
-
-    assert np.isfinite(float(value))
-    assert np.all(np.isfinite(np.asarray(grad)))
-
-
-def test_posterior_target_gas_transform_enforces_constraint(monkeypatch) -> None:
-    from euclid_dsps import posterior_target as target_module
-
-    monkeypatch.setattr(
-        target_module,
-        "model_mags_jax_dynamic",
-        lambda context, model_args, params: jnp.asarray([20.0]),
-    )
-    target = build_posterior_target(
-        context=DspsContext(
-            ssp=None,
-            filters={},
-            model_config={"sfh_model": "popcosmos_bins", "nebular_model": "gas_grid"},
-        ),
-        model_args=(),
-        base_params={
-            "log10_stellar_metallicity": 0.0,
-            "log10_gas_metallicity": 0.0,
-        },
-        fit_config={
-            "likelihood_space": "mag",
-            "photometric_likelihood": "gaussian",
-            "free_parameters": {
-                "log10_stellar_metallicity": {
-                    "initial": 0.0,
-                    "bounds": [-1.0, 1.0],
-                },
-                "log10_gas_metallicity": {
-                    "initial": 0.0,
-                    "bounds": [-1.0, 1.0],
-                },
-            },
-        },
-        sample_config={"priors": {}},
-        observed_mag=np.asarray([20.0]),
-        sigma_mag=np.asarray([0.1]),
-        observed_flux=np.asarray([1.0]),
-        flux_error=np.asarray([0.1]),
-    )
-    invalid_theta = jnp.asarray([0.5, 0.0])
-    invalid_y = target.unconstrained_from_theta(invalid_theta)
-    roundtrip_theta = target.theta_from_unconstrained(invalid_y)
-
-    assert float(roundtrip_theta[1]) >= float(roundtrip_theta[0])
-    assert np.isfinite(float(target.logdensity(invalid_y)))
-
-
-def test_posterior_target_gas_transform_moves_boundary_init_inside() -> None:
-    target = build_posterior_target(
-        context=DspsContext(
-            ssp=None,
-            filters={},
-            model_config={"sfh_model": "popcosmos_bins", "nebular_model": "gas_grid"},
-        ),
-        model_args=(),
-        base_params={
-            "log10_stellar_metallicity": 0.5,
-            "log10_gas_metallicity": 0.5,
-        },
-        fit_config={
-            "likelihood_space": "mag",
-            "photometric_likelihood": "gaussian",
-            "free_parameters": {
-                "log10_stellar_metallicity": {
-                    "initial": 0.5,
-                    "bounds": [-2.0, 0.5],
-                },
-                "log10_gas_metallicity": {
-                    "initial": 0.5,
-                    "bounds": [-2.0, 0.5],
-                },
-            },
-        },
-        sample_config={"priors": {}},
-        observed_mag=np.asarray([20.0]),
-        sigma_mag=np.asarray([0.1]),
-        observed_flux=np.asarray([1.0]),
-        flux_error=np.asarray([0.1]),
+def _latent_spec() -> JitLatentSpec:
+    return JitLatentSpec(
+        names=("a", "b"),
+        lower=jnp.asarray([-1.0, -1.0]),
+        upper=jnp.asarray([1.0, 1.0]),
+        raw_center=jnp.zeros(2),
+        raw_scale=jnp.ones(2),
+        normalization="spline15d_mixed",
+        transform_family=jnp.zeros(2, dtype=jnp.int32),
+        transform_location=jnp.zeros(2),
+        transform_lambda=jnp.ones(2),
     )
 
-    y0 = initial_unconstrained_position(
-        target,
-        {
-            "log10_stellar_metallicity": 0.5,
-            "log10_gas_metallicity": 0.5,
-        },
-        target.fit_config,
-    )
-    theta = target.theta_from_unconstrained(y0)
 
-    assert float(theta[1]) >= float(theta[0])
-    assert float(theta[1]) <= 0.5
-    assert float(theta[0]) < 0.5
+def _model():
+    return SimpleNamespace(
+        prior=StandardNormalPrior(latent_dim=2),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+        band_calibration=None,
+    )
+
+
+def _model_flux(x, *_args, **_kwargs):
+    return jnp.stack((x[..., 0] + 0.2, x[..., 1] - 0.1), axis=-1)
+
+
+def _observation() -> PosteriorObservation:
+    return PosteriorObservation(
+        flux=jnp.asarray([[0.25, -0.15]]),
+        flux_err=jnp.asarray([[0.1, 0.2]]),
+        mask=jnp.asarray([[True, True]]),
+    )
+
+
+def test_all_posterior_paths_are_wired_to_the_canonical_target() -> None:
+    assert "posterior_log_target(" in inspect.getsource(
+        train_module._importance_weighted_wake_outputs
+    )
+    assert "posterior_log_target(" in inspect.getsource(
+        train_module._smc_tempered_terms
+    )
+    assert "posterior_log_target(" in inspect.getsource(
+        exact_module._target_components_fn
+    )
+    assert "posterior_log_target(" in inspect.getsource(
+        map_module._optimize_map_start_chunk_jit
+    )
+
+
+def test_wake_is_nuts_mclmc_and_map_target_values_match_numerically(
+    monkeypatch,
+) -> None:
+    model = _model()
+    spec = _latent_spec()
+    observation = _observation()
+    x = jnp.asarray([[[0.1, -0.2]]])
+    likelihood = {
+        "type": "student_t",
+        "student_t_dof": 2.0,
+        "error_floor_frac": 0.0,
+        "error_jitter": 0.0,
+    }
+    wake_or_is = posterior_log_target(
+        model,
+        x,
+        observation,
+        spec,
+        None,
+        None,
+        spec.names,
+        likelihood,
+        {},
+        model_flux_fn=_model_flux,
+    )
+    map_target = posterior_log_target_from_model_flux(
+        model,
+        x,
+        observation,
+        spec,
+        wake_or_is.model_flux,
+        likelihood,
+    )
+    batch = LossBatch(
+        flux=observation.flux,
+        flux_err=observation.flux_err,
+        mask=observation.mask,
+        features=jnp.zeros((1, 4)),
+        truth_theta=jnp.zeros((1, 0)),
+    )
+    runtime = SimpleNamespace(
+        model=model,
+        batch=batch,
+        latent_spec=spec,
+        context=None,
+        model_args=None,
+        likelihood=likelihood,
+        config={"calibration": {}},
+    )
+    monkeypatch.setattr(exact_module, "model_flux_from_x", _model_flux)
+    exact = exact_module._target_components_fn(runtime)(x[0, 0])
+    expected = float(wake_or_is.logtarget[0, 0])
+    assert np.isclose(float(map_target.logtarget[0, 0]), expected, atol=1.0e-7)
+    assert np.isclose(float(exact.logtarget), expected, atol=1.0e-7)
+    assert np.isclose(float(exact.loglike), float(wake_or_is.loglike[0, 0]))
+    assert np.isclose(float(exact.logprior), float(wake_or_is.logprior[0, 0]))
+
+
+def test_canonical_support_is_identical_and_reports_outside_bounds(
+    monkeypatch,
+) -> None:
+    model = _model()
+    spec = _latent_spec()
+    observation = _observation()
+    invalid_x = jnp.asarray([[[2.0, 0.0]]])
+    likelihood = {"type": "gaussian", "error_floor_frac": 0.0}
+    wake_or_is = posterior_log_target(
+        model,
+        invalid_x,
+        observation,
+        spec,
+        None,
+        None,
+        spec.names,
+        likelihood,
+        {},
+        model_flux_fn=_model_flux,
+    )
+    batch = LossBatch(
+        flux=observation.flux,
+        flux_err=observation.flux_err,
+        mask=observation.mask,
+        features=jnp.zeros((1, 4)),
+        truth_theta=jnp.zeros((1, 0)),
+    )
+    runtime = SimpleNamespace(
+        model=model,
+        batch=batch,
+        latent_spec=spec,
+        context=None,
+        model_args=None,
+        likelihood=likelihood,
+        config={"calibration": {}},
+    )
+    monkeypatch.setattr(exact_module, "model_flux_from_x", _model_flux)
+    exact = exact_module._target_components_fn(runtime)(invalid_x[0, 0])
+    assert not bool(wake_or_is.physical_valid[0, 0])
+    assert np.isneginf(float(wake_or_is.logtarget[0, 0]))
+    assert np.isneginf(float(exact.logtarget))
+    diagnostics = physical_bounds_diagnostics(
+        jnp.asarray([[0.0, 0.0], [2.0, 0.0]]),
+        spec,
+    )
+    assert diagnostics["fraction_of_samples_outside_fit_bounds"] == 0.5
+    assert diagnostics["fraction_outside_fit_bounds_by_parameter"]["a"] == 0.5
+    assert diagnostics["fraction_outside_fit_bounds_by_parameter"]["b"] == 0.0

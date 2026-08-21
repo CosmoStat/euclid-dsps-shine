@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .config import require_equinox
 from .encoder import (
@@ -41,6 +42,18 @@ class PosteriorEncoderState(NamedTuple):
     mixture_means: jnp.ndarray | None
     mixture_log_stds: jnp.ndarray | None
     flow_context: jnp.ndarray
+
+
+class DefensiveProposalSample(NamedTuple):
+    """Draws and exact density from a configurable defensive mixture."""
+
+    x: jnp.ndarray
+    logproposal: jnp.ndarray
+    component_index: jnp.ndarray
+    component_fractions: jnp.ndarray
+    posterior_tempered_fraction: jnp.ndarray
+    prior_fraction: jnp.ndarray
+    maximum_posterior_temperature: jnp.ndarray
 
 
 class PriorTransportGaussianEncoder(eqx.Module):
@@ -644,6 +657,184 @@ def posterior_mixture_diagnostics(model, features) -> dict[str, jnp.ndarray]:
         "entropy": jnp.mean(entropy),
         "max_weight": jnp.mean(jnp.max(weights, axis=-1)),
     }
+
+
+def defensive_posterior_proposal(
+    model: Any,
+    key: jax.Array,
+    features: jnp.ndarray,
+    n_samples: int,
+    components: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> DefensiveProposalSample:
+    """Sample a stratified defensive mixture and evaluate its complete density.
+
+    Every selected draw is scored under every component. In particular, a
+    draw originating from a tempered posterior is never divided only by that
+    component density.
+    """
+    count = int(n_samples)
+    if count <= 0:
+        raise ValueError("n_samples must be positive")
+    normalized = _normalize_defensive_components(components)
+    requested_fractions = np.asarray([item[2] for item in normalized], dtype=float)
+    component_counts = _allocate_component_counts(count, requested_fractions)
+    realized_fractions = component_counts / float(count)
+    fractions = jnp.asarray(realized_fractions, dtype=jnp.float32)
+    keys = jax.random.split(key, len(normalized) + 1)
+    n_objects = int(features.shape[0])
+    candidates = []
+    component_labels = []
+    for component_id, (component_key, component_count, component) in enumerate(
+        zip(keys[1:], component_counts, normalized, strict=True)
+    ):
+        source, temperature, _fraction = component
+        if source == "posterior":
+            draw = sample_posterior(
+                model,
+                component_key,
+                features,
+                int(component_count),
+                base_temperature=temperature,
+            ).x
+        else:
+            draw = model.prior.sample(
+                component_key, int(component_count) * n_objects
+            ).reshape(int(component_count), n_objects, -1)
+        candidates.append(draw)
+        component_labels.append(
+            jnp.full(
+                (int(component_count), n_objects),
+                component_id,
+                dtype=jnp.int32,
+            )
+        )
+    x = jnp.concatenate(candidates, axis=0)
+    component_index = jnp.concatenate(component_labels, axis=0)
+    permutation = jax.random.permutation(keys[0], count)
+    x = jax.lax.stop_gradient(jnp.take(x, permutation, axis=0))
+    component_index = jnp.take(component_index, permutation, axis=0)
+    component_log_prob = []
+    for source, temperature, _fraction in normalized:
+        if source == "posterior":
+            value = posterior_log_prob(
+                model,
+                features,
+                x,
+                base_temperature=temperature,
+            )
+        else:
+            value = model.prior.log_prob(x)
+        component_log_prob.append(value)
+    logproposal = defensive_mixture_log_prob(
+        jnp.stack(component_log_prob, axis=0), fractions
+    )
+    tempered_fraction = sum(
+        float(realized_fractions[index])
+        for index, (source, temperature, _fraction) in enumerate(normalized)
+        if source == "posterior" and temperature > 1.0
+    )
+    prior_fraction = sum(
+        float(realized_fractions[index])
+        for index, (source, _temperature, _fraction) in enumerate(normalized)
+        if source == "prior"
+    )
+    posterior_temperatures = [
+        temperature
+        for source, temperature, _fraction in normalized
+        if source == "posterior"
+    ]
+    return DefensiveProposalSample(
+        x=x,
+        logproposal=logproposal,
+        component_index=component_index,
+        component_fractions=fractions,
+        posterior_tempered_fraction=jnp.asarray(tempered_fraction, dtype=x.dtype),
+        prior_fraction=jnp.asarray(prior_fraction, dtype=x.dtype),
+        maximum_posterior_temperature=jnp.asarray(
+            max(posterior_temperatures, default=1.0), dtype=x.dtype
+        ),
+    )
+
+
+def defensive_mixture_log_prob(
+    component_log_prob: jnp.ndarray,
+    fractions: jnp.ndarray,
+) -> jnp.ndarray:
+    """Return ``logsumexp(log fraction_i + log density_i)`` exactly."""
+    values = jnp.asarray(component_log_prob)
+    weights = jnp.asarray(fractions, dtype=values.dtype)
+    if values.ndim < 1 or values.shape[0] != weights.shape[0]:
+        raise ValueError("component_log_prob and fractions must share component axis")
+    weights = weights / jnp.sum(weights)
+    shape = (weights.shape[0],) + (1,) * (values.ndim - 1)
+    return jax.scipy.special.logsumexp(
+        jnp.log(weights).reshape(shape) + values,
+        axis=0,
+    )
+
+
+def posterior_entropy_diagnostics(
+    model: Any,
+    features: jnp.ndarray,
+    key: jax.Array,
+    *,
+    n_samples: int = 1,
+) -> dict[str, jnp.ndarray]:
+    """Estimate full conditional-flow entropy and its contraction terms."""
+    draw = sample_posterior(model, key, features, max(1, int(n_samples)))
+    residual = draw.residual_logdet
+    full_entropy = -jnp.mean(draw.logq)
+    base_entropy_mc = jnp.mean(-draw.logq - residual)
+    return {
+        "posterior_full_entropy_mc": full_entropy,
+        "posterior_base_entropy": base_entropy_mc,
+        "posterior_residual_logdet_mean": jnp.mean(residual),
+        "posterior_residual_logdet_q05": jnp.quantile(residual, 0.05),
+        "posterior_residual_logdet_q95": jnp.quantile(residual, 0.95),
+    }
+
+
+def _normalize_defensive_components(
+    components: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> tuple[tuple[str, float, float], ...]:
+    if not components:
+        raise ValueError("defensive proposal requires at least one component")
+    normalized = []
+    for item in components:
+        source = str(item.get("source", "posterior")).strip().lower()
+        if source not in {"posterior", "prior"}:
+            raise ValueError("defensive proposal source must be posterior or prior")
+        temperature = float(item.get("temperature", 1.0))
+        fraction = float(item.get("fraction", 0.0))
+        if source == "prior":
+            temperature = 1.0
+        if temperature <= 0.0 or fraction <= 0.0:
+            raise ValueError("proposal temperatures and fractions must be positive")
+        normalized.append((source, temperature, fraction))
+    total = sum(item[2] for item in normalized)
+    if not np.isfinite(total) or total <= 0.0:
+        raise ValueError("defensive proposal fractions must have a finite sum")
+    return tuple(
+        (source, temperature, fraction / total)
+        for source, temperature, fraction in normalized
+    )
+
+
+def _allocate_component_counts(count: int, fractions: np.ndarray) -> np.ndarray:
+    """Allocate a fixed particle budget by largest remainder."""
+    requested = np.asarray(fractions, dtype=float)
+    raw = requested * int(count)
+    allocated = np.floor(raw).astype(np.int64)
+    missing = int(count) - int(np.sum(allocated))
+    if missing:
+        order = np.argsort(-(raw - allocated), kind="stable")
+        allocated[order[:missing]] += 1
+    if np.any(allocated <= 0):
+        raise ValueError(
+            "n_samples is too small to allocate at least one defensive draw "
+            "to every configured component"
+        )
+    return allocated
 
 
 def _is_mixture_encoder(encoder) -> bool:
