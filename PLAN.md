@@ -6918,3 +6918,47 @@ Phase 6 - Later AGN and production scaling:
 - Added a JIT regression test for default spline-node reconstruction. The fix
   applies to the model path itself rather than relying on eager imports in the
   Slurm wrapper.
+# 2026-08-22 Adaptive-SMC mixing and prior-gradient completion
+
+## Current scientific gate
+
+- Audited HEAD: `2a5eeba13d15c8ae286ce1de836f48f72c22a955`.
+- The latest Jean-Zay smoke correctly failed closed: training batches reached
+  only median `beta_final=0.235-0.347`, hard fractions were `0.656-0.812`, and
+  prior macro-updates were rejected because the selection gradient was NaN
+  while the data and trust gradients were finite.
+- Keep the canonical target, defensive `r0`, conditional RealNVP, broad
+  identity RealNVP parent prior, standardized-logit no-truth coordinates,
+  Student-t2 likelihood, Gaussian-m5 selection correction, and K64/K128
+  primary/fallback budgets unchanged.
+- The big run remains blocked until a new immutable smoke passes every
+  scientific and numerical gate.
+
+## Implementation phase
+
+- Add genealogical ancestor ESS and a combined mixing failure contract.
+- Adapt the per-object RW scale only between bridge stages.
+- Propagate mixing diagnostics through fallback, training, validation, exact
+  benchmarking, receipts, and the hard-object queue.
+- Record a common-random-number q baseline immediately after sleep bootstrap
+  and compare it to the post-SMC-distillation validation.
+- Keep prior updates fail-closed, stabilize invalid selection draws, and add a
+  score-function gradient diagnostic without enabling it in production.
+- Rename the mixed-likelihood selection score so it is not presented as an
+  exact marginal evidence.
+- Run targeted and full local tests, update this plan, then commit and push.
+
+## Completed local gate
+
+- Implemented ancestor ESS, the combined per-object mixing rule, and fixed-scale
+  within-stage RW-MH adaptation without changing the bridge target or budgets.
+- Added post-bootstrap common-random-number validation and fail-closed q/prior
+  receipt checks. Final ESS remains diagnostic only.
+- Stabilized the Gaussian-m5 selection gradient at physical CGS scales and
+  added a score-function comparison helper that is diagnostic-only.
+- Targeted Adaptive-SMC/selection tests: `39 passed`.
+- Full repository suite: `631 passed, 8 skipped` (`8` non-failing warnings).
+- `ruff check` and `python -m compileall euclid_dsps scripts tests` pass.
+- No Jean-Zay job and no big run were submitted. The next permissible action
+  is one new immutable scientific smoke; the big run remains fail-closed on
+  its receipt.

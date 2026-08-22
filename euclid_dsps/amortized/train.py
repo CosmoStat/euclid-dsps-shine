@@ -4142,8 +4142,18 @@ def _estimate_selection_log_alpha(
             )
         physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
         selected_flux = model_flux[:, band_index]
-        log_beta = observed_flux_selection_log_beta_gaussian_m5(
+        # Never feed an invalid DSPS value into log_ndtr. Masking only after
+        # evaluating the CDF can leave a NaN reverse-mode cotangent even when
+        # the corresponding draw contributes zero selection probability.
+        safe_selected_flux = jnp.where(
+            physical_valid,
             selected_flux,
+            jax.lax.stop_gradient(
+                jnp.full_like(selected_flux, jnp.asarray(flux_limit))
+            ),
+        )
+        log_beta = observed_flux_selection_log_beta_gaussian_m5(
+            safe_selected_flux,
             flux_limit,
             selection["m5"],
             selection["gamma"],

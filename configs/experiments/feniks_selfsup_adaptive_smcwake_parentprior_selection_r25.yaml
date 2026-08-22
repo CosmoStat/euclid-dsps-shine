@@ -91,7 +91,11 @@ amortized:
       rw_scale_min: 0.15
       rw_scale_max: 1.00
       hard_final_ess_fraction: 0.30
-      hard_min_mutation_acceptance: 0.05
+      hard_min_mutation_acceptance: 0.10
+      hard_min_ancestor_ess_fraction: 0.05
+      # This only rejects effectively immobile chains: RMS displacement is
+      # sqrt(1e-4 / 15) ~= 0.0026 per transported latent dimension.
+      hard_min_epsilon_squared_jump: 1.0e-4
       bisection_steps: 32
       initial_proposal:
         posterior_unit_fraction: 0.70
@@ -111,7 +115,9 @@ amortized:
         rw_scale_min: 0.10
         rw_scale_max: 1.00
         hard_final_ess_fraction: 0.30
-        hard_min_mutation_acceptance: 0.05
+        hard_min_mutation_acceptance: 0.10
+        hard_min_ancestor_ess_fraction: 0.05
+        hard_min_epsilon_squared_jump: 1.0e-4
         bisection_steps: 32
     selection_correction:
       enabled: true

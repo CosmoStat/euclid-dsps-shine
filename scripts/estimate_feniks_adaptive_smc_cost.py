@@ -91,7 +91,8 @@ def estimate(config_path: Path, manifest_path: Path) -> dict[str, object]:
         int(training["validation_objects"]),
         n_validation,
     )
-    validation = sweeps * (
+    validation_passes = sweeps + 1  # post-bootstrap baseline plus every sweep
+    validation = validation_passes * (
         validation_objects * typical
         + validation_objects * int(training["validation_q_is_particles"])
         + int(selection["n_prior_samples"])
@@ -134,6 +135,7 @@ def estimate(config_path: Path, manifest_path: Path) -> dict[str, object]:
         },
         "assumptions": {
             "observed_sweeps": sweeps,
+            "validation_passes": validation_passes,
             "primary_final_move_always_counted": True,
             "hard_conservative": (
                 "20% of objects exhaust primary stages then require one-resample fallback"

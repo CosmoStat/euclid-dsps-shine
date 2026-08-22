@@ -11,7 +11,9 @@ from euclid_dsps.amortized.adaptive_bridge_smc import (
     AdaptiveBridgeSMCConfig,
     AdaptiveBridgeSMCResult,
     adaptive_next_beta,
+    ancestor_ess_from_ids,
     epsilon_random_walk_mh,
+    mixing_failure_mask,
     run_adaptive_bridge_smc,
 )
 from euclid_dsps.amortized.adaptive_smc_training import (
@@ -19,9 +21,11 @@ from euclid_dsps.amortized.adaptive_smc_training import (
     apply_prior_macro_update,
     make_component_optimizer,
     merge_hard_fallback,
+    primary_posterior_batch,
     smc_prior_mstep_terms,
     smc_q_distillation_loss,
     snapshot_model,
+    tree_all_finite,
 )
 
 HAS_EQUINOX = importlib.util.find_spec("equinox") is not None
@@ -303,6 +307,46 @@ def test_adaptive_beta_is_monotone_and_matches_conditional_ess() -> None:
     assert jnp.all(conditional_ess >= 0.75 * 64 - 1.0e-3)
 
 
+def test_ancestor_ess_distinguishes_balanced_collapsed_and_dominant_lines() -> None:
+    ancestors = jnp.asarray(
+        [
+            [0, 0, 0],
+            [1, 0, 0],
+            [2, 0, 0],
+            [3, 0, 0],
+            [4, 0, 0],
+            [5, 0, 0],
+            [6, 0, 1],
+            [7, 0, 2],
+        ],
+        dtype=jnp.int32,
+    )
+    ess, fraction = ancestor_ess_from_ids(ancestors)
+    dominant_expected = 1.0 / (0.75**2 + 2.0 * 0.125**2)
+
+    assert np.asarray(ess) == pytest.approx([8.0, 1.0, dominant_expected])
+    assert np.asarray(fraction) == pytest.approx(
+        [1.0, 1.0 / 8.0, dominant_expected / 8.0]
+    )
+
+
+def test_mixing_gate_allows_low_ancestry_only_when_particles_moved() -> None:
+    failure, poor_acceptance, poor_ancestry, poor_movement = mixing_failure_mask(
+        mutation_acceptance=jnp.asarray([0.30, 0.30, 0.05]),
+        mutation_proposed=jnp.asarray([True, True, True]),
+        ancestor_ess_fraction=jnp.asarray([0.01, 0.01, 0.50]),
+        epsilon_squared_jump=jnp.asarray([1.0, 0.0, 1.0]),
+        min_mutation_acceptance=0.10,
+        min_ancestor_ess_fraction=0.05,
+        min_epsilon_squared_jump=1.0e-4,
+    )
+
+    assert np.array_equal(np.asarray(poor_acceptance), [False, False, True])
+    assert np.array_equal(np.asarray(poor_ancestry), [True, True, False])
+    assert np.array_equal(np.asarray(poor_movement), [False, True, False])
+    assert np.array_equal(np.asarray(failure), [False, True, True])
+
+
 def test_epsilon_rw_mh_preserves_analytic_target() -> None:
     n_particles = 8192
     initial = jax.random.normal(jax.random.PRNGKey(6), (n_particles, 1, 1))
@@ -344,12 +388,19 @@ def test_low_acceptance_adapts_rw_scale_and_records_particle_movement() -> None:
             steps_after_resample=0,
             final_steps_at_beta1=4,
             rw_scale=1.0,
-            rw_scale_max=1.0,
+            rw_scale_min=0.1,
+            rw_scale_max=2.0,
             hard_min_mutation_acceptance=0.0,
         ),
     )
 
-    assert jnp.all(result.final_rw_scale < 0.75)
+    expected = jnp.exp(result.mutation_acceptance - 0.30)
+    assert jnp.allclose(result.final_rw_scale, expected, atol=2.0e-6)
+    assert jnp.allclose(
+        result.mutation_acceptance_path[0],
+        result.mutation_acceptance,
+        atol=1.0e-7,
+    )
     assert jnp.all(result.unique_ancestor_fraction == 1.0)
     assert jnp.all(result.epsilon_squared_jump > 0.0)
     assert jnp.all(jnp.isfinite(result.epsilon_squared_jump))
@@ -403,7 +454,13 @@ def _fake_smc_result(*, n_particles: int, n_objects: int, hard):
         mutation_acceptance=jnp.full((n_objects,), 0.3),
         final_rw_scale=jnp.full((n_objects,), 0.6),
         unique_ancestor_fraction=jnp.ones((n_objects,)),
+        ancestor_ess=jnp.full((n_objects,), float(n_particles)),
+        ancestor_ess_fraction=jnp.ones((n_objects,)),
         epsilon_squared_jump=jnp.ones((n_objects,)),
+        poor_acceptance=jnp.zeros((n_objects,), dtype=jnp.bool_),
+        poor_ancestry=jnp.zeros((n_objects,), dtype=jnp.bool_),
+        poor_movement=jnp.zeros((n_objects,), dtype=jnp.bool_),
+        mixing_failure=jnp.zeros((n_objects,), dtype=jnp.bool_),
         hard_object_flag=hard,
         finite_target_fraction=jnp.ones((n_objects,)),
         logZ_estimate=jnp.arange(n_objects, dtype=jnp.float32),
@@ -413,21 +470,7 @@ def _fake_smc_result(*, n_particles: int, n_objects: int, hard):
 
 def test_hard_fallback_only_replaces_successful_queued_objects() -> None:
     primary_result = _fake_smc_result(n_particles=4, n_objects=3, hard=[False, True, True])
-    primary = SMCPosteriorBatch(
-        particles=primary_result.final_particles,
-        normalized_weights=primary_result.final_normalized_weights,
-        eligible=jnp.asarray([True, False, False]),
-        beta_final=primary_result.beta_final,
-        final_ess=primary_result.final_ess,
-        final_max_weight=primary_result.final_max_weight,
-        mutation_acceptance=primary_result.mutation_acceptance,
-        final_rw_scale=primary_result.final_rw_scale,
-        unique_ancestor_fraction=primary_result.unique_ancestor_fraction,
-        epsilon_squared_jump=primary_result.epsilon_squared_jump,
-        logZ_estimate=primary_result.logZ_estimate,
-        fallback_attempted=jnp.zeros((3,), dtype=jnp.bool_),
-        fallback_succeeded=jnp.zeros((3,), dtype=jnp.bool_),
-    )
+    primary = primary_posterior_batch(primary_result)
     fallback = _fake_smc_result(n_particles=8, n_objects=2, hard=[False, True])
     merged = merge_hard_fallback(
         key=jax.random.PRNGKey(20),
@@ -544,7 +587,13 @@ def test_smc_losses_stop_particles_and_separate_q_from_prior() -> None:
         mutation_acceptance=jnp.full((3,), 0.3),
         final_rw_scale=jnp.full((3,), 0.6),
         unique_ancestor_fraction=jnp.ones((3,)),
+        ancestor_ess=jnp.full((3,), 5.0),
+        ancestor_ess_fraction=jnp.ones((3,)),
         epsilon_squared_jump=jnp.ones((3,)),
+        poor_acceptance=jnp.zeros((3,), dtype=jnp.bool_),
+        poor_ancestry=jnp.zeros((3,), dtype=jnp.bool_),
+        poor_movement=jnp.zeros((3,), dtype=jnp.bool_),
+        mixing_failure=jnp.zeros((3,), dtype=jnp.bool_),
         logZ_estimate=jnp.zeros((3,)),
         fallback_attempted=jnp.zeros((3,), dtype=jnp.bool_),
         fallback_succeeded=jnp.zeros((3,), dtype=jnp.bool_),
@@ -595,6 +644,81 @@ def test_smc_losses_stop_particles_and_separate_q_from_prior() -> None:
 
 
 @pytest.mark.skipif(not HAS_EQUINOX, reason="equinox is not installed")
+def test_realnvp_prior_data_and_trust_gradients_are_finite_at_extremes() -> None:
+    import equinox as eqx
+
+    from euclid_dsps.amortized.flows import RealNVPPrior
+
+    dimension = 4
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(61),
+        latent_dim=dimension,
+        n_layers=4,
+        hidden_size=16,
+        permutation="roll",
+        init="identity",
+    )
+    ordinary = jax.random.normal(jax.random.PRNGKey(62), (14, 3, dimension))
+    extremes = jnp.asarray(
+        [
+            [[8.0, -8.0, 6.0, -6.0]] * 3,
+            [[-7.0, 7.0, -5.0, 5.0]] * 3,
+        ],
+        dtype=jnp.float32,
+    )
+    particles = jnp.concatenate((ordinary, extremes), axis=0)
+    particle_count = particles.shape[0]
+    posterior = SMCPosteriorBatch(
+        particles=particles,
+        normalized_weights=jnp.full((particle_count, 3), 1.0 / particle_count),
+        eligible=jnp.ones((3,), dtype=jnp.bool_),
+        beta_final=jnp.ones((3,)),
+        final_ess=jnp.full((3,), float(particle_count)),
+        final_max_weight=jnp.full((3,), 1.0 / particle_count),
+        mutation_acceptance=jnp.full((3,), 0.3),
+        final_rw_scale=jnp.full((3,), 0.6),
+        unique_ancestor_fraction=jnp.ones((3,)),
+        ancestor_ess=jnp.full((3,), float(particle_count)),
+        ancestor_ess_fraction=jnp.ones((3,)),
+        epsilon_squared_jump=jnp.ones((3,)),
+        poor_acceptance=jnp.zeros((3,), dtype=jnp.bool_),
+        poor_ancestry=jnp.zeros((3,), dtype=jnp.bool_),
+        poor_movement=jnp.zeros((3,), dtype=jnp.bool_),
+        mixing_failure=jnp.zeros((3,), dtype=jnp.bool_),
+        logZ_estimate=jnp.zeros((3,)),
+        fallback_attempted=jnp.zeros((3,), dtype=jnp.bool_),
+        fallback_succeeded=jnp.zeros((3,), dtype=jnp.bool_),
+    )
+    trust_samples = prior.sample(jax.random.PRNGKey(63), 16_384)
+
+    data_value, data_gradient = eqx.filter_value_and_grad(
+        lambda candidate: smc_prior_mstep_terms(
+            candidate, prior, posterior, trust_samples
+        ).data_nll
+    )(prior)
+    trust_value, trust_gradient = eqx.filter_value_and_grad(
+        lambda candidate: smc_prior_mstep_terms(
+            candidate, prior, posterior, trust_samples
+        ).prior_kl_old_new
+    )(prior)
+    updates = jax.tree_util.tree_map(
+        lambda gradient: -1.0e-4 * gradient if gradient is not None else None,
+        data_gradient,
+    )
+    proposed = eqx.apply_updates(prior, updates)
+    proposed_kl = smc_prior_mstep_terms(
+        proposed, prior, posterior, trust_samples
+    ).prior_kl_old_new
+
+    assert jnp.isfinite(data_value)
+    assert tree_all_finite(data_gradient)
+    assert trust_value == pytest.approx(0.0, abs=1.0e-7)
+    assert tree_all_finite(trust_gradient)
+    assert jnp.isfinite(proposed_kl)
+    assert float(proposed_kl) >= -1.0e-4
+
+
+@pytest.mark.skipif(not HAS_EQUINOX, reason="equinox is not installed")
 def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
     import equinox as eqx
 
@@ -641,7 +765,13 @@ def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
         mutation_acceptance=jnp.full((4,), 0.3),
         final_rw_scale=jnp.full((4,), 0.6),
         unique_ancestor_fraction=jnp.ones((4,)),
+        ancestor_ess=jnp.full((4,), 8.0),
+        ancestor_ess_fraction=jnp.ones((4,)),
         epsilon_squared_jump=jnp.ones((4,)),
+        poor_acceptance=jnp.zeros((4,), dtype=jnp.bool_),
+        poor_ancestry=jnp.zeros((4,), dtype=jnp.bool_),
+        poor_movement=jnp.zeros((4,), dtype=jnp.bool_),
+        mixing_failure=jnp.zeros((4,), dtype=jnp.bool_),
         logZ_estimate=jnp.zeros((4,)),
         fallback_attempted=jnp.zeros((4,), dtype=jnp.bool_),
         fallback_succeeded=jnp.zeros((4,), dtype=jnp.bool_),

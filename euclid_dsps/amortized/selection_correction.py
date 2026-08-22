@@ -31,16 +31,33 @@ def observed_flux_selection_log_beta(
     valid = jnp.isfinite(model_flux_array)
     valid &= jnp.isfinite(error_array) & (error_array > 0.0)
     valid &= jnp.isfinite(limit_array)
-    unit = jnp.maximum(jnp.abs(model_flux_array), jnp.abs(limit_array))
-    unit = jnp.maximum(unit, jnp.abs(error_array))
+    finite_model_abs = jnp.where(
+        jnp.isfinite(model_flux_array),
+        jnp.abs(model_flux_array),
+        jnp.zeros_like(model_flux_array),
+    )
+    finite_limit_abs = jnp.where(
+        jnp.isfinite(limit_array),
+        jnp.abs(limit_array),
+        jnp.zeros_like(limit_array),
+    )
+    finite_error_abs = jnp.where(
+        jnp.isfinite(error_array),
+        jnp.abs(error_array),
+        jnp.zeros_like(error_array),
+    )
+    unit = jnp.maximum(finite_model_abs, finite_limit_abs)
+    unit = jnp.maximum(unit, finite_error_abs)
     unit = jax.lax.stop_gradient(
         jnp.maximum(unit, jnp.asarray(1.0e-30, dtype=model_flux_array.dtype))
     )
     model_scaled = model_flux_array / unit
     limit_scaled = limit_array / unit
     error_scaled = error_array / unit
+    safe_model = jnp.where(valid, model_scaled, jnp.zeros_like(model_scaled))
+    safe_limit = jnp.where(valid, limit_scaled, jnp.zeros_like(limit_scaled))
     safe_error = jnp.where(valid, error_scaled, jnp.ones_like(error_scaled))
-    z = (model_scaled - limit_scaled) / safe_error
+    z = (safe_model - safe_limit) / safe_error
     return jnp.where(valid, log_ndtr(z), -jnp.inf)
 
 
@@ -78,9 +95,17 @@ def observed_flux_selection_log_beta_gaussian_m5(
     m5_array = jnp.asarray(m5, dtype=dtype)
     gamma_array = jnp.asarray(gamma, dtype=dtype)
     f5 = jnp.asarray(abmag_to_fnu_cgs_jax(m5_array), dtype=dtype)
+    finite_flux_abs = jnp.where(
+        jnp.isfinite(flux),
+        jnp.abs(flux),
+        jnp.zeros_like(flux),
+    )
     unit = jax.lax.stop_gradient(
         jnp.maximum(
-            jnp.maximum(jnp.abs(limit), jnp.abs(f5)),
+            jnp.maximum(
+                finite_flux_abs,
+                jnp.maximum(jnp.abs(limit), jnp.abs(f5)),
+            ),
             jnp.asarray(1.0e-30, dtype=dtype),
         )
     )
@@ -199,6 +224,57 @@ def estimate_log_alpha_reparameterized(
         batch_size, dtype=log_alpha.dtype
     )
     return log_alpha, metrics
+
+
+def estimate_log_alpha_score_function_diagnostic(
+    prior: Any,
+    key: jax.Array,
+    *,
+    n_prior_samples: int,
+    log_beta_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    dtype: Any = jnp.float32,
+) -> tuple[jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray]]:
+    """Return ``log alpha`` and a score-gradient surrogate for diagnostics.
+
+    The scalar surrogate has the score-function gradient
+
+    ``E[p_eta(x) beta(x) / alpha_eta * grad log p_eta(x)]``.
+
+    Its value is not ``log alpha`` and it must not replace the pathwise
+    production objective without an explicit scientific decision. Samples,
+    completeness values, and normalized selection weights are stopped so the
+    only gradient is through ``prior.log_prob``.
+    """
+    count = int(n_prior_samples)
+    if count <= 0:
+        raise ValueError("n_prior_samples must be positive")
+    base = jax.random.normal(
+        key,
+        (count, int(prior.latent_dim)),
+        dtype=dtype,
+    )
+    samples, _logdet = prior.forward(base)
+    stopped_samples = jax.lax.stop_gradient(samples)
+    log_beta = jax.lax.stop_gradient(jnp.ravel(log_beta_fn(stopped_samples)))
+    log_alpha, metrics = selection_log_alpha_from_log_beta(log_beta)
+    finite = jnp.isfinite(log_beta)
+    any_finite = jnp.any(finite)
+    safe_log_beta = jnp.where(finite, log_beta, -jnp.inf)
+    safe_log_beta = jnp.where(any_finite, safe_log_beta, jnp.zeros_like(log_beta))
+    selection_weights = jax.lax.stop_gradient(jax.nn.softmax(safe_log_beta))
+    score_surrogate = jnp.sum(
+        selection_weights * prior.log_prob(stopped_samples)
+    )
+    score_surrogate = jnp.where(
+        any_finite,
+        score_surrogate,
+        jnp.asarray(jnp.nan, dtype=score_surrogate.dtype),
+    )
+    metrics = dict(metrics)
+    metrics["selection/score_function_diagnostic"] = jnp.asarray(
+        1.0, dtype=log_alpha.dtype
+    )
+    return log_alpha, score_surrogate, metrics
 
 
 def disabled_selection_metrics(dtype: Any = jnp.float32) -> dict[str, jnp.ndarray]:

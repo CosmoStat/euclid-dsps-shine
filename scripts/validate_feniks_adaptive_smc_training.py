@@ -33,10 +33,13 @@ def main() -> None:
     for relative in (
         "checkpoints/last.eqx",
         "checkpoints/best.eqx",
+        "checkpoints/bootstrap.eqx",
         "checkpoints/training_state_last.eqx",
         "adaptive_training_log.csv",
         "adaptive_validation_log.csv",
         "prior_macro_log.csv",
+        "hard_object_queue.csv",
+        "training_progress.json",
         "selection_gradient_preflight.json",
     ):
         path = args.train / relative

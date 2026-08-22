@@ -62,6 +62,9 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert primary.n_particles == 64
     assert primary.max_stages == 8
     assert primary.rw_adapt_target_acceptance == pytest.approx(0.30)
+    assert primary.hard_min_mutation_acceptance == pytest.approx(0.10)
+    assert primary.hard_min_ancestor_ess_fraction == pytest.approx(0.05)
+    assert primary.hard_min_epsilon_squared_jump == pytest.approx(1.0e-4)
     assert fallback.n_particles == 128
     assert fallback.max_stages == 12
     assert fallback.steps_after_resample == 4
@@ -120,7 +123,8 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
         validation_arrays=SimpleNamespace(flux=np.zeros((32, 2))),
         latent_spec=SimpleNamespace(normalization="standardized_logit"),
     )
-    validation = {
+    bootstrap = {
+        "validation_stage": "bootstrap",
         "selection_alpha": 0.3,
         "selection_alpha_mc_relative_error": 0.05,
         "median_mutation_acceptance": 0.3,
@@ -129,7 +133,16 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
         "median_final_ess_fraction": 0.8,
         "hard_fraction_after_fallback": 0.1,
         "median_unique_ancestor_fraction": 0.5,
+        "median_ancestor_ess_fraction": 0.5,
         "median_epsilon_squared_jump": 1.0,
+        "mixing_failure_fraction": 0.1,
+        "validation_q_is_ess_fraction": 0.04,
+        "validation_q_is_max_weight": 0.85,
+        "validation_smc_cross_entropy": 11.0,
+    }
+    final = {
+        **bootstrap,
+        "validation_stage": "observed_sweep_1",
         "validation_q_is_ess_fraction": 0.05,
         "validation_q_is_max_weight": 0.8,
         "validation_smc_cross_entropy": 10.0,
@@ -140,6 +153,9 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
             "prior_kl_proposed": 0.01,
             "grads_finite": True,
             "raw_grad_norm": 1.0,
+            "data_grads_finite": True,
+            "selection_grads_finite": True,
+            "trust_grads_finite": True,
             "rejection_code": 0,
         }
     ]
@@ -166,11 +182,14 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
         alpha_preflight={"finite": True, "nonzero": True},
     )
 
-    passing = _final_training_receipt(validation_rows=[validation], **common)
+    passing = _final_training_receipt(
+        validation_rows=[bootstrap, final], **common
+    )
     collapsed = _final_training_receipt(
         validation_rows=[
+            bootstrap,
             {
-                **validation,
+                **final,
                 "validation_q_is_ess_fraction": 1.0 / 64.0,
                 "validation_q_is_max_weight": 0.99,
             }
@@ -179,6 +198,14 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
     )
 
     assert passing["status"] == "PASS"
+    assert passing["bootstrap_validation"] == bootstrap
+    assert passing["q_validation_improvement"][
+        "q_is_ess_fraction_delta"
+    ] == pytest.approx(0.01)
+    assert passing["q_validation_improvement"][
+        "smc_cross_entropy_improvement"
+    ] == pytest.approx(1.0)
+    assert "median_final_ess_fraction" not in passing["checks"]
     assert collapsed["status"] == "FAIL"
     assert not collapsed["checks"]["q_only_is_ess_fraction_adequate"]
     assert not collapsed["checks"]["q_only_is_not_single_weight_dominated"]
@@ -344,7 +371,13 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             mutation_acceptance=jnp.full((2*N,), 0.3),
             final_rw_scale=jnp.full((2*N,), 0.6),
             unique_ancestor_fraction=jnp.ones((2*N,)),
+            ancestor_ess=jnp.full((2*N,), K),
+            ancestor_ess_fraction=jnp.ones((2*N,)),
             epsilon_squared_jump=jnp.ones((2*N,)),
+            poor_acceptance=jnp.zeros((2*N,), dtype=bool),
+            poor_ancestry=jnp.zeros((2*N,), dtype=bool),
+            poor_movement=jnp.zeros((2*N,), dtype=bool),
+            mixing_failure=jnp.zeros((2*N,), dtype=bool),
             logZ_estimate=jnp.zeros((2*N,)),
             fallback_attempted=jnp.zeros((2*N,), dtype=bool),
             fallback_succeeded=jnp.zeros((2*N,), dtype=bool),

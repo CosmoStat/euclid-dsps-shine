@@ -36,7 +36,9 @@ class AdaptiveBridgeSMCConfig:
     rw_scale_min: float = 0.15
     rw_scale_max: float = 1.00
     hard_final_ess_fraction: float = 0.30
-    hard_min_mutation_acceptance: float = 0.05
+    hard_min_mutation_acceptance: float = 0.10
+    hard_min_ancestor_ess_fraction: float = 0.05
+    hard_min_epsilon_squared_jump: float = 1.0e-4
     bisection_steps: int = 32
 
 
@@ -57,7 +59,13 @@ class AdaptiveBridgeSMCResult(NamedTuple):
     mutation_acceptance: jnp.ndarray
     final_rw_scale: jnp.ndarray
     unique_ancestor_fraction: jnp.ndarray
+    ancestor_ess: jnp.ndarray
+    ancestor_ess_fraction: jnp.ndarray
     epsilon_squared_jump: jnp.ndarray
+    poor_acceptance: jnp.ndarray
+    poor_ancestry: jnp.ndarray
+    poor_movement: jnp.ndarray
+    mixing_failure: jnp.ndarray
     hard_object_flag: jnp.ndarray
     finite_target_fraction: jnp.ndarray
     logZ_estimate: jnp.ndarray
@@ -183,6 +191,7 @@ def run_adaptive_bridge_smc(
         moved_log_target = jnp.where(
             resample_mask[None, :], proposed_log_target, current_log_target
         )
+        stage_rw_scales = current_rw_scales
         stage_accepted = jnp.zeros((n_objects,), dtype=dtype)
         stage_proposed = jnp.zeros((n_objects,), dtype=dtype)
         for move_index in range(int(cfg.steps_after_resample)):
@@ -203,17 +212,10 @@ def run_adaptive_bridge_smc(
                 log_target_fn=log_target_fn,
                 epsilon_to_x_fn=epsilon_to_x_fn,
                 x_to_epsilon_fn=x_to_epsilon_fn,
-                rw_scale=current_rw_scales,
+                rw_scale=stage_rw_scales,
             )
             stage_accepted += jnp.sum(accepted, axis=0)
             stage_proposed += n_particles * resample_mask.astype(dtype)
-            move_acceptance = jnp.mean(accepted.astype(dtype), axis=0)
-            current_rw_scales = _adapt_random_walk_scale(
-                current_rw_scales,
-                move_acceptance,
-                resample_mask,
-                cfg,
-            )
         reached_final = active & (next_beta >= 1.0 - 1.0e-6)
         for move_index in range(int(cfg.final_steps_at_beta1)):
             move_key = jax.random.fold_in(
@@ -236,21 +238,20 @@ def run_adaptive_bridge_smc(
                 log_target_fn=log_target_fn,
                 epsilon_to_x_fn=epsilon_to_x_fn,
                 x_to_epsilon_fn=x_to_epsilon_fn,
-                rw_scale=current_rw_scales,
+                rw_scale=stage_rw_scales,
             )
             stage_accepted += jnp.sum(accepted, axis=0)
             stage_proposed += n_particles * reached_final.astype(dtype)
-            move_acceptance = jnp.mean(accepted.astype(dtype), axis=0)
-            current_rw_scales = _adapt_random_walk_scale(
-                current_rw_scales,
-                move_acceptance,
-                reached_final,
-                cfg,
-            )
         stage_acceptance = jnp.where(
             stage_proposed > 0,
             stage_accepted / stage_proposed,
             jnp.nan,
+        )
+        current_rw_scales = _adapt_random_walk_scale(
+            current_rw_scales,
+            stage_acceptance,
+            stage_proposed > 0,
+            cfg,
         )
         beta_history = beta_history.at[stage + 1].set(next_beta)
         cess_history = cess_history.at[stage].set(
@@ -328,21 +329,17 @@ def run_adaptive_bridge_smc(
         accepted_total / proposed_total,
         jnp.nan,
     )
-    low_acceptance = (proposed_total > 0) & (
-        acceptance < float(cfg.hard_min_mutation_acceptance)
-    )
-    hard = (
-        (beta < 1.0 - 1.0e-6)
-        | (final_ess / n_particles < float(cfg.hard_final_ess_fraction))
-        | (finite_target_fraction <= 0.0)
-        | low_acceptance
-    )
     sorted_ancestors = jnp.sort(ancestor_ids, axis=0)
     unique_ancestors = 1 + jnp.sum(
         sorted_ancestors[1:] != sorted_ancestors[:-1],
         axis=0,
     )
     unique_ancestor_fraction = unique_ancestors.astype(dtype) / n_particles
+    ancestor_ess, ancestor_ess_fraction = ancestor_ess_from_ids(
+        ancestor_ids,
+        n_initial_ancestors=n_particles,
+        dtype=dtype,
+    )
     initial_ancestors = jnp.take_along_axis(
         initial_particles,
         ancestor_ids[..., None],
@@ -353,6 +350,26 @@ def run_adaptive_bridge_smc(
     epsilon_squared_jump = jnp.mean(
         jnp.sum(jnp.square(final_epsilon - initial_epsilon), axis=-1),
         axis=0,
+    )
+    (
+        mixing_failure,
+        poor_acceptance,
+        poor_ancestry,
+        poor_movement,
+    ) = mixing_failure_mask(
+        mutation_acceptance=acceptance,
+        mutation_proposed=proposed_total > 0,
+        ancestor_ess_fraction=ancestor_ess_fraction,
+        epsilon_squared_jump=epsilon_squared_jump,
+        min_mutation_acceptance=cfg.hard_min_mutation_acceptance,
+        min_ancestor_ess_fraction=cfg.hard_min_ancestor_ess_fraction,
+        min_epsilon_squared_jump=cfg.hard_min_epsilon_squared_jump,
+    )
+    hard = (
+        (beta < 1.0 - 1.0e-6)
+        | (final_ess / n_particles < float(cfg.hard_final_ess_fraction))
+        | (finite_target_fraction <= 0.0)
+        | mixing_failure
     )
     return AdaptiveBridgeSMCResult(
         final_particles=jax.lax.stop_gradient(particles),
@@ -371,7 +388,13 @@ def run_adaptive_bridge_smc(
         mutation_acceptance=jax.lax.stop_gradient(acceptance),
         final_rw_scale=jax.lax.stop_gradient(rw_scales),
         unique_ancestor_fraction=jax.lax.stop_gradient(unique_ancestor_fraction),
+        ancestor_ess=jax.lax.stop_gradient(ancestor_ess),
+        ancestor_ess_fraction=jax.lax.stop_gradient(ancestor_ess_fraction),
         epsilon_squared_jump=jax.lax.stop_gradient(epsilon_squared_jump),
+        poor_acceptance=jax.lax.stop_gradient(poor_acceptance),
+        poor_ancestry=jax.lax.stop_gradient(poor_ancestry),
+        poor_movement=jax.lax.stop_gradient(poor_movement),
+        mixing_failure=jax.lax.stop_gradient(mixing_failure),
         hard_object_flag=jax.lax.stop_gradient(hard),
         finite_target_fraction=jax.lax.stop_gradient(finite_target_fraction),
         logZ_estimate=jax.lax.stop_gradient(logz),
@@ -574,9 +597,14 @@ def _adapt_random_walk_scale(
     object_mask: jnp.ndarray,
     config: AdaptiveBridgeSMCConfig,
 ) -> jnp.ndarray:
-    """Adapt per-object RW scales between exact MH transition kernels."""
+    """Adapt per-object RW scales once between bridge stages."""
+    safe_acceptance = jnp.where(
+        object_mask,
+        acceptance,
+        jnp.asarray(config.rw_adapt_target_acceptance, dtype=acceptance.dtype),
+    )
     log_multiplier = float(config.rw_adapt_rate) * (
-        acceptance - float(config.rw_adapt_target_acceptance)
+        safe_acceptance - float(config.rw_adapt_target_acceptance)
     )
     proposed = jnp.clip(
         current_scale * jnp.exp(log_multiplier),
@@ -584,6 +612,68 @@ def _adapt_random_walk_scale(
         float(config.rw_scale_max),
     )
     return jnp.where(object_mask, proposed, current_scale)
+
+
+def ancestor_ess_from_ids(
+    ancestor_ids: jnp.ndarray,
+    *,
+    n_initial_ancestors: int | None = None,
+    dtype=None,
+) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Return genealogical ESS and its fraction of the initial particle count.
+
+    For descendant frequencies ``p_a = n_a / K``, the diagnostic is
+    ``1 / sum_a p_a**2``. Unlike a unique-ancestor count, it detects one
+    dominant lineage among several surviving lineages.
+    """
+    ancestors = jnp.asarray(ancestor_ids, dtype=jnp.int32)
+    if ancestors.ndim != 2:
+        raise ValueError("ancestor_ids must have [particles, objects] shape")
+    particle_count = int(ancestors.shape[0])
+    initial_count = (
+        particle_count
+        if n_initial_ancestors is None
+        else int(n_initial_ancestors)
+    )
+    if particle_count <= 0 or initial_count <= 0:
+        raise ValueError("ancestor ESS requires positive particle counts")
+    result_dtype = jnp.float32 if dtype is None else dtype
+    counts = jnp.sum(
+        jax.nn.one_hot(ancestors, initial_count, dtype=result_dtype),
+        axis=0,
+    )
+    frequencies = counts / jnp.asarray(particle_count, dtype=result_dtype)
+    ancestor_ess = 1.0 / jnp.sum(jnp.square(frequencies), axis=-1)
+    return ancestor_ess, ancestor_ess / jnp.asarray(initial_count, dtype=result_dtype)
+
+
+def mixing_failure_mask(
+    *,
+    mutation_acceptance: jnp.ndarray,
+    mutation_proposed: jnp.ndarray,
+    ancestor_ess_fraction: jnp.ndarray,
+    epsilon_squared_jump: jnp.ndarray,
+    min_mutation_acceptance: float,
+    min_ancestor_ess_fraction: float,
+    min_epsilon_squared_jump: float,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Classify mixing without treating low ancestry alone as a failure."""
+    acceptance = jnp.asarray(mutation_acceptance)
+    proposed = jnp.asarray(mutation_proposed, dtype=jnp.bool_)
+    ancestry = jnp.asarray(ancestor_ess_fraction, dtype=acceptance.dtype)
+    movement = jnp.asarray(epsilon_squared_jump, dtype=acceptance.dtype)
+    poor_acceptance = proposed & (
+        ~jnp.isfinite(acceptance)
+        | (acceptance < float(min_mutation_acceptance))
+    )
+    poor_ancestry = ~jnp.isfinite(ancestry) | (
+        ancestry < float(min_ancestor_ess_fraction)
+    )
+    poor_movement = ~jnp.isfinite(movement) | (
+        movement < float(min_epsilon_squared_jump)
+    )
+    failure = poor_acceptance | (poor_ancestry & poor_movement)
+    return failure, poor_acceptance, poor_ancestry, poor_movement
 
 
 def bridge_logdensity(
@@ -735,3 +825,9 @@ def _validate_inputs(particles, cfg):
         cfg.rw_scale_max
     ):
         raise ValueError("rw_scale must lie within the configured bounds")
+    if not 0.0 <= float(cfg.hard_min_mutation_acceptance) <= 1.0:
+        raise ValueError("hard_min_mutation_acceptance must lie in [0, 1]")
+    if not 0.0 <= float(cfg.hard_min_ancestor_ess_fraction) <= 1.0:
+        raise ValueError("hard_min_ancestor_ess_fraction must lie in [0, 1]")
+    if float(cfg.hard_min_epsilon_squared_jump) < 0.0:
+        raise ValueError("hard_min_epsilon_squared_jump must be non-negative")

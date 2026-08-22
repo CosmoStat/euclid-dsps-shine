@@ -599,8 +599,26 @@ def _run_adaptive_smc_benchmark(
             "unique_ancestor_fraction": float(
                 np.asarray(jax.device_get(result.unique_ancestor_fraction[0]))
             ),
+            "ancestor_ess": float(
+                np.asarray(jax.device_get(result.ancestor_ess[0]))
+            ),
+            "ancestor_ess_fraction": float(
+                np.asarray(jax.device_get(result.ancestor_ess_fraction[0]))
+            ),
             "epsilon_squared_jump": float(
                 np.asarray(jax.device_get(result.epsilon_squared_jump[0]))
+            ),
+            "poor_acceptance": bool(
+                np.asarray(jax.device_get(result.poor_acceptance[0]))
+            ),
+            "poor_ancestry": bool(
+                np.asarray(jax.device_get(result.poor_ancestry[0]))
+            ),
+            "poor_movement": bool(
+                np.asarray(jax.device_get(result.poor_movement[0]))
+            ),
+            "mixing_failure": bool(
+                np.asarray(jax.device_get(result.mixing_failure[0]))
             ),
             "hard": bool(
                 np.asarray(jax.device_get(result.hard_object_flag[0]))
@@ -923,8 +941,20 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             row["adaptive_smc_unique_ancestor_fraction"] = selected_smc[
                 "unique_ancestor_fraction"
             ]
+            row["adaptive_smc_ancestor_ess"] = selected_smc["ancestor_ess"]
+            row["adaptive_smc_ancestor_ess_fraction"] = selected_smc[
+                "ancestor_ess_fraction"
+            ]
             row["adaptive_smc_epsilon_squared_jump"] = selected_smc[
                 "epsilon_squared_jump"
+            ]
+            row["adaptive_smc_poor_acceptance"] = selected_smc[
+                "poor_acceptance"
+            ]
+            row["adaptive_smc_poor_ancestry"] = selected_smc["poor_ancestry"]
+            row["adaptive_smc_poor_movement"] = selected_smc["poor_movement"]
+            row["adaptive_smc_mixing_failure"] = selected_smc[
+                "mixing_failure"
             ]
             row["adaptive_smc_logZ"] = selected_smc["logZ_estimate"]
             row["adaptive_smc_fallback_attempted"] = adaptive[

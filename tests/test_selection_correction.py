@@ -9,6 +9,7 @@ import numpy as np
 from euclid_dsps.amortized.config import amortized_config
 from euclid_dsps.amortized.selection_correction import (
     estimate_log_alpha_reparameterized,
+    estimate_log_alpha_score_function_diagnostic,
     observed_flux_selection_beta,
     observed_flux_selection_log_beta,
     observed_flux_selection_log_beta_gaussian_m5,
@@ -122,6 +123,33 @@ def test_fused_gaussian_m5_selection_has_finite_cgs_scale_gradient() -> None:
     assert jnp.all(jnp.isfinite(gradients))
 
 
+def test_fused_gaussian_m5_selection_handles_extreme_finite_flux() -> None:
+    limit = observed_magnitude_flux_limit_jax(25.0)
+    flux = jnp.asarray([0.0, 1.0e-35, limit, 1.0e-20, 1.0e30])
+    values = observed_flux_selection_log_beta_gaussian_m5(
+        flux,
+        limit,
+        27.5,
+        0.039,
+        sigma_sys_mag=0.005,
+        min_sigma_fnu_cgs=1.0e-40,
+    )
+    gradient = jax.grad(
+        lambda shift: jnp.sum(
+            observed_flux_selection_log_beta_gaussian_m5(
+                flux * jnp.exp(shift),
+                limit,
+                27.5,
+                0.039,
+                sigma_sys_mag=0.005,
+                min_sigma_fnu_cgs=1.0e-40,
+            )
+        )
+    )(jnp.asarray(0.0))
+    assert jnp.all(jnp.isfinite(values))
+    assert jnp.isfinite(gradient)
+
+
 def test_fused_gaussian_m5_log_alpha_has_finite_nonzero_shift_gradient() -> None:
     limit = observed_magnitude_flux_limit_jax(25.0)
     base = jnp.linspace(-4.0, 4.0, 512)
@@ -179,6 +207,120 @@ def test_log_alpha_gradient_is_finite_nonzero_and_matches_finite_difference() ->
     assert np.isfinite(float(gradient))
     assert abs(float(gradient)) > 1.0e-3
     assert np.isclose(float(gradient), float(finite_difference), rtol=2.0e-2)
+
+
+def test_selection_pathwise_score_function_and_finite_difference_agree() -> None:
+    class ShiftNormalPrior:
+        latent_dim = 1
+
+        def __init__(self, shift):
+            self.shift = shift
+
+        def forward(self, base):
+            value = base + self.shift
+            return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
+        def log_prob(self, value):
+            residual = value - self.shift
+            return -0.5 * (
+                jnp.square(residual[:, 0]) + jnp.log(2.0 * jnp.pi)
+            )
+
+    key = jax.random.PRNGKey(211)
+    samples = 65_536
+
+    def pathwise(shift):
+        value, _ = estimate_log_alpha_reparameterized(
+            ShiftNormalPrior(shift),
+            key,
+            n_prior_samples=samples,
+            prior_sample_batch_size=samples,
+            log_beta_fn=lambda latent: observed_flux_selection_log_beta(
+                latent[:, 0], jnp.asarray(0.7), jnp.asarray(0.2)
+            ),
+        )
+        return value
+
+    shift = jnp.asarray(0.1)
+    pathwise_gradient = jax.grad(pathwise)(shift)
+    step = 2.0e-3
+    finite_difference = (pathwise(shift + step) - pathwise(shift - step)) / (
+        2.0 * step
+    )
+    def score_surrogate(value):
+        _score_value, surrogate, _metrics = (
+            estimate_log_alpha_score_function_diagnostic(
+                ShiftNormalPrior(value),
+                key,
+                n_prior_samples=samples,
+                log_beta_fn=lambda latent: observed_flux_selection_log_beta(
+                    latent[:, 0], jnp.asarray(0.7), jnp.asarray(0.2)
+                ),
+            )
+        )
+        return surrogate
+
+    score_shift_gradient = jax.grad(score_surrogate)(shift)
+
+    assert jnp.isfinite(pathwise_gradient)
+    assert jnp.isfinite(score_shift_gradient)
+    assert np.isclose(
+        float(pathwise_gradient), float(finite_difference), rtol=2.0e-2
+    )
+    assert np.isclose(
+        float(score_shift_gradient), float(pathwise_gradient), rtol=3.0e-2
+    )
+
+
+def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None:
+    import equinox as eqx
+
+    from euclid_dsps.amortized.flows import RealNVPPrior
+
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(301),
+        latent_dim=2,
+        n_layers=2,
+        hidden_size=8,
+        permutation="roll",
+        init="identity",
+    )
+    key = jax.random.PRNGKey(302)
+    flux_limit = observed_magnitude_flux_limit_jax(25.0)
+
+    def objective(raw_shift):
+        bias = prior.layers[0].shift_net.layers[-1].bias.at[0].set(raw_shift)
+        candidate = eqx.tree_at(
+            lambda value: value.layers[0].shift_net.layers[-1].bias,
+            prior,
+            bias,
+        )
+        value, _ = estimate_log_alpha_reparameterized(
+            candidate,
+            key,
+            n_prior_samples=16_384,
+            prior_sample_batch_size=16_384,
+            log_beta_fn=lambda latent: (
+                observed_flux_selection_log_beta_gaussian_m5(
+                    flux_limit * jnp.exp(latent[:, 0]),
+                    flux_limit,
+                    27.5,
+                    0.039,
+                    sigma_sys_mag=0.005,
+                    min_sigma_fnu_cgs=1.0e-40,
+                )
+            ),
+        )
+        return value
+
+    point = jnp.asarray(0.03)
+    gradient = jax.grad(objective)(point)
+    step = 2.0e-3
+    finite_difference = (objective(point + step) - objective(point - step)) / (
+        2.0 * step
+    )
+    assert jnp.isfinite(gradient)
+    assert np.isclose(float(gradient), float(finite_difference), rtol=3.0e-2)
 
 
 def test_chunked_log_alpha_matches_single_batch_and_preserves_sample_count() -> None:

@@ -80,7 +80,13 @@ class SMCPosteriorBatch(NamedTuple):
     mutation_acceptance: jnp.ndarray
     final_rw_scale: jnp.ndarray
     unique_ancestor_fraction: jnp.ndarray
+    ancestor_ess: jnp.ndarray
+    ancestor_ess_fraction: jnp.ndarray
     epsilon_squared_jump: jnp.ndarray
+    poor_acceptance: jnp.ndarray
+    poor_ancestry: jnp.ndarray
+    poor_movement: jnp.ndarray
+    mixing_failure: jnp.ndarray
     logZ_estimate: jnp.ndarray
     fallback_attempted: jnp.ndarray
     fallback_succeeded: jnp.ndarray
@@ -351,7 +357,15 @@ def primary_posterior_batch(result: AdaptiveBridgeSMCResult) -> SMCPosteriorBatc
         unique_ancestor_fraction=jax.lax.stop_gradient(
             result.unique_ancestor_fraction
         ),
+        ancestor_ess=jax.lax.stop_gradient(result.ancestor_ess),
+        ancestor_ess_fraction=jax.lax.stop_gradient(
+            result.ancestor_ess_fraction
+        ),
         epsilon_squared_jump=jax.lax.stop_gradient(result.epsilon_squared_jump),
+        poor_acceptance=jax.lax.stop_gradient(result.poor_acceptance),
+        poor_ancestry=jax.lax.stop_gradient(result.poor_ancestry),
+        poor_movement=jax.lax.stop_gradient(result.poor_movement),
+        mixing_failure=jax.lax.stop_gradient(result.mixing_failure),
         logZ_estimate=jax.lax.stop_gradient(result.logZ_estimate),
         fallback_attempted=jnp.zeros_like(hard),
         fallback_succeeded=jnp.zeros_like(hard),
@@ -444,11 +458,35 @@ def merge_hard_fallback(
                 fallback.unique_ancestor_fraction,
             )
         ),
+        ancestor_ess=jax.lax.stop_gradient(
+            replace_object_field(primary.ancestor_ess, fallback.ancestor_ess)
+        ),
+        ancestor_ess_fraction=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.ancestor_ess_fraction,
+                fallback.ancestor_ess_fraction,
+            )
+        ),
         epsilon_squared_jump=jax.lax.stop_gradient(
             replace_object_field(
                 primary.epsilon_squared_jump,
                 fallback.epsilon_squared_jump,
             )
+        ),
+        poor_acceptance=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.poor_acceptance,
+                fallback.poor_acceptance,
+            )
+        ),
+        poor_ancestry=jax.lax.stop_gradient(
+            replace_object_field(primary.poor_ancestry, fallback.poor_ancestry)
+        ),
+        poor_movement=jax.lax.stop_gradient(
+            replace_object_field(primary.poor_movement, fallback.poor_movement)
+        ),
+        mixing_failure=jax.lax.stop_gradient(
+            replace_object_field(primary.mixing_failure, fallback.mixing_failure)
         ),
         logZ_estimate=jax.lax.stop_gradient(
             replace_object_field(primary.logZ_estimate, fallback.logZ_estimate)

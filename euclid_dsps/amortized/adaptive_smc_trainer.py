@@ -203,7 +203,13 @@ def adaptive_smc_configs(config: dict[str, Any]):
         rw_scale_max=float(raw.get("rw_scale_max", 1.0)),
         hard_final_ess_fraction=float(raw.get("hard_final_ess_fraction", 0.30)),
         hard_min_mutation_acceptance=float(
-            raw.get("hard_min_mutation_acceptance", 0.05)
+            raw.get("hard_min_mutation_acceptance", 0.10)
+        ),
+        hard_min_ancestor_ess_fraction=float(
+            raw.get("hard_min_ancestor_ess_fraction", 0.05)
+        ),
+        hard_min_epsilon_squared_jump=float(
+            raw.get("hard_min_epsilon_squared_jump", 1.0e-4)
         ),
         bisection_steps=int(raw.get("bisection_steps", 32)),
     )
@@ -252,6 +258,18 @@ def adaptive_smc_configs(config: dict[str, Any]):
             fallback_raw.get(
                 "hard_min_mutation_acceptance",
                 primary.hard_min_mutation_acceptance,
+            )
+        ),
+        hard_min_ancestor_ess_fraction=float(
+            fallback_raw.get(
+                "hard_min_ancestor_ess_fraction",
+                primary.hard_min_ancestor_ess_fraction,
+            )
+        ),
+        hard_min_epsilon_squared_jump=float(
+            fallback_raw.get(
+                "hard_min_epsilon_squared_jump",
+                primary.hard_min_epsilon_squared_jump,
             )
         ),
         bisection_steps=int(
@@ -501,7 +519,13 @@ def _unshard_smc_result(result: AdaptiveBridgeSMCResult) -> AdaptiveBridgeSMCRes
         mutation_acceptance=objects(result.mutation_acceptance),
         final_rw_scale=objects(result.final_rw_scale),
         unique_ancestor_fraction=objects(result.unique_ancestor_fraction),
+        ancestor_ess=objects(result.ancestor_ess),
+        ancestor_ess_fraction=objects(result.ancestor_ess_fraction),
         epsilon_squared_jump=objects(result.epsilon_squared_jump),
+        poor_acceptance=objects(result.poor_acceptance),
+        poor_ancestry=objects(result.poor_ancestry),
+        poor_movement=objects(result.poor_movement),
+        mixing_failure=objects(result.mixing_failure),
         hard_object_flag=objects(result.hard_object_flag),
         finite_target_fraction=objects(result.finite_target_fraction),
         logZ_estimate=objects(result.logZ_estimate),
@@ -528,7 +552,13 @@ def _slice_smc_result(result: AdaptiveBridgeSMCResult, count: int):
         mutation_acceptance=result.mutation_acceptance[:count],
         final_rw_scale=result.final_rw_scale[:count],
         unique_ancestor_fraction=result.unique_ancestor_fraction[:count],
+        ancestor_ess=result.ancestor_ess[:count],
+        ancestor_ess_fraction=result.ancestor_ess_fraction[:count],
         epsilon_squared_jump=result.epsilon_squared_jump[:count],
+        poor_acceptance=result.poor_acceptance[:count],
+        poor_ancestry=result.poor_ancestry[:count],
+        poor_movement=result.poor_movement[:count],
+        mixing_failure=result.mixing_failure[:count],
         hard_object_flag=result.hard_object_flag[:count],
         finite_target_fraction=result.finite_target_fraction[:count],
         logZ_estimate=result.logZ_estimate[:count],
@@ -563,7 +593,13 @@ def _shard_posterior(posterior: SMCPosteriorBatch, n_devices: int):
         mutation_acceptance=objects(posterior.mutation_acceptance),
         final_rw_scale=objects(posterior.final_rw_scale),
         unique_ancestor_fraction=objects(posterior.unique_ancestor_fraction),
+        ancestor_ess=objects(posterior.ancestor_ess),
+        ancestor_ess_fraction=objects(posterior.ancestor_ess_fraction),
         epsilon_squared_jump=objects(posterior.epsilon_squared_jump),
+        poor_acceptance=objects(posterior.poor_acceptance),
+        poor_ancestry=objects(posterior.poor_ancestry),
+        poor_movement=objects(posterior.poor_movement),
+        mixing_failure=objects(posterior.mixing_failure),
         logZ_estimate=objects(posterior.logZ_estimate),
         fallback_attempted=objects(posterior.fallback_attempted),
         fallback_succeeded=objects(posterior.fallback_succeeded),
@@ -673,6 +709,40 @@ def _run_training_e_step(
                         np.asarray(primary_result.final_ess[object_index])
                         / primary_result.final_particles.shape[0]
                     ),
+                    "primary_acceptance": float(
+                        np.asarray(primary_result.mutation_acceptance[object_index])
+                    ),
+                    "primary_final_rw_scale": float(
+                        np.asarray(primary_result.final_rw_scale[object_index])
+                    ),
+                    "primary_unique_ancestor_fraction": float(
+                        np.asarray(
+                            primary_result.unique_ancestor_fraction[object_index]
+                        )
+                    ),
+                    "primary_ancestor_ess": float(
+                        np.asarray(primary_result.ancestor_ess[object_index])
+                    ),
+                    "primary_ancestor_ess_fraction": float(
+                        np.asarray(
+                            primary_result.ancestor_ess_fraction[object_index]
+                        )
+                    ),
+                    "primary_epsilon_squared_jump": float(
+                        np.asarray(primary_result.epsilon_squared_jump[object_index])
+                    ),
+                    "primary_poor_acceptance": bool(
+                        np.asarray(primary_result.poor_acceptance[object_index])
+                    ),
+                    "primary_poor_ancestry": bool(
+                        np.asarray(primary_result.poor_ancestry[object_index])
+                    ),
+                    "primary_poor_movement": bool(
+                        np.asarray(primary_result.poor_movement[object_index])
+                    ),
+                    "primary_mixing_failure": bool(
+                        np.asarray(primary_result.mixing_failure[object_index])
+                    ),
                     "fallback_beta_final": float(
                         np.asarray(fallback_result.beta_final[local_index])
                     ),
@@ -691,8 +761,28 @@ def _run_training_e_step(
                             fallback_result.unique_ancestor_fraction[local_index]
                         )
                     ),
+                    "fallback_ancestor_ess": float(
+                        np.asarray(fallback_result.ancestor_ess[local_index])
+                    ),
+                    "fallback_ancestor_ess_fraction": float(
+                        np.asarray(
+                            fallback_result.ancestor_ess_fraction[local_index]
+                        )
+                    ),
                     "fallback_epsilon_squared_jump": float(
                         np.asarray(fallback_result.epsilon_squared_jump[local_index])
+                    ),
+                    "fallback_poor_acceptance": bool(
+                        np.asarray(fallback_result.poor_acceptance[local_index])
+                    ),
+                    "fallback_poor_ancestry": bool(
+                        np.asarray(fallback_result.poor_ancestry[local_index])
+                    ),
+                    "fallback_poor_movement": bool(
+                        np.asarray(fallback_result.poor_movement[local_index])
+                    ),
+                    "fallback_mixing_failure": bool(
+                        np.asarray(fallback_result.mixing_failure[local_index])
                     ),
                     "fallback_succeeded": bool(
                         not np.asarray(fallback_result.hard_object_flag[local_index])
@@ -768,10 +858,34 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
             if np.any(eligible)
             else float("nan")
         ),
+        "median_ancestor_ess": (
+            float(np.median(np.asarray(posterior.ancestor_ess)[eligible]))
+            if np.any(eligible)
+            else float("nan")
+        ),
+        "median_ancestor_ess_fraction": (
+            float(
+                np.median(np.asarray(posterior.ancestor_ess_fraction)[eligible])
+            )
+            if np.any(eligible)
+            else float("nan")
+        ),
         "median_epsilon_squared_jump": (
             float(np.median(np.asarray(posterior.epsilon_squared_jump)[eligible]))
             if np.any(eligible)
             else float("nan")
+        ),
+        "poor_acceptance_fraction": float(
+            np.mean(np.asarray(posterior.poor_acceptance, dtype=bool))
+        ),
+        "poor_ancestry_fraction": float(
+            np.mean(np.asarray(posterior.poor_ancestry, dtype=bool))
+        ),
+        "poor_movement_fraction": float(
+            np.mean(np.asarray(posterior.poor_movement, dtype=bool))
+        ),
+        "mixing_failure_fraction": float(
+            np.mean(np.asarray(posterior.mixing_failure, dtype=bool))
         ),
         "fallback_attempt_fraction": float(
             np.mean(np.asarray(posterior.fallback_attempted, dtype=bool))
@@ -933,6 +1047,7 @@ def _run_validation(
     n_devices: int,
     key: jax.Array,
     sweep: int,
+    validation_stage: str,
 ) -> tuple[dict[str, Any], SMCPosteriorBatch]:
     batch, real_mask, row_indices = _validation_batch(
         runtime,
@@ -990,9 +1105,19 @@ def _run_validation(
     q_is_valid = np.asarray(q_is["valid"]) & np.asarray(real_mask)
     q_is_ess = np.asarray(q_is["ess_fraction"], dtype=float)
     summary = _posterior_summary(posterior._replace(eligible=jnp.asarray(eligible)))
+    # Student-t2 defines the robust inference score while Gaussian PhotoErr
+    # defines survey completeness. Their selection-corrected combination is
+    # therefore not the marginal log evidence of one generative likelihood.
+    selection_corrected_robust_score = (
+        float(np.mean(logz[eligible]) - np.asarray(log_alpha))
+        if np.any(eligible)
+        else float("nan")
+    )
     summary.update(
         {
             "sweep": int(sweep),
+            "validation_stage": str(validation_stage),
+            "validation_randomness_contract": "fixed_common_random_numbers",
             "validation_smc_cross_entropy": float(np.asarray(q_cross_entropy)),
             "validation_smc_eligible_count": float(
                 np.asarray(q_metrics.eligible_count)
@@ -1007,11 +1132,12 @@ def _run_validation(
                 if np.any(q_is_valid)
                 else 1.0
             ),
-            "validation_selected_log_evidence": (
-                float(np.mean(logz[eligible]) - np.asarray(log_alpha))
-                if np.any(eligible)
-                else float("nan")
+            "validation_selection_corrected_robust_score": (
+                selection_corrected_robust_score
             ),
+            # Deprecated compatibility alias. Do not describe this as exact
+            # evidence while inference and survey-selection noises differ.
+            "validation_selected_log_evidence": selection_corrected_robust_score,
             "selection_alpha": float(
                 np.asarray(selection_metrics["selection/alpha"])
             ),
@@ -1295,6 +1421,59 @@ def train_feniks_adaptive_smc(
         if pad_count:
             _log(verbose, f"[adaptive-smc-train] bootstrap padding={pad_count}")
 
+    if observed_start == 1:
+        model = _unreplicate_tree(model_replicated)
+        bootstrap_validation_key = jax.random.fold_in(
+            jax.random.PRNGKey(training.seed), 900_001
+        )
+        bootstrap_validation, _ = _run_validation(
+            model=model,
+            model_replicated=model_replicated,
+            runtime=runtime,
+            training_config=training,
+            primary_step=primary_step,
+            fallback_step=fallback_step,
+            n_devices=n_devices,
+            key=bootstrap_validation_key,
+            sweep=0,
+            validation_stage="bootstrap",
+        )
+        validation_rows.append(bootstrap_validation)
+        bootstrap_ce = float(
+            bootstrap_validation["validation_smc_cross_entropy"]
+        )
+        save_checkpoint(
+            out / "checkpoints" / "bootstrap.eqx",
+            model,
+            config=runtime.config,
+            latent_spec=runtime.latent_spec,
+            feature_stats=runtime.feature_stats,
+            epoch=training.bootstrap_sleep_epochs,
+            metric=bootstrap_ce,
+            metric_name="validation_smc_cross_entropy",
+        )
+        if np.isfinite(bootstrap_ce):
+            best_cross_entropy = bootstrap_ce
+            best_epoch_label = "bootstrap"
+            save_checkpoint(
+                out / "checkpoints" / "best.eqx",
+                model,
+                config=runtime.config,
+                latent_spec=runtime.latent_spec,
+                feature_stats=runtime.feature_stats,
+                epoch=training.bootstrap_sleep_epochs,
+                metric=bootstrap_ce,
+                metric_name="validation_smc_cross_entropy",
+            )
+        _write_progress_tables(out, log_rows, validation_rows, prior_rows, hard_rows)
+        _log(
+            verbose,
+            "[adaptive-smc-train] bootstrap validation "
+            f"CE={bootstrap_ce:.5f} "
+            f"qIS={bootstrap_validation['validation_q_is_ess_fraction']:.4f} "
+            f"maxw={bootstrap_validation['validation_q_is_max_weight']:.4f}",
+        )
+
     for sweep in range(observed_start, training.observed_sweeps + 1):
         sweep_rng = np.random.default_rng(int(training.seed) + 2000 + sweep)
         order = sweep_rng.permutation(runtime.train_arrays.flux.shape[0])
@@ -1444,7 +1623,9 @@ def train_feniks_adaptive_smc(
                 f"accept={summary['median_mutation_acceptance']:.3f} "
                 f"rw={summary['median_final_rw_scale']:.3f} "
                 f"anc={summary['median_unique_ancestor_fraction']:.3f} "
+                f"aess={summary['median_ancestor_ess_fraction']:.3f} "
                 f"jump={summary['median_epsilon_squared_jump']:.3f} "
+                f"mixfail={summary['mixing_failure_fraction']:.3f} "
                 f"q_ce={row['q_cross_entropy']:.4f}",
             )
         if macro_values and macro_object_count >= training.min_prior_macro_objects:
@@ -1471,7 +1652,9 @@ def train_feniks_adaptive_smc(
             prior_rows.append(macro_metrics)
             _log_prior_macro(verbose, macro_metrics)
         model = _unreplicate_tree(model_replicated)
-        key, validation_key = jax.random.split(key)
+        validation_key = jax.random.fold_in(
+            jax.random.PRNGKey(training.seed), 900_001
+        )
         validation, _validation_posterior = _run_validation(
             model=model,
             model_replicated=model_replicated,
@@ -1482,6 +1665,7 @@ def train_feniks_adaptive_smc(
             n_devices=n_devices,
             key=validation_key,
             sweep=sweep,
+            validation_stage="observed_sweep",
         )
         validation_rows.append(validation)
         validation_ce = float(validation["validation_smc_cross_entropy"])
@@ -1535,14 +1719,17 @@ def train_feniks_adaptive_smc(
             "[adaptive-smc-train] validation "
             f"sweep={sweep} CE={validation_ce:.5f} "
             f"qIS={validation['validation_q_is_ess_fraction']:.4f} "
-            f"evidence={validation['validation_selected_log_evidence']:.5f}",
+            "robust_score="
+            f"{validation['validation_selection_corrected_robust_score']:.5f}",
         )
         if pad_count:
             _log(verbose, f"[adaptive-smc-train] observed padding={pad_count}")
 
     if not validation_rows:
         model = _unreplicate_tree(model_replicated)
-        key, validation_key = jax.random.split(key)
+        validation_key = jax.random.fold_in(
+            jax.random.PRNGKey(training.seed), 900_001
+        )
         validation, _ = _run_validation(
             model=model,
             model_replicated=model_replicated,
@@ -1553,6 +1740,7 @@ def train_feniks_adaptive_smc(
             n_devices=n_devices,
             key=validation_key,
             sweep=0,
+            validation_stage="recovery",
         )
         validation_rows.append(validation)
     receipt = _final_training_receipt(
@@ -1675,6 +1863,25 @@ def _final_training_receipt(
     alpha_preflight,
 ):
     final = validation_rows[-1]
+    bootstrap = next(
+        (
+            row
+            for row in validation_rows
+            if row.get("validation_stage") == "bootstrap"
+        ),
+        validation_rows[0],
+    )
+    bootstrap_q_is = float(bootstrap["validation_q_is_ess_fraction"])
+    final_q_is = float(final["validation_q_is_ess_fraction"])
+    bootstrap_q_max_weight = float(bootstrap["validation_q_is_max_weight"])
+    final_q_max_weight = float(final["validation_q_is_max_weight"])
+    bootstrap_ce = float(bootstrap["validation_smc_cross_entropy"])
+    final_ce = float(final["validation_smc_cross_entropy"])
+    q_is_ess_gain = final_q_is - bootstrap_q_is
+    q_is_ess_ratio = (
+        final_q_is / bootstrap_q_is if bootstrap_q_is > 0.0 else float("inf")
+    )
+    smc_cross_entropy_improvement = bootstrap_ce - final_ce
     applied_prior = [row for row in prior_rows if bool(row.get("update_applied"))]
     alpha_finite = bool(np.isfinite(final["selection_alpha"]))
     alpha_error_ok = (
@@ -1705,9 +1912,6 @@ def _final_training_receipt(
         "median_beta_final_is_one": bool(
             np.isclose(float(final["median_beta_final"]), 1.0, atol=1.0e-6)
         ),
-        "median_final_ess_fraction_gt_0p3": bool(
-            float(final["median_final_ess_fraction"]) > 0.30
-        ),
         "hard_fraction_lt_0p3": bool(
             float(final["hard_fraction_after_fallback"])
             < training.hard_fraction_fail
@@ -1715,12 +1919,18 @@ def _final_training_receipt(
         "mutation_acceptance_reasonable": bool(
             np.isfinite(acceptance) and 0.15 <= acceptance <= 0.60
         ),
-        "smc_ancestry_non_degenerate": bool(
-            float(final["median_unique_ancestor_fraction"]) > 0.05
+        "smc_combined_mixing_adequate": bool(
+            float(final["mixing_failure_fraction"])
+            < training.hard_fraction_fail
         ),
-        "smc_particles_moved_in_epsilon_space": bool(
-            np.isfinite(float(final["median_epsilon_squared_jump"]))
-            and float(final["median_epsilon_squared_jump"]) > 0.0
+        "smc_ancestry_or_movement_adequate": bool(
+            float(final["median_ancestor_ess_fraction"])
+            >= fallback.hard_min_ancestor_ess_fraction
+            or (
+                np.isfinite(float(final["median_epsilon_squared_jump"]))
+                and float(final["median_epsilon_squared_jump"])
+                >= fallback.hard_min_epsilon_squared_jump
+            )
         ),
         "q_only_is_ess_fraction_adequate": bool(
             float(final["validation_q_is_ess_fraction"])
@@ -1729,6 +1939,14 @@ def _final_training_receipt(
         "q_only_is_not_single_weight_dominated": bool(
             float(final["validation_q_is_max_weight"])
             <= training.max_validation_q_is_max_weight
+        ),
+        "q_only_is_improved_or_bootstrap_supported": bool(
+            q_is_ess_gain > 0.0
+            or bootstrap_q_is >= training.min_validation_q_is_ess_fraction
+        ),
+        "smc_cross_entropy_improved_from_bootstrap": bool(
+            np.isfinite(smc_cross_entropy_improvement)
+            and smc_cross_entropy_improvement > 0.0
         ),
         "q_gradient_clipping_not_permanent": bool(
             np.isfinite(q_clipped_fraction)
@@ -1752,6 +1970,15 @@ def _final_training_receipt(
         "alpha_mc_relative_error_acceptable": alpha_error_ok,
         "all_applied_prior_gradients_finite": bool(
             applied_prior and all(row["grads_finite"] for row in applied_prior)
+        ),
+        "all_prior_component_gradients_finite": bool(
+            prior_rows
+            and all(
+                bool(row.get("data_grads_finite"))
+                and bool(row.get("selection_grads_finite"))
+                and bool(row.get("trust_grads_finite"))
+                for row in prior_rows
+            )
         ),
         "q_smc_update_nonzero": any(
             row.get("phase") == "observed_smc" and row.get("q_update_applied")
@@ -1781,6 +2008,15 @@ def _final_training_receipt(
         "population_prior_initialization": "identity_realnvp_standard_normal",
         "truth_used_for_training_or_selection": False,
         "selection_gradient_preflight": alpha_preflight,
+        "bootstrap_validation": bootstrap,
+        "q_validation_improvement": {
+            "q_is_ess_fraction_delta": q_is_ess_gain,
+            "q_is_ess_fraction_ratio": q_is_ess_ratio,
+            "q_is_max_weight_reduction": (
+                bootstrap_q_max_weight - final_q_max_weight
+            ),
+            "smc_cross_entropy_improvement": smc_cross_entropy_improvement,
+        },
         "best_validation_smc_cross_entropy": float(best_cross_entropy),
         "best_checkpoint_label": best_epoch_label,
         "posterior_full_entropy_mc_first": float(entropy_values[0]),
@@ -1802,6 +2038,7 @@ def _final_training_receipt(
             for code in range(5)
         },
         "final_validation": final,
+        "final_ess_is_diagnostic_only": True,
         "elapsed_seconds": float(elapsed_seconds),
         "next_action": (
             "RUN_BIG_TRAINING"
