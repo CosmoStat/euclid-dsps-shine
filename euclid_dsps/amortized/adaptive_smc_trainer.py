@@ -86,13 +86,18 @@ class AdaptiveTrainingConfig:
     q_smc_learning_rate: float = 2.0e-5
     prior_learning_rate: float = 1.0e-5
     weight_decay: float = 1.0e-6
-    gradient_clip_norm: float = 5.0
+    q_gradient_clip_norm: float = 20.0
+    prior_gradient_clip_norm: float = 5.0
+    smoke_min_bootstrap_updates: int = 128
     trust_strength: float = 0.2
     trust_samples: int = 512
     max_prior_kl_per_dimension: float = 0.05
     max_alpha_mc_relative_error: float = 0.15
     validation_objects: int = 32
     validation_q_is_particles: int = 64
+    min_validation_q_is_ess_fraction: float = 0.05
+    max_validation_q_is_max_weight: float = 0.80
+    max_q_gradient_clipped_fraction: float = 0.80
     hard_fraction_fail: float = 0.30
     seed: int = 260821
 
@@ -130,6 +135,7 @@ class RuntimeBundle:
 def adaptive_training_config(config: dict[str, Any]) -> AdaptiveTrainingConfig:
     cfg = amortized_config(config)
     raw = dict(cfg["training"].get("adaptive_smc", {}) or {})
+    legacy_clip = float(raw.get("gradient_clip_norm", 5.0))
     return AdaptiveTrainingConfig(
         bootstrap_sleep_epochs=int(raw.get("bootstrap_sleep_epochs", 12)),
         observed_sweeps=int(raw.get("observed_sweeps", 3)),
@@ -144,7 +150,15 @@ def adaptive_training_config(config: dict[str, Any]) -> AdaptiveTrainingConfig:
         q_smc_learning_rate=float(raw.get("q_smc_learning_rate", 2.0e-5)),
         prior_learning_rate=float(raw.get("prior_learning_rate", 1.0e-5)),
         weight_decay=float(raw.get("weight_decay", 1.0e-6)),
-        gradient_clip_norm=float(raw.get("gradient_clip_norm", 5.0)),
+        q_gradient_clip_norm=float(
+            raw.get("q_gradient_clip_norm", legacy_clip)
+        ),
+        prior_gradient_clip_norm=float(
+            raw.get("prior_gradient_clip_norm", legacy_clip)
+        ),
+        smoke_min_bootstrap_updates=int(
+            raw.get("smoke_min_bootstrap_updates", 128)
+        ),
         trust_strength=float(raw.get("trust_strength", 0.2)),
         trust_samples=int(raw.get("trust_samples", 512)),
         max_prior_kl_per_dimension=float(
@@ -155,6 +169,15 @@ def adaptive_training_config(config: dict[str, Any]) -> AdaptiveTrainingConfig:
         ),
         validation_objects=int(raw.get("validation_objects", 32)),
         validation_q_is_particles=int(raw.get("validation_q_is_particles", 64)),
+        min_validation_q_is_ess_fraction=float(
+            raw.get("min_validation_q_is_ess_fraction", 0.05)
+        ),
+        max_validation_q_is_max_weight=float(
+            raw.get("max_validation_q_is_max_weight", 0.80)
+        ),
+        max_q_gradient_clipped_fraction=float(
+            raw.get("max_q_gradient_clipped_fraction", 0.80)
+        ),
         hard_fraction_fail=float(raw.get("hard_fraction_fail", 0.30)),
         seed=int(cfg["training"].get("seed", raw.get("seed", 260821))),
     )
@@ -172,6 +195,12 @@ def adaptive_smc_configs(config: dict[str, Any]):
         steps_after_resample=int(raw.get("steps_after_resample", 2)),
         final_steps_at_beta1=int(raw.get("final_steps_at_beta1", 1)),
         rw_scale=float(raw.get("rw_scale", 0.60)),
+        rw_adapt_target_acceptance=float(
+            raw.get("rw_adapt_target_acceptance", 0.30)
+        ),
+        rw_adapt_rate=float(raw.get("rw_adapt_rate", 1.0)),
+        rw_scale_min=float(raw.get("rw_scale_min", 0.15)),
+        rw_scale_max=float(raw.get("rw_scale_max", 1.0)),
         hard_final_ess_fraction=float(raw.get("hard_final_ess_fraction", 0.30)),
         hard_min_mutation_acceptance=float(
             raw.get("hard_min_mutation_acceptance", 0.05)
@@ -198,6 +227,21 @@ def adaptive_smc_configs(config: dict[str, Any]):
             fallback_raw.get("final_steps_at_beta1", primary.final_steps_at_beta1)
         ),
         rw_scale=float(fallback_raw.get("rw_scale", primary.rw_scale)),
+        rw_adapt_target_acceptance=float(
+            fallback_raw.get(
+                "rw_adapt_target_acceptance",
+                primary.rw_adapt_target_acceptance,
+            )
+        ),
+        rw_adapt_rate=float(
+            fallback_raw.get("rw_adapt_rate", primary.rw_adapt_rate)
+        ),
+        rw_scale_min=float(
+            fallback_raw.get("rw_scale_min", primary.rw_scale_min)
+        ),
+        rw_scale_max=float(
+            fallback_raw.get("rw_scale_max", primary.rw_scale_max)
+        ),
         hard_final_ess_fraction=float(
             fallback_raw.get(
                 "hard_final_ess_fraction",
@@ -228,6 +272,29 @@ def adaptive_smc_configs(config: dict[str, Any]):
     )
     _validate_runtime_configs(primary, fallback, proposal)
     return primary, fallback, proposal
+
+
+def _smoke_training_config(
+    training: AdaptiveTrainingConfig,
+    *,
+    train_objects: int,
+) -> AdaptiveTrainingConfig:
+    """Keep the smoke small while exercising enough fresh sleep updates."""
+    smoke_micro_batch = min(training.micro_batch_size, 32)
+    smoke_batches = max(1, int(np.ceil(int(train_objects) / smoke_micro_batch)))
+    smoke_bootstrap_epochs = max(
+        min(training.bootstrap_sleep_epochs, 12),
+        int(np.ceil(training.smoke_min_bootstrap_updates / smoke_batches)),
+    )
+    return replace(
+        training,
+        bootstrap_sleep_epochs=smoke_bootstrap_epochs,
+        observed_sweeps=1,
+        micro_batch_size=smoke_micro_batch,
+        prior_macro_objects=min(training.prior_macro_objects, 64),
+        min_prior_macro_objects=min(training.min_prior_macro_objects, 32),
+        validation_objects=min(training.validation_objects, 8),
+    )
 
 
 def _validate_runtime_configs(primary, fallback, proposal):
@@ -432,6 +499,9 @@ def _unshard_smc_result(result: AdaptiveBridgeSMCResult) -> AdaptiveBridgeSMCRes
         number_of_stages=objects(result.number_of_stages),
         number_of_resamples=objects(result.number_of_resamples),
         mutation_acceptance=objects(result.mutation_acceptance),
+        final_rw_scale=objects(result.final_rw_scale),
+        unique_ancestor_fraction=objects(result.unique_ancestor_fraction),
+        epsilon_squared_jump=objects(result.epsilon_squared_jump),
         hard_object_flag=objects(result.hard_object_flag),
         finite_target_fraction=objects(result.finite_target_fraction),
         logZ_estimate=objects(result.logZ_estimate),
@@ -456,6 +526,9 @@ def _slice_smc_result(result: AdaptiveBridgeSMCResult, count: int):
         number_of_stages=result.number_of_stages[:count],
         number_of_resamples=result.number_of_resamples[:count],
         mutation_acceptance=result.mutation_acceptance[:count],
+        final_rw_scale=result.final_rw_scale[:count],
+        unique_ancestor_fraction=result.unique_ancestor_fraction[:count],
+        epsilon_squared_jump=result.epsilon_squared_jump[:count],
         hard_object_flag=result.hard_object_flag[:count],
         finite_target_fraction=result.finite_target_fraction[:count],
         logZ_estimate=result.logZ_estimate[:count],
@@ -488,6 +561,9 @@ def _shard_posterior(posterior: SMCPosteriorBatch, n_devices: int):
         final_ess=objects(posterior.final_ess),
         final_max_weight=objects(posterior.final_max_weight),
         mutation_acceptance=objects(posterior.mutation_acceptance),
+        final_rw_scale=objects(posterior.final_rw_scale),
+        unique_ancestor_fraction=objects(posterior.unique_ancestor_fraction),
+        epsilon_squared_jump=objects(posterior.epsilon_squared_jump),
         logZ_estimate=objects(posterior.logZ_estimate),
         fallback_attempted=objects(posterior.fallback_attempted),
         fallback_succeeded=objects(posterior.fallback_succeeded),
@@ -607,6 +683,17 @@ def _run_training_e_step(
                     "fallback_acceptance": float(
                         np.asarray(fallback_result.mutation_acceptance[local_index])
                     ),
+                    "fallback_final_rw_scale": float(
+                        np.asarray(fallback_result.final_rw_scale[local_index])
+                    ),
+                    "fallback_unique_ancestor_fraction": float(
+                        np.asarray(
+                            fallback_result.unique_ancestor_fraction[local_index]
+                        )
+                    ),
+                    "fallback_epsilon_squared_jump": float(
+                        np.asarray(fallback_result.epsilon_squared_jump[local_index])
+                    ),
                     "fallback_succeeded": bool(
                         not np.asarray(fallback_result.hard_object_flag[local_index])
                     ),
@@ -665,6 +752,25 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
         "median_mutation_acceptance": (
             float(np.median(acceptance[finite_acceptance]))
             if np.any(finite_acceptance)
+            else float("nan")
+        ),
+        "median_final_rw_scale": (
+            float(np.median(np.asarray(posterior.final_rw_scale)[eligible]))
+            if np.any(eligible)
+            else float("nan")
+        ),
+        "median_unique_ancestor_fraction": (
+            float(
+                np.median(
+                    np.asarray(posterior.unique_ancestor_fraction)[eligible]
+                )
+            )
+            if np.any(eligible)
+            else float("nan")
+        ),
+        "median_epsilon_squared_jump": (
+            float(np.median(np.asarray(posterior.epsilon_squared_jump)[eligible]))
+            if np.any(eligible)
             else float("nan")
         ),
         "fallback_attempt_fraction": float(
@@ -959,14 +1065,9 @@ def train_feniks_adaptive_smc(
     )
     training = adaptive_training_config(runtime.config)
     if smoke:
-        training = replace(
+        training = _smoke_training_config(
             training,
-            bootstrap_sleep_epochs=min(training.bootstrap_sleep_epochs, 12),
-            observed_sweeps=1,
-            micro_batch_size=min(training.micro_batch_size, 32),
-            prior_macro_objects=min(training.prior_macro_objects, 64),
-            min_prior_macro_objects=min(training.min_prior_macro_objects, 32),
-            validation_objects=min(training.validation_objects, 8),
+            train_objects=int(runtime.train_arrays.flux.shape[0]),
         )
         selection = runtime.selection_objective_config["selection_correction"]
         selection["n_prior_samples"] = min(
@@ -974,6 +1075,9 @@ def train_feniks_adaptive_smc(
         )
         selection["prior_sample_batch_size"] = min(
             int(selection["prior_sample_batch_size"]), 128
+        )
+        selection["gradient_preflight_samples"] = int(
+            selection["n_prior_samples"]
         )
     primary_config, fallback_config, proposal_config = adaptive_smc_configs(
         runtime.config
@@ -997,8 +1101,11 @@ def train_feniks_adaptive_smc(
         f"train={runtime.train_arrays.flux.shape[0]} "
         f"validation={runtime.validation_arrays.flux.shape[0]} "
         f"bootstrap={training.bootstrap_sleep_epochs} "
+        f"bootstrap_updates={training.bootstrap_sleep_epochs * int(np.ceil(runtime.train_arrays.flux.shape[0] / training.micro_batch_size))} "
         f"observed_sweeps={training.observed_sweeps} "
-        f"micro_batch={training.micro_batch_size}",
+        f"micro_batch={training.micro_batch_size} "
+        f"q_clip={training.q_gradient_clip_norm:g} "
+        f"prior_clip={training.prior_gradient_clip_norm:g}",
     )
     key = jax.random.PRNGKey(int(training.seed))
     key, model_key = jax.random.split(key)
@@ -1009,17 +1116,17 @@ def train_feniks_adaptive_smc(
     )
     q_sleep_optimizer = make_component_optimizer(
         learning_rate=training.q_sleep_learning_rate,
-        gradient_clip_norm=training.gradient_clip_norm,
+        gradient_clip_norm=training.q_gradient_clip_norm,
         weight_decay=training.weight_decay,
     )
     q_smc_optimizer = make_component_optimizer(
         learning_rate=training.q_smc_learning_rate,
-        gradient_clip_norm=training.gradient_clip_norm,
+        gradient_clip_norm=training.q_gradient_clip_norm,
         weight_decay=training.weight_decay,
     )
     prior_optimizer = make_component_optimizer(
         learning_rate=training.prior_learning_rate,
-        gradient_clip_norm=training.gradient_clip_norm,
+        gradient_clip_norm=training.prior_gradient_clip_norm,
         weight_decay=training.weight_decay,
     )
     q_sleep_state = q_sleep_optimizer.init(
@@ -1096,12 +1203,12 @@ def train_feniks_adaptive_smc(
     )
     q_smc_step = make_pmap_q_smc_step(
         optimizer=q_smc_optimizer,
-        gradient_clip_norm=training.gradient_clip_norm,
+        gradient_clip_norm=training.q_gradient_clip_norm,
     )
     q_sleep_step = make_pmap_q_sleep_step(
         optimizer=q_sleep_optimizer,
         sleep_loss_fn=_make_sleep_loss_fn(runtime),
-        gradient_clip_norm=training.gradient_clip_norm,
+        gradient_clip_norm=training.q_gradient_clip_norm,
     )
     selection_fn = _make_selection_log_alpha_fn(runtime)
     log_rows: list[dict[str, Any]] = []
@@ -1322,6 +1429,7 @@ def train_feniks_adaptive_smc(
                     {"sweep": sweep, "batch": batch_index, "phase": "prior_macro"}
                 )
                 prior_rows.append(macro_metrics)
+                _log_prior_macro(verbose, macro_metrics)
                 macro_values = []
                 macro_snapshot = None
                 macro_object_count = 0
@@ -1333,6 +1441,10 @@ def train_feniks_adaptive_smc(
                 f"beta={summary['median_beta_final']:.3f} "
                 f"ESS={summary['median_final_ess_fraction']:.3f} "
                 f"hard={summary['hard_fraction_after_fallback']:.3f} "
+                f"accept={summary['median_mutation_acceptance']:.3f} "
+                f"rw={summary['median_final_rw_scale']:.3f} "
+                f"anc={summary['median_unique_ancestor_fraction']:.3f} "
+                f"jump={summary['median_epsilon_squared_jump']:.3f} "
                 f"q_ce={row['q_cross_entropy']:.4f}",
             )
         if macro_values and macro_object_count >= training.min_prior_macro_objects:
@@ -1357,6 +1469,7 @@ def train_feniks_adaptive_smc(
                 {"sweep": sweep, "batch": n_batches, "phase": "prior_macro_tail"}
             )
             prior_rows.append(macro_metrics)
+            _log_prior_macro(verbose, macro_metrics)
         model = _unreplicate_tree(model_replicated)
         key, validation_key = jax.random.split(key)
         validation, _validation_posterior = _run_validation(
@@ -1493,14 +1606,21 @@ def _apply_prior_macro(
         trust_strength=training.trust_strength,
         max_kl_per_dimension=training.max_prior_kl_per_dimension,
         max_alpha_mc_relative_error=training.max_alpha_mc_relative_error,
-        gradient_clip_norm=training.gradient_clip_norm,
+        gradient_clip_norm=training.prior_gradient_clip_norm,
     )
     payload = {
         field: _host_scalar(getattr(metrics, field))
         for field in PriorUpdateMetrics._fields
     }
-    payload["update_applied"] = bool(payload["update_applied"])
-    payload["grads_finite"] = bool(payload["grads_finite"])
+    for field in (
+        "update_applied",
+        "grads_finite",
+        "component_diagnostics_evaluated",
+        "data_grads_finite",
+        "selection_grads_finite",
+        "trust_grads_finite",
+    ):
+        payload[field] = bool(payload[field])
     payload["rejection_code"] = int(payload["rejection_code"])
     return _replicate_model_for_pmap(model, devices), prior_state, payload, key
 
@@ -1521,6 +1641,21 @@ def _write_progress_tables(out, log_rows, validation_rows, prior_rows, hard_rows
         "last_prior_macro": prior_rows[-1] if prior_rows else None,
     }
     write_json(out / "training_progress.json", progress)
+
+
+def _log_prior_macro(verbose: bool, metrics: dict[str, Any]) -> None:
+    _log(
+        verbose,
+        "[adaptive-smc-train] prior-macro "
+        f"phase={metrics.get('phase', 'unknown')} "
+        f"applied={int(bool(metrics['update_applied']))} "
+        f"rejection={int(metrics['rejection_code'])} "
+        f"eligible={int(metrics['eligible_count'])} "
+        f"grad={float(metrics['raw_grad_norm']):.6g} "
+        f"data_grad={float(metrics['data_grad_norm']):.6g} "
+        f"selection_grad={float(metrics['selection_grad_norm']):.6g} "
+        f"trust_grad={float(metrics['trust_grad_norm']):.6g}",
+    )
 
 
 def _final_training_receipt(
@@ -1559,10 +1694,11 @@ def _final_training_receipt(
         if row.get("q_grad_clipped", row.get("grad_clipped")) is not None
     ]
     prior_clipped = [
-        float(row["raw_grad_norm"]) > training.gradient_clip_norm
+        float(row["raw_grad_norm"]) > training.prior_gradient_clip_norm
         for row in prior_rows
         if np.isfinite(row.get("raw_grad_norm", np.nan))
     ]
+    q_clipped_fraction = float(np.mean(q_clipped)) if q_clipped else float("nan")
     checks = {
         "no_truth_in_training": True,
         "canonical_target_reused": True,
@@ -1577,7 +1713,26 @@ def _final_training_receipt(
             < training.hard_fraction_fail
         ),
         "mutation_acceptance_reasonable": bool(
-            np.isfinite(acceptance) and 0.05 <= acceptance <= 0.80
+            np.isfinite(acceptance) and 0.15 <= acceptance <= 0.60
+        ),
+        "smc_ancestry_non_degenerate": bool(
+            float(final["median_unique_ancestor_fraction"]) > 0.05
+        ),
+        "smc_particles_moved_in_epsilon_space": bool(
+            np.isfinite(float(final["median_epsilon_squared_jump"]))
+            and float(final["median_epsilon_squared_jump"]) > 0.0
+        ),
+        "q_only_is_ess_fraction_adequate": bool(
+            float(final["validation_q_is_ess_fraction"])
+            >= training.min_validation_q_is_ess_fraction
+        ),
+        "q_only_is_not_single_weight_dominated": bool(
+            float(final["validation_q_is_max_weight"])
+            <= training.max_validation_q_is_max_weight
+        ),
+        "q_gradient_clipping_not_permanent": bool(
+            np.isfinite(q_clipped_fraction)
+            and q_clipped_fraction <= training.max_q_gradient_clipped_fraction
         ),
         "validation_smc_cross_entropy_finite": bool(
             np.isfinite(final["validation_smc_cross_entropy"])
@@ -1635,11 +1790,17 @@ def _final_training_receipt(
         "prior_macro_updates_attempted": len(prior_rows),
         "prior_macro_updates_applied": len(applied_prior),
         "q_gradient_clipped_fraction": (
-            float(np.mean(q_clipped)) if q_clipped else None
+            q_clipped_fraction if np.isfinite(q_clipped_fraction) else None
         ),
         "prior_gradient_clipped_fraction": (
             float(np.mean(prior_clipped)) if prior_clipped else None
         ),
+        "prior_macro_rejection_counts": {
+            str(code): sum(
+                int(row.get("rejection_code", -1)) == code for row in prior_rows
+            )
+            for code in range(5)
+        },
         "final_validation": final,
         "elapsed_seconds": float(elapsed_seconds),
         "next_action": (

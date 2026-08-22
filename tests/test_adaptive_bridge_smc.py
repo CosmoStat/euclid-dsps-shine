@@ -16,9 +16,12 @@ from euclid_dsps.amortized.adaptive_bridge_smc import (
 )
 from euclid_dsps.amortized.adaptive_smc_training import (
     SMCPosteriorBatch,
+    apply_prior_macro_update,
+    make_component_optimizer,
     merge_hard_fallback,
     smc_prior_mstep_terms,
     smc_q_distillation_loss,
+    snapshot_model,
 )
 
 HAS_EQUINOX = importlib.util.find_spec("equinox") is not None
@@ -321,6 +324,37 @@ def test_epsilon_rw_mh_preserves_analytic_target() -> None:
     assert 0.50 < float(jnp.mean(accepted)) < 0.95
 
 
+def test_low_acceptance_adapts_rw_scale_and_records_particle_movement() -> None:
+    n_particles = 512
+    dimension = 15
+    initial = jax.random.normal(
+        jax.random.PRNGKey(71),
+        (n_particles, 2, dimension),
+    )
+    forward, inverse = _scaled_identity_transport(1.0, dimension)
+    result = run_adaptive_bridge_smc(
+        key=jax.random.PRNGKey(72),
+        initial_particles=initial,
+        log_r0_fn=lambda x: _isotropic_normal_log_prob(x, 0.0, 1.0),
+        log_target_fn=lambda x: _isotropic_normal_log_prob(x, 0.0, 1.0),
+        epsilon_to_x_fn=forward,
+        x_to_epsilon_fn=inverse,
+        config=AdaptiveBridgeSMCConfig(
+            n_particles=n_particles,
+            steps_after_resample=0,
+            final_steps_at_beta1=4,
+            rw_scale=1.0,
+            rw_scale_max=1.0,
+            hard_min_mutation_acceptance=0.0,
+        ),
+    )
+
+    assert jnp.all(result.final_rw_scale < 0.75)
+    assert jnp.all(result.unique_ancestor_fraction == 1.0)
+    assert jnp.all(result.epsilon_squared_jump > 0.0)
+    assert jnp.all(jnp.isfinite(result.epsilon_squared_jump))
+
+
 def test_unreachable_budget_marks_hard_without_fake_gradient_sample() -> None:
     n_particles = 64
     initial = jax.random.normal(jax.random.PRNGKey(8), (n_particles, 2, 1))
@@ -367,6 +401,9 @@ def _fake_smc_result(*, n_particles: int, n_objects: int, hard):
         number_of_stages=jnp.ones((n_objects,), dtype=jnp.int32),
         number_of_resamples=jnp.zeros((n_objects,), dtype=jnp.int32),
         mutation_acceptance=jnp.full((n_objects,), 0.3),
+        final_rw_scale=jnp.full((n_objects,), 0.6),
+        unique_ancestor_fraction=jnp.ones((n_objects,)),
+        epsilon_squared_jump=jnp.ones((n_objects,)),
         hard_object_flag=hard,
         finite_target_fraction=jnp.ones((n_objects,)),
         logZ_estimate=jnp.arange(n_objects, dtype=jnp.float32),
@@ -384,6 +421,9 @@ def test_hard_fallback_only_replaces_successful_queued_objects() -> None:
         final_ess=primary_result.final_ess,
         final_max_weight=primary_result.final_max_weight,
         mutation_acceptance=primary_result.mutation_acceptance,
+        final_rw_scale=primary_result.final_rw_scale,
+        unique_ancestor_fraction=primary_result.unique_ancestor_fraction,
+        epsilon_squared_jump=primary_result.epsilon_squared_jump,
         logZ_estimate=primary_result.logZ_estimate,
         fallback_attempted=jnp.zeros((3,), dtype=jnp.bool_),
         fallback_succeeded=jnp.zeros((3,), dtype=jnp.bool_),
@@ -502,6 +542,9 @@ def test_smc_losses_stop_particles_and_separate_q_from_prior() -> None:
         final_ess=jnp.full((3,), 5.0),
         final_max_weight=jnp.full((3,), 0.2),
         mutation_acceptance=jnp.full((3,), 0.3),
+        final_rw_scale=jnp.full((3,), 0.6),
+        unique_ancestor_fraction=jnp.ones((3,)),
+        epsilon_squared_jump=jnp.ones((3,)),
         logZ_estimate=jnp.zeros((3,)),
         fallback_attempted=jnp.zeros((3,), dtype=jnp.bool_),
         fallback_succeeded=jnp.zeros((3,), dtype=jnp.bool_),
@@ -549,3 +592,100 @@ def test_smc_losses_stop_particles_and_separate_q_from_prior() -> None:
     assert prior_norm == 0.0
     assert prior_mstep_grad_norm > 0.0
     assert jnp.all(particle_grads == 0.0)
+
+
+@pytest.mark.skipif(not HAS_EQUINOX, reason="equinox is not installed")
+def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
+    import equinox as eqx
+
+    from euclid_dsps.amortized.elbo import AmortizedModel
+    from euclid_dsps.amortized.flows import RealNVPPrior
+    from euclid_dsps.amortized.posterior import ConditionalFlowEncoder
+    from euclid_dsps.calibration import GlobalSedScaleState
+
+    latent_dim = 2
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(80),
+        input_dim=4,
+        latent_dim=latent_dim,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-4.0,
+        log_std_max=3.0,
+        initial_log_std=0.0,
+        family="realnvp",
+        n_layers=2,
+        hidden_size=8,
+        output_space="latent_x",
+    )
+    prior = RealNVPPrior(
+        jax.random.PRNGKey(81),
+        latent_dim=latent_dim,
+        n_layers=2,
+        hidden_size=8,
+        permutation="roll",
+        init="identity",
+    )
+    model = AmortizedModel(
+        encoder,
+        prior,
+        GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    posterior = SMCPosteriorBatch(
+        particles=jax.random.normal(jax.random.PRNGKey(82), (8, 4, latent_dim)),
+        normalized_weights=jnp.full((8, 4), 1.0 / 8.0),
+        eligible=jnp.ones((4,), dtype=jnp.bool_),
+        beta_final=jnp.ones((4,)),
+        final_ess=jnp.full((4,), 8.0),
+        final_max_weight=jnp.full((4,), 1.0 / 8.0),
+        mutation_acceptance=jnp.full((4,), 0.3),
+        final_rw_scale=jnp.full((4,), 0.6),
+        unique_ancestor_fraction=jnp.ones((4,)),
+        epsilon_squared_jump=jnp.ones((4,)),
+        logZ_estimate=jnp.zeros((4,)),
+        fallback_attempted=jnp.zeros((4,), dtype=jnp.bool_),
+        fallback_succeeded=jnp.zeros((4,), dtype=jnp.bool_),
+    )
+    optimizer = make_component_optimizer(
+        learning_rate=1.0e-4,
+        gradient_clip_norm=5.0,
+        weight_decay=0.0,
+    )
+    optimizer_state = optimizer.init(eqx.filter(prior, eqx.is_inexact_array))
+
+    def nonfinite_selection_gradient(candidate, _key):
+        leaf = next(
+            value
+            for value in jax.tree_util.tree_leaves(candidate.prior)
+            if eqx.is_inexact_array(value) and value.size
+        )
+        centered = leaf.reshape(-1)[0] - jax.lax.stop_gradient(leaf.reshape(-1)[0])
+        log_alpha = -0.5 + jnp.sqrt(jnp.square(centered))
+        return log_alpha, {
+            "selection/alpha_mc_relative_error": jnp.asarray(0.0)
+        }
+
+    _model, _state, metrics = apply_prior_macro_update(
+        model=model,
+        prior_snapshot=snapshot_model(model),
+        optimizer=optimizer,
+        optimizer_state=optimizer_state,
+        posterior=posterior,
+        trust_key=jax.random.PRNGKey(83),
+        selection_key=jax.random.PRNGKey(84),
+        selection_log_alpha_fn=nonfinite_selection_gradient,
+        trust_samples=32,
+        trust_strength=0.2,
+        max_kl_per_dimension=0.05,
+        max_alpha_mc_relative_error=0.15,
+        gradient_clip_norm=5.0,
+    )
+
+    assert jnp.isfinite(metrics.loss)
+    assert not metrics.grads_finite
+    assert metrics.component_diagnostics_evaluated
+    assert metrics.data_grads_finite
+    assert not metrics.selection_grads_finite
+    assert metrics.trust_grads_finite
+    assert not metrics.update_applied
+    assert metrics.rejection_code == 1

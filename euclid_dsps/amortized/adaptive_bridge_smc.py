@@ -31,6 +31,10 @@ class AdaptiveBridgeSMCConfig:
     steps_after_resample: int = 2
     final_steps_at_beta1: int = 1
     rw_scale: float = 0.60
+    rw_adapt_target_acceptance: float = 0.30
+    rw_adapt_rate: float = 1.0
+    rw_scale_min: float = 0.15
+    rw_scale_max: float = 1.00
     hard_final_ess_fraction: float = 0.30
     hard_min_mutation_acceptance: float = 0.05
     bisection_steps: int = 32
@@ -51,6 +55,9 @@ class AdaptiveBridgeSMCResult(NamedTuple):
     number_of_stages: jnp.ndarray
     number_of_resamples: jnp.ndarray
     mutation_acceptance: jnp.ndarray
+    final_rw_scale: jnp.ndarray
+    unique_ancestor_fraction: jnp.ndarray
+    epsilon_squared_jump: jnp.ndarray
     hard_object_flag: jnp.ndarray
     finite_target_fraction: jnp.ndarray
     logZ_estimate: jnp.ndarray
@@ -98,6 +105,7 @@ def run_adaptive_bridge_smc(
     resamples = jnp.zeros((n_objects,), dtype=jnp.int32)
     accepted_total = jnp.zeros((n_objects,), dtype=dtype)
     proposed_total = jnp.zeros((n_objects,), dtype=dtype)
+    rw_scales = jnp.full((n_objects,), float(cfg.rw_scale), dtype=dtype)
 
     def stage_body(stage, state):
         (
@@ -117,6 +125,7 @@ def run_adaptive_bridge_smc(
             resample_counts,
             accepted_counts,
             proposed_counts,
+            current_rw_scales,
         ) = state
         active = current_beta < 1.0 - 1.0e-6
         log_ratio = _finite_logdensity(current_log_target) - current_log_r0
@@ -194,10 +203,17 @@ def run_adaptive_bridge_smc(
                 log_target_fn=log_target_fn,
                 epsilon_to_x_fn=epsilon_to_x_fn,
                 x_to_epsilon_fn=x_to_epsilon_fn,
-                rw_scale=cfg.rw_scale,
+                rw_scale=current_rw_scales,
             )
             stage_accepted += jnp.sum(accepted, axis=0)
             stage_proposed += n_particles * resample_mask.astype(dtype)
+            move_acceptance = jnp.mean(accepted.astype(dtype), axis=0)
+            current_rw_scales = _adapt_random_walk_scale(
+                current_rw_scales,
+                move_acceptance,
+                resample_mask,
+                cfg,
+            )
         reached_final = active & (next_beta >= 1.0 - 1.0e-6)
         for move_index in range(int(cfg.final_steps_at_beta1)):
             move_key = jax.random.fold_in(
@@ -220,10 +236,17 @@ def run_adaptive_bridge_smc(
                 log_target_fn=log_target_fn,
                 epsilon_to_x_fn=epsilon_to_x_fn,
                 x_to_epsilon_fn=x_to_epsilon_fn,
-                rw_scale=cfg.rw_scale,
+                rw_scale=current_rw_scales,
             )
             stage_accepted += jnp.sum(accepted, axis=0)
             stage_proposed += n_particles * reached_final.astype(dtype)
+            move_acceptance = jnp.mean(accepted.astype(dtype), axis=0)
+            current_rw_scales = _adapt_random_walk_scale(
+                current_rw_scales,
+                move_acceptance,
+                reached_final,
+                cfg,
+            )
         stage_acceptance = jnp.where(
             stage_proposed > 0,
             stage_accepted / stage_proposed,
@@ -253,6 +276,7 @@ def run_adaptive_bridge_smc(
             resample_counts + resample_mask.astype(jnp.int32),
             accepted_counts + stage_accepted,
             proposed_counts + stage_proposed,
+            current_rw_scales,
         )
 
     state = (
@@ -272,6 +296,7 @@ def run_adaptive_bridge_smc(
         resamples,
         accepted_total,
         proposed_total,
+        rw_scales,
     )
     state = jax.lax.fori_loop(0, int(cfg.max_stages), stage_body, state)
     (
@@ -291,6 +316,7 @@ def run_adaptive_bridge_smc(
         resamples,
         accepted_total,
         proposed_total,
+        rw_scales,
     ) = state
     log_weights = jax.nn.log_softmax(log_weights, axis=0)
     weights = jnp.exp(log_weights)
@@ -311,6 +337,23 @@ def run_adaptive_bridge_smc(
         | (finite_target_fraction <= 0.0)
         | low_acceptance
     )
+    sorted_ancestors = jnp.sort(ancestor_ids, axis=0)
+    unique_ancestors = 1 + jnp.sum(
+        sorted_ancestors[1:] != sorted_ancestors[:-1],
+        axis=0,
+    )
+    unique_ancestor_fraction = unique_ancestors.astype(dtype) / n_particles
+    initial_ancestors = jnp.take_along_axis(
+        initial_particles,
+        ancestor_ids[..., None],
+        axis=0,
+    )
+    final_epsilon, _final_logdet = x_to_epsilon_fn(particles)
+    initial_epsilon, _initial_logdet = x_to_epsilon_fn(initial_ancestors)
+    epsilon_squared_jump = jnp.mean(
+        jnp.sum(jnp.square(final_epsilon - initial_epsilon), axis=-1),
+        axis=0,
+    )
     return AdaptiveBridgeSMCResult(
         final_particles=jax.lax.stop_gradient(particles),
         final_normalized_weights=jax.lax.stop_gradient(weights),
@@ -326,6 +369,9 @@ def run_adaptive_bridge_smc(
         number_of_stages=jax.lax.stop_gradient(stages),
         number_of_resamples=jax.lax.stop_gradient(resamples),
         mutation_acceptance=jax.lax.stop_gradient(acceptance),
+        final_rw_scale=jax.lax.stop_gradient(rw_scales),
+        unique_ancestor_fraction=jax.lax.stop_gradient(unique_ancestor_fraction),
+        epsilon_squared_jump=jax.lax.stop_gradient(epsilon_squared_jump),
         hard_object_flag=jax.lax.stop_gradient(hard),
         finite_target_fraction=jax.lax.stop_gradient(finite_target_fraction),
         logZ_estimate=jax.lax.stop_gradient(logz),
@@ -431,7 +477,7 @@ def _epsilon_random_walk_mh_cached(
     log_target_fn: LogDensity,
     epsilon_to_x_fn: Transport,
     x_to_epsilon_fn: Transport,
-    rw_scale: float,
+    rw_scale: float | jnp.ndarray,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Cached exact RW-MH move, short-circuited when no object is active."""
 
@@ -473,11 +519,14 @@ def _epsilon_random_walk_mh_active(
     log_target_fn: LogDensity,
     epsilon_to_x_fn: Transport,
     x_to_epsilon_fn: Transport,
-    rw_scale: float,
+    rw_scale: float | jnp.ndarray,
 ):
     proposal_key, accept_key = jax.random.split(key)
     epsilon, current_logdet = x_to_epsilon_fn(particles)
-    proposal_epsilon = epsilon + float(rw_scale) * jax.random.normal(
+    scale = jnp.asarray(rw_scale, dtype=epsilon.dtype)
+    if scale.ndim == 0:
+        scale = jnp.broadcast_to(scale, (epsilon.shape[1],))
+    proposal_epsilon = epsilon + scale[None, :, None] * jax.random.normal(
         proposal_key,
         epsilon.shape,
         dtype=epsilon.dtype,
@@ -517,6 +566,24 @@ def _epsilon_random_walk_mh_active(
         jnp.where(accepted, proposal_log_r0, current_log_r0),
         jnp.where(accepted, proposal_log_target, current_log_target),
     )
+
+
+def _adapt_random_walk_scale(
+    current_scale: jnp.ndarray,
+    acceptance: jnp.ndarray,
+    object_mask: jnp.ndarray,
+    config: AdaptiveBridgeSMCConfig,
+) -> jnp.ndarray:
+    """Adapt per-object RW scales between exact MH transition kernels."""
+    log_multiplier = float(config.rw_adapt_rate) * (
+        acceptance - float(config.rw_adapt_target_acceptance)
+    )
+    proposed = jnp.clip(
+        current_scale * jnp.exp(log_multiplier),
+        float(config.rw_scale_min),
+        float(config.rw_scale_max),
+    )
+    return jnp.where(object_mask, proposed, current_scale)
 
 
 def bridge_logdensity(
@@ -658,3 +725,13 @@ def _validate_inputs(particles, cfg):
         raise ValueError("mutation step counts must be non-negative")
     if float(cfg.rw_scale) <= 0.0:
         raise ValueError("rw_scale must be positive")
+    if not 0.0 < float(cfg.rw_adapt_target_acceptance) < 1.0:
+        raise ValueError("rw_adapt_target_acceptance must lie in (0, 1)")
+    if float(cfg.rw_adapt_rate) < 0.0:
+        raise ValueError("rw_adapt_rate must be non-negative")
+    if not 0.0 < float(cfg.rw_scale_min) <= float(cfg.rw_scale_max):
+        raise ValueError("rw_scale bounds must satisfy 0 < min <= max")
+    if not float(cfg.rw_scale_min) <= float(cfg.rw_scale) <= float(
+        cfg.rw_scale_max
+    ):
+        raise ValueError("rw_scale must lie within the configured bounds")

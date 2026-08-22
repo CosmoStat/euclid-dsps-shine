@@ -78,6 +78,9 @@ class SMCPosteriorBatch(NamedTuple):
     final_ess: jnp.ndarray
     final_max_weight: jnp.ndarray
     mutation_acceptance: jnp.ndarray
+    final_rw_scale: jnp.ndarray
+    unique_ancestor_fraction: jnp.ndarray
+    epsilon_squared_jump: jnp.ndarray
     logZ_estimate: jnp.ndarray
     fallback_attempted: jnp.ndarray
     fallback_succeeded: jnp.ndarray
@@ -118,6 +121,13 @@ class PriorUpdateMetrics(NamedTuple):
     raw_grad_norm: jnp.ndarray
     clipped_grad_norm: jnp.ndarray
     grads_finite: jnp.ndarray
+    component_diagnostics_evaluated: jnp.ndarray
+    data_grad_norm: jnp.ndarray
+    selection_grad_norm: jnp.ndarray
+    trust_grad_norm: jnp.ndarray
+    data_grads_finite: jnp.ndarray
+    selection_grads_finite: jnp.ndarray
+    trust_grads_finite: jnp.ndarray
     update_applied: jnp.ndarray
     rejection_code: jnp.ndarray
 
@@ -337,6 +347,11 @@ def primary_posterior_batch(result: AdaptiveBridgeSMCResult) -> SMCPosteriorBatc
         final_ess=jax.lax.stop_gradient(result.final_ess),
         final_max_weight=jax.lax.stop_gradient(result.final_max_weight),
         mutation_acceptance=jax.lax.stop_gradient(result.mutation_acceptance),
+        final_rw_scale=jax.lax.stop_gradient(result.final_rw_scale),
+        unique_ancestor_fraction=jax.lax.stop_gradient(
+            result.unique_ancestor_fraction
+        ),
+        epsilon_squared_jump=jax.lax.stop_gradient(result.epsilon_squared_jump),
         logZ_estimate=jax.lax.stop_gradient(result.logZ_estimate),
         fallback_attempted=jnp.zeros_like(hard),
         fallback_succeeded=jnp.zeros_like(hard),
@@ -418,6 +433,21 @@ def merge_hard_fallback(
             replace_object_field(
                 primary.mutation_acceptance,
                 fallback.mutation_acceptance,
+            )
+        ),
+        final_rw_scale=jax.lax.stop_gradient(
+            replace_object_field(primary.final_rw_scale, fallback.final_rw_scale)
+        ),
+        unique_ancestor_fraction=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.unique_ancestor_fraction,
+                fallback.unique_ancestor_fraction,
+            )
+        ),
+        epsilon_squared_jump=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.epsilon_squared_jump,
+                fallback.epsilon_squared_jump,
             )
         ),
         logZ_estimate=jax.lax.stop_gradient(
@@ -640,6 +670,56 @@ def apply_prior_macro_update(
     terms, log_alpha, selection_metrics = auxiliary
     raw_norm = tree_l2_norm(grads)
     gradients_finite = tree_all_finite(grads)
+    diagnostic_dtype = jnp.asarray(loss).dtype
+    component_evaluated = False
+    data_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
+    selection_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
+    trust_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
+    data_grads_finite = jnp.asarray(True)
+    selection_grads_finite = jnp.asarray(True)
+    trust_grads_finite = jnp.asarray(True)
+    if not bool(np.asarray(jax.device_get(gradients_finite))):
+        component_evaluated = True
+
+        def data_objective(candidate_prior):
+            return smc_prior_mstep_terms(
+                candidate_prior,
+                prior_snapshot.prior,
+                posterior,
+                old_samples,
+            ).data_nll
+
+        def selection_objective(candidate_prior):
+            candidate_model = eqx.tree_at(
+                lambda tree: tree.prior,
+                model,
+                candidate_prior,
+            )
+            return selection_log_alpha_fn(candidate_model, selection_key)[0]
+
+        def trust_objective(candidate_prior):
+            return smc_prior_mstep_terms(
+                candidate_prior,
+                prior_snapshot.prior,
+                posterior,
+                old_samples,
+            ).prior_kl_old_new
+
+        _data_value, data_grads = eqx.filter_value_and_grad(data_objective)(
+            model.prior
+        )
+        _selection_value, selection_grads = eqx.filter_value_and_grad(
+            selection_objective
+        )(model.prior)
+        _trust_value, trust_grads = eqx.filter_value_and_grad(trust_objective)(
+            model.prior
+        )
+        data_grad_norm = tree_l2_norm(data_grads)
+        selection_grad_norm = tree_l2_norm(selection_grads)
+        trust_grad_norm = tree_l2_norm(trust_grads)
+        data_grads_finite = tree_all_finite(data_grads)
+        selection_grads_finite = tree_all_finite(selection_grads)
+        trust_grads_finite = tree_all_finite(trust_grads)
     alpha_relative_error = jnp.asarray(
         selection_metrics["selection/alpha_mc_relative_error"],
         dtype=loss.dtype,
@@ -700,6 +780,15 @@ def apply_prior_macro_update(
         raw_grad_norm=raw_norm,
         clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
         grads_finite=gradients_finite,
+        component_diagnostics_evaluated=jnp.asarray(component_evaluated),
+        data_grad_norm=jnp.asarray(data_grad_norm, dtype=diagnostic_dtype),
+        selection_grad_norm=jnp.asarray(
+            selection_grad_norm, dtype=diagnostic_dtype
+        ),
+        trust_grad_norm=jnp.asarray(trust_grad_norm, dtype=diagnostic_dtype),
+        data_grads_finite=jnp.asarray(data_grads_finite),
+        selection_grads_finite=jnp.asarray(selection_grads_finite),
+        trust_grads_finite=jnp.asarray(trust_grads_finite),
         update_applied=apply_update,
         rejection_code=jnp.asarray(rejection_code, dtype=jnp.int32),
     )

@@ -94,7 +94,7 @@ from .posterior_target import (
 from .selection_correction import (
     disabled_selection_metrics,
     estimate_log_alpha_reparameterized,
-    observed_flux_selection_log_beta,
+    observed_flux_selection_log_beta_gaussian_m5,
     observed_magnitude_flux_limit_jax,
 )
 
@@ -4142,17 +4142,13 @@ def _estimate_selection_log_alpha(
             )
         physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
         selected_flux = model_flux[:, band_index]
-        flux_error = m5_depth_flux_error_jax(
+        log_beta = observed_flux_selection_log_beta_gaussian_m5(
             selected_flux,
+            flux_limit,
             selection["m5"],
             selection["gamma"],
             sigma_sys_mag=float(selection.get("sigma_sys_mag", 0.0)),
             min_sigma_fnu_cgs=float(selection.get("min_sigma_fnu_cgs", 1.0e-40)),
-        )
-        log_beta = observed_flux_selection_log_beta(
-            selected_flux,
-            flux_error,
-            flux_limit,
         )
         return jnp.where(physical_valid, log_beta, -jnp.inf)
 

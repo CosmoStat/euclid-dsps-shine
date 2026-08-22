@@ -1,5 +1,42 @@
 # Plan
 
+## 2026-08-22 Adaptive-SMC measured remediation
+
+- Status: implementation complete and locally validated; a fresh Jean-Zay
+  scientific smoke remains required. The completed smoke proved two independent
+  blockers: both prior macro losses were finite but their joint gradients were
+  non-finite (`rejection_code=1`), while q-coordinate mutation accepted only
+  6-10% and left 34-41% of training objects hard after fallback.
+- The Gaussian-m5 selection probability is now evaluated in one detached common
+  flux unit. This preserves exactly
+  `beta=Phi((fhat_r-f_limit)/sigma_m5(fhat_r))` while avoiding cgs-scale
+  reverse-mode products. Rejected M-steps now report separate data, selection
+  and trust gradient norms/finite flags and still apply no partial update.
+- Epsilon-space RW scale is adapted per object between exact MH kernels toward
+  acceptance 0.30, with bounded scales. The fallback retains K=128 and the hard
+  gate but uses four moves after resampling and two final moves. Final scale,
+  unique ancestry and squared epsilon displacement are persisted into training
+  and exact-posterior diagnostics.
+- The 96-object smoke now performs at least 128 fresh sleep optimizer updates:
+  43 epochs x 3 batches = 129 updates, instead of 36. q uses a measured clip
+  norm 20 while the prior keeps 5. The production schedule remains 12 epochs
+  over the full selected training manifest.
+- The fail-closed receipt now requires q-only ordinary-IS support
+  (`ESS/K>=0.05`, median maximum weight <=0.80), SMC acceptance in [0.15, 0.60],
+  non-degenerate ancestry/movement, non-permanent q clipping, a finite nonzero
+  selection gradient and at least one accepted finite prior M-step. Equal final
+  weights after SMC resampling alone can no longer pass the workflow.
+- Local verification passes 66 core adaptive-SMC/selection/canonical/exact
+  posterior tests, 26 supplemental SMC/data-parallel tests, the added fused
+  selection-gradient regression, Ruff, compileall, shell syntax and diff
+  checks. The more active
+  fallback raises the absolute configured primary-plus-fallback ceiling from
+  4,480 to 7,680 latent-object DSPS evaluations; the measured smoke rates, not
+  this pessimistic ceiling, decide whether the 20-hour big job is viable.
+- Publish this patch and run exactly one new smoke root. Do not submit or resume
+  the big run until the new receipt is `PASS`; the previous failed roots remain
+  diagnostic artifacts only.
+
 ## 2026-08-21 Adaptive-SMC scientific smoke gate
 
 - Status: remote smoke completed the intended training and checkpoint path,

@@ -53,6 +53,64 @@ def observed_flux_selection_beta(
     return jnp.exp(observed_flux_selection_log_beta(model_flux, flux_error, flux_limit))
 
 
+def observed_flux_selection_log_beta_gaussian_m5(
+    model_flux: Any,
+    flux_limit: Any,
+    m5: Any,
+    gamma: Any,
+    *,
+    sigma_sys_mag: float = 0.0,
+    min_sigma_fnu_cgs: float = 1.0e-40,
+) -> jnp.ndarray:
+    """Return Gaussian-m5 completeness without cgs-scale autodiff adjoints.
+
+    This is algebraically the same PhotoErr model used by
+    :func:`m5_depth_flux_error_jax`, but flux, threshold, depth and noise are
+    kept in one detached common unit through ``log_ndtr``. The fused form
+    avoids multiplying reverse-mode sensitivities near ``1e30`` by DSPS flux
+    derivatives near ``1e-30``.
+    """
+    flux = jnp.asarray(model_flux)
+    if not jnp.issubdtype(flux.dtype, jnp.inexact):
+        flux = flux.astype(jnp.float32)
+    dtype = flux.dtype
+    limit = jnp.asarray(flux_limit, dtype=dtype)
+    m5_array = jnp.asarray(m5, dtype=dtype)
+    gamma_array = jnp.asarray(gamma, dtype=dtype)
+    f5 = jnp.asarray(abmag_to_fnu_cgs_jax(m5_array), dtype=dtype)
+    unit = jax.lax.stop_gradient(
+        jnp.maximum(
+            jnp.maximum(jnp.abs(limit), jnp.abs(f5)),
+            jnp.asarray(1.0e-30, dtype=dtype),
+        )
+    )
+    flux_scaled = flux / unit
+    limit_scaled = limit / unit
+    f5_scaled = f5 / unit
+    sigma2_scaled = (
+        (jnp.asarray(0.04, dtype=dtype) - gamma_array)
+        * jnp.abs(flux_scaled)
+        * f5_scaled
+        + gamma_array * jnp.square(f5_scaled)
+    )
+    if float(sigma_sys_mag) > 0.0:
+        sys_fraction = jnp.expm1(
+            jnp.log(jnp.asarray(10.0, dtype=dtype))
+            * float(sigma_sys_mag)
+            / 2.5
+        )
+        sigma2_scaled = sigma2_scaled + jnp.square(sys_fraction * flux_scaled)
+    floor_scaled = jnp.asarray(min_sigma_fnu_cgs, dtype=dtype) / unit
+    sigma_scaled = jnp.sqrt(
+        jnp.maximum(sigma2_scaled, jnp.square(floor_scaled))
+    )
+    return observed_flux_selection_log_beta(
+        flux_scaled,
+        sigma_scaled,
+        limit_scaled,
+    )
+
+
 def selection_log_alpha_from_log_beta(
     log_beta: Any,
 ) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:

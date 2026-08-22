@@ -593,6 +593,15 @@ def _run_adaptive_smc_benchmark(
             "mutation_acceptance": float(
                 np.asarray(jax.device_get(result.mutation_acceptance[0]))
             ),
+            "final_rw_scale": float(
+                np.asarray(jax.device_get(result.final_rw_scale[0]))
+            ),
+            "unique_ancestor_fraction": float(
+                np.asarray(jax.device_get(result.unique_ancestor_fraction[0]))
+            ),
+            "epsilon_squared_jump": float(
+                np.asarray(jax.device_get(result.epsilon_squared_jump[0]))
+            ),
             "hard": bool(
                 np.asarray(jax.device_get(result.hard_object_flag[0]))
             ),
@@ -909,6 +918,13 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             ]
             row["adaptive_smc_mutation_acceptance"] = selected_smc[
                 "mutation_acceptance"
+            ]
+            row["adaptive_smc_final_rw_scale"] = selected_smc["final_rw_scale"]
+            row["adaptive_smc_unique_ancestor_fraction"] = selected_smc[
+                "unique_ancestor_fraction"
+            ]
+            row["adaptive_smc_epsilon_squared_jump"] = selected_smc[
+                "epsilon_squared_jump"
             ]
             row["adaptive_smc_logZ"] = selected_smc["logZ_estimate"]
             row["adaptive_smc_fallback_attempted"] = adaptive[

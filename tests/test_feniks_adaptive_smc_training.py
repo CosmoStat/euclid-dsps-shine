@@ -7,6 +7,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +17,8 @@ from jax.scipy.special import log_ndtr
 
 from euclid_dsps.amortized.adaptive_smc_trainer import (
     _config_without_truth,
+    _final_training_receipt,
+    _smoke_training_config,
     adaptive_smc_configs,
     adaptive_training_config,
 )
@@ -58,8 +61,11 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert cfg["objective"]["sleep"]["error_model"] == "observed_catalog"
     assert primary.n_particles == 64
     assert primary.max_stages == 8
+    assert primary.rw_adapt_target_acceptance == pytest.approx(0.30)
     assert fallback.n_particles == 128
     assert fallback.max_stages == 12
+    assert fallback.steps_after_resample == 4
+    assert fallback.final_steps_at_beta1 == 2
     assert proposal.normalized_fractions().tolist() == pytest.approx(
         [0.70, 0.20, 0.10]
     )
@@ -67,6 +73,11 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert training.bootstrap_sleep_epochs == 12
     assert training.observed_sweeps == 3
     assert training.sleep_replay_every_smc_updates == 4
+    assert training.q_gradient_clip_norm == 20.0
+    assert training.prior_gradient_clip_norm == 5.0
+    assert training.smoke_min_bootstrap_updates == 128
+    assert training.min_validation_q_is_ess_fraction == pytest.approx(0.05)
+    assert training.max_validation_q_is_max_weight == pytest.approx(0.80)
     assert cfg["training"]["best_checkpoint_metric"] == (
         "validation_smc_cross_entropy"
     )
@@ -87,6 +98,90 @@ def test_adaptive_smc_mode_is_checkpoint_and_inference_metadata_compatible() -> 
     assert summary["objective"]["adaptive_smc"]["hard_fallback"][
         "n_particles"
     ] == 128
+
+
+def test_smoke_runs_a_minimum_number_of_fresh_sleep_updates() -> None:
+    production = adaptive_training_config(_production_config())
+    smoke = _smoke_training_config(production, train_objects=96)
+
+    assert smoke.micro_batch_size == 32
+    assert smoke.bootstrap_sleep_epochs == 43
+    assert smoke.bootstrap_sleep_epochs * 3 >= 128
+    assert smoke.observed_sweeps == 1
+
+
+def test_final_receipt_requires_q_only_importance_support() -> None:
+    config = _production_config()
+    training = adaptive_training_config(config)
+    primary, fallback, proposal = adaptive_smc_configs(config)
+    runtime = SimpleNamespace(
+        parameter_names=("x0", "x1"),
+        train_arrays=SimpleNamespace(flux=np.zeros((96, 2))),
+        validation_arrays=SimpleNamespace(flux=np.zeros((32, 2))),
+        latent_spec=SimpleNamespace(normalization="standardized_logit"),
+    )
+    validation = {
+        "selection_alpha": 0.3,
+        "selection_alpha_mc_relative_error": 0.05,
+        "median_mutation_acceptance": 0.3,
+        "posterior_full_entropy_mc": 12.0,
+        "median_beta_final": 1.0,
+        "median_final_ess_fraction": 0.8,
+        "hard_fraction_after_fallback": 0.1,
+        "median_unique_ancestor_fraction": 0.5,
+        "median_epsilon_squared_jump": 1.0,
+        "validation_q_is_ess_fraction": 0.05,
+        "validation_q_is_max_weight": 0.8,
+        "validation_smc_cross_entropy": 10.0,
+    }
+    prior_rows = [
+        {
+            "update_applied": True,
+            "prior_kl_proposed": 0.01,
+            "grads_finite": True,
+            "raw_grad_norm": 1.0,
+            "rejection_code": 0,
+        }
+    ]
+    log_rows = [
+        {"phase": "bootstrap_sleep", "grad_clipped": False},
+        {
+            "phase": "observed_smc",
+            "q_grad_clipped": False,
+            "q_update_applied": True,
+        },
+    ]
+    common = dict(
+        runtime=runtime,
+        training=training,
+        primary=primary,
+        fallback=fallback,
+        proposal=proposal,
+        prior_rows=prior_rows,
+        log_rows=log_rows,
+        best_cross_entropy=10.0,
+        best_epoch_label="observed_sweep_1",
+        elapsed_seconds=1.0,
+        smoke=True,
+        alpha_preflight={"finite": True, "nonzero": True},
+    )
+
+    passing = _final_training_receipt(validation_rows=[validation], **common)
+    collapsed = _final_training_receipt(
+        validation_rows=[
+            {
+                **validation,
+                "validation_q_is_ess_fraction": 1.0 / 64.0,
+                "validation_q_is_max_weight": 0.99,
+            }
+        ],
+        **common,
+    )
+
+    assert passing["status"] == "PASS"
+    assert collapsed["status"] == "FAIL"
+    assert not collapsed["checks"]["q_only_is_ess_fraction_adequate"]
+    assert not collapsed["checks"]["q_only_is_not_single_weight_dominated"]
 
 
 def test_selection_normalizer_does_not_change_normalized_object_weights() -> None:
@@ -141,7 +236,7 @@ def test_cost_estimate_counts_mutation_and_final_target_evaluations(
     assert per_object["easy_zero_resamples"] == 128
     assert per_object["typical_one_resample"] == 256
     assert per_object["two_resamples"] == 384
-    assert per_object["absolute_configured_primary_plus_fallback_upper_bound"] == 4480
+    assert per_object["absolute_configured_primary_plus_fallback_upper_bound"] == 7680
 
 
 def test_selection_corrected_toy_recovers_parent_mean() -> None:
@@ -246,7 +341,11 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             normalized_weights=result.final_normalized_weights.transpose(1, 0, 2).reshape(K, 2*N),
             eligible=jnp.ones((2*N,), dtype=bool), beta_final=jnp.ones((2*N,)),
             final_ess=jnp.full((2*N,), K), final_max_weight=jnp.full((2*N,), 1/K),
-            mutation_acceptance=jnp.full((2*N,), 0.3), logZ_estimate=jnp.zeros((2*N,)),
+            mutation_acceptance=jnp.full((2*N,), 0.3),
+            final_rw_scale=jnp.full((2*N,), 0.6),
+            unique_ancestor_fraction=jnp.ones((2*N,)),
+            epsilon_squared_jump=jnp.ones((2*N,)),
+            logZ_estimate=jnp.zeros((2*N,)),
             fallback_attempted=jnp.zeros((2*N,), dtype=bool),
             fallback_succeeded=jnp.zeros((2*N,), dtype=bool),
         )

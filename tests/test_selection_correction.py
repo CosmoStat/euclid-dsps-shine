@@ -11,6 +11,7 @@ from euclid_dsps.amortized.selection_correction import (
     estimate_log_alpha_reparameterized,
     observed_flux_selection_beta,
     observed_flux_selection_log_beta,
+    observed_flux_selection_log_beta_gaussian_m5,
     observed_magnitude_flux_limit_jax,
 )
 from euclid_dsps.config import load_config
@@ -73,6 +74,73 @@ def test_observed_flux_selection_beta_matches_gaussian_monte_carlo() -> None:
     noise = sigma * jax.random.normal(jax.random.PRNGKey(5), (200_000,))
     empirical = jnp.mean((model_flux + noise > flux_limit).astype(jnp.float32))
     assert np.isclose(float(empirical), float(analytic), atol=3.0e-3)
+
+
+def test_fused_gaussian_m5_selection_matches_separate_photoerr_path() -> None:
+    flux = jnp.asarray(
+        [0.0, 1.0e-31, 1.0e-30, 3.631e-30, 1.0e-29],
+        dtype=jnp.float32,
+    )
+    limit = observed_magnitude_flux_limit_jax(25.0)
+    error = m5_depth_flux_error_jax(
+        flux,
+        27.5,
+        0.039,
+        sigma_sys_mag=0.005,
+        min_sigma_fnu_cgs=1.0e-40,
+    )
+    separate = observed_flux_selection_log_beta(flux, error, limit)
+    fused = observed_flux_selection_log_beta_gaussian_m5(
+        flux,
+        limit,
+        27.5,
+        0.039,
+        sigma_sys_mag=0.005,
+        min_sigma_fnu_cgs=1.0e-40,
+    )
+    assert np.allclose(np.asarray(fused), np.asarray(separate), rtol=2.0e-5)
+
+
+def test_fused_gaussian_m5_selection_has_finite_cgs_scale_gradient() -> None:
+    limit = observed_magnitude_flux_limit_jax(25.0)
+
+    def objective(log_flux_ratio):
+        flux = limit * jnp.exp(log_flux_ratio)
+        return observed_flux_selection_log_beta_gaussian_m5(
+            flux,
+            limit,
+            27.5,
+            0.039,
+            sigma_sys_mag=0.005,
+            min_sigma_fnu_cgs=1.0e-40,
+        )
+
+    points = jnp.asarray([-30.0, -10.0, -2.0, 0.0, 2.0, 10.0])
+    values = jax.vmap(objective)(points)
+    gradients = jax.vmap(jax.grad(objective))(points)
+    assert jnp.all(jnp.isfinite(values))
+    assert jnp.all(jnp.isfinite(gradients))
+
+
+def test_fused_gaussian_m5_log_alpha_has_finite_nonzero_shift_gradient() -> None:
+    limit = observed_magnitude_flux_limit_jax(25.0)
+    base = jnp.linspace(-4.0, 4.0, 512)
+
+    def log_alpha(shift):
+        flux = limit * jnp.exp(base + shift)
+        log_beta = observed_flux_selection_log_beta_gaussian_m5(
+            flux,
+            limit,
+            27.5,
+            0.039,
+            sigma_sys_mag=0.005,
+        )
+        return jax.scipy.special.logsumexp(log_beta) - jnp.log(base.size)
+
+    value, gradient = jax.value_and_grad(log_alpha)(jnp.asarray(0.0))
+    assert jnp.isfinite(value)
+    assert jnp.isfinite(gradient)
+    assert gradient > 0.0
 
 
 def test_log_alpha_gradient_is_finite_nonzero_and_matches_finite_difference() -> None:
