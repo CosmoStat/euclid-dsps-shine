@@ -44,11 +44,18 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["features"].setdefault("normalize_per_band", True)
     raw["features"].setdefault("flux_transform", "asinh")
     raw["features"].setdefault("error_transform", "log")
+    raw["features"].setdefault("append_mask", False)
+    raw["features"].setdefault("error_epsilon", 1.0e-6)
     raw["encoder"].setdefault("type", "gaussian_mlp")
     raw["encoder"].setdefault(
         "input_dim",
         int(raw["features"].get("n_flux_bands", 10))
-        + int(raw["features"].get("n_error_bands", 10)),
+        + int(raw["features"].get("n_error_bands", 10))
+        + (
+            int(raw["features"].get("n_flux_bands", 10))
+            if bool(raw["features"].get("append_mask", False))
+            else 0
+        ),
     )
     raw["encoder"].setdefault("latent_dim", 16)
     raw["encoder"].setdefault("hidden_sizes", [256, 256, 256])
@@ -64,6 +71,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["encoder"].setdefault("flow_shift_clamp", 3.0)
     raw["encoder"].setdefault("flow_tail_bound", 8.0)
     raw["encoder"].setdefault("flow_init_scale", 0.0)
+    raw["encoder"].setdefault("flow_permutation", "indexed_roll")
     raw["encoder"].setdefault("flow_output_space", "prior_base")
     raw["encoder"].setdefault("base_components", 1)
     raw["encoder"].setdefault("context_encoder", "base_moments")
@@ -74,6 +82,11 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["encoder"].setdefault("set_context_dim", 128)
     raw["encoder"].setdefault("set_num_heads", 4)
     raw["encoder"].setdefault("set_num_layers", 2)
+    raw["encoder"].setdefault("residual_trunk_width", 512)
+    raw["encoder"].setdefault("residual_blocks", 3)
+    raw["encoder"].setdefault("residual_representation_width", 256)
+    raw["encoder"].setdefault("residual_context_dim", 128)
+    raw["encoder"].setdefault("mean_init_scale", 1.0e-3)
     raw["objective"].setdefault("mode", "stochastic_elbo")
     raw["objective"].setdefault("npe_weight", 0.0)
     raw["objective"].setdefault("prior_truth_weight", 0.0)
@@ -116,9 +129,7 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["objective"]["selection_correction"].setdefault("n_prior_samples", 4096)
     raw["objective"]["selection_correction"].setdefault("prior_sample_batch_size", 64)
     raw["objective"]["selection_correction"].setdefault("common_random_numbers", True)
-    raw["objective"]["selection_correction"].setdefault(
-        "gradient_preflight_samples", 0
-    )
+    raw["objective"]["selection_correction"].setdefault("gradient_preflight_samples", 0)
     raw["prior"].setdefault("type", "realnvp")
     raw["prior"].setdefault("source", "joint_realnvp")
     raw["prior"].setdefault("checkpoint", None)

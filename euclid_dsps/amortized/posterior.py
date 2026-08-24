@@ -13,6 +13,7 @@ from .encoder import (
     GaussianEncoder,
     MixtureGaussianEncoder,
     PassbandSetEncoder,
+    ResidualPhotometryEncoder,
     _diag_normal_log_prob,
 )
 from .flows import (
@@ -310,6 +311,12 @@ class ConditionalFlowEncoder(eqx.Module):
         set_context_dim: int = 128,
         set_num_heads: int = 4,
         set_num_layers: int = 2,
+        residual_trunk_width: int = 512,
+        residual_blocks: int = 3,
+        residual_representation_width: int = 256,
+        residual_context_dim: int = 128,
+        mean_init_scale: float = 1.0e-3,
+        permutation: str = "indexed_roll",
     ) -> None:
         keys = jax.random.split(key, int(n_layers) + 1)
         self.base_components = int(base_components)
@@ -323,7 +330,26 @@ class ConditionalFlowEncoder(eqx.Module):
             log_std_max=log_std_max,
             initial_log_std=initial_log_std,
         )
-        if context_encoder_type == "passband_set_transformer":
+        if context_encoder_type == "residual_photometry":
+            if self.base_components != 1:
+                raise ValueError(
+                    "residual photometry conditional flows require base_components=1"
+                )
+            self.base = ResidualPhotometryEncoder(
+                keys[0],
+                input_dim=input_dim,
+                latent_dim=latent_dim,
+                trunk_width=int(residual_trunk_width),
+                residual_blocks=int(residual_blocks),
+                representation_width=int(residual_representation_width),
+                context_dim=int(residual_context_dim),
+                log_std_min=log_std_min,
+                log_std_max=log_std_max,
+                initial_log_std=initial_log_std,
+                mean_init_scale=float(mean_init_scale),
+            )
+            context_dim = int(residual_context_dim)
+        elif context_encoder_type == "passband_set_transformer":
             if self.base_components != 1:
                 raise ValueError(
                     "passband-set conditional flows currently require base_components=1"
@@ -393,9 +419,22 @@ class ConditionalFlowEncoder(eqx.Module):
                 )
                 for index in range(int(n_layers))
             )
+        permutation_mode = str(permutation).strip().lower()
+        if permutation_mode in {"roll", "indexed_roll"}:
+            shifts = tuple(index + 1 for index in range(int(n_layers)))
+        elif permutation_mode in {"alternating_roll", "balanced_roll"}:
+            shifts = tuple(
+                1 if index % 2 == 0 else -1 for index in range(int(n_layers))
+            )
+        elif permutation_mode in {"none", "identity"}:
+            shifts = (0,) * int(n_layers)
+        else:
+            raise ValueError(
+                "conditional flow permutation must be indexed_roll, "
+                "alternating_roll, or none"
+            )
         permutations = tuple(
-            jnp.roll(jnp.arange(int(latent_dim)), index + 1)
-            for index in range(int(n_layers))
+            jnp.roll(jnp.arange(int(latent_dim)), shift) for shift in shifts
         )
         self.permutations = permutations
         self.inverse_permutations = tuple(jnp.argsort(value) for value in permutations)
@@ -409,7 +448,10 @@ class ConditionalFlowEncoder(eqx.Module):
         return self.base(features)
 
     def flow_context(self, features, mean=None, log_std=None):
-        if self.context_encoder_type == "passband_set_transformer":
+        if self.context_encoder_type in {
+            "passband_set_transformer",
+            "residual_photometry",
+        }:
             return self.base.context(features)
         if mean is None or log_std is None:
             mean, log_std = self.base(features)
@@ -481,6 +523,11 @@ def posterior_encoder_state(model, features) -> PosteriorEncoderState:
             component_log_stds,
             model.encoder.flow_context(features, mean, log_std),
         )
+    if isinstance(model.encoder, ConditionalFlowEncoder) and isinstance(
+        model.encoder.base, ResidualPhotometryEncoder
+    ):
+        mean, log_std, context = model.encoder.base.encode(features)
+        return PosteriorEncoderState(mean, log_std, None, None, None, context)
     mean, log_std = model.encoder(features)
     context = (
         model.encoder.flow_context(features, mean, log_std)
@@ -845,12 +892,16 @@ def posterior_entropy_diagnostics(
     residual = draw.residual_logdet
     full_entropy = -jnp.mean(draw.logq)
     base_entropy_mc = jnp.mean(-draw.logq - residual)
+    log_std = jnp.asarray(draw.base_log_std)
     return {
         "posterior_full_entropy_mc": full_entropy,
         "posterior_base_entropy": base_entropy_mc,
         "posterior_residual_logdet_mean": jnp.mean(residual),
         "posterior_residual_logdet_q05": jnp.quantile(residual, 0.05),
         "posterior_residual_logdet_q95": jnp.quantile(residual, 0.95),
+        "posterior_log_std_mean": jnp.mean(log_std),
+        "posterior_log_std_min": jnp.min(log_std),
+        "posterior_log_std_max": jnp.max(log_std),
     }
 
 
@@ -981,11 +1032,14 @@ def _normalize_context_encoder(value: str) -> str:
         "passband_set_transformer": "passband_set_transformer",
         "set_transformer": "passband_set_transformer",
         "band_set": "passband_set_transformer",
+        "residual_photometry": "residual_photometry",
+        "residual_mlp": "residual_photometry",
+        "sc_asmc_em": "residual_photometry",
     }
     if normalized not in aliases:
         raise ValueError(
-            "Conditional context encoder must be base_moments or "
-            "passband_set_transformer"
+            "Conditional context encoder must be base_moments, "
+            "passband_set_transformer, or residual_photometry"
         )
     return aliases[normalized]
 

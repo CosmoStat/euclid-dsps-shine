@@ -53,7 +53,12 @@ from .elbo import (
     objective_mode,
     objective_uses_truth,
 )
-from .encoder import GaussianEncoder, MixtureGaussianEncoder, PassbandSetEncoder
+from .encoder import (
+    GaussianEncoder,
+    MixtureGaussianEncoder,
+    PassbandSetEncoder,
+    ResidualPhotometryEncoder,
+)
 from .features import (
     FeatureStats,
     compute_feature_stats,
@@ -220,6 +225,7 @@ def build_amortized_model(
             min_bin_height=float(encoder_cfg.get("flow_min_bin_height", 1.0e-3)),
             min_derivative=float(encoder_cfg.get("flow_min_derivative", 1.0e-3)),
             init_scale=float(encoder_cfg.get("flow_init_scale", 0.0)),
+            permutation=str(encoder_cfg.get("flow_permutation", "indexed_roll")),
             output_space=str(encoder_cfg.get("flow_output_space", "prior_base")),
             base_components=int(encoder_cfg.get("base_components", 1)),
             context_encoder_type=str(
@@ -232,6 +238,13 @@ def build_amortized_model(
             set_context_dim=int(encoder_cfg.get("set_context_dim", 128)),
             set_num_heads=int(encoder_cfg.get("set_num_heads", 4)),
             set_num_layers=int(encoder_cfg.get("set_num_layers", 2)),
+            residual_trunk_width=int(encoder_cfg.get("residual_trunk_width", 512)),
+            residual_blocks=int(encoder_cfg.get("residual_blocks", 3)),
+            residual_representation_width=int(
+                encoder_cfg.get("residual_representation_width", 256)
+            ),
+            residual_context_dim=int(encoder_cfg.get("residual_context_dim", 128)),
+            mean_init_scale=float(encoder_cfg.get("mean_init_scale", 1.0e-3)),
         )
     else:
         raise ValueError(f"Unsupported amortized encoder type: {encoder_type}")
@@ -578,7 +591,12 @@ def _initialize_encoder_mean_if_possible(
             ),
         )
         return eqx.tree_at(lambda enc: enc.base, encoder, updated)
-    if not isinstance(base, (GaussianEncoder, PassbandSetEncoder)):
+    if not isinstance(
+        base,
+        (GaussianEncoder, PassbandSetEncoder, ResidualPhotometryEncoder),
+    ):
+        return encoder
+    if isinstance(base, ResidualPhotometryEncoder):
         return encoder
     zero_mean_weight = jnp.zeros_like(base.mean_head.weight)
     zero_log_std_weight = jnp.zeros_like(base.log_std_head.weight)
@@ -857,6 +875,8 @@ def train_amortized_fs2(
             stats_arrays.mask,
             band_names=stats_arrays.band_names,
             flux_transform=str(cfg["features"].get("flux_transform", "asinh")),
+            append_mask=bool(cfg["features"].get("append_mask", False)),
+            error_epsilon=float(cfg["features"].get("error_epsilon", 1.0e-6)),
         )
         feature_stats_catalog_rows = int(len(stats_arrays.object_id))
     write_feature_stats(out / "feature_stats.json", feature_stats)
@@ -864,7 +884,7 @@ def train_amortized_fs2(
         verbose,
         "[amortized] feature stats ready: "
         f"{len(feature_stats.band_names)} bands, "
-        f"feature_dim={2 * len(feature_stats.band_names)} "
+        f"feature_dim={(3 if feature_stats.append_mask else 2) * len(feature_stats.band_names)} "
         f"flux_transform={feature_stats.flux_transform}",
     )
 
@@ -2134,10 +2154,6 @@ def build_training_split(
     stratified_strategy = str(data_cfg.get("stratified_strategy", "balanced"))
     rng = np.random.default_rng(int(data_cfg.get("selection_seed", seed)))
     n_rows = _catalog_num_rows(config["catalog_path"])
-    redshift_column = _configured_redshift_column(config, data_cfg)
-    redshift = _read_redshift_column(config["catalog_path"], redshift_column)
-    if redshift is not None:
-        n_rows = len(redshift)
     redshift_bins = np.asarray(
         data_cfg.get(
             "redshift_bins",
@@ -2149,6 +2165,9 @@ def build_training_split(
         redshift_bins = np.asarray([0.0, 6.0], dtype=float)
     redshift_bins = np.unique(redshift_bins)
 
+    # Explicit manifests are a no-truth contract. Resolve them before even
+    # looking up a configured redshift column, because z_obs may be truth in
+    # FENIKS and is unnecessary for an already fixed split.
     if train_indices_file or validation_indices_file:
         if row_indices_file:
             raise ValueError(
@@ -2183,11 +2202,11 @@ def build_training_split(
         return TrainingSplit(
             train_indices=train_indices,
             validation_indices=validation_indices,
-            train_redshift=_redshift_for_indices(redshift, train_indices),
-            validation_redshift=_redshift_for_indices(redshift, validation_indices),
-            redshift_column=redshift_column if redshift is not None else None,
+            train_redshift=np.asarray([], dtype=float),
+            validation_redshift=np.asarray([], dtype=float),
+            redshift_column=None,
             redshift_bins=redshift_bins,
-            selection_mode="explicit_train_validation_files",
+            selection_mode="explicit_train_validation_files_no_truth",
             stratified_strategy=stratified_strategy,
             validation_fraction=(
                 float(validation_indices.size)
@@ -2198,7 +2217,10 @@ def build_training_split(
                 str(validation_indices_file) if validation_indices_file else None
             ),
         )
-
+    redshift_column = _configured_redshift_column(config, data_cfg)
+    redshift = _read_redshift_column(config["catalog_path"], redshift_column)
+    if redshift is not None:
+        n_rows = len(redshift)
     if row_indices_file:
         selected = np.asarray(load_row_indices(row_indices_file), dtype=np.int64)
         if limit is not None:
@@ -3270,9 +3292,10 @@ def _importance_weighted_wake_outputs(
     wake_nll = jnp.sum(jnp.where(valid_object, wake_nll_by_object, 0.0))
     wake_nll = wake_nll / valid_object_count
     prior_nll_by_object = -jnp.sum(weighted_logprior, axis=0)
-    diagnostic_prior_mstep_nll = jnp.sum(
-        jnp.where(eligible_object, prior_nll_by_object, 0.0)
-    ) / eligible_object_count
+    diagnostic_prior_mstep_nll = (
+        jnp.sum(jnp.where(eligible_object, prior_nll_by_object, 0.0))
+        / eligible_object_count
+    )
     train_prior = bool(wake.get("train_prior", False))
     train_encoder = bool(wake.get("train_encoder", True))
     prior_update_applied = (
@@ -3324,9 +3347,7 @@ def _importance_weighted_wake_outputs(
 
     def rejected_prior_mstep(_operand):
         zero = jnp.asarray(0.0, dtype=wake_nll.dtype)
-        metrics = _unevaluated_selection_metrics(
-            objective_config, dtype=wake_nll.dtype
-        )
+        metrics = _unevaluated_selection_metrics(objective_config, dtype=wake_nll.dtype)
         return (
             zero,
             jax.lax.stop_gradient(diagnostic_prior_mstep_nll),
@@ -4174,9 +4195,7 @@ def _selection_log_beta_from_prior_samples(
     safe_selected_flux = jnp.where(
         physical_valid,
         selected_flux,
-        jax.lax.stop_gradient(
-            jnp.full_like(selected_flux, jnp.asarray(flux_limit))
-        ),
+        jax.lax.stop_gradient(jnp.full_like(selected_flux, jnp.asarray(flux_limit))),
     )
     log_beta = observed_flux_selection_log_beta_gaussian_m5(
         safe_selected_flux,
@@ -4282,9 +4301,7 @@ def _selection_alpha_gradient_preflight(
 
     log_alpha, grads = eqx.filter_value_and_grad(objective)(model)
     prior_leaves = [
-        leaf
-        for leaf in jax.tree_util.tree_leaves(grads.prior)
-        if leaf is not None
+        leaf for leaf in jax.tree_util.tree_leaves(grads.prior) if leaf is not None
     ]
     forward_finite = bool(np.isfinite(float(np.asarray(jax.device_get(log_alpha)))))
     gradients_finite = bool(
@@ -4482,7 +4499,9 @@ def _loss_batch_with_input_noise(
         flux=batch.flux,
         flux_err=batch.flux_err,
         mask=batch.mask,
-        features=make_encoder_features(noisy_flux, batch.flux_err, feature_stats),
+        features=make_encoder_features(
+            noisy_flux, batch.flux_err, feature_stats, batch.mask
+        ),
         truth_theta=(
             batch.truth_theta
             if batch.truth_theta is not None
@@ -4620,9 +4639,12 @@ def _selection_correction_runtime_config(
             "objective.selection_correction.gradient_preflight_samples must be "
             "non-negative"
         )
-    gradient_estimator = str(
-        selection.get("gradient_estimator", "pathwise")
-    ).strip().lower().replace("-", "_")
+    gradient_estimator = (
+        str(selection.get("gradient_estimator", "pathwise"))
+        .strip()
+        .lower()
+        .replace("-", "_")
+    )
     if gradient_estimator not in {"pathwise", "score_function"}:
         raise ValueError(
             "objective.selection_correction.gradient_estimator must be "
@@ -5539,9 +5561,7 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "sample_strategy": str(cfg["objective"].get("sample_strategy", "random")),
             "wake": dict(cfg["objective"].get("wake", {}) or {}),
             "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
-            "adaptive_smc": dict(
-                cfg["objective"].get("adaptive_smc", {}) or {}
-            ),
+            "adaptive_smc": dict(cfg["objective"].get("adaptive_smc", {}) or {}),
             "selection_correction": dict(
                 cfg["objective"].get("selection_correction", {}) or {}
             ),
@@ -6010,7 +6030,12 @@ def _write_training_snapshot(
 
     flux = jnp.asarray(arrays.flux[order], dtype=jnp.float32)
     flux_err = jnp.asarray(arrays.flux_err[order], dtype=jnp.float32)
-    features = make_encoder_features(flux, flux_err, feature_stats)
+    features = make_encoder_features(
+        flux,
+        flux_err,
+        feature_stats,
+        jnp.asarray(arrays.mask[order]),
+    )
     mean, log_std = model.encoder(features)
     mean_np = np.asarray(jax.device_get(mean), dtype=np.float32)
     log_std_np = np.asarray(jax.device_get(log_std), dtype=np.float32)

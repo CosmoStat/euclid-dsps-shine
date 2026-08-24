@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -9,8 +10,10 @@ from euclid_dsps.amortized.latent import (
     latent_center_theta_from_config,
     latent_prior_geometry_frame,
     latent_spec_from_config,
+    latent_transform_provenance,
     theta_to_x,
     x_to_theta,
+    x_to_theta_log_abs_det_jacobian,
 )
 from euclid_dsps.config import load_config
 from euclid_dsps.parameters import (
@@ -190,3 +193,68 @@ def test_spline15d_config_has_exact_parameter_contract() -> None:
         "dust_delta",
     )
     assert spec.names[-1] == "sfh_dlog_sfr_10"
+
+
+def _bounded_mixed_warp_config() -> dict:
+    config = load_config("configs/amortized_feniks_spline15d_18band_gpu.yaml")
+    config["truth"] = {"parameter_columns": {}}
+    config["amortized"]["latent"] = {
+        "schema": "feniks_spline15d",
+        "include_redshift": True,
+        "use_fit_bounds": True,
+        "normalization": "bounded_mixed_warp",
+        "warps": {
+            "z_obs": {"family": "asinh", "center": "fit_initial", "lambda": 0.5},
+            "log10_stellar_mass": {
+                "family": "asinh",
+                "center": "fit_initial",
+                "lambda": 1.0,
+            },
+            "dust_av": {"family": "log1p", "lambda": 0.2},
+        },
+        "raw_scales": {name: 1.0 for name in config["fit"]["free_parameters"]},
+    }
+    return config
+
+
+def test_bounded_mixed_warp_roundtrip_and_strict_bounds() -> None:
+    config = _bounded_mixed_warp_config()
+    spec = latent_spec_from_config(config)
+    x = jnp.linspace(-4.0, 4.0, 45, dtype=jnp.float32).reshape(3, 15)
+
+    theta = x_to_theta(x, spec)
+    recovered = theta_to_x(theta, spec)
+
+    assert spec.normalization == "bounded_mixed_warp"
+    assert jnp.all(theta > spec.lower)
+    assert jnp.all(theta < spec.upper)
+    np.testing.assert_allclose(np.asarray(recovered), np.asarray(x), atol=3.0e-4)
+
+
+def test_bounded_mixed_warp_jacobian_matches_autodiff() -> None:
+    spec = latent_spec_from_config(_bounded_mixed_warp_config())
+    x = jnp.linspace(-0.7, 0.7, 15, dtype=jnp.float32)
+
+    jacobian = jax.jacrev(lambda value: x_to_theta(value, spec))(x)
+    sign, numerical = jnp.linalg.slogdet(jacobian)
+    analytic = x_to_theta_log_abs_det_jacobian(x, spec)
+    gradient = jax.grad(lambda value: x_to_theta_log_abs_det_jacobian(value, spec))(x)
+
+    assert sign > 0.0
+    assert jnp.isfinite(analytic)
+    assert jnp.all(jnp.isfinite(gradient))
+    np.testing.assert_allclose(float(analytic), float(numerical), atol=2.0e-5)
+
+
+def test_bounded_mixed_warp_provenance_is_no_truth_and_hashed() -> None:
+    config = _bounded_mixed_warp_config()
+    payload = latent_transform_provenance(config)
+
+    assert payload["truth_used"] is False
+    assert payload["truth_columns_read"] == []
+    assert payload["coordinate_information_source"] == (
+        "fit_bounds_fit_initials_and_config_only"
+    )
+    assert len(payload["transform_hash"]) == 64
+    assert len(payload["warps"]) == 15
+    assert {row["family"] for row in payload["warps"]} == {"asinh", "log1p"}

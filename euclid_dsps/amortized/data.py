@@ -65,6 +65,8 @@ def compute_feature_stats_from_config(
         np.concatenate(mask_chunks, axis=0),
         band_names=band_names,
         flux_transform=str(features_cfg.get("flux_transform", "asinh")),
+        append_mask=bool(features_cfg.get("append_mask", False)),
+        error_epsilon=float(features_cfg.get("error_epsilon", 1.0e-6)),
     )
 
 
@@ -248,6 +250,7 @@ def iter_photometry_batches_from_arrays(
             jnp.asarray(arrays.flux[idx], dtype=jnp.float32),
             jnp.asarray(arrays.flux_err[idx], dtype=jnp.float32),
             feature_stats,
+            jnp.asarray(arrays.mask[idx]),
         )
         yield PhotometryBatch(
             object_id=np.asarray(arrays.object_id[idx], dtype=np.int64),

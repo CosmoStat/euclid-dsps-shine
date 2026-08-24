@@ -693,15 +693,23 @@ def _flow_permutation(latent_dim: int, index: int, mode: str) -> jnp.ndarray:
         return indices[::-1]
     if normalized == "roll":
         return jnp.roll(indices, shift=(int(index) + 1) % int(latent_dim))
+    if normalized == "alternating_roll":
+        return jnp.roll(indices, shift=1 if int(index) % 2 == 0 else -1)
     raise AssertionError(f"Unhandled flow permutation: {normalized}")
 
 
 def _validate_flow_permutation(mode: str) -> str:
     normalized = str(mode).strip().lower()
-    aliases = {"identity": "none", "false": "none"}
+    aliases = {
+        "identity": "none",
+        "false": "none",
+        "balanced_roll": "alternating_roll",
+    }
     normalized = aliases.get(normalized, normalized)
-    if normalized not in {"roll", "reverse", "none"}:
-        raise ValueError("Flow permutation must be 'roll', 'reverse', or 'none'")
+    if normalized not in {"roll", "alternating_roll", "reverse", "none"}:
+        raise ValueError(
+            "Flow permutation must be 'roll', 'alternating_roll', 'reverse', or 'none'"
+        )
     return normalized
 
 

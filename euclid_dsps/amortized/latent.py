@@ -67,12 +67,35 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
             "'feniks_spline15d'."
         )
     lower, upper = free_parameter_bounds_from_config(config, names)
-    raw_center, raw_scale, normalization = _latent_normalization_from_config(
-        config,
-        names,
-        np.asarray(lower, dtype=float),
-        np.asarray(upper, dtype=float),
-    )
+    lower_array = np.asarray(lower, dtype=float)
+    upper_array = np.asarray(upper, dtype=float)
+    requested_normalization = str(
+        latent.get("normalization", latent.get("transform", "identity"))
+    ).lower()
+    transform_family = None
+    transform_location = None
+    transform_lambda = None
+    if requested_normalization == "bounded_mixed_warp":
+        (
+            raw_center,
+            raw_scale,
+            transform_family,
+            transform_location,
+            transform_lambda,
+        ) = _bounded_mixed_warp_from_config(
+            config,
+            names,
+            lower_array,
+            upper_array,
+        )
+        normalization = "bounded_mixed_warp"
+    else:
+        raw_center, raw_scale, normalization = _latent_normalization_from_config(
+            config,
+            names,
+            lower_array,
+            upper_array,
+        )
     return LatentSpec(
         names=names,
         lower=jnp.asarray(lower, dtype=jnp.float32),
@@ -80,12 +103,40 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         raw_center=jnp.asarray(raw_center, dtype=jnp.float32),
         raw_scale=jnp.asarray(raw_scale, dtype=jnp.float32),
         normalization=normalization,
+        transform_family=(
+            None
+            if transform_family is None
+            else jnp.asarray(transform_family, dtype=jnp.int32)
+        ),
+        transform_location=(
+            None
+            if transform_location is None
+            else jnp.asarray(transform_location, dtype=jnp.float32)
+        ),
+        transform_lambda=(
+            None
+            if transform_lambda is None
+            else jnp.asarray(transform_lambda, dtype=jnp.float32)
+        ),
     )
 
 
 def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map network latent ``x`` to bounded physical ``theta``."""
     x = _validate_last_dim(jnp.asarray(x, dtype=jnp.float32), spec)
+    if str(spec.normalization) == "bounded_mixed_warp":
+        raw = network_x_to_raw_x(x, spec)
+        unit = jax.nn.sigmoid(raw)
+        family = _bounded_transform_family(spec)
+        location = _bounded_transform_location(spec)
+        lam = _bounded_transform_lambda(spec)
+        lower_h = _bounded_physical_warp(spec.lower, family, location, lam)
+        upper_h = _bounded_physical_warp(spec.upper, family, location, lam)
+        warped = lower_h + unit * (upper_h - lower_h)
+        asinh_theta = location + lam * jnp.sinh(warped)
+        log1p_theta = lam * jnp.expm1(warped)
+        theta = jnp.where(family == 1, log1p_theta, asinh_theta)
+        return jnp.clip(theta, spec.lower, spec.upper)
     if str(spec.normalization) == "spline15d_mixed":
         raw = network_x_to_raw_x(x, spec)
         family = _spline15d_transform_family(spec)
@@ -114,6 +165,16 @@ def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
 def theta_to_x(theta: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map bounded physical ``theta`` to network latent ``x``."""
     theta = _validate_last_dim(jnp.asarray(theta, dtype=jnp.float32), spec)
+    if str(spec.normalization) == "bounded_mixed_warp":
+        family = _bounded_transform_family(spec)
+        location = _bounded_transform_location(spec)
+        lam = _bounded_transform_lambda(spec)
+        lower_h = _bounded_physical_warp(spec.lower, family, location, lam)
+        upper_h = _bounded_physical_warp(spec.upper, family, location, lam)
+        warped = _bounded_physical_warp(theta, family, location, lam)
+        eps = jnp.asarray(1.0e-6, dtype=theta.dtype)
+        unit = _safe_unit_interval((warped - lower_h) / (upper_h - lower_h), eps)
+        return raw_x_to_network_x(_logit(unit), spec)
     if str(spec.normalization) == "spline15d_mixed":
         family = _spline15d_transform_family(spec)
         location = _spline15d_transform_location(spec)
@@ -154,6 +215,43 @@ def network_x_to_raw_x(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
 def raw_x_to_network_x(raw_x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map raw bounded logits to standardized network latent coordinates."""
     return (raw_x - _latent_center(spec)) / _latent_scale(spec)
+
+
+def x_to_theta_log_abs_det_jacobian(
+    x: jnp.ndarray,
+    spec: LatentSpec,
+) -> jnp.ndarray:
+    """Return ``log |d theta / d x|`` for the bounded mixed warp.
+
+    The transform is coordinate-wise, so the determinant is the product of
+    the one-dimensional derivatives. Finite network coordinates map strictly
+    inside the configured physical bounds.
+    """
+    if str(spec.normalization) != "bounded_mixed_warp":
+        raise ValueError("x_to_theta_log_abs_det_jacobian requires bounded_mixed_warp")
+    x = _validate_last_dim(jnp.asarray(x, dtype=jnp.float32), spec)
+    raw = network_x_to_raw_x(x, spec)
+    unit = jax.nn.sigmoid(raw)
+    family = _bounded_transform_family(spec)
+    location = _bounded_transform_location(spec)
+    lam = _bounded_transform_lambda(spec)
+    lower_h = _bounded_physical_warp(spec.lower, family, location, lam)
+    upper_h = _bounded_physical_warp(spec.upper, family, location, lam)
+    warped = lower_h + unit * (upper_h - lower_h)
+    inverse_derivative = jnp.where(
+        family == 1,
+        lam * jnp.exp(warped),
+        lam * jnp.cosh(warped),
+    )
+    eps = jnp.asarray(1.0e-12, dtype=x.dtype)
+    terms = (
+        jnp.log(jnp.maximum(jnp.abs(_latent_scale(spec)), eps))
+        + jnp.log(jnp.maximum(upper_h - lower_h, eps))
+        + jax.nn.log_sigmoid(raw)
+        + jax.nn.log_sigmoid(-raw)
+        + jnp.log(jnp.maximum(inverse_derivative, eps))
+    )
+    return jnp.sum(terms, axis=-1)
 
 
 def theta_matrix_to_param_dict(
@@ -222,6 +320,59 @@ def latent_spec_hash(spec: LatentSpec) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def latent_transform_provenance(
+    config: dict[str, Any],
+    spec: LatentSpec | None = None,
+) -> dict[str, Any]:
+    """Return the complete no-truth provenance for a latent transform."""
+    resolved = spec or latent_spec_from_config(config)
+    payload = latent_spec_to_jsonable(resolved)
+    families = _optional_array_to_list(resolved.transform_family)
+    locations = _optional_array_to_list(resolved.transform_location)
+    lambdas = _optional_array_to_list(resolved.transform_lambda)
+    warp_rows = []
+    if str(resolved.normalization) == "bounded_mixed_warp":
+        for index, name in enumerate(resolved.names):
+            warp_rows.append(
+                {
+                    "parameter": name,
+                    "family": "log1p" if int(families[index]) == 1 else "asinh",
+                    "center": float(locations[index]),
+                    "lambda": float(lambdas[index]),
+                    "raw_center_at_fit_initial": float(payload["raw_center"][index]),
+                    "raw_scale": float(payload["raw_scale"][index]),
+                    "lower": float(payload["lower"][index]),
+                    "upper": float(payload["upper"][index]),
+                }
+            )
+    return {
+        "status": "complete",
+        "transform": payload,
+        "transform_hash": latent_spec_hash(resolved),
+        "coordinate_information_source": "fit_bounds_fit_initials_and_config_only",
+        "truth_columns_read": [],
+        "truth_used": False,
+        "physical_bounds_guaranteed_for_finite_x": True,
+        "equations": {
+            "unit": "(h(theta)-h(lower))/(h(upper)-h(lower))",
+            "raw": "logit(unit)",
+            "network_x": "(raw-raw(theta_initial))/raw_scale",
+        },
+        "warps": warp_rows,
+    }
+
+
+def write_latent_transform_provenance(
+    path: str | Path,
+    config: dict[str, Any],
+    spec: LatentSpec | None = None,
+) -> dict[str, Any]:
+    """Write and return the complete latent-transform provenance payload."""
+    payload = latent_transform_provenance(config, spec)
+    write_json(path, payload)
+    return payload
+
+
 def _optional_array_to_list(value: jnp.ndarray | None) -> list[float] | None:
     if value is None:
         return None
@@ -244,6 +395,36 @@ def _spline15d_transform_lambda(spec: LatentSpec) -> jnp.ndarray:
     if spec.transform_lambda is None:
         raise ValueError("spline15d_mixed requires transform_lambda")
     return jnp.maximum(jnp.asarray(spec.transform_lambda, dtype=jnp.float32), 1.0e-12)
+
+
+def _bounded_transform_family(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_family is None:
+        raise ValueError("bounded_mixed_warp requires transform_family")
+    return jnp.asarray(spec.transform_family, dtype=jnp.int32)
+
+
+def _bounded_transform_location(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_location is None:
+        raise ValueError("bounded_mixed_warp requires transform_location")
+    return jnp.asarray(spec.transform_location, dtype=jnp.float32)
+
+
+def _bounded_transform_lambda(spec: LatentSpec) -> jnp.ndarray:
+    if spec.transform_lambda is None:
+        raise ValueError("bounded_mixed_warp requires transform_lambda")
+    return jnp.maximum(jnp.asarray(spec.transform_lambda, dtype=jnp.float32), 1.0e-12)
+
+
+def _bounded_physical_warp(
+    theta: jnp.ndarray,
+    family: jnp.ndarray,
+    location: jnp.ndarray,
+    lam: jnp.ndarray,
+) -> jnp.ndarray:
+    asinh_value = jnp.arcsinh((theta - location) / lam)
+    log1p_theta = jnp.where(family == 1, theta, jnp.zeros_like(theta))
+    log1p_value = jnp.log1p(log1p_theta / lam)
+    return jnp.where(family == 1, log1p_value, asinh_value)
 
 
 def _latent_center(spec: LatentSpec) -> jnp.ndarray:
@@ -297,6 +478,102 @@ def _latent_normalization_from_config(
         float(latent.get("max_raw_scale", 5.0)),
     )
     return raw_center, raw_scale, "standardized_logit"
+
+
+def _bounded_mixed_warp_from_config(
+    config: dict[str, Any],
+    names: tuple[str, ...],
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build a no-truth bounded mixed warp from fit bounds and initials."""
+    latent = (config.get("amortized", {}) or {}).get("latent", {}) or {}
+    configured = latent.get("warps", latent.get("bounded_mixed_warp", {})) or {}
+    if not isinstance(configured, dict):
+        raise ValueError("amortized.latent.warps must be a mapping")
+    configured_scales = latent.get("raw_scales", {}) or {}
+    if not isinstance(configured_scales, dict):
+        raise ValueError("amortized.latent.raw_scales must be a mapping")
+    initial = initial_theta_from_config(config, names, lower, upper)
+    family_values: list[int] = []
+    locations: list[float] = []
+    lambdas: list[float] = []
+    raw_scales: list[float] = []
+    for index, name in enumerate(names):
+        entry = configured.get(name, {}) or {}
+        if not isinstance(entry, dict):
+            raise ValueError(f"bounded warp for {name} must be a mapping")
+        default_family, default_lambda = _bounded_warp_defaults(name)
+        family_name = str(entry.get("family", default_family)).strip().lower()
+        if family_name not in {"asinh", "log1p"}:
+            raise ValueError(f"bounded warp family for {name} must be asinh or log1p")
+        family_values.append(1 if family_name == "log1p" else 0)
+        center_value = entry.get("center", "fit_initial")
+        if isinstance(center_value, str):
+            if center_value.strip().lower() != "fit_initial":
+                raise ValueError(
+                    f"bounded warp center for {name} must be fit_initial or finite"
+                )
+            center = float(initial[index])
+        else:
+            parsed_center = _finite_float_or_none(center_value)
+            if parsed_center is None:
+                raise ValueError(f"bounded warp center for {name} must be finite")
+            center = parsed_center
+        lam = _finite_float_or_none(entry.get("lambda", default_lambda))
+        if lam is None or lam <= 0.0:
+            raise ValueError(f"bounded warp lambda for {name} must be positive")
+        if family_name == "log1p" and float(lower[index]) <= -lam:
+            raise ValueError(f"bounded log1p warp for {name} requires lower > -lambda")
+        raw_scale = _finite_float_or_none(
+            entry.get("raw_scale", configured_scales.get(name, 1.0))
+        )
+        if raw_scale is None or raw_scale <= 0.0:
+            raise ValueError(f"bounded warp raw_scale for {name} must be positive")
+        locations.append(center)
+        lambdas.append(lam)
+        raw_scales.append(raw_scale)
+    family = np.asarray(family_values, dtype=np.int32)
+    location = np.asarray(locations, dtype=float)
+    lam = np.asarray(lambdas, dtype=float)
+    lower_h = _bounded_physical_warp_numpy(lower, family, location, lam)
+    upper_h = _bounded_physical_warp_numpy(upper, family, location, lam)
+    initial_h = _bounded_physical_warp_numpy(initial, family, location, lam)
+    span = upper_h - lower_h
+    if np.any(~np.isfinite(span)) or np.any(span <= 0.0):
+        raise ValueError("bounded mixed warp must be finite and monotonic on bounds")
+    unit = np.clip((initial_h - lower_h) / span, 1.0e-6, 1.0 - 1.0e-6)
+    raw_center = np.log(unit) - np.log1p(-unit)
+    return (
+        raw_center,
+        np.asarray(raw_scales, dtype=float),
+        family,
+        location,
+        lam,
+    )
+
+
+def _bounded_warp_defaults(name: str) -> tuple[str, float]:
+    if name == "dust_av":
+        return "log1p", 0.2
+    if name in {"z_obs", "log10_stellar_metallicity", "dust_delta"}:
+        return "asinh", 0.5
+    if name == "log10_stellar_mass" or name.startswith("sfh_dlog_sfr_"):
+        return "asinh", 1.0
+    return "asinh", 1.0
+
+
+def _bounded_physical_warp_numpy(
+    theta: np.ndarray,
+    family: np.ndarray,
+    location: np.ndarray,
+    lam: np.ndarray,
+) -> np.ndarray:
+    asinh_value = np.arcsinh((theta - location) / lam)
+    log1p_theta = np.where(family == 1, theta, np.zeros_like(theta))
+    with np.errstate(invalid="raise", divide="raise"):
+        log1p_value = np.log1p(log1p_theta / lam)
+    return np.where(family == 1, log1p_value, asinh_value)
 
 
 def latent_center_theta_from_config(
