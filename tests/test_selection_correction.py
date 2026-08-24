@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from euclid_dsps.amortized.config import amortized_config
+from euclid_dsps.amortized.features import FeatureStats
 from euclid_dsps.amortized.selection_correction import (
     estimate_log_alpha_reparameterized,
     estimate_log_alpha_score_function,
@@ -16,6 +17,7 @@ from euclid_dsps.amortized.selection_correction import (
     observed_flux_selection_log_beta_gaussian_m5,
     observed_magnitude_flux_limit_jax,
 )
+from euclid_dsps.amortized.train import _selection_correction_runtime_config
 from euclid_dsps.config import load_config
 from euclid_dsps.photometric_uncertainty import (
     flux_error_from_model,
@@ -478,6 +480,21 @@ def test_selection_aware_feniks_config_separates_likelihood_and_survey_noise() -
     assert config["synthetic_diffsky"]["selection"]["observed_magnitude_limits"] == {
         "lsst_r": 25.0
     }
+
+
+def test_adaptive_smc_runtime_preserves_score_function_estimator() -> None:
+    config = load_config(
+        CONFIG_DIR
+        / "feniks_selfsup_adaptive_smcwake_parentprior_selection_r25.yaml"
+    )
+    stats = FeatureStats(
+        flux_scale=np.ones(1),
+        err_scale=np.ones(1),
+        band_names=("lsst_r",),
+    )
+    runtime = _selection_correction_runtime_config(config, stats)
+
+    assert runtime["gradient_estimator"] == "score_function"
 
 
 def test_parentprior_sleepnpe_config_has_disjoint_q_and_prior_updates() -> None:

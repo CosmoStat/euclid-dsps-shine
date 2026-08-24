@@ -2234,9 +2234,9 @@ def run_feniks_adaptive_smc_q_curriculum(
     train_indices_file: str | Path,
     validation_indices_file: str | Path,
     checkpoint: str | Path,
-    exact_objects: int = 32,
+    exact_objects: int = 96,
     extended_max_stages: int = 48,
-    distillation_steps: int = 4,
+    distillation_steps: int = 64,
     primary_rw_scale: float = 0.30,
     fallback_rw_scale: float = 0.15,
     verbose: bool = True,
@@ -2482,6 +2482,8 @@ def run_feniks_adaptive_smc_q_curriculum(
     q_rows: list[dict[str, Any]] = []
     updated_model = initial_model
     q_updates_applied = 0
+    exact_cross_entropy_before = float("nan")
+    exact_cross_entropy_after = float("nan")
     if exact_count >= target:
         combined_posterior = _concat_posteriors(exact_posteriors)
         combined_features = jnp.concatenate(exact_features, axis=0)
@@ -2492,6 +2494,15 @@ def run_feniks_adaptive_smc_q_curriculum(
         # Rebuild plain arrays before passing them to the independent q pmap.
         macro_posterior = _remove_named_sharding(macro_posterior)
         macro_features = _remove_named_sharding(macro_features)
+        exact_cross_entropy_before = float(
+            np.asarray(
+                smc_q_distillation_loss(
+                    initial_model,
+                    macro_features,
+                    macro_posterior,
+                )[0]
+            )
+        )
         q_optimizer = make_component_optimizer(
             learning_rate=training.q_smc_learning_rate,
             gradient_clip_norm=training.q_gradient_clip_norm,
@@ -2531,7 +2542,29 @@ def run_feniks_adaptive_smc_q_curriculum(
                     "update_applied": applied,
                 }
             )
+            if (
+                step_index == 0
+                or (step_index + 1) % 8 == 0
+                or step_index + 1 == int(distillation_steps)
+            ):
+                _log(
+                    verbose,
+                    "[adaptive-smc-curriculum] "
+                    f"q-step={step_index + 1}/{distillation_steps} "
+                    f"CE={q_rows[-1]['cross_entropy']:.5f} "
+                    f"grad={q_rows[-1]['raw_grad_norm']:.3g} "
+                    f"applied={int(applied)}",
+                )
         updated_model = _unreplicate_tree(model_replicated)
+        exact_cross_entropy_after = float(
+            np.asarray(
+                smc_q_distillation_loss(
+                    updated_model,
+                    macro_features,
+                    macro_posterior,
+                )[0]
+            )
+        )
 
     checkpoint_path = out / "checkpoints" / "q_exact_curriculum.eqx"
     if q_updates_applied:
@@ -2563,6 +2596,9 @@ def run_feniks_adaptive_smc_q_curriculum(
     q_is_ess_gain = (
         after_q_is["median_ess_fraction"] - baseline_q_is["median_ess_fraction"]
     )
+    exact_cross_entropy_improvement = (
+        exact_cross_entropy_before - exact_cross_entropy_after
+    )
     standard_ready = bool(
         np.isclose(after_summary["median_beta_final"], 1.0, atol=1.0e-6)
         and after_summary["hard_fraction_after_fallback"] < training.hard_fraction_fail
@@ -2570,7 +2606,7 @@ def run_feniks_adaptive_smc_q_curriculum(
     )
     selection_ready = bool(alpha_preflight["finite"] and alpha_preflight["nonzero"])
     q_ready = bool(
-        cross_entropy_improvement > 0.0
+        exact_cross_entropy_improvement > 0.0
         and q_is_ess_gain > 0.0
         and after_q_is["median_ess_fraction"]
         >= training.min_validation_q_is_ess_fraction
@@ -2614,6 +2650,11 @@ def run_feniks_adaptive_smc_q_curriculum(
             "median_beta_final_delta": beta_gain,
             "hard_fraction_reduction": hard_reduction,
             "smc_cross_entropy_improvement": cross_entropy_improvement,
+            "exact_training_cross_entropy_before": exact_cross_entropy_before,
+            "exact_training_cross_entropy_after": exact_cross_entropy_after,
+            "exact_training_cross_entropy_improvement": (
+                exact_cross_entropy_improvement
+            ),
             "q_only_is_ess_fraction_delta": q_is_ess_gain,
             "q_only_is_max_weight_reduction": (
                 baseline_q_is["median_max_weight"]

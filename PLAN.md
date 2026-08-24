@@ -63,6 +63,23 @@
   config/selection suite passes (`26 passed`) with Ruff, compileall and diff
   checks. Job `1314730` establishes extended-SMC feasibility but remains an
   incomplete artifact because no q update or receipt was written.
+- Completed curriculum `1316284` confirms the extended E-step (32/32 exact in
+  the first batch) and four finite unclipped q updates, but q-only IS remains
+  collapsed at ESS/K=1/64 with max weight approximately one. Four optimizer
+  steps reduce the exact-cohort CE only marginally and are not a meaningful
+  amortization phase. Expand the bounded diagnostic to all 96 observed objects
+  and 64 full-cohort q updates while keeping the parent prior frozen.
+- The completed receipt also exposed that runtime normalization dropped
+  `selection_correction.gradient_estimator`, silently reverting the preflight
+  to pathwise. Preserve and validate that field explicitly so the configured
+  score-function estimator is the production gradient while pathwise remains
+  diagnostic. Record exact-cohort CE before/after separately from the changing
+  standard-budget eligible subset.
+- Implemented the 96-object / 64-step curriculum defaults, periodic q progress
+  logging and fixed exact-cohort CE before/after. Added a regression proving
+  that runtime selection normalization preserves `score_function`; the focused
+  selection/config suite passes (`27 passed`) with Ruff, compileall, shell
+  syntax and diff checks. No parent-prior update or big job is enabled.
 
 ## 2026-08-24 Adaptive-SMC E-step isolation
 

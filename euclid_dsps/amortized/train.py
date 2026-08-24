@@ -4620,6 +4620,14 @@ def _selection_correction_runtime_config(
             "objective.selection_correction.gradient_preflight_samples must be "
             "non-negative"
         )
+    gradient_estimator = str(
+        selection.get("gradient_estimator", "pathwise")
+    ).strip().lower().replace("-", "_")
+    if gradient_estimator not in {"pathwise", "score_function"}:
+        raise ValueError(
+            "objective.selection_correction.gradient_estimator must be "
+            "pathwise or score_function"
+        )
     model = dict(
         ((config.get("synthetic_diffsky", {}) or {}).get("flux_error_model", {})) or {}
     )
@@ -4666,6 +4674,7 @@ def _selection_correction_runtime_config(
             n_prior_samples,
         ),
         "gradient_preflight_samples": gradient_preflight_samples,
+        "gradient_estimator": gradient_estimator,
         "common_random_numbers": bool(selection.get("common_random_numbers", True)),
         "rng_seed": int(
             selection.get("seed", int(cfg["training"].get("seed", 42)) + 7919)
