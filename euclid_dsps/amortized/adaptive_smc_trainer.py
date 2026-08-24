@@ -2620,7 +2620,7 @@ def run_feniks_adaptive_smc_q_curriculum(
         "selection_gradient_ready": selection_ready,
         "truth_used_for_training_or_selection": False,
         "next_action": (
-            "RUN_FRESH_TRAINING_SMOKE_WITH_CURRICULUM_CHECKPOINT"
+            "IMPLEMENT_FRESH_TRAINING_SMOKE_FROM_CURRICULUM_CHECKPOINT"
             if standard_ready and q_ready and selection_ready
             else "STOP_AND_REVIEW_CURRICULUM_DIAGNOSTICS"
         ),
