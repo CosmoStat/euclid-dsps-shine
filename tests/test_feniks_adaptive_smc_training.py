@@ -59,6 +59,9 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert cfg["encoder"]["base_components"] == 1
     assert cfg["objective"]["mode"] == "adaptive_smc_wake"
     assert cfg["objective"]["sleep"]["error_model"] == "observed_catalog"
+    assert cfg["objective"]["selection_correction"]["gradient_estimator"] == (
+        "score_function"
+    )
     assert primary.n_particles == 64
     assert primary.max_stages == 8
     assert primary.rw_adapt_target_acceptance == pytest.approx(0.30)

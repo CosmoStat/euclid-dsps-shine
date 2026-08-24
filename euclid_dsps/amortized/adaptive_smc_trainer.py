@@ -51,7 +51,10 @@ from .latent import (
     write_latent_prior_geometry,
 )
 from .posterior import posterior_entropy_diagnostics
-from .selection_correction import estimate_log_alpha_score_function_diagnostic
+from .selection_correction import (
+    estimate_log_alpha_score_function,
+    estimate_log_alpha_score_function_diagnostic,
+)
 from .train import (
     JitLatentSpec,
     LossBatch,
@@ -1059,8 +1062,51 @@ def _make_sleep_loss_fn(runtime: RuntimeBundle):
     return loss
 
 
+def _model_float_dtype(model):
+    leaves = jax.tree_util.tree_leaves(
+        eqx.filter(model.prior, eqx.is_inexact_array)
+    )
+    if not leaves:
+        return jnp.float32
+    return jnp.asarray(leaves[0]).dtype
+
+
 def _make_selection_log_alpha_fn(runtime: RuntimeBundle):
+    selection_config = runtime.selection_objective_config["selection_correction"]
+    estimator = str(selection_config.get("gradient_estimator", "pathwise"))
+    if estimator not in {"pathwise", "score_function"}:
+        raise ValueError(
+            "selection_correction.gradient_estimator must be pathwise or "
+            "score_function"
+        )
+
     def selection(model, key):
+        if estimator == "score_function":
+            def log_beta(samples):
+                return _selection_log_beta_from_prior_samples(
+                    model,
+                    samples,
+                    runtime.jit_latent_spec,
+                    runtime.context,
+                    runtime.model_args,
+                    runtime.parameter_names,
+                    runtime.calibration_config,
+                    selection_config,
+                )
+
+            return estimate_log_alpha_score_function(
+                model.prior,
+                key,
+                n_prior_samples=int(selection_config["n_prior_samples"]),
+                log_beta_fn=log_beta,
+                prior_sample_batch_size=int(
+                    selection_config.get(
+                        "prior_sample_batch_size",
+                        selection_config["n_prior_samples"],
+                    )
+                ),
+                dtype=_model_float_dtype(model),
+            )
         return _estimate_selection_log_alpha(
             model,
             runtime.jit_latent_spec,
@@ -1123,6 +1169,9 @@ def _selection_alpha_gradient_preflight(runtime: RuntimeBundle, model, key):
                 key,
                 n_prior_samples=count,
                 log_beta_fn=log_beta,
+                prior_sample_batch_size=int(
+                    selection.get("prior_sample_batch_size", count)
+                ),
             )
         )
         return surrogate
@@ -1139,12 +1188,21 @@ def _selection_alpha_gradient_preflight(runtime: RuntimeBundle, model, key):
             jnp.isfinite(score_surrogate) & tree_all_finite(score_gradient)
         )
     )
+    estimator = str(selection.get("gradient_estimator", "pathwise"))
+    if estimator not in {"pathwise", "score_function"}:
+        raise ValueError(
+            "selection_correction.gradient_estimator must be pathwise or "
+            "score_function"
+        )
+    production_finite = pathwise_finite if estimator == "pathwise" else score_finite
+    production_norm = gradient_norm if estimator == "pathwise" else score_gradient_norm
     return {
         "samples": count,
         "log_alpha": float(np.asarray(log_alpha)),
-        "gradient_norm": float(np.asarray(gradient_norm)),
-        "finite": pathwise_finite,
-        "nonzero": bool(np.asarray(gradient_norm > 0.0)),
+        "gradient_estimator": estimator,
+        "gradient_norm": float(np.asarray(production_norm)),
+        "finite": production_finite,
+        "nonzero": bool(np.asarray(production_norm > 0.0)),
         "pathwise": {
             "finite": pathwise_finite,
             "gradient_norm": float(np.asarray(gradient_norm)),
@@ -1153,7 +1211,7 @@ def _selection_alpha_gradient_preflight(runtime: RuntimeBundle, model, key):
             "finite": score_finite,
             "gradient_norm": float(np.asarray(score_gradient_norm)),
             "surrogate": float(np.asarray(score_surrogate)),
-            "production_enabled": False,
+            "production_enabled": estimator == "score_function",
         },
     }
 
@@ -2152,6 +2210,429 @@ def run_feniks_adaptive_smc_e_step_pilot(
     pd.DataFrame(log_rows).to_csv(out / "e_step_pilot_log.csv", index=False)
     pd.DataFrame(hard_rows).to_csv(out / "hard_object_queue.csv", index=False)
     write_json(out / "pilot_receipt.json", receipt)
+    (out / "DONE").touch()
+    return receipt
+
+
+def run_feniks_adaptive_smc_q_curriculum(
+    config: dict[str, Any],
+    out_dir: str | Path,
+    *,
+    train_indices_file: str | Path,
+    validation_indices_file: str | Path,
+    checkpoint: str | Path,
+    exact_objects: int = 32,
+    extended_max_stages: int = 48,
+    distillation_steps: int = 4,
+    primary_rw_scale: float = 0.30,
+    fallback_rw_scale: float = 0.15,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Bootstrap q once from a bounded exact-SMC cohort, then re-audit it.
+
+    The parent prior is frozen throughout. The extended bridge is used only to
+    collect ``exact_objects`` supported beta=1 posteriors. q is distilled from
+    that stopped empirical posterior, after which the normal production
+    primary/fallback budgets are rerun with fixed random numbers.
+    """
+    out = ensure_dir(out_dir)
+    if (out / "curriculum_receipt.json").exists():
+        raise FileExistsError(f"adaptive SMC curriculum output already exists: {out}")
+    if int(exact_objects) <= 0 or int(distillation_steps) <= 0:
+        raise ValueError("exact_objects and distillation_steps must be positive")
+    if int(extended_max_stages) <= 12:
+        raise ValueError("extended_max_stages must exceed the standard fallback")
+    runtime = prepare_adaptive_training_runtime(
+        config,
+        out,
+        train_indices_file=train_indices_file,
+        validation_indices_file=validation_indices_file,
+    )
+    training = _smoke_training_config(
+        adaptive_training_config(runtime.config),
+        train_objects=int(runtime.train_arrays.flux.shape[0]),
+    )
+    primary, fallback, proposal = adaptive_smc_configs(runtime.config)
+    primary = replace(primary, rw_scale=float(primary_rw_scale))
+    fallback = replace(fallback, rw_scale=float(fallback_rw_scale))
+    extended = replace(
+        fallback,
+        max_stages=int(extended_max_stages),
+        rw_scale=float(fallback_rw_scale),
+    )
+    devices = tuple(jax.local_devices())
+    n_devices = len(devices)
+    if training.micro_batch_size % n_devices:
+        raise ValueError("micro_batch_size must be divisible by local device count")
+    target = ((int(exact_objects) + n_devices - 1) // n_devices) * n_devices
+    if target > int(runtime.train_arrays.flux.shape[0]):
+        raise ValueError("exact_objects exceeds the fixed training cohort")
+    initial_model = load_checkpoint(checkpoint, runtime.config)
+    alpha_preflight = _selection_alpha_gradient_preflight(
+        runtime,
+        initial_model,
+        jax.random.PRNGKey(training.seed + 720_000),
+    )
+    write_json(out / "selection_gradient_preflight.json", alpha_preflight)
+    order = np.arange(runtime.train_arrays.flux.shape[0], dtype=np.int64)
+    original_count = len(order)
+    rng = np.random.default_rng(training.seed + 720_001)
+    order, _pad_count = _pad_epoch_order_for_data_parallel(
+        order,
+        global_batch_size=training.micro_batch_size,
+        enabled=True,
+        rng=rng,
+    )
+    real_order_mask = np.arange(len(order)) < original_count
+
+    def standard_pass(model, *, seed_offset: int, label: str):
+        model_replicated = _replicate_model_for_pmap(snapshot_model(model), devices)
+        primary_step = make_pmap_e_step(
+            latent_spec=runtime.jit_latent_spec,
+            context=runtime.context,
+            model_args=runtime.model_args,
+            parameter_names=runtime.parameter_names,
+            likelihood_config=runtime.likelihood_config,
+            calibration_config=runtime.calibration_config,
+            proposal_config=proposal,
+            smc_config=primary,
+        )
+        fallback_step = make_pmap_e_step(
+            latent_spec=runtime.jit_latent_spec,
+            context=runtime.context,
+            model_args=runtime.model_args,
+            parameter_names=runtime.parameter_names,
+            likelihood_config=runtime.likelihood_config,
+            calibration_config=runtime.calibration_config,
+            proposal_config=proposal,
+            smc_config=fallback,
+        )
+        values: list[SMCPosteriorBatch] = []
+        features: list[jnp.ndarray] = []
+        rows: list[dict[str, Any]] = []
+        hard_rows: list[dict[str, Any]] = []
+        pass_key = jax.random.PRNGKey(training.seed + seed_offset)
+        for batch_index, photometry in enumerate(
+            iter_photometry_batches_from_arrays(
+                runtime.train_arrays,
+                batch_size=training.micro_batch_size,
+                feature_stats=runtime.feature_stats,
+                order=order,
+                truth_names=None,
+            )
+        ):
+            start = batch_index * training.micro_batch_size
+            stop = start + training.micro_batch_size
+            pass_key, primary_key, fallback_key = jax.random.split(pass_key, 3)
+            posterior, _result = _run_training_e_step(
+                model_replicated=model_replicated,
+                batch=_loss_batch(photometry),
+                real_object_mask=real_order_mask[start:stop],
+                row_indices=np.asarray(photometry.row_index, dtype=np.int64),
+                primary_step=primary_step,
+                fallback_step=fallback_step,
+                primary_key=primary_key,
+                fallback_key=fallback_key,
+                n_devices=n_devices,
+                fallback_batch_size=training.fallback_batch_size,
+                hard_rows=hard_rows,
+                sweep=0,
+                batch_index=batch_index,
+            )
+            values.append(posterior)
+            features.append(batch.features)
+            summary = _posterior_summary(posterior)
+            rows.append({"phase": label, "batch": batch_index, **summary})
+            _log(
+                verbose,
+                f"[adaptive-smc-curriculum] {label} batch={batch_index + 1} "
+                f"beta={summary['median_beta_final']:.3f} "
+                f"hard={summary['hard_fraction_after_fallback']:.3f} "
+                f"accept={summary['median_mutation_acceptance']:.3f}",
+            )
+        combined = _concat_posteriors(values)
+        combined_features = jnp.concatenate(features, axis=0)
+        cross_entropy, cross_entropy_metrics = smc_q_distillation_loss(
+            model,
+            combined_features,
+            combined,
+        )
+        aggregate = _posterior_summary(combined)
+        aggregate["smc_cross_entropy"] = float(np.asarray(cross_entropy))
+        aggregate["smc_cross_entropy_eligible_count"] = float(
+            np.asarray(cross_entropy_metrics.eligible_count)
+        )
+        return aggregate, rows, hard_rows
+
+    def q_is_validation(model, *, seed_offset: int):
+        batch, real_mask, _rows = _validation_batch(
+            runtime, training.validation_objects, n_devices
+        )
+        diagnostics = q_only_importance_diagnostics(
+            model_snapshot=snapshot_model(model),
+            batch=batch,
+            latent_spec=runtime.jit_latent_spec,
+            context=runtime.context,
+            model_args=runtime.model_args,
+            parameter_names=runtime.parameter_names,
+            likelihood_config=runtime.likelihood_config,
+            calibration_config=runtime.calibration_config,
+            key=jax.random.PRNGKey(training.seed + seed_offset),
+            n_particles=training.validation_q_is_particles,
+        )
+        valid = np.asarray(diagnostics["valid"]) & np.asarray(real_mask)
+        ess = np.asarray(diagnostics["ess_fraction"], dtype=float)
+        max_weight = np.asarray(diagnostics["max_weight"], dtype=float)
+        return {
+            "objects": int(np.sum(real_mask)),
+            "valid_objects": int(np.sum(valid)),
+            "median_ess_fraction": (
+                float(np.median(ess[valid])) if np.any(valid) else 0.0
+            ),
+            "median_max_weight": (
+                float(np.median(max_weight[valid])) if np.any(valid) else 1.0
+            ),
+            "randomness_contract": "fixed_common_random_numbers",
+        }
+
+    baseline_summary, baseline_rows, baseline_hard = standard_pass(
+        initial_model,
+        seed_offset=721_000,
+        label="standard_before",
+    )
+    baseline_q_is = q_is_validation(initial_model, seed_offset=721_500)
+    extended_step = make_pmap_e_step(
+        latent_spec=runtime.jit_latent_spec,
+        context=runtime.context,
+        model_args=runtime.model_args,
+        parameter_names=runtime.parameter_names,
+        likelihood_config=runtime.likelihood_config,
+        calibration_config=runtime.calibration_config,
+        proposal_config=proposal,
+        smc_config=extended,
+    )
+    frozen_replicated = _replicate_model_for_pmap(
+        snapshot_model(initial_model), devices
+    )
+    exact_posteriors: list[SMCPosteriorBatch] = []
+    exact_features: list[jnp.ndarray] = []
+    extended_rows: list[dict[str, Any]] = []
+    exact_count = 0
+    exact_key = jax.random.PRNGKey(training.seed + 722_000)
+    for batch_index, photometry in enumerate(
+        iter_photometry_batches_from_arrays(
+            runtime.train_arrays,
+            batch_size=training.micro_batch_size,
+            feature_stats=runtime.feature_stats,
+            order=order,
+            truth_names=None,
+        )
+    ):
+        start = batch_index * training.micro_batch_size
+        stop = start + training.micro_batch_size
+        batch = _loss_batch(photometry)
+        exact_key, step_key = jax.random.split(exact_key)
+        result = _unshard_smc_result(
+            extended_step(
+                frozen_replicated,
+                _shard_loss_batch(batch, n_devices),
+                jax.random.split(step_key, n_devices),
+            )
+        )
+        posterior = primary_posterior_batch(result)
+        real_mask = jnp.asarray(real_order_mask[start:stop], dtype=jnp.bool_)
+        posterior = posterior._replace(eligible=posterior.eligible & real_mask)
+        eligible_indices = np.flatnonzero(np.asarray(posterior.eligible))
+        if len(eligible_indices):
+            exact_posteriors.append(
+                _take_posterior_objects(posterior, eligible_indices)
+            )
+            exact_features.append(
+                jnp.take(batch.features, jnp.asarray(eligible_indices), axis=0)
+            )
+            exact_count += len(eligible_indices)
+        summary = _posterior_summary(posterior)
+        extended_rows.append(
+            {"phase": "extended_exact", "batch": batch_index, **summary}
+        )
+        _log(
+            verbose,
+            "[adaptive-smc-curriculum] "
+            f"extended batch={batch_index + 1} beta={summary['median_beta_final']:.3f} "
+            f"eligible_total={exact_count}/{target} "
+            f"accept={summary['median_mutation_acceptance']:.3f}",
+        )
+        if exact_count >= target:
+            break
+
+    q_rows: list[dict[str, Any]] = []
+    updated_model = initial_model
+    q_updates_applied = 0
+    if exact_count >= target:
+        combined_posterior = _concat_posteriors(exact_posteriors)
+        combined_features = jnp.concatenate(exact_features, axis=0)
+        selected = np.arange(target, dtype=np.int32)
+        macro_posterior = _take_posterior_objects(combined_posterior, selected)
+        macro_features = jnp.take(combined_features, selected, axis=0)
+        q_optimizer = make_component_optimizer(
+            learning_rate=training.q_smc_learning_rate,
+            gradient_clip_norm=training.q_gradient_clip_norm,
+            weight_decay=training.weight_decay,
+        )
+        q_state = q_optimizer.init(
+            eqx.filter(initial_model.encoder, eqx.is_inexact_array)
+        )
+        q_step = make_pmap_q_smc_step(
+            optimizer=q_optimizer,
+            gradient_clip_norm=training.q_gradient_clip_norm,
+        )
+        model_replicated = _replicate_model_for_pmap(initial_model, devices)
+        state_replicated = _replicate_tree(q_state, devices)
+        sharded_features = _shard_features(macro_features, n_devices)
+        sharded_posterior = _shard_posterior(macro_posterior, n_devices)
+        for step_index in range(int(distillation_steps)):
+            model_replicated, state_replicated, metrics, step_metrics = q_step(
+                model_replicated,
+                state_replicated,
+                sharded_features,
+                sharded_posterior,
+            )
+            applied = _replicated_bool(step_metrics.update_applied)
+            q_updates_applied += int(applied)
+            q_rows.append(
+                {
+                    "step": step_index + 1,
+                    "eligible_count": target,
+                    "cross_entropy": _replicated_scalar(metrics.cross_entropy),
+                    "raw_grad_norm": _replicated_scalar(step_metrics.raw_grad_norm),
+                    "clipped_grad_norm": _replicated_scalar(
+                        step_metrics.clipped_grad_norm
+                    ),
+                    "grad_clipped": _replicated_bool(step_metrics.grad_clipped),
+                    "grads_finite": _replicated_bool(step_metrics.grads_finite),
+                    "update_applied": applied,
+                }
+            )
+        updated_model = _unreplicate_tree(model_replicated)
+
+    checkpoint_path = out / "checkpoints" / "q_exact_curriculum.eqx"
+    if q_updates_applied:
+        save_checkpoint(
+            checkpoint_path,
+            updated_model,
+            config=runtime.config,
+            latent_spec=runtime.latent_spec,
+            feature_stats=runtime.feature_stats,
+            epoch=0,
+            metric=float(q_rows[-1]["cross_entropy"]),
+            metric_name="exact_curriculum_smc_cross_entropy",
+        )
+    after_summary, after_rows, after_hard = standard_pass(
+        updated_model,
+        seed_offset=721_000,
+        label="standard_after",
+    )
+    after_q_is = q_is_validation(updated_model, seed_offset=721_500)
+    beta_gain = after_summary["median_beta_final"] - baseline_summary["median_beta_final"]
+    hard_reduction = (
+        baseline_summary["hard_fraction_after_fallback"]
+        - after_summary["hard_fraction_after_fallback"]
+    )
+    cross_entropy_improvement = (
+        baseline_summary["smc_cross_entropy"]
+        - after_summary["smc_cross_entropy"]
+    )
+    q_is_ess_gain = (
+        after_q_is["median_ess_fraction"] - baseline_q_is["median_ess_fraction"]
+    )
+    standard_ready = bool(
+        np.isclose(after_summary["median_beta_final"], 1.0, atol=1.0e-6)
+        and after_summary["hard_fraction_after_fallback"] < training.hard_fraction_fail
+        and 0.15 <= after_summary["median_mutation_acceptance"] <= 0.60
+    )
+    selection_ready = bool(alpha_preflight["finite"] and alpha_preflight["nonzero"])
+    q_ready = bool(
+        cross_entropy_improvement > 0.0
+        and q_is_ess_gain > 0.0
+        and after_q_is["median_ess_fraction"]
+        >= training.min_validation_q_is_ess_fraction
+        and after_q_is["median_max_weight"]
+        <= training.max_validation_q_is_max_weight
+    )
+
+    def configured_ceiling(smc_config: AdaptiveBridgeSMCConfig) -> int:
+        return int(smc_config.n_particles) * (
+            1
+            + int(smc_config.max_stages)
+            * int(smc_config.steps_after_resample)
+            + int(smc_config.final_steps_at_beta1)
+        )
+
+    standard_ceiling = configured_ceiling(primary) + configured_ceiling(fallback)
+    extended_ceiling = configured_ceiling(extended)
+    receipt = {
+        "status": "DIAGNOSTIC_COMPLETE",
+        "contract": (
+            "no truth; parent prior frozen; one bounded exact-SMC cohort trains q "
+            "through stopped inclusive distillation only"
+        ),
+        "source_checkpoint": str(checkpoint),
+        "curriculum_checkpoint": str(checkpoint_path) if q_updates_applied else None,
+        "train_objects_available": original_count,
+        "exact_objects_requested": int(exact_objects),
+        "exact_objects_target_padded": target,
+        "exact_objects_collected": exact_count,
+        "extended_smc": asdict(extended),
+        "standard_primary_smc": asdict(primary),
+        "standard_fallback_smc": asdict(fallback),
+        "distillation_steps_requested": int(distillation_steps),
+        "q_updates_applied": q_updates_applied,
+        "prior_updates_applied": 0,
+        "baseline_standard": baseline_summary,
+        "after_standard": after_summary,
+        "baseline_q_only_is": baseline_q_is,
+        "after_q_only_is": after_q_is,
+        "improvement": {
+            "median_beta_final_delta": beta_gain,
+            "hard_fraction_reduction": hard_reduction,
+            "smc_cross_entropy_improvement": cross_entropy_improvement,
+            "q_only_is_ess_fraction_delta": q_is_ess_gain,
+            "q_only_is_max_weight_reduction": (
+                baseline_q_is["median_max_weight"]
+                - after_q_is["median_max_weight"]
+            ),
+        },
+        "configured_dsps_evaluation_ceiling": {
+            "unit": "latent-object DSPS forward evaluations",
+            "standard_primary_plus_fallback_per_object": standard_ceiling,
+            "extended_per_object": extended_ceiling,
+            "two_standard_passes_all_objects": 2 * original_count * standard_ceiling,
+            "extended_until_target_best_case": target * extended_ceiling,
+            "extended_all_available_objects": original_count * extended_ceiling,
+            "note": (
+                "pessimistic ceiling assuming resampling and every configured "
+                "mutation at every stage; GPU evaluations are vectorized"
+            ),
+        },
+        "selection_gradient_preflight": alpha_preflight,
+        "standard_kernel_ready_for_training_smoke": standard_ready,
+        "q_ready_for_training_smoke": q_ready,
+        "selection_gradient_ready": selection_ready,
+        "truth_used_for_training_or_selection": False,
+        "next_action": (
+            "RUN_FRESH_TRAINING_SMOKE_WITH_CURRICULUM_CHECKPOINT"
+            if standard_ready and q_ready and selection_ready
+            else "STOP_AND_REVIEW_CURRICULUM_DIAGNOSTICS"
+        ),
+    }
+    pd.DataFrame(baseline_rows + extended_rows + after_rows).to_csv(
+        out / "curriculum_e_step_log.csv", index=False
+    )
+    pd.DataFrame(q_rows).to_csv(out / "q_distillation_log.csv", index=False)
+    pd.DataFrame(baseline_hard + after_hard).to_csv(
+        out / "hard_object_queue.csv", index=False
+    )
+    write_json(out / "curriculum_receipt.json", receipt)
     (out / "DONE").touch()
     return receipt
 

@@ -125,6 +125,10 @@ amortized:
       band: lsst_r
       max_mag_ab: 25.0
       survey_noise: gaussian_m5
+      # The real DSPS pathwise derivative is non-finite at f_nu~1e-30. Keep the
+      # identical MC log(alpha) value and use the exact density-score identity
+      # for its prior gradient; beta never enters object posterior weights.
+      gradient_estimator: score_function
       n_prior_samples: 2048
       prior_sample_batch_size: 256
       gradient_preflight_samples: 512

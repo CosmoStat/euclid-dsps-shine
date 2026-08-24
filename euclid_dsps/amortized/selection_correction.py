@@ -232,6 +232,7 @@ def estimate_log_alpha_score_function_diagnostic(
     *,
     n_prior_samples: int,
     log_beta_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    prior_sample_batch_size: int | None = None,
     dtype: Any = jnp.float32,
 ) -> tuple[jnp.ndarray, jnp.ndarray, dict[str, jnp.ndarray]]:
     """Return ``log alpha`` and a score-gradient surrogate for diagnostics.
@@ -248,14 +249,32 @@ def estimate_log_alpha_score_function_diagnostic(
     count = int(n_prior_samples)
     if count <= 0:
         raise ValueError("n_prior_samples must be positive")
+    batch_size = (
+        count
+        if prior_sample_batch_size is None
+        else min(int(prior_sample_batch_size), count)
+    )
+    if batch_size <= 0:
+        raise ValueError("prior_sample_batch_size must be positive")
+    n_batches = (count + batch_size - 1) // batch_size
+    padded_count = n_batches * batch_size
     base = jax.random.normal(
         key,
-        (count, int(prior.latent_dim)),
+        (padded_count, int(prior.latent_dim)),
         dtype=dtype,
     )
-    samples, _logdet = prior.forward(base)
-    stopped_samples = jax.lax.stop_gradient(samples)
-    log_beta = jax.lax.stop_gradient(jnp.ravel(log_beta_fn(stopped_samples)))
+    batched_base = base.reshape(n_batches, batch_size, int(prior.latent_dim))
+
+    def transform_and_score(base_batch):
+        samples, _logdet = prior.forward(base_batch)
+        stopped = jax.lax.stop_gradient(samples)
+        return stopped, jax.lax.stop_gradient(log_beta_fn(stopped))
+
+    samples, log_beta = jax.lax.map(
+        jax.checkpoint(transform_and_score), batched_base
+    )
+    stopped_samples = samples.reshape(padded_count, int(prior.latent_dim))[:count]
+    log_beta = jnp.ravel(log_beta)[:count]
     log_alpha, metrics = selection_log_alpha_from_log_beta(log_beta)
     finite = jnp.isfinite(log_beta)
     any_finite = jnp.any(finite)
@@ -274,7 +293,50 @@ def estimate_log_alpha_score_function_diagnostic(
     metrics["selection/score_function_diagnostic"] = jnp.asarray(
         1.0, dtype=log_alpha.dtype
     )
+    metrics["selection/prior_sample_batch_size"] = jnp.asarray(
+        batch_size, dtype=log_alpha.dtype
+    )
     return log_alpha, score_surrogate, metrics
+
+
+def estimate_log_alpha_score_function(
+    prior: Any,
+    key: jax.Array,
+    *,
+    n_prior_samples: int,
+    log_beta_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    prior_sample_batch_size: int | None = None,
+    dtype: Any = jnp.float32,
+) -> tuple[jnp.ndarray, dict[str, jnp.ndarray]]:
+    """Estimate ``log alpha`` with its exact score-function gradient.
+
+    The returned scalar has the Monte-Carlo value ``log(mean(beta))`` and the
+    gradient
+
+    ``sum_k stop(beta_k / sum_j beta_j) * grad log p_eta(x_k)``.
+
+    This avoids differentiating through DSPS and Gaussian-m5 while preserving
+    the population selection-normalization objective. It must only be used for
+    the prior loss; selection still never enters object-level posterior weights.
+    """
+    log_alpha, score_surrogate, metrics = (
+        estimate_log_alpha_score_function_diagnostic(
+            prior,
+            key,
+            n_prior_samples=n_prior_samples,
+            log_beta_fn=log_beta_fn,
+            prior_sample_batch_size=prior_sample_batch_size,
+            dtype=dtype,
+        )
+    )
+    objective = (
+        jax.lax.stop_gradient(log_alpha - score_surrogate) + score_surrogate
+    )
+    metrics = dict(metrics)
+    metrics["selection/gradient_estimator_score_function"] = jnp.asarray(
+        1.0, dtype=log_alpha.dtype
+    )
+    return objective, metrics
 
 
 def disabled_selection_metrics(dtype: Any = jnp.float32) -> dict[str, jnp.ndarray]:

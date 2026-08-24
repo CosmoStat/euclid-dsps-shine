@@ -9,6 +9,7 @@ import numpy as np
 from euclid_dsps.amortized.config import amortized_config
 from euclid_dsps.amortized.selection_correction import (
     estimate_log_alpha_reparameterized,
+    estimate_log_alpha_score_function,
     estimate_log_alpha_score_function_diagnostic,
     observed_flux_selection_beta,
     observed_flux_selection_log_beta,
@@ -272,6 +273,62 @@ def test_selection_pathwise_score_function_and_finite_difference_agree() -> None
     )
 
 
+def test_score_function_objective_preserves_log_alpha_value_and_gradient() -> None:
+    class ShiftNormalPrior:
+        latent_dim = 1
+
+        def __init__(self, shift):
+            self.shift = shift
+
+        def forward(self, base):
+            value = base + self.shift
+            return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
+        def log_prob(self, value):
+            residual = value - self.shift
+            return -0.5 * (
+                jnp.square(residual[:, 0]) + jnp.log(2.0 * jnp.pi)
+            )
+
+    key = jax.random.PRNGKey(221)
+    samples = 65_536
+
+    def pathwise(shift):
+        value, _ = estimate_log_alpha_reparameterized(
+            ShiftNormalPrior(shift),
+            key,
+            n_prior_samples=samples,
+            prior_sample_batch_size=samples,
+            log_beta_fn=lambda latent: observed_flux_selection_log_beta(
+                latent[:, 0], jnp.asarray(0.7), jnp.asarray(0.2)
+            ),
+        )
+        return value
+
+    def score(shift):
+        return estimate_log_alpha_score_function(
+            ShiftNormalPrior(shift),
+            key,
+            n_prior_samples=samples,
+            log_beta_fn=lambda latent: observed_flux_selection_log_beta(
+                latent[:, 0], jnp.asarray(0.7), jnp.asarray(0.2)
+            ),
+        )
+
+    point = jnp.asarray(0.1)
+    score_value, metrics = score(point)
+    score_gradient = jax.grad(lambda shift: score(shift)[0])(point)
+    pathwise_value = pathwise(point)
+    pathwise_gradient = jax.grad(pathwise)(point)
+
+    assert float(metrics["selection/gradient_estimator_score_function"]) == 1.0
+    assert np.isclose(float(score_value), float(pathwise_value), rtol=1.0e-6)
+    assert np.isfinite(float(score_gradient))
+    assert np.isclose(
+        float(score_gradient), float(pathwise_gradient), rtol=3.0e-2
+    )
+
+
 def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None:
     import equinox as eqx
 
@@ -302,7 +359,32 @@ def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None
             prior_sample_batch_size=16_384,
             log_beta_fn=lambda latent: (
                 observed_flux_selection_log_beta_gaussian_m5(
-                    flux_limit * jnp.exp(latent[:, 0]),
+                    flux_limit * jnp.exp(latent[:, 1]),
+                    flux_limit,
+                    27.5,
+                    0.039,
+                    sigma_sys_mag=0.005,
+                    min_sigma_fnu_cgs=1.0e-40,
+                )
+            ),
+        )
+        return value
+
+    def score_objective(raw_shift):
+        bias = prior.layers[0].shift_net.layers[-1].bias.at[0].set(raw_shift)
+        candidate = eqx.tree_at(
+            lambda value: value.layers[0].shift_net.layers[-1].bias,
+            prior,
+            bias,
+        )
+        value, _ = estimate_log_alpha_score_function(
+            candidate,
+            key,
+            n_prior_samples=16_384,
+            prior_sample_batch_size=2048,
+            log_beta_fn=lambda latent: (
+                observed_flux_selection_log_beta_gaussian_m5(
+                    flux_limit * jnp.exp(latent[:, 1]),
                     flux_limit,
                     27.5,
                     0.039,
@@ -315,12 +397,15 @@ def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None
 
     point = jnp.asarray(0.03)
     gradient = jax.grad(objective)(point)
+    score_gradient = jax.grad(score_objective)(point)
     step = 2.0e-3
     finite_difference = (objective(point + step) - objective(point - step)) / (
         2.0 * step
     )
     assert jnp.isfinite(gradient)
+    assert jnp.isfinite(score_gradient)
     assert np.isclose(float(gradient), float(finite_difference), rtol=3.0e-2)
+    assert np.isclose(float(score_gradient), float(gradient), rtol=5.0e-2)
 
 
 def test_chunked_log_alpha_matches_single_batch_and_preserves_sample_count() -> None:

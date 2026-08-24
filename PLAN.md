@@ -1,5 +1,47 @@
 # Plan
 
+## 2026-08-24 Exact-cohort SMC bootstrap
+
+- Status: implemented and locally validated; Jean-Zay curriculum remains
+  unexecuted. Frozen pilot `1311562` completed successfully and
+  isolated the remaining scientific blockers: RW-MH acceptance is healthy
+  (median 0.232) and particles move, but the standard fallback reaches only
+  median beta 0.265, leaving 77.1% hard; the real pathwise Gaussian-m5
+  selection gradient remains non-finite while its score-function identity is
+  finite.
+- Add one bounded exact-cohort curriculum that runs an extended bridge only
+  until it has enough beta=1 eligible objects for one q macro-distillation,
+  then immediately reruns the frozen standard-budget E-step on the same fixed
+  cohort. It must never update the parent prior or submit production.
+- Add an explicit selection-gradient estimator contract. Preserve the scalar
+  `+log(alpha_eta)` objective, allow an exact score-function gradient surrogate
+  only when configured, and retain pathwise and finite-difference diagnostics.
+- Keep r0, the canonical target, the conditional RealNVP, DSPS, Student-t2,
+  Gaussian-m5 completeness, no-truth inputs, and all fail-closed gates
+  unchanged.
+- Add focused tests, cost accounting, immutable Jean-Zay launch/validation
+  scripts, and leave the big run unauthorized until the post-distillation
+  standard-budget pilot passes.
+- Implemented a diagnostic-only 4-H100 curriculum with a baseline standard
+  frozen E-step, a bounded K=128 / 48-stage exact cohort that stops after at
+  least 32 eligible beta=1 objects, four stopped inclusive-q distillation
+  steps, and a common-random-number standard-budget E-step plus q-only IS
+  comparison after the update. The parent prior is never updated.
+- Promoted the exact score identity for the selection gradient behind
+  `gradient_estimator: score_function`: the returned loss value remains the
+  same Monte-Carlo `log(alpha_eta)`, while its gradient is the stopped
+  beta-weighted prior score. DSPS/Gaussian-m5 evaluation remains chunked and
+  pathwise/score diagnostics are both retained.
+- The receipt records pessimistic latent-object DSPS evaluation ceilings,
+  exact-object yield, q gradient/clipping, SMC cross-entropy change, q-only IS
+  ESS/max-weight change, and standard-budget beta/hard-fraction change. It
+  cannot authorize a training smoke unless all three kernel, q and selection
+  gates pass.
+- Local verification: 91 focused adaptive-SMC, selection, canonical-target and
+  exact-posterior tests pass; the score gradient matches pathwise and finite
+  differences on shift-normal and active RealNVP directions. Ruff, compileall,
+  shell syntax and diff checks pass. No remote job was submitted.
+
 ## 2026-08-24 Adaptive-SMC E-step isolation
 
 - Status: implementation complete and locally validated; the frozen H100 pilot
