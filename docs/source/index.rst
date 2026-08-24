@@ -33,7 +33,8 @@ Where to Start
      - :doc:`spline15d_realnvp`, :doc:`prior_learning`
      - ``configs/prior_feniks_spline15d_realnvp.yaml``
    * - Run amortized inference
-     - :doc:`amortized_inference`, :doc:`conditional_posterior_matrix`
+     - :doc:`amortized_inference`, :doc:`conditional_posterior_matrix`,
+       :doc:`sc_asmc_em`
      - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
    * - Use HLTDS/FS2 debug references
      - :doc:`data_download`, :doc:`diffsky_dataset`
@@ -110,6 +111,7 @@ parameters physically.
    joint_prior_realnvp_matrix
    mode_covering_posterior_matrix
    selfsupervised_rws_matrix
+   sc_asmc_em
    feniks_prior_ladder_jlens
    science_assessment
    ssp_compression

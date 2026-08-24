@@ -1,5 +1,75 @@
 # Plan
 
+## 2026-08-24 Selection-Corrected Amortized SMC-EM
+
+- Status: implementation complete and locally validated on
+  `feature/feniks-exact-posterior-benchmark` at base commit `179053c`. No
+  Jean-Zay job may be submitted from this phase; the final launcher remains
+  fail-closed on one hash-bound immutable four-H100 smoke, followed by its
+  integrated 512-object budget preflight.
+- Infer the parent population only inside the existing FENIKS refinement and
+  catalogue-support domain C0. The target is `p_eta(theta | C0)` and the only
+  explicitly corrected additional selection is
+  `A = 1[m_r_observed < 25]`. Audit and hash upstream provenance without
+  regenerating the dataset.
+- Keep training, both E-steps, both M-steps, checkpoint selection and preflight
+  strictly no-truth. Remove truth mappings before catalogue reads and reserve
+  truth for a separate post-freeze closure command.
+- Use one Gaussian observation family for object targets, sleep generation and
+  Gaussian-PhotoErr completeness. Retain Student-t2 only as an explicit
+  robustness ablation. Selection normalization enters only the prior M-step;
+  beta and alpha never enter normalized object posterior weights.
+- Add the config-only `bounded_mixed_warp`, 18-band observed-data feature
+  statistics, the shared residual photometry trunk with a direct 128D flow
+  context, a six-layer identity-initialized conditional RealNVP q, and an
+  eight-layer identity-initialized RealNVP population prior. Train all three
+  learned components from scratch.
+- Bootstrap q with 10--15 epochs of post-noise selected Gaussian sleep and EMA,
+  then run exactly two generalized-EM iterations with phase snapshots and
+  frozen persistent posterior banks. Never update q and p from changing
+  particles.
+- Add the ordinary-IS fast path followed by primary K64, fallback K128 and
+  extended hard-only K128 adaptive SMC. Begin with the integrated stratified
+  512-object budget preflight; allow one bounded active bootstrap and abort
+  cleanly if the repeated preflight fails.
+- Persist sharded, atomically completed posterior banks with hashes, resume,
+  validation, streaming merge, prior-ratio reweighting and selective refresh.
+  Produce a fail-closed no-truth receipt and report containing the C0 statement,
+  population/individual diagnostics, predictive photometry, method fractions,
+  runtime and selection-gradient diagnostics.
+- Provide independent 4/8/16-H100 object-sharded launchers, with four independent
+  four-GPU E-step shards at 16 GPUs and no fragile multi-host collective. Keep
+  NUTS entirely outside training and expose only a separate post-training
+  4--8-object validation command.
+- Pre-implementation estimate for 15 latents: q has 2,432,082 trainable
+  parameters with 36 features (2,441,298 with 54 mask-augmented features), the
+  prior has 1,179,888, and the total is 3,611,970 or 3,621,186. For the
+  historical 8,376 selected rows, budget roughly 10--14 million DSPS latent
+  evaluations and 24--32 h on four H100s, 12--16 h on eight, or 6--8 h on
+  sixteen; the measured preflight supersedes these provisional bounds.
+- Final implementation verification: the 54-input q has 2,441,298 trainable
+  parameters, the prior has 1,179,888, and the total is 3,621,186. The complete
+  repository suite passes (`695 passed, 8 skipped`), together with Ruff,
+  `compileall`, shell syntax, CLI help and `git diff --check`. The prior and q
+  conditional flows are identity initialized through exactly zero final
+  layers; the prior identity check gives zero displacement and zero logdet.
+- Resume provenance is fail-closed across the canonical configuration,
+  dataset, row manifests, latent transform, feature statistics, q/q-EMA/prior
+  snapshots, bank shards, active bootstrap, M-steps, distillation, XLA
+  auto-tuning, report and final frozen model. Production launchers require a
+  matching hash-bound four-H100 smoke from the same dataset, configuration and
+  commit before they enter the two-iteration workflow.
+- Remaining external gates: the configured FENIKS parquet is absent from this
+  checkout, so the asset-backed local smoke, four-H100 smoke, measured
+  512-object preflight, full-catalogue run, final report and truth closure have
+  not run. Sphinx and ShellCheck are unavailable locally; `bash -n` covers all
+  launchers. No dataset was regenerated and no Jean-Zay job was submitted.
+- Launch sequencing is now explicit and fail-closed: one four-H100 smoke, then
+  a dependent 16-H100 scaling smoke over four disjoint eight-object cohorts,
+  then the dependent full 16-H100 run. Production validates the four-H100
+  receipt and all four scaling-smoke receipts against the same dataset,
+  canonical configuration and commit.
+
 ## 2026-08-24 Exact-cohort SMC bootstrap
 
 - Status: runtime recovery in progress. Jean-Zay curriculum job `1313481`
