@@ -1945,7 +1945,19 @@ def load_checkpoint(
     try:
         model = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
-        _raise_realnvp_mask_checkpoint_error(path, exc)
+        if _checkpoint_requires_float64_template(exc):
+            if not bool(jax.config.jax_enable_x64):
+                raise RuntimeError(
+                    f"Checkpoint {path} contains float64 model parameters. "
+                    "Set JAX_ENABLE_X64=true before importing JAX."
+                ) from exc
+            template = jax.tree_util.tree_map(
+                _promote_floating_checkpoint_leaf_to_float64,
+                template,
+            )
+            model = eqx.tree_deserialise_leaves(path, template)
+        else:
+            _raise_realnvp_mask_checkpoint_error(path, exc)
     if isinstance(model.prior, (RealNVPPrior, RQSplineCouplingPrior)):
         roundtrip_fail_atol = _checkpoint_prior_roundtrip_fail_atol(config)
         assert_flow_integrity(
@@ -1955,6 +1967,17 @@ def load_checkpoint(
             roundtrip_fail_atol=roundtrip_fail_atol,
         )
     return model
+
+
+def _checkpoint_requires_float64_template(exc: RuntimeError) -> bool:
+    message = str(exc)
+    return "changed dtype from float32" in message and "to float64 on disk" in message
+
+
+def _promote_floating_checkpoint_leaf_to_float64(value):
+    if eqx.is_array(value) and jnp.issubdtype(value.dtype, jnp.floating):
+        return value.astype(jnp.float64)
+    return value
 
 
 def _checkpoint_prior_roundtrip_fail_atol(config: dict[str, Any]) -> float:

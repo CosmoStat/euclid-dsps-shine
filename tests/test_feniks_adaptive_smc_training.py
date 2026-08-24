@@ -114,6 +114,60 @@ def test_smoke_runs_a_minimum_number_of_fresh_sleep_updates() -> None:
     assert smoke.observed_sweeps == 1
 
 
+def test_float64_adaptive_checkpoint_loads_with_promoted_template(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "model.eqx"
+    code = textwrap.dedent(
+        f"""
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        from euclid_dsps.config import load_config
+        from euclid_dsps.amortized.train import (
+            _latent_spec_for_amortized_config,
+            _promote_floating_checkpoint_leaf_to_float64,
+            build_amortized_model,
+            load_checkpoint,
+        )
+        config = load_config(
+            'configs/experiments/'
+            'feniks_selfsup_adaptive_smcwake_parentprior_selection_r25.yaml'
+        )
+        spec = _latent_spec_for_amortized_config(config)
+        model = build_amortized_model(config, jax.random.PRNGKey(0), latent_spec=spec)
+        model = jax.tree_util.tree_map(
+            _promote_floating_checkpoint_leaf_to_float64, model
+        )
+        path = {str(checkpoint)!r}
+        eqx.tree_serialise_leaves(path, model)
+        restored = load_checkpoint(path, config)
+        leaves = [x for x in jax.tree_util.tree_leaves(restored) if eqx.is_array(x)]
+        assert any(jnp.issubdtype(x.dtype, jnp.floating) for x in leaves)
+        assert all(
+            x.dtype == jnp.float64
+            for x in leaves
+            if jnp.issubdtype(x.dtype, jnp.floating)
+        )
+        print('PASS')
+        """
+    )
+    env = dict(os.environ)
+    env["JAX_ENABLE_X64"] = "true"
+    env["JAX_PLATFORMS"] = "cpu"
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=Path.cwd(),
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "PASS" in completed.stdout
+
+
 def test_final_receipt_requires_q_only_importance_support() -> None:
     config = _production_config()
     training = adaptive_training_config(config)

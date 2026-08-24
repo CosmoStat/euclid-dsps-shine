@@ -32,6 +32,12 @@
   19 selection tests and focused receipt/movement regressions pass; Ruff,
   compileall, shell syntax and diff checks pass. The repository-wide suite was
   stopped after 11% because of its local runtime and is not claimed complete.
+- The first frozen pilot job `1310704` failed before SMC because the trained
+  bootstrap checkpoint contains float64 parameters while a fresh Equinox
+  template retained two float32 bias leaves. The checkpoint loader now retries
+  with an all-floating-leaves float64 template when that exact mismatch is
+  detected, and the pilot explicitly enables JAX x64. A subprocess regression
+  serializes and reloads this mixed-template/float64-checkpoint case.
 
 ## 2026-08-22 Adaptive-SMC measured remediation
 
