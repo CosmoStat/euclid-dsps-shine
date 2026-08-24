@@ -663,6 +663,17 @@ def _shard_features(features: jnp.ndarray, n_devices: int) -> jnp.ndarray:
     return values.reshape(int(n_devices), values.shape[0] // int(n_devices), -1)
 
 
+def _remove_named_sharding(tree):
+    """Materialize array leaves through host memory before a new pmap axis."""
+
+    def materialize(leaf):
+        if not eqx.is_array(leaf):
+            return leaf
+        return jnp.asarray(np.asarray(jax.device_get(leaf)))
+
+    return jax.tree_util.tree_map(materialize, tree)
+
+
 def _replicate_model_for_pmap(model, devices: tuple[Any, ...]):
     """Build a fresh leading device axis without retaining an old mesh.
 
@@ -1770,6 +1781,8 @@ def train_feniks_adaptive_smc(
                     combined_posterior, selected
                 )
                 macro_features = jnp.take(combined_features, selected, axis=0)
+                macro_posterior = _remove_named_sharding(macro_posterior)
+                macro_features = _remove_named_sharding(macro_features)
                 sharded_posterior = _shard_posterior(
                     macro_posterior, n_devices
                 )
@@ -2475,6 +2488,10 @@ def run_feniks_adaptive_smc_q_curriculum(
         selected = np.arange(target, dtype=np.int32)
         macro_posterior = _take_posterior_objects(combined_posterior, selected)
         macro_features = jnp.take(combined_features, selected, axis=0)
+        # Direct E-step output is committed to filter_pmap's internal mesh.
+        # Rebuild plain arrays before passing them to the independent q pmap.
+        macro_posterior = _remove_named_sharding(macro_posterior)
+        macro_features = _remove_named_sharding(macro_features)
         q_optimizer = make_component_optimizer(
             learning_rate=training.q_smc_learning_rate,
             gradient_clip_norm=training.q_gradient_clip_norm,

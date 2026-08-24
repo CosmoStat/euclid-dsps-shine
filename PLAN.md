@@ -51,6 +51,18 @@
   caused job `1313481` to fail. Focused config/selection tests pass again
   (`26 passed`), together with Ruff, compileall and diff checks. Relaunch in a
   fresh output root; `1313481` contains no scientific result.
+- Second runtime recovery in progress: job `1314730` validated the extended
+  bridge scientifically on its first batch (32/32 eligible, median beta=1,
+  acceptance 0.184), then failed before q distillation because its K=128
+  posterior retained the internal mesh of the E-step `pmap`. Host-materialize
+  the stopped posterior/features before rebuilding the explicit device axis,
+  mirroring the existing post-prior-update replica-layout repair.
+- Implemented that mesh reset for both curriculum and production q macro
+  updates. The two-device regression exercises the host-materialized posterior
+  through q distillation, prior M-step and a second q distillation; the focused
+  config/selection suite passes (`26 passed`) with Ruff, compileall and diff
+  checks. Job `1314730` establishes extended-SMC feasibility but remains an
+  incomplete artifact because no q update or receipt was written.
 
 ## 2026-08-24 Adaptive-SMC E-step isolation
 

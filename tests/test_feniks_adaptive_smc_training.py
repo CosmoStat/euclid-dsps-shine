@@ -375,8 +375,8 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             make_component_optimizer, make_pmap_q_smc_step, snapshot_model
         )
         from euclid_dsps.amortized.adaptive_smc_trainer import (
-            _replicate_model_for_pmap, _replicate_tree, _shard_posterior,
-            _unreplicate_tree
+            _remove_named_sharding, _replicate_model_for_pmap,
+            _replicate_tree, _shard_posterior, _unreplicate_tree
         )
         from euclid_dsps.amortized.elbo import AmortizedModel
         from euclid_dsps.amortized.flows import RealNVPPrior
@@ -450,13 +450,16 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             fallback_attempted=jnp.zeros((2*N,), dtype=bool),
             fallback_succeeded=jnp.zeros((2*N,), dtype=bool),
         )
+        posterior = _remove_named_sharding(posterior)
         qopt = make_component_optimizer(
             learning_rate=1e-3, gradient_clip_norm=5.0, weight_decay=0.0
         )
         qstate = qopt.init(eqx.filter(model.encoder, eqx.is_inexact_array))
         devices = tuple(jax.local_devices())
         pstep = make_pmap_q_smc_step(optimizer=qopt, gradient_clip_norm=5.0)
-        features = jax.random.normal(jax.random.PRNGKey(4), (2*N, 6)).reshape(2, N, 6)
+        features = _remove_named_sharding(
+            jax.random.normal(jax.random.PRNGKey(4), (2*N, 6))
+        ).reshape(2, N, 6)
         model_rep, qstate_rep, _metrics, step_metrics = pstep(
             _replicate_tree(model, devices), _replicate_tree(qstate, devices),
             features, _shard_posterior(posterior, 2)
