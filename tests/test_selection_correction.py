@@ -225,9 +225,7 @@ def test_selection_pathwise_score_function_and_finite_difference_agree() -> None
 
         def log_prob(self, value):
             residual = value - self.shift
-            return -0.5 * (
-                jnp.square(residual[:, 0]) + jnp.log(2.0 * jnp.pi)
-            )
+            return -0.5 * (jnp.square(residual[:, 0]) + jnp.log(2.0 * jnp.pi))
 
     key = jax.random.PRNGKey(211)
     samples = 65_536
@@ -247,9 +245,8 @@ def test_selection_pathwise_score_function_and_finite_difference_agree() -> None
     shift = jnp.asarray(0.1)
     pathwise_gradient = jax.grad(pathwise)(shift)
     step = 2.0e-3
-    finite_difference = (pathwise(shift + step) - pathwise(shift - step)) / (
-        2.0 * step
-    )
+    finite_difference = (pathwise(shift + step) - pathwise(shift - step)) / (2.0 * step)
+
     def score_surrogate(value):
         _score_value, surrogate, _metrics = (
             estimate_log_alpha_score_function_diagnostic(
@@ -267,9 +264,7 @@ def test_selection_pathwise_score_function_and_finite_difference_agree() -> None
 
     assert jnp.isfinite(pathwise_gradient)
     assert jnp.isfinite(score_shift_gradient)
-    assert np.isclose(
-        float(pathwise_gradient), float(finite_difference), rtol=2.0e-2
-    )
+    assert np.isclose(float(pathwise_gradient), float(finite_difference), rtol=2.0e-2)
     assert np.isclose(
         float(score_shift_gradient), float(pathwise_gradient), rtol=3.0e-2
     )
@@ -288,9 +283,7 @@ def test_score_function_objective_preserves_log_alpha_value_and_gradient() -> No
 
         def log_prob(self, value):
             residual = value - self.shift
-            return -0.5 * (
-                jnp.square(residual[:, 0]) + jnp.log(2.0 * jnp.pi)
-            )
+            return -0.5 * (jnp.square(residual[:, 0]) + jnp.log(2.0 * jnp.pi))
 
     key = jax.random.PRNGKey(221)
     samples = 65_536
@@ -326,9 +319,7 @@ def test_score_function_objective_preserves_log_alpha_value_and_gradient() -> No
     assert float(metrics["selection/gradient_estimator_score_function"]) == 1.0
     assert np.isclose(float(score_value), float(pathwise_value), rtol=1.0e-6)
     assert np.isfinite(float(score_gradient))
-    assert np.isclose(
-        float(score_gradient), float(pathwise_gradient), rtol=3.0e-2
-    )
+    assert np.isclose(float(score_gradient), float(pathwise_gradient), rtol=3.0e-2)
 
 
 def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None:
@@ -357,17 +348,15 @@ def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None
         value, _ = estimate_log_alpha_reparameterized(
             candidate,
             key,
-            n_prior_samples=16_384,
-            prior_sample_batch_size=16_384,
-            log_beta_fn=lambda latent: (
-                observed_flux_selection_log_beta_gaussian_m5(
-                    flux_limit * jnp.exp(latent[:, 1]),
-                    flux_limit,
-                    27.5,
-                    0.039,
-                    sigma_sys_mag=0.005,
-                    min_sigma_fnu_cgs=1.0e-40,
-                )
+            n_prior_samples=32_768,
+            prior_sample_batch_size=32_768,
+            log_beta_fn=lambda latent: observed_flux_selection_log_beta_gaussian_m5(
+                flux_limit * jnp.exp(latent[:, 1]),
+                flux_limit,
+                27.5,
+                0.039,
+                sigma_sys_mag=0.005,
+                min_sigma_fnu_cgs=1.0e-40,
             ),
         )
         return value
@@ -382,17 +371,15 @@ def test_identity_realnvp_selection_gradient_matches_finite_difference() -> None
         value, _ = estimate_log_alpha_score_function(
             candidate,
             key,
-            n_prior_samples=16_384,
+            n_prior_samples=32_768,
             prior_sample_batch_size=2048,
-            log_beta_fn=lambda latent: (
-                observed_flux_selection_log_beta_gaussian_m5(
-                    flux_limit * jnp.exp(latent[:, 1]),
-                    flux_limit,
-                    27.5,
-                    0.039,
-                    sigma_sys_mag=0.005,
-                    min_sigma_fnu_cgs=1.0e-40,
-                )
+            log_beta_fn=lambda latent: observed_flux_selection_log_beta_gaussian_m5(
+                flux_limit * jnp.exp(latent[:, 1]),
+                flux_limit,
+                27.5,
+                0.039,
+                sigma_sys_mag=0.005,
+                min_sigma_fnu_cgs=1.0e-40,
             ),
         )
         return value
@@ -484,8 +471,7 @@ def test_selection_aware_feniks_config_separates_likelihood_and_survey_noise() -
 
 def test_adaptive_smc_runtime_preserves_score_function_estimator() -> None:
     config = load_config(
-        CONFIG_DIR
-        / "feniks_selfsup_adaptive_smcwake_parentprior_selection_r25.yaml"
+        CONFIG_DIR / "feniks_selfsup_adaptive_smcwake_parentprior_selection_r25.yaml"
     )
     stats = FeatureStats(
         flux_scale=np.ones(1),

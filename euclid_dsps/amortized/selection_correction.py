@@ -112,23 +112,16 @@ def observed_flux_selection_log_beta_gaussian_m5(
     flux_scaled = flux / unit
     limit_scaled = limit / unit
     f5_scaled = f5 / unit
-    sigma2_scaled = (
-        (jnp.asarray(0.04, dtype=dtype) - gamma_array)
-        * jnp.abs(flux_scaled)
-        * f5_scaled
-        + gamma_array * jnp.square(f5_scaled)
-    )
+    sigma2_scaled = (jnp.asarray(0.04, dtype=dtype) - gamma_array) * jnp.abs(
+        flux_scaled
+    ) * f5_scaled + gamma_array * jnp.square(f5_scaled)
     if float(sigma_sys_mag) > 0.0:
         sys_fraction = jnp.expm1(
-            jnp.log(jnp.asarray(10.0, dtype=dtype))
-            * float(sigma_sys_mag)
-            / 2.5
+            jnp.log(jnp.asarray(10.0, dtype=dtype)) * float(sigma_sys_mag) / 2.5
         )
         sigma2_scaled = sigma2_scaled + jnp.square(sys_fraction * flux_scaled)
     floor_scaled = jnp.asarray(min_sigma_fnu_cgs, dtype=dtype) / unit
-    sigma_scaled = jnp.sqrt(
-        jnp.maximum(sigma2_scaled, jnp.square(floor_scaled))
-    )
+    sigma_scaled = jnp.sqrt(jnp.maximum(sigma2_scaled, jnp.square(floor_scaled)))
     return observed_flux_selection_log_beta(
         flux_scaled,
         sigma_scaled,
@@ -239,7 +232,7 @@ def estimate_log_alpha_score_function_diagnostic(
 
     The scalar surrogate has the score-function gradient
 
-    ``E[p_eta(x) beta(x) / alpha_eta * grad log p_eta(x)]``.
+    ``sum_k (normalized_beta_k - 1/M) * grad log p_eta(x_k)``.
 
     Its value is not ``log alpha`` and it must not replace the pathwise
     production objective without an explicit scientific decision. Samples,
@@ -270,9 +263,7 @@ def estimate_log_alpha_score_function_diagnostic(
         stopped = jax.lax.stop_gradient(samples)
         return stopped, jax.lax.stop_gradient(log_beta_fn(stopped))
 
-    samples, log_beta = jax.lax.map(
-        jax.checkpoint(transform_and_score), batched_base
-    )
+    samples, log_beta = jax.lax.map(jax.checkpoint(transform_and_score), batched_base)
     stopped_samples = samples.reshape(padded_count, int(prior.latent_dim))[:count]
     log_beta = jnp.ravel(log_beta)[:count]
     log_alpha, metrics = selection_log_alpha_from_log_beta(log_beta)
@@ -281,9 +272,9 @@ def estimate_log_alpha_score_function_diagnostic(
     safe_log_beta = jnp.where(finite, log_beta, -jnp.inf)
     safe_log_beta = jnp.where(any_finite, safe_log_beta, jnp.zeros_like(log_beta))
     selection_weights = jax.lax.stop_gradient(jax.nn.softmax(safe_log_beta))
-    score_surrogate = jnp.sum(
-        selection_weights * prior.log_prob(stopped_samples)
-    )
+    uniform_weight = jnp.asarray(1.0 / count, dtype=selection_weights.dtype)
+    centered_weights = jax.lax.stop_gradient(selection_weights - uniform_weight)
+    score_surrogate = jnp.sum(centered_weights * prior.log_prob(stopped_samples))
     score_surrogate = jnp.where(
         any_finite,
         score_surrogate,
@@ -295,6 +286,17 @@ def estimate_log_alpha_score_function_diagnostic(
     )
     metrics["selection/prior_sample_batch_size"] = jnp.asarray(
         batch_size, dtype=log_alpha.dtype
+    )
+    metrics["selection/score_weight_ess"] = 1.0 / jnp.sum(jnp.square(selection_weights))
+    metrics["selection/score_weight_ess_fraction"] = metrics[
+        "selection/score_weight_ess"
+    ] / float(count)
+    metrics["selection/maximum_score_weight"] = jnp.max(selection_weights)
+    metrics["selection/score_weights_finite"] = jnp.all(
+        jnp.isfinite(selection_weights)
+    ).astype(log_alpha.dtype)
+    metrics["selection/score_control_variate_centered"] = jnp.asarray(
+        1.0, dtype=log_alpha.dtype
     )
     return log_alpha, score_surrogate, metrics
 
@@ -313,25 +315,21 @@ def estimate_log_alpha_score_function(
     The returned scalar has the Monte-Carlo value ``log(mean(beta))`` and the
     gradient
 
-    ``sum_k stop(beta_k / sum_j beta_j) * grad log p_eta(x_k)``.
+    ``sum_k stop(beta_k / sum_j beta_j - 1/M) * grad log p_eta(x_k)``.
 
     This avoids differentiating through DSPS and Gaussian-m5 while preserving
     the population selection-normalization objective. It must only be used for
     the prior loss; selection still never enters object-level posterior weights.
     """
-    log_alpha, score_surrogate, metrics = (
-        estimate_log_alpha_score_function_diagnostic(
-            prior,
-            key,
-            n_prior_samples=n_prior_samples,
-            log_beta_fn=log_beta_fn,
-            prior_sample_batch_size=prior_sample_batch_size,
-            dtype=dtype,
-        )
+    log_alpha, score_surrogate, metrics = estimate_log_alpha_score_function_diagnostic(
+        prior,
+        key,
+        n_prior_samples=n_prior_samples,
+        log_beta_fn=log_beta_fn,
+        prior_sample_batch_size=prior_sample_batch_size,
+        dtype=dtype,
     )
-    objective = (
-        jax.lax.stop_gradient(log_alpha - score_surrogate) + score_surrogate
-    )
+    objective = jax.lax.stop_gradient(log_alpha - score_surrogate) + score_surrogate
     metrics = dict(metrics)
     metrics["selection/gradient_estimator_score_function"] = jnp.asarray(
         1.0, dtype=log_alpha.dtype
@@ -358,4 +356,9 @@ def disabled_selection_metrics(dtype: Any = jnp.float32) -> dict[str, jnp.ndarra
         "selection/prior_sample_batch_size": zero,
         "selection/alpha_mc_error": zero,
         "selection/alpha_mc_relative_error": zero,
+        "selection/score_weight_ess": zero,
+        "selection/score_weight_ess_fraction": zero,
+        "selection/maximum_score_weight": zero,
+        "selection/score_weights_finite": jnp.asarray(1.0, dtype=dtype),
+        "selection/score_control_variate_centered": zero,
     }

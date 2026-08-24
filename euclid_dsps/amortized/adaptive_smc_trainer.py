@@ -49,6 +49,7 @@ from .latent import (
     latent_spec_hash,
     latent_spec_to_jsonable,
     write_latent_prior_geometry,
+    write_latent_transform_provenance,
 )
 from .posterior import posterior_entropy_diagnostics
 from .selection_correction import (
@@ -147,9 +148,7 @@ def adaptive_training_config(config: dict[str, Any]) -> AdaptiveTrainingConfig:
         bootstrap_sleep_epochs=int(raw.get("bootstrap_sleep_epochs", 12)),
         observed_sweeps=int(raw.get("observed_sweeps", 3)),
         micro_batch_size=int(raw.get("micro_batch_size", 128)),
-        q_smc_macro_eligible_objects=int(
-            raw.get("q_smc_macro_eligible_objects", 32)
-        ),
+        q_smc_macro_eligible_objects=int(raw.get("q_smc_macro_eligible_objects", 32)),
         prior_macro_objects=int(raw.get("prior_macro_objects", 512)),
         min_prior_macro_objects=int(raw.get("min_prior_macro_objects", 128)),
         fallback_batch_size=int(raw.get("fallback_batch_size", 32)),
@@ -160,23 +159,15 @@ def adaptive_training_config(config: dict[str, Any]) -> AdaptiveTrainingConfig:
         q_smc_learning_rate=float(raw.get("q_smc_learning_rate", 2.0e-5)),
         prior_learning_rate=float(raw.get("prior_learning_rate", 1.0e-5)),
         weight_decay=float(raw.get("weight_decay", 1.0e-6)),
-        q_gradient_clip_norm=float(
-            raw.get("q_gradient_clip_norm", legacy_clip)
-        ),
+        q_gradient_clip_norm=float(raw.get("q_gradient_clip_norm", legacy_clip)),
         prior_gradient_clip_norm=float(
             raw.get("prior_gradient_clip_norm", legacy_clip)
         ),
-        smoke_min_bootstrap_updates=int(
-            raw.get("smoke_min_bootstrap_updates", 128)
-        ),
+        smoke_min_bootstrap_updates=int(raw.get("smoke_min_bootstrap_updates", 128)),
         trust_strength=float(raw.get("trust_strength", 0.2)),
         trust_samples=int(raw.get("trust_samples", 512)),
-        max_prior_kl_per_dimension=float(
-            raw.get("max_prior_kl_per_dimension", 0.05)
-        ),
-        max_alpha_mc_relative_error=float(
-            raw.get("max_alpha_mc_relative_error", 0.15)
-        ),
+        max_prior_kl_per_dimension=float(raw.get("max_prior_kl_per_dimension", 0.05)),
+        max_alpha_mc_relative_error=float(raw.get("max_alpha_mc_relative_error", 0.15)),
         validation_objects=int(raw.get("validation_objects", 32)),
         validation_q_is_particles=int(raw.get("validation_q_is_particles", 64)),
         min_validation_q_is_ess_fraction=float(
@@ -205,9 +196,7 @@ def adaptive_smc_configs(config: dict[str, Any]):
         steps_after_resample=int(raw.get("steps_after_resample", 2)),
         final_steps_at_beta1=int(raw.get("final_steps_at_beta1", 1)),
         rw_scale=float(raw.get("rw_scale", 0.60)),
-        rw_adapt_target_acceptance=float(
-            raw.get("rw_adapt_target_acceptance", 0.30)
-        ),
+        rw_adapt_target_acceptance=float(raw.get("rw_adapt_target_acceptance", 0.30)),
         rw_adapt_rate=float(raw.get("rw_adapt_rate", 1.0)),
         rw_scale_min=float(raw.get("rw_scale_min", 0.15)),
         rw_scale_max=float(raw.get("rw_scale_max", 1.0)),
@@ -249,15 +238,9 @@ def adaptive_smc_configs(config: dict[str, Any]):
                 primary.rw_adapt_target_acceptance,
             )
         ),
-        rw_adapt_rate=float(
-            fallback_raw.get("rw_adapt_rate", primary.rw_adapt_rate)
-        ),
-        rw_scale_min=float(
-            fallback_raw.get("rw_scale_min", primary.rw_scale_min)
-        ),
-        rw_scale_max=float(
-            fallback_raw.get("rw_scale_max", primary.rw_scale_max)
-        ),
+        rw_adapt_rate=float(fallback_raw.get("rw_adapt_rate", primary.rw_adapt_rate)),
+        rw_scale_min=float(fallback_raw.get("rw_scale_min", primary.rw_scale_min)),
+        rw_scale_max=float(fallback_raw.get("rw_scale_max", primary.rw_scale_max)),
         hard_final_ess_fraction=float(
             fallback_raw.get(
                 "hard_final_ess_fraction",
@@ -293,9 +276,7 @@ def adaptive_smc_configs(config: dict[str, Any]):
         posterior_tempered_fraction=float(
             proposal_raw.get("posterior_tempered_fraction", 0.20)
         ),
-        posterior_temperature=float(
-            proposal_raw.get("posterior_temperature", 1.50)
-        ),
+        posterior_temperature=float(proposal_raw.get("posterior_temperature", 1.50)),
         prior_fraction=float(proposal_raw.get("prior_fraction", 0.10)),
     )
     _validate_runtime_configs(primary, fallback, proposal)
@@ -380,6 +361,8 @@ def prepare_adaptive_training_runtime(
         train_arrays.mask,
         band_names=train_arrays.band_names,
         flux_transform=str(cfg["features"].get("flux_transform", "asinh")),
+        append_mask=bool(cfg["features"].get("append_mask", False)),
+        error_epsilon=float(cfg["features"].get("error_epsilon", 1.0e-6)),
     )
     write_feature_stats(out / "feature_stats.json", feature_stats)
     filters = load_filters(runtime_config["bands"])
@@ -393,17 +376,22 @@ def prepare_adaptive_training_runtime(
     )
     model_args = dynamic_model_args(context)
     latent_spec = _latent_spec_for_amortized_config(runtime_config)
-    if latent_spec.normalization != "standardized_logit":
+    if latent_spec.normalization not in {
+        "standardized_logit",
+        "bounded_mixed_warp",
+    }:
         raise ValueError(
             "strict self-supervised production requires bounds-based "
-            "standardized_logit coordinates"
+            "standardized_logit or bounded_mixed_warp coordinates"
         )
     if cfg["latent"].get("normalization_checkpoint"):
         raise ValueError("truth-derived normalization checkpoints are forbidden")
     if str(cfg["prior"].get("source")) not in {"joint_realnvp", "realnvp"}:
         raise ValueError("production parent prior must be a broad joint_realnvp")
     if cfg["prior"].get("checkpoint"):
-        raise ValueError("production parent prior must not load a truth-trained checkpoint")
+        raise ValueError(
+            "production parent prior must not load a truth-trained checkpoint"
+        )
     latent_payload = latent_spec_to_jsonable(latent_spec)
     latent_payload.update(
         {
@@ -414,6 +402,11 @@ def prepare_adaptive_training_runtime(
         }
     )
     write_json(out / "effective_latent_spec.json", latent_payload)
+    write_latent_transform_provenance(
+        out / "latent_transform_provenance.json",
+        runtime_config,
+        latent_spec,
+    )
     write_latent_prior_geometry(
         runtime_config,
         out,
@@ -457,9 +450,7 @@ def prepare_adaptive_training_runtime(
         model_args=model_args,
         parameter_names=latent_spec.names,
         likelihood_config=dict(cfg["likelihood"]),
-        calibration_config={
-            "calibration": runtime_config.get("calibration", {}) or {}
-        },
+        calibration_config={"calibration": runtime_config.get("calibration", {}) or {}},
         sleep_objective_config=sleep_objective,
         selection_objective_config=selection_objective,
         feature_stats=feature_stats,
@@ -595,9 +586,9 @@ def _shard_posterior(posterior: SMCPosteriorBatch, n_devices: int):
 
     def particle_object(value):
         value = jnp.asarray(value)
-        return value.reshape(value.shape[0], devices, local, *value.shape[2:]).transpose(
-            1, 0, 2, *range(3, value.ndim + 1)
-        )
+        return value.reshape(
+            value.shape[0], devices, local, *value.shape[2:]
+        ).transpose(1, 0, 2, *range(3, value.ndim + 1))
 
     def objects(value):
         value = jnp.asarray(value)
@@ -616,9 +607,7 @@ def _shard_posterior(posterior: SMCPosteriorBatch, n_devices: int):
         ancestor_ess=objects(posterior.ancestor_ess),
         ancestor_ess_fraction=objects(posterior.ancestor_ess_fraction),
         epsilon_squared_jump=objects(posterior.epsilon_squared_jump),
-        median_epsilon_squared_jump=objects(
-            posterior.median_epsilon_squared_jump
-        ),
+        median_epsilon_squared_jump=objects(posterior.median_epsilon_squared_jump),
         moved_particle_fraction=objects(posterior.moved_particle_fraction),
         unchanged_from_ancestor_fraction=objects(
             posterior.unchanged_from_ancestor_fraction
@@ -635,8 +624,13 @@ def _shard_posterior(posterior: SMCPosteriorBatch, n_devices: int):
 
 def _concat_posteriors(values: list[SMCPosteriorBatch]) -> SMCPosteriorBatch:
     return SMCPosteriorBatch(
-        *(jnp.concatenate([getattr(item, field) for item in values], axis=1 if field in {"particles", "normalized_weights"} else 0)
-          for field in SMCPosteriorBatch._fields)
+        *(
+            jnp.concatenate(
+                [getattr(item, field) for item in values],
+                axis=1 if field in {"particles", "normalized_weights"} else 0,
+            )
+            for field in SMCPosteriorBatch._fields
+        )
     )
 
 
@@ -785,9 +779,7 @@ def _run_training_e_step(
                         np.asarray(primary_result.ancestor_ess[object_index])
                     ),
                     "primary_ancestor_ess_fraction": float(
-                        np.asarray(
-                            primary_result.ancestor_ess_fraction[object_index]
-                        )
+                        np.asarray(primary_result.ancestor_ess_fraction[object_index])
                     ),
                     "primary_epsilon_squared_jump": float(
                         np.asarray(primary_result.epsilon_squared_jump[object_index])
@@ -841,9 +833,7 @@ def _run_training_e_step(
                         np.asarray(fallback_result.ancestor_ess[local_index])
                     ),
                     "fallback_ancestor_ess_fraction": float(
-                        np.asarray(
-                            fallback_result.ancestor_ess_fraction[local_index]
-                        )
+                        np.asarray(fallback_result.ancestor_ess_fraction[local_index])
                     ),
                     "fallback_epsilon_squared_jump": float(
                         np.asarray(fallback_result.epsilon_squared_jump[local_index])
@@ -910,8 +900,7 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
         "median_beta_final": float(np.median(np.asarray(posterior.beta_final))),
         "median_final_ess_fraction": float(
             np.median(
-                np.asarray(posterior.final_ess)
-                / float(posterior.particles.shape[0])
+                np.asarray(posterior.final_ess) / float(posterior.particles.shape[0])
             )
         ),
         "mean_final_max_weight": eligible_mean(posterior.final_max_weight),
@@ -921,14 +910,10 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
             else float("nan")
         ),
         "fraction_ess_below_0p1": (
-            float(np.mean(ess_fraction[eligible] < 0.10))
-            if np.any(eligible)
-            else 1.0
+            float(np.mean(ess_fraction[eligible] < 0.10)) if np.any(eligible) else 1.0
         ),
         "fraction_max_weight_above_0p8": (
-            float(np.mean(max_weight[eligible] > 0.80))
-            if np.any(eligible)
-            else 1.0
+            float(np.mean(max_weight[eligible] > 0.80)) if np.any(eligible) else 1.0
         ),
         "median_mutation_acceptance": (
             float(np.median(acceptance[finite_acceptance]))
@@ -941,11 +926,7 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
             else float("nan")
         ),
         "median_unique_ancestor_fraction": (
-            float(
-                np.median(
-                    np.asarray(posterior.unique_ancestor_fraction)[eligible]
-                )
-            )
+            float(np.median(np.asarray(posterior.unique_ancestor_fraction)[eligible]))
             if np.any(eligible)
             else float("nan")
         ),
@@ -955,17 +936,13 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
             else float("nan")
         ),
         "median_ancestor_ess_fraction": (
-            float(
-                np.median(np.asarray(posterior.ancestor_ess_fraction)[eligible])
-            )
+            float(np.median(np.asarray(posterior.ancestor_ess_fraction)[eligible]))
             if np.any(eligible)
             else float("nan")
         ),
         "median_epsilon_squared_jump": (
             float(
-                np.median(
-                    np.asarray(posterior.median_epsilon_squared_jump)[eligible]
-                )
+                np.median(np.asarray(posterior.median_epsilon_squared_jump)[eligible])
             )
             if np.any(eligible)
             else float("nan")
@@ -1074,9 +1051,7 @@ def _make_sleep_loss_fn(runtime: RuntimeBundle):
 
 
 def _model_float_dtype(model):
-    leaves = jax.tree_util.tree_leaves(
-        eqx.filter(model.prior, eqx.is_inexact_array)
-    )
+    leaves = jax.tree_util.tree_leaves(eqx.filter(model.prior, eqx.is_inexact_array))
     if not leaves:
         return jnp.float32
     return jnp.asarray(leaves[0]).dtype
@@ -1087,12 +1062,12 @@ def _make_selection_log_alpha_fn(runtime: RuntimeBundle):
     estimator = str(selection_config.get("gradient_estimator", "pathwise"))
     if estimator not in {"pathwise", "score_function"}:
         raise ValueError(
-            "selection_correction.gradient_estimator must be pathwise or "
-            "score_function"
+            "selection_correction.gradient_estimator must be pathwise or score_function"
         )
 
     def selection(model, key):
         if estimator == "score_function":
+
             def log_beta(samples):
                 return _selection_log_beta_from_prior_samples(
                     model,
@@ -1195,15 +1170,12 @@ def _selection_alpha_gradient_preflight(runtime: RuntimeBundle, model, key):
         np.asarray(jnp.isfinite(log_alpha) & tree_all_finite(gradient))
     )
     score_finite = bool(
-        np.asarray(
-            jnp.isfinite(score_surrogate) & tree_all_finite(score_gradient)
-        )
+        np.asarray(jnp.isfinite(score_surrogate) & tree_all_finite(score_gradient))
     )
     estimator = str(selection.get("gradient_estimator", "pathwise"))
     if estimator not in {"pathwise", "score_function"}:
         raise ValueError(
-            "selection_correction.gradient_estimator must be pathwise or "
-            "score_function"
+            "selection_correction.gradient_estimator must be pathwise or score_function"
         )
     production_finite = pathwise_finite if estimator == "pathwise" else score_finite
     production_norm = gradient_norm if estimator == "pathwise" else score_gradient_norm
@@ -1269,9 +1241,7 @@ def _run_validation(
         training_config.validation_objects,
         n_devices,
     )
-    primary_key, fallback_key, is_key, alpha_key, entropy_key = jax.random.split(
-        key, 5
-    )
+    primary_key, fallback_key, is_key, alpha_key, entropy_key = jax.random.split(key, 5)
     validation_hard_rows: list[dict[str, Any]] = []
     posterior, _primary = _run_training_e_step(
         model_replicated=model_replicated,
@@ -1338,9 +1308,7 @@ def _run_validation(
                 np.asarray(q_metrics.eligible_count)
             ),
             "validation_q_is_ess_fraction": (
-                float(np.median(q_is_ess[q_is_valid]))
-                if np.any(q_is_valid)
-                else 0.0
+                float(np.median(q_is_ess[q_is_valid])) if np.any(q_is_valid) else 0.0
             ),
             "validation_q_is_max_weight": (
                 float(np.median(np.asarray(q_is["max_weight"])[q_is_valid]))
@@ -1353,14 +1321,10 @@ def _run_validation(
             # Deprecated compatibility alias. Do not describe this as exact
             # evidence while inference and survey-selection noises differ.
             "validation_selected_log_evidence": selection_corrected_robust_score,
-            "selection_alpha": float(
-                np.asarray(selection_metrics["selection/alpha"])
-            ),
+            "selection_alpha": float(np.asarray(selection_metrics["selection/alpha"])),
             "selection_log_alpha": float(np.asarray(log_alpha)),
             "selection_alpha_mc_relative_error": float(
-                np.asarray(
-                    selection_metrics["selection/alpha_mc_relative_error"]
-                )
+                np.asarray(selection_metrics["selection/alpha_mc_relative_error"])
             ),
             "posterior_full_entropy_mc": float(
                 np.asarray(entropy["posterior_full_entropy_mc"])
@@ -1411,15 +1375,11 @@ def train_feniks_adaptive_smc(
             train_objects=int(runtime.train_arrays.flux.shape[0]),
         )
         selection = runtime.selection_objective_config["selection_correction"]
-        selection["n_prior_samples"] = min(
-            int(selection["n_prior_samples"]), 512
-        )
+        selection["n_prior_samples"] = min(int(selection["n_prior_samples"]), 512)
         selection["prior_sample_batch_size"] = min(
             int(selection["prior_sample_batch_size"]), 128
         )
-        selection["gradient_preflight_samples"] = int(
-            selection["n_prior_samples"]
-        )
+        selection["gradient_preflight_samples"] = int(selection["n_prior_samples"])
     primary_config, fallback_config, proposal_config = adaptive_smc_configs(
         runtime.config
     )
@@ -1598,9 +1558,7 @@ def train_feniks_adaptive_smc(
                 "batch": batch_index,
                 "loss": _replicated_scalar(step_metrics.loss),
                 "raw_grad_norm": _replicated_scalar(step_metrics.raw_grad_norm),
-                "clipped_grad_norm": _replicated_scalar(
-                    step_metrics.clipped_grad_norm
-                ),
+                "clipped_grad_norm": _replicated_scalar(step_metrics.clipped_grad_norm),
                 "grad_clipped": _replicated_bool(step_metrics.grad_clipped),
                 "update_applied": _replicated_bool(step_metrics.update_applied),
                 "selection_acceptance": _replicated_scalar(
@@ -1656,9 +1614,7 @@ def train_feniks_adaptive_smc(
             validation_stage="bootstrap",
         )
         validation_rows.append(bootstrap_validation)
-        bootstrap_ce = float(
-            bootstrap_validation["validation_smc_cross_entropy"]
-        )
+        bootstrap_ce = float(bootstrap_validation["validation_smc_cross_entropy"])
         save_checkpoint(
             out / "checkpoints" / "bootstrap.eqx",
             model,
@@ -1777,15 +1733,11 @@ def train_feniks_adaptive_smc(
                 combined_posterior = _concat_posteriors(q_macro_posteriors)
                 combined_features = jnp.concatenate(q_macro_features, axis=0)
                 selected = np.arange(q_target, dtype=np.int32)
-                macro_posterior = _take_posterior_objects(
-                    combined_posterior, selected
-                )
+                macro_posterior = _take_posterior_objects(combined_posterior, selected)
                 macro_features = jnp.take(combined_features, selected, axis=0)
                 macro_posterior = _remove_named_sharding(macro_posterior)
                 macro_features = _remove_named_sharding(macro_features)
-                sharded_posterior = _shard_posterior(
-                    macro_posterior, n_devices
-                )
+                sharded_posterior = _shard_posterior(macro_posterior, n_devices)
                 (
                     model_replicated,
                     q_smc_state_replicated,
@@ -1806,9 +1758,7 @@ def train_feniks_adaptive_smc(
                         "sweep": sweep,
                         "batch": batch_index,
                         "eligible_count": q_target,
-                        "q_cross_entropy": _replicated_scalar(
-                            q_metrics.cross_entropy
-                        ),
+                        "q_cross_entropy": _replicated_scalar(q_metrics.cross_entropy),
                         "q_update_applied": applied,
                         "q_raw_grad_norm": _replicated_scalar(
                             q_step_metrics.raw_grad_norm
@@ -1816,14 +1766,10 @@ def train_feniks_adaptive_smc(
                         "q_clipped_grad_norm": _replicated_scalar(
                             q_step_metrics.clipped_grad_norm
                         ),
-                        "q_grad_clipped": _replicated_bool(
-                            q_step_metrics.grad_clipped
-                        ),
+                        "q_grad_clipped": _replicated_bool(q_step_metrics.grad_clipped),
                     }
                 )
-                remaining = np.arange(
-                    q_target, q_macro_eligible_count, dtype=np.int32
-                )
+                remaining = np.arange(q_target, q_macro_eligible_count, dtype=np.int32)
                 q_macro_posteriors = (
                     [_take_posterior_objects(combined_posterior, remaining)]
                     if len(remaining)
@@ -1869,9 +1815,7 @@ def train_feniks_adaptive_smc(
                         "clipped_grad_norm": _replicated_scalar(
                             replay_metrics.clipped_grad_norm
                         ),
-                        "grad_clipped": _replicated_bool(
-                            replay_metrics.grad_clipped
-                        ),
+                        "grad_clipped": _replicated_bool(replay_metrics.grad_clipped),
                         "update_applied": _replicated_bool(
                             replay_metrics.update_applied
                         ),
@@ -1955,9 +1899,7 @@ def train_feniks_adaptive_smc(
             prior_rows.append(macro_metrics)
             _log_prior_macro(verbose, macro_metrics)
         model = _unreplicate_tree(model_replicated)
-        validation_key = jax.random.fold_in(
-            jax.random.PRNGKey(training.seed), 900_001
-        )
+        validation_key = jax.random.fold_in(jax.random.PRNGKey(training.seed), 900_001)
         validation, _validation_posterior = _run_validation(
             model=model,
             model_replicated=model_replicated,
@@ -2030,9 +1972,7 @@ def train_feniks_adaptive_smc(
 
     if not validation_rows:
         model = _unreplicate_tree(model_replicated)
-        validation_key = jax.random.fold_in(
-            jax.random.PRNGKey(training.seed), 900_001
-        )
+        validation_key = jax.random.fold_in(jax.random.PRNGKey(training.seed), 900_001)
         validation, _ = _run_validation(
             model=model,
             model_replicated=model_replicated,
@@ -2237,9 +2177,7 @@ def _usable_exact_object_count(
     if int(minimum) <= 0 or int(n_devices) <= 0:
         raise ValueError("minimum and n_devices must be positive")
     usable = (int(collected) // int(n_devices)) * int(n_devices)
-    required = (
-        (int(minimum) + int(n_devices) - 1) // int(n_devices) * int(n_devices)
-    )
+    required = (int(minimum) + int(n_devices) - 1) // int(n_devices) * int(n_devices)
     return usable if usable >= required else 0
 
 
@@ -2614,14 +2552,15 @@ def run_feniks_adaptive_smc_q_curriculum(
         label="standard_after",
     )
     after_q_is = q_is_validation(updated_model, seed_offset=721_500)
-    beta_gain = after_summary["median_beta_final"] - baseline_summary["median_beta_final"]
+    beta_gain = (
+        after_summary["median_beta_final"] - baseline_summary["median_beta_final"]
+    )
     hard_reduction = (
         baseline_summary["hard_fraction_after_fallback"]
         - after_summary["hard_fraction_after_fallback"]
     )
     cross_entropy_improvement = (
-        baseline_summary["smc_cross_entropy"]
-        - after_summary["smc_cross_entropy"]
+        baseline_summary["smc_cross_entropy"] - after_summary["smc_cross_entropy"]
     )
     q_is_ess_gain = (
         after_q_is["median_ess_fraction"] - baseline_q_is["median_ess_fraction"]
@@ -2640,15 +2579,13 @@ def run_feniks_adaptive_smc_q_curriculum(
         and q_is_ess_gain > 0.0
         and after_q_is["median_ess_fraction"]
         >= training.min_validation_q_is_ess_fraction
-        and after_q_is["median_max_weight"]
-        <= training.max_validation_q_is_max_weight
+        and after_q_is["median_max_weight"] <= training.max_validation_q_is_max_weight
     )
 
     def configured_ceiling(smc_config: AdaptiveBridgeSMCConfig) -> int:
         return int(smc_config.n_particles) * (
             1
-            + int(smc_config.max_stages)
-            * int(smc_config.steps_after_resample)
+            + int(smc_config.max_stages) * int(smc_config.steps_after_resample)
             + int(smc_config.final_steps_at_beta1)
         )
 
@@ -2689,8 +2626,7 @@ def run_feniks_adaptive_smc_q_curriculum(
             ),
             "q_only_is_ess_fraction_delta": q_is_ess_gain,
             "q_only_is_max_weight_reduction": (
-                baseline_q_is["median_max_weight"]
-                - after_q_is["median_max_weight"]
+                baseline_q_is["median_max_weight"] - after_q_is["median_max_weight"]
             ),
         },
         "configured_dsps_evaluation_ceiling": {
@@ -2825,11 +2761,7 @@ def _final_training_receipt(
 ):
     final = validation_rows[-1]
     bootstrap = next(
-        (
-            row
-            for row in validation_rows
-            if row.get("validation_stage") == "bootstrap"
-        ),
+        (row for row in validation_rows if row.get("validation_stage") == "bootstrap"),
         validation_rows[0],
     )
     bootstrap_q_is = float(bootstrap["validation_q_is_ess_fraction"])
@@ -2864,8 +2796,7 @@ def _final_training_receipt(
     q_smc_clipped = [
         bool(row["q_grad_clipped"])
         for row in log_rows
-        if row.get("phase") == "q_smc_macro"
-        and row.get("q_grad_clipped") is not None
+        if row.get("phase") == "q_smc_macro" and row.get("q_grad_clipped") is not None
     ]
     prior_clipped = [
         float(row["raw_grad_norm"]) > training.prior_gradient_clip_norm
@@ -2883,15 +2814,13 @@ def _final_training_receipt(
             np.isclose(float(final["median_beta_final"]), 1.0, atol=1.0e-6)
         ),
         "hard_fraction_lt_0p3": bool(
-            float(final["hard_fraction_after_fallback"])
-            < training.hard_fraction_fail
+            float(final["hard_fraction_after_fallback"]) < training.hard_fraction_fail
         ),
         "mutation_acceptance_reasonable": bool(
             np.isfinite(acceptance) and 0.15 <= acceptance <= 0.60
         ),
         "smc_combined_mixing_adequate": bool(
-            float(final["mixing_failure_fraction"])
-            < training.hard_fraction_fail
+            float(final["mixing_failure_fraction"]) < training.hard_fraction_fail
         ),
         "smc_ancestry_or_movement_adequate": bool(
             float(final["median_ancestor_ess_fraction"])
@@ -2920,8 +2849,7 @@ def _final_training_receipt(
         ),
         "q_gradient_clipping_not_permanent": bool(
             np.isfinite(q_smc_clipped_fraction)
-            and q_smc_clipped_fraction
-            <= training.max_q_gradient_clipped_fraction
+            and q_smc_clipped_fraction <= training.max_q_gradient_clipped_fraction
         ),
         "validation_smc_cross_entropy_finite": bool(
             np.isfinite(final["validation_smc_cross_entropy"])
@@ -2983,9 +2911,7 @@ def _final_training_receipt(
         "q_validation_improvement": {
             "q_is_ess_fraction_delta": q_is_ess_gain,
             "q_is_ess_fraction_ratio": q_is_ess_ratio,
-            "q_is_max_weight_reduction": (
-                bootstrap_q_max_weight - final_q_max_weight
-            ),
+            "q_is_max_weight_reduction": (bootstrap_q_max_weight - final_q_max_weight),
             "smc_cross_entropy_improvement": smc_cross_entropy_improvement,
         },
         "best_validation_smc_cross_entropy": float(best_cross_entropy),
@@ -3000,9 +2926,7 @@ def _final_training_receipt(
             q_clipped_fraction if np.isfinite(q_clipped_fraction) else None
         ),
         "q_smc_gradient_clipped_fraction": (
-            q_smc_clipped_fraction
-            if np.isfinite(q_smc_clipped_fraction)
-            else None
+            q_smc_clipped_fraction if np.isfinite(q_smc_clipped_fraction) else None
         ),
         "prior_gradient_clipped_fraction": (
             float(np.mean(prior_clipped)) if prior_clipped else None

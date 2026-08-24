@@ -84,6 +84,8 @@ def run_adaptive_bridge_smc(
     epsilon_to_x_fn: Transport,
     x_to_epsilon_fn: Transport,
     config: AdaptiveBridgeSMCConfig | None = None,
+    initial_log_r0: jnp.ndarray | None = None,
+    initial_log_target: jnp.ndarray | None = None,
 ) -> AdaptiveBridgeSMCResult:
     """Transport defensive proposal particles to an exact posterior target.
 
@@ -99,8 +101,22 @@ def run_adaptive_bridge_smc(
     dtype = particles.dtype
     log_uniform = -jnp.log(jnp.asarray(n_particles, dtype=dtype))
     log_weights = jnp.full((n_particles, n_objects), log_uniform, dtype=dtype)
-    log_r0 = _finite_logdensity(log_r0_fn(particles))
-    log_target = log_target_fn(particles)
+    density_shape = (n_particles, n_objects)
+    log_r0 = (
+        _finite_logdensity(log_r0_fn(particles))
+        if initial_log_r0 is None
+        else _finite_logdensity(jnp.asarray(initial_log_r0, dtype=dtype))
+    )
+    log_target = (
+        log_target_fn(particles)
+        if initial_log_target is None
+        else jnp.asarray(initial_log_target, dtype=dtype)
+    )
+    if log_r0.shape != density_shape or log_target.shape != density_shape:
+        raise ValueError(
+            "cached bridge densities must have shape "
+            f"{density_shape}, got {log_r0.shape} and {log_target.shape}"
+        )
     beta = jnp.zeros((n_objects,), dtype=dtype)
     logz = jnp.zeros((n_objects,), dtype=dtype)
     ancestor_ids = jnp.broadcast_to(
@@ -163,9 +179,7 @@ def run_adaptive_bridge_smc(
         updated_logz = current_logz + jnp.where(active, log_norm, 0.0)
         weights = jnp.exp(updated_log_weights)
         ess = 1.0 / jnp.sum(jnp.square(weights), axis=0)
-        resample_mask = active & (
-            ess < float(cfg.resample_ess_fraction) * n_particles
-        )
+        resample_mask = active & (ess < float(cfg.resample_ess_fraction) * n_particles)
         stage_key = jax.random.fold_in(key, stage)
         resample_key, mutation_key = jax.random.split(stage_key)
         (
@@ -417,9 +431,7 @@ def run_adaptive_bridge_smc(
         ancestor_ess=jax.lax.stop_gradient(ancestor_ess),
         ancestor_ess_fraction=jax.lax.stop_gradient(ancestor_ess_fraction),
         epsilon_squared_jump=jax.lax.stop_gradient(epsilon_squared_jump),
-        median_epsilon_squared_jump=jax.lax.stop_gradient(
-            median_epsilon_squared_jump
-        ),
+        median_epsilon_squared_jump=jax.lax.stop_gradient(median_epsilon_squared_jump),
         moved_particle_fraction=jax.lax.stop_gradient(moved_particle_fraction),
         unchanged_from_ancestor_fraction=jax.lax.stop_gradient(
             unchanged_from_ancestor_fraction
@@ -682,9 +694,7 @@ def ancestor_ess_from_ids(
         raise ValueError("ancestor_ids must have [particles, objects] shape")
     particle_count = int(ancestors.shape[0])
     initial_count = (
-        particle_count
-        if n_initial_ancestors is None
-        else int(n_initial_ancestors)
+        particle_count if n_initial_ancestors is None else int(n_initial_ancestors)
     )
     if particle_count <= 0 or initial_count <= 0:
         raise ValueError("ancestor ESS requires positive particle counts")
@@ -714,8 +724,7 @@ def mixing_failure_mask(
     ancestry = jnp.asarray(ancestor_ess_fraction, dtype=acceptance.dtype)
     movement = jnp.asarray(epsilon_squared_jump, dtype=acceptance.dtype)
     poor_acceptance = proposed & (
-        ~jnp.isfinite(acceptance)
-        | (acceptance < float(min_mutation_acceptance))
+        ~jnp.isfinite(acceptance) | (acceptance < float(min_mutation_acceptance))
     )
     poor_ancestry = ~jnp.isfinite(ancestry) | (
         ancestry < float(min_ancestor_ess_fraction)
@@ -832,9 +841,7 @@ def _systematic_resample_selected(
         axis=0,
     )
     proposed_ancestors = jnp.take_along_axis(ancestor_ids, indices, axis=0)
-    particles = jnp.where(
-        object_mask[None, :, None], proposed_particles, particles
-    )
+    particles = jnp.where(object_mask[None, :, None], proposed_particles, particles)
     ancestors = jnp.where(object_mask[None, :], proposed_ancestors, ancestor_ids)
     uniform = jnp.full_like(log_weights, -jnp.log(float(n_particles)))
     log_weights = jnp.where(object_mask[None, :], uniform, log_weights)
@@ -872,9 +879,7 @@ def _validate_inputs(particles, cfg):
         raise ValueError("rw_adapt_rate must be non-negative")
     if not 0.0 < float(cfg.rw_scale_min) <= float(cfg.rw_scale_max):
         raise ValueError("rw_scale bounds must satisfy 0 < min <= max")
-    if not float(cfg.rw_scale_min) <= float(cfg.rw_scale) <= float(
-        cfg.rw_scale_max
-    ):
+    if not float(cfg.rw_scale_min) <= float(cfg.rw_scale) <= float(cfg.rw_scale_max):
         raise ValueError("rw_scale must lie within the configured bounds")
     if not 0.0 <= float(cfg.hard_min_mutation_acceptance) <= 1.0:
         raise ValueError("hard_min_mutation_acceptance must lie in [0, 1]")

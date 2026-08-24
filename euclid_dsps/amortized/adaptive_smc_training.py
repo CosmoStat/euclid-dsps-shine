@@ -95,6 +95,32 @@ class SMCPosteriorBatch(NamedTuple):
     fallback_succeeded: jnp.ndarray
 
 
+class OrdinaryImportanceResult(NamedTuple):
+    """Ordinary object-posterior IS diagnostics with no selection factors."""
+
+    particles: jnp.ndarray
+    normalized_weights: jnp.ndarray
+    loglike: jnp.ndarray
+    logprior: jnp.ndarray
+    logproposal: jnp.ndarray
+    logweight: jnp.ndarray
+    ess: jnp.ndarray
+    max_weight: jnp.ndarray
+    logz_estimate: jnp.ndarray
+    target_finite: jnp.ndarray
+    accepted: jnp.ndarray
+
+
+class OrdinaryImportanceDiagnostics(NamedTuple):
+    normalized_weights: jnp.ndarray
+    logweight: jnp.ndarray
+    ess: jnp.ndarray
+    max_weight: jnp.ndarray
+    logz_estimate: jnp.ndarray
+    target_finite: jnp.ndarray
+    accepted: jnp.ndarray
+
+
 class DistillationMetrics(NamedTuple):
     loss: jnp.ndarray
     eligible_count: jnp.ndarray
@@ -124,6 +150,9 @@ class PriorUpdateMetrics(NamedTuple):
     selection_log_alpha: jnp.ndarray
     selection_alpha: jnp.ndarray
     selection_alpha_mc_relative_error: jnp.ndarray
+    selection_score_weight_ess: jnp.ndarray
+    selection_maximum_score_weight: jnp.ndarray
+    selection_score_weights_finite: jnp.ndarray
     prior_kl_loss_estimate: jnp.ndarray
     prior_kl_proposed: jnp.ndarray
     eligible_count: jnp.ndarray
@@ -144,9 +173,9 @@ class PriorUpdateMetrics(NamedTuple):
 def snapshot_model(model):
     """Freeze all array leaves for one E-step without changing the model type."""
     return jax.tree_util.tree_map(
-        lambda value: jax.lax.stop_gradient(value)
-        if eqx.is_inexact_array(value)
-        else value,
+        lambda value: (
+            jax.lax.stop_gradient(value) if eqx.is_inexact_array(value) else value
+        ),
         model,
     )
 
@@ -205,17 +234,34 @@ def run_model_adaptive_smc_e_step(
     key: jax.Array,
     smc_config: AdaptiveBridgeSMCConfig,
     proposal_config: AdaptiveSMCProposalConfig | None = None,
+    initial_particles: jnp.ndarray | None = None,
+    initial_logproposal: jnp.ndarray | None = None,
+    initial_logtarget: jnp.ndarray | None = None,
 ) -> AdaptiveBridgeSMCResult:
     """Run one exact-target bridge from a frozen q/prior snapshot."""
     proposal_cfg = proposal_config or AdaptiveSMCProposalConfig()
     proposal_key, smc_key = jax.random.split(key)
-    proposal_x = _sample_exact_initial_mixture(
-        model_snapshot,
-        proposal_key,
-        batch.features,
-        int(smc_config.n_particles),
-        proposal_cfg,
+    proposal_x = (
+        _sample_exact_initial_mixture(
+            model_snapshot,
+            proposal_key,
+            batch.features,
+            int(smc_config.n_particles),
+            proposal_cfg,
+        )
+        if initial_particles is None
+        else jax.lax.stop_gradient(jnp.asarray(initial_particles))
     )
+    expected_shape = (
+        int(smc_config.n_particles),
+        int(batch.features.shape[0]),
+        int(model_snapshot.prior.latent_dim),
+    )
+    if proposal_x.shape != expected_shape:
+        raise ValueError(
+            f"initial bridge particles must have shape {expected_shape}, "
+            f"got {proposal_x.shape}"
+        )
     fractions = proposal_cfg.normalized_fractions(proposal_x.dtype)
 
     def log_r0(values):
@@ -276,6 +322,146 @@ def run_model_adaptive_smc_e_step(
         epsilon_to_x_fn=epsilon_to_x,
         x_to_epsilon_fn=x_to_epsilon,
         config=smc_config,
+        initial_log_r0=initial_logproposal,
+        initial_log_target=initial_logtarget,
+    )
+
+
+def run_model_ordinary_importance(
+    *,
+    model_snapshot,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    likelihood_config,
+    calibration_config,
+    key: jax.Array,
+    n_particles: int = 64,
+    proposal_config: AdaptiveSMCProposalConfig | None = None,
+    minimum_ess_fraction: float = 0.10,
+    maximum_weight: float = 0.80,
+) -> OrdinaryImportanceResult:
+    """Run the defensive ordinary-IS fast path for frozen q and prior snapshots."""
+    if int(n_particles) <= 0:
+        raise ValueError("ordinary importance sampling requires particles")
+    if not 0.0 < float(minimum_ess_fraction) <= 1.0:
+        raise ValueError("minimum_ess_fraction must be in (0, 1]")
+    if not 0.0 < float(maximum_weight) <= 1.0:
+        raise ValueError("maximum_weight must be in (0, 1]")
+    proposal_cfg = proposal_config or AdaptiveSMCProposalConfig()
+    particles = _sample_exact_initial_mixture(
+        model_snapshot,
+        key,
+        batch.features,
+        int(n_particles),
+        proposal_cfg,
+    )
+    fractions = proposal_cfg.normalized_fractions(particles.dtype)
+    component_values = jnp.stack(
+        (
+            posterior_log_prob(
+                model_snapshot,
+                batch.features,
+                particles,
+                base_temperature=1.0,
+            ),
+            posterior_log_prob(
+                model_snapshot,
+                batch.features,
+                particles,
+                base_temperature=proposal_cfg.posterior_temperature,
+            ),
+            model_snapshot.prior.log_prob(particles),
+        ),
+        axis=0,
+    )
+    logproposal = defensive_mixture_log_prob(component_values, fractions)
+    target = posterior_log_target(
+        model_snapshot,
+        particles,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        likelihood_config,
+        calibration_config,
+    )
+    diagnostics = ordinary_importance_diagnostics(
+        target.loglike,
+        target.logprior,
+        logproposal,
+        minimum_ess_fraction=minimum_ess_fraction,
+        maximum_weight=maximum_weight,
+    )
+    return OrdinaryImportanceResult(
+        particles=jax.lax.stop_gradient(particles),
+        normalized_weights=jax.lax.stop_gradient(diagnostics.normalized_weights),
+        loglike=jax.lax.stop_gradient(target.loglike),
+        logprior=jax.lax.stop_gradient(target.logprior),
+        logproposal=jax.lax.stop_gradient(logproposal),
+        logweight=jax.lax.stop_gradient(diagnostics.logweight),
+        ess=jax.lax.stop_gradient(diagnostics.ess),
+        max_weight=jax.lax.stop_gradient(diagnostics.max_weight),
+        logz_estimate=jax.lax.stop_gradient(diagnostics.logz_estimate),
+        target_finite=jax.lax.stop_gradient(diagnostics.target_finite),
+        accepted=jax.lax.stop_gradient(diagnostics.accepted),
+    )
+
+
+def ordinary_importance_diagnostics(
+    loglike: jnp.ndarray,
+    logprior: jnp.ndarray,
+    logproposal: jnp.ndarray,
+    *,
+    minimum_ess_fraction: float = 0.10,
+    maximum_weight: float = 0.80,
+) -> OrdinaryImportanceDiagnostics:
+    """Return ordinary-IS weights using only likelihood, prior and proposal."""
+    loglike = jnp.asarray(loglike)
+    logprior = jnp.asarray(logprior, dtype=loglike.dtype)
+    logproposal = jnp.asarray(logproposal, dtype=loglike.dtype)
+    if loglike.shape != logprior.shape or loglike.shape != logproposal.shape:
+        raise ValueError("ordinary importance log-density arrays must share shape")
+    if loglike.ndim != 2:
+        raise ValueError(
+            "ordinary importance arrays must have shape [particles, objects]"
+        )
+    if not 0.0 < float(minimum_ess_fraction) <= 1.0:
+        raise ValueError("minimum_ess_fraction must be in (0, 1]")
+    if not 0.0 < float(maximum_weight) <= 1.0:
+        raise ValueError("maximum_weight must be in (0, 1]")
+    # This is deliberately the complete and only object-level weight contract.
+    logweight = loglike + logprior - logproposal
+    finite = jnp.isfinite(logweight)
+    any_finite = jnp.any(finite, axis=0)
+    safe = jnp.where(finite, logweight, -jnp.inf)
+    safe = jnp.where(any_finite[None, :], safe, jnp.zeros_like(safe))
+    normalized = jax.nn.softmax(safe, axis=0)
+    normalized = jnp.where(any_finite[None, :], normalized, 0.0)
+    ess = 1.0 / jnp.maximum(
+        jnp.sum(jnp.square(normalized), axis=0),
+        jnp.asarray(1.0e-30, dtype=normalized.dtype),
+    )
+    max_weight_value = jnp.max(normalized, axis=0)
+    n_particles = int(logweight.shape[0])
+    logz = jax.scipy.special.logsumexp(safe, axis=0) - jnp.log(
+        jnp.asarray(int(n_particles), dtype=safe.dtype)
+    )
+    target_finite = any_finite & jnp.all(jnp.isfinite(logproposal), axis=0)
+    accepted = target_finite
+    accepted &= ess / float(n_particles) >= float(minimum_ess_fraction)
+    accepted &= max_weight_value <= float(maximum_weight)
+    return OrdinaryImportanceDiagnostics(
+        normalized_weights=normalized,
+        logweight=logweight,
+        ess=ess,
+        max_weight=max_weight_value,
+        logz_estimate=logz,
+        target_finite=target_finite,
+        accepted=accepted,
     )
 
 
@@ -357,20 +543,14 @@ def primary_posterior_batch(result: AdaptiveBridgeSMCResult) -> SMCPosteriorBatc
         final_max_weight=jax.lax.stop_gradient(result.final_max_weight),
         mutation_acceptance=jax.lax.stop_gradient(result.mutation_acceptance),
         final_rw_scale=jax.lax.stop_gradient(result.final_rw_scale),
-        unique_ancestor_fraction=jax.lax.stop_gradient(
-            result.unique_ancestor_fraction
-        ),
+        unique_ancestor_fraction=jax.lax.stop_gradient(result.unique_ancestor_fraction),
         ancestor_ess=jax.lax.stop_gradient(result.ancestor_ess),
-        ancestor_ess_fraction=jax.lax.stop_gradient(
-            result.ancestor_ess_fraction
-        ),
+        ancestor_ess_fraction=jax.lax.stop_gradient(result.ancestor_ess_fraction),
         epsilon_squared_jump=jax.lax.stop_gradient(result.epsilon_squared_jump),
         median_epsilon_squared_jump=jax.lax.stop_gradient(
             result.median_epsilon_squared_jump
         ),
-        moved_particle_fraction=jax.lax.stop_gradient(
-            result.moved_particle_fraction
-        ),
+        moved_particle_fraction=jax.lax.stop_gradient(result.moved_particle_fraction),
         unchanged_from_ancestor_fraction=jax.lax.stop_gradient(
             result.unchanged_from_ancestor_fraction
         ),
@@ -419,9 +599,7 @@ def merge_hard_fallback(
         dtype=primary.normalized_weights.dtype,
     )
     current_weights = jnp.take(primary.normalized_weights, indices, axis=1)
-    replacement_weights = jnp.where(
-        fallback_success[None, :], uniform, current_weights
-    )
+    replacement_weights = jnp.where(fallback_success[None, :], uniform, current_weights)
     weights = primary.normalized_weights.at[:, indices].set(replacement_weights)
 
     def replace_object_field(current, candidate):
@@ -583,9 +761,11 @@ def apply_q_smc_update(
     finite = jnp.isfinite(loss) & tree_all_finite(grads)
     finite &= distillation.eligible_count > 0.0
     safe_grads = jax.tree_util.tree_map(
-        lambda value: jnp.where(finite, value, jnp.zeros_like(value))
-        if value is not None
-        else None,
+        lambda value: (
+            jnp.where(finite, value, jnp.zeros_like(value))
+            if value is not None
+            else None
+        ),
         grads,
     )
     updates, proposed_state = optimizer.update(
@@ -598,13 +778,18 @@ def apply_q_smc_update(
     optimizer_state = _select_tree(proposed_state, optimizer_state, finite)
     model = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
     clipped_norm = jnp.minimum(raw_norm, float(gradient_clip_norm))
-    return model, optimizer_state, distillation, OptimizerStepMetrics(
-        loss=loss,
-        raw_grad_norm=raw_norm,
-        clipped_grad_norm=clipped_norm,
-        grad_clipped=raw_norm > float(gradient_clip_norm),
-        grads_finite=tree_all_finite(grads),
-        update_applied=finite,
+    return (
+        model,
+        optimizer_state,
+        distillation,
+        OptimizerStepMetrics(
+            loss=loss,
+            raw_grad_norm=raw_norm,
+            clipped_grad_norm=clipped_norm,
+            grad_clipped=raw_norm > float(gradient_clip_norm),
+            grads_finite=tree_all_finite(grads),
+            update_applied=finite,
+        ),
     )
 
 
@@ -629,9 +814,11 @@ def apply_q_sleep_update(
     raw_norm = tree_l2_norm(grads)
     finite = jnp.isfinite(loss) & tree_all_finite(grads)
     safe_grads = jax.tree_util.tree_map(
-        lambda value: jnp.where(finite, value, jnp.zeros_like(value))
-        if value is not None
-        else None,
+        lambda value: (
+            jnp.where(finite, value, jnp.zeros_like(value))
+            if value is not None
+            else None
+        ),
         grads,
     )
     updates, proposed_state = optimizer.update(
@@ -644,13 +831,18 @@ def apply_q_sleep_update(
     optimizer_state = _select_tree(proposed_state, optimizer_state, finite)
     model = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
     clipped_norm = jnp.minimum(raw_norm, float(gradient_clip_norm))
-    return model, optimizer_state, sleep_metrics, OptimizerStepMetrics(
-        loss=loss,
-        raw_grad_norm=raw_norm,
-        clipped_grad_norm=clipped_norm,
-        grad_clipped=raw_norm > float(gradient_clip_norm),
-        grads_finite=tree_all_finite(grads),
-        update_applied=finite,
+    return (
+        model,
+        optimizer_state,
+        sleep_metrics,
+        OptimizerStepMetrics(
+            loss=loss,
+            raw_grad_norm=raw_norm,
+            clipped_grad_norm=clipped_norm,
+            grad_clipped=raw_norm > float(gradient_clip_norm),
+            grads_finite=tree_all_finite(grads),
+            update_applied=finite,
+        ),
     )
 
 
@@ -725,9 +917,7 @@ def apply_prior_macro_update(
             selection_key,
         )
         loss = (
-            terms.data_nll
-            + log_alpha
-            + float(trust_strength) * terms.prior_kl_old_new
+            terms.data_nll + log_alpha + float(trust_strength) * terms.prior_kl_old_new
         )
         return loss, (terms, log_alpha, selection_metrics)
 
@@ -739,55 +929,49 @@ def apply_prior_macro_update(
     raw_norm = tree_l2_norm(grads)
     gradients_finite = tree_all_finite(grads)
     diagnostic_dtype = jnp.asarray(loss).dtype
-    component_evaluated = False
+    component_evaluated = True
     data_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
     selection_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
     trust_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
     data_grads_finite = jnp.asarray(True)
     selection_grads_finite = jnp.asarray(True)
     trust_grads_finite = jnp.asarray(True)
-    if not bool(np.asarray(jax.device_get(gradients_finite))):
-        component_evaluated = True
 
-        def data_objective(candidate_prior):
-            return smc_prior_mstep_terms(
-                candidate_prior,
-                prior_snapshot.prior,
-                posterior,
-                old_samples,
-            ).data_nll
+    def data_objective(candidate_prior):
+        return smc_prior_mstep_terms(
+            candidate_prior,
+            prior_snapshot.prior,
+            posterior,
+            old_samples,
+        ).data_nll
 
-        def selection_objective(candidate_prior):
-            candidate_model = eqx.tree_at(
-                lambda tree: tree.prior,
-                model,
-                candidate_prior,
-            )
-            return selection_log_alpha_fn(candidate_model, selection_key)[0]
-
-        def trust_objective(candidate_prior):
-            return smc_prior_mstep_terms(
-                candidate_prior,
-                prior_snapshot.prior,
-                posterior,
-                old_samples,
-            ).prior_kl_old_new
-
-        _data_value, data_grads = eqx.filter_value_and_grad(data_objective)(
-            model.prior
+    def selection_objective(candidate_prior):
+        candidate_model = eqx.tree_at(
+            lambda tree: tree.prior,
+            model,
+            candidate_prior,
         )
-        _selection_value, selection_grads = eqx.filter_value_and_grad(
-            selection_objective
-        )(model.prior)
-        _trust_value, trust_grads = eqx.filter_value_and_grad(trust_objective)(
-            model.prior
-        )
-        data_grad_norm = tree_l2_norm(data_grads)
-        selection_grad_norm = tree_l2_norm(selection_grads)
-        trust_grad_norm = tree_l2_norm(trust_grads)
-        data_grads_finite = tree_all_finite(data_grads)
-        selection_grads_finite = tree_all_finite(selection_grads)
-        trust_grads_finite = tree_all_finite(trust_grads)
+        return selection_log_alpha_fn(candidate_model, selection_key)[0]
+
+    def trust_objective(candidate_prior):
+        return smc_prior_mstep_terms(
+            candidate_prior,
+            prior_snapshot.prior,
+            posterior,
+            old_samples,
+        ).prior_kl_old_new
+
+    _data_value, data_grads = eqx.filter_value_and_grad(data_objective)(model.prior)
+    _selection_value, selection_grads = eqx.filter_value_and_grad(selection_objective)(
+        model.prior
+    )
+    _trust_value, trust_grads = eqx.filter_value_and_grad(trust_objective)(model.prior)
+    data_grad_norm = tree_l2_norm(data_grads)
+    selection_grad_norm = tree_l2_norm(selection_grads)
+    trust_grad_norm = tree_l2_norm(trust_grads)
+    data_grads_finite = tree_all_finite(data_grads)
+    selection_grads_finite = tree_all_finite(selection_grads)
+    trust_grads_finite = tree_all_finite(trust_grads)
     alpha_relative_error = jnp.asarray(
         selection_metrics["selection/alpha_mc_relative_error"],
         dtype=loss.dtype,
@@ -797,9 +981,11 @@ def apply_prior_macro_update(
     pre_update_ok &= jnp.isfinite(log_alpha)
     pre_update_ok &= alpha_relative_error <= float(max_alpha_mc_relative_error)
     safe_grads = jax.tree_util.tree_map(
-        lambda value: jnp.where(pre_update_ok, value, jnp.zeros_like(value))
-        if value is not None
-        else None,
+        lambda value: (
+            jnp.where(pre_update_ok, value, jnp.zeros_like(value))
+            if value is not None
+            else None
+        ),
         grads,
     )
     updates, proposed_state = optimizer.update(
@@ -808,9 +994,7 @@ def apply_prior_macro_update(
         eqx.filter(model.prior, eqx.is_inexact_array),
     )
     proposed_prior = eqx.apply_updates(model.prior, updates)
-    old_log_prob = jax.lax.stop_gradient(
-        prior_snapshot.prior.log_prob(old_samples)
-    )
+    old_log_prob = jax.lax.stop_gradient(prior_snapshot.prior.log_prob(old_samples))
     proposed_kl = jnp.mean(old_log_prob - proposed_prior.log_prob(old_samples))
     dimension = int(model.prior.latent_dim)
     trust_ok = jnp.isfinite(proposed_kl)
@@ -836,37 +1020,294 @@ def apply_prior_macro_update(
             ),
         ),
     )
-    return model, optimizer_state, PriorUpdateMetrics(
-        loss=loss,
-        data_nll=terms.data_nll,
-        selection_log_alpha=log_alpha,
-        selection_alpha=jnp.exp(log_alpha),
-        selection_alpha_mc_relative_error=alpha_relative_error,
-        prior_kl_loss_estimate=terms.prior_kl_old_new,
-        prior_kl_proposed=proposed_kl,
-        eligible_count=terms.eligible_count,
-        raw_grad_norm=raw_norm,
-        clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
-        grads_finite=gradients_finite,
-        component_diagnostics_evaluated=jnp.asarray(component_evaluated),
-        data_grad_norm=jnp.asarray(data_grad_norm, dtype=diagnostic_dtype),
-        selection_grad_norm=jnp.asarray(
-            selection_grad_norm, dtype=diagnostic_dtype
+    return (
+        model,
+        optimizer_state,
+        PriorUpdateMetrics(
+            loss=loss,
+            data_nll=terms.data_nll,
+            selection_log_alpha=log_alpha,
+            selection_alpha=jnp.exp(log_alpha),
+            selection_alpha_mc_relative_error=alpha_relative_error,
+            selection_score_weight_ess=jnp.asarray(
+                selection_metrics.get("selection/score_weight_ess", jnp.nan),
+                dtype=diagnostic_dtype,
+            ),
+            selection_maximum_score_weight=jnp.asarray(
+                selection_metrics.get("selection/maximum_score_weight", jnp.nan),
+                dtype=diagnostic_dtype,
+            ),
+            selection_score_weights_finite=jnp.asarray(
+                selection_metrics.get("selection/score_weights_finite", 0.0),
+                dtype=diagnostic_dtype,
+            ),
+            prior_kl_loss_estimate=terms.prior_kl_old_new,
+            prior_kl_proposed=proposed_kl,
+            eligible_count=terms.eligible_count,
+            raw_grad_norm=raw_norm,
+            clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
+            grads_finite=gradients_finite,
+            component_diagnostics_evaluated=jnp.asarray(component_evaluated),
+            data_grad_norm=jnp.asarray(data_grad_norm, dtype=diagnostic_dtype),
+            selection_grad_norm=jnp.asarray(
+                selection_grad_norm, dtype=diagnostic_dtype
+            ),
+            trust_grad_norm=jnp.asarray(trust_grad_norm, dtype=diagnostic_dtype),
+            data_grads_finite=jnp.asarray(data_grads_finite),
+            selection_grads_finite=jnp.asarray(selection_grads_finite),
+            trust_grads_finite=jnp.asarray(trust_grads_finite),
+            update_applied=apply_update,
+            rejection_code=jnp.asarray(rejection_code, dtype=jnp.int32),
         ),
-        trust_grad_norm=jnp.asarray(trust_grad_norm, dtype=diagnostic_dtype),
-        data_grads_finite=jnp.asarray(data_grads_finite),
-        selection_grads_finite=jnp.asarray(selection_grads_finite),
-        trust_grads_finite=jnp.asarray(trust_grads_finite),
-        update_applied=apply_update,
-        rejection_code=jnp.asarray(rejection_code, dtype=jnp.int32),
+    )
+
+
+def make_pmap_prior_macro_step(
+    *,
+    optimizer,
+    selection_log_beta_fn,
+    total_selection_samples: int,
+    total_trust_samples: int,
+    trust_strength: float,
+    max_kl_per_dimension: float,
+    max_alpha_mc_relative_error: float,
+    gradient_clip_norm: float,
+    n_devices: int,
+):
+    """Build a data-parallel prior M-step with one global centered score."""
+    if int(n_devices) <= 0:
+        raise ValueError("prior pmap requires at least one device")
+    if int(total_selection_samples) % int(n_devices):
+        raise ValueError("selection samples must be divisible by local devices")
+    if int(total_trust_samples) % int(n_devices):
+        raise ValueError("trust samples must be divisible by local devices")
+    local_selection_samples = int(total_selection_samples) // int(n_devices)
+    local_trust_samples = int(total_trust_samples) // int(n_devices)
+    array_axis = eqx.if_array(0)
+
+    @eqx.filter_pmap(
+        axis_name="devices",
+        in_axes=(
+            array_axis,
+            array_axis,
+            array_axis,
+            array_axis,
+            array_axis,
+            array_axis,
+        ),
+        out_axes=(array_axis, array_axis, array_axis),
+    )
+    def step(
+        model,
+        prior_snapshot,
+        optimizer_state,
+        posterior,
+        trust_key,
+        selection_key,
+    ):
+        old_samples = jax.lax.stop_gradient(
+            prior_snapshot.prior.sample(trust_key, local_trust_samples)
+        )
+
+        def data_objective(candidate_prior):
+            particles = jax.lax.stop_gradient(posterior.particles)
+            weights = jax.lax.stop_gradient(posterior.normalized_weights)
+            eligible = jax.lax.stop_gradient(posterior.eligible)
+            logprior = candidate_prior.log_prob(particles)
+            finite = jnp.isfinite(logprior)
+            usable = eligible & jnp.all(finite, axis=0)
+            per_object = -jnp.sum(weights * jnp.where(finite, logprior, 0.0), axis=0)
+            local_count = jnp.sum(usable.astype(per_object.dtype))
+            local_numerator = jnp.sum(jnp.where(usable, per_object, 0.0))
+            global_count = jax.lax.psum(local_count, axis_name="devices")
+            global_numerator = jax.lax.psum(local_numerator, axis_name="devices")
+            finite_fraction = jax.lax.pmean(
+                jnp.mean(finite.astype(per_object.dtype)), axis_name="devices"
+            )
+            return global_numerator / jnp.maximum(global_count, 1.0), (
+                global_count,
+                finite_fraction,
+            )
+
+        def selection_objective(candidate_prior):
+            candidate_model = eqx.tree_at(
+                lambda tree: tree.prior, model, candidate_prior
+            )
+            samples = jax.lax.stop_gradient(
+                candidate_prior.sample(selection_key, local_selection_samples)
+            )
+            log_beta = jax.lax.stop_gradient(
+                selection_log_beta_fn(candidate_model, samples)
+            )
+            beta = jnp.where(jnp.isfinite(log_beta), jnp.exp(log_beta), 0.0)
+            beta_sum = jax.lax.psum(jnp.sum(beta), axis_name="devices")
+            beta_sum_square = jax.lax.psum(
+                jnp.sum(jnp.square(beta)), axis_name="devices"
+            )
+            sample_count = jax.lax.psum(
+                jnp.asarray(local_selection_samples, dtype=beta.dtype),
+                axis_name="devices",
+            )
+            safe_sum = jnp.maximum(beta_sum, jnp.asarray(1.0e-30, dtype=beta.dtype))
+            normalized = jax.lax.stop_gradient(beta / safe_sum)
+            centered = jax.lax.stop_gradient(normalized - 1.0 / sample_count)
+            local_score = jnp.sum(centered * candidate_prior.log_prob(samples))
+            score = jax.lax.psum(local_score, axis_name="devices")
+            log_alpha = jnp.log(safe_sum / sample_count)
+            value = jax.lax.stop_gradient(log_alpha - score) + score
+            alpha = beta_sum / sample_count
+            variance = jnp.maximum(
+                (beta_sum_square - beta_sum**2 / sample_count)
+                / jnp.maximum(sample_count - 1.0, 1.0),
+                0.0,
+            )
+            mc_error = jnp.sqrt(variance / sample_count)
+            score_ess = beta_sum**2 / jnp.maximum(beta_sum_square, 1.0e-30)
+            maximum_weight = jax.lax.pmax(jnp.max(normalized), axis_name="devices")
+            weights_finite = jax.lax.pmin(
+                jnp.all(jnp.isfinite(normalized)).astype(jnp.int32),
+                axis_name="devices",
+            ).astype(jnp.bool_)
+            metrics = {
+                "log_alpha": log_alpha,
+                "alpha": alpha,
+                "alpha_mc_relative_error": mc_error
+                / jnp.maximum(alpha, jnp.asarray(1.0e-12, dtype=alpha.dtype)),
+                "score_weight_ess": score_ess,
+                "maximum_score_weight": maximum_weight,
+                "score_weights_finite": weights_finite,
+            }
+            return value, metrics
+
+        def trust_objective(candidate_prior):
+            old_log_prob = jax.lax.stop_gradient(
+                prior_snapshot.prior.log_prob(old_samples)
+            )
+            local_kl = jnp.mean(old_log_prob - candidate_prior.log_prob(old_samples))
+            return jax.lax.pmean(local_kl, axis_name="devices")
+
+        (data_nll, data_aux), data_grads = eqx.filter_value_and_grad(
+            data_objective, has_aux=True
+        )(model.prior)
+        (selection_value, selection_metrics), selection_grads = (
+            eqx.filter_value_and_grad(selection_objective, has_aux=True)(model.prior)
+        )
+        trust_value, trust_grads = eqx.filter_value_and_grad(trust_objective)(
+            model.prior
+        )
+        # Reverse-mode differentiation leaves one data-dependent contribution on
+        # each replica. Average those contributions so replicated parameters stay
+        # synchronized without multiplying the effective learning rate by the
+        # device count.
+        data_grads = _pmean_tree(data_grads, "devices")
+        selection_grads = _pmean_tree(selection_grads, "devices")
+        trust_grads = _pmean_tree(trust_grads, "devices")
+        grads = jax.tree_util.tree_map(
+            lambda data, selection, trust: (
+                (data + selection + float(trust_strength) * trust)
+                if data is not None
+                else None
+            ),
+            data_grads,
+            selection_grads,
+            trust_grads,
+        )
+        loss = data_nll + selection_value + float(trust_strength) * trust_value
+        raw_norm = tree_l2_norm(grads)
+        gradients_finite = tree_all_finite(grads)
+        data_grad_norm = tree_l2_norm(data_grads)
+        selection_grad_norm = tree_l2_norm(selection_grads)
+        trust_grad_norm = tree_l2_norm(trust_grads)
+        alpha_relative_error = selection_metrics["alpha_mc_relative_error"]
+        global_count, _finite_fraction = data_aux
+        pre_update_ok = jnp.isfinite(loss) & gradients_finite
+        pre_update_ok &= global_count > 0.0
+        pre_update_ok &= jnp.isfinite(selection_metrics["log_alpha"])
+        pre_update_ok &= alpha_relative_error <= float(max_alpha_mc_relative_error)
+        pre_update_ok &= selection_metrics["score_weights_finite"]
+        safe_grads = jax.tree_util.tree_map(
+            lambda value: (
+                jnp.where(pre_update_ok, value, jnp.zeros_like(value))
+                if value is not None
+                else None
+            ),
+            grads,
+        )
+        updates, proposed_state = optimizer.update(
+            safe_grads,
+            optimizer_state,
+            eqx.filter(model.prior, eqx.is_inexact_array),
+        )
+        proposed_prior = eqx.apply_updates(model.prior, updates)
+        old_log_prob = jax.lax.stop_gradient(prior_snapshot.prior.log_prob(old_samples))
+        local_proposed_kl = jnp.mean(
+            old_log_prob - proposed_prior.log_prob(old_samples)
+        )
+        proposed_kl = jax.lax.pmean(local_proposed_kl, axis_name="devices")
+        dimension = int(model.prior.latent_dim)
+        trust_ok = jnp.isfinite(proposed_kl)
+        trust_ok &= jnp.abs(proposed_kl) <= float(max_kl_per_dimension) * dimension
+        apply_update = jax.lax.pmin(
+            (pre_update_ok & trust_ok).astype(jnp.int32), axis_name="devices"
+        ).astype(jnp.bool_)
+        prior = _select_tree(proposed_prior, model.prior, apply_update)
+        optimizer_state = _select_tree(proposed_state, optimizer_state, apply_update)
+        model = eqx.tree_at(lambda tree: tree.prior, model, prior)
+        rejection_code = jnp.where(
+            ~jnp.isfinite(loss) | ~gradients_finite,
+            1,
+            jnp.where(
+                global_count <= 0.0,
+                2,
+                jnp.where(
+                    alpha_relative_error > float(max_alpha_mc_relative_error),
+                    3,
+                    jnp.where(~trust_ok, 4, 0),
+                ),
+            ),
+        )
+        metrics = PriorUpdateMetrics(
+            loss=loss,
+            data_nll=data_nll,
+            selection_log_alpha=selection_metrics["log_alpha"],
+            selection_alpha=selection_metrics["alpha"],
+            selection_alpha_mc_relative_error=alpha_relative_error,
+            selection_score_weight_ess=selection_metrics["score_weight_ess"],
+            selection_maximum_score_weight=selection_metrics["maximum_score_weight"],
+            selection_score_weights_finite=selection_metrics["score_weights_finite"],
+            prior_kl_loss_estimate=trust_value,
+            prior_kl_proposed=proposed_kl,
+            eligible_count=global_count,
+            raw_grad_norm=raw_norm,
+            clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
+            grads_finite=gradients_finite,
+            component_diagnostics_evaluated=jnp.asarray(True),
+            data_grad_norm=data_grad_norm,
+            selection_grad_norm=selection_grad_norm,
+            trust_grad_norm=trust_grad_norm,
+            data_grads_finite=tree_all_finite(data_grads),
+            selection_grads_finite=tree_all_finite(selection_grads),
+            trust_grads_finite=tree_all_finite(trust_grads),
+            update_applied=apply_update,
+            rejection_code=jnp.asarray(rejection_code, dtype=jnp.int32),
+        )
+        return model, optimizer_state, metrics
+
+    return step
+
+
+def _pmean_tree(tree, axis_name: str):
+    return jax.tree_util.tree_map(
+        lambda value: (
+            jax.lax.pmean(value, axis_name=axis_name) if value is not None else None
+        ),
+        tree,
     )
 
 
 def _select_tree(proposed, current, condition):
     return jax.tree_util.tree_map(
-        lambda new, old: jnp.where(condition, new, old)
-        if eqx.is_array(new)
-        else new,
+        lambda new, old: jnp.where(condition, new, old) if eqx.is_array(new) else new,
         proposed,
         current,
     )
@@ -955,6 +1396,93 @@ def make_pmap_e_step(
     return step
 
 
+def make_pmap_ordinary_importance_step(
+    *,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    likelihood_config,
+    calibration_config,
+    proposal_config: AdaptiveSMCProposalConfig,
+    minimum_ess_fraction: float = 0.10,
+    maximum_weight: float = 0.80,
+):
+    """Build an object-sharded ordinary-IS fast path without collectives."""
+    array_axis = eqx.if_array(0)
+
+    @eqx.filter_pmap(
+        in_axes=(array_axis, array_axis, array_axis),
+        out_axes=array_axis,
+    )
+    def step(model_snapshot, batch, key):
+        return run_model_ordinary_importance(
+            model_snapshot=snapshot_model(model_snapshot),
+            batch=batch,
+            latent_spec=latent_spec,
+            context=context,
+            model_args=model_args,
+            parameter_names=parameter_names,
+            likelihood_config=likelihood_config,
+            calibration_config=calibration_config,
+            key=key,
+            n_particles=64,
+            proposal_config=proposal_config,
+            minimum_ess_fraction=minimum_ess_fraction,
+            maximum_weight=maximum_weight,
+        )
+
+    return step
+
+
+def make_pmap_continuation_e_step(
+    *,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    likelihood_config,
+    calibration_config,
+    smc_config: AdaptiveBridgeSMCConfig,
+    proposal_config: AdaptiveSMCProposalConfig,
+):
+    """Build a pmap SMC step continuing cached ordinary-IS K64 particles."""
+    if int(smc_config.n_particles) != 64:
+        raise ValueError("cached ordinary-IS continuation requires K=64")
+    array_axis = eqx.if_array(0)
+
+    @eqx.filter_pmap(
+        in_axes=(array_axis, array_axis, array_axis, 0, 0, 0),
+        out_axes=array_axis,
+    )
+    def step(
+        model_snapshot,
+        batch,
+        key,
+        initial_particles,
+        initial_logproposal,
+        initial_logtarget,
+    ):
+        return run_model_adaptive_smc_e_step(
+            model_snapshot=snapshot_model(model_snapshot),
+            batch=batch,
+            latent_spec=latent_spec,
+            context=context,
+            model_args=model_args,
+            parameter_names=parameter_names,
+            likelihood_config=likelihood_config,
+            calibration_config=calibration_config,
+            key=key,
+            smc_config=smc_config,
+            proposal_config=proposal_config,
+            initial_particles=initial_particles,
+            initial_logproposal=initial_logproposal,
+            initial_logtarget=initial_logtarget,
+        )
+
+    return step
+
+
 def make_pmap_q_smc_step(
     *,
     optimizer,
@@ -986,27 +1514,29 @@ def make_pmap_q_smc_step(
         global_count = jax.lax.psum(count, axis_name="devices")
         global_numerator = jax.lax.psum(numerator, axis_name="devices")
         grads = jax.tree_util.tree_map(
-            lambda value: jax.lax.psum(value, axis_name="devices")
-            / jnp.maximum(global_count, 1.0)
-            if value is not None
-            else None,
+            lambda value: (
+                jax.lax.psum(value, axis_name="devices")
+                / jnp.maximum(global_count, 1.0)
+                if value is not None
+                else None
+            ),
             grads,
         )
         loss = global_numerator / jnp.maximum(global_count, 1.0)
         raw_norm = tree_l2_norm(grads)
         gradients_finite = tree_all_finite(grads)
         apply_update = jax.lax.pmin(
-            (
-                jnp.isfinite(loss)
-                & gradients_finite
-                & (global_count > 0.0)
-            ).astype(jnp.int32),
+            (jnp.isfinite(loss) & gradients_finite & (global_count > 0.0)).astype(
+                jnp.int32
+            ),
             axis_name="devices",
         ).astype(jnp.bool_)
         safe_grads = jax.tree_util.tree_map(
-            lambda value: jnp.where(apply_update, value, jnp.zeros_like(value))
-            if value is not None
-            else None,
+            lambda value: (
+                jnp.where(apply_update, value, jnp.zeros_like(value))
+                if value is not None
+                else None
+            ),
             grads,
         )
         updates, proposed_state = optimizer.update(
@@ -1016,24 +1546,18 @@ def make_pmap_q_smc_step(
         )
         proposed_encoder = eqx.apply_updates(model.encoder, updates)
         encoder = _select_tree(proposed_encoder, model.encoder, apply_update)
-        optimizer_state = _select_tree(
-            proposed_state, optimizer_state, apply_update
-        )
+        optimizer_state = _select_tree(proposed_state, optimizer_state, apply_update)
         model = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
         metrics = DistillationMetrics(
             loss=loss,
             eligible_count=global_count,
             cross_entropy=loss,
-            finite_fraction=jax.lax.pmean(
-                finite_fraction, axis_name="devices"
-            ),
+            finite_fraction=jax.lax.pmean(finite_fraction, axis_name="devices"),
         )
         step_metrics = OptimizerStepMetrics(
             loss=loss,
             raw_grad_norm=raw_norm,
-            clipped_grad_norm=jnp.minimum(
-                raw_norm, float(gradient_clip_norm)
-            ),
+            clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
             grad_clipped=raw_norm > float(gradient_clip_norm),
             grads_finite=gradients_finite,
             update_applied=apply_update,
@@ -1078,27 +1602,29 @@ def make_pmap_q_sleep_step(
         global_count = jax.lax.psum(selected, axis_name="devices")
         global_numerator = jax.lax.psum(numerator, axis_name="devices")
         grads = jax.tree_util.tree_map(
-            lambda value: jax.lax.psum(value, axis_name="devices")
-            / jnp.maximum(global_count, 1.0)
-            if value is not None
-            else None,
+            lambda value: (
+                jax.lax.psum(value, axis_name="devices")
+                / jnp.maximum(global_count, 1.0)
+                if value is not None
+                else None
+            ),
             grads,
         )
         loss = global_numerator / jnp.maximum(global_count, 1.0)
         raw_norm = tree_l2_norm(grads)
         gradients_finite = tree_all_finite(grads)
         apply_update = jax.lax.pmin(
-            (
-                jnp.isfinite(loss)
-                & gradients_finite
-                & (global_count > 0.0)
-            ).astype(jnp.int32),
+            (jnp.isfinite(loss) & gradients_finite & (global_count > 0.0)).astype(
+                jnp.int32
+            ),
             axis_name="devices",
         ).astype(jnp.bool_)
         safe_grads = jax.tree_util.tree_map(
-            lambda value: jnp.where(apply_update, value, jnp.zeros_like(value))
-            if value is not None
-            else None,
+            lambda value: (
+                jnp.where(apply_update, value, jnp.zeros_like(value))
+                if value is not None
+                else None
+            ),
             grads,
         )
         updates, proposed_state = optimizer.update(
@@ -1108,9 +1634,7 @@ def make_pmap_q_sleep_step(
         )
         proposed_encoder = eqx.apply_updates(model.encoder, updates)
         encoder = _select_tree(proposed_encoder, model.encoder, apply_update)
-        optimizer_state = _select_tree(
-            proposed_state, optimizer_state, apply_update
-        )
+        optimizer_state = _select_tree(proposed_state, optimizer_state, apply_update)
         model = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
         sleep_metrics = jax.tree_util.tree_map(
             lambda value: jax.lax.pmean(value, axis_name="devices"),
@@ -1119,9 +1643,7 @@ def make_pmap_q_sleep_step(
         step_metrics = OptimizerStepMetrics(
             loss=loss,
             raw_grad_norm=raw_norm,
-            clipped_grad_norm=jnp.minimum(
-                raw_norm, float(gradient_clip_norm)
-            ),
+            clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
             grad_clipped=raw_norm > float(gradient_clip_norm),
             grads_finite=gradients_finite,
             update_applied=apply_update,
