@@ -17,8 +17,14 @@ bootstrap_prepared=$(find "$BOOTSTRAP_ROOT/galaxies" -name PREP_DONE 2>/dev/null
 nuts_chains=$(find "$BOOTSTRAP_ROOT/galaxies" -path '*/nuts/chain_*/DONE' 2>/dev/null | wc -l)
 nuts_galaxies=$(find "$BOOTSTRAP_ROOT/galaxies" -mindepth 2 -maxdepth 2 \
   -name DONE 2>/dev/null | wc -l)
+warmup_summaries=$(find "$BOOTSTRAP_ROOT/galaxies" \
+  -path '*/nuts/chain_*/warmup_summary.json' 2>/dev/null | wc -l)
+sampling_states=$(find "$BOOTSTRAP_ROOT/galaxies" \
+  -path '*/nuts/chain_*/sampling_state.pkl' 2>/dev/null | wc -l)
 distilled_prepared=$(find "$DISTILLED_ROOT/galaxies" -name PREP_DONE 2>/dev/null | wc -l)
 printf 'teacher SMC prepared : %s/8\n' "$bootstrap_prepared"
+printf 'NUTS warmup done     : %s/32\n' "$warmup_summaries"
+printf 'NUTS states saved    : %s/32\n' "$sampling_states"
 printf 'NUTS chains complete : %s/32\n' "$nuts_chains"
 printf 'NUTS galaxies done   : %s/8\n' "$nuts_galaxies"
 printf 'distilled q prepared : %s/8\n' "$distilled_prepared"
