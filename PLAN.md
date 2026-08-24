@@ -2,8 +2,12 @@
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 
-- Status: implemented and locally validated; Jean-Zay curriculum remains
-  unexecuted. Frozen pilot `1311562` completed successfully and
+- Status: runtime recovery in progress. Jean-Zay curriculum job `1313481`
+  failed during its baseline pass before producing scientific metrics because
+  the nested pass constructed `_loss_batch(photometry)` inline, then referenced
+  an outer-scope `batch` binding while collecting features. The fix must bind
+  the local batch explicitly and be relaunched in a new immutable root.
+  Frozen pilot `1311562` completed successfully and
   isolated the remaining scientific blockers: RW-MH acceptance is healthy
   (median 0.232) and particles move, but the standard fallback reaches only
   median beta 0.265, leaving 77.1% hard; the real pathwise Gaussian-m5
@@ -41,6 +45,12 @@
   exact-posterior tests pass; the score gradient matches pathwise and finite
   differences on shift-normal and active RealNVP directions. Ruff, compileall,
   shell syntax and diff checks pass. No remote job was submitted.
+- Runtime recovery: bind the per-iteration value as the uniquely local
+  `loss_batch` before both the E-step call and feature accumulation. This
+  removes the accidental closure over the later outer `batch` variable that
+  caused job `1313481` to fail. Focused config/selection tests pass again
+  (`26 passed`), together with Ruff, compileall and diff checks. Relaunch in a
+  fresh output root; `1313481` contains no scientific result.
 
 ## 2026-08-24 Adaptive-SMC E-step isolation
 

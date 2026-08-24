@@ -2324,9 +2324,10 @@ def run_feniks_adaptive_smc_q_curriculum(
             start = batch_index * training.micro_batch_size
             stop = start + training.micro_batch_size
             pass_key, primary_key, fallback_key = jax.random.split(pass_key, 3)
+            loss_batch = _loss_batch(photometry)
             posterior, _result = _run_training_e_step(
                 model_replicated=model_replicated,
-                batch=_loss_batch(photometry),
+                batch=loss_batch,
                 real_object_mask=real_order_mask[start:stop],
                 row_indices=np.asarray(photometry.row_index, dtype=np.int64),
                 primary_step=primary_step,
@@ -2340,7 +2341,7 @@ def run_feniks_adaptive_smc_q_curriculum(
                 batch_index=batch_index,
             )
             values.append(posterior)
-            features.append(batch.features)
+            features.append(loss_batch.features)
             summary = _posterior_summary(posterior)
             rows.append({"phase": label, "batch": batch_index, **summary})
             _log(
