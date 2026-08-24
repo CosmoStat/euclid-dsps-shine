@@ -114,7 +114,7 @@ def test_smoke_runs_a_minimum_number_of_fresh_sleep_updates() -> None:
     assert smoke.observed_sweeps == 1
 
 
-def test_float64_adaptive_checkpoint_loads_with_promoted_template(
+def test_mixed_dtype_adaptive_checkpoint_loads_with_matched_template(
     tmp_path: Path,
 ) -> None:
     checkpoint = tmp_path / "model.eqx"
@@ -126,7 +126,6 @@ def test_float64_adaptive_checkpoint_loads_with_promoted_template(
         from euclid_dsps.config import load_config
         from euclid_dsps.amortized.train import (
             _latent_spec_for_amortized_config,
-            _promote_floating_checkpoint_leaf_to_float64,
             build_amortized_model,
             load_checkpoint,
         )
@@ -137,18 +136,21 @@ def test_float64_adaptive_checkpoint_loads_with_promoted_template(
         spec = _latent_spec_for_amortized_config(config)
         model = build_amortized_model(config, jax.random.PRNGKey(0), latent_spec=spec)
         model = jax.tree_util.tree_map(
-            _promote_floating_checkpoint_leaf_to_float64, model
+            lambda x: x.astype(jnp.float64)
+            if eqx.is_array(x) and jnp.issubdtype(x.dtype, jnp.floating)
+            else x,
+            model,
+        )
+        model = eqx.tree_at(
+            lambda tree: tree.sed_scale.log_alpha_sed,
+            model,
+            jnp.asarray(0.0, dtype=jnp.float32),
         )
         path = {str(checkpoint)!r}
         eqx.tree_serialise_leaves(path, model)
         restored = load_checkpoint(path, config)
-        leaves = [x for x in jax.tree_util.tree_leaves(restored) if eqx.is_array(x)]
-        assert any(jnp.issubdtype(x.dtype, jnp.floating) for x in leaves)
-        assert all(
-            x.dtype == jnp.float64
-            for x in leaves
-            if jnp.issubdtype(x.dtype, jnp.floating)
-        )
+        assert restored.encoder.base.mean_head.bias.dtype == jnp.float64
+        assert restored.sed_scale.log_alpha_sed.dtype == jnp.float32
         print('PASS')
         """
     )

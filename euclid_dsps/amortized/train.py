@@ -1945,16 +1945,8 @@ def load_checkpoint(
     try:
         model = eqx.tree_deserialise_leaves(path, template)
     except RuntimeError as exc:
-        if _checkpoint_requires_float64_template(exc):
-            if not bool(jax.config.jax_enable_x64):
-                raise RuntimeError(
-                    f"Checkpoint {path} contains float64 model parameters. "
-                    "Set JAX_ENABLE_X64=true before importing JAX."
-                ) from exc
-            template = jax.tree_util.tree_map(
-                _promote_floating_checkpoint_leaf_to_float64,
-                template,
-            )
+        if _checkpoint_has_dtype_mismatch(exc):
+            template = _checkpoint_template_with_serialized_dtypes(path, template)
             model = eqx.tree_deserialise_leaves(path, template)
         else:
             _raise_realnvp_mask_checkpoint_error(path, exc)
@@ -1969,15 +1961,43 @@ def load_checkpoint(
     return model
 
 
-def _checkpoint_requires_float64_template(exc: RuntimeError) -> bool:
-    message = str(exc)
-    return "changed dtype from float32" in message and "to float64 on disk" in message
+def _checkpoint_has_dtype_mismatch(exc: RuntimeError) -> bool:
+    return "has changed dtype from" in str(exc)
 
 
-def _promote_floating_checkpoint_leaf_to_float64(value):
-    if eqx.is_array(value) and jnp.issubdtype(value.dtype, jnp.floating):
-        return value.astype(jnp.float64)
-    return value
+def _checkpoint_template_with_serialized_dtypes(path: Path, template):
+    """Match each array-like template leaf to its serialized dtype and shape."""
+    paths_and_leaves, treedef = jax.tree_util.tree_flatten_with_path(template)
+    rebuilt = []
+    with path.open("rb") as stream:
+        for key_path, leaf in paths_and_leaves:
+            if not eqx.is_array_like(leaf):
+                rebuilt.append(leaf)
+                continue
+            serialized = np.load(stream, allow_pickle=False)
+            expected_shape = np.shape(leaf)
+            if tuple(serialized.shape) != tuple(expected_shape):
+                raise RuntimeError(
+                    "Checkpoint leaf shape mismatch at "
+                    f"{key_path}: template={expected_shape}, "
+                    f"checkpoint={serialized.shape}"
+                )
+            if (
+                np.issubdtype(serialized.dtype, np.floating)
+                and serialized.dtype.itemsize > 4
+                and not bool(jax.config.jax_enable_x64)
+            ):
+                raise RuntimeError(
+                    f"Checkpoint {path} contains float64 model parameters. "
+                    "Set JAX_ENABLE_X64=true before importing JAX."
+                )
+            if eqx.is_array(leaf):
+                rebuilt.append(jnp.asarray(leaf, dtype=serialized.dtype))
+            elif isinstance(leaf, np.ndarray):
+                rebuilt.append(np.asarray(leaf, dtype=serialized.dtype))
+            else:
+                rebuilt.append(leaf)
+    return treedef.unflatten(rebuilt)
 
 
 def _checkpoint_prior_roundtrip_fail_atol(config: dict[str, Any]) -> float:
