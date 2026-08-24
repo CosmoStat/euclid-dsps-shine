@@ -4093,6 +4093,59 @@ def _unevaluated_selection_metrics(objective_config, *, dtype):
     return metrics
 
 
+def _selection_log_beta_from_prior_samples(
+    model,
+    prior_samples,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    calibration_config,
+    selection,
+):
+    """Evaluate the fixed survey completeness for supplied prior samples."""
+    band_index = int(selection["band_index"])
+    flux_limit = float(selection["flux_limit_fnu_cgs"])
+    scale_cfg = global_sed_scale_config(calibration_config)
+    band_cfg = per_band_flux_calibration_config(calibration_config)
+    safe_samples, physical_valid = safe_decoder_inputs(prior_samples, latent_spec)
+    model_flux = model_flux_from_x(
+        safe_samples,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+    )
+    if scale_cfg.enabled:
+        model_flux = apply_global_sed_scale_to_flux(
+            model_flux,
+            jax.lax.stop_gradient(model.sed_scale.log_alpha_sed),
+        )
+    if band_cfg.enabled and model.band_calibration is not None:
+        model_flux = apply_per_band_flux_calibration_to_flux(
+            model_flux,
+            jax.lax.stop_gradient(model.band_calibration.log_alpha_band),
+        )
+    physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
+    selected_flux = model_flux[:, band_index]
+    safe_selected_flux = jnp.where(
+        physical_valid,
+        selected_flux,
+        jax.lax.stop_gradient(
+            jnp.full_like(selected_flux, jnp.asarray(flux_limit))
+        ),
+    )
+    log_beta = observed_flux_selection_log_beta_gaussian_m5(
+        safe_selected_flux,
+        flux_limit,
+        selection["m5"],
+        selection["gamma"],
+        sigma_sys_mag=float(selection.get("sigma_sys_mag", 0.0)),
+        min_sigma_fnu_cgs=float(selection.get("min_sigma_fnu_cgs", 1.0e-40)),
+    )
+    return jnp.where(physical_valid, log_beta, -jnp.inf)
+
+
 def _estimate_selection_log_alpha(
     model,
     latent_spec,
@@ -4113,54 +4166,19 @@ def _estimate_selection_log_alpha(
         if bool(selection.get("common_random_numbers", True))
         else jax.random.fold_in(key, 7919)
     )
-    band_index = int(selection["band_index"])
     flux_limit = float(selection["flux_limit_fnu_cgs"])
-    scale_cfg = global_sed_scale_config(calibration_config)
-    band_cfg = per_band_flux_calibration_config(calibration_config)
 
     def log_beta_from_prior_samples(prior_samples):
-        safe_samples, physical_valid = safe_decoder_inputs(
+        return _selection_log_beta_from_prior_samples(
+            model,
             prior_samples,
-            latent_spec,
-        )
-        model_flux = model_flux_from_x(
-            safe_samples,
             latent_spec,
             context,
             model_args,
             parameter_names,
+            calibration_config,
+            selection,
         )
-        if scale_cfg.enabled:
-            model_flux = apply_global_sed_scale_to_flux(
-                model_flux,
-                jax.lax.stop_gradient(model.sed_scale.log_alpha_sed),
-            )
-        if band_cfg.enabled and model.band_calibration is not None:
-            model_flux = apply_per_band_flux_calibration_to_flux(
-                model_flux,
-                jax.lax.stop_gradient(model.band_calibration.log_alpha_band),
-            )
-        physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
-        selected_flux = model_flux[:, band_index]
-        # Never feed an invalid DSPS value into log_ndtr. Masking only after
-        # evaluating the CDF can leave a NaN reverse-mode cotangent even when
-        # the corresponding draw contributes zero selection probability.
-        safe_selected_flux = jnp.where(
-            physical_valid,
-            selected_flux,
-            jax.lax.stop_gradient(
-                jnp.full_like(selected_flux, jnp.asarray(flux_limit))
-            ),
-        )
-        log_beta = observed_flux_selection_log_beta_gaussian_m5(
-            safe_selected_flux,
-            flux_limit,
-            selection["m5"],
-            selection["gamma"],
-            sigma_sys_mag=float(selection.get("sigma_sys_mag", 0.0)),
-            min_sigma_fnu_cgs=float(selection.get("min_sigma_fnu_cgs", 1.0e-40)),
-        )
-        return jnp.where(physical_valid, log_beta, -jnp.inf)
 
     log_alpha, metrics = estimate_log_alpha_reparameterized(
         model.prior,

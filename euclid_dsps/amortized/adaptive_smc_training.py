@@ -83,6 +83,9 @@ class SMCPosteriorBatch(NamedTuple):
     ancestor_ess: jnp.ndarray
     ancestor_ess_fraction: jnp.ndarray
     epsilon_squared_jump: jnp.ndarray
+    median_epsilon_squared_jump: jnp.ndarray
+    moved_particle_fraction: jnp.ndarray
+    unchanged_from_ancestor_fraction: jnp.ndarray
     poor_acceptance: jnp.ndarray
     poor_ancestry: jnp.ndarray
     poor_movement: jnp.ndarray
@@ -362,6 +365,15 @@ def primary_posterior_batch(result: AdaptiveBridgeSMCResult) -> SMCPosteriorBatc
             result.ancestor_ess_fraction
         ),
         epsilon_squared_jump=jax.lax.stop_gradient(result.epsilon_squared_jump),
+        median_epsilon_squared_jump=jax.lax.stop_gradient(
+            result.median_epsilon_squared_jump
+        ),
+        moved_particle_fraction=jax.lax.stop_gradient(
+            result.moved_particle_fraction
+        ),
+        unchanged_from_ancestor_fraction=jax.lax.stop_gradient(
+            result.unchanged_from_ancestor_fraction
+        ),
         poor_acceptance=jax.lax.stop_gradient(result.poor_acceptance),
         poor_ancestry=jax.lax.stop_gradient(result.poor_ancestry),
         poor_movement=jax.lax.stop_gradient(result.poor_movement),
@@ -471,6 +483,24 @@ def merge_hard_fallback(
             replace_object_field(
                 primary.epsilon_squared_jump,
                 fallback.epsilon_squared_jump,
+            )
+        ),
+        median_epsilon_squared_jump=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.median_epsilon_squared_jump,
+                fallback.median_epsilon_squared_jump,
+            )
+        ),
+        moved_particle_fraction=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.moved_particle_fraction,
+                fallback.moved_particle_fraction,
+            )
+        ),
+        unchanged_from_ancestor_fraction=jax.lax.stop_gradient(
+            replace_object_field(
+                primary.unchanged_from_ancestor_fraction,
+                fallback.unchanged_from_ancestor_fraction,
             )
         ),
         poor_acceptance=jax.lax.stop_gradient(

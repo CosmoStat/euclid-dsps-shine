@@ -76,6 +76,7 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert training.bootstrap_sleep_epochs == 12
     assert training.observed_sweeps == 3
     assert training.sleep_replay_every_smc_updates == 4
+    assert training.q_smc_macro_eligible_objects == 32
     assert training.q_gradient_clip_norm == 20.0
     assert training.prior_gradient_clip_norm == 5.0
     assert training.smoke_min_bootstrap_updates == 128
@@ -160,9 +161,12 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
         }
     ]
     log_rows = [
-        {"phase": "bootstrap_sleep", "grad_clipped": False},
+        *(
+            {"phase": "bootstrap_sleep", "grad_clipped": True}
+            for _ in range(10)
+        ),
         {
-            "phase": "observed_smc",
+            "phase": "q_smc_macro",
             "q_grad_clipped": False,
             "q_update_applied": True,
         },
@@ -198,6 +202,8 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
     )
 
     assert passing["status"] == "PASS"
+    assert passing["q_smc_gradient_clipped_fraction"] == pytest.approx(0.0)
+    assert passing["q_gradient_clipped_fraction"] > 0.8
     assert passing["bootstrap_validation"] == bootstrap
     assert passing["q_validation_improvement"][
         "q_is_ess_fraction_delta"
@@ -374,6 +380,9 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
             ancestor_ess=jnp.full((2*N,), K),
             ancestor_ess_fraction=jnp.ones((2*N,)),
             epsilon_squared_jump=jnp.ones((2*N,)),
+            median_epsilon_squared_jump=jnp.ones((2*N,)),
+            moved_particle_fraction=jnp.ones((2*N,)),
+            unchanged_from_ancestor_fraction=jnp.zeros((2*N,)),
             poor_acceptance=jnp.zeros((2*N,), dtype=bool),
             poor_ancestry=jnp.zeros((2*N,), dtype=bool),
             poor_movement=jnp.zeros((2*N,), dtype=bool),

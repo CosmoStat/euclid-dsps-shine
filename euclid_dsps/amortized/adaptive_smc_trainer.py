@@ -51,6 +51,7 @@ from .latent import (
     write_latent_prior_geometry,
 )
 from .posterior import posterior_entropy_diagnostics
+from .selection_correction import estimate_log_alpha_score_function_diagnostic
 from .train import (
     JitLatentSpec,
     LossBatch,
@@ -61,11 +62,13 @@ from .train import (
     _pad_epoch_order_for_data_parallel,
     _replicate_tree,
     _selection_correction_runtime_config,
+    _selection_log_beta_from_prior_samples,
     _shard_loss_batch,
     _sleep_runtime_config,
     _unreplicate_tree,
     build_amortized_model,
     build_training_split,
+    load_checkpoint,
     save_checkpoint,
     write_training_split_artifacts,
 )
@@ -78,6 +81,7 @@ class AdaptiveTrainingConfig:
     bootstrap_sleep_epochs: int = 12
     observed_sweeps: int = 3
     micro_batch_size: int = 128
+    q_smc_macro_eligible_objects: int = 32
     prior_macro_objects: int = 512
     min_prior_macro_objects: int = 128
     fallback_batch_size: int = 32
@@ -140,6 +144,9 @@ def adaptive_training_config(config: dict[str, Any]) -> AdaptiveTrainingConfig:
         bootstrap_sleep_epochs=int(raw.get("bootstrap_sleep_epochs", 12)),
         observed_sweeps=int(raw.get("observed_sweeps", 3)),
         micro_batch_size=int(raw.get("micro_batch_size", 128)),
+        q_smc_macro_eligible_objects=int(
+            raw.get("q_smc_macro_eligible_objects", 32)
+        ),
         prior_macro_objects=int(raw.get("prior_macro_objects", 512)),
         min_prior_macro_objects=int(raw.get("min_prior_macro_objects", 128)),
         fallback_batch_size=int(raw.get("fallback_batch_size", 32)),
@@ -522,6 +529,11 @@ def _unshard_smc_result(result: AdaptiveBridgeSMCResult) -> AdaptiveBridgeSMCRes
         ancestor_ess=objects(result.ancestor_ess),
         ancestor_ess_fraction=objects(result.ancestor_ess_fraction),
         epsilon_squared_jump=objects(result.epsilon_squared_jump),
+        median_epsilon_squared_jump=objects(result.median_epsilon_squared_jump),
+        moved_particle_fraction=objects(result.moved_particle_fraction),
+        unchanged_from_ancestor_fraction=objects(
+            result.unchanged_from_ancestor_fraction
+        ),
         poor_acceptance=objects(result.poor_acceptance),
         poor_ancestry=objects(result.poor_ancestry),
         poor_movement=objects(result.poor_movement),
@@ -555,6 +567,11 @@ def _slice_smc_result(result: AdaptiveBridgeSMCResult, count: int):
         ancestor_ess=result.ancestor_ess[:count],
         ancestor_ess_fraction=result.ancestor_ess_fraction[:count],
         epsilon_squared_jump=result.epsilon_squared_jump[:count],
+        median_epsilon_squared_jump=result.median_epsilon_squared_jump[:count],
+        moved_particle_fraction=result.moved_particle_fraction[:count],
+        unchanged_from_ancestor_fraction=(
+            result.unchanged_from_ancestor_fraction[:count]
+        ),
         poor_acceptance=result.poor_acceptance[:count],
         poor_ancestry=result.poor_ancestry[:count],
         poor_movement=result.poor_movement[:count],
@@ -596,6 +613,13 @@ def _shard_posterior(posterior: SMCPosteriorBatch, n_devices: int):
         ancestor_ess=objects(posterior.ancestor_ess),
         ancestor_ess_fraction=objects(posterior.ancestor_ess_fraction),
         epsilon_squared_jump=objects(posterior.epsilon_squared_jump),
+        median_epsilon_squared_jump=objects(
+            posterior.median_epsilon_squared_jump
+        ),
+        moved_particle_fraction=objects(posterior.moved_particle_fraction),
+        unchanged_from_ancestor_fraction=objects(
+            posterior.unchanged_from_ancestor_fraction
+        ),
         poor_acceptance=objects(posterior.poor_acceptance),
         poor_ancestry=objects(posterior.poor_ancestry),
         poor_movement=objects(posterior.poor_movement),
@@ -611,6 +635,29 @@ def _concat_posteriors(values: list[SMCPosteriorBatch]) -> SMCPosteriorBatch:
         *(jnp.concatenate([getattr(item, field) for item in values], axis=1 if field in {"particles", "normalized_weights"} else 0)
           for field in SMCPosteriorBatch._fields)
     )
+
+
+def _take_posterior_objects(
+    posterior: SMCPosteriorBatch, indices: np.ndarray | jnp.ndarray
+) -> SMCPosteriorBatch:
+    selected = jnp.asarray(indices, dtype=jnp.int32)
+    return SMCPosteriorBatch(
+        *(
+            jnp.take(
+                getattr(posterior, field),
+                selected,
+                axis=1 if field in {"particles", "normalized_weights"} else 0,
+            )
+            for field in SMCPosteriorBatch._fields
+        )
+    )
+
+
+def _shard_features(features: jnp.ndarray, n_devices: int) -> jnp.ndarray:
+    values = jnp.asarray(features)
+    if values.shape[0] % int(n_devices):
+        raise ValueError("feature object count must be divisible by devices")
+    return values.reshape(int(n_devices), values.shape[0] // int(n_devices), -1)
 
 
 def _replicate_model_for_pmap(model, devices: tuple[Any, ...]):
@@ -731,6 +778,21 @@ def _run_training_e_step(
                     "primary_epsilon_squared_jump": float(
                         np.asarray(primary_result.epsilon_squared_jump[object_index])
                     ),
+                    "primary_median_epsilon_squared_jump": float(
+                        np.asarray(
+                            primary_result.median_epsilon_squared_jump[object_index]
+                        )
+                    ),
+                    "primary_moved_particle_fraction": float(
+                        np.asarray(primary_result.moved_particle_fraction[object_index])
+                    ),
+                    "primary_unchanged_from_ancestor_fraction": float(
+                        np.asarray(
+                            primary_result.unchanged_from_ancestor_fraction[
+                                object_index
+                            ]
+                        )
+                    ),
                     "primary_poor_acceptance": bool(
                         np.asarray(primary_result.poor_acceptance[object_index])
                     ),
@@ -771,6 +833,21 @@ def _run_training_e_step(
                     ),
                     "fallback_epsilon_squared_jump": float(
                         np.asarray(fallback_result.epsilon_squared_jump[local_index])
+                    ),
+                    "fallback_median_epsilon_squared_jump": float(
+                        np.asarray(
+                            fallback_result.median_epsilon_squared_jump[local_index]
+                        )
+                    ),
+                    "fallback_moved_particle_fraction": float(
+                        np.asarray(fallback_result.moved_particle_fraction[local_index])
+                    ),
+                    "fallback_unchanged_from_ancestor_fraction": float(
+                        np.asarray(
+                            fallback_result.unchanged_from_ancestor_fraction[
+                                local_index
+                            ]
+                        )
                     ),
                     "fallback_poor_acceptance": bool(
                         np.asarray(fallback_result.poor_acceptance[local_index])
@@ -871,7 +948,30 @@ def _posterior_summary(posterior: SMCPosteriorBatch) -> dict[str, float]:
             else float("nan")
         ),
         "median_epsilon_squared_jump": (
-            float(np.median(np.asarray(posterior.epsilon_squared_jump)[eligible]))
+            float(
+                np.median(
+                    np.asarray(posterior.median_epsilon_squared_jump)[eligible]
+                )
+            )
+            if np.any(eligible)
+            else float("nan")
+        ),
+        "mean_epsilon_squared_jump": (
+            float(np.mean(np.asarray(posterior.epsilon_squared_jump)[eligible]))
+            if np.any(eligible)
+            else float("nan")
+        ),
+        "median_moved_particle_fraction": (
+            float(np.median(np.asarray(posterior.moved_particle_fraction)[eligible]))
+            if np.any(eligible)
+            else float("nan")
+        ),
+        "median_unchanged_from_ancestor_fraction": (
+            float(
+                np.median(
+                    np.asarray(posterior.unchanged_from_ancestor_fraction)[eligible]
+                )
+            )
             if np.any(eligible)
             else float("nan")
         ),
@@ -1001,14 +1101,60 @@ def _selection_alpha_gradient_preflight(runtime: RuntimeBundle, model, key):
 
     log_alpha, gradient = eqx.filter_value_and_grad(log_alpha_for_prior)(model.prior)
     gradient_norm = tree_l2_norm(gradient)
+
+    def score_surrogate_for_prior(prior):
+        candidate = eqx.tree_at(lambda tree: tree.prior, model, prior)
+
+        def log_beta(samples):
+            return _selection_log_beta_from_prior_samples(
+                candidate,
+                samples,
+                runtime.jit_latent_spec,
+                runtime.context,
+                runtime.model_args,
+                runtime.parameter_names,
+                runtime.calibration_config,
+                selection,
+            )
+
+        _score_log_alpha, surrogate, _metrics = (
+            estimate_log_alpha_score_function_diagnostic(
+                prior,
+                key,
+                n_prior_samples=count,
+                log_beta_fn=log_beta,
+            )
+        )
+        return surrogate
+
+    score_surrogate, score_gradient = eqx.filter_value_and_grad(
+        score_surrogate_for_prior
+    )(model.prior)
+    score_gradient_norm = tree_l2_norm(score_gradient)
+    pathwise_finite = bool(
+        np.asarray(jnp.isfinite(log_alpha) & tree_all_finite(gradient))
+    )
+    score_finite = bool(
+        np.asarray(
+            jnp.isfinite(score_surrogate) & tree_all_finite(score_gradient)
+        )
+    )
     return {
         "samples": count,
         "log_alpha": float(np.asarray(log_alpha)),
         "gradient_norm": float(np.asarray(gradient_norm)),
-        "finite": bool(
-            np.asarray(jnp.isfinite(log_alpha) & tree_all_finite(gradient))
-        ),
+        "finite": pathwise_finite,
         "nonzero": bool(np.asarray(gradient_norm > 0.0)),
+        "pathwise": {
+            "finite": pathwise_finite,
+            "gradient_norm": float(np.asarray(gradient_norm)),
+        },
+        "score_function_diagnostic": {
+            "finite": score_finite,
+            "gradient_norm": float(np.asarray(score_gradient_norm)),
+            "surrogate": float(np.asarray(score_surrogate)),
+            "production_enabled": False,
+        },
     }
 
 
@@ -1216,6 +1362,8 @@ def train_feniks_adaptive_smc(
         raise ValueError("micro_batch_size must be divisible by local device count")
     if training.fallback_batch_size % n_devices:
         raise ValueError("fallback_batch_size must be divisible by local device count")
+    if training.q_smc_macro_eligible_objects <= 0:
+        raise ValueError("q_smc_macro_eligible_objects must be positive")
     _log(
         verbose,
         "[adaptive-smc-train] "
@@ -1488,6 +1636,9 @@ def train_feniks_adaptive_smc(
         macro_values: list[SMCPosteriorBatch] = []
         macro_snapshot = None
         macro_object_count = 0
+        q_macro_posteriors: list[SMCPosteriorBatch] = []
+        q_macro_features: list[jnp.ndarray] = []
+        q_macro_eligible_count = 0
         n_batches = len(order) // training.micro_batch_size
         for batch_index, photometry in enumerate(
             iter_photometry_batches_from_arrays(
@@ -1520,40 +1671,109 @@ def train_feniks_adaptive_smc(
             )
             summary = _posterior_summary(posterior)
             sharded_batch = _shard_loss_batch(batch, n_devices)
-            sharded_posterior = _shard_posterior(posterior, n_devices)
-            model_replicated, q_smc_state_replicated, q_metrics, q_step_metrics = (
-                q_smc_step(
-                    model_replicated,
-                    q_smc_state_replicated,
-                    sharded_batch.features,
-                    sharded_posterior,
+            eligible_indices = np.flatnonzero(np.asarray(posterior.eligible))
+            if len(eligible_indices):
+                q_macro_posteriors.append(
+                    _take_posterior_objects(posterior, eligible_indices)
                 )
+                q_macro_features.append(
+                    jnp.take(batch.features, jnp.asarray(eligible_indices), axis=0)
+                )
+                q_macro_eligible_count += len(eligible_indices)
+            diagnostic_q_ce, _diagnostic_q_metrics = smc_q_distillation_loss(
+                _unreplicate_tree(model_replicated),
+                batch.features,
+                posterior,
             )
-            smc_update_count += int(_replicated_bool(q_step_metrics.update_applied))
             row = {
                 "phase": "observed_smc",
                 "sweep": sweep,
                 "batch": batch_index,
                 **summary,
-                "q_cross_entropy": _replicated_scalar(q_metrics.cross_entropy),
-                "q_update_applied": _replicated_bool(
-                    q_step_metrics.update_applied
-                ),
-                "q_raw_grad_norm": _replicated_scalar(
-                    q_step_metrics.raw_grad_norm
-                ),
-                "q_clipped_grad_norm": _replicated_scalar(
-                    q_step_metrics.clipped_grad_norm
-                ),
-                "q_grad_clipped": _replicated_bool(q_step_metrics.grad_clipped),
+                "q_cross_entropy": float(np.asarray(diagnostic_q_ce)),
+                "q_update_applied": False,
+                "q_raw_grad_norm": float("nan"),
+                "q_clipped_grad_norm": float("nan"),
+                "q_grad_clipped": None,
+                "q_macro_eligible_pending": q_macro_eligible_count,
             }
             log_rows.append(row)
+            q_macro_update_applied = False
+            q_target = (
+                (training.q_smc_macro_eligible_objects + n_devices - 1)
+                // n_devices
+                * n_devices
+            )
+            while q_macro_eligible_count >= q_target:
+                combined_posterior = _concat_posteriors(q_macro_posteriors)
+                combined_features = jnp.concatenate(q_macro_features, axis=0)
+                selected = np.arange(q_target, dtype=np.int32)
+                macro_posterior = _take_posterior_objects(
+                    combined_posterior, selected
+                )
+                macro_features = jnp.take(combined_features, selected, axis=0)
+                sharded_posterior = _shard_posterior(
+                    macro_posterior, n_devices
+                )
+                (
+                    model_replicated,
+                    q_smc_state_replicated,
+                    q_metrics,
+                    q_step_metrics,
+                ) = q_smc_step(
+                    model_replicated,
+                    q_smc_state_replicated,
+                    _shard_features(macro_features, n_devices),
+                    sharded_posterior,
+                )
+                applied = _replicated_bool(q_step_metrics.update_applied)
+                q_macro_update_applied |= applied
+                smc_update_count += int(applied)
+                log_rows.append(
+                    {
+                        "phase": "q_smc_macro",
+                        "sweep": sweep,
+                        "batch": batch_index,
+                        "eligible_count": q_target,
+                        "q_cross_entropy": _replicated_scalar(
+                            q_metrics.cross_entropy
+                        ),
+                        "q_update_applied": applied,
+                        "q_raw_grad_norm": _replicated_scalar(
+                            q_step_metrics.raw_grad_norm
+                        ),
+                        "q_clipped_grad_norm": _replicated_scalar(
+                            q_step_metrics.clipped_grad_norm
+                        ),
+                        "q_grad_clipped": _replicated_bool(
+                            q_step_metrics.grad_clipped
+                        ),
+                    }
+                )
+                remaining = np.arange(
+                    q_target, q_macro_eligible_count, dtype=np.int32
+                )
+                q_macro_posteriors = (
+                    [_take_posterior_objects(combined_posterior, remaining)]
+                    if len(remaining)
+                    else []
+                )
+                q_macro_features = (
+                    [jnp.take(combined_features, remaining, axis=0)]
+                    if len(remaining)
+                    else []
+                )
+                q_macro_eligible_count = len(remaining)
             if macro_snapshot is None:
                 macro_snapshot = snapshot_model(_unreplicate_tree(model_replicated))
             macro_values.append(posterior)
-            macro_object_count += int(np.sum(real_mask))
+            macro_object_count += int(np.sum(np.asarray(posterior.eligible)))
             replay_every = training.sleep_replay_every_smc_updates
-            if replay_every > 0 and smc_update_count % replay_every == 0:
+            if (
+                replay_every > 0
+                and q_macro_update_applied
+                and smc_update_count % replay_every == 0
+            ):
                 key, replay_key = jax.random.split(key)
                 (
                     model_replicated,
@@ -1626,7 +1846,19 @@ def train_feniks_adaptive_smc(
                 f"aess={summary['median_ancestor_ess_fraction']:.3f} "
                 f"jump={summary['median_epsilon_squared_jump']:.3f} "
                 f"mixfail={summary['mixing_failure_fraction']:.3f} "
-                f"q_ce={row['q_cross_entropy']:.4f}",
+                f"q_pending={q_macro_eligible_count}",
+            )
+        if q_macro_eligible_count:
+            log_rows.append(
+                {
+                    "phase": "q_smc_macro_tail",
+                    "sweep": sweep,
+                    "batch": n_batches,
+                    "eligible_count": q_macro_eligible_count,
+                    "q_update_applied": False,
+                    "q_grad_clipped": None,
+                    "skip_reason": "insufficient_eligible_objects",
+                }
             )
         if macro_values and macro_object_count >= training.min_prior_macro_objects:
             (
@@ -1767,6 +1999,163 @@ def train_feniks_adaptive_smc(
     return receipt
 
 
+def run_feniks_adaptive_smc_e_step_pilot(
+    config: dict[str, Any],
+    out_dir: str | Path,
+    *,
+    train_indices_file: str | Path,
+    validation_indices_file: str | Path,
+    checkpoint: str | Path,
+    primary_rw_scale: float = 0.30,
+    fallback_rw_scale: float = 0.15,
+    verbose: bool = True,
+) -> dict[str, Any]:
+    """Audit frozen q/prior SMC geometry without applying any optimizer update."""
+    out = ensure_dir(out_dir)
+    if (out / "pilot_receipt.json").exists():
+        raise FileExistsError(f"adaptive SMC pilot output already exists: {out}")
+    runtime = prepare_adaptive_training_runtime(
+        config,
+        out,
+        train_indices_file=train_indices_file,
+        validation_indices_file=validation_indices_file,
+    )
+    training = adaptive_training_config(runtime.config)
+    training = _smoke_training_config(
+        training,
+        train_objects=int(runtime.train_arrays.flux.shape[0]),
+    )
+    primary, fallback, proposal = adaptive_smc_configs(runtime.config)
+    primary = replace(primary, rw_scale=float(primary_rw_scale))
+    fallback = replace(fallback, rw_scale=float(fallback_rw_scale))
+    devices = tuple(jax.local_devices())
+    n_devices = len(devices)
+    if training.micro_batch_size % n_devices:
+        raise ValueError("micro_batch_size must be divisible by local device count")
+    model = load_checkpoint(checkpoint, runtime.config)
+    frozen_model = snapshot_model(model)
+    model_replicated = _replicate_model_for_pmap(frozen_model, devices)
+    primary_step = make_pmap_e_step(
+        latent_spec=runtime.jit_latent_spec,
+        context=runtime.context,
+        model_args=runtime.model_args,
+        parameter_names=runtime.parameter_names,
+        likelihood_config=runtime.likelihood_config,
+        calibration_config=runtime.calibration_config,
+        proposal_config=proposal,
+        smc_config=primary,
+    )
+    fallback_step = make_pmap_e_step(
+        latent_spec=runtime.jit_latent_spec,
+        context=runtime.context,
+        model_args=runtime.model_args,
+        parameter_names=runtime.parameter_names,
+        likelihood_config=runtime.likelihood_config,
+        calibration_config=runtime.calibration_config,
+        proposal_config=proposal,
+        smc_config=fallback,
+    )
+    key = jax.random.PRNGKey(training.seed + 710_000)
+    alpha_preflight = _selection_alpha_gradient_preflight(
+        runtime, frozen_model, jax.random.fold_in(key, 4242)
+    )
+    write_json(out / "selection_gradient_preflight.json", alpha_preflight)
+    order = np.arange(runtime.train_arrays.flux.shape[0], dtype=np.int64)
+    original_count = len(order)
+    rng = np.random.default_rng(training.seed + 710_001)
+    order, _pad_count = _pad_epoch_order_for_data_parallel(
+        order,
+        global_batch_size=training.micro_batch_size,
+        enabled=True,
+        rng=rng,
+    )
+    real_order_mask = np.arange(len(order)) < original_count
+    posterior_values: list[SMCPosteriorBatch] = []
+    log_rows: list[dict[str, Any]] = []
+    hard_rows: list[dict[str, Any]] = []
+    for batch_index, photometry in enumerate(
+        iter_photometry_batches_from_arrays(
+            runtime.train_arrays,
+            batch_size=training.micro_batch_size,
+            feature_stats=runtime.feature_stats,
+            order=order,
+            truth_names=None,
+        )
+    ):
+        start = batch_index * training.micro_batch_size
+        stop = start + training.micro_batch_size
+        key, primary_key, fallback_key = jax.random.split(key, 3)
+        posterior, _primary = _run_training_e_step(
+            model_replicated=model_replicated,
+            batch=_loss_batch(photometry),
+            real_object_mask=real_order_mask[start:stop],
+            row_indices=np.asarray(photometry.row_index, dtype=np.int64),
+            primary_step=primary_step,
+            fallback_step=fallback_step,
+            primary_key=primary_key,
+            fallback_key=fallback_key,
+            n_devices=n_devices,
+            fallback_batch_size=training.fallback_batch_size,
+            hard_rows=hard_rows,
+            sweep=0,
+            batch_index=batch_index,
+        )
+        posterior_values.append(posterior)
+        summary = _posterior_summary(posterior)
+        summary.update({"batch": batch_index, "phase": "frozen_e_step"})
+        log_rows.append(summary)
+        _log(
+            verbose,
+            "[adaptive-smc-pilot] "
+            f"batch={batch_index + 1} beta={summary['median_beta_final']:.3f} "
+            f"hard={summary['hard_fraction_after_fallback']:.3f} "
+            f"accept={summary['median_mutation_acceptance']:.3f} "
+            f"moved={summary['median_moved_particle_fraction']:.3f} "
+            f"median_jump={summary['median_epsilon_squared_jump']:.3g}",
+        )
+    aggregate = _posterior_summary(_concat_posteriors(posterior_values))
+    kernel_pass = bool(
+        np.isclose(aggregate["median_beta_final"], 1.0, atol=1.0e-6)
+        and aggregate["hard_fraction_after_fallback"] < training.hard_fraction_fail
+        and 0.15 <= aggregate["median_mutation_acceptance"] <= 0.60
+        and aggregate["mixing_failure_fraction"] < training.hard_fraction_fail
+    )
+    receipt = {
+        "status": "DIAGNOSTIC_COMPLETE",
+        "contract": "q and parent prior frozen; no optimizer update; no truth read",
+        "checkpoint": str(checkpoint),
+        "train_objects": original_count,
+        "primary_smc": asdict(primary),
+        "fallback_smc": asdict(fallback),
+        "r0": {
+            "definition": "0.70 q_T1 + 0.20 q_T1.5 + 0.10 p_eta_snapshot",
+            **asdict(proposal),
+        },
+        "selection_gradient_preflight": alpha_preflight,
+        "aggregate": aggregate,
+        "kernel_ready_for_training_smoke": kernel_pass,
+        "pathwise_selection_gradient_ready": bool(
+            alpha_preflight["finite"] and alpha_preflight["nonzero"]
+        ),
+        "score_function_gradient_diagnostic_ready": bool(
+            alpha_preflight["score_function_diagnostic"]["finite"]
+        ),
+        "q_updates_applied": 0,
+        "prior_updates_applied": 0,
+        "truth_used_for_training_or_selection": False,
+        "next_action": (
+            "RUN_FRESH_TRAINING_SMOKE"
+            if kernel_pass and alpha_preflight["finite"]
+            else "STOP_AND_REVIEW_ESTEP_OR_SELECTION_GRADIENT"
+        ),
+    }
+    pd.DataFrame(log_rows).to_csv(out / "e_step_pilot_log.csv", index=False)
+    pd.DataFrame(hard_rows).to_csv(out / "hard_object_queue.csv", index=False)
+    write_json(out / "pilot_receipt.json", receipt)
+    (out / "DONE").touch()
+    return receipt
+
+
 def _apply_prior_macro(
     *,
     model_replicated,
@@ -1900,12 +2289,21 @@ def _final_training_receipt(
         for row in log_rows
         if row.get("q_grad_clipped", row.get("grad_clipped")) is not None
     ]
+    q_smc_clipped = [
+        bool(row["q_grad_clipped"])
+        for row in log_rows
+        if row.get("phase") == "q_smc_macro"
+        and row.get("q_grad_clipped") is not None
+    ]
     prior_clipped = [
         float(row["raw_grad_norm"]) > training.prior_gradient_clip_norm
         for row in prior_rows
         if np.isfinite(row.get("raw_grad_norm", np.nan))
     ]
     q_clipped_fraction = float(np.mean(q_clipped)) if q_clipped else float("nan")
+    q_smc_clipped_fraction = (
+        float(np.mean(q_smc_clipped)) if q_smc_clipped else float("nan")
+    )
     checks = {
         "no_truth_in_training": True,
         "canonical_target_reused": True,
@@ -1949,8 +2347,9 @@ def _final_training_receipt(
             and smc_cross_entropy_improvement > 0.0
         ),
         "q_gradient_clipping_not_permanent": bool(
-            np.isfinite(q_clipped_fraction)
-            and q_clipped_fraction <= training.max_q_gradient_clipped_fraction
+            np.isfinite(q_smc_clipped_fraction)
+            and q_smc_clipped_fraction
+            <= training.max_q_gradient_clipped_fraction
         ),
         "validation_smc_cross_entropy_finite": bool(
             np.isfinite(final["validation_smc_cross_entropy"])
@@ -1981,7 +2380,7 @@ def _final_training_receipt(
             )
         ),
         "q_smc_update_nonzero": any(
-            row.get("phase") == "observed_smc" and row.get("q_update_applied")
+            row.get("phase") == "q_smc_macro" and row.get("q_update_applied")
             for row in log_rows
         ),
     }
@@ -2027,6 +2426,11 @@ def _final_training_receipt(
         "prior_macro_updates_applied": len(applied_prior),
         "q_gradient_clipped_fraction": (
             q_clipped_fraction if np.isfinite(q_clipped_fraction) else None
+        ),
+        "q_smc_gradient_clipped_fraction": (
+            q_smc_clipped_fraction
+            if np.isfinite(q_smc_clipped_fraction)
+            else None
         ),
         "prior_gradient_clipped_fraction": (
             float(np.mean(prior_clipped)) if prior_clipped else None

@@ -1,5 +1,38 @@
 # Plan
 
+## 2026-08-24 Adaptive-SMC E-step isolation
+
+- Status: implementation complete and locally validated; the frozen H100 pilot
+  remains unexecuted. The latest immutable H100 smoke failed scientifically:
+  median beta remained near 0.27, 81-94% of training objects remained hard,
+  q-only IS and held-out SMC cross-entropy worsened, and the real Gaussian-m5
+  pathwise selection gradient was non-finite. No big run is authorized.
+- Replace the movement mean used by the hard gate with per-particle diagnostics
+  (median squared epsilon displacement, moved fraction, unchanged fraction),
+  while retaining the legacy mean for compatibility.
+- Accumulate only eligible final-SMC objects before q distillation and prior
+  M-steps. Do not update either network from the 2-6 surviving objects of one
+  micro-batch; log the skipped tail explicitly.
+- Report q-SMC clipping separately from sleep clipping and compare the real
+  pathwise selection gradient with the diagnostic score-function identity.
+- Add an E-step-only H100 pilot that loads the immutable bootstrap checkpoint,
+  freezes q and the prior, and tests corrected initial RW scales before another
+  training smoke. The pilot must not submit the big run.
+- Implemented per-particle movement diagnostics and changed the hard gate to use
+  the median squared epsilon displacement rather than the legacy mean. q and
+  prior updates now accumulate eligible objects and skip undersized tails;
+  q-SMC clipping is reported separately from sleep clipping.
+- The real selection preflight now reports both the production pathwise gradient
+  and a disabled score-function diagnostic on the same DSPS/Gaussian-m5 graph.
+  The diagnostic does not alter `+log(alpha_eta)` or enable a partial update.
+- Added a 4-H100 frozen E-step pilot launcher using the immutable bootstrap
+  checkpoint and initial RW scales 0.30/0.15. It writes a diagnostic receipt and
+  never updates q/prior or submits production.
+- Local verification: 15 bridge-SMC tests, 49 adaptive/target/exact tests,
+  19 selection tests and focused receipt/movement regressions pass; Ruff,
+  compileall, shell syntax and diff checks pass. The repository-wide suite was
+  stopped after 11% because of its local runtime and is not claimed complete.
+
 ## 2026-08-22 Adaptive-SMC measured remediation
 
 - Status: implementation complete and locally validated; a fresh Jean-Zay

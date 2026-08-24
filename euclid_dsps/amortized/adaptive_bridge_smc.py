@@ -62,6 +62,9 @@ class AdaptiveBridgeSMCResult(NamedTuple):
     ancestor_ess: jnp.ndarray
     ancestor_ess_fraction: jnp.ndarray
     epsilon_squared_jump: jnp.ndarray
+    median_epsilon_squared_jump: jnp.ndarray
+    moved_particle_fraction: jnp.ndarray
+    unchanged_from_ancestor_fraction: jnp.ndarray
     poor_acceptance: jnp.ndarray
     poor_ancestry: jnp.ndarray
     poor_movement: jnp.ndarray
@@ -113,6 +116,7 @@ def run_adaptive_bridge_smc(
     resamples = jnp.zeros((n_objects,), dtype=jnp.int32)
     accepted_total = jnp.zeros((n_objects,), dtype=dtype)
     proposed_total = jnp.zeros((n_objects,), dtype=dtype)
+    ever_accepted = jnp.zeros((n_particles, n_objects), dtype=jnp.bool_)
     rw_scales = jnp.full((n_objects,), float(cfg.rw_scale), dtype=dtype)
 
     def stage_body(stage, state):
@@ -134,6 +138,7 @@ def run_adaptive_bridge_smc(
             accepted_counts,
             proposed_counts,
             current_rw_scales,
+            current_ever_accepted,
         ) = state
         active = current_beta < 1.0 - 1.0e-6
         log_ratio = _finite_logdensity(current_log_target) - current_log_r0
@@ -191,6 +196,16 @@ def run_adaptive_bridge_smc(
         moved_log_target = jnp.where(
             resample_mask[None, :], proposed_log_target, current_log_target
         )
+        resampled_ever_accepted = jnp.take_along_axis(
+            current_ever_accepted,
+            resample_indices,
+            axis=0,
+        )
+        moved_ever_accepted = jnp.where(
+            resample_mask[None, :],
+            resampled_ever_accepted,
+            current_ever_accepted,
+        )
         stage_rw_scales = current_rw_scales
         stage_accepted = jnp.zeros((n_objects,), dtype=dtype)
         stage_proposed = jnp.zeros((n_objects,), dtype=dtype)
@@ -216,6 +231,7 @@ def run_adaptive_bridge_smc(
             )
             stage_accepted += jnp.sum(accepted, axis=0)
             stage_proposed += n_particles * resample_mask.astype(dtype)
+            moved_ever_accepted |= accepted
         reached_final = active & (next_beta >= 1.0 - 1.0e-6)
         for move_index in range(int(cfg.final_steps_at_beta1)):
             move_key = jax.random.fold_in(
@@ -242,6 +258,7 @@ def run_adaptive_bridge_smc(
             )
             stage_accepted += jnp.sum(accepted, axis=0)
             stage_proposed += n_particles * reached_final.astype(dtype)
+            moved_ever_accepted |= accepted
         stage_acceptance = jnp.where(
             stage_proposed > 0,
             stage_accepted / stage_proposed,
@@ -278,6 +295,7 @@ def run_adaptive_bridge_smc(
             accepted_counts + stage_accepted,
             proposed_counts + stage_proposed,
             current_rw_scales,
+            moved_ever_accepted,
         )
 
     state = (
@@ -298,6 +316,7 @@ def run_adaptive_bridge_smc(
         accepted_total,
         proposed_total,
         rw_scales,
+        ever_accepted,
     )
     state = jax.lax.fori_loop(0, int(cfg.max_stages), stage_body, state)
     (
@@ -318,6 +337,7 @@ def run_adaptive_bridge_smc(
         accepted_total,
         proposed_total,
         rw_scales,
+        ever_accepted,
     ) = state
     log_weights = jax.nn.log_softmax(log_weights, axis=0)
     weights = jnp.exp(log_weights)
@@ -347,9 +367,15 @@ def run_adaptive_bridge_smc(
     )
     final_epsilon, _final_logdet = x_to_epsilon_fn(particles)
     initial_epsilon, _initial_logdet = x_to_epsilon_fn(initial_ancestors)
-    epsilon_squared_jump = jnp.mean(
-        jnp.sum(jnp.square(final_epsilon - initial_epsilon), axis=-1),
-        axis=0,
+    (
+        epsilon_squared_jump,
+        median_epsilon_squared_jump,
+        moved_particle_fraction,
+        unchanged_from_ancestor_fraction,
+    ) = particle_movement_diagnostics(
+        final_epsilon,
+        initial_epsilon,
+        ever_accepted,
     )
     (
         mixing_failure,
@@ -360,7 +386,7 @@ def run_adaptive_bridge_smc(
         mutation_acceptance=acceptance,
         mutation_proposed=proposed_total > 0,
         ancestor_ess_fraction=ancestor_ess_fraction,
-        epsilon_squared_jump=epsilon_squared_jump,
+        epsilon_squared_jump=median_epsilon_squared_jump,
         min_mutation_acceptance=cfg.hard_min_mutation_acceptance,
         min_ancestor_ess_fraction=cfg.hard_min_ancestor_ess_fraction,
         min_epsilon_squared_jump=cfg.hard_min_epsilon_squared_jump,
@@ -391,6 +417,13 @@ def run_adaptive_bridge_smc(
         ancestor_ess=jax.lax.stop_gradient(ancestor_ess),
         ancestor_ess_fraction=jax.lax.stop_gradient(ancestor_ess_fraction),
         epsilon_squared_jump=jax.lax.stop_gradient(epsilon_squared_jump),
+        median_epsilon_squared_jump=jax.lax.stop_gradient(
+            median_epsilon_squared_jump
+        ),
+        moved_particle_fraction=jax.lax.stop_gradient(moved_particle_fraction),
+        unchanged_from_ancestor_fraction=jax.lax.stop_gradient(
+            unchanged_from_ancestor_fraction
+        ),
         poor_acceptance=jax.lax.stop_gradient(poor_acceptance),
         poor_ancestry=jax.lax.stop_gradient(poor_ancestry),
         poor_movement=jax.lax.stop_gradient(poor_movement),
@@ -399,6 +432,24 @@ def run_adaptive_bridge_smc(
         finite_target_fraction=jax.lax.stop_gradient(finite_target_fraction),
         logZ_estimate=jax.lax.stop_gradient(logz),
         ancestor_ids=jax.lax.stop_gradient(ancestor_ids),
+    )
+
+
+def particle_movement_diagnostics(
+    final_epsilon: jnp.ndarray,
+    ancestor_epsilon: jnp.ndarray,
+    ever_accepted: jnp.ndarray,
+) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """Summarize movement across particles without hiding cloned descendants."""
+    final = jnp.asarray(final_epsilon)
+    initial = jnp.asarray(ancestor_epsilon, dtype=final.dtype)
+    accepted = jnp.asarray(ever_accepted, dtype=jnp.bool_)
+    squared_jump = jnp.sum(jnp.square(final - initial), axis=-1)
+    return (
+        jnp.mean(squared_jump, axis=0),
+        jnp.median(squared_jump, axis=0),
+        jnp.mean(accepted.astype(final.dtype), axis=0),
+        jnp.mean((squared_jump == 0.0).astype(final.dtype), axis=0),
     )
 
 

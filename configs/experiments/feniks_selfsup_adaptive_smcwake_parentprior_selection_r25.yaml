@@ -140,6 +140,7 @@ amortized:
       bootstrap_sleep_epochs: 12
       observed_sweeps: 3
       micro_batch_size: 128
+      q_smc_macro_eligible_objects: 32
       prior_macro_objects: 512
       min_prior_macro_objects: 128
       fallback_batch_size: 32

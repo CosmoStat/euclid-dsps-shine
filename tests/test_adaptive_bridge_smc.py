@@ -14,6 +14,7 @@ from euclid_dsps.amortized.adaptive_bridge_smc import (
     ancestor_ess_from_ids,
     epsilon_random_walk_mh,
     mixing_failure_mask,
+    particle_movement_diagnostics,
     run_adaptive_bridge_smc,
 )
 from euclid_dsps.amortized.adaptive_smc_training import (
@@ -347,6 +348,20 @@ def test_mixing_gate_allows_low_ancestry_only_when_particles_moved() -> None:
     assert np.array_equal(np.asarray(failure), [False, True, True])
 
 
+def test_particle_movement_median_exposes_mostly_cloned_population() -> None:
+    initial = jnp.zeros((8, 1, 2))
+    final = initial.at[0, 0].set(jnp.asarray([20.0, 0.0]))
+    accepted = jnp.zeros((8, 1), dtype=jnp.bool_).at[0, 0].set(True)
+    mean_jump, median_jump, moved_fraction, unchanged_fraction = (
+        particle_movement_diagnostics(final, initial, accepted)
+    )
+
+    assert float(mean_jump[0]) == pytest.approx(50.0)
+    assert float(median_jump[0]) == 0.0
+    assert float(moved_fraction[0]) == pytest.approx(1.0 / 8.0)
+    assert float(unchanged_fraction[0]) == pytest.approx(7.0 / 8.0)
+
+
 def test_epsilon_rw_mh_preserves_analytic_target() -> None:
     n_particles = 8192
     initial = jax.random.normal(jax.random.PRNGKey(6), (n_particles, 1, 1))
@@ -404,6 +419,13 @@ def test_low_acceptance_adapts_rw_scale_and_records_particle_movement() -> None:
     assert jnp.all(result.unique_ancestor_fraction == 1.0)
     assert jnp.all(result.epsilon_squared_jump > 0.0)
     assert jnp.all(jnp.isfinite(result.epsilon_squared_jump))
+    assert jnp.all(result.median_epsilon_squared_jump >= 0.0)
+    assert jnp.all(result.moved_particle_fraction >= 0.0)
+    assert jnp.all(result.moved_particle_fraction <= 1.0)
+    assert jnp.allclose(
+        result.unchanged_from_ancestor_fraction,
+        1.0 - result.moved_particle_fraction,
+    )
 
 
 def test_unreachable_budget_marks_hard_without_fake_gradient_sample() -> None:
@@ -457,6 +479,9 @@ def _fake_smc_result(*, n_particles: int, n_objects: int, hard):
         ancestor_ess=jnp.full((n_objects,), float(n_particles)),
         ancestor_ess_fraction=jnp.ones((n_objects,)),
         epsilon_squared_jump=jnp.ones((n_objects,)),
+        median_epsilon_squared_jump=jnp.ones((n_objects,)),
+        moved_particle_fraction=jnp.ones((n_objects,)),
+        unchanged_from_ancestor_fraction=jnp.zeros((n_objects,)),
         poor_acceptance=jnp.zeros((n_objects,), dtype=jnp.bool_),
         poor_ancestry=jnp.zeros((n_objects,), dtype=jnp.bool_),
         poor_movement=jnp.zeros((n_objects,), dtype=jnp.bool_),
@@ -590,6 +615,9 @@ def test_smc_losses_stop_particles_and_separate_q_from_prior() -> None:
         ancestor_ess=jnp.full((3,), 5.0),
         ancestor_ess_fraction=jnp.ones((3,)),
         epsilon_squared_jump=jnp.ones((3,)),
+        median_epsilon_squared_jump=jnp.ones((3,)),
+        moved_particle_fraction=jnp.ones((3,)),
+        unchanged_from_ancestor_fraction=jnp.zeros((3,)),
         poor_acceptance=jnp.zeros((3,), dtype=jnp.bool_),
         poor_ancestry=jnp.zeros((3,), dtype=jnp.bool_),
         poor_movement=jnp.zeros((3,), dtype=jnp.bool_),
@@ -681,6 +709,9 @@ def test_realnvp_prior_data_and_trust_gradients_are_finite_at_extremes() -> None
         ancestor_ess=jnp.full((3,), float(particle_count)),
         ancestor_ess_fraction=jnp.ones((3,)),
         epsilon_squared_jump=jnp.ones((3,)),
+        median_epsilon_squared_jump=jnp.ones((3,)),
+        moved_particle_fraction=jnp.ones((3,)),
+        unchanged_from_ancestor_fraction=jnp.zeros((3,)),
         poor_acceptance=jnp.zeros((3,), dtype=jnp.bool_),
         poor_ancestry=jnp.zeros((3,), dtype=jnp.bool_),
         poor_movement=jnp.zeros((3,), dtype=jnp.bool_),
@@ -768,6 +799,9 @@ def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
         ancestor_ess=jnp.full((4,), 8.0),
         ancestor_ess_fraction=jnp.ones((4,)),
         epsilon_squared_jump=jnp.ones((4,)),
+        median_epsilon_squared_jump=jnp.ones((4,)),
+        moved_particle_fraction=jnp.ones((4,)),
+        unchanged_from_ancestor_fraction=jnp.zeros((4,)),
         poor_acceptance=jnp.zeros((4,), dtype=jnp.bool_),
         poor_ancestry=jnp.zeros((4,), dtype=jnp.bool_),
         poor_movement=jnp.zeros((4,), dtype=jnp.bool_),

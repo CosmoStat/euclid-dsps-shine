@@ -608,6 +608,19 @@ def _run_adaptive_smc_benchmark(
             "epsilon_squared_jump": float(
                 np.asarray(jax.device_get(result.epsilon_squared_jump[0]))
             ),
+            "median_epsilon_squared_jump": float(
+                np.asarray(
+                    jax.device_get(result.median_epsilon_squared_jump[0])
+                )
+            ),
+            "moved_particle_fraction": float(
+                np.asarray(jax.device_get(result.moved_particle_fraction[0]))
+            ),
+            "unchanged_from_ancestor_fraction": float(
+                np.asarray(
+                    jax.device_get(result.unchanged_from_ancestor_fraction[0])
+                )
+            ),
             "poor_acceptance": bool(
                 np.asarray(jax.device_get(result.poor_acceptance[0]))
             ),
@@ -947,6 +960,15 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             ]
             row["adaptive_smc_epsilon_squared_jump"] = selected_smc[
                 "epsilon_squared_jump"
+            ]
+            row["adaptive_smc_median_epsilon_squared_jump"] = selected_smc[
+                "median_epsilon_squared_jump"
+            ]
+            row["adaptive_smc_moved_particle_fraction"] = selected_smc[
+                "moved_particle_fraction"
+            ]
+            row["adaptive_smc_unchanged_from_ancestor_fraction"] = selected_smc[
+                "unchanged_from_ancestor_fraction"
             ]
             row["adaptive_smc_poor_acceptance"] = selected_smc[
                 "poor_acceptance"
