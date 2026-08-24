@@ -100,6 +100,9 @@
   complete: `49 passed` across the teacher audit, exact-posterior and bridge-SMC
   suites, with Ruff, compileall, CLI, shell syntax and diff checks passing. No
   Jean-Zay job or big run was submitted.
+- Teacher audit concurrency is configurable via `MAX_CONCURRENT` and defaults
+  to all eight array tasks. A one-shot monitor reports Slurm state per task plus
+  teacher, NUTS-chain, NUTS-galaxy, distilled-q and summary artifact counts.
 
 - Status: implementation complete and locally validated; the frozen H100 pilot
   remains unexecuted. The latest immutable H100 smoke failed scientifically:

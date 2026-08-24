@@ -7,6 +7,7 @@ CONFIG="${CONFIG:-configs/experiments/feniks_selfsup_adaptive_smcwake_parentprio
 CATALOG_DIR="${CATALOG_DIR:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
+MAX_CONCURRENT="${MAX_CONCURRENT:-8}"
 AUDIT_TAG="${AUDIT_TAG:-feniks_smc_teacher_audit_$(date +%Y%m%d_%H%M%S)}"
 AUDIT_ROOT="${AUDIT_ROOT:-outputs/runs/$AUDIT_TAG}"
 BOOTSTRAP_ROOT="$AUDIT_ROOT/bootstrap"
@@ -17,6 +18,11 @@ DISTILLED_CHECKPOINT="$CURRICULUM_ROOT/checkpoints/q_exact_curriculum.eqx"
 FEATURE_STATS="$CURRICULUM_ROOT/feature_stats.json"
 COHORT_FILE="$SOURCE_SMOKE_ROOT/manifests/exact_cohort.csv"
 DATASET="$CATALOG_DIR/test.parquet"
+
+if (( MAX_CONCURRENT < 1 || MAX_CONCURRENT > 8 )); then
+  echo "[teacher-audit][error] MAX_CONCURRENT must be in [1, 8]" >&2
+  exit 2
+fi
 
 cd "$REPO_DIR"
 for path in "$CONFIG" "$DATASET" "$FEATURE_STATS" "$COHORT_FILE" \
@@ -71,19 +77,20 @@ PY
 export REPO_DIR MINICONDA_PATH CONDA_ENV CONFIG DATASET FEATURE_STATS
 export BOOTSTRAP_CHECKPOINT DISTILLED_CHECKPOINT BOOTSTRAP_ROOT DISTILLED_ROOT
 export AUDIT_SUMMARY
-raw=$(sbatch --parsable --array="0-7%4" scripts/feniks_smc_teacher_audit_h100.slurm)
+raw=$(sbatch --parsable --array="0-7%${MAX_CONCURRENT}" \
+  scripts/feniks_smc_teacher_audit_h100.slurm)
 AUDIT_JOB="${raw%%;*}"
 final_raw=$(sbatch --parsable --dependency="afterok:${AUDIT_JOB}" \
   scripts/feniks_smc_teacher_audit_finalize.slurm)
 AUDIT_FINALIZER_JOB="${final_raw%%;*}"
 
 latest=outputs/logs/feniks_smc_teacher_audit_latest.env
-printf 'export AUDIT_JOB=%q\nexport AUDIT_FINALIZER_JOB=%q\nexport AUDIT_ROOT=%q\nexport BOOTSTRAP_ROOT=%q\nexport DISTILLED_ROOT=%q\nexport AUDIT_SUMMARY=%q\n' \
+printf 'export AUDIT_JOB=%q\nexport AUDIT_FINALIZER_JOB=%q\nexport AUDIT_ROOT=%q\nexport BOOTSTRAP_ROOT=%q\nexport DISTILLED_ROOT=%q\nexport AUDIT_SUMMARY=%q\nexport MAX_CONCURRENT=%q\n' \
   "$AUDIT_JOB" "$AUDIT_FINALIZER_JOB" "$AUDIT_ROOT" "$BOOTSTRAP_ROOT" \
-  "$DISTILLED_ROOT" "$AUDIT_SUMMARY" > "$latest"
+  "$DISTILLED_ROOT" "$AUDIT_SUMMARY" "$MAX_CONCURRENT" > "$latest"
 echo "audit_job=$AUDIT_JOB"
 echo "audit_finalizer_job=$AUDIT_FINALIZER_JOB"
 echo "audit_root=$AUDIT_ROOT"
-echo "array=0-7%4 one_galaxy_per_H100"
+echo "array=0-7%${MAX_CONCURRENT} one_galaxy_per_H100"
 echo "big_job_not_submitted=1"
 echo "latest_env=$latest"
