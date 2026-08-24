@@ -9,7 +9,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -162,6 +162,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frac-tune", default="0.4,0.4,0.2")
     parser.add_argument("--desired-energy-var", type=float, default=5.0e-4)
     parser.add_argument("--seed", type=int, default=260727)
+    parser.add_argument(
+        "--adaptive-smc-mode",
+        choices=("config", "teacher", "skip"),
+        default="config",
+        help=(
+            "Use configured production budgets, the bounded K128/48-stage "
+            "teacher budget, or skip adaptive SMC generation."
+        ),
+    )
+    parser.add_argument(
+        "--ignore-truth",
+        action="store_true",
+        help="Do not load latent truth columns for no-truth diagnostic contracts.",
+    )
+    parser.add_argument(
+        "--skip-defensive-is",
+        action="store_true",
+        help="Skip the legacy defensive-IS diagnostic when it is not under audit.",
+    )
     parser.add_argument("--overwrite", action="store_true")
     return parser.parse_args()
 
@@ -170,6 +189,8 @@ def main() -> None:
     args = parse_args()
     config = load_config(args.config)
     config["catalog_path"] = str(args.dataset)
+    if args.ignore_truth:
+        config["truth"] = {"parameter_columns": {}}
     if args.command == "prepare-cohort":
         prepare_cohort(args, config)
     elif args.command == "prepare-galaxy":
@@ -306,13 +327,14 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
         },
     )
     adaptive_smc_manifest = None
-    if _adaptive_smc_enabled(runtime.config):
+    if _adaptive_smc_enabled(runtime.config) and args.adaptive_smc_mode != "skip":
         key, adaptive_smc_key = jax.random.split(key)
         adaptive_smc_manifest = _run_adaptive_smc_benchmark(
             runtime,
             adaptive_smc_key,
             galaxy_dir,
             seed=int(args.seed) + galaxy_index * 10_000 + 75_000,
+            mode=str(args.adaptive_smc_mode),
         )
     proposal_components = (
         ((runtime.config.get("amortized", {}) or {}).get("objective", {}) or {})
@@ -320,7 +342,7 @@ def prepare_galaxy(args: argparse.Namespace, config: dict[str, Any]) -> None:
         .get("proposal", {})
         .get("components")
     )
-    if proposal_components:
+    if proposal_components and not args.skip_defensive_is:
         key, defensive_key = jax.random.split(key)
         defensive = defensive_posterior_proposal(
             runtime.model,
@@ -497,10 +519,11 @@ def _run_adaptive_smc_benchmark(
     galaxy_dir: Path,
     *,
     seed: int,
+    mode: str = "config",
 ) -> dict[str, object]:
     """Run the production bridge and persist a weighted exact-target posterior."""
-    primary_config, fallback_config, proposal_config = adaptive_smc_configs(
-        runtime.config
+    primary_config, fallback_config, proposal_config = (
+        _adaptive_smc_benchmark_configs(runtime.config, mode=mode)
     )
     model_snapshot = snapshot_model(runtime.model)
     primary_key, fallback_key, resample_key = jax.random.split(key, 3)
@@ -524,7 +547,9 @@ def _run_adaptive_smc_benchmark(
     )
     posterior = primary_posterior_batch(primary)
     fallback = None
-    if bool(np.asarray(jax.device_get(primary.hard_object_flag[0]))):
+    if fallback_config is not None and bool(
+        np.asarray(jax.device_get(primary.hard_object_flag[0]))
+    ):
         fallback = run_model_adaptive_smc_e_step(
             **target_kwargs,
             key=fallback_key,
@@ -646,6 +671,7 @@ def _run_adaptive_smc_benchmark(
 
     payload = {
         "status": "complete",
+        "benchmark_mode": mode,
         "target": "canonical_posterior_log_target",
         "initial_proposal": "0.70 q_T1 + 0.20 q_T1.5 + 0.10 p_eta",
         "primary": result_payload(primary),
@@ -659,6 +685,20 @@ def _run_adaptive_smc_benchmark(
     }
     _write_json(galaxy_dir / "adaptive_smc_diagnostics.json", payload)
     return payload
+
+
+def _adaptive_smc_benchmark_configs(
+    config: dict[str, Any],
+    *,
+    mode: str,
+):
+    """Return explicit standard or extended-teacher benchmark budgets."""
+    primary, fallback, proposal = adaptive_smc_configs(config)
+    if mode == "config":
+        return primary, fallback, proposal
+    if mode == "teacher":
+        return replace(fallback, max_stages=48), None, proposal
+    raise ValueError(f"unsupported adaptive SMC benchmark mode: {mode}")
 
 
 def _adaptive_smc_enabled(config: dict[str, Any]) -> bool:

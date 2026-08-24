@@ -91,6 +91,16 @@
 
 ## 2026-08-24 Adaptive-SMC E-step isolation
 
+- Teacher audit follow-up: add one immutable eight-object diagnostic comparing
+  the bootstrap and distilled q checkpoints against the same extended bridge
+  SMC teacher and canonical-target NUTS reference. Persist q-only IS/PSIS,
+  marginal location/width, covariance geometry, SMC ancestry/movement and NUTS
+  convergence diagnostics. This is a diagnostic gate only; no q/prior update
+  and no truth-dependent loss are permitted. Implementation is locally
+  complete: `49 passed` across the teacher audit, exact-posterior and bridge-SMC
+  suites, with Ruff, compileall, CLI, shell syntax and diff checks passing. No
+  Jean-Zay job or big run was submitted.
+
 - Status: implementation complete and locally validated; the frozen H100 pilot
   remains unexecuted. The latest immutable H100 smoke failed scientifically:
   median beta remained near 0.27, 81-94% of training objects remained hard,
