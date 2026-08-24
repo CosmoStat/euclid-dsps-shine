@@ -23,6 +23,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exact-objects", type=int, default=96)
+    parser.add_argument("--min-exact-objects", type=int, default=64)
     parser.add_argument("--extended-max-stages", type=int, default=48)
     parser.add_argument("--distillation-steps", type=int, default=64)
     parser.add_argument("--primary-rw-scale", type=float, default=0.30)
@@ -53,6 +54,7 @@ def main() -> None:
         validation_indices_file=args.validation_indices_file,
         checkpoint=args.checkpoint,
         exact_objects=args.exact_objects,
+        min_exact_objects=args.min_exact_objects,
         extended_max_stages=args.extended_max_stages,
         distillation_steps=args.distillation_steps,
         primary_rw_scale=args.primary_rw_scale,

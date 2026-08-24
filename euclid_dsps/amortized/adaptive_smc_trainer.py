@@ -2227,6 +2227,22 @@ def run_feniks_adaptive_smc_e_step_pilot(
     return receipt
 
 
+def _usable_exact_object_count(
+    collected: int,
+    *,
+    minimum: int,
+    n_devices: int,
+) -> int:
+    """Return the device-divisible eligible cohort, or zero below its gate."""
+    if int(minimum) <= 0 or int(n_devices) <= 0:
+        raise ValueError("minimum and n_devices must be positive")
+    usable = (int(collected) // int(n_devices)) * int(n_devices)
+    required = (
+        (int(minimum) + int(n_devices) - 1) // int(n_devices) * int(n_devices)
+    )
+    return usable if usable >= required else 0
+
+
 def run_feniks_adaptive_smc_q_curriculum(
     config: dict[str, Any],
     out_dir: str | Path,
@@ -2235,6 +2251,7 @@ def run_feniks_adaptive_smc_q_curriculum(
     validation_indices_file: str | Path,
     checkpoint: str | Path,
     exact_objects: int = 96,
+    min_exact_objects: int = 64,
     extended_max_stages: int = 48,
     distillation_steps: int = 64,
     primary_rw_scale: float = 0.30,
@@ -2251,8 +2268,16 @@ def run_feniks_adaptive_smc_q_curriculum(
     out = ensure_dir(out_dir)
     if (out / "curriculum_receipt.json").exists():
         raise FileExistsError(f"adaptive SMC curriculum output already exists: {out}")
-    if int(exact_objects) <= 0 or int(distillation_steps) <= 0:
-        raise ValueError("exact_objects and distillation_steps must be positive")
+    if (
+        int(exact_objects) <= 0
+        or int(min_exact_objects) <= 0
+        or int(distillation_steps) <= 0
+    ):
+        raise ValueError(
+            "exact_objects, min_exact_objects and distillation_steps must be positive"
+        )
+    if int(min_exact_objects) > int(exact_objects):
+        raise ValueError("min_exact_objects cannot exceed exact_objects")
     if int(extended_max_stages) <= 12:
         raise ValueError("extended_max_stages must exceed the standard fallback")
     runtime = prepare_adaptive_training_runtime(
@@ -2484,10 +2509,15 @@ def run_feniks_adaptive_smc_q_curriculum(
     q_updates_applied = 0
     exact_cross_entropy_before = float("nan")
     exact_cross_entropy_after = float("nan")
-    if exact_count >= target:
+    usable_exact_count = _usable_exact_object_count(
+        exact_count,
+        minimum=int(min_exact_objects),
+        n_devices=n_devices,
+    )
+    if usable_exact_count:
         combined_posterior = _concat_posteriors(exact_posteriors)
         combined_features = jnp.concatenate(exact_features, axis=0)
-        selected = np.arange(target, dtype=np.int32)
+        selected = np.arange(usable_exact_count, dtype=np.int32)
         macro_posterior = _take_posterior_objects(combined_posterior, selected)
         macro_features = jnp.take(combined_features, selected, axis=0)
         # Direct E-step output is committed to filter_pmap's internal mesh.
@@ -2531,7 +2561,7 @@ def run_feniks_adaptive_smc_q_curriculum(
             q_rows.append(
                 {
                     "step": step_index + 1,
-                    "eligible_count": target,
+                    "eligible_count": usable_exact_count,
                     "cross_entropy": _replicated_scalar(metrics.cross_entropy),
                     "raw_grad_norm": _replicated_scalar(step_metrics.raw_grad_norm),
                     "clipped_grad_norm": _replicated_scalar(
@@ -2634,8 +2664,10 @@ def run_feniks_adaptive_smc_q_curriculum(
         "curriculum_checkpoint": str(checkpoint_path) if q_updates_applied else None,
         "train_objects_available": original_count,
         "exact_objects_requested": int(exact_objects),
+        "minimum_exact_objects_required": int(min_exact_objects),
         "exact_objects_target_padded": target,
         "exact_objects_collected": exact_count,
+        "exact_objects_used": usable_exact_count,
         "extended_smc": asdict(extended),
         "standard_primary_smc": asdict(primary),
         "standard_fallback_smc": asdict(fallback),

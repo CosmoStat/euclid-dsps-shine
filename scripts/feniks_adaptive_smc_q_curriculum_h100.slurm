@@ -22,6 +22,7 @@ MANIFEST_ROOT="${MANIFEST_ROOT:?MANIFEST_ROOT is required}"
 BOOTSTRAP_CHECKPOINT="${BOOTSTRAP_CHECKPOINT:?BOOTSTRAP_CHECKPOINT is required}"
 CURRICULUM_ROOT="${CURRICULUM_ROOT:?CURRICULUM_ROOT is required}"
 EXACT_OBJECTS="${EXACT_OBJECTS:-96}"
+MIN_EXACT_OBJECTS="${MIN_EXACT_OBJECTS:-64}"
 EXTENDED_MAX_STAGES="${EXTENDED_MAX_STAGES:-48}"
 DISTILLATION_STEPS="${DISTILLATION_STEPS:-64}"
 
@@ -48,6 +49,7 @@ python scripts/run_feniks_adaptive_smc_q_curriculum.py \
   --checkpoint "$BOOTSTRAP_CHECKPOINT" \
   --out "$CURRICULUM_ROOT" \
   --exact-objects "$EXACT_OBJECTS" \
+  --min-exact-objects "$MIN_EXACT_OBJECTS" \
   --extended-max-stages "$EXTENDED_MAX_STAGES" \
   --distillation-steps "$DISTILLATION_STEPS" \
   --expected-devices 4

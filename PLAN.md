@@ -80,6 +80,14 @@
   that runtime selection normalization preserves `score_function`; the focused
   selection/config suite passes (`27 passed`) with Ruff, compileall, shell
   syntax and diff checks. No parent-prior update or big job is enabled.
+- Curriculum `1317167` completed all 96 extended attempts with 95 eligible
+  exact posteriors and a finite production score gradient, but the diagnostic
+  incorrectly required 96/96 before applying any q update. This violates the
+  hard-object exclusion contract. Use the largest eligible count divisible by
+  the device count (92 here), require at least 64 exact objects, and report
+  attempted/collected/used counts separately. The focused trainer, selection
+  and bridge-SMC suite passes (`44 passed`), together with Ruff, compileall,
+  shell syntax and diff checks; no remote job or big run was submitted.
 
 ## 2026-08-24 Adaptive-SMC E-step isolation
 

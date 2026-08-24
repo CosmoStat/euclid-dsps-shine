@@ -19,6 +19,7 @@ from euclid_dsps.amortized.adaptive_smc_trainer import (
     _config_without_truth,
     _final_training_receipt,
     _smoke_training_config,
+    _usable_exact_object_count,
     adaptive_smc_configs,
     adaptive_training_config,
 )
@@ -115,6 +116,17 @@ def test_smoke_runs_a_minimum_number_of_fresh_sleep_updates() -> None:
     assert smoke.bootstrap_sleep_epochs == 43
     assert smoke.bootstrap_sleep_epochs * 3 >= 128
     assert smoke.observed_sweeps == 1
+
+
+def test_exact_curriculum_uses_largest_device_divisible_supported_cohort() -> None:
+    assert _usable_exact_object_count(95, minimum=64, n_devices=4) == 92
+    assert _usable_exact_object_count(64, minimum=64, n_devices=4) == 64
+    assert _usable_exact_object_count(63, minimum=64, n_devices=4) == 0
+
+    with pytest.raises(ValueError, match="positive"):
+        _usable_exact_object_count(95, minimum=0, n_devices=4)
+    with pytest.raises(ValueError, match="positive"):
+        _usable_exact_object_count(95, minimum=64, n_devices=0)
 
 
 def test_mixed_dtype_adaptive_checkpoint_loads_with_matched_template(
