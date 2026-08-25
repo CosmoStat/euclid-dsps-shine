@@ -89,6 +89,12 @@
   x64 transport proposal was returned against an f32 cached state on the skip
   branch. Proposal particles and cached densities are now cast back to their
   state dtypes before entering `lax.cond`/`fori_loop` state.
+- Four-H100 retry `1359371` passed prepare, sleep and hierarchy compilation,
+  then exposed replicated `NamedSharding(P())` metadata leaking from ordinary
+  IS particles into the selective continuation `pmap`, whose leading input
+  axis must be mapped. The continuation boundary now materializes these small
+  selected buffers on the host, reshapes them as contiguous device-major
+  arrays, and lets the next `pmap` establish its required axis sharding.
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 

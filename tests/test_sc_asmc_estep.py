@@ -32,7 +32,10 @@ def test_array_hierarchy_helpers_compile() -> None:
     sharded = _shard_particle_objects(padded, 4)
     assert padded.shape == (64, 8, 2)
     assert sharded.shape == (4, 64, 2, 2)
+    assert isinstance(sharded, np.ndarray)
+    assert sharded.flags.c_contiguous
     np.testing.assert_array_equal(np.asarray(padded[:, 3]), np.asarray(particles[:, 0]))
+    np.testing.assert_array_equal(sharded[1, :, 1], np.asarray(particles[:, 0]))
 
 
 def test_micro_batch_candidates_are_device_divisible_and_descending() -> None:

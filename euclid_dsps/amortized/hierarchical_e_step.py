@@ -606,15 +606,19 @@ def _shard_object_batch(batch: Any, n_devices: int) -> Any:
     )
 
 
-def _shard_particle_objects(value: jnp.ndarray, n_devices: int) -> jnp.ndarray:
-    array = jnp.asarray(value)
+def _shard_particle_objects(value: jnp.ndarray, n_devices: int) -> np.ndarray:
+    # Selective continuation starts from a previous pmap result. Materialize it
+    # on the host so its replicated NamedSharding cannot leak into the next pmap.
+    array = np.asarray(jax.device_get(value))
     particles, objects = array.shape[:2]
     if objects % int(n_devices):
         raise ValueError("particle objects are not divisible by local devices")
     local = objects // int(n_devices)
     axes = (1, 0, 2, *range(3, array.ndim + 1))
-    return array.reshape(particles, int(n_devices), local, *array.shape[2:]).transpose(
-        axes
+    return np.ascontiguousarray(
+        array.reshape(
+            particles, int(n_devices), local, *array.shape[2:]
+        ).transpose(axes)
     )
 
 
