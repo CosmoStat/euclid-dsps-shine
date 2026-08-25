@@ -21,6 +21,6 @@ TASK_ID="${SLURM_ARRAY_TASK_ID:?This launcher must run as a Slurm array}"
 
 export RUN_ROOT="$SMOKE16_ROOT/shard_$TASK_ID"
 export SMOKE_ROW_OFFSET="$((TASK_ID * 8))"
-export SMOKE4_ROOT
+export UPSTREAM_SMOKE_ROOT="$SMOKE4_ROOT"
 
 exec bash scripts/feniks_sc_asmc_em_4gpu_smoke.slurm

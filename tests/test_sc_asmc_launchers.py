@@ -51,12 +51,18 @@ def test_sixteen_gpu_smoke_uses_disjoint_four_gpu_shards() -> None:
     launcher = Path("scripts/feniks_sc_asmc_em_16gpu_smoke.slurm").read_text(
         encoding="utf-8"
     )
+    four_gpu = Path("scripts/feniks_sc_asmc_em_4gpu_smoke.slurm").read_text(
+        encoding="utf-8"
+    )
     runner = Path("scripts/run_feniks_sc_asmc_em.py").read_text(encoding="utf-8")
 
     assert "#SBATCH --array=0-3%4" in launcher
     assert "#SBATCH --gres=gpu:4" in launcher
     assert 'RUN_ROOT="$SMOKE16_ROOT/shard_$TASK_ID"' in launcher
     assert 'SMOKE_ROW_OFFSET="$((TASK_ID * 8))"' in launcher
+    assert 'UPSTREAM_SMOKE_ROOT="$SMOKE4_ROOT"' in launcher
+    assert '--smoke-root "$UPSTREAM_SMOKE_ROOT"' in four_gpu
+    assert '--smoke-root "$SMOKE4_ROOT"' not in four_gpu
     assert "--row-offset" in runner
 
 

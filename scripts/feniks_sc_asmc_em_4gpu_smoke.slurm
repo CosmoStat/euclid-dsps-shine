@@ -41,9 +41,9 @@ COMMON=(
   --config "$CONFIG" --catalog "$CATALOG" --out "$RUN_ROOT"
   --require-gpu --expected-devices 4
 )
-if [[ -n "${SMOKE4_ROOT:-}" ]]; then
+if [[ -n "${UPSTREAM_SMOKE_ROOT:-}" ]]; then
   python scripts/validate_feniks_sc_asmc_smoke.py \
-    --smoke-root "$SMOKE4_ROOT" --config "$CONFIG" --catalog "$CATALOG"
+    --smoke-root "$UPSTREAM_SMOKE_ROOT" --config "$CONFIG" --catalog "$CATALOG"
 fi
 "${COMMON[@]}" prepare --estep-shards 1
 "${COMMON[@]}" sleep --smoke

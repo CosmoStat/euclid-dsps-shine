@@ -75,6 +75,10 @@
   `append_mask` and `error_epsilon`, and its feature builder matches catalogue
   validity and mask semantics. The failed smoke remains non-scientific and the
   dependent 16-H100 smoke and production jobs were cancelled.
+- The first retry also exposed environment leakage in the launcher: an exported
+  output `SMOKE4_ROOT` was mistaken for an upstream receipt and validated before
+  creation. Upstream validation now uses the distinct
+  `UPSTREAM_SMOKE_ROOT` variable, set only by the 16-H100 scaling smoke.
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 
