@@ -103,12 +103,12 @@ def run_adaptive_bridge_smc(
     log_weights = jnp.full((n_particles, n_objects), log_uniform, dtype=dtype)
     density_shape = (n_particles, n_objects)
     log_r0 = (
-        _finite_logdensity(log_r0_fn(particles))
+        _finite_logdensity(jnp.asarray(log_r0_fn(particles), dtype=dtype))
         if initial_log_r0 is None
         else _finite_logdensity(jnp.asarray(initial_log_r0, dtype=dtype))
     )
     log_target = (
-        log_target_fn(particles)
+        jnp.asarray(log_target_fn(particles), dtype=dtype)
         if initial_log_target is None
         else jnp.asarray(initial_log_target, dtype=dtype)
     )
@@ -618,8 +618,13 @@ def _epsilon_random_walk_mh_active(
         dtype=epsilon.dtype,
     )
     proposal_x, proposal_logdet = epsilon_to_x_fn(proposal_epsilon)
-    proposal_log_r0 = log_r0_fn(proposal_x)
-    proposal_log_target = log_target_fn(proposal_x)
+    proposal_x = jnp.asarray(proposal_x, dtype=particles.dtype)
+    proposal_log_r0 = jnp.asarray(
+        log_r0_fn(proposal_x), dtype=current_log_r0.dtype
+    )
+    proposal_log_target = jnp.asarray(
+        log_target_fn(proposal_x), dtype=current_log_target.dtype
+    )
     current_log_gamma = _bridge_from_values(
         current_log_r0,
         current_log_target,

@@ -84,6 +84,11 @@
   unused truth schema metadata that the observed-only runtime deliberately
   strips. Canonical SC-ASMC-EM hashing now erases the complete truth metadata
   block while continuing to bind every computational no-truth setting.
+- Four-H100 retry `1358885` then passed both prepare and sleep receipts before
+  exposing a JAX control-flow dtype mismatch in the SMC mutation kernel: an
+  x64 transport proposal was returned against an f32 cached state on the skip
+  branch. Proposal particles and cached densities are now cast back to their
+  state dtypes before entering `lax.cond`/`fori_loop` state.
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 

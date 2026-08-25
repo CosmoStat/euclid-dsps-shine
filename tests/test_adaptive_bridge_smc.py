@@ -55,6 +55,39 @@ def _scaled_identity_transport(scale: float, dimension: int):
     return forward, inverse
 
 
+@pytest.mark.parametrize("active", [False, True])
+def test_epsilon_move_preserves_state_dtype_with_upcasting_transport(active) -> None:
+    particles = jnp.zeros((4, 1, 2), dtype=jnp.float32)
+
+    def log_density(value):
+        return -jnp.sum(jnp.square(value), axis=-1)
+
+    def forward(value):
+        promoted = value.astype(jnp.float64)
+        return promoted, jnp.zeros(promoted.shape[:-1], dtype=jnp.float64)
+
+    def inverse(value):
+        promoted = value.astype(jnp.float64)
+        return promoted, jnp.zeros(promoted.shape[:-1], dtype=jnp.float64)
+
+    moved, accepted = jax.jit(
+        lambda value: epsilon_random_walk_mh(
+            key=jax.random.PRNGKey(7),
+            particles=value,
+            beta=jnp.ones((1,), dtype=jnp.float32),
+            object_mask=jnp.asarray([active]),
+            log_r0_fn=log_density,
+            log_target_fn=log_density,
+            epsilon_to_x_fn=forward,
+            x_to_epsilon_fn=inverse,
+            rw_scale=0.1,
+        )
+    )(particles)
+
+    assert moved.dtype == particles.dtype
+    assert accepted.dtype == jnp.bool_
+
+
 def _sample_two_scale_mixture(key, shape, *, narrow, broad, narrow_fraction):
     component_key, noise_key = jax.random.split(key)
     narrow_component = jax.random.bernoulli(
