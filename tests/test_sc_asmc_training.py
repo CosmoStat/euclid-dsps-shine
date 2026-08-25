@@ -69,6 +69,7 @@ def test_ema_rejects_invalid_decay() -> None:
 
 
 def test_component_resume_is_bound_to_workflow_config(tmp_path) -> None:
+    from euclid_dsps.amortized.adaptive_smc_trainer import _config_without_truth
     from euclid_dsps.amortized.features import FeatureStats, feature_stats_hash
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
     from euclid_dsps.amortized.posterior_bank import sha256_file
@@ -84,7 +85,11 @@ def test_component_resume_is_bound_to_workflow_config(tmp_path) -> None:
         append_mask=True,
     )
     latent = latent_spec_from_config(config)
-    runtime = SimpleNamespace(config=config, feature_stats=stats, latent_spec=latent)
+    runtime = SimpleNamespace(
+        config=_config_without_truth(config),
+        feature_stats=stats,
+        latent_spec=latent,
+    )
     checkpoint = tmp_path / "q.eqx"
     checkpoint.write_bytes(b"checkpoint")
     digest = sha256_file(checkpoint)
@@ -102,7 +107,7 @@ def test_component_resume_is_bound_to_workflow_config(tmp_path) -> None:
     )
 
     validate_component_checkpoint(checkpoint, digest, runtime)
-    changed = deepcopy(config)
+    changed = _config_without_truth(deepcopy(config))
     changed["amortized"]["sc_asmc_em"]["q_distillation"]["epochs"] = 4
     changed_runtime = SimpleNamespace(
         config=changed,

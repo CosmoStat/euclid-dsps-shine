@@ -79,6 +79,11 @@
   output `SMOKE4_ROOT` was mistaken for an upstream receipt and validated before
   creation. Upstream validation now uses the distinct
   `UPSTREAM_SMOKE_ROOT` variable, set only by the 16-H100 scaling smoke.
+- Four-H100 retry `1358685` passed initialization and finite mask-augmented
+  sleep, then rejected q at the E-step because checkpoint hashing included
+  unused truth schema metadata that the observed-only runtime deliberately
+  strips. Canonical SC-ASMC-EM hashing now erases the complete truth metadata
+  block while continuing to bind every computational no-truth setting.
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 

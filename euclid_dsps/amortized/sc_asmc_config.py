@@ -47,6 +47,10 @@ def sc_asmc_em_config_hash(config: dict[str, Any]) -> str:
     """Return the canonical hash binding all workflow configuration values."""
     normalized = copy.deepcopy(config)
     amortized_config(normalized)
+    # Runtime loading removes every truth-related metadata field so neither the
+    # redshift nor physical truth columns can enter an observed-only read. These
+    # unused fields must therefore not distinguish checkpoint provenance.
+    normalized["truth"] = {"parameter_columns": {}}
     encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":")).encode(
         "utf-8"
     )

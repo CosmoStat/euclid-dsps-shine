@@ -5,6 +5,7 @@ import copy
 import pytest
 
 from euclid_dsps.amortized.sc_asmc_config import (
+    sc_asmc_em_config_hash,
     sc_asmc_em_hierarchy,
     validate_sc_asmc_em_config,
 )
@@ -53,6 +54,16 @@ def test_final_model_trainable_parameter_count() -> None:
     assert count(model.encoder) == 2_441_298
     assert count(model.prior) == 1_179_888
     assert count(model.encoder) + count(model.prior) == 3_621_186
+
+
+def test_config_hash_matches_truth_stripped_runtime() -> None:
+    config = load_config(CONFIG)
+    runtime = copy.deepcopy(config)
+    runtime["truth"] = {"parameter_columns": {}}
+
+    assert sc_asmc_em_config_hash(runtime) == sc_asmc_em_config_hash(config)
+    runtime["amortized"]["sc_asmc_em"]["q_distillation"]["epochs"] = 4
+    assert sc_asmc_em_config_hash(runtime) != sc_asmc_em_config_hash(config)
 
 
 @pytest.mark.parametrize(
