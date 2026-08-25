@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 HAS_EQUINOX = importlib.util.find_spec("equinox") is not None
@@ -110,6 +111,46 @@ def test_component_resume_is_bound_to_workflow_config(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="workflow configuration mismatch"):
         validate_component_checkpoint(checkpoint, digest, changed_runtime)
+
+
+def test_final_sleep_runtime_preserves_mask_feature_contract() -> None:
+    from euclid_dsps.amortized.features import FeatureStats
+    from euclid_dsps.amortized.train import (
+        _sleep_encoder_features,
+        _sleep_runtime_config,
+    )
+    from euclid_dsps.config import load_config
+
+    config = load_config("configs/experiments/feniks_sc_asmc_em_r25.yaml")
+    band_names = tuple(str(band["name"]) for band in config["bands"])
+    stats = FeatureStats(
+        flux_scale=np.ones(18, dtype=np.float32),
+        err_scale=np.ones(18, dtype=np.float32),
+        band_names=band_names,
+        append_mask=True,
+        error_epsilon=1.0e-6,
+    )
+    runtime = _sleep_runtime_config(config, stats)
+    features = _sleep_encoder_features(
+        jnp.ones((2, 18), dtype=jnp.float32),
+        jnp.ones((2, 18), dtype=jnp.float32),
+        jnp.ones((2, 18), dtype=jnp.bool_),
+        runtime,
+    )
+    compiled = jax.jit(
+        lambda flux, error, mask: _sleep_encoder_features(
+            flux, error, mask, runtime
+        )
+    )(
+        jnp.ones((2, 18), dtype=jnp.float32),
+        jnp.ones((2, 18), dtype=jnp.float32),
+        jnp.ones((2, 18), dtype=jnp.bool_),
+    )
+
+    assert runtime["append_mask"] is True
+    assert runtime["error_epsilon"] == pytest.approx(1.0e-6)
+    assert features.shape == (2, 54)
+    assert compiled.shape == (2, 54)
 
 
 def test_gaussian_sleep_toy_recovers_conditional_and_keeps_entropy() -> None:

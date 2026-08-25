@@ -4374,11 +4374,15 @@ def _sleep_encoder_features(flux, flux_err, mask, sleep_config):
     flux_scale = jnp.asarray(sleep_config["feature_flux_scale"], dtype=flux.dtype)
     err_scale = jnp.asarray(sleep_config["feature_err_scale"], dtype=flux.dtype)
     scale_floor = jnp.asarray(1.0e-30, dtype=flux.dtype)
-    relative_eps = jnp.asarray(1.0e-6, dtype=flux.dtype)
+    relative_eps = jnp.asarray(
+        sleep_config.get("error_epsilon", 1.0e-6), dtype=flux.dtype
+    )
     flux_scale_safe = jnp.maximum(flux_scale, scale_floor)
     err_scale_safe = jnp.maximum(err_scale, scale_floor)
-    safe_flux = jnp.where(mask, flux, 0.0)
-    safe_err = jnp.where(mask, flux_err, err_scale_safe)
+    valid = jnp.asarray(mask, dtype=jnp.bool_)
+    valid &= jnp.isfinite(flux) & jnp.isfinite(flux_err) & (flux_err > 0.0)
+    safe_flux = jnp.where(valid, flux, 0.0)
+    safe_err = jnp.where(valid, flux_err, err_scale_safe)
     flux_ratio = safe_flux / flux_scale_safe
     transform = str(sleep_config.get("flux_transform", "asinh"))
     if transform == "asinh":
@@ -4391,7 +4395,10 @@ def _sleep_encoder_features(flux, flux_err, mask, sleep_config):
         raise ValueError(f"Unsupported sleep flux transform: {transform}")
     err_positive = jnp.maximum(safe_err, relative_eps * err_scale_safe)
     err_features = jnp.log(err_positive / err_scale_safe + relative_eps)
-    return jnp.concatenate((flux_features, err_features), axis=-1)
+    values = [flux_features, err_features]
+    if bool(sleep_config.get("append_mask", False)):
+        values.append(valid.astype(flux.dtype))
+    return jnp.concatenate(values, axis=-1)
 
 
 def _prior_mstep_loss(
@@ -4562,6 +4569,8 @@ def _sleep_runtime_config(
             np.asarray(feature_stats.err_scale, dtype=float).tolist()
         ),
         "flux_transform": str(feature_stats.flux_transform),
+        "append_mask": bool(feature_stats.append_mask),
+        "error_epsilon": float(feature_stats.error_epsilon),
         **_sleep_selection_config(sleep, bands),
     }
     if requested == "observed_catalog":

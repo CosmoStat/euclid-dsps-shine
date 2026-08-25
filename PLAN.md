@@ -69,6 +69,12 @@
   then the dependent full 16-H100 run. Production validates the four-H100
   receipt and all four scaling-smoke receipts against the same dataset,
   canonical configuration and commit.
+- Four-H100 smoke `1347480` exposed a sleep-only feature-contract mismatch:
+  generated sleep pairs emitted 36 flux/error features while the configured q
+  required the 18 masks as 54 inputs. The sleep runtime now carries
+  `append_mask` and `error_epsilon`, and its feature builder matches catalogue
+  validity and mask semantics. The failed smoke remains non-scientific and the
+  dependent 16-H100 smoke and production jobs were cancelled.
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 

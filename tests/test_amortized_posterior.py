@@ -1599,6 +1599,8 @@ def test_sleep_m5_noise_and_features_match_catalog_contract() -> None:
         "feature_flux_scale": (8.0e-31, 1.2e-30),
         "feature_err_scale": (2.0e-31, 3.0e-31),
         "flux_transform": "asinh",
+        "append_mask": True,
+        "error_epsilon": 1.0e-6,
     }
     actual = _sleep_m5_flux_error(flux, config)
     compiled = jax.jit(lambda value: _sleep_m5_flux_error(value, config))(flux)
@@ -1632,13 +1634,17 @@ def test_sleep_m5_noise_and_features_match_catalog_contract() -> None:
         err_scale=np.asarray(config["feature_err_scale"], dtype=np.float32),
         band_names=("a", "b"),
         flux_transform="asinh",
+        append_mask=True,
+        error_epsilon=1.0e-6,
     )
     err_scale_safe = jnp.maximum(jnp.asarray(stats.err_scale), 1.0e-30)
     expected = make_encoder_features(
         jnp.where(mask, flux, 0.0),
         jnp.where(mask, actual, err_scale_safe),
         stats,
+        mask,
     )
+    assert features.shape == (2, 6)
     assert jnp.array_equal(features, expected)
 
 
