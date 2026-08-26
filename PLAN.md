@@ -7215,3 +7215,5 @@ Phase 6 - Later AGN and production scaling:
 - Add one post-EM retry of unresolved rows under frozen q1/p2, persist it as a
   separate bank, then regenerate the report and retain the unchanged 5% gate.
 - This repair is not an EM iteration and does not update q, p2, DSPS, or selection.
+- Source-bank validation preserves its historical training commit while the repair
+  receipt records the newer repair implementation commit separately.

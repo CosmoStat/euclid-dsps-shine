@@ -84,9 +84,13 @@ def reweight_and_refresh_bank_worker(
         q_ema_checkpoint=q_ema_checkpoint,
         prior_checkpoint=old_prior_checkpoint,
     )
-    validate_posterior_bank_manifest_provenance(
+    expected_source_fields = asdict(expected_source_provenance)
+    # A post-training repair runs under a newer implementation commit while the
+    # immutable source bank retains the commit that produced its particles.
+    expected_source_fields.pop("code_commit")
+    source_provenance = validate_posterior_bank_manifest_provenance(
         input_manifest,
-        expected_fields=asdict(expected_source_provenance),
+        expected_fields=expected_source_fields,
     )
     expected_new_prior_hash = sha256_file(new_prior_checkpoint)
     provenance = posterior_bank_provenance(
@@ -249,6 +253,8 @@ def reweight_and_refresh_bank_worker(
         "ratio": "w_new proportional to w_old * p_new(x) / p_old(x)",
         "old_prior_checkpoint_hash": expected_old_prior_hash,
         "new_prior_checkpoint_hash": expected_new_prior_hash,
+        "source_code_commit": source_provenance.code_commit,
+        "repair_code_commit": provenance.code_commit,
         "minimum_reweight_ess_fraction": minimum_ess_fraction,
         "low_ess_rows": low_count,
         "unresolved_input_rows": unresolved_count,
