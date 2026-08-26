@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 
 from euclid_dsps.amortized.posterior_bank import C0_SCOPE_STATEMENT, sha256_file
+from euclid_dsps.amortized.sc_asmc_closure_analysis import _photoz_summary
 from euclid_dsps.amortized.sc_asmc_postfreeze import (
+    _final_bank_path,
     choose_postfreeze_nuts_records,
     dense_weighted_particle_draws,
     validate_postfreeze_gate,
@@ -89,3 +91,51 @@ def test_postfreeze_gate_is_bound_to_no_truth_final_receipt(tmp_path) -> None:
     (tmp_path / "FINAL_PASS").write_text("bad\n", encoding="utf-8")
     with pytest.raises(ValueError, match="does not bind"):
         validate_postfreeze_gate(tmp_path)
+
+
+def test_postfreeze_consumers_prefer_repaired_final_bank(tmp_path) -> None:
+    original = tmp_path / "em2_p2.json"
+    repaired = tmp_path / "em2_p2_repaired.json"
+    receipt = {
+        "posterior_banks": {
+            "em2_p2": {"path": str(original)},
+            "em2_p2_repaired": {"path": str(repaired)},
+        }
+    }
+
+    assert _final_bank_path(receipt) == repaired
+    del receipt["posterior_banks"]["em2_p2_repaired"]
+    assert _final_bank_path(receipt) == original
+
+
+def test_photoz_summary_uses_distribution_metrics() -> None:
+    rows = []
+    for method in ("q0", "smc_em1", "q1", "smc_em2"):
+        rows.extend(
+            [
+                {
+                    "method": method,
+                    "delta_z_over_1pz": -0.1,
+                    "covered_68": True,
+                    "covered_95": True,
+                    "pit": 0.25,
+                    "crps": 0.2,
+                },
+                {
+                    "method": method,
+                    "delta_z_over_1pz": 0.2,
+                    "covered_68": False,
+                    "covered_95": True,
+                    "pit": 0.75,
+                    "crps": 0.4,
+                },
+            ]
+        )
+
+    summary = _photoz_summary(rows)
+
+    assert len(summary) == 4
+    assert summary[0]["coverage_68"] == 0.5
+    assert summary[0]["coverage_95"] == 1.0
+    assert summary[0]["pit_mean"] == 0.5
+    assert summary[0]["mean_crps"] == pytest.approx(0.3)

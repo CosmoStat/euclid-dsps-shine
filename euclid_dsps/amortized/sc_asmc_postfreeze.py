@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import json
 import os
+import subprocess
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ from euclid_dsps.config import load_config
 from .data import load_photometry_arrays_from_config
 from .latent import x_to_theta
 from .mira import FENIKS_SPLINE15D_PARAMETERS, evaluate_feniks_mira
+from .posterior import sample_posterior
 from .posterior_bank import (
     C0_SCOPE_STATEMENT,
     POSTERIOR_METHOD_NAMES,
@@ -26,6 +29,8 @@ from .posterior_bank import (
     iter_posterior_bank_shards,
     sha256_file,
 )
+from .sc_asmc_closure_analysis import write_closure_analysis
+from .sc_asmc_training import load_sc_model, prepare_sc_runtime
 from .tarp import evaluate_feniks_tarp
 from .train import _latent_spec_for_amortized_config
 
@@ -124,7 +129,7 @@ def prepare_postfreeze_nuts_cohort(
     """Write the exact-benchmark cohort only after the training freeze gate."""
     root = Path(run_root)
     receipt = validate_postfreeze_gate(root)
-    bank_path = Path(receipt["posterior_banks"]["em2_p2"]["path"])
+    bank_path = _final_bank_path(receipt)
     records = _bank_object_records(bank_path)
     chosen = choose_postfreeze_nuts_records(
         records,
@@ -256,18 +261,68 @@ def run_sc_asmc_truth_closure(
     if not np.all(np.isfinite(truth_matrix)):
         raise ValueError("truth closure contains non-finite physical parameters")
     latent_spec = _latent_spec_for_amortized_config(training_config)
+    selected_catalogue_rows = np.load(
+        manifest["artifacts"]["selected_rows"]["path"], allow_pickle=False
+    )
+    selected_catalogue_indices = np.asarray(
+        [row_lookup[int(row)] for row in selected_catalogue_rows], dtype=np.int64
+    )
+    truth_selected_catalog = truth_matrix[selected_catalogue_indices]
 
-    bank_path = Path(final["posterior_banks"]["em2_p2"]["path"])
+    bank_path = _final_bank_path(final)
+    em1_bank_path = Path(final["posterior_banks"]["em1"]["path"])
+    runtime = prepare_sc_runtime(
+        training_config,
+        root / ".runtime_cache" / "truth_closure",
+        feature_train_rows=manifest["artifacts"]["feature_train_rows"]["path"],
+        heldout_rows=manifest["artifacts"]["heldout_rows"]["path"],
+    )
+    q0_checkpoint = _q0_checkpoint(root)
+    q1_checkpoint = final["checkpoints"]["q1_ema"]["path"]
+    p0_checkpoint = final["checkpoints"]["p0"]["path"]
+    p2_checkpoint = final["checkpoints"]["p2"]["path"]
+    q0_model = load_sc_model(
+        training_config,
+        runtime,
+        q_checkpoint=q0_checkpoint,
+        prior_checkpoint=p0_checkpoint,
+    )
+    q1_model = load_sc_model(
+        training_config,
+        runtime,
+        q_checkpoint=q1_checkpoint,
+        prior_checkpoint=p2_checkpoint,
+    )
     posterior_dir = out / "posterior_samples"
     posterior_dir.mkdir(parents=True, exist_ok=True)
+    method_dirs = {
+        name: out / "posterior_samples_all_methods" / name
+        for name in ("q0", "smc_em1", "q1", "smc_em2")
+    }
+    for directory in method_dirs.values():
+        directory.mkdir(parents=True, exist_ok=True)
     truth_frames: list[pd.DataFrame] = []
     bias_chunks: list[np.ndarray] = []
     coverage_chunks: dict[float, list[np.ndarray]] = {
         level: [] for level in (0.50, 0.68, 0.90, 0.95)
     }
     posterior_records = []
+    all_method_records: dict[str, list[dict[str, Any]]] = {
+        name: [] for name in method_dirs
+    }
+    draw_chunks: dict[str, list[np.ndarray]] = {name: [] for name in method_dirs}
+    selected_truth_chunks: list[np.ndarray] = []
+    selected_row_chunks: list[np.ndarray] = []
+    selected_id_chunks: list[np.ndarray] = []
+    selected_catalogue_index_chunks: list[np.ndarray] = []
     excluded_unresolved = 0
-    for shard_index, shard in enumerate(iter_posterior_bank_shards(bank_path)):
+    final_shards = iter_posterior_bank_shards(bank_path)
+    em1_shards = iter_posterior_bank_shards(em1_bank_path)
+    for shard_index, (shard, em1_shard) in enumerate(
+        zip(final_shards, em1_shards, strict=True)
+    ):
+        if not np.array_equal(shard.row_index, em1_shard.row_index):
+            raise ValueError("EM1 and final bank shard rows differ")
         selected = np.flatnonzero(np.asarray(shard.resolved, dtype=bool))
         excluded_unresolved += int(shard.object_count - len(selected))
         if not len(selected):
@@ -285,7 +340,7 @@ def run_sc_asmc_truth_closure(
             raise ValueError(
                 "posterior-bank object IDs do not match closure truth rows"
             )
-        x_draws = dense_weighted_particle_draws(
+        smc2_x = dense_weighted_particle_draws(
             np.asarray(shard.particles[selected]),
             np.asarray(shard.normalized_weights[selected]),
             np.asarray(shard.particle_count[selected]),
@@ -293,23 +348,92 @@ def run_sc_asmc_truth_closure(
             seed=int(seed),
             row_indices=rows,
         )
-        theta = np.asarray(
-            jax.device_get(x_to_theta(jnp.asarray(x_draws), latent_spec)),
+        smc2_theta = np.asarray(
+            jax.device_get(x_to_theta(jnp.asarray(smc2_x), latent_spec)),
             dtype=np.float32,
         )
+        smc1_x = dense_weighted_particle_draws(
+            np.asarray(em1_shard.particles[selected]),
+            np.asarray(em1_shard.normalized_weights[selected]),
+            np.asarray(em1_shard.particle_count[selected]),
+            samples=int(samples_per_object),
+            seed=int(seed) + 10_000,
+            row_indices=rows,
+        )
+        smc1_theta = np.asarray(
+            jax.device_get(x_to_theta(jnp.asarray(smc1_x), latent_spec)),
+            dtype=np.float32,
+        )
+        features = jnp.asarray(np.asarray(shard.features)[selected])
+        q0_x = np.asarray(
+            jax.device_get(
+                sample_posterior(
+                    q0_model,
+                    jax.random.fold_in(
+                        jax.random.PRNGKey(int(seed) + 20_000), shard_index
+                    ),
+                    features,
+                    int(samples_per_object),
+                ).x
+            )
+        ).transpose(1, 0, 2)
+        q1_x = np.asarray(
+            jax.device_get(
+                sample_posterior(
+                    q1_model,
+                    jax.random.fold_in(
+                        jax.random.PRNGKey(int(seed) + 30_000), shard_index
+                    ),
+                    features,
+                    int(samples_per_object),
+                ).x
+            )
+        ).transpose(1, 0, 2)
+        q0_theta = np.asarray(
+            jax.device_get(x_to_theta(jnp.asarray(q0_x), latent_spec)), dtype=np.float32
+        )
+        q1_theta = np.asarray(
+            jax.device_get(x_to_theta(jnp.asarray(q1_x), latent_spec)), dtype=np.float32
+        )
+        method_theta = {
+            "q0": q0_theta,
+            "smc_em1": smc1_theta,
+            "q1": q1_theta,
+            "smc_em2": smc2_theta,
+        }
         truth_values = truth_matrix[catalogue_index].astype(np.float32)
         posterior_frame = {
             "object_id": np.repeat(object_id, int(samples_per_object)),
             "row_index": np.repeat(rows, int(samples_per_object)),
             "sample_id": np.tile(np.arange(int(samples_per_object)), len(rows)),
         }
-        flattened = theta.reshape(-1, len(parameters))
+        flattened = smc2_theta.reshape(-1, len(parameters))
         posterior_frame.update(
             {name: flattened[:, index] for index, name in enumerate(parameters)}
         )
         shard_path = posterior_dir / f"posterior_samples_{shard_index:05d}.parquet"
         _atomic_parquet(shard_path, pd.DataFrame(posterior_frame))
         posterior_records.append(_file_record(shard_path))
+        for method, values in method_theta.items():
+            method_frame = {
+                "object_id": np.repeat(object_id, int(samples_per_object)),
+                "row_index": np.repeat(rows, int(samples_per_object)),
+                "sample_id": np.tile(np.arange(int(samples_per_object)), len(rows)),
+                **{
+                    name: values.reshape(-1, len(parameters))[:, index]
+                    for index, name in enumerate(parameters)
+                },
+            }
+            method_path = (
+                method_dirs[method] / f"posterior_samples_{shard_index:05d}.parquet"
+            )
+            _atomic_parquet(method_path, pd.DataFrame(method_frame))
+            all_method_records[method].append(_file_record(method_path))
+            draw_chunks[method].append(values)
+        selected_truth_chunks.append(truth_values)
+        selected_row_chunks.append(rows)
+        selected_id_chunks.append(object_id)
+        selected_catalogue_index_chunks.append(catalogue_index)
         truth_frames.append(
             pd.DataFrame(
                 {
@@ -322,10 +446,10 @@ def run_sc_asmc_truth_closure(
                 }
             )
         )
-        bias_chunks.append(np.mean(theta, axis=1) - truth_values)
+        bias_chunks.append(np.mean(smc2_theta, axis=1) - truth_values)
         for level in coverage_chunks:
             tail = (1.0 - level) / 2.0
-            lower, upper = np.quantile(theta, (tail, 1.0 - tail), axis=1)
+            lower, upper = np.quantile(smc2_theta, (tail, 1.0 - tail), axis=1)
             coverage_chunks[level].append(
                 (truth_values >= lower) & (truth_values <= upper)
             )
@@ -354,6 +478,33 @@ def run_sc_asmc_truth_closure(
         }
     )
     _atomic_parquet(population_truth_path, population_truth)
+    prior_artifacts = {
+        name: Path(final["report"]["artifacts"][f"prior_{name}"]["path"])
+        for name in ("p0", "p1", "p2")
+    }
+    resolved_catalogue_indices = np.concatenate(selected_catalogue_index_chunks)
+    r_index = tuple(arrays.band_names).index("lsst_r")
+    r_flux = np.asarray(arrays.flux)[resolved_catalogue_indices, r_index]
+    r_error = np.asarray(arrays.flux_err)[resolved_catalogue_indices, r_index]
+    closure_analysis = write_closure_analysis(
+        out / "analysis",
+        draws={
+            name: np.concatenate(chunks, axis=0) for name, chunks in draw_chunks.items()
+        },
+        truth_selected=np.concatenate(selected_truth_chunks, axis=0),
+        truth_selected_catalog=truth_selected_catalog,
+        row_indices=np.concatenate(selected_row_chunks),
+        object_ids=np.concatenate(selected_id_chunks),
+        truth_c0=truth_matrix,
+        prior_artifacts=prior_artifacts,
+        parameters=parameters,
+        observed_covariates={
+            "r_magnitude_observed": -2.5
+            * np.log10(np.maximum(r_flux, np.finfo(np.float64).tiny))
+            - 48.6,
+            "r_snr": r_flux / np.maximum(r_error, np.finfo(np.float64).tiny),
+        },
+    )
     p2_record = final["report"]["artifacts"]["prior_p2"]
     p2_path = Path(p2_record["path"])
     if sha256_file(p2_path) != p2_record["sha256"]:
@@ -380,27 +531,37 @@ def run_sc_asmc_truth_closure(
         },
     )
 
-    mira = evaluate_feniks_mira(
-        truth_path=truth_output,
-        posterior_specs=(("sc_asmc_em", posterior_dir),),
-        out_dir=out / "mira",
-        num_regions=int(num_mira_regions),
-        num_bootstrap=int(num_bootstrap),
-        samples_per_object=int(samples_per_object),
-        seed=int(seed) + 1,
-        limit=evaluation_limit,
-        parameters=parameters,
+    posterior_specs = tuple(
+        (name, method_dirs[name]) for name in ("q0", "smc_em1", "q1", "smc_em2")
     )
-    tarp = evaluate_feniks_tarp(
-        truth_path=truth_output,
-        posterior_specs=(("sc_asmc_em", posterior_dir),),
-        out_dir=out / "tarp",
-        num_bootstrap=int(num_bootstrap),
-        samples_per_object=int(samples_per_object),
-        seed=int(seed) + 2,
-        limit=evaluation_limit,
-        parameters=parameters,
-    )
+    with ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="closure-calibration"
+    ) as pool:
+        mira_future = pool.submit(
+            evaluate_feniks_mira,
+            truth_path=truth_output,
+            posterior_specs=posterior_specs,
+            out_dir=out / "mira",
+            num_regions=int(num_mira_regions),
+            num_bootstrap=int(num_bootstrap),
+            samples_per_object=int(samples_per_object),
+            seed=int(seed) + 1,
+            limit=evaluation_limit,
+            parameters=parameters,
+        )
+        tarp_future = pool.submit(
+            evaluate_feniks_tarp,
+            truth_path=truth_output,
+            posterior_specs=posterior_specs,
+            out_dir=out / "tarp",
+            num_bootstrap=int(num_bootstrap),
+            samples_per_object=int(samples_per_object),
+            seed=int(seed) + 2,
+            limit=evaluation_limit,
+            parameters=parameters,
+        )
+        mira = mira_future.result()
+        tarp = tarp_future.result()
     payload = {
         "status": "PASS",
         "phase": "postfreeze_truth_closure",
@@ -410,6 +571,7 @@ def run_sc_asmc_truth_closure(
         "truth_used": True,
         "truth_used_for_training_or_checkpoint_selection": False,
         "final_receipt_sha256": sha256_file(root / "FINAL_RECEIPT.json"),
+        "closure_code_commit": _git_commit(),
         "training_config": _file_record(training_path),
         "truth_only_config": _file_record(truth_path),
         "truth_config_catalog_before_manifest_binding": configured_dataset,
@@ -420,12 +582,14 @@ def run_sc_asmc_truth_closure(
         "excluded_unresolved_objects": int(excluded_unresolved),
         "dense_draws_per_object": int(samples_per_object),
         "distribution_contract": (
-            "dense joint posterior draws are retained for coverage, MIRA, TARP, "
-            "posterior bias, and population diagnostics"
+            "equal draws per object preserve every q0, SMC EM1, q1, and SMC EM2 "
+            "posterior distribution; parent priors and beta-weighted selected priors "
+            "remain separate from selected-catalog posterior mixtures"
         ),
         "artifacts": {
             "inference_truth": _file_record(truth_output),
             "posterior_samples": posterior_records,
+            "posterior_samples_all_methods": all_method_records,
             "marginal_coverage": _file_record(coverage_path),
             "posterior_bias": _file_record(bias_path),
             "population_truth_C0": _file_record(population_truth_path),
@@ -433,6 +597,12 @@ def run_sc_asmc_truth_closure(
             "population_geometry": _file_record(population_geometry),
             "mira_manifest": _file_record(out / "mira" / "mira_manifest.json"),
             "tarp_manifest": _file_record(out / "tarp" / "tarp_manifest.json"),
+            "closure_analysis": {
+                name: _file_record(path)
+                if path.is_file()
+                else {"path": str(path.resolve()), "kind": "directory"}
+                for name, path in closure_analysis.items()
+            },
         },
         "mira": mira,
         "tarp": tarp,
@@ -470,6 +640,22 @@ def dense_weighted_particle_draws(
         choice = rng.choice(int(count), size=int(samples), replace=True, p=active)
         result[index] = values[index, choice]
     return result
+
+
+def _q0_checkpoint(root: Path) -> str:
+    active = root / "preflight" / "active_bootstrap" / "active_bootstrap_receipt.json"
+    if active.is_file():
+        return str(_read_json(active)["q_ema_checkpoint"])
+    sleep = _read_json(root / "sleep" / "sleep_receipt.json")
+    return str(sleep["q_ema_checkpoint"])
+
+
+def _final_bank_path(receipt: dict[str, Any]) -> Path:
+    banks = receipt.get("posterior_banks") or {}
+    record = banks.get("em2_p2_repaired") or banks.get("em2_p2")
+    if not isinstance(record, dict) or not record.get("path"):
+        raise ValueError("final receipt does not identify a final posterior bank")
+    return Path(record["path"])
 
 
 def _bank_object_records(bank_path: Path) -> list[dict[str, Any]]:
@@ -572,6 +758,15 @@ def _file_record(path: str | Path) -> dict[str, Any]:
 
 def _read_json(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
