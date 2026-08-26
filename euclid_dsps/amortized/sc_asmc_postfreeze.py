@@ -434,6 +434,12 @@ def run_sc_asmc_truth_closure(
         selected_row_chunks.append(rows)
         selected_id_chunks.append(object_id)
         selected_catalogue_index_chunks.append(catalogue_index)
+        print(
+            "[sc-asmc][closure] "
+            f"shard={shard_index} resolved_objects={len(rows)} "
+            "methods=q0,smc_em1,q1,smc_em2",
+            flush=True,
+        )
         truth_frames.append(
             pd.DataFrame(
                 {
@@ -505,6 +511,11 @@ def run_sc_asmc_truth_closure(
             "r_snr": r_flux / np.maximum(r_error, np.finfo(np.float64).tiny),
         },
     )
+    print(
+        "[sc-asmc][closure] dense mixtures, population comparisons, PIT, "
+        "photo-z, coverage, and plots complete",
+        flush=True,
+    )
     p2_record = final["report"]["artifacts"]["prior_p2"]
     p2_path = Path(p2_record["path"])
     if sha256_file(p2_path) != p2_record["sha256"]:
@@ -534,6 +545,7 @@ def run_sc_asmc_truth_closure(
     posterior_specs = tuple(
         (name, method_dirs[name]) for name in ("q0", "smc_em1", "q1", "smc_em2")
     )
+    print("[sc-asmc][closure] starting MIRA and TARP", flush=True)
     with ThreadPoolExecutor(
         max_workers=2, thread_name_prefix="closure-calibration"
     ) as pool:
@@ -562,6 +574,7 @@ def run_sc_asmc_truth_closure(
         )
         mira = mira_future.result()
         tarp = tarp_future.result()
+    print("[sc-asmc][closure] MIRA and TARP complete", flush=True)
     payload = {
         "status": "PASS",
         "phase": "postfreeze_truth_closure",
