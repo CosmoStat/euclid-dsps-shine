@@ -7240,3 +7240,158 @@ Phase 6 - Later AGN and production scaling:
   every selected object and posterior-predictive residuals for q0, SMC EM1, q1,
   and SMC EM2 over every resolved object. Keep this audit diagnostic-only and
   bind it to the frozen final and truth-closure receipts.
+
+## SC-ASMC scientific repair plan (2026-08-26)
+
+### Evidence and current blockers
+
+- Treat job `1413622` as a diagnostic gate, not as another training run. It must
+  distinguish a forward-model/likelihood failure from an inference failure by
+  comparing truth-forward and dense posterior-predictive residuals over the full
+  selected catalogue.
+- The frozen closure already rejects the current inference chain: q0/q1 have
+  strongly biased photo-z point summaries and no direct-IS successes, while the
+  SMC central estimates are accurate but its 15D posterior is severely
+  under-dispersed. The final SMC bank must not be used as a teacher for a new
+  population run without a diversity repair.
+- Sleep bootstrap performs only 528 optimizer updates for a 2.44M-parameter q
+  and selects on model-generated sleep NLL. It does not require useful overlap
+  with the observed-catalogue target.
+- Distillation performs 48 bank and 16 sleep updates per epoch for three epochs.
+  With EMA decay 0.999, the EMA contains only about 6.2% cumulative new-weight
+  contribution after epoch 1 and 17.5% after all three epochs. The selected
+  best-EMA q1 can therefore remain effectively q0 even when the raw encoder
+  changes.
+- The fallback SMC uses 128 particles, random-walk mutations in 15 dimensions,
+  four moves after resampling, and two final moves. Its hard ancestry threshold
+  is only 0.05, and poor ancestry is not by itself a failure. This permits a
+  nearly single-lineage posterior bank to pass when small movements are finite.
+- The prior M-step is correctly selection-aware, but 50-100 steps at 1e-5 with
+  a trust penalty cannot recover the parent population from a collapsed teacher.
+  Prior optimization must remain blocked until q and SMC pass their own gates.
+
+### Repair sequence
+
+1. **Forward and likelihood gate.** Require full-catalogue truth-forward
+   normalized residuals, per-band bias/RMS/coverage, reduced chi-square, and
+   conditional slices in redshift, r magnitude, and S/N. If truth-forward fails,
+   fix parameter semantics, photometric units, passbands, or the noise model
+   before changing q or SMC. Do not hide a deterministic bias with an error floor.
+2. **q optimization and checkpoint gate.** Compare q1 raw against q1 EMA on a
+   fixed no-truth observed cohort and the post-freeze closure cohort. Increase
+   sleep exposure substantially, shorten or bias-correct the distillation EMA,
+   allow more than five distillation epochs, reduce sleep replay anchoring, and
+   select checkpoints using held-out bank CE plus observed direct-IS ESS,
+   maximum weight, hard-SMC fraction, and entropy. Preserve dense joint draws.
+3. **SMC diversity gate.** Benchmark random-walk versus the existing
+   gradient-informed MALA kernel on the same fixed hard cohort. Test higher CESS,
+   less frequent resampling, more final rejuvenation, and K=256 only after the
+   kernel comparison. Require ancestry ESS/unique lineages and posterior
+   calibration, not only final weight ESS or a resolved flag.
+4. **Selection-aware prior learning.** Once the teacher passes, run additional
+   EM iterations with held-out bank objective and selection-gradient diagnostics.
+   Learn one parent `p_eta(theta|C0)`; derive the selected population as
+   `beta(theta) p_eta(theta|C0) / alpha`, rather than fitting a second unrelated
+   selected prior. Keep truth out of optimization and checkpoint selection.
+5. **End-to-end pilot before production.** Use a fixed 512-object audit cohort,
+   then a 2k-object pilot, before a new 6140-object run. Freeze seeds and rows and
+   compare q0, raw/EMA q1, SMC, p0/p1/p2, predictive residuals, MIRA, TARP, PIT,
+   coverage, runtime, and unresolved fractions in one receipt.
+
+### Promotion gates
+
+- Forward model: every band has finite truth-forward diagnostics with normalized
+  residual mean close to zero and RMS/central coverage compatible with the stated
+  likelihood, including conditional redshift/magnitude/SNR bins.
+- Fast q: finite dense draws, materially improved held-out bank CE, useful
+  direct-IS overlap on observed data, no entropy collapse, and post-freeze 15D
+  MIRA/TARP/coverage competitive with the historical RWS reference.
+- SMC teacher: unresolved fraction below 1%, median ancestry ESS fraction above
+  0.2 with a reported lower tail, nontrivial unique-ancestor and moved-particle
+  fractions, and calibrated dense posterior coverage. Accurate medians alone do
+  not pass this gate.
+- Population prior: held-out selection-corrected objective improves without a
+  failed trust/Monte-Carlo gate; post-freeze parent and selected-population
+  distances both improve from p0 to p2. Truth metrics remain evaluation-only.
+- Photometry: full-catalogue dense posterior-predictive residuals are reported by
+  method and band. A pass requires the SMC posterior predictive to inherit the
+  truth-forward calibration rather than merely producing plausible latent point
+  estimates.
+
+### Predictive-audit recovery outcome
+
+- Recovered the completed full-catalogue tables from job `1413622` without
+  repeating DSPS evaluation. Fixed the tuple-based Pandas band indexer that had
+  crashed only the plotting/finalization phase, and added a standalone recovery
+  entry point plus regression coverage.
+- The truth-forward gate passes on all 6140 selected objects: the median
+  per-band normalized-residual RMS is 1.023 and the largest is 1.070. This rules
+  out a gross DSPS/FENIKS forward-contract mismatch for this catalogue.
+- The scientific posterior-predictive gate fails. q0 and q1 have catastrophic
+  normalized residuals, while SMC EM2 improves the median per-band RMS to 3.77
+  but remains far from the truth-forward calibration. Continue with the q and
+  SMC diversity repairs above; do not promote the frozen result as calibrated.
+
+### Global decision after the historical RWS comparison
+
+- The historical RWS baseline is not a validated exact posterior, but it is the
+  stronger amortized baseline. Its two paper seeds reached full-15D MIRA scores
+  0.6915 and 0.6919 and TARP coverage RMSE 0.0612 and 0.0591. The current q1
+  reaches 0.5569 and 0.5033, while SMC EM2 reaches 0.3745 and 0.5256.
+- The regression is structural, not a request for a few extra SC-ASMC epochs.
+  Historical RWS used 120 epochs, 12,690 sleep updates and 4,230 observed wake
+  updates. Current q0 received 528 sleep updates, and the selected q1 EMA was
+  chosen after one 64-update distillation epoch, so only about 6.2% of its EMA
+  mass came from the new teacher. q0 and q1 being almost identical is expected.
+- The current SMC has high final-weight ESS but essentially one surviving
+  lineage: median ancestry ESS 1 and median unique-ancestor fraction 1/128.
+  Current acceptance/resolution gates therefore certify numerically finite
+  output, not a diverse posterior. p2 does not improve parent recovery over p0,
+  so population EM must remain blocked.
+- Implement an apples-to-apples frozen-cohort benchmark first: historical RWS,
+  current q0, q1 raw, q1 EMA, and exact-target SMC, all evaluated with 128 joint
+  draws, full predictive residuals, ordinary-IS K=2048 support, MIRA, TARP,
+  coverage, photo-z, and runtime. Keep likelihood/transform differences explicit.
+- Restore a selection-aware hybrid RWS proposal baseline before extending
+  SC-ASMC: historical 4-layer/128-wide conditional flow, long 3:1 sleep/wake
+  exposure, observed wake updates, unchanged importance weights, and
+  `+log(alpha_eta)` only for the trainable parent prior. Compare robust
+  Student-t2 proposal training against the exact Gaussian target rather than
+  silently changing both training and scientific target together.
+- Only after the proposal passes support should the bridge-SMC path gain a
+  pluggable MALA kernel, ancestry-only rejection, stronger final rejuvenation,
+  and K=128/256 ablations on a fixed hard cohort. Distillation must then compare
+  raw and bias-corrected/lower-decay EMA checkpoints and gate on direct-IS
+  support and predictive fit, not bank cross-entropy alone.
+- Required promotion order is now: 512-object RWS recovery pilot, independent
+  2k confirmation, SMC diversity benchmark, q distillation, selection-aware
+  prior M-step, then and only then a new 6140-object run. Do not continue the
+  failed q1/p2 checkpoints as the default recovery path.
+
+### RWS recovery implementation
+
+- Added a truth-free recovery matrix with two architecture controls and two
+  seeds. Both train for 180 epochs on every observed-r<25 training row using
+  Student-t2 RWS, a 3:1 sleep/wake schedule, and an explicitly frozen identity
+  population prior. Historical 4x128/base-moments capacity is compared against
+  the current 6x256/residual-photometry capacity without changing the data or
+  objective.
+- Added immutable manifests for selected training, held-out validation, a
+  512-object independent test pilot, and a disjoint 2000-object confirmation.
+  Manifest construction reads only observed r-band flux and records that no
+  truth column participates in training or checkpoint selection.
+- Added exact-Gaussian K=2048 ordinary-IW evaluation and dense posterior-
+  predictive evaluation. Promotion requires both seeds to pass median and
+  lower-tail ESS, Pareto-k, maximum-weight, finite-weight, and per-band PPC
+  gates. A passing pilot selects one architecture; a separate two-seed 2k
+  confirmation is then required.
+- Added a single Jean-Zay submitter with a four-task 16-H100 pilot, a two-task
+  8-H100 confirmation, dependency-based fail-closed gates, SCRATCH-backed JAX
+  caches/logs, persistent job metadata, and a detailed restart-safe monitor.
+- Tightened the bridge-SMC hard-object classifier: low ancestry ESS now fails on
+  its own even when descendants moved. This prevents the prior false-positive
+  resolution mode. MALA/particle-count ablations remain deliberately blocked
+  until `RWS_RECOVERY_PASS.json` authorizes the fixed-cohort SMC benchmark.
+- The final recovery receipt can authorize only the SMC diversity benchmark.
+  It explicitly leaves population-prior update and full-catalogue production
+  false, so no learned prior can consume a proposal that failed overlap or PPC.

@@ -723,7 +723,7 @@ def mixing_failure_mask(
     min_ancestor_ess_fraction: float,
     min_epsilon_squared_jump: float,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
-    """Classify mixing without treating low ancestry alone as a failure."""
+    """Reject any chain with poor mutation, ancestry, or particle movement."""
     acceptance = jnp.asarray(mutation_acceptance)
     proposed = jnp.asarray(mutation_proposed, dtype=jnp.bool_)
     ancestry = jnp.asarray(ancestor_ess_fraction, dtype=acceptance.dtype)
@@ -737,7 +737,7 @@ def mixing_failure_mask(
     poor_movement = ~jnp.isfinite(movement) | (
         movement < float(min_epsilon_squared_jump)
     )
-    failure = poor_acceptance | (poor_ancestry & poor_movement)
+    failure = poor_acceptance | poor_ancestry | poor_movement
     return failure, poor_acceptance, poor_ancestry, poor_movement
 
 

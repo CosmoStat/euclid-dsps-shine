@@ -1,0 +1,24 @@
+extends: feniks_rws_recovery_r25_common.yaml
+
+# Historical-capacity control: same strict no-truth coordinates, data and RWS
+# schedule as the recovery run, but the smaller architecture that performed
+# best in the previous FENIKS RWS experiments.
+amortized:
+  encoder:
+    type: conditional_flow
+    input_dim: 54
+    latent_dim: 15
+    context_encoder: base_moments
+    base_components: 1
+    log_std_min: -4.0
+    log_std_max: 3.0
+    initial_log_std: 0.0
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_scale_clamp: 0.50
+    flow_shift_clamp: 3.0
+    flow_init_scale: 0.0
+    flow_permutation: alternating_roll
+

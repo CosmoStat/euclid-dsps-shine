@@ -364,7 +364,7 @@ def test_ancestor_ess_distinguishes_balanced_collapsed_and_dominant_lines() -> N
     )
 
 
-def test_mixing_gate_allows_low_ancestry_only_when_particles_moved() -> None:
+def test_mixing_gate_rejects_low_ancestry_even_when_particles_moved() -> None:
     failure, poor_acceptance, poor_ancestry, poor_movement = mixing_failure_mask(
         mutation_acceptance=jnp.asarray([0.30, 0.30, 0.05]),
         mutation_proposed=jnp.asarray([True, True, True]),
@@ -378,7 +378,7 @@ def test_mixing_gate_allows_low_ancestry_only_when_particles_moved() -> None:
     assert np.array_equal(np.asarray(poor_acceptance), [False, False, True])
     assert np.array_equal(np.asarray(poor_ancestry), [True, True, False])
     assert np.array_equal(np.asarray(poor_movement), [False, True, False])
-    assert np.array_equal(np.asarray(failure), [False, True, True])
+    assert np.array_equal(np.asarray(failure), [True, True, True])
 
 
 def test_particle_movement_median_exposes_mostly_cloned_population() -> None:
