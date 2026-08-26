@@ -7231,3 +7231,7 @@ Phase 6 - Later AGN and production scaling:
 - Produce 15D marginal coverage, PIT, bias/pulls, MIRA, TARP, photo-z metrics,
   population recovery, representative individual corners, and provenance-backed
   source arrays. Truth remains post-freeze only.
+- The first Jean-Zay closure launch failed before reading truth because the
+  relative catalogue path from the YAML did not reproduce the absolute-path
+  training configuration hash. Rebind that path from the immutable run manifest
+  and require the reconstructed hash to match before loading any checkpoint.

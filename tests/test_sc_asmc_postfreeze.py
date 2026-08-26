@@ -7,12 +7,35 @@ import pytest
 
 from euclid_dsps.amortized.posterior_bank import C0_SCOPE_STATEMENT, sha256_file
 from euclid_dsps.amortized.sc_asmc_closure_analysis import _photoz_summary
+from euclid_dsps.amortized.sc_asmc_config import sc_asmc_em_config_hash
 from euclid_dsps.amortized.sc_asmc_postfreeze import (
     _final_bank_path,
+    bind_frozen_training_config,
     choose_postfreeze_nuts_records,
     dense_weighted_particle_draws,
     validate_postfreeze_gate,
 )
+
+
+def test_closure_reconstructs_frozen_absolute_catalogue_config(tmp_path) -> None:
+    catalogue = tmp_path / "catalogue.parquet"
+    frozen = {"catalog_path": str(catalogue.resolve()), "truth": {}}
+    manifest = {
+        "dataset": {"path": str(catalogue.resolve())},
+        "config_sha256": sc_asmc_em_config_hash(frozen),
+    }
+
+    rebound = bind_frozen_training_config(
+        {"catalog_path": "relative/catalogue.parquet", "truth": {}}, manifest
+    )
+
+    assert rebound["catalog_path"] == str(catalogue.resolve())
+    assert sc_asmc_em_config_hash(rebound) == manifest["config_sha256"]
+    with pytest.raises(ValueError, match="cannot reconstruct"):
+        bind_frozen_training_config(
+            {"catalog_path": "relative/catalogue.parquet", "truth": {}, "seed": 2},
+            manifest,
+        )
 
 
 def test_dense_closure_draws_preserve_joint_particles_and_are_reproducible() -> None:

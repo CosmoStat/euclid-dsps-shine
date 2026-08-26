@@ -30,6 +30,7 @@ from .posterior_bank import (
     sha256_file,
 )
 from .sc_asmc_closure_analysis import write_closure_analysis
+from .sc_asmc_config import sc_asmc_em_config_hash
 from .sc_asmc_training import load_sc_model, prepare_sc_runtime
 from .tarp import evaluate_feniks_tarp
 from .train import _latent_spec_for_amortized_config
@@ -66,6 +67,19 @@ def validate_postfreeze_gate(run_root: str | Path) -> dict[str, Any]:
         if not path.is_file() or sha256_file(path) != record.get("sha256"):
             raise ValueError(f"frozen final model {name} hash mismatch")
     return receipt
+
+
+def bind_frozen_training_config(
+    config: dict[str, Any], manifest: dict[str, Any]
+) -> dict[str, Any]:
+    """Restore the absolute catalogue path used by the frozen training run."""
+    bound = dict(config)
+    bound["catalog_path"] = str(Path(manifest["dataset"]["path"]).resolve())
+    if sc_asmc_em_config_hash(bound) != manifest["config_sha256"]:
+        raise ValueError(
+            "truth closure cannot reconstruct the frozen training configuration"
+        )
+    return bound
 
 
 def choose_postfreeze_nuts_records(
@@ -228,6 +242,7 @@ def run_sc_asmc_truth_closure(
         )
     manifest = _read_json(root / "manifest" / "run_manifest.json")
     dataset = Path(manifest["dataset"]["path"])
+    training_config = bind_frozen_training_config(training_config, manifest)
     configured_dataset = str(truth_config["catalog_path"])
     if sha256_file(dataset) != manifest["dataset"]["sha256"]:
         raise ValueError("truth closure dataset differs from the frozen run manifest")
