@@ -262,6 +262,7 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     assert "--confirmation-objects 2000" in submitter
     assert 'EUCLID_DSPS_JAX_COMPILATION_CACHE_DIR="$CACHE_ROOT/jax"' in worker
     assert 'JAX_COMPILATION_CACHE_DIR="$CACHE_ROOT/jax"' in worker
+    assert "export JAX_ENABLE_X64=true" in worker
     assert "--freeze-prior" in worker
     assert "--posterior-samples \"$SUPPORT_SAMPLES\"" in worker
     assert "--min-median-ess-fraction 0.05" in worker

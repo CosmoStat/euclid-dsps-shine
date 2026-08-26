@@ -37,6 +37,7 @@ TEST_CATALOG="$CATALOG_DIR/test.parquet"
 
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-48}"
 export JAX_PLATFORMS=cuda XLA_PYTHON_CLIENT_PREALLOCATE=false
+export JAX_ENABLE_X64=true
 export TF_FORCE_GPU_ALLOW_GROWTH=true TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export MPLBACKEND=Agg MPLCONFIGDIR="/tmp/mpl-${USER}-${SLURM_ARRAY_JOB_ID}-${SLURM_ARRAY_TASK_ID}"
 export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}" PIP_NO_INDEX=1
@@ -79,4 +80,3 @@ python scripts/evaluate_feniks_rws_recovery.py summarize \
   --candidate "$SELECTED" --seed "$SEED" --phase confirmation \
   --config "$EVAL_CONFIG" --train "$TRAIN" --importance "$IMPORTANCE" \
   --predictive "$PREDICTIVE" --out "$OUT"
-

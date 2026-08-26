@@ -49,6 +49,7 @@ PREDICTIVE="$OUT/pilot_exact_gaussian_predictive"
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-48}"
 export JAX_PLATFORMS=cuda
+export JAX_ENABLE_X64=true
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TF_FORCE_GPU_ALLOW_GROWTH=true
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
