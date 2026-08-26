@@ -309,6 +309,16 @@ hash-bound final receipt, including a repaired final bank when present:
      --export=ALL,REPO_DIR="$PWD",RUN_ROOT="$RUN_ROOT",CLOSURE_ROOT="$SCRATCH/sc_asmc_truth_closure_$(date +%Y%m%d_%H%M%S)" \
      scripts/feniks_sc_asmc_truth_closure_4gpu.slurm
 
+After the truth closure, the diagnostic-only full-catalogue photometric audit
+evaluates DSPS at truth for every selected object and evaluates q0, SMC EM1,
+q1, and SMC EM2 posterior-predictive residuals for every resolved object:
+
+.. code-block:: bash
+
+   sbatch \
+     --export=ALL,REPO_DIR="$PWD",RUN_ROOT="$RUN_ROOT",CLOSURE_ROOT="$CLOSURE_ROOT",AUDIT_ROOT="$SCRATCH/sc_asmc_predictive_audit_$(date +%Y%m%d_%H%M%S)" \
+     scripts/feniks_sc_asmc_predictive_audit_4gpu.slurm
+
 The photo-z scatter uses the posterior median only as a displayed point
 estimator. PIT, coverage, CRPS, MIRA, TARP, posterior mixtures, and population
 comparisons use the full dense distributions and never collapse a posterior to

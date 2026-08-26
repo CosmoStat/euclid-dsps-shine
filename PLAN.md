@@ -7235,3 +7235,8 @@ Phase 6 - Later AGN and production scaling:
   relative catalogue path from the YAML did not reproduce the absolute-path
   training configuration hash. Rebind that path from the immutable run manifest
   and require the reconstructed hash to match before loading any checkpoint.
+- The completed closure exposes severe q bias and SMC under-dispersion. Add a
+  separate post-freeze audit that evaluates the DSPS forward model at truth for
+  every selected object and posterior-predictive residuals for q0, SMC EM1, q1,
+  and SMC EM2 over every resolved object. Keep this audit diagnostic-only and
+  bind it to the frozen final and truth-closure receipts.
