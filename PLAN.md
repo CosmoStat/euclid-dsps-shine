@@ -7217,3 +7217,5 @@ Phase 6 - Later AGN and production scaling:
 - This repair is not an EM iteration and does not update q, p2, DSPS, or selection.
 - Source-bank validation preserves its historical training commit while the repair
   receipt records the newer repair implementation commit separately.
+- Run the repair as four independent 4-H100 array tasks (12 source-bank shards
+  each), followed by a dependent 4-H100 streaming merge/report/validation job.

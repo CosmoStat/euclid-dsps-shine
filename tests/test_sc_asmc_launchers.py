@@ -77,6 +77,8 @@ def test_sc_asmc_shell_launchers_pass_bash_static_validation() -> None:
         "scripts/feniks_sc_asmc_postfreeze_nuts_8gpu.slurm",
         "scripts/feniks_sc_asmc_report_resume_4gpu.slurm",
         "scripts/feniks_sc_asmc_repair_report_4gpu.slurm",
+        "scripts/feniks_sc_asmc_repair_16gpu.slurm",
+        "scripts/feniks_sc_asmc_repair_finalize_4gpu.slurm",
     ]
     subprocess.run(["bash", "-n", *paths], check=True)
 
@@ -106,6 +108,25 @@ def test_final_repair_launcher_retries_only_post_em_inference() -> None:
     assert '"${COMMON[@]}" validate' in launcher
     assert "prior-mstep" not in launcher
     assert "q-distill" not in launcher
+
+
+def test_parallel_final_repair_uses_four_independent_four_gpu_workers() -> None:
+    repair = Path("scripts/feniks_sc_asmc_repair_16gpu.slurm").read_text(
+        encoding="utf-8"
+    )
+    finalize = Path("scripts/feniks_sc_asmc_repair_finalize_4gpu.slurm").read_text(
+        encoding="utf-8"
+    )
+
+    assert "#SBATCH --array=0-3%4" in repair
+    assert "#SBATCH --gres=gpu:4" in repair
+    assert 'repair-final --shard-id "$TASK_ID" --shard-count 4' in repair
+    assert "jax.distributed" not in repair
+    assert 'merge-repair-final --shard-count 4' in finalize
+    assert '"${COMMON[@]}" report' in finalize
+    assert '"${COMMON[@]}" validate' in finalize
+    assert "prior-mstep" not in repair + finalize
+    assert "q-distill" not in repair + finalize
 
 
 def test_postfreeze_nuts_is_absent_from_training_worker() -> None:
