@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
+import subprocess
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -249,6 +250,8 @@ def generate_sc_asmc_report(
     receipt = {
         "status": "PASS",
         "phase": "frozen_no_truth_report",
+        "report_code_commit": _git_commit(),
+        "training_code_commit": manifest["code"]["commit"],
         "c0_scope_statement": C0_SCOPE_STATEMENT,
         "target_population": TARGET_POPULATION_CONTRACT,
         "observed_selection": OBSERVED_SELECTION_CONTRACT,
@@ -265,6 +268,15 @@ def generate_sc_asmc_report(
     }
     _atomic_json(receipt_path, receipt)
     return receipt
+
+
+def _git_commit() -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _write_frozen_final_model(
@@ -526,24 +538,11 @@ def _write_individual_and_predictive_artifacts(
 
     rng = np.random.default_rng(seed + 303)
     x_predictive = _weighted_particle_draws(final, predictive_samples, rng=rng)
-    model_flux_chunks = []
-    for start in range(0, predictive_samples, int(decoder_batch_size)):
-        model_flux_chunks.append(
-            np.asarray(
-                jax.device_get(
-                    model_flux_from_x(
-                        jnp.asarray(
-                            x_predictive[start : start + int(decoder_batch_size)]
-                        ),
-                        runtime.jit_latent_spec,
-                        runtime.context,
-                        runtime.model_args,
-                        runtime.parameter_names,
-                    )
-                )
-            )
-        )
-    model_flux = np.concatenate(model_flux_chunks, axis=0)
+    model_flux = _predictive_model_flux_batched(
+        x_predictive,
+        runtime,
+        decoder_batch_size=int(decoder_batch_size),
+    )
     observed = _observed_arrays_in_row_order(runtime, report_rows)
     if observed.truth:
         raise RuntimeError("posterior predictive report loaded truth")
@@ -580,6 +579,48 @@ def _write_individual_and_predictive_artifacts(
         predictive_dir, normalized_residual, observed.band_names
     )
     return individual_path, predictive_path, summary_path, plot_path
+
+
+def _predictive_model_flux_batched(
+    x: np.ndarray,
+    runtime: RuntimeBundle,
+    *,
+    decoder_batch_size: int,
+) -> np.ndarray:
+    """Decode posterior draws while bounding total sample-object pairs."""
+    values = np.asarray(x)
+    if values.ndim != 3:
+        raise ValueError("predictive latent draws must have shape [samples,objects,dim]")
+    if int(decoder_batch_size) <= 0:
+        raise ValueError("decoder_batch_size must be positive")
+    sample_chunks = []
+    for sample_start in range(0, values.shape[0], int(decoder_batch_size)):
+        sample_stop = min(
+            sample_start + int(decoder_batch_size), values.shape[0]
+        )
+        sample_count = sample_stop - sample_start
+        object_chunk_size = max(1, int(decoder_batch_size) // sample_count)
+        object_chunks = []
+        for object_start in range(0, values.shape[1], object_chunk_size):
+            block = values[
+                sample_start:sample_stop,
+                object_start : object_start + object_chunk_size,
+            ]
+            object_chunks.append(
+                np.asarray(
+                    jax.device_get(
+                        model_flux_from_x(
+                            jnp.asarray(block),
+                            runtime.jit_latent_spec,
+                            runtime.context,
+                            runtime.model_args,
+                            runtime.parameter_names,
+                        )
+                    )
+                )
+            )
+        sample_chunks.append(np.concatenate(object_chunks, axis=1))
+    return np.concatenate(sample_chunks, axis=0)
 
 
 def _frozen_component_paths(root: Path) -> dict[str, Path]:

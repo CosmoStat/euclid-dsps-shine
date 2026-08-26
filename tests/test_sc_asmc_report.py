@@ -7,6 +7,7 @@ from euclid_dsps.amortized.posterior_bank import (
     write_posterior_bank_shard,
 )
 from euclid_dsps.amortized.sc_asmc_report import (
+    _predictive_model_flux_batched,
     _weighted_correlation,
     summarize_posterior_bank,
 )
@@ -45,3 +46,32 @@ def test_beta_weighted_correlation_differs_from_parent_when_weights_vary() -> No
     assert parent.shape == (2, 2)
     assert selected.shape == (2, 2)
     assert not np.allclose(parent, selected)
+
+
+def test_predictive_decoder_bounds_total_sample_object_pairs(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    import jax.numpy as jnp
+
+    from euclid_dsps.amortized import sc_asmc_report as report_module
+
+    calls = []
+
+    def fake_model_flux(x, *_args):
+        calls.append(tuple(x.shape))
+        return jnp.asarray(x[..., :2])
+
+    monkeypatch.setattr(report_module, "model_flux_from_x", fake_model_flux)
+    runtime = SimpleNamespace(
+        jit_latent_spec=None,
+        context=None,
+        model_args=None,
+        parameter_names=("a", "b", "c"),
+    )
+    x = np.arange(7 * 5 * 3, dtype=np.float32).reshape(7, 5, 3)
+
+    flux = _predictive_model_flux_batched(x, runtime, decoder_batch_size=6)
+
+    np.testing.assert_array_equal(flux, x[..., :2])
+    assert all(samples * objects <= 6 for samples, objects, _ in calls)
+    assert calls == [(6, 1, 3)] * 5 + [(1, 5, 3)]

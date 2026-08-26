@@ -95,6 +95,13 @@
   axis must be mapped. The continuation boundary now materializes these small
   selected buffers on the host, reshapes them as contiguous device-major
   arrays, and lets the next `pmap` establish its required axis sharding.
+- Production `1363794` completed both EM iterations, both selection-corrected
+  prior M-steps, and both full-bank reweighting passes before report-only
+  failure. Posterior-predictive reporting bounded only the sample axis, so its
+  configured batch of 128 still decoded all 64 samples for 32 objects at once
+  and XLA autotuning requested an additional 18.22 GiB. Reporting now bounds
+  the total sample-object pairs per DSPS call while preserving the exact output
+  ordering; no training or frozen-bank artifact is changed.
 
 ## 2026-08-24 Exact-cohort SMC bootstrap
 
