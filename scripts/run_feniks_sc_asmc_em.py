@@ -55,6 +55,13 @@ def parse_args() -> argparse.Namespace:
     merge_reweight.add_argument("--iteration", type=int, choices=(1, 2), required=True)
     merge_reweight.add_argument("--shard-count", type=int, required=True)
 
+    repair = sub.add_parser("repair-final")
+    repair.add_argument("--shard-id", type=int, required=True)
+    repair.add_argument("--shard-count", type=int, required=True)
+
+    merge_repair = sub.add_parser("merge-repair-final")
+    merge_repair.add_argument("--shard-count", type=int, required=True)
+
     distill = sub.add_parser("q-distill")
     distill.add_argument("--iteration", type=int, choices=(1,), required=True)
 
@@ -134,6 +141,15 @@ def main() -> None:
         )
     elif args.command == "q-distill":
         _distill(config, args.out, iteration=int(args.iteration))
+    elif args.command == "repair-final":
+        _repair_final(
+            config,
+            args.out,
+            shard_id=int(args.shard_id),
+            shard_count=int(args.shard_count),
+        )
+    elif args.command == "merge-repair-final":
+        _merge_repair_final(args.out, shard_count=int(args.shard_count))
     elif args.command == "report":
         _report(config, args.out)
     elif args.command == "validate":
@@ -388,6 +404,63 @@ def _merge_reweight(root: Path, *, iteration: int, shard_count: int) -> dict:
     from euclid_dsps.amortized.posterior_bank import merge_posterior_bank_shards
 
     bank = root / "banks" / f"em{iteration}_p{iteration}"
+    _require_worker_receipts(bank, shard_count)
+    paths = sorted((bank / "shards").glob("shard_*"))
+    expected = np.load(_manifest(root)["artifacts"]["selected_rows"]["path"])
+    result = merge_posterior_bank_shards(
+        bank,
+        [str(path) for path in paths],
+        expected_row_indices=expected,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True), flush=True)
+    return result
+
+
+def _repair_final(
+    config: dict,
+    root: Path,
+    *,
+    shard_id: int,
+    shard_count: int,
+) -> dict:
+    """Retry unresolved final rows with frozen q1 and p2; do not run another EM."""
+    from euclid_dsps.amortized.sc_asmc_reweight import (
+        reweight_and_refresh_bank_worker,
+    )
+
+    manifest = _manifest(root)
+    runtime = _runtime(config, root, worker_label=f"repair_final_{shard_id}")
+    distill = json.loads(
+        (root / "distill1" / "q_distillation_em1_receipt.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    p2 = _mstep_receipt(root, 2)["prior_checkpoint"]
+    result = reweight_and_refresh_bank_worker(
+        config,
+        runtime,
+        manifest,
+        input_bank_manifest=root / "banks" / "em2_p2" / "posterior_bank_manifest.json",
+        output_bank_root=root / "banks" / "em2_p2_repaired",
+        worker_id=int(shard_id),
+        worker_count=int(shard_count),
+        q_checkpoint=distill["q_raw_checkpoint"],
+        q_ema_checkpoint=distill["q_ema_checkpoint"],
+        old_prior_checkpoint=p2,
+        new_prior_checkpoint=p2,
+        seed=int(manifest["seed"]) + 90_000 + int(shard_id),
+        resume=True,
+        refresh_unresolved=True,
+        refresh_low_ess=False,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True), flush=True)
+    return result
+
+
+def _merge_repair_final(root: Path, *, shard_count: int) -> dict:
+    from euclid_dsps.amortized.posterior_bank import merge_posterior_bank_shards
+
+    bank = root / "banks" / "em2_p2_repaired"
     _require_worker_receipts(bank, shard_count)
     paths = sorted((bank / "shards").glob("shard_*"))
     expected = np.load(_manifest(root)["artifacts"]["selected_rows"]["path"])
@@ -686,6 +759,10 @@ def _status(root: Path) -> dict:
         "bank_em2": root / "banks" / "em2" / "posterior_bank_manifest.json",
         "prior_p2": root / "mstep2" / "prior_mstep_2_receipt.json",
         "bank_em2_p2": root / "banks" / "em2_p2" / "posterior_bank_manifest.json",
+        "bank_em2_p2_repaired": root
+        / "banks"
+        / "em2_p2_repaired"
+        / "posterior_bank_manifest.json",
         "training_complete": root / "TRAINING_COMPLETE.json",
         "report": root / "report" / "report_receipt.json",
         "final_receipt": root / "FINAL_RECEIPT.json",

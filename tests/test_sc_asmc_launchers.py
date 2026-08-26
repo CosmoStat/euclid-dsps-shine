@@ -76,6 +76,7 @@ def test_sc_asmc_shell_launchers_pass_bash_static_validation() -> None:
         "scripts/feniks_sc_asmc_em_16gpu_smoke.slurm",
         "scripts/feniks_sc_asmc_postfreeze_nuts_8gpu.slurm",
         "scripts/feniks_sc_asmc_report_resume_4gpu.slurm",
+        "scripts/feniks_sc_asmc_repair_report_4gpu.slurm",
     ]
     subprocess.run(["bash", "-n", *paths], check=True)
 
@@ -91,6 +92,20 @@ def test_report_resume_launcher_requires_frozen_training_and_bounds_memory() -> 
     assert '"${COMMON[@]}" report' in launcher
     assert '"${COMMON[@]}" validate' in launcher
     assert '"${COMMON[@]}" status' in launcher
+
+
+def test_final_repair_launcher_retries_only_post_em_inference() -> None:
+    launcher = Path("scripts/feniks_sc_asmc_repair_report_4gpu.slurm").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'test -s "$RUN_ROOT/TRAINING_COMPLETE.json"' in launcher
+    assert 'repair-final --shard-id 0 --shard-count 1' in launcher
+    assert 'merge-repair-final --shard-count 1' in launcher
+    assert '"${COMMON[@]}" report' in launcher
+    assert '"${COMMON[@]}" validate' in launcher
+    assert "prior-mstep" not in launcher
+    assert "q-distill" not in launcher
 
 
 def test_postfreeze_nuts_is_absent_from_training_worker() -> None:

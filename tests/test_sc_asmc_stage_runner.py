@@ -21,6 +21,8 @@ def test_stage_runner_help_exposes_resumeable_phases() -> None:
         "prior-mstep",
         "reweight",
         "merge-reweight",
+        "repair-final",
+        "merge-repair-final",
         "q-distill",
         "report",
         "validate",

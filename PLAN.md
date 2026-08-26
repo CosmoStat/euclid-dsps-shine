@@ -7206,3 +7206,12 @@ Phase 6 - Later AGN and production scaling:
 - No Jean-Zay job and no big run were submitted. The next permissible action
   is one new immutable scientific smoke; the big run remains fail-closed on
   its receipt.
+# Final unresolved-bank repair (2026-08-26)
+
+- The frozen report completed after the bounded decoder fix, but final validation
+  correctly rejected `em2_p2` because its unresolved fraction exceeded 5%.
+- Root cause: prior-ratio reweighting refreshed low-ratio-ESS rows only; unresolved
+  E-step rows with healthy ratio ESS were copied unchanged (`refreshed=0`).
+- Add one post-EM retry of unresolved rows under frozen q1/p2, persist it as a
+  separate bank, then regenerate the report and retain the unchanged 5% gate.
+- This repair is not an EM iteration and does not update q, p2, DSPS, or selection.

@@ -129,8 +129,24 @@ def validate_and_write_final_receipt(
     for label in ("em1", "em1_p1", "em2", "em2_p2"):
         bank_path = root / "banks" / label / "posterior_bank_manifest.json"
         banks[label] = _validate_bank(bank_path, expected_rows, manifest)
+    repaired_path = root / "banks" / "em2_p2_repaired" / "posterior_bank_manifest.json"
+    final_label = "em2_p2"
+    if repaired_path.is_file():
+        repair_receipt = _required_receipt(
+            root / "banks" / "em2_p2_repaired" / "worker_00_receipt.json"
+        )
+        _validate_phase_receipt("final_unresolved_repair", repair_receipt)
+        if repair_receipt.get("refresh_unresolved") is not True:
+            raise ValueError("final repaired bank lacks unresolved-refresh evidence")
+        if repair_receipt.get("refresh_low_ess") is not False:
+            raise ValueError("final repair was not restricted to unresolved rows")
+        phase_receipts["final_unresolved_repair"] = repair_receipt
+        banks["em2_p2_repaired"] = _validate_bank(
+            repaired_path, expected_rows, manifest
+        )
+        final_label = "em2_p2_repaired"
     final_summary = summarize_posterior_bank(
-        root / "banks" / "em2_p2" / "posterior_bank_manifest.json"
+        root / "banks" / final_label / "posterior_bank_manifest.json"
     )
     maximum_unresolved = float(
         (
@@ -187,7 +203,7 @@ def validate_and_write_final_receipt(
         report,
         q_checkpoint=checkpoints["q1_ema"],
         prior_checkpoint=checkpoints["p2"],
-        final_bank=banks["em2_p2"],
+        final_bank=banks[final_label],
         feature_stats_path=feature_stats,
         workflow_config_hash=manifest["config_sha256"],
     )

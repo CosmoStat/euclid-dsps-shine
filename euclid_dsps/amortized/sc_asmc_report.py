@@ -192,9 +192,7 @@ def generate_sc_asmc_report(
         output=output,
         seed=seed,
     )
-    method_summary = summarize_posterior_bank(
-        root / "banks" / "em2_p2" / "posterior_bank_manifest.json"
-    )
+    method_summary = summarize_posterior_bank(_final_bank_manifest(root))
     method_summary["e_step_runtime"] = _e_step_runtime_summary(root)
     method_path = output / "method_runtime_diagnostics.json"
     _atomic_json(method_path, method_summary)
@@ -644,12 +642,19 @@ def _frozen_component_paths(root: Path) -> dict[str, Path]:
         ),
         "q_final": Path(distill["q_ema_checkpoint"]),
         "bank_em1": root / "banks" / "em1" / "posterior_bank_manifest.json",
-        "bank_final": root / "banks" / "em2_p2" / "posterior_bank_manifest.json",
+        "bank_final": _final_bank_manifest(root),
     }
     missing = [str(path) for path in result.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError(f"frozen report inputs are incomplete: {missing}")
     return result
+
+
+def _final_bank_manifest(root: Path) -> Path:
+    repaired = root / "banks" / "em2_p2_repaired" / "posterior_bank_manifest.json"
+    if repaired.is_file():
+        return repaired
+    return root / "banks" / "em2_p2" / "posterior_bank_manifest.json"
 
 
 def _read_bank_rows(manifest_path: Path, rows: np.ndarray) -> PosteriorBankShard:

@@ -58,8 +58,10 @@ def reweight_and_refresh_bank_worker(
     seed: int,
     resume: bool = True,
     verbose: bool = True,
+    refresh_unresolved: bool = False,
+    refresh_low_ess: bool = True,
 ) -> dict[str, Any]:
-    """Reweight assigned shards and replace only low-ESS object rows."""
+    """Reweight assigned shards and selectively replace weak object rows."""
     validate_sc_asmc_em_config(config)
     if not 0 <= int(worker_id) < int(worker_count):
         raise ValueError("bank reweight worker_id must be in [0, worker_count)")
@@ -103,6 +105,8 @@ def reweight_and_refresh_bank_worker(
             expected_old_prior_hash=expected_old_prior_hash,
             expected_new_prior_hash=expected_new_prior_hash,
             assigned=assigned,
+            refresh_unresolved=refresh_unresolved,
+            refresh_low_ess=refresh_low_ess,
         )
         return payload
     new_model = load_sc_model(
@@ -145,6 +149,7 @@ def reweight_and_refresh_bank_worker(
     shard_records = []
     low_count = 0
     refresh_count = 0
+    unresolved_count = 0
     futures = []
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="bank-reweight") as pool:
         for local_index, record in enumerate(assigned):
@@ -176,18 +181,28 @@ def reweight_and_refresh_bank_worker(
                 reweighted.particle_count,
                 minimum_ess_fraction=minimum_ess_fraction,
             )
+            unresolved_rows = np.asarray(input_shard.row_index)[
+                ~np.asarray(input_shard.resolved, dtype=bool)
+            ]
+            refresh_rows = rows_requiring_refresh(
+                low_rows,
+                unresolved_rows,
+                refresh_unresolved=refresh_unresolved,
+                refresh_low_ess=refresh_low_ess,
+            )
             low_count += int(len(low_rows))
-            if len(low_rows):
+            unresolved_count += int(len(unresolved_rows))
+            if len(refresh_rows):
                 replacement = _refresh_rows(
                     runtime=runtime,
                     model=new_model,
-                    rows=low_rows,
+                    rows=refresh_rows,
                     kernels=kernels,
                     hierarchy=hierarchy,
                     seed=int(seed) + local_index,
                 )
                 reweighted = replace_posterior_bank_rows(reweighted, replacement)
-                refresh_count += int(len(low_rows))
+                refresh_count += int(len(refresh_rows))
             futures.append(
                 pool.submit(
                     write_posterior_bank_shard,
@@ -204,6 +219,8 @@ def reweight_and_refresh_bank_worker(
                     "shard_id": output_shard_id,
                     "rows": reweighted.object_count,
                     "low_reweight_ess_rows": int(len(low_rows)),
+                    "unresolved_input_rows": int(len(unresolved_rows)),
+                    "refresh_requested_rows": int(len(refresh_rows)),
                     "resumed": False,
                 }
             )
@@ -211,14 +228,18 @@ def reweight_and_refresh_bank_worker(
                 print(
                     "[sc-asmc][reweight] "
                     f"worker={worker_id} shard={output_shard_id} "
-                    f"rows={reweighted.object_count} refreshed={len(low_rows)}",
+                    f"rows={reweighted.object_count} refreshed={len(refresh_rows)}",
                     flush=True,
                 )
         for future in futures:
             future.result()
     payload = {
         "status": "complete",
-        "phase": "bank_reweight_and_selective_refresh",
+        "phase": (
+            "final_unresolved_repair"
+            if refresh_unresolved
+            else "bank_reweight_and_selective_refresh"
+        ),
         "worker_id": int(worker_id),
         "worker_count": int(worker_count),
         "c0_scope_statement": C0_SCOPE_STATEMENT,
@@ -230,7 +251,10 @@ def reweight_and_refresh_bank_worker(
         "new_prior_checkpoint_hash": expected_new_prior_hash,
         "minimum_reweight_ess_fraction": minimum_ess_fraction,
         "low_ess_rows": low_count,
+        "unresolved_input_rows": unresolved_count,
         "refreshed_rows": refresh_count,
+        "refresh_unresolved": bool(refresh_unresolved),
+        "refresh_low_ess": bool(refresh_low_ess),
         "extended_applied_uniformly": False,
         "shards": shard_records,
     }
@@ -245,6 +269,8 @@ def _validate_reweight_receipt(
     expected_old_prior_hash: str,
     expected_new_prior_hash: str,
     assigned: list[dict[str, Any]],
+    refresh_unresolved: bool,
+    refresh_low_ess: bool,
 ) -> None:
     if payload.get("status") != "complete":
         raise ValueError("reweight receipt is incomplete")
@@ -252,6 +278,10 @@ def _validate_reweight_receipt(
         raise ValueError("reweight resume uses another source prior")
     if payload.get("new_prior_checkpoint_hash") != expected_new_prior_hash:
         raise ValueError("reweight resume uses another destination prior")
+    if bool(payload.get("refresh_unresolved", False)) != bool(refresh_unresolved):
+        raise ValueError("reweight resume uses another unresolved-refresh contract")
+    if bool(payload.get("refresh_low_ess", True)) != bool(refresh_low_ess):
+        raise ValueError("reweight resume uses another low-ESS refresh contract")
     records = payload.get("shards", [])
     if len(records) != len(assigned):
         raise ValueError("reweight receipt shard assignment changed")
@@ -263,6 +293,25 @@ def _validate_reweight_receipt(
         if not is_posterior_bank_shard_complete(record["path"], validate_arrays=True):
             raise ValueError("reweight receipt references an incomplete shard")
         validate_posterior_bank_shard_provenance(record["path"], provenance)
+
+
+def rows_requiring_refresh(
+    low_ess_rows: np.ndarray,
+    unresolved_rows: np.ndarray,
+    *,
+    refresh_unresolved: bool,
+    refresh_low_ess: bool = True,
+) -> np.ndarray:
+    """Return the deterministic union required by the refresh contract."""
+    low = (
+        np.asarray(low_ess_rows, dtype=np.int64)
+        if refresh_low_ess
+        else np.asarray([], dtype=np.int64)
+    )
+    if not refresh_unresolved:
+        return np.unique(low)
+    unresolved = np.asarray(unresolved_rows, dtype=np.int64)
+    return np.unique(np.concatenate((low, unresolved)))
 
 
 def _evaluate_prior_on_bank(prior: Any, shard: PosteriorBankShard) -> np.ndarray:
