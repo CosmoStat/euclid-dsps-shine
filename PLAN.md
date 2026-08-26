@@ -7219,3 +7219,15 @@ Phase 6 - Later AGN and production scaling:
   receipt records the newer repair implementation commit separately.
 - Run the repair as four independent 4-H100 array tasks (12 source-bank shards
   each), followed by a dependent 4-H100 streaming merge/report/validation job.
+
+## Post-freeze truth closure (2026-08-26)
+
+- Bind closure and NUTS consumers to the repaired final bank recorded in the
+  immutable final receipt.
+- Retain 128 joint draws per object for q0, SMC EM1, q1, and SMC EM2; aggregate
+  them only as equal-object selected-catalog posterior mixtures.
+- Compare p0/p1/p2 parent samples and beta-weighted selected samples separately
+  against truth C0 and truth selected distributions.
+- Produce 15D marginal coverage, PIT, bias/pulls, MIRA, TARP, photo-z metrics,
+  population recovery, representative individual corners, and provenance-backed
+  source arrays. Truth remains post-freeze only.

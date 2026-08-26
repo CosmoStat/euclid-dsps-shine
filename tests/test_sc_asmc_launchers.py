@@ -24,7 +24,7 @@ def test_sixteen_gpu_launcher_uses_four_independent_four_gpu_shards() -> None:
     assert "SMOKE_ROOT" in worker
     assert "validate_feniks_sc_asmc_smoke.py" in worker
     assert "REQUIRE_SMOKE16=1" in launcher
-    assert 'SMOKE16_ROOT/shard_$smoke_shard' in worker
+    assert "SMOKE16_ROOT/shard_$smoke_shard" in worker
     assert "SMOKE_PASS" in validator
     assert "smoke configuration differs" in validator
     assert "smoke dataset differs" in validator
@@ -79,6 +79,7 @@ def test_sc_asmc_shell_launchers_pass_bash_static_validation() -> None:
         "scripts/feniks_sc_asmc_repair_report_4gpu.slurm",
         "scripts/feniks_sc_asmc_repair_16gpu.slurm",
         "scripts/feniks_sc_asmc_repair_finalize_4gpu.slurm",
+        "scripts/feniks_sc_asmc_truth_closure_4gpu.slurm",
     ]
     subprocess.run(["bash", "-n", *paths], check=True)
 
@@ -90,7 +91,7 @@ def test_report_resume_launcher_requires_frozen_training_and_bounds_memory() -> 
 
     assert 'test -s "$RUN_ROOT/TRAINING_COMPLETE.json"' in launcher
     assert 'test -s "$RUN_ROOT/banks/em2_p2/posterior_bank_manifest.json"' in launcher
-    assert 'XLA_PYTHON_CLIENT_MEM_FRACTION:-0.72' in launcher
+    assert "XLA_PYTHON_CLIENT_MEM_FRACTION:-0.72" in launcher
     assert '"${COMMON[@]}" report' in launcher
     assert '"${COMMON[@]}" validate' in launcher
     assert '"${COMMON[@]}" status' in launcher
@@ -102,8 +103,8 @@ def test_final_repair_launcher_retries_only_post_em_inference() -> None:
     )
 
     assert 'test -s "$RUN_ROOT/TRAINING_COMPLETE.json"' in launcher
-    assert 'repair-final --shard-id 0 --shard-count 1' in launcher
-    assert 'merge-repair-final --shard-count 1' in launcher
+    assert "repair-final --shard-id 0 --shard-count 1" in launcher
+    assert "merge-repair-final --shard-count 1" in launcher
     assert '"${COMMON[@]}" report' in launcher
     assert '"${COMMON[@]}" validate' in launcher
     assert "prior-mstep" not in launcher
@@ -122,11 +123,27 @@ def test_parallel_final_repair_uses_four_independent_four_gpu_workers() -> None:
     assert "#SBATCH --gres=gpu:4" in repair
     assert 'repair-final --shard-id "$TASK_ID" --shard-count 4' in repair
     assert "jax.distributed" not in repair
-    assert 'merge-repair-final --shard-count 4' in finalize
+    assert "merge-repair-final --shard-count 4" in finalize
     assert '"${COMMON[@]}" report' in finalize
     assert '"${COMMON[@]}" validate' in finalize
     assert "prior-mstep" not in repair + finalize
     assert "q-distill" not in repair + finalize
+
+
+def test_truth_closure_launcher_requires_frozen_receipt_and_separate_truth_config() -> (
+    None
+):
+    launcher = Path("scripts/feniks_sc_asmc_truth_closure_4gpu.slurm").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'test -s "$RUN_ROOT/FINAL_PASS"' in launcher
+    assert 'test -s "$RUN_ROOT/FINAL_RECEIPT.json"' in launcher
+    assert "feniks_sc_asmc_em_r25_truth_closure.yaml" in launcher
+    assert "--samples-per-object 128" in launcher
+    assert "--num-bootstrap 1000" in launcher
+    assert "prior-mstep" not in launcher
+    assert "q-distill" not in launcher
 
 
 def test_postfreeze_nuts_is_absent_from_training_worker() -> None:

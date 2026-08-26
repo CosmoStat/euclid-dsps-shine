@@ -294,17 +294,25 @@ NUTS is a separate 8-object validation job and requires ``FINAL_PASS``:
 
    sbatch --export=ALL,CATALOG="$CATALOG",RUN_ROOT="$RUN_ROOT",NUTS_OUT="$SCRATCH/sc_asmc_nuts_$(date +%Y%m%d_%H%M%S)" scripts/feniks_sc_asmc_postfreeze_nuts_8gpu.slurm
 
-Truth closure retains 128 dense joint draws per resolved object and evaluates
-coverage, posterior bias, population recovery inside C0, MIRA, and TARP:
+Truth closure retains 128 dense joint draws per resolved object for q0, SMC
+after EM1, distilled q1, and final SMC after EM2. It keeps four statistical
+objects separate: individual posteriors, equal-object selected-catalog
+posterior mixtures, parent p0/p1/p2 distributions, and beta-weighted selected
+p0/p1/p2 distributions. It evaluates 15D coverage, PIT, bias and pulls,
+conditional calibration, photo-z bias/NMAD/outliers/CRPS, population recovery
+inside C0, MIRA, and TARP. It always consumes the final bank named by the
+hash-bound final receipt, including a repaired final bank when present:
 
 .. code-block:: bash
 
-   python scripts/run_feniks_sc_asmc_truth_closure.py \
-     --config configs/experiments/feniks_sc_asmc_em_r25.yaml \
-     --truth-config configs/experiments/feniks_sc_asmc_em_r25_truth_closure.yaml \
-     --run-root "$RUN_ROOT" \
-     --out "$WORK/sc_asmc_truth_closure" \
-     --samples-per-object 128 --num-mira-regions 100 --num-bootstrap 1000
+   sbatch \
+     --export=ALL,REPO_DIR="$PWD",RUN_ROOT="$RUN_ROOT",CLOSURE_ROOT="$SCRATCH/sc_asmc_truth_closure_$(date +%Y%m%d_%H%M%S)" \
+     scripts/feniks_sc_asmc_truth_closure_4gpu.slurm
+
+The photo-z scatter uses the posterior median only as a displayed point
+estimator. PIT, coverage, CRPS, MIRA, TARP, posterior mixtures, and population
+comparisons use the full dense distributions and never collapse a posterior to
+a point estimate.
 
 Final artifacts
 ---------------
