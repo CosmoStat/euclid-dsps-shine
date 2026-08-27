@@ -1,5 +1,51 @@
 # Plan
 
+## 2026-08-27 Selection-Corrected Defensive RWS finalization
+
+- Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
+  truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
+  workflow inside the predefined FENIKS refinement/catalogue-support domain
+  `C0`. The additional modeled selection is observed `r<27.5`; upstream
+  true-space filtering remains conditioning and is not inverted.
+- Preserve the two existing conditional-RealNVP candidates and the no-truth
+  `bounded_mixed_warp` geometry. Do not change DSPS, zero points, the existing
+  catalogue, or the canonical object posterior target.
+- Implement a dedicated SC-DRWS training path with a 60-epoch Student-t2,
+  fixed-prior proposal warm-up followed by 120 Gaussian, joint q/prior epochs;
+  3:1 sleep/wake scheduling; variance-control schedules; exact defensive
+  mixture densities; hard-object K128-to-K512 deterministic MIS; separate q
+  and prior optimizers; selection-normalized prior loss; trust region; raw/EMA
+  checkpoints; and resumable state.
+- Extend the existing manifest/evaluation/launcher scaffold rather than
+  duplicating its independent cohorts, ordinary-IW K=2048 evaluation, dense
+  PPC, and four-H100 worker pattern. Add immutable retention-grid and full-row
+  contracts for observed `r<27.5`.
+- Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
+  selected-architecture/two-seed independent 2000-object confirmation, then
+  two complete-selected-training-set seeds. No Jean-Zay submission is made by
+  Codex; only local tests and copy-paste launch commands are delivered.
+- Analytical wake cost per full seed is
+  `15*N*64 + 30*N*128 + 30*N_hard*384` DSPS evaluations, plus
+  `135*N*8` fixed-pool selected-sleep simulations, selection-alpha MC and
+  validation/inference. Benchmark the smoke before assigning a wall-time;
+  start K512 autotuning at four objects per H100 and enforce the configured
+  85-90% device-memory target.
+- Implementation status: the dedicated SC-DRWS trainer, dynamic variance
+  controls, complete deterministic MIS denominator, K128-to-K512 hard
+  expansion, full-wake prior macro-batches, fixed E-step trust reference,
+  score-function selection term, raw/EMA full-model checkpoints, resume state,
+  r<27.5 retention/full-row manifests, K2048/PPC gates, pilot/confirmation/full
+  launchers, four-shard inference and frozen population report are implemented.
+  Historical q has 673,942 trainable parameters; current q has 2,441,298; the
+  shared parent prior has 1,179,888.
+- Local verification: 67 focused SC-DRWS/RWS/posthoc/conditional-flow tests
+  pass, including a four-device CPU pmap regression. Ruff, compileall, bash
+  syntax and `git diff --check` pass. A broader suite attempt reached 134
+  passing tests before it was stopped
+  during long unrelated JAX compilation. The FENIKS parquet is absent locally,
+  so retention counts, GPU memory autotuning and the scientific smoke remain
+  Jean-Zay gates. No job was submitted.
+
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 
 - Status: implementation complete and locally validated on
@@ -7395,3 +7441,32 @@ Phase 6 - Later AGN and production scaling:
 - The final recovery receipt can authorize only the SMC diversity benchmark.
   It explicitly leaves population-prior update and full-catalogue production
   false, so no learned prior can consume a proposal that failed overlap or PPC.
+## 2026-08-27 Selection-Corrected Defensive RWS finalization
+
+- Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
+  truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
+  workflow inside the predefined FENIKS refinement/catalogue-support domain
+  `C0`. The additional modeled selection is observed `r<27.5`; upstream
+  true-space filtering remains conditioning and is not inverted.
+- Preserve the two existing conditional-RealNVP candidates and the no-truth
+  `bounded_mixed_warp` geometry. Do not change DSPS, zero points, the existing
+  catalogue, or the canonical object posterior target.
+- Implement a dedicated SC-DRWS training path with a 60-epoch Student-t2,
+  fixed-prior proposal warm-up followed by 120 Gaussian, joint q/prior epochs;
+  3:1 sleep/wake scheduling; variance-control schedules; exact defensive
+  mixture densities; hard-object K128-to-K512 deterministic MIS; separate q
+  and prior optimizers; selection-normalized prior loss; trust region; raw/EMA
+  checkpoints; and resumable state.
+- Extend the existing manifest/evaluation/launcher scaffold rather than
+  duplicating its independent cohorts, ordinary-IW K=2048 evaluation, dense
+  PPC, and four-H100 worker pattern. Add immutable retention-grid and full-row
+  contracts for observed `r<27.5`.
+- Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
+  selected-architecture/two-seed independent 2000-object confirmation, then
+  two complete-selected-training-set seeds. No Jean-Zay submission is made by
+  Codex; only local tests and copy-paste launch commands are delivered.
+- Analytical wake cost per full seed is
+  `15*N*64 + 30*N*128 + 30*N_hard*384` DSPS evaluations, plus `135*N` sleep
+  simulations and validation/inference. Benchmark the smoke before assigning a
+  wall-time; start K512 autotuning at four objects per H100 and enforce the
+  configured 85-90% device-memory target.

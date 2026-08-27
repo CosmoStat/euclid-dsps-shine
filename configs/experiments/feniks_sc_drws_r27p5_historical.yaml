@@ -1,0 +1,20 @@
+extends: feniks_sc_drws_r27p5_common.yaml
+
+amortized:
+  encoder:
+    type: conditional_flow
+    input_dim: 54
+    latent_dim: 15
+    context_encoder: base_moments
+    base_components: 1
+    log_std_min: -4.0
+    log_std_max: 2.5
+    initial_log_std: 0.25
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_scale_clamp: 0.50
+    flow_shift_clamp: 3.0
+    flow_init_scale: 0.0
+    flow_permutation: alternating_roll

@@ -23,16 +23,16 @@ SEEDS=(260826 260827)
 SEED="${SEEDS[${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}]}"
 SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$RECOVERY_ROOT/PILOT_PASS.json")
 case "$SELECTED" in
-  historical_4x128) EVAL_CONFIG=configs/experiments/feniks_rws_recovery_r25_historical_gaussian_eval.yaml ;;
-  current_residual_6x256) EVAL_CONFIG=configs/experiments/feniks_rws_recovery_r25_current_gaussian_eval.yaml ;;
+  historical_4x128) EVAL_CONFIG=configs/experiments/feniks_sc_drws_r27p5_historical.yaml ;;
+  current_residual_6x256) EVAL_CONFIG=configs/experiments/feniks_sc_drws_r27p5_current.yaml ;;
   *) echo "[rws-confirm][error] invalid selected candidate: $SELECTED" >&2; exit 2 ;;
 esac
 OUT="$RECOVERY_ROOT/$SELECTED/seed_$SEED"
-TRAIN="$OUT/train"
-SUPPORT="$OUT/confirmation_exact_gaussian_k2048"
-IMPORTANCE="$OUT/confirmation_exact_gaussian_iw"
-PREDICTIVE="$OUT/confirmation_exact_gaussian_predictive"
+TRAIN="$OUT/confirmation_train"
 INDICES="$MANIFEST_ROOT/confirmation_indices.npy"
+TRAIN_INDICES="$MANIFEST_ROOT/confirmation_train_indices.npy"
+VALIDATION_INDICES="$MANIFEST_ROOT/validation_indices.npy"
+TRAIN_CATALOG="$CATALOG_DIR/train.parquet"
 TEST_CATALOG="$CATALOG_DIR/test.parquet"
 
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-48}"
@@ -49,34 +49,62 @@ module purge
 module load arch/h100
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
-for path in "$RECOVERY_ROOT/PILOT_PASS.json" "$EVAL_CONFIG" "$TEST_CATALOG" \
-  "$INDICES" "$TRAIN/checkpoints/best.eqx" "$TRAIN/feature_stats.json"; do
+for path in "$RECOVERY_ROOT/PILOT_PASS.json" "$EVAL_CONFIG" "$TRAIN_CATALOG" \
+  "$TEST_CATALOG" "$INDICES" "$TRAIN_INDICES" "$VALIDATION_INDICES" \
+  "$MANIFEST_ROOT/manifest.json"; do
   test -s "$path" || { echo "[rws-confirm][error] missing: $path" >&2; exit 2; }
 done
 test ! -e "$OUT/confirmation_summary.json" || { echo "confirmation already exists"; exit 2; }
+RESUME_ARGS=()
+if [[ -s "$TRAIN/states/latest.eqx" ]]; then
+  RESUME_ARGS+=(--resume-state "$TRAIN/states/latest.eqx")
+  echo "[rws-confirm] resuming $TRAIN/states/latest.eqx"
+elif [[ -e "$TRAIN" ]]; then
+  echo "[rws-confirm][error] train output exists without resumable state: $TRAIN" >&2
+  exit 2
+fi
 OBJECTS=$(python -c 'import numpy as np,sys; print(len(np.load(sys.argv[1])))' "$INDICES")
-COMMON_INFER=(
-  --dataset "$TEST_CATALOG" --checkpoint "$TRAIN/checkpoints/best.eqx"
-  --feature-stats "$TRAIN/feature_stats.json" --row-indices-file "$INDICES"
-  --selection-mode sequential --limit "$OBJECTS" --batch-size 64
-  --jax-batch-size 32 --prior-samples 64 --decoder-sample-chunk-size 1
-  --prior-predictive-batch-size 64 --shard-outputs --no-residual-samples
-)
 echo "[rws-confirm] candidate=$SELECTED seed=$SEED objects=$OBJECTS"
-python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
-  "${COMMON_INFER[@]}" --posterior-samples 2048 --seed "$((SEED + 4000))" \
-  --out "$SUPPORT" --no-posterior-predictive
-python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-finalize-inference \
-  --out "$SUPPORT" --limit "$OBJECTS"
-python scripts/importance_correct_posterior.py --posterior "$SUPPORT" \
-  --out "$IMPORTANCE" --resample-count 256 --seed "$((SEED + 5000))" \
-  --min-median-ess-fraction 0.05 --max-fraction-pareto-k-gt-0p7 0.20
-python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
-  "${COMMON_INFER[@]}" --posterior-samples 64 --seed "$((SEED + 6000))" \
-  --out "$PREDICTIVE"
-python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-finalize-inference \
-  --out "$PREDICTIVE" --limit "$OBJECTS"
+python scripts/train_feniks_sc_drws.py --config "$EVAL_CONFIG" --out "$TRAIN" \
+  --train-indices-file "$TRAIN_INDICES" \
+  --validation-indices-file "$VALIDATION_INDICES" \
+  --manifest-file "$MANIFEST_ROOT/manifest.json" --seed "$SEED" \
+  "${RESUME_ARGS[@]}"
+
+for VARIANT in raw ema; do
+  VARIANT_OFFSET=0
+  [[ "$VARIANT" == "ema" ]] && VARIANT_OFFSET=1
+  SUPPORT="$OUT/confirmation_${VARIANT}_exact_gaussian_k2048"
+  IMPORTANCE="$OUT/confirmation_${VARIANT}_exact_gaussian_iw"
+  PREDICTIVE="$OUT/confirmation_${VARIANT}_exact_gaussian_predictive"
+  COMMON_INFER=(
+    --dataset "$TEST_CATALOG"
+    --checkpoint "$TRAIN/checkpoints/final/${VARIANT}_model.eqx"
+    --feature-stats "$TRAIN/feature_stats.json" --row-indices-file "$INDICES"
+    --selection-mode sequential --limit "$OBJECTS" --batch-size 64
+    --jax-batch-size 32 --prior-samples 64 --decoder-sample-chunk-size 1
+    --prior-predictive-batch-size 64 --shard-outputs --no-residual-samples
+  )
+  python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
+    "${COMMON_INFER[@]}" --posterior-samples 2048 \
+    --seed "$((SEED + 4000 + VARIANT_OFFSET))" --out "$SUPPORT" \
+    --no-posterior-predictive
+  python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-finalize-inference \
+    --out "$SUPPORT" --limit "$OBJECTS"
+  python scripts/importance_correct_posterior.py --posterior "$SUPPORT" \
+    --out "$IMPORTANCE" --resample-count 256 --seed "$((SEED + 5000))" \
+    --min-median-ess-fraction 0.05 --max-fraction-pareto-k-gt-0p7 0.20
+  python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
+    "${COMMON_INFER[@]}" --posterior-samples 64 \
+    --seed "$((SEED + 6000 + VARIANT_OFFSET))" --out "$PREDICTIVE"
+  python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-finalize-inference \
+    --out "$PREDICTIVE" --limit "$OBJECTS"
+done
 python scripts/evaluate_feniks_rws_recovery.py summarize \
   --candidate "$SELECTED" --seed "$SEED" --phase confirmation \
-  --config "$EVAL_CONFIG" --train "$TRAIN" --importance "$IMPORTANCE" \
-  --predictive "$PREDICTIVE" --out "$OUT"
+  --config "$EVAL_CONFIG" --train "$TRAIN" \
+  --importance "$OUT/confirmation_raw_exact_gaussian_iw" \
+  --predictive "$OUT/confirmation_raw_exact_gaussian_predictive" \
+  --ema-importance "$OUT/confirmation_ema_exact_gaussian_iw" \
+  --ema-predictive "$OUT/confirmation_ema_exact_gaussian_predictive" \
+  --out "$OUT"

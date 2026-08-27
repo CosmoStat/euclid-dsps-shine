@@ -1,0 +1,5 @@
+extends: feniks_sc_drws_r27p5_common.yaml
+
+# The inherited residual-photometry MLP supplies both Gaussian base moments and
+# a direct 128-dimensional conditional-flow context. The two components remain
+# complementary parts of one conditional RealNVP posterior.

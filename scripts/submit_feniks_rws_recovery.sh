@@ -5,7 +5,7 @@ REPO_DIR="${REPO_DIR:-$PWD}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 CATALOG_DIR="${CATALOG_DIR:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized}"
-RUN_TAG="${RUN_TAG:-feniks_rws_recovery_$(date +%Y%m%d_%H%M%S)}"
+RUN_TAG="${RUN_TAG:-feniks_sc_drws_r27p5_$(date +%Y%m%d_%H%M%S)}"
 RECOVERY_ROOT="${RECOVERY_ROOT:-${SCRATCH:?Set SCRATCH}/$RUN_TAG}"
 SMOKE_ROOT="${RECOVERY_ROOT}_smoke"
 MANIFEST_ROOT="$RECOVERY_ROOT/manifests"
@@ -18,8 +18,8 @@ TEST_CATALOG="$CATALOG_DIR/test.parquet"
 cd "$REPO_DIR"
 mkdir -p "$LOG_ROOT" "$CACHE_ROOT/jax" outputs/logs
 for path in "$TRAIN_CATALOG" "$TEST_CATALOG" \
-  configs/experiments/feniks_rws_recovery_r25_historical_t2.yaml \
-  configs/experiments/feniks_rws_recovery_r25_current_t2.yaml \
+  configs/experiments/feniks_sc_drws_r27p5_historical.yaml \
+  configs/experiments/feniks_sc_drws_r27p5_current.yaml \
   scripts/feniks_rws_recovery_pilot_h100.slurm \
   scripts/feniks_rws_recovery_confirm_h100.slurm; do
   test -s "$path" || { echo "[rws-recovery-submit][error] missing: $path" >&2; exit 2; }
@@ -33,7 +33,7 @@ JAX_PLATFORMS=cpu python scripts/build_feniks_rws_recovery_manifests.py \
   --confirmation-objects 2000 --seed 260826
 JAX_PLATFORMS=cpu python scripts/build_feniks_rws_recovery_manifests.py \
   --train-catalog "$TRAIN_CATALOG" --test-catalog "$TEST_CATALOG" \
-  --out "$SMOKE_MANIFEST_ROOT" --validation-objects 64 --pilot-objects 8 \
+  --out "$SMOKE_MANIFEST_ROOT" --validation-objects 64 --pilot-objects 128 \
   --confirmation-objects 16 --seed 260826
 
 EXPORTS="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,CATALOG_DIR=$CATALOG_DIR,CACHE_ROOT=$CACHE_ROOT"
@@ -74,7 +74,8 @@ echo "pilot_gate_job=$PILOT_GATE_JOB"
 echo "confirmation_job=$CONFIRM_JOB"
 echo "final_gate_job=$FINAL_JOB"
 echo "recovery_root=$RECOVERY_ROOT"
-echo "resources=4 pilot tasks x 4 H100, then 2 confirmation tasks x 4 H100"
+echo "resources=4 pilot tasks x 4 H100, then 2 independent confirmation tasks x 4 H100"
+echo "full_dataset_not_submitted=1"
 echo "monitor: source $LATEST && squeue -r -j $SMOKE_JOB,$PILOT_JOB,$PILOT_GATE_JOB,$CONFIRM_JOB,$FINAL_JOB"
 echo "detailed_monitor: bash scripts/monitor_feniks_rws_recovery.sh"
 echo "latest_env=$LATEST"

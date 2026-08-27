@@ -129,13 +129,17 @@ class _ConditionalCoupling(eqx.Module):
         self.min_bin_height = float(min_bin_height)
         self.min_derivative = float(min_derivative)
 
-    def forward(self, value, context):
-        return self._transform(value, context, inverse=False)
+    def forward(self, value, context, *, scale_clamp=None):
+        return self._transform(
+            value, context, inverse=False, scale_clamp=scale_clamp
+        )
 
-    def inverse(self, value, context):
-        return self._transform(value, context, inverse=True)
+    def inverse(self, value, context, *, scale_clamp=None):
+        return self._transform(
+            value, context, inverse=True, scale_clamp=scale_clamp
+        )
 
-    def _transform(self, value, context, *, inverse: bool):
+    def _transform(self, value, context, *, inverse: bool, scale_clamp=None):
         value = jnp.asarray(value, dtype=jnp.float32)
         context = _broadcast_context(context, value.shape[:-1])
         mask = jnp.asarray(self.mask, dtype=value.dtype)
@@ -144,7 +148,11 @@ class _ConditionalCoupling(eqx.Module):
         raw = _apply_net(self.net, jnp.concatenate([masked, context], axis=-1))
         if self.family == "realnvp":
             raw = raw.reshape(value.shape[:-1] + (self.latent_dim, 2))
-            log_scale = self.scale_clamp * jnp.tanh(raw[..., 0]) * active
+            effective_clamp = jnp.asarray(
+                self.scale_clamp if scale_clamp is None else scale_clamp,
+                dtype=value.dtype,
+            )
+            log_scale = effective_clamp * jnp.tanh(raw[..., 0]) * active
             shift = self.shift_clamp * jnp.tanh(raw[..., 1]) * active
             if inverse:
                 transformed = (value - shift) * jnp.exp(-log_scale)
@@ -457,15 +465,19 @@ class ConditionalFlowEncoder(eqx.Module):
             mean, log_std = self.base(features)
         return jnp.concatenate((mean, log_std), axis=-1)
 
-    def forward(self, value, context):
+    def forward(self, value, context, *, scale_clamp=None):
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
         for layer, permutation in zip(self.layers, self.permutations, strict=True):
-            value, delta = layer.forward(value, context)
+            value, delta = (
+                layer.forward(value, context, scale_clamp=scale_clamp)
+                if isinstance(layer, _ConditionalCoupling)
+                else layer.forward(value, context)
+            )
             value = jnp.take(value, permutation, axis=-1)
             logdet = logdet + delta
         return value, logdet
 
-    def inverse(self, value, context):
+    def inverse(self, value, context, *, scale_clamp=None):
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
         items = zip(
             reversed(self.layers),
@@ -474,7 +486,11 @@ class ConditionalFlowEncoder(eqx.Module):
         )
         for layer, inverse_permutation in items:
             value = jnp.take(value, inverse_permutation, axis=-1)
-            value, delta = layer.inverse(value, context)
+            value, delta = (
+                layer.inverse(value, context, scale_clamp=scale_clamp)
+                if isinstance(layer, _ConditionalCoupling)
+                else layer.inverse(value, context)
+            )
             logdet = logdet + delta
         return value, logdet
 
@@ -487,9 +503,15 @@ def sample_posterior(
     *,
     sample_strategy: str = "random",
     base_temperature: float = 1.0,
+    log_std_floor=None,
+    flow_scale_clamp=None,
 ) -> PosteriorSample:
     """Sample any configured posterior and return exact densities in x-space."""
-    state = posterior_encoder_state(model, features)
+    state = posterior_encoder_state(
+        model,
+        features,
+        log_std_floor=log_std_floor,
+    )
     return sample_posterior_from_state(
         model,
         key,
@@ -497,10 +519,16 @@ def sample_posterior(
         n_samples,
         sample_strategy=sample_strategy,
         base_temperature=base_temperature,
+        flow_scale_clamp=flow_scale_clamp,
     )
 
 
-def posterior_encoder_state(model, features) -> PosteriorEncoderState:
+def posterior_encoder_state(
+    model,
+    features,
+    *,
+    log_std_floor=None,
+) -> PosteriorEncoderState:
     """Evaluate the encoder once and retain everything required for sampling."""
     if _is_mixture_encoder(model.encoder):
         logits, component_means, component_log_stds = (
@@ -515,6 +543,11 @@ def posterior_encoder_state(model, features) -> PosteriorEncoderState:
         )
         variance = jnp.maximum(second - mean**2, jnp.asarray(1.0e-12))
         log_std = 0.5 * jnp.log(variance)
+        if log_std_floor is not None:
+            log_std = jnp.maximum(
+                log_std,
+                jnp.asarray(log_std_floor, dtype=log_std.dtype),
+            )
         return PosteriorEncoderState(
             mean,
             log_std,
@@ -527,8 +560,18 @@ def posterior_encoder_state(model, features) -> PosteriorEncoderState:
         model.encoder.base, ResidualPhotometryEncoder
     ):
         mean, log_std, context = model.encoder.base.encode(features)
+        if log_std_floor is not None:
+            log_std = jnp.maximum(
+                log_std,
+                jnp.asarray(log_std_floor, dtype=log_std.dtype),
+            )
         return PosteriorEncoderState(mean, log_std, None, None, None, context)
     mean, log_std = model.encoder(features)
+    if log_std_floor is not None:
+        log_std = jnp.maximum(
+            log_std,
+            jnp.asarray(log_std_floor, dtype=log_std.dtype),
+        )
     context = (
         model.encoder.flow_context(features, mean, log_std)
         if isinstance(model.encoder, ConditionalFlowEncoder)
@@ -545,6 +588,7 @@ def sample_posterior_from_state(
     *,
     sample_strategy: str = "random",
     base_temperature: float = 1.0,
+    flow_scale_clamp=None,
 ) -> PosteriorSample:
     """Generate posterior samples from a precomputed encoder state."""
     mean, log_std = state.mean, state.log_std
@@ -609,14 +653,22 @@ def sample_posterior_from_state(
         model.encoder.output_space == "latent_x"
     ):
         context = state.flow_context
-        x, residual_logdet = model.encoder.forward(base, context)
+        x, residual_logdet = model.encoder.forward(
+            base,
+            context,
+            scale_clamp=flow_scale_clamp,
+        )
         logq = logq_base - residual_logdet
         logprior = model.prior.log_prob(x)
     else:
         context = state.flow_context
         u = base
         if isinstance(model.encoder, ConditionalFlowEncoder):
-            u, residual_logdet = model.encoder.forward(u, context)
+            u, residual_logdet = model.encoder.forward(
+                u,
+                context,
+                scale_clamp=flow_scale_clamp,
+            )
         x, prior_logdet = model.prior.forward(u)
         logq = logq_base - residual_logdet - prior_logdet
         base_logprior = _standard_normal_log_prob(u)
@@ -655,9 +707,16 @@ def posterior_log_prob(
     x,
     *,
     base_temperature: float = 1.0,
+    log_std_floor=None,
+    flow_scale_clamp=None,
 ) -> jnp.ndarray:
     """Evaluate exact conditional posterior density for supervised NPE."""
     mean, log_std = model.encoder(features)
+    if log_std_floor is not None:
+        log_std = jnp.maximum(
+            log_std,
+            jnp.asarray(log_std_floor, dtype=log_std.dtype),
+        )
     temperature = float(base_temperature)
     if temperature <= 0.0:
         raise ValueError("base_temperature must be positive")
@@ -672,7 +731,11 @@ def posterior_log_prob(
     if isinstance(model.encoder, ConditionalFlowEncoder) and (
         model.encoder.output_space == "latent_x"
     ):
-        base, inverse_logdet = model.encoder.inverse(x, context)
+        base, inverse_logdet = model.encoder.inverse(
+            x,
+            context,
+            scale_clamp=flow_scale_clamp,
+        )
         base_log_prob = (
             _mixture_base_log_prob_from_encoder(
                 model.encoder, features, base, temperature
@@ -685,7 +748,11 @@ def posterior_log_prob(
     residual_inverse_logdet = jnp.zeros(u.shape[:-1], dtype=u.dtype)
     base = u
     if isinstance(model.encoder, ConditionalFlowEncoder):
-        base, residual_inverse_logdet = model.encoder.inverse(u, context)
+        base, residual_inverse_logdet = model.encoder.inverse(
+            u,
+            context,
+            scale_clamp=flow_scale_clamp,
+        )
     base_log_prob = (
         _mixture_base_log_prob_from_encoder(model.encoder, features, base, temperature)
         if _is_mixture_encoder(model.encoder)
@@ -772,6 +839,10 @@ def defensive_posterior_proposal(
     features: jnp.ndarray,
     n_samples: int,
     components: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    *,
+    antithetic: bool = False,
+    log_std_floor=None,
+    flow_scale_clamp=None,
 ) -> DefensiveProposalSample:
     """Sample a stratified defensive mixture and evaluate its complete density.
 
@@ -796,12 +867,20 @@ def defensive_posterior_proposal(
     ):
         source, temperature, _fraction = component
         if source == "posterior":
+            strategy = (
+                "antithetic"
+                if antithetic and int(component_count) % 2 == 0
+                else "random"
+            )
             draw = sample_posterior(
                 model,
                 component_key,
                 features,
                 int(component_count),
+                sample_strategy=strategy,
                 base_temperature=temperature,
+                log_std_floor=log_std_floor,
+                flow_scale_clamp=flow_scale_clamp,
             ).x
         else:
             draw = model.prior.sample(
@@ -828,6 +907,8 @@ def defensive_posterior_proposal(
                 features,
                 x,
                 base_temperature=temperature,
+                log_std_floor=log_std_floor,
+                flow_scale_clamp=flow_scale_clamp,
             )
         else:
             value = model.prior.log_prob(x)
@@ -886,9 +967,18 @@ def posterior_entropy_diagnostics(
     key: jax.Array,
     *,
     n_samples: int = 1,
+    log_std_floor=None,
+    flow_scale_clamp=None,
 ) -> dict[str, jnp.ndarray]:
     """Estimate full conditional-flow entropy and its contraction terms."""
-    draw = sample_posterior(model, key, features, max(1, int(n_samples)))
+    draw = sample_posterior(
+        model,
+        key,
+        features,
+        max(1, int(n_samples)),
+        log_std_floor=log_std_floor,
+        flow_scale_clamp=flow_scale_clamp,
+    )
     residual = draw.residual_logdet
     full_entropy = -jnp.mean(draw.logq)
     base_entropy_mc = jnp.mean(-draw.logq - residual)

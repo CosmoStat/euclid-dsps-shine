@@ -10,6 +10,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from euclid_dsps.config import load_config
+
 CANDIDATES = ("historical_4x128", "current_residual_6x256")
 SEEDS = (260826, 260827)
 
@@ -72,6 +74,190 @@ def support_tail_metrics(root: Path) -> dict[str, object]:
         else "FAIL"
     )
     return metrics
+
+
+def _training_metrics(
+    train: Path,
+    *,
+    maximum_entropy_drop: float = 3.0,
+    maximum_unresolved_fraction: float = 0.02,
+) -> dict[str, object]:
+    """Read either the SC-DRWS receipt or the legacy diagnostic summary."""
+    receipt_path = train / "training_receipt.json"
+    if receipt_path.is_file():
+        receipt = _read_json(receipt_path)
+        log_path = train / "sc_drws_training_log.csv"
+        frame = pd.read_csv(log_path) if log_path.is_file() else pd.DataFrame()
+        final_entropy = float("nan")
+        if not frame.empty and "full_entropy" in frame:
+            values = pd.to_numeric(frame["full_entropy"], errors="coerce")
+            final_epoch = frame.loc[values.notna(), "epoch"].max()
+            final_entropy = float(
+                pd.to_numeric(
+                    frame.loc[frame["epoch"] == final_epoch, "full_entropy"],
+                    errors="coerce",
+                ).median()
+            )
+        reference = float(receipt.get("reference_entropy", np.nan))
+        entropy_ok = bool(
+            np.isfinite(final_entropy)
+            and np.isfinite(reference)
+            and final_entropy >= reference - float(maximum_entropy_drop)
+        )
+        wake = frame.loc[frame.get("update_kind") == "wake"] if not frame.empty else frame
+        final_unresolved = float("nan")
+        if not wake.empty:
+            last_wake_epoch = wake["epoch"].max()
+            final_unresolved = float(
+                pd.to_numeric(
+                    wake.loc[
+                        wake["epoch"] == last_wake_epoch, "unresolved_fraction"
+                    ],
+                    errors="coerce",
+                ).mean()
+            )
+        unresolved_ok = bool(
+            np.isfinite(final_unresolved)
+            and final_unresolved <= float(maximum_unresolved_fraction)
+        )
+        q_gradients_finite = bool(
+            not frame.empty
+            and "q_grads_finite" in frame
+            and frame["q_grads_finite"].astype(bool).all()
+        )
+        prior_path = train / "sc_drws_prior_log.csv"
+        prior_frame = pd.read_csv(prior_path) if prior_path.is_file() else pd.DataFrame()
+        applied_prior = (
+            prior_frame.loc[prior_frame["update_applied"].astype(bool)]
+            if not prior_frame.empty and "update_applied" in prior_frame
+            else pd.DataFrame()
+        )
+        prior_gradients_finite = bool(
+            not applied_prior.empty
+            and all(
+                applied_prior[name].astype(bool).all()
+                for name in (
+                    "selection_gradient_finite",
+                    "data_gradient_finite",
+                    "trust_gradient_finite",
+                )
+            )
+        )
+        training_pass = bool(
+            receipt.get("status") == "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION"
+            and int(receipt.get("wake_updates", 0)) > 0
+            and int(receipt.get("prior_updates", 0)) > 0
+            and np.isfinite(float(receipt.get("selection_log_alpha", np.nan)))
+            and entropy_ok
+            and unresolved_ok
+            and q_gradients_finite
+            and prior_gradients_finite
+        )
+        return {
+            "status": "PASS" if training_pass else "FAIL",
+            "train_rows": int(receipt["selected_training_rows"]),
+            "validation_rows": None,
+            "epochs": int(receipt["phase_schedule"]["total_epochs"])
+            if "total_epochs" in receipt["phase_schedule"]
+            else int(receipt["phase_schedule"]["warmup_epochs"])
+            + int(receipt["phase_schedule"]["joint_epochs"]),
+            "updates_applied": int(receipt.get("wake_updates", 0)),
+            "updates_skipped": 0,
+            "sleep_updates": int((frame["update_kind"] == "sleep").sum())
+            if not frame.empty
+            else 0,
+            "wake_updates": int(receipt.get("wake_updates", 0)),
+            "wake_ess_fraction_mean": float(
+                pd.to_numeric(frame.get("expanded_ess_fraction"), errors="coerce").mean()
+            )
+            if not frame.empty
+            else float("nan"),
+            "best_checkpoint_epoch": int(
+                receipt["phase_schedule"]["warmup_epochs"]
+                + receipt["phase_schedule"]["joint_epochs"]
+            ),
+            "selection_log_alpha": float(receipt["selection_log_alpha"]),
+            "selection_alpha": float(receipt["selection_alpha"]),
+            "reference_entropy": reference,
+            "final_entropy": final_entropy,
+            "entropy_not_collapsed": entropy_ok,
+            "final_unresolved_fraction": final_unresolved,
+            "unresolved_fraction_below_gate": unresolved_ok,
+            "q_gradients_finite": q_gradients_finite,
+            "q_gradient_clipped_fraction": float(
+                frame["q_grad_clipped"].astype(bool).mean()
+            )
+            if not frame.empty and "q_grad_clipped" in frame
+            else float("nan"),
+            "all_applied_prior_component_gradients_finite": prior_gradients_finite,
+            "raw_model_checkpoint": receipt["raw_model_checkpoint"]["path"],
+            "ema_model_checkpoint": receipt["ema_model_checkpoint"]["path"],
+            "feature_stats": str((train / "feature_stats.json").resolve()),
+        }
+    training = _read_json(train / "training_summary.json")
+    checkpoint = train / "checkpoints" / "best.eqx"
+    training_pass = bool(
+        int(training.get("updates_applied", 0)) > 0
+        and int(training.get("wake_updates", 0)) > 0
+        and int(training.get("updates_skipped", 0)) == 0
+        and checkpoint.is_file()
+    )
+    return {
+        "status": "PASS" if training_pass else "FAIL",
+        **{
+            key: training[key]
+            for key in (
+                "train_rows",
+                "validation_rows",
+                "epochs",
+                "updates_applied",
+                "updates_skipped",
+                "sleep_updates",
+                "wake_updates",
+                "wake_ess_fraction_mean",
+                "best_checkpoint_epoch",
+            )
+        },
+        "selection_log_alpha": 0.0,
+        "raw_model_checkpoint": str(checkpoint.resolve()),
+        "ema_model_checkpoint": str(checkpoint.resolve()),
+        "feature_stats": str((train / "feature_stats.json").resolve()),
+    }
+
+
+def _variant_metrics(
+    *, label: str, importance: Path, predictive: Path, out: Path, log_alpha: float
+) -> dict[str, object]:
+    support = _read_json(importance / "importance_summary.json")
+    support_tail = support_tail_metrics(importance)
+    predictive_gate = predictive_metrics(predictive, out=out / label)
+    passed = bool(
+        support["support_gate"]["status"] == "PASS"
+        and support_tail["status"] == "PASS"
+        and predictive_gate["status"] == "PASS"
+        and np.isfinite(float(support.get("mean_log_evidence_is", np.nan)))
+    )
+    return {
+        "label": label,
+        "status": "PASS" if passed else "FAIL",
+        "selection_corrected_exact_gaussian_iw_score": float(
+            support.get("mean_log_evidence_is", np.nan)
+        )
+        - float(log_alpha),
+        "exact_gaussian_ordinary_iw": {
+            "status": support["support_gate"]["status"],
+            "objects": int(support["n_objects"]),
+            "draws": int(support["n_joint_draws"]),
+            "median_raw_ess_fraction": float(support["median_raw_ess_fraction"]),
+            "fraction_pareto_k_gt_0p7": float(support["fraction_pareto_k_gt_0p7"]),
+            "fraction_pareto_k_gt_1": float(support["fraction_pareto_k_gt_1"]),
+            "mean_log_evidence_is": float(
+                support.get("mean_log_evidence_is", np.nan)
+            ),
+            "tail_gate": support_tail,
+        },
+        "exact_gaussian_posterior_predictive": predictive_gate,
+    }
 
 
 def predictive_metrics(root: Path, *, out: Path) -> dict[str, object]:
@@ -164,27 +350,56 @@ def summarize_candidate(
     train: Path,
     importance: Path,
     predictive: Path,
+    ema_importance: Path | None = None,
+    ema_predictive: Path | None = None,
     out: Path,
     smoke: bool = False,
 ) -> dict[str, object]:
     if candidate not in CANDIDATES:
         raise ValueError(f"unknown candidate {candidate}")
-    training = _read_json(train / "training_summary.json")
-    support = _read_json(importance / "importance_summary.json")
-    support_tail = support_tail_metrics(importance)
-    predictive_gate = predictive_metrics(predictive, out=out)
-    training_pass = bool(
-        int(training.get("updates_applied", 0)) > 0
-        and int(training.get("wake_updates", 0)) > 0
-        and int(training.get("updates_skipped", 0)) == 0
-        and (train / "checkpoints" / "best.eqx").is_file()
+    loaded_config = load_config(config)
+    checkpoint_config = (
+        (loaded_config.get("amortized", {}) or {})
+        .get("sc_drws", {})
+        .get("checkpoint", {})
     )
-    scientific_pass = bool(
-        training_pass
-        and support["support_gate"]["status"] == "PASS"
-        and support_tail["status"] == "PASS"
-        and predictive_gate["status"] == "PASS"
+    training = _training_metrics(
+        train,
+        maximum_entropy_drop=float(
+            checkpoint_config.get("maximum_entropy_drop", 3.0)
+        ),
+        maximum_unresolved_fraction=float(
+            ((loaded_config.get("amortized", {}) or {}).get("sc_drws", {}) or {})
+            .get("hard_mis", {})
+            .get("maximum_unresolved_fraction", 0.02)
+        ),
     )
+    variants = [
+        _variant_metrics(
+            label="raw",
+            importance=importance,
+            predictive=predictive,
+            out=out,
+            log_alpha=float(training["selection_log_alpha"]),
+        )
+    ]
+    if ema_importance is not None and ema_predictive is not None:
+        variants.append(
+            _variant_metrics(
+                label="ema",
+                importance=ema_importance,
+                predictive=ema_predictive,
+                out=out,
+                log_alpha=float(training["selection_log_alpha"]),
+            )
+        )
+    eligible = [variant for variant in variants if variant["status"] == "PASS"]
+    eligible.sort(
+        key=lambda value: -value["selection_corrected_exact_gaussian_iw_score"]
+    )
+    selected = eligible[0] if eligible else None
+    training_pass = training["status"] == "PASS"
+    scientific_pass = bool(training_pass and selected is not None)
     status = "SMOKE_PASS" if smoke and training_pass else (
         "PASS" if scientific_pass else "FAIL"
     )
@@ -194,32 +409,19 @@ def summarize_candidate(
         "candidate": candidate,
         "seed": int(seed),
         "config": str(config),
-        "checkpoint": str((train / "checkpoints" / "best.eqx").resolve()),
-        "feature_stats": str((train / "feature_stats.json").resolve()),
-        "training": {
-            "status": "PASS" if training_pass else "FAIL",
-            "train_rows": int(training["train_rows"]),
-            "validation_rows": int(training["validation_rows"]),
-            "epochs": int(training["epochs"]),
-            "updates_applied": int(training["updates_applied"]),
-            "updates_skipped": int(training["updates_skipped"]),
-            "sleep_updates": int(training["sleep_updates"]),
-            "wake_updates": int(training["wake_updates"]),
-            "wake_ess_fraction_mean": float(training["wake_ess_fraction_mean"]),
-            "best_checkpoint_epoch": int(training["best_checkpoint_epoch"]),
-        },
-        "exact_gaussian_ordinary_iw": {
-            "status": support["support_gate"]["status"],
-            "objects": int(support["n_objects"]),
-            "draws": int(support["n_joint_draws"]),
-            "median_raw_ess_fraction": float(support["median_raw_ess_fraction"]),
-            "fraction_pareto_k_gt_0p7": float(
-                support["fraction_pareto_k_gt_0p7"]
-            ),
-            "fraction_pareto_k_gt_1": float(support["fraction_pareto_k_gt_1"]),
-            "tail_gate": support_tail,
-        },
-        "exact_gaussian_posterior_predictive": predictive_gate,
+        "checkpoint_variant": selected["label"] if selected else None,
+        "checkpoint": (
+            training[f"{selected['label']}_model_checkpoint"] if selected else None
+        ),
+        "feature_stats": training["feature_stats"],
+        "training": training,
+        "variants": variants,
+        "exact_gaussian_ordinary_iw": (
+            selected["exact_gaussian_ordinary_iw"] if selected else variants[0]["exact_gaussian_ordinary_iw"]
+        ),
+        "exact_gaussian_posterior_predictive": (
+            selected["exact_gaussian_posterior_predictive"] if selected else variants[0]["exact_gaussian_posterior_predictive"]
+        ),
         "truth_used_for_training_or_checkpoint_selection": False,
         "promotion_contract": (
             "Both seeds must pass ordinary IW under the exact Gaussian target and "
@@ -319,18 +521,53 @@ def finalize_confirmation(root: Path) -> dict[str, object]:
         "confirmation_objects_per_seed": [
             run["exact_gaussian_ordinary_iw"]["objects"] for run in runs
         ],
-        "ready_for_smc_diversity_benchmark": bool(passed),
-        "ready_for_population_prior_update": False,
-        "ready_for_full_catalogue": False,
+        "ready_for_smc_diversity_benchmark": False,
+        "ready_for_population_prior_update": bool(passed),
+        "ready_for_full_catalogue": bool(passed),
         "truth_used_for_training_or_checkpoint_selection": False,
         "next_action": (
-            "RUN_FIXED_COHORT_MALA_SMC_DIVERSITY_BENCHMARK"
+            "LAUNCH_SELECTED_ARCHITECTURE_TWO_SEED_FULL_DATASET_SC_DRWS"
             if passed
-            else "STOP_AND_REVIEW_RWS_SUPPORT_DIAGNOSTICS"
+            else "STOP_AND_REVIEW_SC_DRWS_SUPPORT_OR_PPC_DIAGNOSTICS"
         ),
         "runs": runs,
     }
     name = "RWS_RECOVERY_PASS.json" if passed else "RWS_RECOVERY_FAIL.json"
+    (root / name).write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return payload
+
+
+def finalize_full(root: Path) -> dict[str, object]:
+    promotion = _read_json(root / "RWS_RECOVERY_PASS.json")
+    selected = str(promotion["selected_candidate"])
+    runs = [
+        _read_json(root / "full" / selected / f"seed_{seed}" / "full_summary.json")
+        for seed in SEEDS
+    ]
+    passed = all(run["status"] == "PASS" for run in runs)
+    eligible = [run for run in runs if run["status"] == "PASS"]
+    eligible.sort(
+        key=lambda run: -max(
+            variant["selection_corrected_exact_gaussian_iw_score"]
+            for variant in run["variants"]
+            if variant["status"] == "PASS"
+        )
+    )
+    chosen = eligible[0] if eligible else None
+    payload = {
+        "status": "PASS" if passed else "FAIL",
+        "selected_candidate": selected,
+        "selected_seed": int(chosen["seed"]) if chosen else None,
+        "selected_checkpoint": chosen["checkpoint"] if chosen else None,
+        "selected_feature_stats": chosen["feature_stats"] if chosen else None,
+        "both_final_seeds_passed": bool(passed),
+        "ready_for_four_shard_catalogue_inference": bool(passed),
+        "truth_used_for_training_or_checkpoint_selection": False,
+        "runs": runs,
+    }
+    name = "FULL_TRAIN_PASS.json" if passed else "FULL_TRAIN_FAIL.json"
     (root / name).write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
@@ -343,17 +580,23 @@ def main() -> None:
     summarize = sub.add_parser("summarize")
     summarize.add_argument("--candidate", required=True, choices=CANDIDATES)
     summarize.add_argument("--seed", type=int, required=True)
-    summarize.add_argument("--phase", choices=("pilot", "confirmation"), required=True)
+    summarize.add_argument(
+        "--phase", choices=("pilot", "confirmation", "full"), required=True
+    )
     summarize.add_argument("--config", type=Path, required=True)
     summarize.add_argument("--train", type=Path, required=True)
     summarize.add_argument("--importance", type=Path, required=True)
     summarize.add_argument("--predictive", type=Path, required=True)
+    summarize.add_argument("--ema-importance", type=Path)
+    summarize.add_argument("--ema-predictive", type=Path)
     summarize.add_argument("--out", type=Path, required=True)
     summarize.add_argument("--smoke", action="store_true")
     pilot = sub.add_parser("select-pilot")
     pilot.add_argument("--root", type=Path, required=True)
     final = sub.add_parser("finalize-confirmation")
     final.add_argument("--root", type=Path, required=True)
+    full = sub.add_parser("finalize-full")
+    full.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
     values = vars(args)
     command = values.pop("command")
@@ -361,8 +604,10 @@ def main() -> None:
         payload = summarize_candidate(**values)
     elif command == "select-pilot":
         payload = select_pilot(**values)
-    else:
+    elif command == "finalize-confirmation":
         payload = finalize_confirmation(**values)
+    else:
+        payload = finalize_full(**values)
     print(json.dumps(payload, indent=2), flush=True)
     if command != "summarize" and payload["status"] == "FAIL":
         raise SystemExit(3)

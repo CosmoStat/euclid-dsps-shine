@@ -530,6 +530,9 @@ def run_importance_correction(
     support_gate = {
         "status": "PASS" if support_pass else "FAIL",
         "median_raw_ess_fraction": median_raw_ess_fraction,
+        "mean_log_evidence_is": float(
+            diagnostics["log_evidence_is"].mean()
+        ),
         "min_median_raw_ess_fraction": float(min_median_ess_fraction),
         "fraction_pareto_k_gt_0p7": fraction_bad_k,
         "max_fraction_pareto_k_gt_0p7": float(max_fraction_pareto_k_gt_0p7),
