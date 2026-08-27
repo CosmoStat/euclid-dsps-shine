@@ -255,11 +255,24 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
         root / "scripts/feniks_rws_recovery_confirm_h100.slurm"
     ).read_text()
     full = (root / "scripts/feniks_sc_drws_full_h100.slurm").read_text()
+    inference = (root / "scripts/feniks_sc_drws_inference_h100.slurm").read_text()
+    entrypoint = (root / "scripts/train_feniks_sc_drws.py").read_text()
     assert "--array=0-3%4" in submit
     assert "#SBATCH --gres=gpu:4" in pilot
     assert "full_dataset_not_submitted=1" in submit
     assert all("--resume-state" in worker for worker in (pilot, confirmation, full))
     assert "--require-full-dataset" in full
+    gpu_workers = (pilot, confirmation, full, inference)
+    for worker in gpu_workers:
+        assert "export EUCLID_DSPS_JAX_PLATFORMS=cuda" in worker
+        assert "export EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0" in worker
+        assert "export EUCLID_DSPS_REQUIRE_GPU=1" in worker
+        assert "export EUCLID_DSPS_EXPECTED_GPU_NAME=NVIDIA" in worker
+    runtime_bootstrap = entrypoint.index("apply_jax_runtime_env(")
+    trainer_import = entrypoint.index(
+        "from euclid_dsps.amortized.sc_drws_trainer import train_feniks_sc_drws"
+    )
+    assert runtime_bootstrap < trainer_import
 
 
 def test_training_resume_state_round_trip_and_provenance_gate(

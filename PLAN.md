@@ -50,7 +50,19 @@
   passing tests before it was stopped
   during long unrelated JAX compilation. The FENIKS parquet is absent locally,
   so retention counts, GPU memory autotuning and the scientific smoke remain
-  Jean-Zay gates. No job was submitted.
+  Jean-Zay gates.
+- Jean-Zay smoke array `1488772` reached four H100 devices in every task but
+  failed before the first optimizer step: the standalone trainer imported its
+  JAX-heavy module before applying the config runtime, so the repository's
+  conservative default disabled PJRT plugin discovery. The entrypoint now
+  applies and validates the runtime before importing the trainer, and every
+  SC-DRWS GPU worker explicitly enables CUDA plugin autoload and requires an
+  NVIDIA device. The failed immutable root remains diagnostic only; relaunch
+  the smoke in a new root. Its dependency-blocked downstream jobs do not
+  authorize training, and full-catalogue production remains unsubmitted.
+  Post-fix verification passes `compileall`, Ruff, shell syntax,
+  `git diff --check` and 24 focused SC-DRWS/RWS tests, including the
+  four-device pmap regression.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 

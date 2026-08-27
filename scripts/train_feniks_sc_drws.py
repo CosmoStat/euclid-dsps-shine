@@ -7,8 +7,8 @@ import argparse
 import json
 from pathlib import Path
 
-from euclid_dsps.amortized.sc_drws_trainer import train_feniks_sc_drws
 from euclid_dsps.config import load_config
+from euclid_dsps.jax_runtime import apply_jax_runtime_env, configure_jax_runtime
 
 
 def main() -> None:
@@ -24,6 +24,12 @@ def main() -> None:
     parser.add_argument("--require-full-dataset", action="store_true")
     args = parser.parse_args()
     config = load_config(args.config)
+    apply_jax_runtime_env(config.get("runtime", {}) or {})
+    configure_jax_runtime()
+
+    # Import only after the config has enabled the requested PJRT backend.
+    from euclid_dsps.amortized.sc_drws_trainer import train_feniks_sc_drws
+
     if args.seed is not None:
         config["amortized"]["training"]["seed"] = int(args.seed)
         config["amortized"]["objective"]["selection_correction"]["seed"] = int(
