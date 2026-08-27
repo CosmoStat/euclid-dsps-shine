@@ -71,6 +71,16 @@
   a regression mutates every expansion field so this host/device ownership
   failure cannot recur silently. No support gate or scientific threshold was
   changed, and the full-catalogue run remains unsubmitted.
+- Smoke array `1490119` then completed all eight training epochs, including the
+  Phase-B K128-to-K512 merge, for both architectures and seeds. Independent
+  IW/PPC startup failed only because SC-DRWS component sidecars used the exact
+  transform hash key `latent_transform_hash`, while the generic checkpoint
+  loader recognized only `latent_spec_hash` and incorrectly fell through to a
+  missing full-spec comparison. The loader now accepts either hash name while
+  validating it against the active deterministic transform, and new SC-DRWS
+  sidecars write both names plus the full latent spec. Existing completed
+  training checkpoints remain hash-verifiable and can be evaluated without
+  retraining.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 

@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from euclid_dsps.amortized import sc_drws_trainer
+from euclid_dsps.amortized import train as amortized_train
 from euclid_dsps.amortized.elbo import AmortizedModel
 from euclid_dsps.amortized.flows import StandardNormalPrior
 from euclid_dsps.amortized.posterior import ConditionalFlowEncoder
@@ -39,6 +40,7 @@ from euclid_dsps.amortized.sc_drws_trainer import (
     _load_state,
     _macro_slices,
     _pack_first_pass,
+    _save_components,
     _save_state,
     validate_sc_drws_config,
 )
@@ -184,6 +186,72 @@ def test_hard_expansion_host_pack_is_writable() -> None:
     packed["unresolved"][selected] = [False, True]
     packed["prior_eligible"][selected] = [True, False]
     np.testing.assert_allclose(packed["ess_fraction"], [0.2, 0.3])
+
+
+def test_sc_drws_checkpoint_sidecar_loads_with_legacy_latent_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    checkpoint = tmp_path / "legacy.eqx"
+    model = _model()
+    sc_drws_trainer.eqx.tree_serialise_leaves(checkpoint, model)
+    checkpoint.with_suffix(".eqx.json").write_text(
+        '{"latent_transform_hash": "bounded-mixed-warp-hash"}'
+    )
+    monkeypatch.setattr(
+        amortized_train, "_latent_spec_for_amortized_config", lambda _config: object()
+    )
+    monkeypatch.setattr(
+        amortized_train, "latent_spec_hash", lambda _spec: "bounded-mixed-warp-hash"
+    )
+    monkeypatch.setattr(
+        amortized_train,
+        "build_amortized_model",
+        lambda _config, _key, *, latent_spec: _model(),
+    )
+
+    restored = amortized_train.load_checkpoint(checkpoint, {"amortized": {}})
+
+    assert isinstance(restored, AmortizedModel)
+    assert isinstance(restored.prior, StandardNormalPrior)
+
+    checkpoint.with_suffix(".eqx.json").write_text(
+        '{"latent_transform_hash": "wrong-hash"}'
+    )
+    with pytest.raises(ValueError, match="latent normalization hash"):
+        amortized_train.load_checkpoint(checkpoint, {"amortized": {}})
+
+
+def test_sc_drws_checkpoint_sidecar_writes_generic_latent_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _model()
+    monkeypatch.setattr(
+        sc_drws_trainer, "latent_spec_hash", lambda _spec: "latent-hash"
+    )
+    monkeypatch.setattr(
+        sc_drws_trainer,
+        "latent_spec_to_jsonable",
+        lambda _spec: {"normalization": "bounded_mixed_warp"},
+    )
+    monkeypatch.setattr(
+        sc_drws_trainer, "feature_stats_hash", lambda _stats: "feature-hash"
+    )
+    runtime = SimpleNamespace(latent_spec=object(), feature_stats=object())
+
+    records = _save_components(
+        tmp_path,
+        model=model,
+        ema_encoder=model.encoder,
+        config={},
+        runtime=runtime,
+        epoch=8,
+        reference_entropy=2.0,
+    )
+
+    sidecar = records["raw_model"]
+    assert sidecar["latent_spec_hash"] == "latent-hash"
+    assert sidecar["latent_transform_hash"] == "latent-hash"
+    assert sidecar["latent_spec"] == {"normalization": "bounded_mixed_warp"}
 
 
 def test_selection_is_excluded_from_object_weights_and_selected_prior_is_derived() -> None:

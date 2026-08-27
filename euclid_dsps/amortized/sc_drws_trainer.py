@@ -33,7 +33,7 @@ from .adaptive_smc_training import (
 from .config import amortized_config, require_amortized_dependencies
 from .data import iter_photometry_batches_from_arrays
 from .features import feature_stats_hash
-from .latent import latent_spec_hash
+from .latent import latent_spec_hash, latent_spec_to_jsonable
 from .posterior import posterior_entropy_diagnostics
 from .sc_asmc_training import update_ema_encoder
 from .sc_drws import (
@@ -1177,6 +1177,8 @@ def _save_components(path, *, model, ema_encoder, config, runtime, epoch, refere
             "epoch": int(epoch),
             "sha256": _sha256(destination),
             "config_hash": _config_hash(config),
+            "latent_spec": latent_spec_to_jsonable(runtime.latent_spec),
+            "latent_spec_hash": latent_spec_hash(runtime.latent_spec),
             "latent_transform_hash": latent_spec_hash(runtime.latent_spec),
             "feature_stats_hash": feature_stats_hash(runtime.feature_stats),
             "c0_scope_statement": C0_SCOPE_STATEMENT,

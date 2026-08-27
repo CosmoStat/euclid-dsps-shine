@@ -1948,16 +1948,23 @@ def load_checkpoint(
     sidecar_path = path.with_suffix(path.suffix + ".json")
     if sidecar_path.is_file():
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
-        recorded_hash = sidecar.get("latent_spec_hash")
+        recorded_hash = sidecar.get(
+            "latent_spec_hash", sidecar.get("latent_transform_hash")
+        )
         expected_hash = latent_spec_hash(active_spec)
         if recorded_hash is not None and str(recorded_hash) != expected_hash:
             raise ValueError(
                 "Amortized checkpoint latent normalization hash does not match "
                 f"the active config: checkpoint={recorded_hash}, config={expected_hash}"
             )
-        if recorded_hash is None and sidecar.get(
-            "latent_spec"
-        ) != latent_spec_to_jsonable(active_spec):
+        if recorded_hash is None and "latent_spec" not in sidecar:
+            raise ValueError(
+                "Amortized checkpoint sidecar is missing latent transform provenance"
+            )
+        if (
+            recorded_hash is None
+            and sidecar["latent_spec"] != latent_spec_to_jsonable(active_spec)
+        ):
             raise ValueError(
                 "Amortized checkpoint latent spec does not match the active config"
             )
