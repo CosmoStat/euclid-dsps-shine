@@ -919,13 +919,21 @@ def _pack_first_pass(first, *, maximum_particles):
     return {
         "particles": output_particles,
         "weights": output_weights,
-        "q_eligible": np.asarray(first.diagnostics.finite, dtype=bool),
-        "prior_eligible": np.asarray(first.diagnostics.finite & ~first.diagnostics.hard),
-        "finite": np.asarray(first.diagnostics.finite, dtype=bool),
-        "ess_fraction": np.asarray(first.diagnostics.ess_fraction, dtype=float),
-        "max_weight": np.asarray(first.diagnostics.max_weight, dtype=float),
+        "q_eligible": np.array(first.diagnostics.finite, dtype=bool, copy=True),
+        "prior_eligible": np.array(
+            first.diagnostics.finite & ~first.diagnostics.hard,
+            dtype=bool,
+            copy=True,
+        ),
+        "finite": np.array(first.diagnostics.finite, dtype=bool, copy=True),
+        "ess_fraction": np.array(
+            first.diagnostics.ess_fraction, dtype=float, copy=True
+        ),
+        "max_weight": np.array(
+            first.diagnostics.max_weight, dtype=float, copy=True
+        ),
         "expanded": np.zeros(objects, dtype=bool),
-        "unresolved": np.asarray(first.diagnostics.hard, dtype=bool),
+        "unresolved": np.array(first.diagnostics.hard, dtype=bool, copy=True),
     }
 
 

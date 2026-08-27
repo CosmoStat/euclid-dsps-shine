@@ -20,6 +20,8 @@ from euclid_dsps.amortized.sc_drws import (
     HARD_EXPANSION_PROPOSAL,
     JOINT_PROPOSAL,
     WARMUP_PROPOSAL,
+    DefensiveImportanceBatch,
+    ImportanceDiagnostics,
     SCDrwsSchedule,
     contains_selection_in_object_weights,
     deterministic_multiple_mixture,
@@ -36,6 +38,7 @@ from euclid_dsps.amortized.sc_drws_trainer import (
     SCDrwsTrainingState,
     _load_state,
     _macro_slices,
+    _pack_first_pass,
     _save_state,
     validate_sc_drws_config,
 )
@@ -140,6 +143,47 @@ def test_adaptive_k128_to_k512_recomputes_complete_mis_density() -> None:
         1.0,
         atol=1e-6,
     )
+
+
+def test_hard_expansion_host_pack_is_writable() -> None:
+    particles = jnp.zeros((128, 2, 3))
+    weights = jnp.full((128, 2), 1.0 / 128.0)
+    first = DefensiveImportanceBatch(
+        particles=particles,
+        logproposal=jnp.zeros((128, 2)),
+        diagnostics=ImportanceDiagnostics(
+            normalized_weights=weights,
+            logweight=jnp.zeros((128, 2)),
+            ess=jnp.asarray([1.0, 2.0]),
+            ess_fraction=jnp.asarray([1.0 / 128.0, 2.0 / 128.0]),
+            max_weight=jnp.asarray([1.0, 0.5]),
+            finite=jnp.asarray([True, True]),
+            hard=jnp.asarray([True, True]),
+        ),
+    )
+
+    packed = _pack_first_pass(first, maximum_particles=512)
+    mutable_keys = (
+        "particles",
+        "weights",
+        "q_eligible",
+        "prior_eligible",
+        "finite",
+        "ess_fraction",
+        "max_weight",
+        "expanded",
+        "unresolved",
+    )
+    assert all(packed[key].flags.writeable for key in mutable_keys)
+
+    selected = np.asarray([0, 1])
+    packed["ess_fraction"][selected] = [0.2, 0.3]
+    packed["max_weight"][selected] = [0.4, 0.5]
+    packed["finite"][selected] = [True, False]
+    packed["expanded"][selected] = True
+    packed["unresolved"][selected] = [False, True]
+    packed["prior_eligible"][selected] = [True, False]
+    np.testing.assert_allclose(packed["ess_fraction"], [0.2, 0.3])
 
 
 def test_selection_is_excluded_from_object_weights_and_selected_prior_is_derived() -> None:

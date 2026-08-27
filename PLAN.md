@@ -63,6 +63,14 @@
   Post-fix verification passes `compileall`, Ruff, shell syntax,
   `git diff --check` and 24 focused SC-DRWS/RWS tests, including the
   four-device pmap regression.
+- The next immutable smoke array `1489064` passed CUDA initialization and ran
+  all seven pre-final epochs on both architectures and seeds. It then failed
+  deterministically at the first Phase-B hard-object K128-to-K512 merge because
+  NumPy views exported from JAX diagnostic arrays were read-only. Packed host
+  diagnostics now take explicit writable copies before selective replacement;
+  a regression mutates every expansion field so this host/device ownership
+  failure cannot recur silently. No support gate or scientific threshold was
+  changed, and the full-catalogue run remains unsubmitted.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 
