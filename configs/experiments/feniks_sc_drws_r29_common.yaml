@@ -23,6 +23,10 @@ amortized:
     error_floor_frac: 0.0
     error_jitter: 0.0
 
+  inference:
+    write_truth_snapshot: false
+    write_truth_diagnostics: false
+
   objective:
     mode: reweighted_wake_sleep
     npe_weight: 0.0

@@ -20,6 +20,7 @@ from scripts.evaluate_feniks_rws_recovery import (
     select_pilot,
     summarize_candidate,
     support_tail_metrics,
+    truth_free_inference_contract,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -229,10 +230,20 @@ def test_support_tail_gate_rejects_a_bad_lower_tail(tmp_path: Path) -> None:
 
 
 def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
+    support = root / "support"
     importance = root / "importance"
     predictive = root / "predictive"
+    support.mkdir(parents=True)
     importance.mkdir(parents=True)
     predictive.mkdir(parents=True)
+    truth_free_summary = {
+        "truth_snapshot_enabled": False,
+        "truth_diagnostics_enabled": False,
+        "truth_snapshot_rows": 0,
+        "truth_used_for_inference_or_checkpoint_selection": False,
+    }
+    (support / "inference_summary.json").write_text(json.dumps(truth_free_summary))
+    (predictive / "inference_summary.json").write_text(json.dumps(truth_free_summary))
     pd.DataFrame(
         {
             "n_proposal_samples": [2048] * 4,
@@ -251,6 +262,11 @@ def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
                 "fraction_pareto_k_gt_0p7": 0.0,
                 "fraction_pareto_k_gt_1": 0.0,
                 "mean_log_evidence_is": score,
+                "inputs": {
+                    "posterior_inference_summary": {
+                        "path": str(support / "inference_summary.json")
+                    }
+                },
             }
         )
     )
@@ -272,6 +288,25 @@ def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
         }
     ).to_parquet(predictive / "posterior_predictive_flux.parquet")
     return importance, predictive
+
+
+def test_truth_free_inference_contract_rejects_snapshot_or_missing_receipt(
+    tmp_path: Path,
+) -> None:
+    assert truth_free_inference_contract(tmp_path)["status"] == "FAIL"
+    (tmp_path / "inference_summary.json").write_text(
+        json.dumps(
+            {
+                "truth_snapshot_enabled": False,
+                "truth_diagnostics_enabled": False,
+                "truth_snapshot_rows": 0,
+                "truth_used_for_inference_or_checkpoint_selection": False,
+            }
+        )
+    )
+    assert truth_free_inference_contract(tmp_path)["status"] == "PASS"
+    (tmp_path / "inference_truth.parquet").write_bytes(b"forbidden")
+    assert truth_free_inference_contract(tmp_path)["status"] == "FAIL"
 
 
 def test_sc_drws_selects_raw_or_ema_only_after_independent_support_gates(

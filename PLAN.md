@@ -84,6 +84,17 @@
   requires the immutable manifests, lets each worker reload its final state,
   and rebuilds the dependency chain; the default continues to reject existing
   roots.
+- The first post-training inference attempt also exposed a separate contract
+  violation: generic amortized inference unconditionally wrote
+  `inference_truth.parquet` and ran truth diagnostics even though SC-DRWS
+  checkpoint selection must be truth-free. Inference truth access is now
+  explicit and disabled for every SC-DRWS config; resumptions remove stale
+  truth artifacts, finalization skips indirect catalogue-truth plots, and the
+  recovery evaluator rejects support/PPC sources without a fail-closed no-truth
+  receipt. Legacy inference retains its previous truth-enabled defaults. The
+  focused inference/diagnostics/SC-DRWS suite passes 50 tests; compileall, Ruff
+  and `git diff --check` pass. The completed smoke can now resume directly at
+  independent support/PPC evaluation without repeating its eight epochs.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 

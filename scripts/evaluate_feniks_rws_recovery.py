@@ -32,6 +32,39 @@ def _predictive_files(root: Path) -> list[Path]:
     return files
 
 
+def truth_free_inference_contract(root: Path) -> dict[str, object]:
+    summary_path = root / "inference_summary.json"
+    summary = _read_json(summary_path) if summary_path.is_file() else {}
+    snapshot = root / "inference_truth.parquet"
+    passed = bool(
+        summary.get("truth_snapshot_enabled") is False
+        and summary.get("truth_diagnostics_enabled") is False
+        and summary.get("truth_used_for_inference_or_checkpoint_selection") is False
+        and int(summary.get("truth_snapshot_rows", -1)) == 0
+        and not snapshot.exists()
+    )
+    return {
+        "status": "PASS" if passed else "FAIL",
+        "inference_summary": str(summary_path),
+        "truth_snapshot_present": snapshot.exists(),
+        "truth_snapshot_enabled": summary.get("truth_snapshot_enabled"),
+        "truth_diagnostics_enabled": summary.get("truth_diagnostics_enabled"),
+        "truth_used_for_inference_or_checkpoint_selection": summary.get(
+            "truth_used_for_inference_or_checkpoint_selection"
+        ),
+    }
+
+
+def _importance_source_inference_root(summary: dict[str, object]) -> Path | None:
+    inputs = summary.get("inputs", {})
+    if not isinstance(inputs, dict):
+        return None
+    receipt = inputs.get("posterior_inference_summary")
+    if not isinstance(receipt, dict) or not receipt.get("path"):
+        return None
+    return Path(str(receipt["path"])).parent
+
+
 def support_tail_metrics(root: Path) -> dict[str, object]:
     path = root / "importance_diagnostics.parquet"
     if not path.is_file():
@@ -231,10 +264,19 @@ def _variant_metrics(
     support = _read_json(importance / "importance_summary.json")
     support_tail = support_tail_metrics(importance)
     predictive_gate = predictive_metrics(predictive, out=out / label)
+    support_source = _importance_source_inference_root(support)
+    support_truth_contract = (
+        truth_free_inference_contract(support_source)
+        if support_source is not None
+        else {"status": "FAIL", "reason": "missing source inference receipt"}
+    )
+    predictive_truth_contract = truth_free_inference_contract(predictive)
     passed = bool(
         support["support_gate"]["status"] == "PASS"
         and support_tail["status"] == "PASS"
         and predictive_gate["status"] == "PASS"
+        and support_truth_contract["status"] == "PASS"
+        and predictive_truth_contract["status"] == "PASS"
         and np.isfinite(float(support.get("mean_log_evidence_is", np.nan)))
     )
     return {
@@ -257,6 +299,10 @@ def _variant_metrics(
             "tail_gate": support_tail,
         },
         "exact_gaussian_posterior_predictive": predictive_gate,
+        "truth_free_inference_contract": {
+            "support": support_truth_contract,
+            "predictive": predictive_truth_contract,
+        },
     }
 
 

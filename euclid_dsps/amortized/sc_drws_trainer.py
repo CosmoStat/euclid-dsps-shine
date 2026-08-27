@@ -113,6 +113,14 @@ def validate_sc_drws_config(config: dict[str, Any]) -> dict[str, Any]:
         not (config.get("truth", {}) or {}).get("parameter_columns", {}),
         "truth.parameter_columns must be empty",
     )
+    require(
+        cfg["inference"].get("write_truth_snapshot") is False,
+        "SC-DRWS inference must disable truth snapshots",
+    )
+    require(
+        cfg["inference"].get("write_truth_diagnostics") is False,
+        "SC-DRWS inference must disable truth diagnostics",
+    )
     require(cfg["latent"]["normalization"] == "bounded_mixed_warp", "bounded_mixed_warp is required")
     require(not cfg["latent"].get("normalization_checkpoint"), "truth-fitted normalization is forbidden")
     require(cfg["prior"]["source"] == "joint_realnvp", "parent prior must be joint_realnvp")

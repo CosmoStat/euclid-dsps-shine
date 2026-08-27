@@ -67,6 +67,94 @@ from .train import (
 )
 from .truth_diagnostics import write_extended_truth_diagnostics
 
+_TRUTH_ONLY_INFERENCE_ARTIFACTS = (
+    "inference_truth.parquet",
+    "redshift_comparison.parquet",
+    "redshift_pit.parquet",
+    "photoz_object_metrics.csv",
+    "photoz_metrics.csv",
+    "photoz_metrics_by_redshift_bin.csv",
+    "posterior_vs_truth_metrics.csv",
+    "photoz_truth_vs_pred.png",
+    "photoz_delta_vs_ztrue.png",
+    "photoz_pit_hist.png",
+    "photoz_width_vs_abs_error.png",
+    "prior_vs_truth_population.csv",
+    "prior_vs_truth_correlations.csv",
+    "prior_vs_truth_correlation_error.png",
+    "extended_truth_diagnostics_summary.json",
+    "corner_full_latent_truth_prior_posterior.png",
+)
+
+
+def _clear_truth_only_inference_artifacts(out: Path) -> None:
+    """Remove stale truth products before a truth-free inference resume."""
+    for name in _TRUTH_ONLY_INFERENCE_ARTIFACTS:
+        (out / name).unlink(missing_ok=True)
+    for pattern in (
+        "*_vs_truth_extended.csv",
+        "*_vs_truth_extended_objects.parquet",
+        "truth_vs_*.png",
+        "*_bias_vs_truth_*.png",
+        "population_overlay_*.png",
+    ):
+        for path in out.glob(pattern):
+            path.unlink()
+
+
+def _maybe_write_inference_truth_snapshot(
+    out: Path,
+    config: dict[str, Any],
+    *,
+    enabled: bool,
+    row_indices: np.ndarray | None,
+    limit: int | None,
+    batch_size: int,
+) -> pd.DataFrame:
+    if not enabled:
+        (out / "inference_truth.parquet").unlink(missing_ok=True)
+        return pd.DataFrame()
+    return write_truth_snapshot(
+        out,
+        config,
+        row_indices=row_indices,
+        limit=limit,
+        batch_size=batch_size,
+    )
+
+
+def _write_inference_truth_metrics(
+    config: dict[str, Any],
+    out: Path,
+    *,
+    dataset_label: str,
+    enabled: bool,
+) -> dict[str, str]:
+    if not enabled:
+        return {"truth_diagnostics": "disabled_by_config"}
+    try:
+        outputs = {
+            key: str(value)
+            for key, value in write_redshift_metrics_for_run(
+                dataset_path=config["catalog_path"],
+                run_dir=out,
+                out_dir=out,
+                label=dataset_label,
+            ).items()
+        }
+    except Exception as exc:
+        outputs = {"warning": str(exc)}
+    try:
+        outputs.update(
+            {
+                f"extended_{key}": str(value)
+                for key, value in write_extended_truth_diagnostics(out).items()
+            }
+        )
+    except Exception as exc:
+        outputs["extended_truth_warning"] = str(exc)
+    return outputs
+
 
 def infer_amortized_fs2(
     config: dict[str, Any],
@@ -113,6 +201,12 @@ def infer_amortized_fs2(
         cfg.get("objective", {})
     )
     inference_cfg = cfg.get("inference", {})
+    write_truth_snapshot_enabled = bool(inference_cfg.get("write_truth_snapshot", True))
+    write_truth_diagnostics_enabled = bool(
+        inference_cfg.get("write_truth_diagnostics", True)
+    )
+    if not write_truth_snapshot_enabled and not write_truth_diagnostics_enabled:
+        _clear_truth_only_inference_artifacts(out)
     selection_mode = str(
         selection_mode
         if selection_mode is not None
@@ -153,9 +247,10 @@ def infer_amortized_fs2(
         np.save(out / "inference_indices.npy", row_indices)
         selection_summary["row_indices_path"] = "inference_indices.npy"
     write_json(out / "inference_selection.json", selection_summary)
-    truth_snapshot = write_truth_snapshot(
+    truth_snapshot = _maybe_write_inference_truth_snapshot(
         out,
         config,
+        enabled=write_truth_snapshot_enabled,
         row_indices=row_indices,
         limit=limit,
         batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
@@ -226,7 +321,8 @@ def infer_amortized_fs2(
         print(
             "[amortized] inference selection: "
             f"rows={selection_summary.get('selected_rows')} "
-            f"truth_rows={len(truth_snapshot)} "
+            f"truth_snapshot={'enabled' if write_truth_snapshot_enabled else 'disabled'} "
+            f"truth_diagnostics={'enabled' if write_truth_diagnostics_enabled else 'disabled'} "
             f"row_indices={selection_summary.get('row_indices_path')}"
         )
         if jax_batch_size != int(batch_size):
@@ -796,27 +892,12 @@ def infer_amortized_fs2(
             "per_band_flux_calibration": per_band_payload,
         },
     )
-    try:
-        metric_outputs = {
-            key: str(value)
-            for key, value in write_redshift_metrics_for_run(
-                dataset_path=config["catalog_path"],
-                run_dir=out,
-                out_dir=out,
-                label=dataset_label,
-            ).items()
-        }
-    except Exception as exc:
-        metric_outputs = {"warning": str(exc)}
-    try:
-        metric_outputs.update(
-            {
-                f"extended_{key}": str(value)
-                for key, value in write_extended_truth_diagnostics(out).items()
-            }
-        )
-    except Exception as exc:
-        metric_outputs["extended_truth_warning"] = str(exc)
+    metric_outputs = _write_inference_truth_metrics(
+        config,
+        out,
+        dataset_label=dataset_label,
+        enabled=write_truth_diagnostics_enabled,
+    )
     try:
         gate = write_inference_collapse_gate(out)
         metric_outputs["collapse_gate"] = str(out / "collapse_gate.json")
@@ -832,6 +913,11 @@ def infer_amortized_fs2(
             "selection": selection_summary,
             "catalog_fingerprint": catalog_identity,
             "truth_snapshot_rows": int(len(truth_snapshot)),
+            "truth_snapshot_enabled": bool(write_truth_snapshot_enabled),
+            "truth_diagnostics_enabled": bool(write_truth_diagnostics_enabled),
+            "truth_used_for_inference_or_checkpoint_selection": bool(
+                write_truth_snapshot_enabled or write_truth_diagnostics_enabled
+            ),
             "batch_size": int(batch_size),
             "jax_batch_size": int(jax_batch_size),
             "posterior_samples": int(posterior_samples),
@@ -872,6 +958,7 @@ def infer_amortized_fs2(
         config=config,
         limit=limit,
         row_indices=row_indices,
+        include_truth=write_truth_diagnostics_enabled,
     )
     if verbose:
         print("[amortized] inference complete")
@@ -927,6 +1014,14 @@ def finalize_amortized_inference(
     out = Path(out_dir)
     if not out.exists():
         raise FileNotFoundError(f"Missing inference output directory: {out}")
+    cfg = amortized_config(config)
+    inference_cfg = cfg.get("inference", {})
+    write_truth_snapshot_enabled = bool(inference_cfg.get("write_truth_snapshot", True))
+    write_truth_diagnostics_enabled = bool(
+        inference_cfg.get("write_truth_diagnostics", True)
+    )
+    if not write_truth_snapshot_enabled and not write_truth_diagnostics_enabled:
+        _clear_truth_only_inference_artifacts(out)
     shard_records = _discover_shard_records(out)
     complete_records = [record for record in shard_records if record["complete"]]
     if verbose:
@@ -969,28 +1064,12 @@ def finalize_amortized_inference(
         "shards_skipped": [],
     }
     _write_shard_manifest(out, manifest_payload)
-    metric_outputs: dict[str, str] = {}
-    try:
-        metric_outputs = {
-            key: str(value)
-            for key, value in write_redshift_metrics_for_run(
-                dataset_path=config["catalog_path"],
-                run_dir=out,
-                out_dir=out,
-                label=dataset_label,
-            ).items()
-        }
-    except Exception as exc:
-        metric_outputs = {"warning": str(exc)}
-    try:
-        metric_outputs.update(
-            {
-                f"extended_{key}": str(value)
-                for key, value in write_extended_truth_diagnostics(out).items()
-            }
-        )
-    except Exception as exc:
-        metric_outputs["extended_truth_warning"] = str(exc)
+    metric_outputs = _write_inference_truth_metrics(
+        config,
+        out,
+        dataset_label=dataset_label,
+        enabled=write_truth_diagnostics_enabled,
+    )
     try:
         gate = write_inference_collapse_gate(out)
         metric_outputs["collapse_gate"] = str(out / "collapse_gate.json")
@@ -1003,6 +1082,7 @@ def finalize_amortized_inference(
         config=config,
         limit=limit,
         row_indices=row_indices,
+        include_truth=write_truth_diagnostics_enabled,
     )
     payload = {
         **initial_summary,
@@ -1013,6 +1093,16 @@ def finalize_amortized_inference(
         "n_complete_shards": int(len(complete_records)),
         "n_discovered_shards": int(len(shard_records)),
         "combine_sample_shards": bool(combine_sample_shards),
+        "truth_snapshot_enabled": bool(write_truth_snapshot_enabled),
+        "truth_diagnostics_enabled": bool(write_truth_diagnostics_enabled),
+        "truth_snapshot_rows": (
+            int(initial_summary.get("truth_snapshot_rows", 0))
+            if write_truth_snapshot_enabled
+            else 0
+        ),
+        "truth_used_for_inference_or_checkpoint_selection": bool(
+            write_truth_snapshot_enabled or write_truth_diagnostics_enabled
+        ),
         "metric_outputs": metric_outputs,
         "posterior_summary": str(out / "posterior_summary.parquet"),
         "posterior_diagnostics_summary": str(

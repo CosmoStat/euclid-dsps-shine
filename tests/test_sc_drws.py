@@ -300,6 +300,8 @@ def test_sc_drws_configs_are_truth_free_and_selection_corrected(name: str) -> No
     assert source["phase_b"]["likelihood"] == "gaussian"
     assert source["hard_mis"]["maximum_particles"] == 512
     assert config["amortized"]["latent"]["normalization"] == "bounded_mixed_warp"
+    assert config["amortized"]["inference"]["write_truth_snapshot"] is False
+    assert config["amortized"]["inference"]["write_truth_diagnostics"] is False
 
 
 def test_four_device_pmap_q_update_regression() -> None:

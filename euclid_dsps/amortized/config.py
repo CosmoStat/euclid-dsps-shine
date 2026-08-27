@@ -216,6 +216,8 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["inference"].setdefault("resume_shards", True)
     raw["inference"].setdefault("write_posterior_predictive", True)
     raw["inference"].setdefault("write_residual_samples", True)
+    raw["inference"].setdefault("write_truth_snapshot", True)
+    raw["inference"].setdefault("write_truth_diagnostics", True)
     raw["inference"].setdefault("combine_sample_shards", False)
     raw["inference"].setdefault("combine_summary_shards", True)
     raw["inference"].setdefault("dense_selected_batches", True)
