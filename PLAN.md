@@ -80,7 +80,10 @@
   validating it against the active deterministic transform, and new SC-DRWS
   sidecars write both names plus the full latent spec. Existing completed
   training checkpoints remain hash-verifiable and can be evaluated without
-  retraining.
+  retraining. The submitter now has an explicit `RESUME_EXISTING=1` path that
+  requires the immutable manifests, lets each worker reload its final state,
+  and rebuilds the dependency chain; the default continues to reject existing
+  roots.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 

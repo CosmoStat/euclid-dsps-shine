@@ -418,3 +418,6 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     assert "--posterior-samples \"$SUPPORT_SAMPLES\"" in worker
     assert "--min-median-ess-fraction 0.05" in worker
     assert "--max-fraction-pareto-k-gt-0p7 0.20" in worker
+    assert 'RESUME_EXISTING="${RESUME_EXISTING:-0}"' in submitter
+    assert 'if [[ "$RESUME_EXISTING" == "1" ]]' in submitter
+    assert "missing resume artifact" in submitter

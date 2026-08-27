@@ -8,6 +8,7 @@ CATALOG_DIR="${CATALOG_DIR:-Data/diffsky/synthetic/feniks_260617_spline15d_group
 RUN_TAG="${RUN_TAG:-feniks_sc_drws_r29_$(date +%Y%m%d_%H%M%S)}"
 RECOVERY_ROOT="${RECOVERY_ROOT:-${SCRATCH:?Set SCRATCH}/$RUN_TAG}"
 SMOKE_ROOT="${RECOVERY_ROOT}_smoke"
+RESUME_EXISTING="${RESUME_EXISTING:-0}"
 MANIFEST_ROOT="$RECOVERY_ROOT/manifests"
 SMOKE_MANIFEST_ROOT="$SMOKE_ROOT/manifests"
 CACHE_ROOT="${CACHE_ROOT:-${SCRATCH}/feniks_rws_recovery_runtime}"
@@ -24,17 +25,40 @@ for path in "$TRAIN_CATALOG" "$TEST_CATALOG" \
   scripts/feniks_rws_recovery_confirm_h100.slurm; do
   test -s "$path" || { echo "[rws-recovery-submit][error] missing: $path" >&2; exit 2; }
 done
-test ! -e "$RECOVERY_ROOT" || { echo "output exists: $RECOVERY_ROOT" >&2; exit 2; }
-test ! -e "$SMOKE_ROOT" || { echo "smoke output exists: $SMOKE_ROOT" >&2; exit 2; }
-
-JAX_PLATFORMS=cpu python scripts/build_feniks_rws_recovery_manifests.py \
-  --train-catalog "$TRAIN_CATALOG" --test-catalog "$TEST_CATALOG" \
-  --out "$MANIFEST_ROOT" --validation-objects 614 --pilot-objects 512 \
-  --confirmation-objects 2000 --seed 260826
-JAX_PLATFORMS=cpu python scripts/build_feniks_rws_recovery_manifests.py \
-  --train-catalog "$TRAIN_CATALOG" --test-catalog "$TEST_CATALOG" \
-  --out "$SMOKE_MANIFEST_ROOT" --validation-objects 64 --pilot-objects 128 \
-  --confirmation-objects 16 --seed 260826
+if [[ "$RESUME_EXISTING" == "1" ]]; then
+  for path in \
+    "$MANIFEST_ROOT/manifest.json" \
+    "$MANIFEST_ROOT/pilot_train_indices.npy" \
+    "$MANIFEST_ROOT/validation_indices.npy" \
+    "$SMOKE_MANIFEST_ROOT/manifest.json" \
+    "$SMOKE_MANIFEST_ROOT/pilot_train_indices.npy" \
+    "$SMOKE_MANIFEST_ROOT/validation_indices.npy"; do
+    test -s "$path" || {
+      echo "[rws-recovery-submit][error] missing resume artifact: $path" >&2
+      exit 2
+    }
+  done
+elif [[ "$RESUME_EXISTING" == "0" ]]; then
+  test ! -e "$RECOVERY_ROOT" || {
+    echo "output exists: $RECOVERY_ROOT" >&2
+    exit 2
+  }
+  test ! -e "$SMOKE_ROOT" || {
+    echo "smoke output exists: $SMOKE_ROOT" >&2
+    exit 2
+  }
+  JAX_PLATFORMS=cpu python scripts/build_feniks_rws_recovery_manifests.py \
+    --train-catalog "$TRAIN_CATALOG" --test-catalog "$TEST_CATALOG" \
+    --out "$MANIFEST_ROOT" --validation-objects 614 --pilot-objects 512 \
+    --confirmation-objects 2000 --seed 260826
+  JAX_PLATFORMS=cpu python scripts/build_feniks_rws_recovery_manifests.py \
+    --train-catalog "$TRAIN_CATALOG" --test-catalog "$TEST_CATALOG" \
+    --out "$SMOKE_MANIFEST_ROOT" --validation-objects 64 --pilot-objects 128 \
+    --confirmation-objects 16 --seed 260826
+else
+  echo "RESUME_EXISTING must be 0 or 1" >&2
+  exit 2
+fi
 
 EXPORTS="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,CATALOG_DIR=$CATALOG_DIR,CACHE_ROOT=$CACHE_ROOT"
 SMOKE_RAW=$(sbatch --parsable --array=0-3%4 --time=00:30:00 \
@@ -74,6 +98,7 @@ echo "pilot_gate_job=$PILOT_GATE_JOB"
 echo "confirmation_job=$CONFIRM_JOB"
 echo "final_gate_job=$FINAL_JOB"
 echo "recovery_root=$RECOVERY_ROOT"
+echo "resume_existing=$RESUME_EXISTING"
 echo "resources=4 pilot tasks x 4 H100, then 2 independent confirmation tasks x 4 H100"
 echo "full_dataset_not_submitted=1"
 echo "monitor: source $LATEST && squeue -r -j $SMOKE_JOB,$PILOT_JOB,$PILOT_GATE_JOB,$CONFIRM_JOB,$FINAL_JOB"
