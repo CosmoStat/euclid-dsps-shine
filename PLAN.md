@@ -5,7 +5,7 @@
 - Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
   truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
   workflow inside the predefined FENIKS refinement/catalogue-support domain
-  `C0`. The additional modeled selection is observed `r<27.5`; upstream
+  `C0`. The additional modeled selection is observed `r<29.0`; upstream
   true-space filtering remains conditioning and is not inverted.
 - Preserve the two existing conditional-RealNVP candidates and the no-truth
   `bounded_mixed_warp` geometry. Do not change DSPS, zero points, the existing
@@ -19,7 +19,7 @@
 - Extend the existing manifest/evaluation/launcher scaffold rather than
   duplicating its independent cohorts, ordinary-IW K=2048 evaluation, dense
   PPC, and four-H100 worker pattern. Add immutable retention-grid and full-row
-  contracts for observed `r<27.5`.
+  contracts for observed `r<29.0`.
 - Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
   selected-architecture/two-seed independent 2000-object confirmation, then
   two complete-selected-training-set seeds. No Jean-Zay submission is made by
@@ -34,10 +34,16 @@
   controls, complete deterministic MIS denominator, K128-to-K512 hard
   expansion, full-wake prior macro-batches, fixed E-step trust reference,
   score-function selection term, raw/EMA full-model checkpoints, resume state,
-  r<27.5 retention/full-row manifests, K2048/PPC gates, pilot/confirmation/full
+  r<29.0 retention/full-row manifests, K2048/PPC gates, pilot/confirmation/full
   launchers, four-shard inference and frozen population report are implemented.
   Historical q has 673,942 trainable parameters; current q has 2,441,298; the
   shared parent prior has 1,179,888.
+- Jean-Zay observed-flux audit: `r<27.5` retained only 64.328% of the 40,000
+  train rows and 63.780% of the 5,000 test rows; `r<28.5` still missed the 90%
+  contract at 89.657%/89.900%. The configured cut is therefore the next
+  half-magnitude grid value, `r<29.0`, retaining 94.103% train (37,641 rows)
+  and 94.120% test (4,706 rows). The survey PhotoErr depth remains
+  `m5_r=27.5`; only the explicit observed selection threshold changes.
 - Local verification: 67 focused SC-DRWS/RWS/posthoc/conditional-flow tests
   pass, including a four-device CPU pmap regression. Ruff, compileall, bash
   syntax and `git diff --check` pass. A broader suite attempt reached 134
@@ -7446,7 +7452,7 @@ Phase 6 - Later AGN and production scaling:
 - Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
   truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
   workflow inside the predefined FENIKS refinement/catalogue-support domain
-  `C0`. The additional modeled selection is observed `r<27.5`; upstream
+  `C0`. The additional modeled selection is observed `r<29.0`; upstream
   true-space filtering remains conditioning and is not inverted.
 - Preserve the two existing conditional-RealNVP candidates and the no-truth
   `bounded_mixed_warp` geometry. Do not change DSPS, zero points, the existing
@@ -7460,7 +7466,7 @@ Phase 6 - Later AGN and production scaling:
 - Extend the existing manifest/evaluation/launcher scaffold rather than
   duplicating its independent cohorts, ordinary-IW K=2048 evaluation, dense
   PPC, and four-H100 worker pattern. Add immutable retention-grid and full-row
-  contracts for observed `r<27.5`.
+  contracts for observed `r<29.0`.
 - Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
   selected-architecture/two-seed independent 2000-object confirmation, then
   two complete-selected-training-set seeds. No Jean-Zay submission is made by

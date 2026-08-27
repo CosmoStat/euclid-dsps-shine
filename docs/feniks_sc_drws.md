@@ -2,13 +2,19 @@
 
 > We infer the parent distribution within the predefined FENIKS refinement
 > and catalogue-support domain, while explicitly correcting the additional
-> observed r<27.5 selection.
+> observed r<29.0 selection.
 
 The upstream true-space filtering is conditioning information (`C0`), not a
 selection that this workflow attempts to invert. Training, validation,
 checkpoint selection, importance weighting, and prior learning read observed
 flux, observed flux error, and mask only. Truth is permitted only in a
 separate closure after the final checkpoints have been frozen.
+
+The cut `r<29.0` is fixed by the observed-catalogue retention preflight. It
+retains 94.103% of the 40,000 train rows and 94.120% of the 5,000 test rows;
+`r<28.5` retained only 89.657%/89.900% and failed the required 90% contract.
+The Gaussian survey-noise model continues to use the physical survey depth
+`m5_r=27.5`; that depth is not the catalogue selection threshold.
 
 ## Object posterior and proposal
 
@@ -54,7 +60,7 @@ J_prior = -mean_i sum_k stop(w_exact,ik) log p_eta(x_ik | C0)
           + log(alpha_eta)
           + lambda_trust KL(p_old || p_eta),
 
-beta(x) = P(m_r,observed < 27.5 | x),
+beta(x) = P(m_r,observed < 29.0 | x),
 alpha_eta = E_p_eta[beta(x)].
 ```
 

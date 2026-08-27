@@ -14,8 +14,8 @@
 set -Eeuo pipefail
 
 TRAIN_CONFIGS=(
-  configs/experiments/feniks_sc_drws_r27p5_historical.yaml
-  configs/experiments/feniks_sc_drws_r27p5_current.yaml
+  configs/experiments/feniks_sc_drws_r29_historical.yaml
+  configs/experiments/feniks_sc_drws_r29_current.yaml
 )
 CANDIDATES=(historical_4x128 current_residual_6x256)
 SEEDS=(260826 260827)

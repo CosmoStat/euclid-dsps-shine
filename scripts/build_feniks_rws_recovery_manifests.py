@@ -16,9 +16,9 @@ from euclid_dsps.photometry import abmag_to_fnu_cgs
 SCOPE_STATEMENT = (
     "We infer the parent distribution within the predefined FENIKS "
     "refinement and catalogue-support domain, while explicitly correcting "
-    "the additional observed r<27.5 selection."
+    "the additional observed r<29.0 selection."
 )
-RETENTION_MAGNITUDES = (25.0, 26.0, 27.0, 27.5, 28.0)
+RETENTION_MAGNITUDES = (25.0, 26.0, 27.0, 27.5, 28.0, 28.5, 29.0)
 
 
 def _sha256(path: Path) -> str:
@@ -95,7 +95,7 @@ def build(
     seed: int,
     final_validation_objects: int = 512,
     band: str = "lsst_r",
-    max_mag_ab: float = 27.5,
+    max_mag_ab: float = 29.0,
     minimum_retained_fraction: float = 0.90,
 ) -> dict[str, object]:
     sizes = (
@@ -258,7 +258,7 @@ def main() -> None:
     parser.add_argument("--final-validation-objects", type=int, default=512)
     parser.add_argument("--seed", type=int, default=260826)
     parser.add_argument("--band", default="lsst_r")
-    parser.add_argument("--max-mag-ab", type=float, default=27.5)
+    parser.add_argument("--max-mag-ab", type=float, default=29.0)
     parser.add_argument("--minimum-retained-fraction", type=float, default=0.90)
     args = parser.parse_args()
     print(json.dumps(build(**vars(args)), indent=2), flush=True)

@@ -23,8 +23,8 @@ SEEDS=(260826 260827)
 SEED="${SEEDS[${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}]}"
 SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$RECOVERY_ROOT/PILOT_PASS.json")
 case "$SELECTED" in
-  historical_4x128) EVAL_CONFIG=configs/experiments/feniks_sc_drws_r27p5_historical.yaml ;;
-  current_residual_6x256) EVAL_CONFIG=configs/experiments/feniks_sc_drws_r27p5_current.yaml ;;
+  historical_4x128) EVAL_CONFIG=configs/experiments/feniks_sc_drws_r29_historical.yaml ;;
+  current_residual_6x256) EVAL_CONFIG=configs/experiments/feniks_sc_drws_r29_current.yaml ;;
   *) echo "[rws-confirm][error] invalid selected candidate: $SELECTED" >&2; exit 2 ;;
 esac
 OUT="$RECOVERY_ROOT/$SELECTED/seed_$SEED"

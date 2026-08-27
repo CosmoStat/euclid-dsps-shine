@@ -24,8 +24,8 @@ SEEDS=(260826 260827)
 SEED="${SEEDS[${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}]}"
 SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json")
 case "$SELECTED" in
-  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r27p5_historical.yaml ;;
-  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r27p5_current.yaml ;;
+  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical.yaml ;;
+  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current.yaml ;;
   *) echo "[sc-drws-full][error] invalid candidate: $SELECTED" >&2; exit 2 ;;
 esac
 OUT="$RECOVERY_ROOT/full/$SELECTED/seed_$SEED"

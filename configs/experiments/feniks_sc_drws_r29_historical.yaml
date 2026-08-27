@@ -1,4 +1,4 @@
-extends: feniks_sc_drws_r27p5_common.yaml
+extends: feniks_sc_drws_r29_common.yaml
 
 amortized:
   encoder:

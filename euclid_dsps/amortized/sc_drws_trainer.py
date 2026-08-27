@@ -132,8 +132,8 @@ def validate_sc_drws_config(config: dict[str, Any]) -> dict[str, Any]:
     require(float(raw.get("ema", {}).get("decay", 0.0)) in {0.99, 0.995}, "EMA decay must be 0.99 or 0.995")
     selection = cfg["objective"].get("selection_correction", {}) or {}
     sleep_selection = cfg["objective"].get("sleep", {}).get("selection", {}) or {}
-    require(float(selection.get("max_mag_ab", 0.0)) == 27.5, "selection correction must use r<27.5")
-    require(float(sleep_selection.get("max_mag_ab", 0.0)) == 27.5, "sleep must use observed r<27.5")
+    require(float(selection.get("max_mag_ab", 0.0)) == 29.0, "selection correction must use r<29.0")
+    require(float(sleep_selection.get("max_mag_ab", 0.0)) == 29.0, "sleep must use observed r<29.0")
     require(selection.get("gradient_estimator") == "score_function", "log alpha must use the existing score-function gradient")
     require(not (config.get("calibration", {}) or {}).get("per_band_zero_points", {}).get("trainable", False), "zero points must remain fixed")
     if errors:
@@ -716,7 +716,7 @@ def train_feniks_sc_drws(
         "c0_scope_statement": C0_SCOPE_STATEMENT,
         "target_population": "p_eta(theta | C0)",
         "selected_population": "beta(theta) p_eta(theta | C0) / alpha_eta",
-        "observed_selection": "A = 1[m_r_observed < 27.5]",
+        "observed_selection": "A = 1[m_r_observed < 29.0]",
         "upstream_true_space_selection": "conditioned_as_C0_not_inverted",
         "truth_used_for_training_validation_or_checkpoint_selection": False,
         "selection_in_object_weights": False,
@@ -782,8 +782,8 @@ def _validate_manifest(
         raise ValueError("manifest C0 scope statement mismatch")
     if payload.get("truth_used_for_training_or_checkpoint_selection") is not False:
         raise ValueError("manifest is not truth-free")
-    if float(payload["selection"]["max_mag_ab"]) != 27.5:
-        raise ValueError("SC-DRWS manifest must use observed r<27.5")
+    if float(payload["selection"]["max_mag_ab"]) != 29.0:
+        raise ValueError("SC-DRWS manifest must use observed r<29.0")
     if float(payload["selection"]["configured_train_retained_fraction"]) < 0.90:
         raise ValueError("SC-DRWS manifest retains less than 90% of C0")
     records = payload.get("manifests", {})
@@ -1172,7 +1172,7 @@ def _save_components(path, *, model, ema_encoder, config, runtime, epoch, refere
             "latent_transform_hash": latent_spec_hash(runtime.latent_spec),
             "feature_stats_hash": feature_stats_hash(runtime.feature_stats),
             "c0_scope_statement": C0_SCOPE_STATEMENT,
-            "selection": "observed r<27.5",
+            "selection": "observed r<29.0",
             "truth_used": False,
             "reference_entropy": float(reference_entropy),
             "support_selection_status": "pending_independent_k2048_evaluation",

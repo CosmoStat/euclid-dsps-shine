@@ -40,13 +40,13 @@ amortized:
       selection:
         enabled: true
         band: lsst_r
-        max_mag_ab: 27.5
+        max_mag_ab: 29.0
         candidate_factor: 8
     selection_correction:
       enabled: true
       kind: observed_magnitude_limit
       band: lsst_r
-      max_mag_ab: 27.5
+      max_mag_ab: 29.0
       survey_noise: gaussian_m5
       gradient_estimator: score_function
       score_control_variate: centered
@@ -59,10 +59,10 @@ amortized:
   sc_drws:
     name: Selection-Corrected Defensive Reweighted Wake-Sleep
     acronym: SC-DRWS
-    c0_scope_statement: We infer the parent distribution within the predefined FENIKS refinement and catalogue-support domain, while explicitly correcting the additional observed r<27.5 selection.
+    c0_scope_statement: We infer the parent distribution within the predefined FENIKS refinement and catalogue-support domain, while explicitly correcting the additional observed r<29.0 selection.
     target_population: p_eta(theta | C0)
     selected_population: beta(theta) * p_eta(theta | C0) / alpha_eta
-    observed_selection: A = 1[m_r_observed < 27.5]
+    observed_selection: A = 1[m_r_observed < 29.0]
     upstream_true_space_selection: conditioned_as_C0_not_inverted
     dataset_regeneration: forbidden
     truth_allowed: false

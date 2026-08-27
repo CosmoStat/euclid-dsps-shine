@@ -99,7 +99,7 @@ def main() -> None:
         "c0_scope_statement": C0_SCOPE_STATEMENT,
         "target_population": "p_eta(theta | C0)",
         "selected_population": "beta(theta) p_eta(theta | C0) / alpha_eta",
-        "observed_selection": "A = 1[m_r_observed < 27.5]",
+        "observed_selection": "A = 1[m_r_observed < 29.0]",
         "upstream_true_space_selection": "conditioned_as_C0_not_inverted",
         "truth_used": False,
         "checkpoint": str(args.checkpoint.resolve()),

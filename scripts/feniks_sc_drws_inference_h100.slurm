@@ -25,8 +25,8 @@ SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selec
 CHECKPOINT=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_checkpoint"])' "$PASS")
 FEATURE_STATS=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_feature_stats"])' "$PASS")
 case "$SELECTED" in
-  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r27p5_historical.yaml ;;
-  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r27p5_current.yaml ;;
+  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical.yaml ;;
+  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current.yaml ;;
   *) exit 2 ;;
 esac
 INDICES="$INFERENCE_ROOT/manifests/shard_${TASK}.npy"

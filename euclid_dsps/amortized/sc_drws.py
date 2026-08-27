@@ -26,7 +26,7 @@ from .posterior_target import posterior_log_target
 C0_SCOPE_STATEMENT = (
     "We infer the parent distribution within the predefined FENIKS "
     "refinement and catalogue-support domain, while explicitly correcting "
-    "the additional observed r<27.5 selection."
+    "the additional observed r<29.0 selection."
 )
 
 

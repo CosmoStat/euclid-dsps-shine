@@ -121,7 +121,7 @@ def test_manifest_builder_uses_selected_observations_and_disjoint_test_cohorts(
     pilot = np.load(out / "pilot_indices.npy")
     confirmation = np.load(out / "confirmation_indices.npy")
     final_validation = np.load(out / "final_validation_indices.npy")
-    threshold = float(np.asarray(abmag_to_fnu_cgs(27.5)))
+    threshold = float(np.asarray(abmag_to_fnu_cgs(29.0)))
     train_frame = pd.read_parquet(train, columns=["flux_lsst_r"])
     test_frame = pd.read_parquet(test, columns=["flux_lsst_r"])
 
@@ -138,12 +138,12 @@ def test_manifest_builder_uses_selected_observations_and_disjoint_test_cohorts(
     assert np.all(test_frame.iloc[confirmation].flux_lsst_r.to_numpy() > threshold)
     assert receipt["truth_columns_requested"] == []
     assert receipt["truth_used_for_training_or_checkpoint_selection"] is False
-    assert receipt["selection"]["max_mag_ab"] == 27.5
+    assert receipt["selection"]["max_mag_ab"] == 29.0
     assert set(receipt["selection"]["retention_grid"]["train"]) == {
-        "25", "26", "27", "27.5", "28"
+        "25", "26", "27", "27.5", "28", "28.5", "29"
     }
     assert receipt["c0_scope_statement"].endswith(
-        "additional observed r<27.5 selection."
+        "additional observed r<29.0 selection."
     )
 
 
@@ -167,6 +167,7 @@ def test_manifest_fails_closed_and_recommends_next_fainter_grid_cut(
             confirmation_objects=2,
             final_validation_objects=2,
             seed=1,
+            max_mag_ab=27.5,
         )
 
 
@@ -317,7 +318,7 @@ def test_sc_drws_selects_raw_or_ema_only_after_independent_support_gates(
         candidate="historical_4x128",
         seed=260826,
         phase="pilot",
-        config=CONFIG_DIR / "feniks_sc_drws_r27p5_historical.yaml",
+        config=CONFIG_DIR / "feniks_sc_drws_r29_historical.yaml",
         train=train,
         importance=raw_iw,
         predictive=raw_ppc,

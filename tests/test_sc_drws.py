@@ -178,7 +178,7 @@ def test_prior_support_gate_fails_closed_on_unresolved_or_dominant_weights() -> 
 
 @pytest.mark.parametrize(
     "name",
-    ("feniks_sc_drws_r27p5_historical.yaml", "feniks_sc_drws_r27p5_current.yaml"),
+    ("feniks_sc_drws_r29_historical.yaml", "feniks_sc_drws_r29_current.yaml"),
 )
 def test_sc_drws_configs_are_truth_free_and_selection_corrected(name: str) -> None:
     config = load_config(f"configs/experiments/{name}")

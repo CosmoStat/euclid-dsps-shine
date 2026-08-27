@@ -5,7 +5,7 @@ REPO_DIR="${REPO_DIR:-$PWD}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 CATALOG_DIR="${CATALOG_DIR:-Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized}"
-RUN_TAG="${RUN_TAG:-feniks_sc_drws_r27p5_$(date +%Y%m%d_%H%M%S)}"
+RUN_TAG="${RUN_TAG:-feniks_sc_drws_r29_$(date +%Y%m%d_%H%M%S)}"
 RECOVERY_ROOT="${RECOVERY_ROOT:-${SCRATCH:?Set SCRATCH}/$RUN_TAG}"
 SMOKE_ROOT="${RECOVERY_ROOT}_smoke"
 MANIFEST_ROOT="$RECOVERY_ROOT/manifests"
@@ -18,8 +18,8 @@ TEST_CATALOG="$CATALOG_DIR/test.parquet"
 cd "$REPO_DIR"
 mkdir -p "$LOG_ROOT" "$CACHE_ROOT/jax" outputs/logs
 for path in "$TRAIN_CATALOG" "$TEST_CATALOG" \
-  configs/experiments/feniks_sc_drws_r27p5_historical.yaml \
-  configs/experiments/feniks_sc_drws_r27p5_current.yaml \
+  configs/experiments/feniks_sc_drws_r29_historical.yaml \
+  configs/experiments/feniks_sc_drws_r29_current.yaml \
   scripts/feniks_rws_recovery_pilot_h100.slurm \
   scripts/feniks_rws_recovery_confirm_h100.slurm; do
   test -s "$path" || { echo "[rws-recovery-submit][error] missing: $path" >&2; exit 2; }
