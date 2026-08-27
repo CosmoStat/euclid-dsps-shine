@@ -64,9 +64,9 @@ FINAL_RAW=$(sbatch --parsable --dependency="afterok:$CONFIRM_JOB" \
 FINAL_JOB="${FINAL_RAW%%;*}"
 
 LATEST=outputs/logs/feniks_rws_recovery_latest.env
-printf 'export SMOKE_JOB=%q\nexport PILOT_JOB=%q\nexport PILOT_GATE_JOB=%q\nexport CONFIRM_JOB=%q\nexport FINAL_JOB=%q\nexport RECOVERY_ROOT=%q\nexport MANIFEST_ROOT=%q\nexport CACHE_ROOT=%q\nexport LOG_ROOT=%q\n' \
+printf 'export SMOKE_JOB=%q\nexport PILOT_JOB=%q\nexport PILOT_GATE_JOB=%q\nexport CONFIRM_JOB=%q\nexport FINAL_JOB=%q\nexport SMOKE_ROOT=%q\nexport RECOVERY_ROOT=%q\nexport MANIFEST_ROOT=%q\nexport CACHE_ROOT=%q\nexport LOG_ROOT=%q\n' \
   "$SMOKE_JOB" "$PILOT_JOB" "$PILOT_GATE_JOB" "$CONFIRM_JOB" "$FINAL_JOB" \
-  "$RECOVERY_ROOT" "$MANIFEST_ROOT" "$CACHE_ROOT" "$LOG_ROOT" > "$LATEST"
+  "$SMOKE_ROOT" "$RECOVERY_ROOT" "$MANIFEST_ROOT" "$CACHE_ROOT" "$LOG_ROOT" > "$LATEST"
 
 echo "smoke_job=$SMOKE_JOB"
 echo "pilot_job=$PILOT_JOB"

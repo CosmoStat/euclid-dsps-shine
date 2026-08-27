@@ -397,6 +397,7 @@ def test_promotion_requires_both_seeds_then_independent_confirmation(
 def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     submitter = (ROOT / "scripts" / "submit_feniks_rws_recovery.sh").read_text()
     worker = (ROOT / "scripts" / "feniks_rws_recovery_pilot_h100.slurm").read_text()
+    monitor = (ROOT / "scripts" / "monitor_feniks_rws_recovery.sh").read_text()
 
     assert "--array=0-3%4" in submitter
     assert 'afterok:$SMOKE_JOB' in submitter
@@ -408,6 +409,9 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     assert 'JAX_COMPILATION_CACHE_DIR="$CACHE_ROOT/jax"' in worker
     assert "export JAX_ENABLE_X64=true" in worker
     assert "train_feniks_sc_drws.py" in worker
+    assert 'export SMOKE_ROOT=%q' in submitter
+    assert "sc_drws_training_log.csv" in monitor
+    assert "full catalogue autorisé mais non soumis" in monitor
     assert "pilot_train_indices.npy" in worker
     assert "raw_model.eqx" not in worker  # expanded through ${VARIANT}_model.eqx
     assert '${VARIANT}_model.eqx' in worker
