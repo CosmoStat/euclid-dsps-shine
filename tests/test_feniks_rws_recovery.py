@@ -266,13 +266,15 @@ def _write_sc_variant(
         json.dumps(
             {
                 "status": "complete",
-                "support_gate": {"status": support_status},
+                "support_gate": {
+                    "status": support_status,
+                    "mean_log_evidence_is": score,
+                },
                 "n_objects": 4,
                 "n_joint_draws": 8192,
                 "median_raw_ess_fraction": ess_fraction,
                 "fraction_pareto_k_gt_0p7": pareto_fraction,
                 "fraction_pareto_k_gt_1": pareto_fraction,
-                "mean_log_evidence_is": score,
                 "inputs": {
                     "posterior_inference_summary": {
                         "path": str(support / "inference_summary.json")

@@ -115,6 +115,15 @@
   evaluator in pilot mode; the focused SC-DRWS/inference suite passes 41 tests,
   with compileall, Ruff, SLURM shell syntax, and `git diff --check` clean. No
   Jean-Zay job or full-catalogue run was submitted from this change.
+- Resume smoke `1500336` exercised the new technical gate but exposed a schema
+  mismatch in the evaluator: importance correction stores the finite IW
+  evidence at `support_gate.mean_log_evidence_is`, while recovery selection
+  read only a nonexistent top-level `mean_log_evidence_is` and therefore
+  manufactured `NaN` for every raw/EMA variant. Read the canonical nested
+  field with a backward-compatible top-level fallback, keep genuine nonfinite
+  evidence fail-closed, and cover the producer-shaped receipt in regression.
+  The 13 focused recovery tests, Ruff, compileall, and `git diff --check` pass;
+  no remote job was submitted from this patch.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 

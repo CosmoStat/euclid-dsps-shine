@@ -311,6 +311,15 @@ def _variant_metrics(
     *, label: str, importance: Path, predictive: Path, out: Path, log_alpha: float
 ) -> dict[str, object]:
     support = _read_json(importance / "importance_summary.json")
+    support_gate = support.get("support_gate", {})
+    if not isinstance(support_gate, dict):
+        support_gate = {}
+    mean_log_evidence_is = float(
+        support_gate.get(
+            "mean_log_evidence_is",
+            support.get("mean_log_evidence_is", np.nan),
+        )
+    )
     support_tail = support_tail_metrics(importance)
     predictive_gate = predictive_metrics(predictive, out=out / label)
     support_source = _importance_source_inference_root(support)
@@ -324,7 +333,7 @@ def _variant_metrics(
         support.get("median_raw_ess_fraction", np.nan),
         support.get("fraction_pareto_k_gt_0p7", np.nan),
         support.get("fraction_pareto_k_gt_1", np.nan),
-        support.get("mean_log_evidence_is", np.nan),
+        mean_log_evidence_is,
         support_tail.get("p10_raw_ess_fraction", np.nan),
         support_tail.get("fraction_raw_ess_below_0p01", np.nan),
         support_tail.get("p90_max_raw_weight", np.nan),
@@ -348,31 +357,29 @@ def _variant_metrics(
         and predictive_truth_contract["status"] == "PASS"
     )
     passed = bool(
-        support["support_gate"]["status"] == "PASS"
+        support_gate.get("status") == "PASS"
         and support_tail["status"] == "PASS"
         and predictive_gate["status"] == "PASS"
         and support_truth_contract["status"] == "PASS"
         and predictive_truth_contract["status"] == "PASS"
-        and np.isfinite(float(support.get("mean_log_evidence_is", np.nan)))
+        and np.isfinite(mean_log_evidence_is)
     )
     return {
         "label": label,
         "status": "PASS" if passed else "FAIL",
         "technical_status": "PASS" if technical_pass else "FAIL",
         "selection_corrected_exact_gaussian_iw_score": float(
-            support.get("mean_log_evidence_is", np.nan)
+            mean_log_evidence_is
         )
         - float(log_alpha),
         "exact_gaussian_ordinary_iw": {
-            "status": support["support_gate"]["status"],
+            "status": support_gate.get("status"),
             "objects": int(support["n_objects"]),
             "draws": int(support["n_joint_draws"]),
             "median_raw_ess_fraction": float(support["median_raw_ess_fraction"]),
             "fraction_pareto_k_gt_0p7": float(support["fraction_pareto_k_gt_0p7"]),
             "fraction_pareto_k_gt_1": float(support["fraction_pareto_k_gt_1"]),
-            "mean_log_evidence_is": float(
-                support.get("mean_log_evidence_is", np.nan)
-            ),
+            "mean_log_evidence_is": mean_log_evidence_is,
             "tail_gate": support_tail,
         },
         "exact_gaussian_posterior_predictive": predictive_gate,
