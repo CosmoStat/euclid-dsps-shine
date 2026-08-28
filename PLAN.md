@@ -101,6 +101,20 @@
   completed training receipt only after checking its no-truth contract and all
   raw/EMA/prior checkpoints, and skips the trainer entirely before independent
   IW/PPC. Incomplete training still follows the strict state-hash resume path.
+- The 128-object, eight-epoch smoke is a runtime and numerical contract only:
+  it must exercise sleep, wake, hard-object MIS expansion, the fail-closed
+  prior gate, raw/EMA inference, ordinary IW, dense PPC, and the no-truth
+  receipts with finite outputs. Its deliberately undertrained ESS, Pareto,
+  entropy, unresolved-object, and prior-update diagnostics are recorded but
+  cannot reject the 512-object, 180-epoch architecture pilot. Scientific
+  support/PPC and prior-learning thresholds remain unchanged for that pilot
+  and the independent 2000-object confirmation. Evaluation resume also reuses
+  hash-bound, complete truth-free inference and importance artifacts rather
+  than recomputing them. Regression coverage proves that an undertrained but
+  finite smoke passes only the technical contract and still fails the same
+  evaluator in pilot mode; the focused SC-DRWS/inference suite passes 41 tests,
+  with compileall, Ruff, SLURM shell syntax, and `git diff --check` clean. No
+  Jean-Zay job or full-catalogue run was submitted from this change.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 

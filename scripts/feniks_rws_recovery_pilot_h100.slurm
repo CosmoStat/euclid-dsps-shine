@@ -144,6 +144,62 @@ if [[ "$TRAINING_COMPLETE" == "0" ]]; then
   python scripts/train_feniks_sc_drws.py "${TRAIN_ARGS[@]}"
 fi
 
+inference_artifact_complete() {
+  python - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+checkpoint = Path(sys.argv[2]).resolve()
+samples = int(sys.argv[3])
+objects = int(sys.argv[4])
+predictive = sys.argv[5] == "1"
+summary_path = root / "inference_summary.json"
+if not summary_path.is_file():
+    raise SystemExit(1)
+summary = json.loads(summary_path.read_text())
+valid = (
+    summary.get("complete") is True
+    and Path(str(summary.get("checkpoint", ""))).resolve() == checkpoint
+    and int(summary.get("posterior_samples", -1)) == samples
+    and int(summary.get("n_processed", -1)) == objects
+    and summary.get("write_posterior_predictive") is predictive
+    and summary.get("truth_snapshot_enabled") is False
+    and summary.get("truth_diagnostics_enabled") is False
+    and summary.get("truth_used_for_inference_or_checkpoint_selection") is False
+    and int(summary.get("truth_snapshot_rows", -1)) == 0
+    and not (root / "inference_truth.parquet").exists()
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
+importance_artifact_complete() {
+  python - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+objects = int(sys.argv[2])
+draws = int(sys.argv[3])
+summary_path = root / "importance_summary.json"
+done_path = root / "DONE"
+if not summary_path.is_file() or not done_path.is_file():
+    raise SystemExit(1)
+summary = json.loads(summary_path.read_text())
+done = json.loads(done_path.read_text())
+valid = (
+    summary.get("status") == "complete"
+    and done.get("status") == "complete"
+    and int(summary.get("n_objects", -1)) == objects
+    and int(summary.get("n_joint_draws", -1)) == draws
+)
+raise SystemExit(0 if valid else 1)
+PY
+}
+
 for VARIANT in raw ema; do
   VARIANT_OFFSET=0
   [[ "$VARIANT" == "ema" ]] && VARIANT_OFFSET=1
@@ -167,23 +223,40 @@ for VARIANT in raw ema; do
   --no-residual-samples
   )
 
-  python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
-    "${COMMON_INFER[@]}" --posterior-samples "$SUPPORT_SAMPLES" \
-    --seed "$((SEED + 1000 + VARIANT_OFFSET))" --out "$SUPPORT" --no-posterior-predictive
-  python -m euclid_dsps.cli --config "$EVAL_CONFIG" \
-    amortized-finalize-inference --out "$SUPPORT" --limit "$OBJECTS"
+  if inference_artifact_complete \
+    "$SUPPORT" "$CHECKPOINT" "$SUPPORT_SAMPLES" "$OBJECTS" 0 \
+    && importance_artifact_complete \
+      "$IMPORTANCE" "$OBJECTS" "$((OBJECTS * SUPPORT_SAMPLES))"; then
+    echo "[sc-drws] reusing complete ${VARIANT} ordinary-IW artifact: $IMPORTANCE"
+  else
+    if inference_artifact_complete \
+      "$SUPPORT" "$CHECKPOINT" "$SUPPORT_SAMPLES" "$OBJECTS" 0; then
+      echo "[sc-drws] reusing complete truth-free ${VARIANT} support inference: $SUPPORT"
+    else
+      python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
+        "${COMMON_INFER[@]}" --posterior-samples "$SUPPORT_SAMPLES" \
+        --seed "$((SEED + 1000 + VARIANT_OFFSET))" --out "$SUPPORT" --no-posterior-predictive
+      python -m euclid_dsps.cli --config "$EVAL_CONFIG" \
+        amortized-finalize-inference --out "$SUPPORT" --limit "$OBJECTS"
+    fi
 
-  python scripts/importance_correct_posterior.py \
-    --posterior "$SUPPORT" --out "$IMPORTANCE" \
-    --resample-count "$([[ "$SMOKE" == "1" ]] && echo 16 || echo 256)" \
-    --seed "$((SEED + 2000))" --min-median-ess-fraction 0.05 \
-    --max-fraction-pareto-k-gt-0p7 0.20
+    python scripts/importance_correct_posterior.py \
+      --posterior "$SUPPORT" --out "$IMPORTANCE" \
+      --resample-count "$([[ "$SMOKE" == "1" ]] && echo 16 || echo 256)" \
+      --seed "$((SEED + 2000))" --min-median-ess-fraction 0.05 \
+      --max-fraction-pareto-k-gt-0p7 0.20
+  fi
 
-  python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
-    "${COMMON_INFER[@]}" --posterior-samples "$PREDICTIVE_SAMPLES" \
-    --seed "$((SEED + 3000))" --out "$PREDICTIVE"
-  python -m euclid_dsps.cli --config "$EVAL_CONFIG" \
-    amortized-finalize-inference --out "$PREDICTIVE" --limit "$OBJECTS"
+  if inference_artifact_complete \
+    "$PREDICTIVE" "$CHECKPOINT" "$PREDICTIVE_SAMPLES" "$OBJECTS" 1; then
+    echo "[sc-drws] reusing complete truth-free ${VARIANT} predictive inference: $PREDICTIVE"
+  else
+    python -m euclid_dsps.cli --config "$EVAL_CONFIG" amortized-infer-diffsky \
+      "${COMMON_INFER[@]}" --posterior-samples "$PREDICTIVE_SAMPLES" \
+      --seed "$((SEED + 3000))" --out "$PREDICTIVE"
+    python -m euclid_dsps.cli --config "$EVAL_CONFIG" \
+      amortized-finalize-inference --out "$PREDICTIVE" --limit "$OBJECTS"
+  fi
 done
 
 SUMMARY_ARGS=(

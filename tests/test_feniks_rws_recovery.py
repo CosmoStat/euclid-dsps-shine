@@ -229,7 +229,16 @@ def test_support_tail_gate_rejects_a_bad_lower_tail(tmp_path: Path) -> None:
     assert result["fraction_raw_ess_below_0p01"] == pytest.approx(0.2)
 
 
-def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
+def _write_sc_variant(
+    root: Path,
+    *,
+    score: float,
+    support_status: str = "PASS",
+    ess_fraction: float = 0.10,
+    max_weight: float = 0.10,
+    pareto_fraction: float = 0.0,
+    predictive_scale: float = 1.0,
+) -> tuple[Path, Path]:
     support = root / "support"
     importance = root / "importance"
     predictive = root / "predictive"
@@ -237,6 +246,7 @@ def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
     importance.mkdir(parents=True)
     predictive.mkdir(parents=True)
     truth_free_summary = {
+        "complete": True,
         "truth_snapshot_enabled": False,
         "truth_diagnostics_enabled": False,
         "truth_snapshot_rows": 0,
@@ -248,19 +258,20 @@ def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
         {
             "n_proposal_samples": [2048] * 4,
             "n_finite_logweights": [2048] * 4,
-            "raw_ess_fraction": [0.10] * 4,
-            "max_raw_weight": [0.10] * 4,
+            "raw_ess_fraction": [ess_fraction] * 4,
+            "max_raw_weight": [max_weight] * 4,
         }
     ).to_parquet(importance / "importance_diagnostics.parquet")
     (importance / "importance_summary.json").write_text(
         json.dumps(
             {
-                "support_gate": {"status": "PASS"},
+                "status": "complete",
+                "support_gate": {"status": support_status},
                 "n_objects": 4,
                 "n_joint_draws": 8192,
-                "median_raw_ess_fraction": 0.10,
-                "fraction_pareto_k_gt_0p7": 0.0,
-                "fraction_pareto_k_gt_1": 0.0,
+                "median_raw_ess_fraction": ess_fraction,
+                "fraction_pareto_k_gt_0p7": pareto_fraction,
+                "fraction_pareto_k_gt_1": pareto_fraction,
                 "mean_log_evidence_is": score,
                 "inputs": {
                     "posterior_inference_summary": {
@@ -284,7 +295,7 @@ def _write_sc_variant(root: Path, *, score: float) -> tuple[Path, Path]:
             "row_index": [0, 0],
             "sample_id": [0, 1],
             "band": ["r", "r"],
-            "model_flux_fnu_cgs": [-1.0, 1.0],
+            "model_flux_fnu_cgs": [-predictive_scale, predictive_scale],
         }
     ).to_parquet(predictive / "posterior_predictive_flux.parquet")
     return importance, predictive
@@ -324,6 +335,7 @@ def test_sc_drws_selects_raw_or_ema_only_after_independent_support_gates(
         "selection_log_alpha": -0.2,
         "selection_alpha": float(np.exp(-0.2)),
         "reference_entropy": 20.0,
+        "truth_used_for_training_validation_or_checkpoint_selection": False,
         "raw_model_checkpoint": {"path": "/raw.eqx"},
         "ema_model_checkpoint": {"path": "/ema.eqx"},
     }
@@ -334,6 +346,7 @@ def test_sc_drws_selects_raw_or_ema_only_after_independent_support_gates(
             "update_kind": ["sleep", "wake"],
             "full_entropy": [19.0, 19.2],
             "expanded_ess_fraction": [np.nan, 0.1],
+            "expansion_fraction": [0.0, 0.5],
             "unresolved_fraction": [0.0, 0.0],
             "q_grads_finite": [True, True],
             "q_grad_clipped": [False, False],
@@ -341,6 +354,7 @@ def test_sc_drws_selects_raw_or_ema_only_after_independent_support_gates(
     ).to_csv(train / "sc_drws_training_log.csv", index=False)
     pd.DataFrame(
         {
+            "gate_accepted": [True],
             "update_applied": [True],
             "selection_gradient_finite": [True],
             "data_gradient_finite": [True],
@@ -364,6 +378,91 @@ def test_sc_drws_selects_raw_or_ema_only_after_independent_support_gates(
     assert result["status"] == "PASS"
     assert result["checkpoint_variant"] == "ema"
     assert result["checkpoint"] == "/ema.eqx"
+
+
+def test_undertrained_smoke_is_technical_only_but_pilot_stays_fail_closed(
+    tmp_path: Path,
+) -> None:
+    train = tmp_path / "train"
+    train.mkdir()
+    (train / "feature_stats.json").write_text("{}")
+    receipt = {
+        "status": "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION",
+        "wake_updates": 2,
+        "prior_updates": 0,
+        "selected_training_rows": 128,
+        "phase_schedule": {"warmup_epochs": 4, "joint_epochs": 4},
+        "selection_log_alpha": -0.2,
+        "selection_alpha": float(np.exp(-0.2)),
+        "reference_entropy": 20.0,
+        "truth_used_for_training_validation_or_checkpoint_selection": False,
+        "raw_model_checkpoint": {"path": "/raw.eqx"},
+        "ema_model_checkpoint": {"path": "/ema.eqx"},
+    }
+    (train / "training_receipt.json").write_text(json.dumps(receipt))
+    pd.DataFrame(
+        {
+            "epoch": [7, 8],
+            "update_kind": ["sleep", "wake"],
+            "full_entropy": [19.0, 19.0],
+            "expanded_ess_fraction": [np.nan, 1.0 / 512.0],
+            "expansion_fraction": [0.0, 1.0],
+            "unresolved_fraction": [0.0, 1.0],
+            "q_grads_finite": [True, True],
+            "q_grad_clipped": [False, False],
+        }
+    ).to_csv(train / "sc_drws_training_log.csv", index=False)
+    pd.DataFrame(
+        {
+            "gate_accepted": [False],
+            "update_applied": [False],
+            "selection_gradient_finite": [False],
+            "data_gradient_finite": [False],
+            "trust_gradient_finite": [False],
+        }
+    ).to_csv(train / "sc_drws_prior_log.csv", index=False)
+    raw_iw, raw_ppc = _write_sc_variant(
+        tmp_path / "raw",
+        score=1.0,
+        support_status="FAIL",
+        ess_fraction=1.0 / 32.0,
+        max_weight=0.99,
+        pareto_fraction=0.30,
+        predictive_scale=8.0,
+    )
+    ema_iw, ema_ppc = _write_sc_variant(
+        tmp_path / "ema",
+        score=1.1,
+        support_status="FAIL",
+        ess_fraction=1.0 / 32.0,
+        max_weight=0.99,
+        pareto_fraction=0.30,
+        predictive_scale=8.0,
+    )
+    common = {
+        "candidate": "historical_4x128",
+        "seed": 260826,
+        "phase": "pilot",
+        "config": CONFIG_DIR / "feniks_sc_drws_r29_historical.yaml",
+        "train": train,
+        "importance": raw_iw,
+        "predictive": raw_ppc,
+        "ema_importance": ema_iw,
+        "ema_predictive": ema_ppc,
+    }
+
+    smoke = summarize_candidate(out=tmp_path / "smoke", smoke=True, **common)
+    pilot = summarize_candidate(out=tmp_path / "pilot", smoke=False, **common)
+
+    assert smoke["status"] == "SMOKE_PASS"
+    assert smoke["smoke_contract"]["status"] == "PASS"
+    assert smoke["training"]["status"] == "FAIL"
+    assert smoke["training"]["technical_smoke_status"] == "PASS"
+    assert all(variant["status"] == "FAIL" for variant in smoke["variants"])
+    assert all(
+        variant["technical_status"] == "PASS" for variant in smoke["variants"]
+    )
+    assert pilot["status"] == "FAIL"
 
 
 def _run_summary(candidate: str, seed: int, *, status: str, ess: float) -> dict:
@@ -459,3 +558,7 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     assert "TRAINING_COMPLETE=1" in worker
     assert "reusing completed truth-free training" in worker
     assert 'if [[ "$TRAINING_COMPLETE" == "0" ]]' in worker
+    assert "inference_artifact_complete" in worker
+    assert "importance_artifact_complete" in worker
+    assert "reusing complete truth-free" in worker
+    assert "reusing complete ${VARIANT} ordinary-IW artifact" in worker

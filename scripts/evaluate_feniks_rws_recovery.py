@@ -158,8 +158,33 @@ def _training_metrics(
             and "q_grads_finite" in frame
             and frame["q_grads_finite"].astype(bool).all()
         )
+        receipt_complete = bool(
+            receipt.get("status")
+            == "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION"
+        )
+        truth_free_training = bool(
+            receipt.get(
+                "truth_used_for_training_validation_or_checkpoint_selection"
+            )
+            is False
+        )
+        wake_path_exercised = bool(
+            not wake.empty and int(receipt.get("wake_updates", 0)) > 0
+        )
+        hard_mis_path_exercised = bool(
+            not wake.empty
+            and "expansion_fraction" in wake
+            and (
+                pd.to_numeric(wake["expansion_fraction"], errors="coerce") > 0.0
+            ).any()
+        )
         prior_path = train / "sc_drws_prior_log.csv"
         prior_frame = pd.read_csv(prior_path) if prior_path.is_file() else pd.DataFrame()
+        prior_gate_evaluated = bool(
+            not prior_frame.empty
+            and "gate_accepted" in prior_frame
+            and "update_applied" in prior_frame
+        )
         applied_prior = (
             prior_frame.loc[prior_frame["update_applied"].astype(bool)]
             if not prior_frame.empty and "update_applied" in prior_frame
@@ -176,11 +201,26 @@ def _training_metrics(
                 )
             )
         )
+        selection_finite = bool(
+            np.isfinite(float(receipt.get("selection_log_alpha", np.nan)))
+            and np.isfinite(float(receipt.get("selection_alpha", np.nan)))
+        )
+        technical_smoke_pass = bool(
+            receipt_complete
+            and truth_free_training
+            and wake_path_exercised
+            and hard_mis_path_exercised
+            and prior_gate_evaluated
+            and selection_finite
+            and np.isfinite(final_entropy)
+            and q_gradients_finite
+        )
         training_pass = bool(
-            receipt.get("status") == "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION"
-            and int(receipt.get("wake_updates", 0)) > 0
+            receipt_complete
+            and truth_free_training
+            and wake_path_exercised
             and int(receipt.get("prior_updates", 0)) > 0
-            and np.isfinite(float(receipt.get("selection_log_alpha", np.nan)))
+            and selection_finite
             and entropy_ok
             and unresolved_ok
             and q_gradients_finite
@@ -188,6 +228,9 @@ def _training_metrics(
         )
         return {
             "status": "PASS" if training_pass else "FAIL",
+            "technical_smoke_status": (
+                "PASS" if technical_smoke_pass else "FAIL"
+            ),
             "train_rows": int(receipt["selected_training_rows"]),
             "validation_rows": None,
             "epochs": int(receipt["phase_schedule"]["total_epochs"])
@@ -217,6 +260,11 @@ def _training_metrics(
             "final_unresolved_fraction": final_unresolved,
             "unresolved_fraction_below_gate": unresolved_ok,
             "q_gradients_finite": q_gradients_finite,
+            "truth_free_training_contract": truth_free_training,
+            "wake_path_exercised": wake_path_exercised,
+            "hard_mis_path_exercised": hard_mis_path_exercised,
+            "prior_gate_evaluated": prior_gate_evaluated,
+            "selection_finite": selection_finite,
             "q_gradient_clipped_fraction": float(
                 frame["q_grad_clipped"].astype(bool).mean()
             )
@@ -237,6 +285,7 @@ def _training_metrics(
     )
     return {
         "status": "PASS" if training_pass else "FAIL",
+        "technical_smoke_status": "PASS" if training_pass else "FAIL",
         **{
             key: training[key]
             for key in (
@@ -271,6 +320,33 @@ def _variant_metrics(
         else {"status": "FAIL", "reason": "missing source inference receipt"}
     )
     predictive_truth_contract = truth_free_inference_contract(predictive)
+    support_values = (
+        support.get("median_raw_ess_fraction", np.nan),
+        support.get("fraction_pareto_k_gt_0p7", np.nan),
+        support.get("fraction_pareto_k_gt_1", np.nan),
+        support.get("mean_log_evidence_is", np.nan),
+        support_tail.get("p10_raw_ess_fraction", np.nan),
+        support_tail.get("fraction_raw_ess_below_0p01", np.nan),
+        support_tail.get("p90_max_raw_weight", np.nan),
+        support_tail.get("minimum_finite_logweight_fraction", np.nan),
+    )
+    predictive_values = (
+        predictive_gate.get("median_band_rms", np.nan),
+        predictive_gate.get("maximum_band_rms", np.nan),
+        predictive_gate.get("median_absolute_band_bias", np.nan),
+        predictive_gate.get("maximum_absolute_band_bias", np.nan),
+    )
+    technical_pass = bool(
+        support.get("status") == "complete"
+        and int(support.get("n_objects", 0)) > 0
+        and int(support.get("n_joint_draws", 0)) > 0
+        and all(np.isfinite(float(value)) for value in support_values)
+        and int(predictive_gate.get("objects", 0)) > 0
+        and int(predictive_gate.get("draws", 0)) > 0
+        and all(np.isfinite(float(value)) for value in predictive_values)
+        and support_truth_contract["status"] == "PASS"
+        and predictive_truth_contract["status"] == "PASS"
+    )
     passed = bool(
         support["support_gate"]["status"] == "PASS"
         and support_tail["status"] == "PASS"
@@ -282,6 +358,7 @@ def _variant_metrics(
     return {
         "label": label,
         "status": "PASS" if passed else "FAIL",
+        "technical_status": "PASS" if technical_pass else "FAIL",
         "selection_corrected_exact_gaussian_iw_score": float(
             support.get("mean_log_evidence_is", np.nan)
         )
@@ -446,9 +523,14 @@ def summarize_candidate(
     selected = eligible[0] if eligible else None
     training_pass = training["status"] == "PASS"
     scientific_pass = bool(training_pass and selected is not None)
-    status = "SMOKE_PASS" if smoke and training_pass else (
-        "PASS" if scientific_pass else "FAIL"
+    smoke_technical_pass = bool(
+        training.get("technical_smoke_status") == "PASS"
+        and all(variant["technical_status"] == "PASS" for variant in variants)
     )
+    if smoke:
+        status = "SMOKE_PASS" if smoke_technical_pass else "FAIL"
+    else:
+        status = "PASS" if scientific_pass else "FAIL"
     payload = {
         "status": status,
         "phase": phase,
@@ -462,6 +544,15 @@ def summarize_candidate(
         "feature_stats": training["feature_stats"],
         "training": training,
         "variants": variants,
+        "smoke_contract": {
+            "status": "PASS" if smoke_technical_pass else "FAIL",
+            "purpose": (
+                "Runtime, numerical, hard-MIS, prior-gate, raw/EMA evaluation, "
+                "and no-truth contract only. Scientific support and PPC "
+                "thresholds remain promotion gates for the 512-object pilot."
+            ),
+            "scientific_thresholds_are_diagnostic_only": bool(smoke),
+        },
         "exact_gaussian_ordinary_iw": (
             selected["exact_gaussian_ordinary_iw"] if selected else variants[0]["exact_gaussian_ordinary_iw"]
         ),
