@@ -685,7 +685,16 @@ def finalize_confirmation(root: Path) -> dict[str, object]:
 
 
 def finalize_full(root: Path) -> dict[str, object]:
-    promotion = _read_json(root / "RWS_RECOVERY_PASS.json")
+    pass_receipt = root / "RWS_RECOVERY_PASS.json"
+    override_receipt = root / "FULL_LAUNCH_AUTHORIZATION.json"
+    promotion = _read_json(
+        pass_receipt if pass_receipt.is_file() else override_receipt
+    )
+    if promotion.get("status") not in {
+        "PASS",
+        "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE",
+    }:
+        raise ValueError("full training lacks a valid authorization receipt")
     selected = str(promotion["selected_candidate"])
     runs = [
         _read_json(root / "full" / selected / f"seed_{seed}" / "full_summary.json")
@@ -704,6 +713,7 @@ def finalize_full(root: Path) -> dict[str, object]:
     payload = {
         "status": "PASS" if passed else "FAIL",
         "selected_candidate": selected,
+        "launch_authorization_status": promotion["status"],
         "selected_seed": int(chosen["seed"]) if chosen else None,
         "selected_checkpoint": chosen["checkpoint"] if chosen else None,
         "selected_feature_stats": chosen["feature_stats"] if chosen else None,

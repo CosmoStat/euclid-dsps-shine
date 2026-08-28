@@ -20,9 +20,10 @@ CATALOG_DIR="${CATALOG_DIR:?CATALOG_DIR is required}"
 RECOVERY_ROOT="${RECOVERY_ROOT:?RECOVERY_ROOT is required}"
 MANIFEST_ROOT="${MANIFEST_ROOT:?MANIFEST_ROOT is required}"
 CACHE_ROOT="${CACHE_ROOT:?CACHE_ROOT is required}"
+FULL_AUTHORIZATION_RECEIPT="${FULL_AUTHORIZATION_RECEIPT:?FULL_AUTHORIZATION_RECEIPT is required}"
 SEEDS=(260826)
 SEED="${SEEDS[${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}]}"
-SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json")
+SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$FULL_AUTHORIZATION_RECEIPT")
 case "$SELECTED" in
   historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical_production.yaml ;;
   current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current_production.yaml ;;
@@ -53,7 +54,7 @@ module purge
 module load arch/h100
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
-for path in "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json" "$CONFIG" \
+for path in "$FULL_AUTHORIZATION_RECEIPT" "$CONFIG" \
   "$MANIFEST_ROOT/manifest.json" "$TRAIN_INDICES" "$VALIDATION_INDICES" \
   "$EVAL_INDICES" "$TRAIN_CATALOG" "$TEST_CATALOG"; do
   test -s "$path" || { echo "[sc-drws-full][error] missing: $path" >&2; exit 2; }

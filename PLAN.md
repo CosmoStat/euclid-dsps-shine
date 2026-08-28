@@ -2,12 +2,23 @@
 
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 
+- Population-first SC-DRWS correction is implemented for the full-production
+  profile. Individual ESS,
+  max-weight and hard-MIS status will remain diagnostics for proposal quality,
+  but they must no longer censor finite objects from the population-prior
+  gradient or reject an otherwise finite macro-batch. The joint algorithm must
+  update `q` from tempered exact wake weights and update the parent prior from
+  every finite object's untempered normalized weights, with selection
+  normalization, clipping and a smooth trust-KL penalty providing the update
+  safeguards. The hard alpha-relative-error and KL threshold gates are disabled
+  for this profile; non-finite losses or gradients still reject an invalid
+  numerical update.
 - Full-production seed policy is reduced, at the user's request, from two
   seeds to the single seed `260826` for the current run. Pilot and independent
   confirmation remain two-seed gates. The full launcher now submits array task
   `0` only, the monitor reports only `260826`, and `finalize-full` gates only
   the configured production seed before authorizing four-shard inference.
-- Big-run anti-collapse hardening is in progress and is deliberately isolated
+- Big-run anti-collapse hardening is implemented and deliberately isolated
   from the already submitted 512-object pilot/confirmation configs. The full
   catalogue will use a hash-bound production profile with 16 initial
   sleep-only epochs; phase-local linear-warmup/cosine-decay q learning rates;
@@ -15,27 +26,35 @@
   with a forced exact `tau=1` before the final quarter; an entropy reference
   measured before the first wake update; and Phase-A K64-to-K256 defensive
   deterministic MIS. Exact object weights, the Phase-B K128-to-K512 path,
-  selection normalization and prior gates remain scientifically unchanged.
-- The same production profile will add generating-component attribution for
+  selection normalization remains scientifically unchanged. The production
+  prior no longer uses per-object support thresholds as update gates.
+- The same production profile adds generating-component attribution for
   dominant importance weights and a fixed, truth-free Gaussian support probe
-  at checkpoint epochs. Its best finite, entropy-eligible state is persisted
-  for interruption-safe rollback and restored before the final independent
-  K2048 raw/EMA support and PPC gates. This internal K128 probe is a training
-  safety mechanism, never a replacement for independent K2048 promotion.
+  at checkpoint epochs. The probe is diagnostic only: it does not roll back,
+  restore, select, or censor the training state. It is never a replacement for
+  independent K2048 raw/EMA evaluation after training.
 - Big-run anti-collapse hardening is implemented in the dedicated
   `full_production_anti_collapse_v1` configs. The full launcher selects those
   configs only after confirmation and validates the profile before training;
   pilot and confirmation YAMLs retain their original 180-epoch contract.
-  Fixed-common-random-number Gaussian K128 probes start at epoch 64, persist a
-  provenance-bound best state, roll back only on finite/entropy or severe
-  relative-support regression, and restore that state for final raw/EMA K2048
-  evaluation. The monitor reports LR, flow multiplier, exact first/expanded
-  ESS, max weight, tau, expansion/unresolved fractions and probe action.
-- Verification after implementation: 36 focused SC-DRWS/recovery tests pass,
-  including four-device pmap and exact flow-freeze regressions; 21 shared
-  adaptive-SMC optimizer/validation tests pass. Ruff, compileall, all SLURM and
-  shell syntax checks, resolved production-config validation and
-  `git diff --check` pass. No Jean-Zay job was submitted. At 37,641 selected
+  Fixed-common-random-number Gaussian K128 probes start at epoch 64 and retain
+  provenance without influencing optimization. The q curriculum now computes
+  `softmax(tau * exact_logweight)` before numerical underflow can destroy
+  tempered mass, and host MIS buffers preserve the exact particle/weight dtype.
+  The monitor reports LR, flow multiplier, exact and q-training ESS, max weight,
+  tau, expansion/unresolved fractions and split-half population stability.
+- The full launcher accepts either the normal confirmation receipt or an
+  explicit `ALLOW_UNCONFIRMED_FULL=1` authorization naming the architecture.
+  The latter records an immutable no-truth override receipt and does not turn
+  the legacy pilot thresholds into training gates. It still launches only seed
+  `260826`; final independent K2048/PPC evaluation remains an assessment of the
+  resulting individual posteriors rather than a training-time censor.
+- Verification after implementation: 64 relevant SC-DRWS, recovery and shared
+  optimizer/validation tests pass, including four-device pmap, exact
+  logweight tempering, population-first prior updates, float64 MIS packing and
+  explicit full authorization. Ruff, compileall, all changed SLURM/shell syntax
+  checks, resolved production-config validation and `git diff --check` pass.
+  No Jean-Zay job was submitted. At 37,641 selected
   rows and an assumed 20% hard fraction, the production estimator reports
   approximately 320.6 million latent-object DSPS evaluations per seed; the
   fixed support probes contribute 0.49 million of that total.

@@ -56,6 +56,7 @@ from .sc_drws import (
     make_pmap_sc_drws_q_step,
     make_pmap_sc_drws_sleep_step,
     phase_for_epoch,
+    population_posterior_stability,
     prior_support_gate,
     proposal_component_labels,
     update_kind_for_epoch,
@@ -184,6 +185,8 @@ def validate_sc_drws_config(config: dict[str, Any]) -> dict[str, Any]:
     if raw.get("profile") == "full_production_anti_collapse_v1":
         phase_a_hard = raw.get("phase_a_hard_mis", {}) or {}
         lr = raw.get("optimizer", {}).get("schedule", {}) or {}
+        prior_update = raw.get("prior_update", {}) or {}
+        checkpoint_safety = raw.get("checkpoint_safety", {}) or {}
         adaptive_tau = (
             raw.get("schedule", {}).get("adaptive_q_weight_temperature", {}) or {}
         )
@@ -201,6 +204,20 @@ def validate_sc_drws_config(config: dict[str, Any]) -> dict[str, Any]:
             and int(phase_a_hard.get("first_particles", 0)) == 64
             and int(phase_a_hard.get("maximum_particles", 0)) == 256,
             "production Phase A hard MIS must expand K64 to K256",
+        )
+        require(
+            prior_update.get("population_first") is True,
+            "production prior updates must include every finite object",
+        )
+        require(
+            prior_update.get("enforce_alpha_mc_relative_error") is False
+            and prior_update.get("enforce_hard_trust_region") is False,
+            "production prior heuristics must be diagnostic only",
+        )
+        require(
+            checkpoint_safety.get("rollback_enabled") is False
+            and checkpoint_safety.get("restore_best_at_end") is False,
+            "production support probes must not roll back or select training state",
         )
     require(
         float(raw.get("ema", {}).get("decay", 0.0)) in {0.99, 0.995},
@@ -649,6 +666,7 @@ def train_feniks_sc_drws(
                     "log_std_floor": floor,
                     "flow_scale_clamp": clamp,
                     "q_weight_temperature": np.nan,
+                    "q_training_ess_fraction": np.nan,
                     "base_entropy": _metric(details, "posterior_base_entropy"),
                     "flow_residual_logdet": _metric(
                         details, "posterior_residual_logdet_mean"
@@ -750,6 +768,40 @@ def train_feniks_sc_drws(
                         )
                     )
                 )
+                scaled_logweights = tau * np.asarray(
+                    packed["logweights"], dtype=np.float64
+                )
+                finite_logweight = np.isfinite(scaled_logweights)
+                finite_object = np.any(finite_logweight, axis=0)
+                maximum_logweight = np.max(
+                    np.where(finite_logweight, scaled_logweights, -np.inf), axis=0
+                )
+                maximum_logweight = np.where(
+                    finite_object, maximum_logweight, 0.0
+                )
+                centered = np.where(
+                    finite_logweight,
+                    scaled_logweights - maximum_logweight[None, :],
+                    -np.inf,
+                )
+                unnormalized = np.exp(centered)
+                normalizer = np.sum(unnormalized, axis=0)
+                q_training_weights = np.divide(
+                    unnormalized,
+                    normalizer[None, :],
+                    out=np.zeros_like(unnormalized),
+                    where=normalizer[None, :] > 0.0,
+                )
+                if np.any(finite_object):
+                    q_training_object_ess = 1.0 / np.sum(
+                        np.square(q_training_weights[:, finite_object]), axis=0
+                    )
+                    q_training_ess_fraction = float(
+                        np.nanmedian(q_training_object_ess)
+                        / float(q_training_weights.shape[0])
+                    )
+                else:
+                    q_training_ess_fraction = float("nan")
                 joint_epoch = epoch - schedule.warmup_epochs
                 phase_a_entropy_enabled = (
                     bool(entropy_cfg.get("apply_during_phase_a_after_bootstrap", False))
@@ -774,6 +826,7 @@ def train_feniks_sc_drws(
                         packed_sharded[0],
                         packed_sharded[1],
                         packed_sharded[2],
+                        packed_sharded[3],
                         jax.random.split(jax.random.fold_in(step_key, 992), n_devices),
                         tau,
                         floor,
@@ -815,6 +868,7 @@ def train_feniks_sc_drws(
                     "log_std_floor": floor,
                     "flow_scale_clamp": clamp,
                     "q_weight_temperature": tau,
+                    "q_training_ess_fraction": q_training_ess_fraction,
                     "base_entropy": _metric(details, "posterior_base_entropy"),
                     "flow_residual_logdet": _metric(
                         details, "posterior_residual_logdet_mean"
@@ -1001,7 +1055,9 @@ def train_feniks_sc_drws(
                     "epoch": epoch,
                     "entropy_eligible": bool(entropy_eligible),
                     "finite_eligible": finite_eligible,
-                    "role": "truth_free_training_safety_only",
+                    "role": support_cfg.get(
+                        "role", "truth_free_training_safety_only"
+                    ),
                 }
             )
             improved = bool(
@@ -1018,7 +1074,8 @@ def train_feniks_sc_drws(
                 > float(best_support_metrics["median_max_weight"])
             )
             rollback = bool(
-                best_support_state is not None
+                bool(support_cfg.get("rollback_enabled", True))
+                and best_support_state is not None
                 and (not entropy_eligible or not finite_eligible or support_regressed)
             )
             if improved:
@@ -1127,6 +1184,24 @@ def train_feniks_sc_drws(
         "truth_used_for_training_validation_or_checkpoint_selection": False,
         "selection_in_object_weights": False,
         "training_profile": raw.get("profile", "pilot_confirmation_default"),
+        "q_tempering_numerics": "softmax(tau * exact_logweight)",
+        "prior_update_contract": {
+            "population_first": bool(prior_cfg.get("population_first", False)),
+            "finite_objects_only": bool(prior_cfg.get("population_first", False)),
+            "individual_support_metrics_are_diagnostic_only": bool(
+                prior_cfg.get("population_first", False)
+            ),
+            "exact_untempered_normalized_weights": True,
+            "selection_normalization": "+log_alpha_eta",
+            "trust_kl_penalty_strength": float(prior_cfg["trust_strength"]),
+            "hard_trust_gate_enforced": bool(
+                prior_cfg.get("enforce_hard_trust_region", True)
+            ),
+            "alpha_relative_error_gate_enforced": bool(
+                prior_cfg.get("enforce_alpha_mc_relative_error", True)
+            ),
+            "population_stability_log": str(prior_log),
+        },
         "phase_schedule": asdict(schedule),
         "phase_a_hard_mis": phase_a_hard_cfg,
         "flow_optimizer": raw.get("flow_optimizer", {}),
@@ -1138,7 +1213,9 @@ def train_feniks_sc_drws(
             "best_probe": best_support_metrics,
             "restored_best_support_epoch": restored_best_support_epoch,
             "randomness_contract": "fixed_common_random_numbers",
-            "selection_role": "truth_free_training_safety_only",
+            "selection_role": support_cfg.get(
+                "role", "truth_free_training_safety_only"
+            ),
             "independent_k2048_still_required": True,
         },
         "dominant_proposal_component_diagnostics": str(training_log),
@@ -1334,10 +1411,22 @@ def _shard_importance(value: DefensiveImportanceBatch, devices: int):
 
 def _pack_first_pass(first, *, maximum_particles, component_labels=None):
     particles, objects, latent = first.particles.shape
-    output_particles = np.zeros((maximum_particles, objects, latent), dtype=np.float32)
-    output_weights = np.zeros((maximum_particles, objects), dtype=np.float32)
+    output_particles = np.zeros(
+        (maximum_particles, objects, latent),
+        dtype=np.asarray(first.particles).dtype,
+    )
+    output_weights = np.zeros(
+        (maximum_particles, objects),
+        dtype=np.asarray(first.diagnostics.normalized_weights).dtype,
+    )
+    output_logweights = np.full(
+        (maximum_particles, objects),
+        -np.inf,
+        dtype=np.asarray(first.diagnostics.logweight).dtype,
+    )
     output_particles[:particles] = np.asarray(first.particles)
     output_weights[:particles] = np.asarray(first.diagnostics.normalized_weights)
+    output_logweights[:particles] = np.asarray(first.diagnostics.logweight)
     dominant = (
         dominant_component_labels(
             first.diagnostics.normalized_weights, component_labels
@@ -1348,6 +1437,7 @@ def _pack_first_pass(first, *, maximum_particles, component_labels=None):
     return {
         "particles": output_particles,
         "weights": output_weights,
+        "logweights": output_logweights,
         "q_eligible": np.array(first.diagnostics.finite, dtype=bool, copy=True),
         "prior_eligible": np.array(
             first.diagnostics.finite & ~first.diagnostics.hard,
@@ -1449,6 +1539,9 @@ def _expand_hard_objects(
         weights = np.asarray(diagnostics.normalized_weights)[:, : len(selected)]
         packed["particles"][:, selected] = particles
         packed["weights"][:, selected] = weights
+        packed["logweights"][:, selected] = np.asarray(diagnostics.logweight)[
+            :, : len(selected)
+        ]
         packed["ess_fraction"][selected] = np.asarray(diagnostics.ess_fraction)[
             : len(selected)
         ]
@@ -1498,6 +1591,7 @@ def _expand_hard_objects(
 def _shard_packed(packed, devices):
     particles = jnp.asarray(packed["particles"])
     weights = jnp.asarray(packed["weights"])
+    logweights = jnp.asarray(packed["logweights"])
     objects = particles.shape[1]
     local = objects // devices
     particle_sharded = particles.reshape(
@@ -1506,8 +1600,11 @@ def _shard_packed(packed, devices):
     weight_sharded = weights.reshape(weights.shape[0], devices, local).transpose(
         1, 0, 2
     )
+    logweight_sharded = logweights.reshape(
+        logweights.shape[0], devices, local
+    ).transpose(1, 0, 2)
     mask_sharded = jnp.asarray(packed["q_eligible"]).reshape(devices, local)
-    return particle_sharded, weight_sharded, mask_sharded
+    return particle_sharded, weight_sharded, logweight_sharded, mask_sharded
 
 
 def _append_prior_reservoir(packed, *lists):
@@ -1570,9 +1667,20 @@ def _apply_prior_updates(
         maximum_unresolved_fraction=float(
             prior_cfg.get("maximum_unresolved_fraction", 0.02)
         ),
+        population_first=bool(prior_cfg.get("population_first", False)),
     )
     rows = []
-    eligible = np.asarray(finite) & ~np.asarray(unresolved)
+    population_first = bool(prior_cfg.get("population_first", False))
+    eligible = (
+        np.asarray(finite)
+        if population_first
+        else np.asarray(finite) & ~np.asarray(unresolved)
+    )
+    stability = (
+        population_posterior_stability(particles, weights, finite)
+        if bool(prior_cfg.get("population_stability_diagnostics", False))
+        else {}
+    )
     posterior = _posterior_for_prior(particles, weights, eligible)
     if not gate.accepted:
         rows.append(
@@ -1586,6 +1694,8 @@ def _apply_prior_updates(
                 "median_ess_fraction": gate.median_ess_fraction,
                 "median_max_weight": gate.median_max_weight,
                 "unresolved_fraction": gate.unresolved_fraction,
+                "population_first": population_first,
+                **stability,
                 "loss": np.nan,
                 "data_nll": np.nan,
                 "log_alpha": np.nan,
@@ -1603,6 +1713,16 @@ def _apply_prior_updates(
     )
     trust_key = jax.random.fold_in(key, 0)
     selection_key = jax.random.fold_in(key, 1)
+    alpha_error_limit = (
+        float(prior_cfg["maximum_alpha_mc_relative_error"])
+        if bool(prior_cfg.get("enforce_alpha_mc_relative_error", True))
+        else float("inf")
+    )
+    kl_per_dimension_limit = (
+        float(prior_cfg["maximum_kl_per_dimension"])
+        if bool(prior_cfg.get("enforce_hard_trust_region", True))
+        else float("inf")
+    )
     for step in range(int(prior_cfg["updates_per_macro"])):
         model, optimizer_state, metrics = apply_prior_macro_update(
             model=model,
@@ -1615,10 +1735,8 @@ def _apply_prior_updates(
             selection_log_alpha_fn=selection_fn,
             trust_samples=int(prior_cfg["trust_samples"]),
             trust_strength=float(prior_cfg["trust_strength"]),
-            max_kl_per_dimension=float(prior_cfg["maximum_kl_per_dimension"]),
-            max_alpha_mc_relative_error=float(
-                prior_cfg["maximum_alpha_mc_relative_error"]
-            ),
+            max_kl_per_dimension=kl_per_dimension_limit,
+            max_alpha_mc_relative_error=alpha_error_limit,
             gradient_clip_norm=5.0,
         )
         applied = bool(np.asarray(metrics.update_applied))
@@ -1634,6 +1752,8 @@ def _apply_prior_updates(
                 "median_ess_fraction": gate.median_ess_fraction,
                 "median_max_weight": gate.median_max_weight,
                 "unresolved_fraction": gate.unresolved_fraction,
+                "population_first": population_first,
+                **stability,
                 "loss": float(np.asarray(metrics.loss)),
                 "data_nll": float(np.asarray(metrics.data_nll)),
                 "log_alpha": float(np.asarray(metrics.selection_log_alpha)),

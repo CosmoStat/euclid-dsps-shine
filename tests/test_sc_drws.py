@@ -35,15 +35,18 @@ from euclid_dsps.amortized.sc_drws import (
     flow_scale_clamp,
     log_std_floor,
     parent_to_selected_weights,
+    population_posterior_stability,
     prior_support_gate,
     proposal_component_labels,
     q_weight_temperature,
     run_defensive_importance,
+    tempered_q_weights,
     update_kind_for_epoch,
     warmup_cosine_learning_rate,
 )
 from euclid_dsps.amortized.sc_drws_trainer import (
     SCDrwsTrainingState,
+    _apply_prior_updates,
     _load_state,
     _macro_slices,
     _pack_first_pass,
@@ -124,6 +127,26 @@ def test_production_curriculum_schedules_are_slow_then_exact() -> None:
             400, epoch=135, median_ess_fraction=1.0 / 64.0, schedule=schedule
         )
     ) == pytest.approx(1.0)
+
+
+def test_q_tempering_uses_logweights_before_normalized_weight_underflow() -> None:
+    normalized = jnp.asarray([[1.0], [0.0]], dtype=jnp.float32)
+    logweights = jnp.asarray([[0.0], [-20.0]], dtype=jnp.float32)
+    tempered = tempered_q_weights(
+        normalized,
+        0.5,
+        exact_logweights=logweights,
+    )
+    exact = tempered_q_weights(
+        normalized,
+        1.0,
+        exact_logweights=logweights,
+    )
+    assert float(tempered[1, 0]) > 0.0
+    np.testing.assert_allclose(
+        np.asarray(exact),
+        np.asarray(jax.nn.softmax(logweights, axis=0)),
+    )
 
 
 def test_phase_local_learning_rate_has_warmup_peak_and_cosine_floor() -> None:
@@ -242,6 +265,7 @@ def test_hard_expansion_host_pack_is_writable() -> None:
     mutable_keys = (
         "particles",
         "weights",
+        "logweights",
         "q_eligible",
         "prior_eligible",
         "finite",
@@ -260,6 +284,26 @@ def test_hard_expansion_host_pack_is_writable() -> None:
     packed["unresolved"][selected] = [False, True]
     packed["prior_eligible"][selected] = [True, False]
     np.testing.assert_allclose(packed["ess_fraction"], [0.2, 0.3])
+
+
+def test_hard_expansion_pack_preserves_importance_precision() -> None:
+    first = DefensiveImportanceBatch(
+        particles=np.zeros((2, 1, 3), dtype=np.float64),
+        logproposal=np.zeros((2, 1), dtype=np.float64),
+        diagnostics=ImportanceDiagnostics(
+            normalized_weights=np.full((2, 1), 0.5, dtype=np.float64),
+            logweight=np.zeros((2, 1), dtype=np.float64),
+            ess=np.asarray([2.0]),
+            ess_fraction=np.asarray([1.0]),
+            max_weight=np.asarray([0.5]),
+            finite=np.asarray([True]),
+            hard=np.asarray([False]),
+        ),
+    )
+    packed = _pack_first_pass(first, maximum_particles=4)
+    assert packed["particles"].dtype == np.float64
+    assert packed["weights"].dtype == np.float64
+    assert packed["logweights"].dtype == np.float64
 
 
 def test_sc_drws_checkpoint_sidecar_loads_with_legacy_latent_hash(
@@ -364,6 +408,106 @@ def test_prior_support_gate_fails_closed_on_unresolved_or_dominant_weights() -> 
     assert rejected.reason == "unresolved_fraction_above_gate"
 
 
+def test_population_first_prior_gate_keeps_finite_one_particle_objects() -> None:
+    accepted = prior_support_gate(
+        ess_fraction=[1.0 / 512.0] * 10,
+        max_weight=[1.0] * 10,
+        finite=[True] * 10,
+        unresolved=[True] * 10,
+        minimum_finite_objects=1,
+        minimum_median_ess_fraction=0.05,
+        maximum_median_weight=0.9,
+        maximum_unresolved_fraction=0.02,
+        population_first=True,
+    )
+    assert accepted.accepted
+    assert accepted.finite_objects == 10
+    assert accepted.median_ess_fraction == pytest.approx(1.0 / 512.0)
+    assert accepted.median_max_weight == pytest.approx(1.0)
+    assert accepted.unresolved_fraction == pytest.approx(1.0)
+
+
+def test_population_stability_uses_dense_weighted_draws() -> None:
+    particles = np.asarray(
+        [
+            [[-1.0], [1.0], [-0.8], [1.2]],
+            [[1.0], [-1.0], [0.8], [-1.2]],
+        ]
+    )
+    weights = np.full((2, 4), 0.5)
+    metrics = population_posterior_stability(
+        particles, weights, np.asarray([True] * 4)
+    )
+    assert metrics["population_finite_objects"] == 4
+    assert metrics["population_split_mean_standardized_rms"] == pytest.approx(0.0)
+    assert np.isfinite(metrics["population_split_std_log_ratio_rms"])
+
+
+def test_population_first_prior_update_uses_all_finite_objects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def fake_update(**kwargs):
+        calls.append(np.asarray(kwargs["posterior"].eligible))
+        metrics = SimpleNamespace(
+            update_applied=np.asarray(True),
+            rejection_code=np.asarray(0),
+            loss=np.asarray(1.0),
+            data_nll=np.asarray(0.5),
+            selection_log_alpha=np.asarray(-0.2),
+            selection_alpha=np.asarray(0.8),
+            selection_grads_finite=np.asarray(True),
+            data_grads_finite=np.asarray(True),
+            trust_grads_finite=np.asarray(True),
+            prior_kl_proposed=np.asarray(0.1),
+        )
+        return kwargs["model"], kwargs["optimizer_state"], metrics
+
+    monkeypatch.setattr(sc_drws_trainer, "apply_prior_macro_update", fake_update)
+    particles = np.zeros((4, 4, 2), dtype=np.float32)
+    weights = np.zeros((4, 4), dtype=np.float32)
+    weights[0] = 1.0
+    gate, _state, _model, updates, rows = _apply_prior_updates(
+        model="model",
+        optimizer="optimizer",
+        optimizer_state="state",
+        selection_fn="selection",
+        particles=particles,
+        weights=weights,
+        ess_fraction=np.full(4, 0.25),
+        max_weight=np.ones(4),
+        finite=np.ones(4, dtype=bool),
+        unresolved=np.ones(4, dtype=bool),
+        prior_cfg={
+            "population_first": True,
+            "population_stability_diagnostics": True,
+            "minimum_finite_objects": 1,
+            "minimum_median_ess_fraction": 0.05,
+            "maximum_median_weight": 0.9,
+            "maximum_unresolved_fraction": 0.02,
+            "maximum_alpha_mc_relative_error": 0.15,
+            "maximum_kl_per_dimension": 0.05,
+            "enforce_alpha_mc_relative_error": False,
+            "enforce_hard_trust_region": False,
+            "updates_per_macro": 1,
+            "trust_samples": 8,
+            "trust_strength": 0.2,
+        },
+        key=jax.random.PRNGKey(1),
+        prior_updates=0,
+        epoch=61,
+        prior_snapshot="snapshot",
+    )
+    assert gate.accepted
+    assert updates == 1
+    assert len(calls) == 1
+    assert calls[0].tolist() == [True] * 4
+    assert rows[0]["population_first"] is True
+    assert rows[0]["unresolved_fraction"] == pytest.approx(1.0)
+    assert rows[0]["update_applied"] is True
+
+
 @pytest.mark.parametrize(
     "name",
     ("feniks_sc_drws_r29_historical.yaml", "feniks_sc_drws_r29_current.yaml"),
@@ -400,7 +544,12 @@ def test_sc_drws_full_profile_adds_anti_collapse_without_changing_architecture(
     assert source["phase_a"]["sleep_only_bootstrap_epochs"] == 16
     assert source["phase_a_hard_mis"]["maximum_particles"] == 256
     assert source["optimizer"]["schedule"]["enabled"] is True
-    assert source["checkpoint_safety"]["restore_best_at_end"] is True
+    assert source["prior_update"]["population_first"] is True
+    assert source["prior_update"]["minimum_finite_objects"] == 1
+    assert source["prior_update"]["enforce_alpha_mc_relative_error"] is False
+    assert source["prior_update"]["enforce_hard_trust_region"] is False
+    assert source["checkpoint_safety"]["rollback_enabled"] is False
+    assert source["checkpoint_safety"]["restore_best_at_end"] is False
 
 
 def test_four_device_pmap_q_update_regression() -> None:
@@ -435,11 +584,12 @@ def test_four_device_pmap_q_update_regression() -> None:
         features = jnp.ones((4, 2, 4))
         particles = jax.random.normal(jax.random.PRNGKey(2), (4, 8, 2, 2))
         weights = jnp.ones((4, 8, 2)) / 8.0
+        logweights = jnp.zeros((4, 8, 2))
         mask = jnp.ones((4, 2), dtype=bool)
         keys = jax.random.split(jax.random.PRNGKey(3), 4)
         _model, _state, metrics, _details = step(
             replicate(model), replicate(state), features, particles, weights,
-            mask, keys, 0.5, -1.5, 0.15, 0.0, 1.0, 0.02, 0.0, 0.0)
+            logweights, mask, keys, 0.5, -1.5, 0.15, 0.0, 1.0, 0.02, 0.0, 0.0)
         assert bool(jnp.all(metrics.grads_finite))
         assert bool(jnp.all(metrics.update_applied))
         updated = [
@@ -482,6 +632,11 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     assert "--array=0-3%4" in submit
     assert "#SBATCH --gres=gpu:4" in pilot
     assert "full_dataset_not_submitted=1" in submit
+    assert 'ALLOW_UNCONFIRMED_FULL="${ALLOW_UNCONFIRMED_FULL:-0}"' in full_submit
+    assert "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE" in full_submit
+    assert "FULL_LAUNCH_AUTHORIZATION.json" in full_submit
+    assert "FULL_AUTHORIZATION_RECEIPT" in full
+    assert "FULL_AUTHORIZATION_RECEIPT" in full_monitor
     assert "--array=0 --output" in full_submit
     assert "#SBATCH --array=0\n" in full
     assert "--array=0-1" not in full_submit

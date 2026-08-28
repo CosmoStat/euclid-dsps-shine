@@ -563,6 +563,47 @@ def test_full_finalizer_requires_only_configured_single_seed(tmp_path: Path) -> 
     assert receipt["ready_for_four_shard_catalogue_inference"] is True
 
 
+def test_full_finalizer_accepts_explicit_unconfirmed_authorization(
+    tmp_path: Path,
+) -> None:
+    candidate = "current_residual_6x256"
+    (tmp_path / "FULL_LAUNCH_AUTHORIZATION.json").write_text(
+        json.dumps(
+            {
+                "status": "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE",
+                "selected_candidate": candidate,
+                "truth_used_for_training_or_authorization": False,
+            }
+        )
+    )
+    run_dir = tmp_path / "full" / candidate / f"seed_{FULL_SEEDS[0]}"
+    run_dir.mkdir(parents=True)
+    (run_dir / "full_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "seed": FULL_SEEDS[0],
+                "checkpoint": "/full/ema.eqx",
+                "feature_stats": "/full/feature_stats.json",
+                "variants": [
+                    {
+                        "status": "PASS",
+                        "selection_corrected_exact_gaussian_iw_score": 2.0,
+                    }
+                ],
+            }
+        )
+    )
+
+    receipt = finalize_full(tmp_path)
+
+    assert receipt["status"] == "PASS"
+    assert (
+        receipt["launch_authorization_status"]
+        == "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE"
+    )
+
+
 def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     submitter = (ROOT / "scripts" / "submit_feniks_rws_recovery.sh").read_text()
     worker = (ROOT / "scripts" / "feniks_rws_recovery_pilot_h100.slurm").read_text()

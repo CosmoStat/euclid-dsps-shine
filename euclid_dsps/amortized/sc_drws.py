@@ -548,11 +548,22 @@ def expand_defensive_importance(
 def tempered_q_weights(
     exact_normalized_weights: jnp.ndarray,
     tau: float | jnp.ndarray,
+    *,
+    exact_logweights: jnp.ndarray | None = None,
 ) -> jnp.ndarray:
     weights = jax.lax.stop_gradient(jnp.asarray(exact_normalized_weights))
     temperature = jnp.asarray(tau, dtype=weights.dtype)
     if weights.ndim < 1:
         raise ValueError("importance weights require a particle axis")
+    if exact_logweights is not None:
+        logweights = jax.lax.stop_gradient(jnp.asarray(exact_logweights))
+        if logweights.shape != weights.shape:
+            raise ValueError("exact logweights must match normalized weights")
+        finite_particle = jnp.isfinite(logweights)
+        finite_object = jnp.any(finite_particle, axis=0)
+        safe = jnp.where(finite_particle, logweights, -jnp.inf)
+        safe = jnp.where(finite_object[None, ...], safe, jnp.zeros_like(safe))
+        return jax.nn.softmax(temperature * safe, axis=0)
     log_weight = jnp.where(weights > 0.0, jnp.log(weights), -jnp.inf)
     return jax.nn.softmax(temperature * log_weight, axis=0)
 
@@ -565,10 +576,15 @@ def q_wake_loss(
     object_mask: jnp.ndarray,
     *,
     tau: float | jnp.ndarray,
+    exact_logweights: jnp.ndarray | None = None,
     log_std_floor_value=None,
     flow_scale_clamp_value=None,
 ) -> jnp.ndarray:
-    weights = tempered_q_weights(exact_normalized_weights, tau)
+    weights = tempered_q_weights(
+        exact_normalized_weights,
+        tau,
+        exact_logweights=exact_logweights,
+    )
     logq = posterior_log_prob(
         model,
         features,
@@ -637,10 +653,11 @@ def prior_support_gate(
     minimum_median_ess_fraction: float,
     maximum_median_weight: float,
     maximum_unresolved_fraction: float,
+    population_first: bool = False,
 ) -> PriorSupportGate:
     finite_values = np.asarray(finite, dtype=bool)
     unresolved_values = np.asarray(unresolved, dtype=bool)
-    usable = finite_values & ~unresolved_values
+    usable = finite_values if population_first else finite_values & ~unresolved_values
     count = int(np.sum(usable))
     ess = np.asarray(ess_fraction, dtype=float)
     maximum = np.asarray(max_weight, dtype=float)
@@ -649,23 +666,26 @@ def prior_support_gate(
     unresolved_fraction = (
         float(np.mean(unresolved_values)) if len(unresolved_values) else 1.0
     )
-    checks = (
-        (count >= int(minimum_finite_objects), "too_few_finite_objects"),
-        (
-            np.isfinite(median_ess)
-            and median_ess >= float(minimum_median_ess_fraction),
-            "median_ess_below_gate",
-        ),
-        (
-            np.isfinite(median_weight)
-            and median_weight <= float(maximum_median_weight),
-            "median_max_weight_above_gate",
-        ),
-        (
-            unresolved_fraction <= float(maximum_unresolved_fraction),
-            "unresolved_fraction_above_gate",
-        ),
-    )
+    checks = [(count >= int(minimum_finite_objects), "too_few_finite_objects")]
+    if not population_first:
+        checks.extend(
+            (
+                (
+                    np.isfinite(median_ess)
+                    and median_ess >= float(minimum_median_ess_fraction),
+                    "median_ess_below_gate",
+                ),
+                (
+                    np.isfinite(median_weight)
+                    and median_weight <= float(maximum_median_weight),
+                    "median_max_weight_above_gate",
+                ),
+                (
+                    unresolved_fraction <= float(maximum_unresolved_fraction),
+                    "unresolved_fraction_above_gate",
+                ),
+            )
+        )
     reason = next((name for passed, name in checks if not passed), "accepted")
     return PriorSupportGate(
         accepted=reason == "accepted",
@@ -675,6 +695,59 @@ def prior_support_gate(
         median_max_weight=median_weight,
         unresolved_fraction=unresolved_fraction,
     )
+
+
+def population_posterior_stability(
+    particles: np.ndarray | jnp.ndarray,
+    normalized_weights: np.ndarray | jnp.ndarray,
+    finite: Sequence[bool] | np.ndarray,
+) -> dict[str, float | int]:
+    """Compare dense weighted population moments across two object halves."""
+    values = np.asarray(particles, dtype=np.float64)
+    weights = np.asarray(normalized_weights, dtype=np.float64)
+    finite_values = np.asarray(finite, dtype=bool)
+    if values.ndim != 3 or weights.shape != values.shape[:2]:
+        raise ValueError("population stability expects [K, N, D] and [K, N]")
+    if finite_values.shape != (values.shape[1],):
+        raise ValueError("population stability finite mask has the wrong shape")
+    indices = np.flatnonzero(finite_values)
+
+    def moments(selected: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        selected_values = values[:, selected]
+        selected_weights = weights[:, selected]
+        normalizer = np.sum(selected_weights)
+        mean = np.sum(selected_weights[..., None] * selected_values, axis=(0, 1))
+        second = np.sum(
+            selected_weights[..., None] * np.square(selected_values), axis=(0, 1)
+        )
+        mean /= normalizer
+        variance = np.maximum(second / normalizer - np.square(mean), 0.0)
+        return mean, variance
+
+    if len(indices) < 4:
+        return {
+            "population_finite_objects": int(len(indices)),
+            "population_split_a_objects": int(len(indices[::2])),
+            "population_split_b_objects": int(len(indices[1::2])),
+            "population_split_mean_standardized_rms": float("nan"),
+            "population_split_std_log_ratio_rms": float("nan"),
+        }
+    combined_mean, combined_variance = moments(indices)
+    del combined_mean
+    left_mean, left_variance = moments(indices[::2])
+    right_mean, right_variance = moments(indices[1::2])
+    scale = np.sqrt(combined_variance + 1.0e-12)
+    mean_rms = np.sqrt(np.mean(np.square((left_mean - right_mean) / scale)))
+    left_std = np.sqrt(left_variance + 1.0e-12)
+    right_std = np.sqrt(right_variance + 1.0e-12)
+    std_log_ratio_rms = np.sqrt(np.mean(np.square(np.log(left_std / right_std))))
+    return {
+        "population_finite_objects": int(len(indices)),
+        "population_split_a_objects": int(len(indices[::2])),
+        "population_split_b_objects": int(len(indices[1::2])),
+        "population_split_mean_standardized_rms": float(mean_rms),
+        "population_split_std_log_ratio_rms": float(std_log_ratio_rms),
+    }
 
 
 def parent_to_selected_weights(beta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
@@ -881,6 +954,7 @@ def make_pmap_sc_drws_q_step(
             array_axis,
             array_axis,
             array_axis,
+            array_axis,
             None,
             None,
             None,
@@ -898,6 +972,7 @@ def make_pmap_sc_drws_q_step(
         features,
         particles,
         exact_weights,
+        exact_logweights,
         object_mask,
         key,
         tau,
@@ -918,6 +993,7 @@ def make_pmap_sc_drws_q_step(
                 exact_weights,
                 object_mask,
                 tau=tau,
+                exact_logweights=exact_logweights,
                 log_std_floor_value=floor,
                 flow_scale_clamp_value=clamp,
             )

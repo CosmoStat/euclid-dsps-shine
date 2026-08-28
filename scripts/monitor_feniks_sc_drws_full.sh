@@ -10,7 +10,7 @@ source "$LATEST"
 INTERVAL="${INTERVAL:-60}"
 SELECTED=$(python -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' \
-  "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json")
+  "$FULL_AUTHORIZATION_RECEIPT")
 SEEDS=(260826)
 
 while true; do
@@ -28,6 +28,7 @@ while true; do
     train="$RECOVERY_ROOT/full/$SELECTED/seed_$seed/train"
     log="$train/sc_drws_training_log.csv"
     support="$train/sc_drws_support_probe_log.csv"
+    prior="$train/sc_drws_prior_log.csv"
     receipt="$train/training_receipt.json"
     echo "--- $SELECTED seed=$seed ---"
     if [[ -s "$receipt" ]]; then
@@ -42,7 +43,7 @@ print(
 )
 PY
     elif [[ -s "$log" ]]; then
-      python - "$log" "$support" <<'PY'
+      python - "$log" "$support" "$prior" <<'PY'
 import sys
 from pathlib import Path
 import pandas as pd
@@ -62,8 +63,18 @@ if len(wake):
         f"ESSx={row['expanded_ess_fraction']:.5f}",
         f"maxw={row['max_weight']:.5f}",
         f"tau={row['q_weight_temperature']:.3f}",
+        f"qESS={row.get('q_training_ess_fraction', float('nan')):.5f}",
         f"expanded={row['expansion_fraction']:.3f}",
         f"unresolved={row['unresolved_fraction']:.3f}",
+    )
+prior = Path(sys.argv[3])
+if prior.is_file():
+    update = pd.read_csv(prior).iloc[-1]
+    print(
+        f"prior applied={int(bool(update['update_applied']))}",
+        f"eligible={int(update['eligible_objects'])}",
+        f"pop_mean_split={update.get('population_split_mean_standardized_rms', float('nan')):.4f}",
+        f"pop_std_split={update.get('population_split_std_log_ratio_rms', float('nan')):.4f}",
     )
 support = Path(sys.argv[2])
 if support.is_file():
