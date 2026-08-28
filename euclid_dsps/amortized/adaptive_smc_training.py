@@ -182,7 +182,7 @@ def snapshot_model(model):
 
 def make_component_optimizer(
     *,
-    learning_rate: float,
+    learning_rate,
     gradient_clip_norm: float,
     weight_decay: float,
 ):
@@ -192,7 +192,9 @@ def make_component_optimizer(
         transforms.append(optax.clip_by_global_norm(float(gradient_clip_norm)))
     transforms.append(
         optax.adamw(
-            learning_rate=float(learning_rate),
+            learning_rate=(
+                learning_rate if callable(learning_rate) else float(learning_rate)
+            ),
             weight_decay=float(weight_decay),
         )
     )

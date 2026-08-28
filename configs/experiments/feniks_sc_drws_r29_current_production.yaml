@@ -1,0 +1,3 @@
+extends:
+  - feniks_sc_drws_r29_current.yaml
+  - feniks_sc_drws_r29_production_common.yaml

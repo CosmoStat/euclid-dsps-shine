@@ -24,8 +24,8 @@ SEEDS=(260826 260827)
 SEED="${SEEDS[${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}]}"
 SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json")
 case "$SELECTED" in
-  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical.yaml ;;
-  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current.yaml ;;
+  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical_production.yaml ;;
+  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current_production.yaml ;;
   *) echo "[sc-drws-full][error] invalid candidate: $SELECTED" >&2; exit 2 ;;
 esac
 OUT="$RECOVERY_ROOT/full/$SELECTED/seed_$SEED"
@@ -58,6 +58,16 @@ for path in "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json" "$CONFIG" \
   "$EVAL_INDICES" "$TRAIN_CATALOG" "$TEST_CATALOG"; do
   test -s "$path" || { echo "[sc-drws-full][error] missing: $path" >&2; exit 2; }
 done
+python - "$CONFIG" <<'PY'
+import sys
+from euclid_dsps.config import load_config
+
+config = load_config(sys.argv[1])
+profile = config["amortized"]["sc_drws"].get("profile")
+if profile != "full_production_anti_collapse_v1":
+    raise SystemExit(f"invalid SC-DRWS full profile: {profile!r}")
+print(f"[sc-drws-full] profile={profile}", flush=True)
+PY
 test ! -e "$OUT/DONE" || { echo "already complete: $OUT"; exit 0; }
 RESUME_ARGS=()
 if [[ -s "$TRAIN/states/latest.eqx" ]]; then

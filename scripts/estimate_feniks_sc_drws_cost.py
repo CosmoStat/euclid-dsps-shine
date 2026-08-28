@@ -11,24 +11,44 @@ from pathlib import Path
 import pandas as pd
 
 
-def estimate(objects: int, hard_fraction: float, dsps_per_second: float | None):
+def estimate(
+    objects: int,
+    hard_fraction: float,
+    dsps_per_second: float | None,
+    *,
+    production: bool = False,
+):
     n = int(objects)
     hard = float(hard_fraction)
-    phase_a_wake = 15 * n * 64
+    phase_a_wake_epochs = 11 if production else 15
+    phase_a_sleep_epochs = 49 if production else 45
+    phase_a_wake = phase_a_wake_epochs * n * 64
+    phase_a_expansion = phase_a_wake_epochs * n * hard * 192 if production else 0
     phase_b_first = 30 * n * 128
     phase_b_expansion = 30 * n * hard * 384
-    sleep = (45 + 90) * n * 8
+    sleep = (phase_a_sleep_epochs + 90) * n * 8
     alpha = 30 * math.ceil(n / 1024) * 4096
-    training = phase_a_wake + phase_b_first + phase_b_expansion + sleep + alpha
+    support_probe = 30 * 128 * 128 if production else 0
+    training = (
+        phase_a_wake
+        + phase_a_expansion
+        + phase_b_first
+        + phase_b_expansion
+        + sleep
+        + alpha
+        + support_probe
+    )
     result = {
         "objects": n,
         "assumed_hard_expansion_fraction": hard,
         "latent_object_dsps_evaluations": {
             "phase_a_wake_k64": phase_a_wake,
+            "phase_a_hard_additional_k192": phase_a_expansion,
             "phase_b_first_pass_k128": phase_b_first,
             "phase_b_hard_additional_k384": phase_b_expansion,
             "selected_sleep_candidate_factor_8": sleep,
             "selection_alpha_mc": alpha,
+            "truth_free_gaussian_k128_support_probes": support_probe,
             "training_total": training,
             "confirmation_raw_ema_k2048_on_2000": 2 * 2000 * 2048,
             "final_raw_ema_k2048_on_512": 2 * 512 * 2048,
@@ -59,6 +79,7 @@ def main() -> None:
     parser.add_argument("--objects", type=int, required=True)
     parser.add_argument("--hard-fraction", type=float, default=0.20)
     parser.add_argument("--smoke-training-log", type=Path)
+    parser.add_argument("--production", action="store_true")
     args = parser.parse_args()
     rate = None
     if args.smoke_training_log:
@@ -70,7 +91,17 @@ def main() -> None:
         valid = evaluations.notna() & elapsed.notna() & (elapsed > 0)
         if valid.any():
             rate = float(evaluations[valid].sum() / elapsed[valid].sum())
-    print(json.dumps(estimate(args.objects, args.hard_fraction, rate), indent=2))
+    print(
+        json.dumps(
+            estimate(
+                args.objects,
+                args.hard_fraction,
+                rate,
+                production=args.production,
+            ),
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

@@ -31,4 +31,5 @@ printf 'export FULL_JOB=%q\nexport FULL_GATE_JOB=%q\nexport RECOVERY_ROOT=%q\nex
 echo "full_job=$FULL_JOB"
 echo "full_gate_job=$FULL_GATE_JOB"
 echo "latest_env=$LATEST"
+echo "monitor: bash scripts/monitor_feniks_sc_drws_full.sh"
 echo "final_inference_not_submitted=1"

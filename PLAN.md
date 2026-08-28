@@ -2,6 +2,39 @@
 
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 
+- Big-run anti-collapse hardening is in progress and is deliberately isolated
+  from the already submitted 512-object pilot/confirmation configs. The full
+  catalogue will use a hash-bound production profile with 16 initial
+  sleep-only epochs; phase-local linear-warmup/cosine-decay q learning rates;
+  a base-first conditional-flow thaw; an ESS-aware q-weight-temperature cap
+  with a forced exact `tau=1` before the final quarter; an entropy reference
+  measured before the first wake update; and Phase-A K64-to-K256 defensive
+  deterministic MIS. Exact object weights, the Phase-B K128-to-K512 path,
+  selection normalization and prior gates remain scientifically unchanged.
+- The same production profile will add generating-component attribution for
+  dominant importance weights and a fixed, truth-free Gaussian support probe
+  at checkpoint epochs. Its best finite, entropy-eligible state is persisted
+  for interruption-safe rollback and restored before the final independent
+  K2048 raw/EMA support and PPC gates. This internal K128 probe is a training
+  safety mechanism, never a replacement for independent K2048 promotion.
+- Big-run anti-collapse hardening is implemented in the dedicated
+  `full_production_anti_collapse_v1` configs. The full launcher selects those
+  configs only after confirmation and validates the profile before training;
+  pilot and confirmation YAMLs retain their original 180-epoch contract.
+  Fixed-common-random-number Gaussian K128 probes start at epoch 64, persist a
+  provenance-bound best state, roll back only on finite/entropy or severe
+  relative-support regression, and restore that state for final raw/EMA K2048
+  evaluation. The monitor reports LR, flow multiplier, exact first/expanded
+  ESS, max weight, tau, expansion/unresolved fractions and probe action.
+- Verification after implementation: 36 focused SC-DRWS/recovery tests pass,
+  including four-device pmap and exact flow-freeze regressions; 21 shared
+  adaptive-SMC optimizer/validation tests pass. Ruff, compileall, all SLURM and
+  shell syntax checks, resolved production-config validation and
+  `git diff --check` pass. No Jean-Zay job was submitted. At 37,641 selected
+  rows and an assumed 20% hard fraction, the production estimator reports
+  approximately 320.6 million latent-object DSPS evaluations per seed; the
+  fixed support probes contribute 0.49 million of that total.
+
 - Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
   truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
   workflow inside the predefined FENIKS refinement/catalogue-support domain

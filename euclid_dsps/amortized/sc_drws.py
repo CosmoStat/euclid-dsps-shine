@@ -44,6 +44,15 @@ class SCDrwsSchedule:
     q_weight_temperature_start: float = 0.50
     q_weight_temperature_end: float = 1.00
     q_weight_temperature_wake_updates: int = 80
+    sleep_only_bootstrap_epochs: int = 0
+    flow_freeze_epochs: int = 0
+    flow_thaw_end_epoch: int = 1
+    flow_final_gradient_multiplier: float = 1.0
+    adaptive_q_temperature: bool = False
+    q_temperature_minimum_ess_fraction: float = 0.0
+    q_temperature_low_support_cap: float = 1.0
+    q_temperature_force_start_epoch: int = 1
+    q_temperature_force_end_epoch: int = 1
 
     @property
     def total_epochs(self) -> int:
@@ -120,6 +129,13 @@ HARD_EXPANSION_PROPOSAL = DefensiveMixture(
         ("prior", 1.0, 0.10),
     )
 )
+WARMUP_HARD_EXPANSION_PROPOSAL = DefensiveMixture(
+    (
+        ("posterior", 1.5, 0.40),
+        ("posterior", 2.5, 0.45),
+        ("prior", 1.0, 0.15),
+    )
+)
 
 
 class ImportanceDiagnostics(NamedTuple):
@@ -189,10 +205,13 @@ def phase_for_epoch(epoch: int, schedule: SCDrwsSchedule) -> str:
 
 
 def update_kind_for_epoch(epoch: int, schedule: SCDrwsSchedule) -> str:
+    if int(epoch) <= int(schedule.sleep_only_bootstrap_epochs):
+        return "sleep"
     cycle = int(schedule.sleep_epochs_per_cycle) + int(schedule.wake_epochs_per_cycle)
     if cycle <= 0 or int(schedule.wake_epochs_per_cycle) != 1:
         raise ValueError("SC-DRWS currently requires one wake epoch per cycle")
-    return "wake" if int(epoch) % cycle == 0 else "sleep"
+    curriculum_epoch = int(epoch) - int(schedule.sleep_only_bootstrap_epochs)
+    return "wake" if curriculum_epoch % cycle == 0 else "sleep"
 
 
 def log_std_floor(epoch: int | jnp.ndarray, schedule: SCDrwsSchedule):
@@ -231,6 +250,99 @@ def q_weight_temperature(
         first_step=1,
         last_step=schedule.q_weight_temperature_wake_updates,
     )
+
+
+def adaptive_q_weight_temperature(
+    wake_update: int | jnp.ndarray,
+    *,
+    epoch: int | jnp.ndarray,
+    median_ess_fraction: float | jnp.ndarray,
+    schedule: SCDrwsSchedule,
+):
+    """Temper q conservatively under poor support, then reach exact RWS."""
+    nominal = q_weight_temperature(wake_update, schedule)
+    if not schedule.adaptive_q_temperature:
+        return nominal
+    ess = jnp.asarray(median_ess_fraction, dtype=nominal.dtype)
+    capped = jnp.where(
+        ess < float(schedule.q_temperature_minimum_ess_fraction),
+        jnp.minimum(nominal, float(schedule.q_temperature_low_support_cap)),
+        nominal,
+    )
+    forced = _linear_schedule(
+        epoch,
+        start=schedule.q_weight_temperature_start,
+        end=1.0,
+        first_step=schedule.q_temperature_force_start_epoch,
+        last_step=schedule.q_temperature_force_end_epoch,
+    )
+    return jnp.maximum(capped, forced)
+
+
+def flow_gradient_multiplier(epoch: int | jnp.ndarray, schedule: SCDrwsSchedule):
+    """Freeze the flow first, then thaw it relative to the Gaussian base."""
+    value = jnp.asarray(epoch, dtype=jnp.float32)
+    if int(schedule.flow_thaw_end_epoch) <= int(schedule.flow_freeze_epochs):
+        raise ValueError("flow thaw must end after the freeze interval")
+    thawed = _linear_schedule(
+        value,
+        start=0.0,
+        end=schedule.flow_final_gradient_multiplier,
+        first_step=schedule.flow_freeze_epochs,
+        last_step=schedule.flow_thaw_end_epoch,
+    )
+    return jnp.where(value <= float(schedule.flow_freeze_epochs), 0.0, thawed)
+
+
+def warmup_cosine_learning_rate(
+    step: int | jnp.ndarray,
+    *,
+    initial_value: float,
+    peak_value: float,
+    end_value: float,
+    warmup_steps: int,
+    total_steps: int,
+):
+    """Phase-local linear warmup followed by cosine decay."""
+    if int(warmup_steps) <= 0 or int(total_steps) <= int(warmup_steps) + 1:
+        raise ValueError("learning-rate schedule needs warmup and decay steps")
+    value = jnp.clip(jnp.asarray(step, dtype=jnp.float32), 0, total_steps - 1)
+    warmup_fraction = value / float(warmup_steps)
+    warmup = float(initial_value) + warmup_fraction * float(peak_value - initial_value)
+    decay_fraction = (value - float(warmup_steps)) / float(
+        total_steps - 1 - warmup_steps
+    )
+    decay_fraction = jnp.clip(decay_fraction, 0.0, 1.0)
+    decay = float(end_value) + 0.5 * float(peak_value - end_value) * (
+        1.0 + jnp.cos(jnp.pi * decay_fraction)
+    )
+    return jnp.where(value <= float(warmup_steps), warmup, decay)
+
+
+def proposal_component_labels(
+    proposal: DefensiveMixture, n_particles: int
+) -> np.ndarray:
+    """Return one stable generating-component label per deterministic draw."""
+    labels: list[str] = []
+    for source, temperature, fraction in proposal.realized(n_particles).components:
+        suffix = f"t{float(temperature):g}".replace(".", "p")
+        label = "prior" if source == "prior" else f"posterior_{suffix}"
+        labels.extend([label] * int(round(float(fraction) * int(n_particles))))
+    if len(labels) != int(n_particles):
+        raise RuntimeError("proposal component labels do not match particle count")
+    return np.asarray(labels, dtype="U32")
+
+
+def dominant_component_labels(
+    normalized_weights: np.ndarray | jnp.ndarray,
+    component_labels: Sequence[str] | np.ndarray,
+) -> np.ndarray:
+    """Identify which generating component supplied each object's top weight."""
+    weights = np.asarray(normalized_weights)
+    labels = np.asarray(component_labels)
+    if weights.ndim != 2 or labels.shape != (weights.shape[0],):
+        raise ValueError("component labels must match the particle axis")
+    return labels[np.argmax(weights, axis=0)]
 
 
 def entropy_penalty_factor(joint_epoch: int, schedule: SCDrwsSchedule) -> float:
@@ -534,7 +646,9 @@ def prior_support_gate(
     maximum = np.asarray(max_weight, dtype=float)
     median_ess = float(np.nanmedian(ess[usable])) if count else float("nan")
     median_weight = float(np.nanmedian(maximum[usable])) if count else float("nan")
-    unresolved_fraction = float(np.mean(unresolved_values)) if len(unresolved_values) else 1.0
+    unresolved_fraction = (
+        float(np.mean(unresolved_values)) if len(unresolved_values) else 1.0
+    )
     checks = (
         (count >= int(minimum_finite_objects), "too_few_finite_objects"),
         (
@@ -614,9 +728,7 @@ def _pmean_tree(tree, axis_name: str):
 def _select_tree(proposed, current, condition):
     return jax.tree_util.tree_map(
         lambda new, old: (
-            jnp.where(condition, new, old)
-            if hasattr(new, "dtype")
-            else new
+            jnp.where(condition, new, old) if hasattr(new, "dtype") else new
         ),
         proposed,
         current,
@@ -650,9 +762,7 @@ def make_pmap_sc_drws_importance_step(
     def step(model_snapshot, batch, key, floor, clamp):
         frozen = jax.tree_util.tree_map(
             lambda value: (
-                jax.lax.stop_gradient(value)
-                if hasattr(value, "dtype")
-                else value
+                jax.lax.stop_gradient(value) if hasattr(value, "dtype") else value
             ),
             model_snapshot,
         )
@@ -714,9 +824,7 @@ def make_pmap_sc_drws_expansion_step(
     def step(model_snapshot, batch, key, first, floor, clamp):
         frozen = jax.tree_util.tree_map(
             lambda value: (
-                jax.lax.stop_gradient(value)
-                if hasattr(value, "dtype")
-                else value
+                jax.lax.stop_gradient(value) if hasattr(value, "dtype") else value
             ),
             model_snapshot,
         )
@@ -780,6 +888,7 @@ def make_pmap_sc_drws_q_step(
             None,
             None,
             None,
+            None,
         ),
         out_axes=(array_axis, array_axis, array_axis, array_axis),
     )
@@ -798,6 +907,7 @@ def make_pmap_sc_drws_q_step(
         entropy_margin,
         entropy_strength,
         entropy_factor,
+        flow_gradient_scale,
     ):
         def objective(encoder):
             candidate = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
@@ -824,12 +934,21 @@ def make_pmap_sc_drws_q_step(
             )
             return wake + penalty, (wake, penalty, entropy)
 
-        (loss, auxiliary), grads = eqx.filter_value_and_grad(
-            objective, has_aux=True
-        )(model.encoder)
+        (loss, auxiliary), grads = eqx.filter_value_and_grad(objective, has_aux=True)(
+            model.encoder
+        )
         grads = _pmean_tree(grads, "devices")
         loss = jax.lax.pmean(loss, "devices")
         raw_norm = _tree_l2_norm(grads)
+        scaled_layers = jax.tree_util.tree_map(
+            lambda value: (
+                value * flow_gradient_scale
+                if value is not None and hasattr(value, "dtype")
+                else value
+            ),
+            grads.layers,
+        )
+        grads = eqx.tree_at(lambda tree: tree.layers, grads, scaled_layers)
         finite = jax.lax.pmin(
             (jnp.isfinite(loss) & _tree_all_finite(grads)).astype(jnp.int32),
             "devices",
@@ -847,6 +966,15 @@ def make_pmap_sc_drws_q_step(
             optimizer_state,
             eqx.filter(model.encoder, eqx.is_inexact_array),
         )
+        scaled_update_layers = jax.tree_util.tree_map(
+            lambda value: (
+                value * flow_gradient_scale
+                if value is not None and hasattr(value, "dtype")
+                else value
+            ),
+            updates.layers,
+        )
+        updates = eqx.tree_at(lambda tree: tree.layers, updates, scaled_update_layers)
         proposed = eqx.apply_updates(model.encoder, updates)
         encoder = _select_tree(proposed, model.encoder, finite)
         optimizer_state = _select_tree(proposed_state, optimizer_state, finite)
@@ -893,10 +1021,10 @@ def make_pmap_sc_drws_sleep_step(
 
     @eqx.filter_pmap(
         axis_name="devices",
-        in_axes=(array_axis, array_axis, array_axis, array_axis, None, None),
+        in_axes=(array_axis, array_axis, array_axis, array_axis, None, None, None),
         out_axes=(array_axis, array_axis, array_axis, array_axis),
     )
-    def step(model, optimizer_state, batch, key, floor, clamp):
+    def step(model, optimizer_state, batch, key, floor, clamp, flow_gradient_scale):
         def objective(encoder):
             candidate = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
             return _model_generated_sleep_loss(
@@ -914,12 +1042,21 @@ def make_pmap_sc_drws_sleep_step(
                 flow_scale_clamp=clamp,
             )
 
-        (loss, details), grads = eqx.filter_value_and_grad(
-            objective, has_aux=True
-        )(model.encoder)
+        (loss, details), grads = eqx.filter_value_and_grad(objective, has_aux=True)(
+            model.encoder
+        )
         grads = _pmean_tree(grads, "devices")
         loss = jax.lax.pmean(loss, "devices")
         raw_norm = _tree_l2_norm(grads)
+        scaled_layers = jax.tree_util.tree_map(
+            lambda value: (
+                value * flow_gradient_scale
+                if value is not None and hasattr(value, "dtype")
+                else value
+            ),
+            grads.layers,
+        )
+        grads = eqx.tree_at(lambda tree: tree.layers, grads, scaled_layers)
         finite = jax.lax.pmin(
             (jnp.isfinite(loss) & _tree_all_finite(grads)).astype(jnp.int32),
             "devices",
@@ -937,6 +1074,15 @@ def make_pmap_sc_drws_sleep_step(
             optimizer_state,
             eqx.filter(model.encoder, eqx.is_inexact_array),
         )
+        scaled_update_layers = jax.tree_util.tree_map(
+            lambda value: (
+                value * flow_gradient_scale
+                if value is not None and hasattr(value, "dtype")
+                else value
+            ),
+            updates.layers,
+        )
+        updates = eqx.tree_at(lambda tree: tree.layers, updates, scaled_update_layers)
         proposed = eqx.apply_updates(model.encoder, updates)
         encoder = _select_tree(proposed, model.encoder, finite)
         optimizer_state = _select_tree(proposed_state, optimizer_state, finite)

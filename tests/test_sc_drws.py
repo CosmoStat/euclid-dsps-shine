@@ -20,20 +20,27 @@ from euclid_dsps.amortized.posterior import ConditionalFlowEncoder
 from euclid_dsps.amortized.sc_drws import (
     HARD_EXPANSION_PROPOSAL,
     JOINT_PROPOSAL,
+    WARMUP_HARD_EXPANSION_PROPOSAL,
     WARMUP_PROPOSAL,
     DefensiveImportanceBatch,
     ImportanceDiagnostics,
     SCDrwsSchedule,
+    adaptive_q_weight_temperature,
     contains_selection_in_object_weights,
     deterministic_multiple_mixture,
+    dominant_component_labels,
     entropy_penalty_factor,
     expand_defensive_importance,
+    flow_gradient_multiplier,
     flow_scale_clamp,
     log_std_floor,
     parent_to_selected_weights,
     prior_support_gate,
+    proposal_component_labels,
     q_weight_temperature,
     run_defensive_importance,
+    update_kind_for_epoch,
+    warmup_cosine_learning_rate,
 )
 from euclid_dsps.amortized.sc_drws_trainer import (
     SCDrwsTrainingState,
@@ -42,6 +49,7 @@ from euclid_dsps.amortized.sc_drws_trainer import (
     _pack_first_pass,
     _save_components,
     _save_state,
+    _support_probe_is_better,
     validate_sc_drws_config,
 )
 from euclid_dsps.calibration import GlobalSedScaleState
@@ -76,11 +84,59 @@ def test_variance_control_schedules_reach_exact_endpoints() -> None:
     schedule = SCDrwsSchedule()
     assert float(log_std_floor(1, schedule)) == pytest.approx(-1.5)
     assert float(log_std_floor(100, schedule)) == pytest.approx(-4.0)
-    assert float(flow_scale_clamp(1, final_value=0.45, schedule=schedule)) == pytest.approx(0.15)
-    assert float(flow_scale_clamp(60, final_value=0.45, schedule=schedule)) == pytest.approx(0.45)
+    assert float(
+        flow_scale_clamp(1, final_value=0.45, schedule=schedule)
+    ) == pytest.approx(0.15)
+    assert float(
+        flow_scale_clamp(60, final_value=0.45, schedule=schedule)
+    ) == pytest.approx(0.45)
     assert float(q_weight_temperature(1, schedule)) == pytest.approx(0.5)
     assert float(q_weight_temperature(80, schedule)) == pytest.approx(1.0)
     assert entropy_penalty_factor(91, schedule) == 0.0
+
+
+def test_production_curriculum_schedules_are_slow_then_exact() -> None:
+    schedule = SCDrwsSchedule(
+        sleep_only_bootstrap_epochs=16,
+        flow_freeze_epochs=12,
+        flow_thaw_end_epoch=40,
+        flow_final_gradient_multiplier=0.5,
+        q_weight_temperature_wake_updates=640,
+        adaptive_q_temperature=True,
+        q_temperature_minimum_ess_fraction=0.025,
+        q_temperature_low_support_cap=0.65,
+        q_temperature_force_start_epoch=100,
+        q_temperature_force_end_epoch=135,
+    )
+    assert all(
+        update_kind_for_epoch(epoch, schedule) == "sleep" for epoch in range(1, 17)
+    )
+    assert update_kind_for_epoch(20, schedule) == "wake"
+    assert float(flow_gradient_multiplier(12, schedule)) == 0.0
+    assert float(flow_gradient_multiplier(40, schedule)) == pytest.approx(0.5)
+    assert float(
+        adaptive_q_weight_temperature(
+            400, epoch=80, median_ess_fraction=1.0 / 64.0, schedule=schedule
+        )
+    ) == pytest.approx(0.65)
+    assert float(
+        adaptive_q_weight_temperature(
+            400, epoch=135, median_ess_fraction=1.0 / 64.0, schedule=schedule
+        )
+    ) == pytest.approx(1.0)
+
+
+def test_phase_local_learning_rate_has_warmup_peak_and_cosine_floor() -> None:
+    values = dict(
+        initial_value=3.0e-6,
+        peak_value=5.0e-5,
+        end_value=1.0e-5,
+        warmup_steps=10,
+        total_steps=101,
+    )
+    assert float(warmup_cosine_learning_rate(0, **values)) == pytest.approx(3.0e-6)
+    assert float(warmup_cosine_learning_rate(10, **values)) == pytest.approx(5.0e-5)
+    assert float(warmup_cosine_learning_rate(100, **values)) == pytest.approx(1.0e-5)
 
 
 def test_fixed_particle_mixtures_use_realized_component_counts() -> None:
@@ -95,6 +151,22 @@ def test_fixed_particle_mixtures_use_realized_component_counts() -> None:
         additional_count=384,
     )
     assert sum(item[2] for item in combined.components) == pytest.approx(1.0)
+
+
+def test_dominant_weight_component_attribution_matches_deterministic_draws() -> None:
+    labels = proposal_component_labels(WARMUP_PROPOSAL, 64)
+    assert labels.shape == (64,)
+    assert np.sum(labels == "posterior_t1") == 35
+    weights = np.zeros((64, 2))
+    weights[0, 0] = 1.0
+    weights[-1, 1] = 1.0
+    np.testing.assert_array_equal(
+        dominant_component_labels(weights, labels),
+        ["posterior_t1", "prior"],
+    )
+    assert proposal_component_labels(WARMUP_HARD_EXPANSION_PROPOSAL, 192).shape == (
+        192,
+    )
 
 
 def test_defensive_proposal_is_antithetic_and_complete_density_is_finite() -> None:
@@ -118,8 +190,10 @@ def test_defensive_proposal_is_antithetic_and_complete_density_is_finite() -> No
 def test_adaptive_k128_to_k512_recomputes_complete_mis_density() -> None:
     model = _model()
     features = jnp.ones((2, 4))
+
     def target(x):
         return model.prior.log_prob(x - 1.0)
+
     first = run_defensive_importance(
         model_snapshot=model,
         features=features,
@@ -254,7 +328,9 @@ def test_sc_drws_checkpoint_sidecar_writes_generic_latent_contract(
     assert sidecar["latent_spec"] == {"normalization": "bounded_mixed_warp"}
 
 
-def test_selection_is_excluded_from_object_weights_and_selected_prior_is_derived() -> None:
+def test_selection_is_excluded_from_object_weights_and_selected_prior_is_derived() -> (
+    None
+):
     assert not contains_selection_in_object_weights("loglike + logprior - logr")
     assert contains_selection_in_object_weights("loglike + logprior + log_beta - logr")
     weights, alpha = parent_to_selected_weights(jnp.asarray([0.0, 0.5, 1.0]))
@@ -304,6 +380,29 @@ def test_sc_drws_configs_are_truth_free_and_selection_corrected(name: str) -> No
     assert config["amortized"]["inference"]["write_truth_diagnostics"] is False
 
 
+@pytest.mark.parametrize(
+    ("name", "layers", "width"),
+    (
+        ("feniks_sc_drws_r29_historical_production.yaml", 4, 128),
+        ("feniks_sc_drws_r29_current_production.yaml", 6, 256),
+    ),
+)
+def test_sc_drws_full_profile_adds_anti_collapse_without_changing_architecture(
+    name: str, layers: int, width: int
+) -> None:
+    config = load_config(f"configs/experiments/{name}")
+    assert validate_sc_drws_config(config)["status"] == "PASS"
+    amortized = config["amortized"]
+    source = amortized["sc_drws"]
+    assert amortized["encoder"]["flow_layers"] == layers
+    assert amortized["encoder"]["flow_hidden_size"] == width
+    assert source["profile"] == "full_production_anti_collapse_v1"
+    assert source["phase_a"]["sleep_only_bootstrap_epochs"] == 16
+    assert source["phase_a_hard_mis"]["maximum_particles"] == 256
+    assert source["optimizer"]["schedule"]["enabled"] is True
+    assert source["checkpoint_safety"]["restore_best_at_end"] is True
+
+
 def test_four_device_pmap_q_update_regression() -> None:
     code = textwrap.dedent(
         """
@@ -340,9 +439,18 @@ def test_four_device_pmap_q_update_regression() -> None:
         keys = jax.random.split(jax.random.PRNGKey(3), 4)
         _model, _state, metrics, _details = step(
             replicate(model), replicate(state), features, particles, weights,
-            mask, keys, 0.5, -1.5, 0.15, 0.0, 1.0, 0.02, 0.0)
+            mask, keys, 0.5, -1.5, 0.15, 0.0, 1.0, 0.02, 0.0, 0.0)
         assert bool(jnp.all(metrics.grads_finite))
         assert bool(jnp.all(metrics.update_applied))
+        updated = [
+            value[0] for value in jax.tree_util.tree_leaves(_model.encoder.layers)
+            if eqx.is_array(value)
+        ]
+        original = [
+            value for value in jax.tree_util.tree_leaves(model.encoder.layers)
+            if eqx.is_array(value)
+        ]
+        assert all(bool(jnp.array_equal(left, right)) for left, right in zip(updated, original))
         print('SC_DRWS_PMAP_PASS')
         """
     )
@@ -365,9 +473,7 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     root = Path(__file__).resolve().parents[1]
     submit = (root / "scripts/submit_feniks_rws_recovery.sh").read_text()
     pilot = (root / "scripts/feniks_rws_recovery_pilot_h100.slurm").read_text()
-    confirmation = (
-        root / "scripts/feniks_rws_recovery_confirm_h100.slurm"
-    ).read_text()
+    confirmation = (root / "scripts/feniks_rws_recovery_confirm_h100.slurm").read_text()
     full = (root / "scripts/feniks_sc_drws_full_h100.slurm").read_text()
     inference = (root / "scripts/feniks_sc_drws_inference_h100.slurm").read_text()
     entrypoint = (root / "scripts/train_feniks_sc_drws.py").read_text()
@@ -376,6 +482,9 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     assert "full_dataset_not_submitted=1" in submit
     assert all("--resume-state" in worker for worker in (pilot, confirmation, full))
     assert "--require-full-dataset" in full
+    assert "feniks_sc_drws_r29_historical_production.yaml" in full
+    assert "feniks_sc_drws_r29_current_production.yaml" in full
+    assert "full_production_anti_collapse_v1" in full
     gpu_workers = (pilot, confirmation, full, inference)
     for worker in gpu_workers:
         assert "export EUCLID_DSPS_JAX_PLATFORMS=cuda" in worker
@@ -393,7 +502,9 @@ def test_training_resume_state_round_trip_and_provenance_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(sc_drws_trainer, "latent_spec_hash", lambda _value: "latent")
-    monkeypatch.setattr(sc_drws_trainer, "feature_stats_hash", lambda _value: "features")
+    monkeypatch.setattr(
+        sc_drws_trainer, "feature_stats_hash", lambda _value: "features"
+    )
     runtime = SimpleNamespace(latent_spec=object(), feature_stats=object())
     state = SCDrwsTrainingState(
         model=jnp.asarray([1.0, 2.0]),
@@ -427,8 +538,49 @@ def test_cost_estimate_accounts_for_sleep_and_hard_expansion() -> None:
     assert value["calibrated_runtime"]["hours_per_seed_four_h100"] > 0
 
 
+def test_production_cost_includes_phase_a_rescue_and_support_probes() -> None:
+    costs = estimate(100, 0.2, None, production=True)["latent_object_dsps_evaluations"]
+    assert costs["phase_a_wake_k64"] == 70_400
+    assert costs["phase_a_hard_additional_k192"] == 42_240
+    assert costs["truth_free_gaussian_k128_support_probes"] == 491_520
+
+
 def test_prior_macro_slices_cover_every_object_without_tiny_tail() -> None:
     slices = _macro_slices(2100, 1024, 128)
     assert slices == [(0, 1024), (1024, 2100)]
     covered = np.concatenate([np.arange(start, stop) for start, stop in slices])
     np.testing.assert_array_equal(covered, np.arange(2100))
+
+
+def test_support_probe_prefers_ess_then_lower_dominant_weight() -> None:
+    incumbent = {
+        "median_ess_fraction": 0.04,
+        "median_max_weight": 0.7,
+        "unresolved_fraction": 0.2,
+    }
+    assert _support_probe_is_better(
+        {
+            "median_ess_fraction": 0.05,
+            "median_max_weight": 0.8,
+            "unresolved_fraction": 0.3,
+        },
+        incumbent,
+    )
+    assert not _support_probe_is_better(
+        {
+            "median_ess_fraction": 0.04,
+            "median_max_weight": 0.9,
+            "unresolved_fraction": 0.2,
+        },
+        incumbent,
+    )
+    assert _support_probe_is_better(
+        {
+            **incumbent,
+            "epoch": 72,
+        },
+        {
+            **incumbent,
+            "epoch": 68,
+        },
+    )
