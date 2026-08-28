@@ -32,7 +32,7 @@ esac
 OUT="$RECOVERY_ROOT/full/$SELECTED/seed_$SEED"
 TRAIN="$OUT/train"
 TRAIN_INDICES="$MANIFEST_ROOT/full_train_indices.npy"
-VALIDATION_INDICES="$MANIFEST_ROOT/validation_indices.npy"
+VALIDATION_INDICES="$MANIFEST_ROOT/confirmation_indices.npy"
 EVAL_INDICES="$MANIFEST_ROOT/final_validation_indices.npy"
 TRAIN_CATALOG="$CATALOG_DIR/train.parquet"
 TEST_CATALOG="$CATALOG_DIR/test.parquet"
@@ -74,6 +74,10 @@ RESUME_ARGS=()
 if [[ -s "$TRAIN/states/latest.eqx" ]]; then
   RESUME_ARGS+=(--resume-state "$TRAIN/states/latest.eqx")
   echo "[sc-drws-full] resuming $TRAIN/states/latest.eqx"
+elif [[ -d "$TRAIN" ]] && \
+  [[ -z "$(find "$TRAIN" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+  rmdir "$TRAIN"
+  echo "[sc-drws-full] removed empty pre-training directory from an earlier failure"
 elif [[ -e "$TRAIN" ]]; then
   echo "[sc-drws-full][error] train directory exists without resumable state" >&2
   exit 2
@@ -81,6 +85,7 @@ fi
 python scripts/train_feniks_sc_drws.py --config "$CONFIG" --out "$TRAIN" \
   --train-indices-file "$TRAIN_INDICES" \
   --validation-indices-file "$VALIDATION_INDICES" \
+  --validation-catalog "$TEST_CATALOG" \
   --manifest-file "$MANIFEST_ROOT/manifest.json" --seed "$SEED" \
   --require-full-dataset "${RESUME_ARGS[@]}"
 

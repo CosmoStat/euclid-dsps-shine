@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--train-indices-file", type=Path, required=True)
     parser.add_argument("--validation-indices-file", type=Path, required=True)
+    parser.add_argument("--validation-catalog", type=Path)
     parser.add_argument("--manifest-file", type=Path, required=True)
     parser.add_argument("--resume-state", type=Path)
     parser.add_argument("--seed", type=int)
@@ -40,6 +41,7 @@ def main() -> None:
         out_dir=args.out,
         train_indices_file=args.train_indices_file,
         validation_indices_file=args.validation_indices_file,
+        validation_catalog_path=args.validation_catalog,
         manifest_file=args.manifest_file,
         resume_state=args.resume_state,
         smoke=args.smoke,

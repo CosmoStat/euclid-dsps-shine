@@ -330,6 +330,7 @@ def prepare_adaptive_training_runtime(
     *,
     train_indices_file: str | Path,
     validation_indices_file: str | Path,
+    validation_catalog_path: str | Path | None = None,
 ) -> RuntimeBundle:
     """Load only observed photometry and fixed physical-model assets."""
     runtime_config = _config_without_truth(config)
@@ -340,6 +341,7 @@ def prepare_adaptive_training_runtime(
         seed=int(cfg["training"].get("seed", 260821)),
         train_indices_file=train_indices_file,
         validation_indices_file=validation_indices_file,
+        validation_catalog_path=validation_catalog_path,
     )
     write_training_split_artifacts(out, split)
     catalog_batch_size = int(cfg["data"].get("catalog_batch_size", 10_000))
@@ -348,8 +350,11 @@ def prepare_adaptive_training_runtime(
         batch_size=catalog_batch_size,
         row_indices=split.train_indices,
     )
+    validation_config = copy.deepcopy(runtime_config)
+    if validation_catalog_path is not None:
+        validation_config["catalog_path"] = str(validation_catalog_path)
     validation_arrays = load_photometry_arrays_from_config(
-        runtime_config,
+        validation_config,
         batch_size=catalog_batch_size,
         row_indices=split.validation_indices,
     )

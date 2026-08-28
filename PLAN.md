@@ -2,6 +2,18 @@
 
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 
+- Full launch `1508902_0` exposed and the follow-up patch fixes a pre-training
+  index-namespace bug: the full
+  train manifest intentionally contains every selected row from `train.parquet`,
+  while the launcher also passed the train-catalog validation subset, so the
+  generic split correctly rejected row 42 as overlapping. The full now preserves
+  every selected training row and loads the truth-free confirmation cohort from
+  the distinct `test.parquet` namespace; `final_validation_indices.npy` remains
+  untouched for the independent post-training K2048/PPC evaluation. Same-catalog
+  overlap rejection remains strict. The empty directory left by this specific
+  pre-training failure is removed safely on relaunch. The cross-catalog split,
+  full-manifest contract and focused SC-DRWS/recovery suite total 46 passing
+  tests after the correction.
 - Population-first SC-DRWS correction is implemented for the full-production
   profile. Individual ESS,
   max-weight and hard-MIS status will remain diagnostics for proposal quality,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -648,6 +649,12 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     assert "260827" not in full_monitor
     assert all("--resume-state" in worker for worker in (pilot, confirmation, full))
     assert "--require-full-dataset" in full
+    assert 'VALIDATION_INDICES="$MANIFEST_ROOT/confirmation_indices.npy"' in full
+    assert '--validation-catalog "$TEST_CATALOG"' in full
+    assert "explicit_cross_catalog_train_validation_no_truth" in (
+        root / "euclid_dsps/amortized/train.py"
+    ).read_text()
+    assert 'parser.add_argument("--validation-catalog", type=Path)' in entrypoint
     assert "feniks_sc_drws_r29_historical_production.yaml" in full
     assert "feniks_sc_drws_r29_current_production.yaml" in full
     assert "full_production_anti_collapse_v1" in full
@@ -662,6 +669,47 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
         "from euclid_dsps.amortized.sc_drws_trainer import train_feniks_sc_drws"
     )
     assert runtime_bootstrap < trainer_import
+
+
+def test_full_manifest_uses_confirmation_for_cross_catalog_validation(
+    tmp_path: Path,
+) -> None:
+    full_train = tmp_path / "full_train_indices.npy"
+    confirmation = tmp_path / "confirmation_indices.npy"
+    np.save(full_train, np.asarray([0, 1, 2], dtype=np.int64))
+    np.save(confirmation, np.asarray([0, 1], dtype=np.int64))
+    manifest = tmp_path / "manifest.json"
+    payload = {
+        "c0_scope_statement": sc_drws_trainer.C0_SCOPE_STATEMENT,
+        "truth_used_for_training_or_checkpoint_selection": False,
+        "selection": {
+            "max_mag_ab": 29.0,
+            "configured_train_retained_fraction": 0.95,
+        },
+        "manifests": {
+            "full_train": {
+                "path": str(full_train),
+                "count": 3,
+                "sha256": sc_drws_trainer._sha256(full_train),
+            },
+            "confirmation": {
+                "path": str(confirmation),
+                "count": 2,
+                "sha256": sc_drws_trainer._sha256(confirmation),
+            },
+        },
+        "final_full_dataset_contract": {"expected_rows": 3},
+    }
+    manifest.write_text(json.dumps(payload))
+
+    result = sc_drws_trainer._validate_manifest(
+        manifest,
+        train_indices_file=full_train,
+        validation_indices_file=confirmation,
+        require_full_dataset=True,
+    )
+
+    assert result["final_full_dataset_contract"]["expected_rows"] == 3
 
 
 def test_training_resume_state_round_trip_and_provenance_gate(

@@ -127,6 +127,7 @@ class TrainingSplit:
     row_indices_file: str | None = None
     train_indices_file: str | None = None
     validation_indices_file: str | None = None
+    validation_catalog_path: str | None = None
 
 
 class LossBatch(NamedTuple):
@@ -2151,6 +2152,7 @@ def build_training_split(
     row_indices_file: str | Path | None = None,
     train_indices_file: str | Path | None = None,
     validation_indices_file: str | Path | None = None,
+    validation_catalog_path: str | Path | None = None,
 ) -> TrainingSplit:
     """Build a reproducible train/validation row split for FS2."""
     cfg = amortized_config(config)
@@ -2195,17 +2197,27 @@ def build_training_split(
             else np.asarray([], dtype=np.int64)
         )
         _validate_selected_indices(train_indices, n_rows, "train_indices_file")
+        validation_n_rows = (
+            _catalog_num_rows(validation_catalog_path)
+            if validation_catalog_path is not None
+            else n_rows
+        )
         _validate_selected_indices(
             validation_indices,
-            n_rows,
+            validation_n_rows,
             "validation_indices_file",
         )
-        overlap = np.intersect1d(train_indices, validation_indices)
-        if overlap.size:
-            raise ValueError(
-                "train and validation index files overlap; first overlapping "
-                f"row_index={int(overlap[0])}"
-            )
+        same_catalog = validation_catalog_path is None or (
+            Path(validation_catalog_path).resolve()
+            == Path(config["catalog_path"]).resolve()
+        )
+        if same_catalog:
+            overlap = np.intersect1d(train_indices, validation_indices)
+            if overlap.size:
+                raise ValueError(
+                    "train and validation index files overlap; first overlapping "
+                    f"row_index={int(overlap[0])}"
+                )
         return TrainingSplit(
             train_indices=train_indices,
             validation_indices=validation_indices,
@@ -2213,7 +2225,11 @@ def build_training_split(
             validation_redshift=np.asarray([], dtype=float),
             redshift_column=None,
             redshift_bins=redshift_bins,
-            selection_mode="explicit_train_validation_files_no_truth",
+            selection_mode=(
+                "explicit_train_validation_files_no_truth"
+                if same_catalog
+                else "explicit_cross_catalog_train_validation_no_truth"
+            ),
             stratified_strategy=stratified_strategy,
             validation_fraction=(
                 float(validation_indices.size)
@@ -2222,6 +2238,11 @@ def build_training_split(
             train_indices_file=str(train_indices_file),
             validation_indices_file=(
                 str(validation_indices_file) if validation_indices_file else None
+            ),
+            validation_catalog_path=(
+                str(validation_catalog_path)
+                if validation_catalog_path is not None
+                else None
             ),
         )
     redshift_column = _configured_redshift_column(config, data_cfg)
@@ -2313,6 +2334,7 @@ def write_training_split_artifacts(out: Path, split: TrainingSplit) -> None:
             "row_indices_file": split.row_indices_file,
             "train_indices_file": split.train_indices_file,
             "validation_indices_file": split.validation_indices_file,
+            "validation_catalog_path": split.validation_catalog_path,
             "train_redshift_finite": int(np.isfinite(split.train_redshift).sum()),
             "validation_redshift_finite": int(
                 np.isfinite(split.validation_redshift).sum()

@@ -298,6 +298,7 @@ def train_feniks_sc_drws(
     out_dir: str | Path,
     train_indices_file: str | Path,
     validation_indices_file: str | Path,
+    validation_catalog_path: str | Path | None = None,
     manifest_file: str | Path,
     resume_state: str | Path | None = None,
     smoke: bool = False,
@@ -311,6 +312,7 @@ def train_feniks_sc_drws(
         manifest_file,
         train_indices_file=train_indices_file,
         validation_indices_file=validation_indices_file,
+        validation_catalog_path=validation_catalog_path,
         require_full_dataset=require_full_dataset,
     )
     runtime = prepare_adaptive_training_runtime(
@@ -1237,6 +1239,9 @@ def train_feniks_sc_drws(
         "raw_and_ema_require_independent_k2048_evaluation": True,
         "manifest_sha256": _sha256(Path(manifest_file)),
         "selected_training_rows": int(len(runtime.train_arrays.flux)),
+        "validation_rows": int(len(runtime.validation_arrays.flux)),
+        "validation_catalog_path": runtime.split.validation_catalog_path,
+        "training_split_mode": runtime.split.selection_mode,
         "full_dataset_contract_required": bool(require_full_dataset),
         "full_dataset_expected_rows": int(
             manifest["final_full_dataset_contract"]["expected_rows"]
@@ -1309,7 +1314,10 @@ def _validate_manifest(
         train_indices_file,
         required_label="full_train" if require_full_dataset else None,
     )
-    validate_indices(validation_indices_file, required_label="validation")
+    validate_indices(
+        validation_indices_file,
+        required_label="confirmation" if require_full_dataset else "validation",
+    )
     if require_full_dataset:
         expected = int(payload["final_full_dataset_contract"]["expected_rows"])
         if len(indices) != expected:
