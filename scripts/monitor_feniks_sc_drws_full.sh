@@ -11,7 +11,7 @@ INTERVAL="${INTERVAL:-60}"
 SELECTED=$(python -c \
   'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' \
   "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json")
-SEEDS=(260826 260827)
+SEEDS=(260826)
 
 while true; do
   clear

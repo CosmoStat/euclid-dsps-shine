@@ -472,14 +472,25 @@ def test_four_device_pmap_q_update_regression() -> None:
 def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     root = Path(__file__).resolve().parents[1]
     submit = (root / "scripts/submit_feniks_rws_recovery.sh").read_text()
+    full_submit = (root / "scripts/submit_feniks_sc_drws_full.sh").read_text()
     pilot = (root / "scripts/feniks_rws_recovery_pilot_h100.slurm").read_text()
     confirmation = (root / "scripts/feniks_rws_recovery_confirm_h100.slurm").read_text()
     full = (root / "scripts/feniks_sc_drws_full_h100.slurm").read_text()
+    full_monitor = (root / "scripts/monitor_feniks_sc_drws_full.sh").read_text()
     inference = (root / "scripts/feniks_sc_drws_inference_h100.slurm").read_text()
     entrypoint = (root / "scripts/train_feniks_sc_drws.py").read_text()
     assert "--array=0-3%4" in submit
     assert "#SBATCH --gres=gpu:4" in pilot
     assert "full_dataset_not_submitted=1" in submit
+    assert "--array=0 --output" in full_submit
+    assert "#SBATCH --array=0\n" in full
+    assert "--array=0-1" not in full_submit
+    assert "#SBATCH --array=0-1" not in full
+    assert "SEEDS=(260826)" in full
+    assert "SEEDS=(260826)" in full_monitor
+    assert "260827" not in full_submit
+    assert "260827" not in full
+    assert "260827" not in full_monitor
     assert all("--resume-state" in worker for worker in (pilot, confirmation, full))
     assert "--require-full-dataset" in full
     assert "feniks_sc_drws_r29_historical_production.yaml" in full

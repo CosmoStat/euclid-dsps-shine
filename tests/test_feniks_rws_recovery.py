@@ -14,8 +14,10 @@ from euclid_dsps.photometry import abmag_to_fnu_cgs
 from scripts.build_feniks_rws_recovery_manifests import build
 from scripts.evaluate_feniks_rws_recovery import (
     CANDIDATES,
+    FULL_SEEDS,
     SEEDS,
     finalize_confirmation,
+    finalize_full,
     predictive_metrics,
     select_pilot,
     summarize_candidate,
@@ -528,6 +530,37 @@ def test_promotion_requires_both_seeds_then_independent_confirmation(
     assert final["ready_for_population_prior_update"] is True
     assert final["ready_for_full_catalogue"] is True
     assert (tmp_path / "RWS_RECOVERY_PASS.json").is_file()
+
+
+def test_full_finalizer_requires_only_configured_single_seed(tmp_path: Path) -> None:
+    candidate = "historical_4x128"
+    (tmp_path / "RWS_RECOVERY_PASS.json").write_text(
+        json.dumps({"status": "PASS", "selected_candidate": candidate})
+    )
+    run_dir = tmp_path / "full" / candidate / f"seed_{FULL_SEEDS[0]}"
+    run_dir.mkdir(parents=True)
+    summary = {
+        "status": "PASS",
+        "seed": FULL_SEEDS[0],
+        "checkpoint": "/full/raw.eqx",
+        "feature_stats": "/full/feature_stats.json",
+        "variants": [
+            {
+                "status": "PASS",
+                "selection_corrected_exact_gaussian_iw_score": 1.0,
+            }
+        ],
+    }
+    (run_dir / "full_summary.json").write_text(json.dumps(summary))
+
+    receipt = finalize_full(tmp_path)
+
+    assert FULL_SEEDS == (260826,)
+    assert receipt["status"] == "PASS"
+    assert receipt["selected_seed"] == 260826
+    assert receipt["configured_final_seeds"] == [260826]
+    assert receipt["all_configured_final_seeds_passed"] is True
+    assert receipt["ready_for_four_shard_catalogue_inference"] is True
 
 
 def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:

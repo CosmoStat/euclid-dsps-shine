@@ -14,6 +14,7 @@ from euclid_dsps.config import load_config
 
 CANDIDATES = ("historical_4x128", "current_residual_6x256")
 SEEDS = (260826, 260827)
+FULL_SEEDS = (260826,)
 
 
 def _read_json(path: Path) -> dict[str, object]:
@@ -670,7 +671,7 @@ def finalize_confirmation(root: Path) -> dict[str, object]:
         "ready_for_full_catalogue": bool(passed),
         "truth_used_for_training_or_checkpoint_selection": False,
         "next_action": (
-            "LAUNCH_SELECTED_ARCHITECTURE_TWO_SEED_FULL_DATASET_SC_DRWS"
+            "LAUNCH_SELECTED_ARCHITECTURE_SINGLE_SEED_FULL_DATASET_SC_DRWS"
             if passed
             else "STOP_AND_REVIEW_SC_DRWS_SUPPORT_OR_PPC_DIAGNOSTICS"
         ),
@@ -688,7 +689,7 @@ def finalize_full(root: Path) -> dict[str, object]:
     selected = str(promotion["selected_candidate"])
     runs = [
         _read_json(root / "full" / selected / f"seed_{seed}" / "full_summary.json")
-        for seed in SEEDS
+        for seed in FULL_SEEDS
     ]
     passed = all(run["status"] == "PASS" for run in runs)
     eligible = [run for run in runs if run["status"] == "PASS"]
@@ -706,7 +707,8 @@ def finalize_full(root: Path) -> dict[str, object]:
         "selected_seed": int(chosen["seed"]) if chosen else None,
         "selected_checkpoint": chosen["checkpoint"] if chosen else None,
         "selected_feature_stats": chosen["feature_stats"] if chosen else None,
-        "both_final_seeds_passed": bool(passed),
+        "configured_final_seeds": list(FULL_SEEDS),
+        "all_configured_final_seeds_passed": bool(passed),
         "ready_for_four_shard_catalogue_inference": bool(passed),
         "truth_used_for_training_or_checkpoint_selection": False,
         "runs": runs,

@@ -2,6 +2,11 @@
 
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 
+- Full-production seed policy is reduced, at the user's request, from two
+  seeds to the single seed `260826` for the current run. Pilot and independent
+  confirmation remain two-seed gates. The full launcher now submits array task
+  `0` only, the monitor reports only `260826`, and `finalize-full` gates only
+  the configured production seed before authorizing four-shard inference.
 - Big-run anti-collapse hardening is in progress and is deliberately isolated
   from the already submitted 512-object pilot/confirmation configs. The full
   catalogue will use a hash-bound production profile with 16 initial
@@ -55,7 +60,8 @@
   contracts for observed `r<29.0`.
 - Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
   selected-architecture/two-seed independent 2000-object confirmation, then
-  two complete-selected-training-set seeds. No Jean-Zay submission is made by
+  one complete-selected-training-set seed for the current production run. No
+  Jean-Zay submission is made by
   Codex; only local tests and copy-paste launch commands are delivered.
 - Analytical wake cost per full seed is
   `15*N*64 + 30*N*128 + 30*N_hard*384` DSPS evaluations, plus

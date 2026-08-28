@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=48
 #SBATCH --time=20:00:00
 #SBATCH --hint=nomultithread
-#SBATCH --array=0-1%2
+#SBATCH --array=0
 
 set -Eeuo pipefail
 
@@ -20,7 +20,7 @@ CATALOG_DIR="${CATALOG_DIR:?CATALOG_DIR is required}"
 RECOVERY_ROOT="${RECOVERY_ROOT:?RECOVERY_ROOT is required}"
 MANIFEST_ROOT="${MANIFEST_ROOT:?MANIFEST_ROOT is required}"
 CACHE_ROOT="${CACHE_ROOT:?CACHE_ROOT is required}"
-SEEDS=(260826 260827)
+SEEDS=(260826)
 SEED="${SEEDS[${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}]}"
 SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$RECOVERY_ROOT/RWS_RECOVERY_PASS.json")
 case "$SELECTED" in

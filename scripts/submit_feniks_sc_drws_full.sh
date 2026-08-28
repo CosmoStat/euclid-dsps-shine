@@ -18,7 +18,7 @@ if r.get("status") != "PASS" or not r.get("ready_for_full_catalogue"):
 PY
 mkdir -p "$LOG_ROOT" outputs/logs "$CACHE_ROOT/jax"
 EXPORTS="ALL,REPO_DIR=$REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,CATALOG_DIR=$CATALOG_DIR,RECOVERY_ROOT=$RECOVERY_ROOT,MANIFEST_ROOT=$MANIFEST_ROOT,CACHE_ROOT=$CACHE_ROOT"
-RAW=$(sbatch --parsable --array=0-1%2 --output="$LOG_ROOT/full-%A_%a.out" \
+RAW=$(sbatch --parsable --array=0 --output="$LOG_ROOT/full-%A_%a.out" \
   --error="$LOG_ROOT/full-%A_%a.err" --export="$EXPORTS" scripts/feniks_sc_drws_full_h100.slurm)
 FULL_JOB="${RAW%%;*}"
 GATE_RAW=$(sbatch --parsable --dependency="afterok:$FULL_JOB" \
