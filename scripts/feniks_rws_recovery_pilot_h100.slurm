@@ -76,7 +76,34 @@ for path in "$TRAIN_CONFIG" "$EVAL_CONFIG" "$TRAIN_CATALOG" "$TEST_CATALOG" \
 done
 test ! -e "$OUT/DONE" || { echo "[rws-recovery][error] already complete: $OUT"; exit 2; }
 RESUME_ARGS=()
-if [[ -s "$TRAIN/states/latest.eqx" ]]; then
+TRAINING_COMPLETE=0
+if [[ -s "$TRAIN/training_receipt.json" ]] && python - "$TRAIN" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+receipt = json.loads((root / "training_receipt.json").read_text())
+required = (
+    root / "feature_stats.json",
+    root / "checkpoints/final/raw_model.eqx",
+    root / "checkpoints/final/ema_model.eqx",
+    root / "checkpoints/final/raw_q.eqx",
+    root / "checkpoints/final/ema_q.eqx",
+    root / "checkpoints/final/prior.eqx",
+)
+valid = (
+    receipt.get("status") == "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION"
+    and receipt.get("truth_used_for_training_validation_or_checkpoint_selection") is False
+    and int(receipt.get("wake_updates", 0)) > 0
+    and all(path.is_file() and path.stat().st_size > 0 for path in required)
+)
+raise SystemExit(0 if valid else 1)
+PY
+then
+  TRAINING_COMPLETE=1
+  echo "[sc-drws] reusing completed truth-free training: $TRAIN"
+elif [[ -s "$TRAIN/states/latest.eqx" ]]; then
   RESUME_ARGS+=(--resume-state "$TRAIN/states/latest.eqx")
   echo "[sc-drws] resuming $TRAIN/states/latest.eqx"
 elif [[ -e "$TRAIN" ]]; then
@@ -113,7 +140,9 @@ TRAIN_ARGS=(
   "${RESUME_ARGS[@]}"
 )
 [[ "$SMOKE" == "1" ]] && TRAIN_ARGS+=(--smoke)
-python scripts/train_feniks_sc_drws.py "${TRAIN_ARGS[@]}"
+if [[ "$TRAINING_COMPLETE" == "0" ]]; then
+  python scripts/train_feniks_sc_drws.py "${TRAIN_ARGS[@]}"
+fi
 
 for VARIANT in raw ema; do
   VARIANT_OFFSET=0

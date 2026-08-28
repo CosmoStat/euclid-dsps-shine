@@ -448,7 +448,7 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     assert "sc_drws_training_log.csv" in monitor
     assert "full catalogue autorisé mais non soumis" in monitor
     assert "pilot_train_indices.npy" in worker
-    assert "raw_model.eqx" not in worker  # expanded through ${VARIANT}_model.eqx
+    assert "for VARIANT in raw ema" in worker
     assert '${VARIANT}_model.eqx' in worker
     assert "--posterior-samples \"$SUPPORT_SAMPLES\"" in worker
     assert "--min-median-ess-fraction 0.05" in worker
@@ -456,3 +456,6 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     assert 'RESUME_EXISTING="${RESUME_EXISTING:-0}"' in submitter
     assert 'if [[ "$RESUME_EXISTING" == "1" ]]' in submitter
     assert "missing resume artifact" in submitter
+    assert "TRAINING_COMPLETE=1" in worker
+    assert "reusing completed truth-free training" in worker
+    assert 'if [[ "$TRAINING_COMPLETE" == "0" ]]' in worker

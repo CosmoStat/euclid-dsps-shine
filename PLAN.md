@@ -95,6 +95,12 @@
   focused inference/diagnostics/SC-DRWS suite passes 50 tests; compileall, Ruff
   and `git diff --check` pass. The completed smoke can now resume directly at
   independent support/PPC evaluation without repeating its eight epochs.
+- Resume must not deserialize the epoch-8 optimizer state after an
+  inference-only config change, because the training-state provenance hash
+  deliberately covers the complete YAML. The GPU worker therefore reuses a
+  completed training receipt only after checking its no-truth contract and all
+  raw/EMA/prior checkpoints, and skips the trainer entirely before independent
+  IW/PPC. Incomplete training still follows the strict state-hash resume path.
 
 ## 2026-08-24 Selection-Corrected Amortized SMC-EM
 
