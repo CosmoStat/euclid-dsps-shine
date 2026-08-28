@@ -312,7 +312,6 @@ def train_feniks_sc_drws(
         manifest_file,
         train_indices_file=train_indices_file,
         validation_indices_file=validation_indices_file,
-        validation_catalog_path=validation_catalog_path,
         require_full_dataset=require_full_dataset,
     )
     runtime = prepare_adaptive_training_runtime(
@@ -320,6 +319,7 @@ def train_feniks_sc_drws(
         out,
         train_indices_file=train_indices_file,
         validation_indices_file=validation_indices_file,
+        validation_catalog_path=validation_catalog_path,
     )
     if runtime.train_arrays.truth or runtime.validation_arrays.truth:
         raise RuntimeError("SC-DRWS runtime loaded truth")

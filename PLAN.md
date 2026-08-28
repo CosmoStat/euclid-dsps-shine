@@ -14,6 +14,11 @@
   pre-training failure is removed safely on relaunch. The cross-catalog split,
   full-manifest contract and focused SC-DRWS/recovery suite total 46 passing
   tests after the correction.
+- Relaunch `1513472_0` exposed a keyword-routing regression before manifest
+  validation: `validation_catalog_path` was passed to `_validate_manifest`
+  instead of `prepare_adaptive_training_runtime`. The argument is now routed
+  only to the runtime loader, with a direct mocked-call regression test; this
+  failure also occurred before any model state or scientific update.
 - Population-first SC-DRWS correction is implemented for the full-production
   profile. Individual ESS,
   max-weight and hard-MIS status will remain diagnostics for proposal quality,

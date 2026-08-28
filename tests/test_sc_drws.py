@@ -712,6 +712,57 @@ def test_full_manifest_uses_confirmation_for_cross_catalog_validation(
     assert result["final_full_dataset_contract"]["expected_rows"] == 3
 
 
+def test_training_routes_validation_catalog_only_to_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validation_catalog = tmp_path / "test.parquet"
+
+    def validate_manifest(
+        _path,
+        *,
+        train_indices_file,
+        validation_indices_file,
+        require_full_dataset,
+    ):
+        assert train_indices_file == "train.npy"
+        assert validation_indices_file == "confirmation.npy"
+        assert require_full_dataset is True
+        return {}
+
+    def prepare_runtime(
+        _config,
+        _out,
+        *,
+        train_indices_file,
+        validation_indices_file,
+        validation_catalog_path,
+    ):
+        assert train_indices_file == "train.npy"
+        assert validation_indices_file == "confirmation.npy"
+        assert validation_catalog_path == validation_catalog
+        raise RuntimeError("runtime-routing-pass")
+
+    monkeypatch.setattr(sc_drws_trainer, "validate_sc_drws_config", lambda _: {})
+    monkeypatch.setattr(sc_drws_trainer, "_validate_manifest", validate_manifest)
+    monkeypatch.setattr(
+        sc_drws_trainer,
+        "prepare_adaptive_training_runtime",
+        prepare_runtime,
+    )
+
+    with pytest.raises(RuntimeError, match="runtime-routing-pass"):
+        sc_drws_trainer.train_feniks_sc_drws(
+            {},
+            out_dir=tmp_path / "out",
+            train_indices_file="train.npy",
+            validation_indices_file="confirmation.npy",
+            validation_catalog_path=validation_catalog,
+            manifest_file="manifest.json",
+            require_full_dataset=True,
+        )
+
+
 def test_training_resume_state_round_trip_and_provenance_gate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
