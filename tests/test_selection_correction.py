@@ -436,6 +436,50 @@ def test_chunked_log_alpha_matches_single_batch_and_preserves_sample_count() -> 
     assert padded_metrics["selection/n_prior_samples"] == 1000
 
 
+def test_score_function_caps_working_batch_and_handles_padding() -> None:
+    class ShiftNormalPrior:
+        latent_dim = 2
+
+        def __init__(self, shift):
+            self.shift = shift
+
+        def forward(self, base):
+            value = base + self.shift
+            return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
+        def log_prob(self, value):
+            residual = value - self.shift
+            return -0.5 * jnp.sum(jnp.square(residual), axis=-1)
+
+    key = jax.random.PRNGKey(1401)
+
+    def evaluate(shift, requested_batch_size):
+        return estimate_log_alpha_score_function(
+            ShiftNormalPrior(shift),
+            key,
+            n_prior_samples=130,
+            prior_sample_batch_size=requested_batch_size,
+            log_beta_fn=lambda value: observed_flux_selection_log_beta(
+                value[:, 0],
+                jnp.asarray(0.7),
+                jnp.asarray(0.2),
+            ),
+        )
+
+    point = jnp.asarray(0.1)
+    capped_value, capped_metrics = evaluate(point, 4096)
+    explicit_value, explicit_metrics = evaluate(point, 64)
+    capped_gradient = jax.grad(lambda shift: evaluate(shift, 4096)[0])(point)
+    explicit_gradient = jax.grad(lambda shift: evaluate(shift, 64)[0])(point)
+
+    assert capped_metrics["selection/n_prior_samples"] == 130
+    assert capped_metrics["selection/prior_sample_batch_size"] == 64
+    assert explicit_metrics["selection/prior_sample_batch_size"] == 64
+    assert jnp.allclose(capped_value, explicit_value, atol=1.0e-7)
+    assert jnp.allclose(capped_gradient, explicit_gradient, atol=1.0e-7)
+    assert jnp.isfinite(capped_gradient)
+
+
 def test_observed_magnitude_limit_uses_shared_ab_flux_convention() -> None:
     expected = float(np.asarray(abmag_to_fnu_cgs(25.0)))
     actual = float(np.asarray(observed_magnitude_flux_limit_jax(25.0)))

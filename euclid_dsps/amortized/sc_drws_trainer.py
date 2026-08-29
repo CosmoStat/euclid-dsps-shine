@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import gc
 import hashlib
 import json
 import os
@@ -971,13 +972,37 @@ def train_feniks_sc_drws(
             prior_rows = []
             gates = []
             macro_key = jax.random.fold_in(key, epoch + 8800)
-            for macro_index, (start, stop) in enumerate(
+            del (
+                batch,
+                details,
+                first,
+                first_sharded,
+                metrics,
+                model_replicated,
+                ema_replicated,
+                packed,
+                packed_sharded,
+                q_optimizer_state_replicated,
+                q_warmup_replicated,
+                q_joint_replicated,
+                sharded_batch,
+            )
+            gc.collect()
+            macro_slices = list(
                 _macro_slices(
                     all_particles.shape[1],
                     macro_size,
                     int(prior_cfg["minimum_finite_objects"]),
                 )
-            ):
+            )
+            for macro_index, (start, stop) in enumerate(macro_slices):
+                if verbose:
+                    print(
+                        "[sc-drws] prior-macro "
+                        f"epoch={epoch} macro={macro_index + 1}/{len(macro_slices)} "
+                        f"objects={stop - start} status=start",
+                        flush=True,
+                    )
                 gate, prior_state, model, prior_updates, rows = _apply_prior_updates(
                     model=model,
                     optimizer=prior_optimizer,
@@ -998,6 +1023,14 @@ def train_feniks_sc_drws(
                 )
                 gates.append(gate)
                 prior_rows.extend(rows)
+                if verbose:
+                    print(
+                        "[sc-drws] prior-macro "
+                        f"epoch={epoch} macro={macro_index + 1}/{len(macro_slices)} "
+                        f"accepted={int(gate.accepted)} "
+                        f"applied={int(bool(rows[-1]['update_applied']))} status=complete",
+                        flush=True,
+                    )
             _append_csv(prior_log, prior_rows)
             if verbose:
                 print(

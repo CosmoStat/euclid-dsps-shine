@@ -850,7 +850,10 @@ def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
     )
     optimizer_state = optimizer.init(eqx.filter(prior, eqx.is_inexact_array))
 
+    selection_calls = []
+
     def nonfinite_selection_gradient(candidate, _key):
+        selection_calls.append(True)
         leaf = next(
             value
             for value in jax.tree_util.tree_leaves(candidate.prior)
@@ -886,3 +889,4 @@ def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
     assert metrics.trust_grads_finite
     assert not metrics.update_applied
     assert metrics.rejection_code == 1
+    assert len(selection_calls) == 1

@@ -902,50 +902,14 @@ def apply_prior_macro_update(
         prior_snapshot.prior.sample(trust_key, int(trust_samples))
     )
 
-    def objective(candidate_prior):
-        candidate_model = eqx.tree_at(
-            lambda tree: tree.prior,
-            model,
-            candidate_prior,
-        )
+    def data_objective(candidate_prior):
         terms = smc_prior_mstep_terms(
             candidate_prior,
             prior_snapshot.prior,
             posterior,
             old_samples,
         )
-        log_alpha, selection_metrics = selection_log_alpha_fn(
-            candidate_model,
-            selection_key,
-        )
-        loss = (
-            terms.data_nll + log_alpha + float(trust_strength) * terms.prior_kl_old_new
-        )
-        return loss, (terms, log_alpha, selection_metrics)
-
-    (loss, auxiliary), grads = eqx.filter_value_and_grad(
-        objective,
-        has_aux=True,
-    )(model.prior)
-    terms, log_alpha, selection_metrics = auxiliary
-    raw_norm = tree_l2_norm(grads)
-    gradients_finite = tree_all_finite(grads)
-    diagnostic_dtype = jnp.asarray(loss).dtype
-    component_evaluated = True
-    data_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
-    selection_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
-    trust_grad_norm = jnp.asarray(jnp.nan, dtype=diagnostic_dtype)
-    data_grads_finite = jnp.asarray(True)
-    selection_grads_finite = jnp.asarray(True)
-    trust_grads_finite = jnp.asarray(True)
-
-    def data_objective(candidate_prior):
-        return smc_prior_mstep_terms(
-            candidate_prior,
-            prior_snapshot.prior,
-            posterior,
-            old_samples,
-        ).data_nll
+        return terms.data_nll, terms
 
     def selection_objective(candidate_prior):
         candidate_model = eqx.tree_at(
@@ -953,7 +917,7 @@ def apply_prior_macro_update(
             model,
             candidate_prior,
         )
-        return selection_log_alpha_fn(candidate_model, selection_key)[0]
+        return selection_log_alpha_fn(candidate_model, selection_key)
 
     def trust_objective(candidate_prior):
         return smc_prior_mstep_terms(
@@ -963,11 +927,33 @@ def apply_prior_macro_update(
             old_samples,
         ).prior_kl_old_new
 
-    _data_value, data_grads = eqx.filter_value_and_grad(data_objective)(model.prior)
-    _selection_value, selection_grads = eqx.filter_value_and_grad(selection_objective)(
-        model.prior
+    (_data_nll, terms), data_grads = eqx.filter_value_and_grad(
+        data_objective,
+        has_aux=True,
+    )(model.prior)
+    jax.block_until_ready((terms, data_grads))
+    (log_alpha, selection_metrics), selection_grads = eqx.filter_value_and_grad(
+        selection_objective,
+        has_aux=True,
+    )(model.prior)
+    jax.block_until_ready((log_alpha, selection_metrics, selection_grads))
+    trust_value, trust_grads = eqx.filter_value_and_grad(trust_objective)(model.prior)
+    jax.block_until_ready((trust_value, trust_grads))
+    grads = jax.tree_util.tree_map(
+        lambda data, selection, trust: (
+            data + selection + float(trust_strength) * trust
+            if data is not None
+            else None
+        ),
+        data_grads,
+        selection_grads,
+        trust_grads,
     )
-    _trust_value, trust_grads = eqx.filter_value_and_grad(trust_objective)(model.prior)
+    loss = terms.data_nll + log_alpha + float(trust_strength) * trust_value
+    raw_norm = tree_l2_norm(grads)
+    gradients_finite = tree_all_finite(grads)
+    diagnostic_dtype = jnp.asarray(loss).dtype
+    component_evaluated = True
     data_grad_norm = tree_l2_norm(data_grads)
     selection_grad_norm = tree_l2_norm(selection_grads)
     trust_grad_norm = tree_l2_norm(trust_grads)

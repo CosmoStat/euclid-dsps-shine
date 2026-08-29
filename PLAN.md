@@ -1,5 +1,35 @@
 # Plan
 
+## 2026-08-29 SC-DRWS prior-update memory repair
+
+- Continuation `1527131_0` resumed the truth-free full state successfully and
+  completed all 589 wake batches at epoch 64, then exhausted H100 memory in the
+  first population-prior update while differentiating the 4096-draw
+  score-function selection normalization. The epoch-63 state is intact; the
+  failure occurred before any Phase-B prior optimizer update was committed.
+- Replace the monolithic prior objective and its duplicate component-gradient
+  diagnostics with separately evaluated data, selection and trust gradients
+  that are combined exactly once before clipping. Stream the score-function
+  selection surrogate over deterministic fixed-size batches so DSPS
+  intermediates and prior log-probability activations are rematerialized with
+  bounded peak memory while retaining the same 4096-draw estimator and common
+  random numbers.
+- Add value/gradient equivalence, non-divisible batch and macro-update tests;
+  validate resume/config provenance without submitting Jean-Zay jobs.
+- Implemented without changing any YAML or scientific sample count, so the
+  existing epoch-63 state keeps its resolved-config contract. The
+  score-function estimator still uses 4096 common-random-number prior draws,
+  but caps its working set at 64, stores only completeness values between its
+  two passes, and rematerializes prior scores through a scalar scan. Data,
+  selection and trust gradients now execute sequentially with explicit device
+  synchronization and are combined before the unchanged optimizer clipping.
+  Stale four-device wake replicas are released before prior optimization.
+- Prior macro start/completion markers are emitted and surfaced by the full
+  monitor. Verification passes 75 broad focused tests plus 12 post-synchrony
+  prior tests, Ruff, compileall, SLURM/shell syntax and `git diff --check`.
+  No Jean-Zay job was submitted; continuation must replay epoch 64 from the
+  intact epoch-63 checkpoint before exercising this repair.
+
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 
 - Full launch `1508902_0` exposed and the follow-up patch fixes a pre-training

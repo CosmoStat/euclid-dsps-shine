@@ -11,6 +11,8 @@ from jax.scipy.special import log_ndtr, logsumexp
 
 from euclid_dsps.photometry import abmag_to_fnu_cgs_jax
 
+_MAX_SCORE_FUNCTION_BATCH_SIZE = 64
+
 
 def observed_magnitude_flux_limit_jax(max_mag_ab: Any) -> jnp.ndarray:
     """Convert an observed AB-magnitude upper limit to an fnu-cgs threshold."""
@@ -249,6 +251,7 @@ def estimate_log_alpha_score_function_diagnostic(
     )
     if batch_size <= 0:
         raise ValueError("prior_sample_batch_size must be positive")
+    batch_size = min(batch_size, _MAX_SCORE_FUNCTION_BATCH_SIZE)
     n_batches = (count + batch_size - 1) // batch_size
     padded_count = n_batches * batch_size
     base = jax.random.normal(
@@ -261,11 +264,13 @@ def estimate_log_alpha_score_function_diagnostic(
     def transform_and_score(base_batch):
         samples, _logdet = prior.forward(base_batch)
         stopped = jax.lax.stop_gradient(samples)
-        return stopped, jax.lax.stop_gradient(log_beta_fn(stopped))
+        return jax.lax.stop_gradient(log_beta_fn(stopped))
 
-    samples, log_beta = jax.lax.map(jax.checkpoint(transform_and_score), batched_base)
-    stopped_samples = samples.reshape(padded_count, int(prior.latent_dim))[:count]
-    log_beta = jnp.ravel(log_beta)[:count]
+    batched_log_beta = jax.lax.map(
+        jax.checkpoint(transform_and_score),
+        batched_base,
+    )
+    log_beta = jnp.ravel(batched_log_beta)[:count]
     log_alpha, metrics = selection_log_alpha_from_log_beta(log_beta)
     finite = jnp.isfinite(log_beta)
     any_finite = jnp.any(finite)
@@ -274,7 +279,26 @@ def estimate_log_alpha_score_function_diagnostic(
     selection_weights = jax.lax.stop_gradient(jax.nn.softmax(safe_log_beta))
     uniform_weight = jnp.asarray(1.0 / count, dtype=selection_weights.dtype)
     centered_weights = jax.lax.stop_gradient(selection_weights - uniform_weight)
-    score_surrogate = jnp.sum(centered_weights * prior.log_prob(stopped_samples))
+    padded_centered_weights = jnp.pad(
+        centered_weights,
+        (0, padded_count - count),
+        constant_values=0.0,
+    ).reshape(n_batches, batch_size)
+
+    def accumulate_score(score, inputs):
+        base_batch, weight_batch = inputs
+        samples, _logdet = prior.forward(base_batch)
+        stopped = jax.lax.stop_gradient(samples)
+        contribution = jnp.sum(
+            jax.lax.stop_gradient(weight_batch) * prior.log_prob(stopped)
+        )
+        return score + contribution, None
+
+    score_surrogate, _ = jax.lax.scan(
+        jax.checkpoint(accumulate_score),
+        jnp.asarray(0.0, dtype=selection_weights.dtype),
+        (batched_base, padded_centered_weights),
+    )
     score_surrogate = jnp.where(
         any_finite,
         score_surrogate,

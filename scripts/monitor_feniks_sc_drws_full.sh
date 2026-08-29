@@ -89,6 +89,10 @@ PY
     else
       echo "attente/demarrage"
     fi
+    worker_log="$LOG_ROOT/full-${FULL_JOB}_0.out"
+    if [[ -s "$worker_log" ]]; then
+      grep -E '\[sc-drws\] prior-macro ' "$worker_log" 2>/dev/null | tail -n 1 || true
+    fi
   done
   echo
   echo "Ctrl-C pour quitter. Rafraichissement dans ${INTERVAL}s."
