@@ -2,6 +2,11 @@
 
 ## 2026-08-29 SC-DRWS prior-update memory repair
 
+- Relaunch `1550687_0` reached the selection preflight before state loading but
+  exposed an x64-only scan contract error: completeness weights were float32
+  while the loaded population prior's `log_prob` was float64. Type the scalar
+  score carry from the prior log-density result and cover the mixed-dtype path
+  with JAX x64 explicitly enabled. This preflight failure made no state change.
 - Continuation `1527131_0` resumed the truth-free full state successfully and
   completed all 589 wake batches at epoch 64, then exhausted H100 memory in the
   first population-prior update while differentiating the 4096-draw
@@ -29,6 +34,9 @@
   prior tests, Ruff, compileall, SLURM/shell syntax and `git diff --check`.
   No Jean-Zay job was submitted; continuation must replay epoch 64 from the
   intact epoch-63 checkpoint before exercising this repair.
+- The mixed-dtype follow-up passes 31 selection/prior tests with
+  `JAX_ENABLE_X64=true`, including the explicit float32-completeness/
+  float64-prior regression, plus Ruff, compileall and `git diff --check`.
 
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 

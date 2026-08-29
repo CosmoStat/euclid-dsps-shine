@@ -284,6 +284,9 @@ def estimate_log_alpha_score_function_diagnostic(
         (0, padded_count - count),
         constant_values=0.0,
     ).reshape(n_batches, batch_size)
+    score_dtype = prior.log_prob(
+        jnp.zeros((1, int(prior.latent_dim)), dtype=dtype)
+    ).dtype
 
     def accumulate_score(score, inputs):
         base_batch, weight_batch = inputs
@@ -296,7 +299,7 @@ def estimate_log_alpha_score_function_diagnostic(
 
     score_surrogate, _ = jax.lax.scan(
         jax.checkpoint(accumulate_score),
-        jnp.asarray(0.0, dtype=selection_weights.dtype),
+        jnp.asarray(0.0, dtype=score_dtype),
         (batched_base, padded_centered_weights),
     )
     score_surrogate = jnp.where(

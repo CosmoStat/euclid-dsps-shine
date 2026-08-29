@@ -480,6 +480,47 @@ def test_score_function_caps_working_batch_and_handles_padding() -> None:
     assert jnp.isfinite(capped_gradient)
 
 
+def test_score_function_mixed_float32_weights_and_float64_prior() -> None:
+    class MixedDtypePrior:
+        latent_dim = 1
+
+        def __init__(self, shift):
+            self.shift = shift
+
+        def forward(self, base):
+            value = base.astype(jnp.float64) + self.shift
+            return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
+        def log_prob(self, value):
+            residual = value - self.shift
+            return -0.5 * jnp.square(residual[:, 0])
+
+    with jax.enable_x64():
+        point = jnp.asarray(0.1, dtype=jnp.float64)
+
+        def objective(shift):
+            value, _metrics = estimate_log_alpha_score_function(
+                MixedDtypePrior(shift),
+                jax.random.PRNGKey(1402),
+                n_prior_samples=130,
+                prior_sample_batch_size=64,
+                dtype=jnp.float32,
+                log_beta_fn=lambda value: observed_flux_selection_log_beta(
+                    value[:, 0],
+                    jnp.asarray(0.7, dtype=jnp.float64),
+                    jnp.asarray(0.2, dtype=jnp.float64),
+                ).astype(jnp.float32),
+            )
+            return value
+
+        value, gradient = jax.value_and_grad(objective)(point)
+
+    assert value.dtype == jnp.float64
+    assert gradient.dtype == jnp.float64
+    assert jnp.isfinite(value)
+    assert jnp.isfinite(gradient)
+
+
 def test_observed_magnitude_limit_uses_shared_ab_flux_convention() -> None:
     expected = float(np.asarray(abmag_to_fnu_cgs(25.0)))
     actual = float(np.asarray(observed_magnitude_flux_limit_jax(25.0)))
