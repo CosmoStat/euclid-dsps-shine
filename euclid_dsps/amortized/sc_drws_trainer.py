@@ -556,6 +556,10 @@ def train_feniks_sc_drws(
     prior_log = out / "sc_drws_prior_log.csv"
     hard_log = out / "sc_drws_hard_log.csv"
     support_log = out / "sc_drws_support_probe_log.csv"
+    if resume_state is not None:
+        completed_epoch = int(np.asarray(state.epoch))
+        for log_path in (training_log, prior_log, hard_log, support_log):
+            _truncate_csv_after_epoch(log_path, completed_epoch)
     support_cfg = raw.get("checkpoint_safety", {}) or {}
     support_probe_step = None
     if bool(support_cfg.get("enabled", False)):
@@ -2041,3 +2045,25 @@ def _append_csv(path, rows):
         if not exists:
             writer.writeheader()
         writer.writerows(rows)
+
+
+def _truncate_csv_after_epoch(path: Path, completed_epoch: int) -> None:
+    """Remove rows from failed, non-checkpointed epochs before a resume."""
+    if not path.is_file():
+        return
+    with path.open(encoding="utf-8", newline="") as stream:
+        reader = csv.DictReader(stream)
+        fieldnames = reader.fieldnames
+        rows = [
+            row
+            for row in reader
+            if int(float(row.get("epoch", -1))) <= int(completed_epoch)
+        ]
+    if not fieldnames:
+        return
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(path)

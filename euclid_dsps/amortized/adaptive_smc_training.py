@@ -135,6 +135,12 @@ class PriorMstepTerms(NamedTuple):
     finite_fraction: jnp.ndarray
 
 
+class PriorDataTerms(NamedTuple):
+    data_nll: jnp.ndarray
+    eligible_count: jnp.ndarray
+    finite_fraction: jnp.ndarray
+
+
 class OptimizerStepMetrics(NamedTuple):
     loss: jnp.ndarray
     raw_grad_norm: jnp.ndarray
@@ -876,6 +882,76 @@ def smc_prior_mstep_terms(
     )
 
 
+def batched_prior_data_mstep_terms(
+    current_prior,
+    posterior: SMCPosteriorBatch,
+    *,
+    object_batch_size: int = 128,
+) -> PriorDataTerms:
+    """Evaluate the exact prior data term with bounded hidden activations."""
+    particles = jax.lax.stop_gradient(posterior.particles)
+    weights = jax.lax.stop_gradient(posterior.normalized_weights)
+    eligible = jax.lax.stop_gradient(posterior.eligible)
+    particle_count, object_count, latent_dim = particles.shape
+    batch_size = min(int(object_batch_size), int(object_count))
+    if batch_size <= 0:
+        raise ValueError("object_batch_size and posterior object count must be positive")
+    batch_count = (int(object_count) + batch_size - 1) // batch_size
+    padded_count = batch_count * batch_size
+    padding = padded_count - int(object_count)
+    particles = jnp.pad(particles, ((0, 0), (0, padding), (0, 0)))
+    weights = jnp.pad(weights, ((0, 0), (0, padding)))
+    eligible = jnp.pad(eligible, (0, padding), constant_values=False)
+    valid = jnp.arange(padded_count) < int(object_count)
+    particle_batches = jnp.swapaxes(
+        particles.reshape(particle_count, batch_count, batch_size, latent_dim),
+        0,
+        1,
+    )
+    weight_batches = jnp.swapaxes(
+        weights.reshape(particle_count, batch_count, batch_size),
+        0,
+        1,
+    )
+    eligible_batches = eligible.reshape(batch_count, batch_size)
+    valid_batches = valid.reshape(batch_count, batch_size)
+    value_dtype = current_prior.log_prob(
+        jnp.zeros((1, 1, latent_dim), dtype=particles.dtype)
+    ).dtype
+
+    def accumulate(carry, inputs):
+        data_sum, usable_count, finite_count, evaluated_count = carry
+        particle_batch, weight_batch, eligible_batch, valid_batch = inputs
+        logprior = current_prior.log_prob(particle_batch)
+        finite = jnp.isfinite(logprior)
+        usable = eligible_batch & valid_batch & jnp.all(finite, axis=0)
+        per_object = -jnp.sum(
+            weight_batch * jnp.where(finite, logprior, 0.0),
+            axis=0,
+        )
+        data_sum += jnp.sum(jnp.where(usable, per_object, 0.0))
+        usable_count += jnp.sum(usable.astype(value_dtype))
+        finite_count += jnp.sum(
+            (finite & valid_batch[None, :]).astype(value_dtype)
+        )
+        evaluated_count += jnp.asarray(particle_count, dtype=value_dtype) * jnp.sum(
+            valid_batch.astype(value_dtype)
+        )
+        return (data_sum, usable_count, finite_count, evaluated_count), None
+
+    initial = tuple(jnp.asarray(0.0, dtype=value_dtype) for _ in range(4))
+    (data_sum, usable_count, finite_count, evaluated_count), _ = jax.lax.scan(
+        jax.checkpoint(accumulate),
+        initial,
+        (particle_batches, weight_batches, eligible_batches, valid_batches),
+    )
+    return PriorDataTerms(
+        data_nll=data_sum / jnp.maximum(usable_count, 1.0),
+        eligible_count=usable_count,
+        finite_fraction=finite_count / jnp.maximum(evaluated_count, 1.0),
+    )
+
+
 def apply_prior_macro_update(
     *,
     model,
@@ -903,11 +979,9 @@ def apply_prior_macro_update(
     )
 
     def data_objective(candidate_prior):
-        terms = smc_prior_mstep_terms(
+        terms = batched_prior_data_mstep_terms(
             candidate_prior,
-            prior_snapshot.prior,
             posterior,
-            old_samples,
         )
         return terms.data_nll, terms
 
@@ -920,12 +994,11 @@ def apply_prior_macro_update(
         return selection_log_alpha_fn(candidate_model, selection_key)
 
     def trust_objective(candidate_prior):
-        return smc_prior_mstep_terms(
-            candidate_prior,
-            prior_snapshot.prior,
-            posterior,
-            old_samples,
-        ).prior_kl_old_new
+        stopped_samples = jax.lax.stop_gradient(old_samples)
+        old_log_prob = jax.lax.stop_gradient(
+            prior_snapshot.prior.log_prob(stopped_samples)
+        )
+        return jnp.mean(old_log_prob - candidate_prior.log_prob(stopped_samples))
 
     (_data_nll, terms), data_grads = eqx.filter_value_and_grad(
         data_objective,
@@ -948,6 +1021,12 @@ def apply_prior_macro_update(
         data_grads,
         selection_grads,
         trust_grads,
+    )
+    terms = PriorMstepTerms(
+        data_nll=terms.data_nll,
+        prior_kl_old_new=trust_value,
+        eligible_count=terms.eligible_count,
+        finite_fraction=terms.finite_fraction,
     )
     loss = terms.data_nll + log_alpha + float(trust_strength) * trust_value
     raw_norm = tree_l2_norm(grads)

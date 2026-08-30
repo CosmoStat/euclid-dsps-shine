@@ -2,6 +2,14 @@
 
 ## 2026-08-29 SC-DRWS prior-update memory repair
 
+- The first remotely exercised macro after the selection repair still failed
+  during XLA autotuning, now on the population data term: the HLO
+  `f64[256,524288]` is the prior hidden activation for
+  `512 particles x 1024 objects` and requires 1 GiB for one tensor. Preserve
+  the exact 1024-object macro objective and optimizer cadence, but evaluate its
+  data NLL through a rematerialized scan capped at 128 objects. Selection and
+  trust remain evaluated once per macro, so memory bounding must not multiply
+  the expensive selection-normalization work.
 - Relaunch `1550687_0` reached the selection preflight before state loading but
   exposed an x64-only scan contract error: completeness weights were float32
   while the loaded population prior's `log_prob` was float64. Type the scalar
@@ -37,6 +45,18 @@
 - The mixed-dtype follow-up passes 31 selection/prior tests with
   `JAX_ENABLE_X64=true`, including the explicit float32-completeness/
   float64-prior regression, plus Ruff, compileall and `git diff --check`.
+- The first post-repair population macro identified a distinct activation
+  blow-up in the prior data term: evaluating all `512 x 1024` stopped
+  particles together produced the observed `f64[256,524288]` transpose and
+  exhausted another 1 GiB during autotuning. The exact 1024-object objective
+  now accumulates through rematerialized 128-object scan blocks, reducing that
+  dominant activation to `f64[256,65536]` while retaining one optimizer update,
+  one selection estimator and one trust term per macro. Resume also truncates
+  CSV rows newer than the last durable state, so the failed epoch-64 replay is
+  no longer reported as checkpointed progress. Verification passes 79 focused
+  x64 tests, Ruff, compileall, shell/SLURM syntax and `git diff --check`; no
+  scientific configuration, manifest, truth contract or checkpoint hash input
+  changed, and no Jean-Zay job was submitted.
 
 ## 2026-08-27 Selection-Corrected Defensive RWS finalization
 

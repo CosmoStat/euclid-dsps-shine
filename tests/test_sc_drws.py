@@ -54,6 +54,7 @@ from euclid_dsps.amortized.sc_drws_trainer import (
     _save_components,
     _save_state,
     _support_probe_is_better,
+    _truncate_csv_after_epoch,
     validate_sc_drws_config,
 )
 from euclid_dsps.calibration import GlobalSedScaleState
@@ -791,6 +792,27 @@ def test_training_resume_state_round_trip_and_provenance_gate(
     np.testing.assert_allclose(np.asarray(loaded.model), [1.0, 2.0])
     with pytest.raises(ValueError, match="provenance mismatch"):
         _load_state(path, state, config={"changed": True}, runtime=runtime)
+
+
+def test_resume_truncates_logs_after_last_durable_epoch(tmp_path: Path) -> None:
+    path = tmp_path / "training.csv"
+    path.write_text(
+        "epoch,batch,loss\n"
+        "62,1,2.0\n"
+        "63,1,1.5\n"
+        "64,1,1.4\n"
+        "64,2,1.3\n",
+        encoding="utf-8",
+    )
+
+    _truncate_csv_after_epoch(path, 63)
+
+    assert path.read_text(encoding="utf-8") == (
+        "epoch,batch,loss\n"
+        "62,1,2.0\n"
+        "63,1,1.5\n"
+    )
+    _truncate_csv_after_epoch(tmp_path / "missing.csv", 63)
 
 
 def test_cost_estimate_accounts_for_sleep_and_hard_expansion() -> None:

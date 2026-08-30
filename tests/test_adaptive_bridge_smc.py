@@ -20,6 +20,7 @@ from euclid_dsps.amortized.adaptive_bridge_smc import (
 from euclid_dsps.amortized.adaptive_smc_training import (
     SMCPosteriorBatch,
     apply_prior_macro_update,
+    batched_prior_data_mstep_terms,
     make_component_optimizer,
     merge_hard_fallback,
     primary_posterior_batch,
@@ -760,6 +761,13 @@ def test_realnvp_prior_data_and_trust_gradients_are_finite_at_extremes() -> None
             candidate, prior, posterior, trust_samples
         ).data_nll
     )(prior)
+    batched_data_value, batched_data_gradient = eqx.filter_value_and_grad(
+        lambda candidate: batched_prior_data_mstep_terms(
+            candidate,
+            posterior,
+            object_batch_size=2,
+        ).data_nll
+    )(prior)
     trust_value, trust_gradient = eqx.filter_value_and_grad(
         lambda candidate: smc_prior_mstep_terms(
             candidate, prior, posterior, trust_samples
@@ -775,7 +783,16 @@ def test_realnvp_prior_data_and_trust_gradients_are_finite_at_extremes() -> None
     ).prior_kl_old_new
 
     assert jnp.isfinite(data_value)
+    assert jnp.allclose(batched_data_value, data_value, rtol=1.0e-6, atol=1.0e-6)
+    for batched_leaf, full_leaf in zip(
+        jax.tree_util.tree_leaves(batched_data_gradient),
+        jax.tree_util.tree_leaves(data_gradient),
+        strict=True,
+    ):
+        if batched_leaf is not None:
+            assert jnp.allclose(batched_leaf, full_leaf, rtol=2.0e-5, atol=2.0e-5)
     assert tree_all_finite(data_gradient)
+    assert tree_all_finite(batched_data_gradient)
     assert trust_value == pytest.approx(0.0, abs=1.0e-7)
     assert tree_all_finite(trust_gradient)
     assert jnp.isfinite(proposed_kl)
