@@ -2,6 +2,17 @@
 
 ## 2026-08-29 SC-DRWS prior-update memory repair
 
+- Long-running full job `1562322_0` completed repeated Phase-B wake/prior
+  cycles through epoch 76, then hit a CPython/Equinox `inspect.signature`
+  `SystemError` while macro 33 at epoch 80 redundantly evaluated
+  `prior.log_prob(zeros)` only to infer the score carry dtype. Its continuation
+  recovered the durable state and reached epoch 92. Remove that redundant flow
+  trace by carrying a scalar dtype witness from the already-required prior
+  forward pass; preserve the mixed float32 completeness / float64 prior score
+  contract and add a regression whose prior rejects the obsolete singleton
+  log-probability probe. Verification passes 69 broad x64 selection/prior/
+  SC-DRWS tests plus Ruff, compileall and `git diff --check`; no configuration,
+  objective, sample count or checkpoint provenance input changed.
 - The first remotely exercised macro after the selection repair still failed
   during XLA autotuning, now on the population data term: the HLO
   `f64[256,524288]` is the prior hidden activation for

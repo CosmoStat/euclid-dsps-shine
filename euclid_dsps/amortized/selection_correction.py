@@ -264,9 +264,12 @@ def estimate_log_alpha_score_function_diagnostic(
     def transform_and_score(base_batch):
         samples, _logdet = prior.forward(base_batch)
         stopped = jax.lax.stop_gradient(samples)
-        return jax.lax.stop_gradient(log_beta_fn(stopped))
+        return (
+            jax.lax.stop_gradient(log_beta_fn(stopped)),
+            jnp.zeros((), dtype=samples.dtype),
+        )
 
-    batched_log_beta = jax.lax.map(
+    batched_log_beta, sample_dtype_witness = jax.lax.map(
         jax.checkpoint(transform_and_score),
         batched_base,
     )
@@ -284,9 +287,7 @@ def estimate_log_alpha_score_function_diagnostic(
         (0, padded_count - count),
         constant_values=0.0,
     ).reshape(n_batches, batch_size)
-    score_dtype = prior.log_prob(
-        jnp.zeros((1, int(prior.latent_dim)), dtype=dtype)
-    ).dtype
+    score_dtype = sample_dtype_witness.dtype
 
     def accumulate_score(score, inputs):
         base_batch, weight_batch = inputs

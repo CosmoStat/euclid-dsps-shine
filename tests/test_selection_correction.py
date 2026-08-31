@@ -521,6 +521,40 @@ def test_score_function_mixed_float32_weights_and_float64_prior() -> None:
     assert jnp.isfinite(gradient)
 
 
+def test_score_function_reuses_forward_dtype_without_singleton_logprob_probe() -> None:
+    class NoSingletonProbePrior:
+        latent_dim = 1
+
+        def forward(self, base):
+            value = base.astype(jnp.float64)
+            return value, jnp.zeros(value.shape[:-1], dtype=value.dtype)
+
+        def log_prob(self, value):
+            if value.shape[0] == 1:
+                raise AssertionError("unexpected singleton dtype probe")
+            return -0.5 * jnp.square(value[:, 0])
+
+    with jax.enable_x64():
+        value, surrogate, metrics = estimate_log_alpha_score_function_diagnostic(
+            NoSingletonProbePrior(),
+            jax.random.PRNGKey(1403),
+            n_prior_samples=130,
+            prior_sample_batch_size=64,
+            dtype=jnp.float32,
+            log_beta_fn=lambda latent: observed_flux_selection_log_beta(
+                latent[:, 0],
+                jnp.asarray(0.7, dtype=jnp.float64),
+                jnp.asarray(0.2, dtype=jnp.float64),
+            ).astype(jnp.float32),
+        )
+
+    assert value.dtype == jnp.float32
+    assert surrogate.dtype == jnp.float64
+    assert metrics["selection/prior_sample_batch_size"] == 64
+    assert jnp.isfinite(value)
+    assert jnp.isfinite(surrogate)
+
+
 def test_observed_magnitude_limit_uses_shared_ab_flux_convention() -> None:
     expected = float(np.asarray(abmag_to_fnu_cgs(25.0)))
     actual = float(np.asarray(observed_magnitude_flux_limit_jax(25.0)))
