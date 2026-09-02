@@ -630,6 +630,21 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     full = (root / "scripts/feniks_sc_drws_full_h100.slurm").read_text()
     full_monitor = (root / "scripts/monitor_feniks_sc_drws_full.sh").read_text()
     inference = (root / "scripts/feniks_sc_drws_inference_h100.slurm").read_text()
+    inference_submit = (
+        root / "scripts/submit_feniks_sc_drws_inference.sh"
+    ).read_text()
+    postfreeze = (
+        root / "scripts/feniks_sc_drws_postfreeze_h100.slurm"
+    ).read_text()
+    postfreeze_submit = (
+        root / "scripts/submit_feniks_sc_drws_postfreeze.sh"
+    ).read_text()
+    postfreeze_monitor = (
+        root / "scripts/monitor_feniks_sc_drws_postfreeze.sh"
+    ).read_text()
+    full_tail_submit = (
+        root / "scripts/submit_feniks_sc_drws_full_tail.sh"
+    ).read_text()
     entrypoint = (root / "scripts/train_feniks_sc_drws.py").read_text()
     assert "--array=0-3%4" in submit
     assert "#SBATCH --gres=gpu:4" in pilot
@@ -659,12 +674,23 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     assert "feniks_sc_drws_r29_historical_production.yaml" in full
     assert "feniks_sc_drws_r29_current_production.yaml" in full
     assert "full_production_anti_collapse_v1" in full
-    gpu_workers = (pilot, confirmation, full, inference)
+    gpu_workers = (pilot, confirmation, full, inference, postfreeze)
     for worker in gpu_workers:
         assert "export EUCLID_DSPS_JAX_PLATFORMS=cuda" in worker
         assert "export EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0" in worker
         assert "export EUCLID_DSPS_REQUIRE_GPU=1" in worker
         assert "export EUCLID_DSPS_EXPECTED_GPU_NAME=NVIDIA" in worker
+    assert 'ALLOW_DIAGNOSTIC_FULL="${ALLOW_DIAGNOSTIC_FULL:-0}"' in inference
+    assert 'AFTER_JOB="${AFTER_JOB:-}"' in inference_submit
+    assert '--dependency="afterok:$AFTER_JOB"' in inference_submit
+    assert "evaluate_feniks_sc_drws_postfreeze.py" in postfreeze
+    assert "report_feniks_sc_drws.py" in postfreeze
+    assert '--dependency="afterok:$AFTER_JOB"' in postfreeze_submit
+    assert "SC_DRWS_POSTFREEZE_RECEIPT.json" in postfreeze_monitor
+    assert "prior_${variant}/report_receipt.json" in postfreeze_monitor
+    assert '--dependency="afterany:$AFTER_JOB"' in full_tail_submit
+    assert '--dependency="afterok:$TAIL_JOB"' in full_tail_submit
+    assert "submit_feniks_sc_drws_postfreeze.sh" in full_tail_submit
     runtime_bootstrap = entrypoint.index("apply_jax_runtime_env(")
     trainer_import = entrypoint.index(
         "from euclid_dsps.amortized.sc_drws_trainer import train_feniks_sc_drws"

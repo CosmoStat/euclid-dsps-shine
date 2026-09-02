@@ -7,7 +7,7 @@
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=48
-#SBATCH --time=12:00:00
+#SBATCH --time=20:00:00
 #SBATCH --hint=nomultithread
 #SBATCH --array=0-3%4
 
@@ -19,14 +19,40 @@ CATALOG_DIR="${CATALOG_DIR:?CATALOG_DIR is required}"
 RECOVERY_ROOT="${RECOVERY_ROOT:?RECOVERY_ROOT is required}"
 INFERENCE_ROOT="${INFERENCE_ROOT:?INFERENCE_ROOT is required}"
 CACHE_ROOT="${CACHE_ROOT:?CACHE_ROOT is required}"
+ALLOW_DIAGNOSTIC_FULL="${ALLOW_DIAGNOSTIC_FULL:-0}"
 TASK="${SLURM_ARRAY_TASK_ID:?SLURM_ARRAY_TASK_ID is required}"
 PASS="$RECOVERY_ROOT/FULL_TRAIN_PASS.json"
-SELECTED=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_candidate"])' "$PASS")
-CHECKPOINT=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_checkpoint"])' "$PASS")
-FEATURE_STATS=$(python -c 'import json,sys; print(json.load(open(sys.argv[1]))["selected_feature_stats"])' "$PASS")
+FAIL="$RECOVERY_ROOT/FULL_TRAIN_FAIL.json"
+if [[ -s "$PASS" ]]; then
+  RECEIPT="$PASS"
+  CHECKPOINT_KEY=selected_checkpoint
+  FEATURE_STATS_KEY=selected_feature_stats
+  INFERENCE_ROLE=promotional
+elif [[ "$ALLOW_DIAGNOSTIC_FULL" == "1" && -s "$FAIL" ]]; then
+  RECEIPT="$FAIL"
+  CHECKPOINT_KEY=diagnostic_checkpoint
+  FEATURE_STATS_KEY=diagnostic_feature_stats
+  INFERENCE_ROLE=diagnostic_only
+else
+  echo "[sc-drws-infer][error] no authorized full receipt" >&2
+  exit 2
+fi
+readarray -t RECEIPT_VALUES < <(python - "$RECEIPT" "$CHECKPOINT_KEY" "$FEATURE_STATS_KEY" <<'PY'
+import json, sys
+receipt = json.load(open(sys.argv[1]))
+for key in ("selected_candidate", sys.argv[2], sys.argv[3]):
+    value = receipt.get(key)
+    if not value:
+        raise SystemExit(f"missing {key} in {sys.argv[1]}")
+    print(value)
+PY
+)
+SELECTED="${RECEIPT_VALUES[0]}"
+CHECKPOINT="${RECEIPT_VALUES[1]}"
+FEATURE_STATS="${RECEIPT_VALUES[2]}"
 case "$SELECTED" in
-  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical.yaml ;;
-  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current.yaml ;;
+  historical_4x128) CONFIG=configs/experiments/feniks_sc_drws_r29_historical_production.yaml ;;
+  current_residual_6x256) CONFIG=configs/experiments/feniks_sc_drws_r29_current_production.yaml ;;
   *) exit 2 ;;
 esac
 INDICES="$INFERENCE_ROOT/manifests/shard_${TASK}.npy"
@@ -48,8 +74,9 @@ module load arch/h100
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 mkdir -p "$MPLCONFIGDIR" "$CACHE_ROOT/jax"
-for path in "$PASS" "$CONFIG" "$CHECKPOINT" "$FEATURE_STATS" "$INDICES" \
+for path in "$RECEIPT" "$CONFIG" "$CHECKPOINT" "$FEATURE_STATS" "$INDICES" \
   "$CATALOG_DIR/train.parquet"; do test -s "$path" || exit 2; done
+echo "[sc-drws-infer] role=$INFERENCE_ROLE receipt=$RECEIPT"
 OBJECTS=$(python -c 'import numpy as np,sys; print(len(np.load(sys.argv[1])))' "$INDICES")
 python -m euclid_dsps.cli --config "$CONFIG" amortized-infer-diffsky \
   --dataset "$CATALOG_DIR/train.parquet" --checkpoint "$CHECKPOINT" \

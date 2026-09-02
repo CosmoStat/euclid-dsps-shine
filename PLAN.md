@@ -7693,3 +7693,37 @@ Phase 6 - Later AGN and production scaling:
   simulations and validation/inference. Benchmark the smoke before assigning a
   wall-time; start K512 autotuning at four objects per H100 and enforce the
   configured 85-90% device-memory target.
+
+## 2026-09-02 SC-DRWS post-freeze evaluation chain
+
+- Preserve the scientific `FULL_TRAIN_PASS` gate, but also record a clearly
+  non-promotional raw/EMA diagnostic checkpoint when both variants are
+  technically complete yet miss support or PPC thresholds.
+- Add a dependency-aware four-shard selected-catalogue inference launch path so
+  it can be queued before the long training chain finishes. Diagnostic fallback
+  must be explicit and must never be relabeled as a scientific pass.
+- Add an independent post-freeze closure job that runs only after the frozen
+  full summary exists: no-truth parent/selected-prior reports, held-out 15D
+  MIRA and TARP for raw/EMA proposal and importance-resampled draws, and
+  parent/selected population comparisons against truth. Truth remains absent
+  from training, checkpoint selection, and the no-truth gate.
+- Extend workflow tests, run focused pytest, Ruff, compileall, and shell syntax
+  checks, then commit and push before providing the Jean-Zay continuation and
+  monitoring commands.
+
+Completed locally:
+
+- Added a one-command tail submitter that queues one resumable `afterany`
+  worker, replaces the terminal full gate, and submits all post-freeze work
+  behind the replacement gate.
+- The full worker still performs independent raw/EMA K2048 ordinary-IW and
+  dense PPC evaluation. The post-freeze chain adds four parallel catalogue
+  shards, no-truth raw/EMA parent and beta-weighted selected-prior reports,
+  and held-out dense 15D MIRA/TARP for q and importance-resampled draws.
+- A failed scientific support/PPC gate remains `FAIL`; a technically readable
+  raw/EMA checkpoint may only authorize a clearly labeled, non-promotional
+  diagnostic inference and closure.
+- Validation: `59 passed` across the SC-DRWS workflow and MIRA/TARP tests;
+  Ruff, Python compilation, Bash syntax, and `git diff --check` pass. Jean-Zay
+  submission and remote artifact completion remain to be performed by the
+  user after pulling this commit.

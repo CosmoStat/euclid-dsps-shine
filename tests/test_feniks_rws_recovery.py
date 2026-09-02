@@ -24,6 +24,9 @@ from scripts.evaluate_feniks_rws_recovery import (
     support_tail_metrics,
     truth_free_inference_contract,
 )
+from scripts.finalize_feniks_sc_drws_postfreeze import (
+    finalize as finalize_postfreeze,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "configs" / "experiments"
@@ -602,6 +605,137 @@ def test_full_finalizer_accepts_explicit_unconfirmed_authorization(
         receipt["launch_authorization_status"]
         == "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE"
     )
+
+
+def test_full_finalizer_records_nonpromotional_diagnostic_checkpoint(
+    tmp_path: Path,
+) -> None:
+    candidate = "current_residual_6x256"
+    (tmp_path / "FULL_TRAIN_PASS.json").write_text(
+        json.dumps({"status": "PASS", "checkpoint": "stale"})
+    )
+    (tmp_path / "FULL_LAUNCH_AUTHORIZATION.json").write_text(
+        json.dumps(
+            {
+                "status": "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE",
+                "selected_candidate": candidate,
+                "truth_used_for_training_or_authorization": False,
+            }
+        )
+    )
+    run_dir = tmp_path / "full" / candidate / f"seed_{FULL_SEEDS[0]}"
+    run_dir.mkdir(parents=True)
+    (run_dir / "full_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "FAIL",
+                "seed": FULL_SEEDS[0],
+                "checkpoint": None,
+                "feature_stats": "/full/feature_stats.json",
+                "training": {
+                    "raw_model_checkpoint": "/full/raw.eqx",
+                    "ema_model_checkpoint": "/full/ema.eqx",
+                },
+                "variants": [
+                    {
+                        "label": "raw",
+                        "status": "FAIL",
+                        "technical_status": "PASS",
+                        "selection_corrected_exact_gaussian_iw_score": float("nan"),
+                        "exact_gaussian_ordinary_iw": {
+                            "median_raw_ess_fraction": 0.01
+                        },
+                        "exact_gaussian_posterior_predictive": {
+                            "median_band_rms": 3.0
+                        },
+                        "truth_free_inference_contract": {
+                            "support": {"status": "PASS"},
+                            "predictive": {"status": "PASS"},
+                        },
+                    },
+                    {
+                        "label": "ema",
+                        "status": "FAIL",
+                        "technical_status": "PASS",
+                        "selection_corrected_exact_gaussian_iw_score": float("nan"),
+                        "exact_gaussian_ordinary_iw": {
+                            "median_raw_ess_fraction": 0.02
+                        },
+                        "exact_gaussian_posterior_predictive": {
+                            "median_band_rms": 2.0
+                        },
+                        "truth_free_inference_contract": {
+                            "support": {"status": "PASS"},
+                            "predictive": {"status": "PASS"},
+                        },
+                    },
+                ],
+            }
+        )
+    )
+
+    receipt = finalize_full(tmp_path)
+
+    assert receipt["status"] == "FAIL"
+    assert receipt["ready_for_four_shard_catalogue_inference"] is False
+    assert receipt["diagnostic_checkpoint_variant"] == "ema"
+    assert receipt["diagnostic_checkpoint"] == "/full/ema.eqx"
+    assert receipt["diagnostic_catalogue_inference_allowed"] is True
+    assert receipt["diagnostic_catalogue_inference_is_promotional"] is False
+    assert not (tmp_path / "FULL_TRAIN_PASS.json").exists()
+
+
+def test_postfreeze_finalizer_preserves_diagnostic_status(tmp_path: Path) -> None:
+    closure = tmp_path / "closure"
+    inference = tmp_path / "inference"
+    closure.mkdir()
+    inference.mkdir()
+    (closure / "POSTFREEZE_COMPLETE.json").write_text(
+        json.dumps(
+            {
+                "status": "DIAGNOSTIC_COMPLETE",
+                "truth_used_for_training_or_checkpoint_selection": False,
+            }
+        )
+    )
+    (inference / "inference_receipt.json").write_text(
+        json.dumps(
+            {
+                "status": "DIAGNOSTIC_COMPLETE",
+                "diagnostic_only": True,
+                "truth_used": False,
+            }
+        )
+    )
+
+    receipt = finalize_postfreeze(
+        recovery_root=tmp_path,
+        closure_root=closure,
+        inference_root=inference,
+    )
+
+    assert receipt["status"] == "DIAGNOSTIC_COMPLETE"
+    assert receipt["scientific_promotion"] is False
+    assert receipt["truth_used_for_training_or_checkpoint_selection"] is False
+
+
+def test_sc_drws_truth_closure_config_is_separate_from_training() -> None:
+    training = load_config(
+        CONFIG_DIR / "feniks_sc_drws_r29_current_production.yaml"
+    )
+    closure = load_config(CONFIG_DIR / "feniks_sc_drws_r29_truth_closure.yaml")
+
+    assert training["truth"]["parameter_columns"] == {}
+    assert set(closure["truth"]["parameter_columns"]) == {
+        "z_obs",
+        "log10_stellar_mass",
+        "log10_stellar_metallicity",
+        "dust_av",
+        "dust_delta",
+        *(f"sfh_dlog_sfr_{index:02d}" for index in range(1, 11)),
+    }
+    assert closure["amortized"]["inference"]["write_truth_snapshot"] is True
+    assert closure["amortized"]["inference"]["write_truth_diagnostics"] is True
 
 
 def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:

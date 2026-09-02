@@ -11,9 +11,22 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--full-pass", type=Path, required=True)
+    parser.add_argument(
+        "--full-receipt", "--full-pass", dest="full_receipt", type=Path, required=True
+    )
+    parser.add_argument("--diagnostic-only", action="store_true")
     args = parser.parse_args()
-    full = json.loads(args.full_pass.read_text())
+    full = json.loads(args.full_receipt.read_text())
+    if args.diagnostic_only:
+        checkpoint = full.get("diagnostic_checkpoint")
+        if full.get("status") != "FAIL" or not checkpoint:
+            raise SystemExit("invalid diagnostic full receipt")
+        status = "DIAGNOSTIC_COMPLETE"
+    else:
+        checkpoint = full.get("selected_checkpoint")
+        if full.get("status") != "PASS" or not checkpoint:
+            raise SystemExit("invalid promoted full receipt")
+        status = "PASS"
     shards = []
     for index in range(4):
         root = args.root / f"shard_{index}"
@@ -22,10 +35,12 @@ def main() -> None:
             raise SystemExit(f"incomplete inference shard {index}")
         shards.append(json.loads(summary.read_text()))
     payload = {
-        "status": "PASS",
+        "status": status,
         "workflow": "SC-DRWS full selected-catalogue inference",
-        "checkpoint": full["selected_checkpoint"],
+        "checkpoint": checkpoint,
         "shards": 4,
+        "diagnostic_only": bool(args.diagnostic_only),
+        "scientific_promotion": not bool(args.diagnostic_only),
         "truth_used": False,
         "report_artifacts": {
             "posterior_joint_draws": "shard_*/posterior_samples/*.parquet",

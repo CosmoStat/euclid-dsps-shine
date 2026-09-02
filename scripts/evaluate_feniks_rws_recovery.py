@@ -710,6 +710,51 @@ def finalize_full(root: Path) -> dict[str, object]:
         )
     )
     chosen = eligible[0] if eligible else None
+    diagnostic_candidates = []
+    for run in runs:
+        training = run.get("training", {})
+        for variant in run.get("variants", []):
+            score = float(
+                variant.get("selection_corrected_exact_gaussian_iw_score", np.nan)
+            )
+            label = str(variant.get("label", ""))
+            checkpoint = training.get(f"{label}_model_checkpoint")
+            importance = variant.get("exact_gaussian_ordinary_iw", {})
+            predictive = variant.get("exact_gaussian_posterior_predictive", {})
+            truth_contract = variant.get("truth_free_inference_contract", {})
+            median_ess = float(importance.get("median_raw_ess_fraction", np.nan))
+            median_rms = float(predictive.get("median_band_rms", np.nan))
+            if (
+                label in {"raw", "ema"}
+                and checkpoint
+                and np.isfinite(median_ess)
+                and np.isfinite(median_rms)
+                and truth_contract.get("support", {}).get("status") == "PASS"
+                and truth_contract.get("predictive", {}).get("status") == "PASS"
+            ):
+                diagnostic_candidates.append(
+                    {
+                        "seed": int(run["seed"]),
+                        "variant": label,
+                        "checkpoint": str(checkpoint),
+                        "feature_stats": str(run["feature_stats"]),
+                        "selection_corrected_exact_gaussian_iw_score": score,
+                        "median_raw_ess_fraction": median_ess,
+                        "median_band_rms": median_rms,
+                        "scientific_status": str(variant.get("status", "FAIL")),
+                    }
+                )
+    diagnostic_candidates.sort(
+        key=lambda item: (
+            not np.isfinite(item["selection_corrected_exact_gaussian_iw_score"]),
+            -item["selection_corrected_exact_gaussian_iw_score"]
+            if np.isfinite(item["selection_corrected_exact_gaussian_iw_score"])
+            else 0.0,
+            -item["median_raw_ess_fraction"],
+            item["median_band_rms"],
+        )
+    )
+    diagnostic = diagnostic_candidates[0] if diagnostic_candidates else None
     payload = {
         "status": "PASS" if passed else "FAIL",
         "selected_candidate": selected,
@@ -720,10 +765,29 @@ def finalize_full(root: Path) -> dict[str, object]:
         "configured_final_seeds": list(FULL_SEEDS),
         "all_configured_final_seeds_passed": bool(passed),
         "ready_for_four_shard_catalogue_inference": bool(passed),
+        "diagnostic_checkpoint_variant": (
+            diagnostic["variant"] if diagnostic else None
+        ),
+        "diagnostic_checkpoint": diagnostic["checkpoint"] if diagnostic else None,
+        "diagnostic_feature_stats": (
+            diagnostic["feature_stats"] if diagnostic else None
+        ),
+        "diagnostic_catalogue_inference_allowed": bool(diagnostic),
+        "diagnostic_catalogue_inference_is_promotional": False,
+        "diagnostic_selection_contract": (
+            "Best truth-free raw/EMA checkpoint by finite selection-corrected "
+            "exact-Gaussian IW score when available, then ESS and PPC. This "
+            "fallback does not override failed support, PPC, entropy, or "
+            "unresolved-fraction gates."
+        ),
         "truth_used_for_training_or_checkpoint_selection": False,
         "runs": runs,
     }
     name = "FULL_TRAIN_PASS.json" if passed else "FULL_TRAIN_FAIL.json"
+    stale_name = "FULL_TRAIN_FAIL.json" if passed else "FULL_TRAIN_PASS.json"
+    stale_receipt = root / stale_name
+    if stale_receipt.is_file():
+        stale_receipt.unlink()
     (root / name).write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
