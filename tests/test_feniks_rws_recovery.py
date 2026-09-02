@@ -24,6 +24,11 @@ from scripts.evaluate_feniks_rws_recovery import (
     support_tail_metrics,
     truth_free_inference_contract,
 )
+from scripts.finalize_feniks_sc_drws_epoch160 import (
+    FENIKS_SPLINE15D_PARAMETERS,
+    _write_population_bank,
+    deterministic_panel_rows,
+)
 from scripts.finalize_feniks_sc_drws_postfreeze import (
     finalize as finalize_postfreeze,
 )
@@ -736,6 +741,94 @@ def test_sc_drws_truth_closure_config_is_separate_from_training() -> None:
     }
     assert closure["amortized"]["inference"]["write_truth_snapshot"] is True
     assert closure["amortized"]["inference"]["write_truth_diagnostics"] is True
+
+
+def test_epoch160_panel_uses_observed_flux_quantiles_only(tmp_path: Path) -> None:
+    catalog = tmp_path / "train.parquet"
+    rows = np.asarray([1, 2, 4, 6, 8, 9], dtype=np.int64)
+    pd.DataFrame(
+        {
+            "flux_lsst_r": np.asarray([100, 1, 4, 50, 2, 25, 8, 40, 16, 32]),
+            "truth_secret": np.arange(10, dtype=float),
+        }
+    ).to_parquet(catalog, index=False)
+
+    selected = deterministic_panel_rows(catalog, rows, count=3)
+
+    assert selected.tolist() == [1, 2, 9]
+
+
+def test_epoch160_population_bank_is_object_equal_and_keeps_dense_panel(
+    tmp_path: Path,
+) -> None:
+    parameters = tuple(FENIKS_SPLINE15D_PARAMETERS)
+    source = tmp_path / "source.parquet"
+    rows = []
+    for row_index in (10, 20):
+        for sample_id in range(4):
+            rows.append(
+                {
+                    "object_id": row_index + 100,
+                    "row_index": row_index,
+                    "sample_id": sample_id,
+                    **{
+                        name: float(row_index + sample_id + offset)
+                        for offset, name in enumerate(parameters)
+                    },
+                }
+            )
+    pd.DataFrame(rows).to_parquet(source, index=False)
+    (tmp_path / "population/individual_panels").mkdir(parents=True)
+    output = tmp_path / "population/posterior_aggregate/raw_q.parquet"
+
+    aggregate, panel, summary = _write_population_bank(
+        files=[source],
+        output=output,
+        expected_rows=np.asarray([10, 20]),
+        panel_rows=np.asarray([20]),
+        parameters=parameters,
+        samples_per_object=2,
+        original_samples_per_object=4,
+    )
+
+    assert aggregate.groupby("row_index").size().to_dict() == {10: 2, 20: 2}
+    assert len(panel) == 4
+    assert set(panel["row_index"]) == {20}
+    assert summary["object_equal_weighting"] is True
+    assert summary["distribution_replaced_by_point_estimates"] is False
+    assert output.is_file()
+
+
+def test_epoch160_submitter_shards_real_gpu_work_and_freezes_exact_checkpoint() -> None:
+    submitter = (
+        ROOT / "scripts/submit_feniks_sc_drws_epoch160_evaluation.sh"
+    ).read_text()
+    wait = (ROOT / "scripts/feniks_sc_drws_epoch160_wait.slurm").read_text()
+    heldout = (
+        ROOT / "scripts/feniks_sc_drws_epoch160_heldout_h100.slurm"
+    ).read_text()
+    catalogue = (
+        ROOT / "scripts/feniks_sc_drws_epoch160_catalogue_h100.slurm"
+    ).read_text()
+    finalizer = (
+        ROOT / "scripts/finalize_feniks_sc_drws_epoch160.py"
+    ).read_text()
+
+    assert "checkpoints/epoch_$(printf '%04d' \"$EPOCH\")" in wait
+    assert '[[ -s "$CHECKPOINT/raw_model.eqx"' in wait
+    assert "--array=0-7%8" in submitter
+    assert "--array=0-15%16" in submitter
+    assert '#SBATCH --gres=gpu:1' in heldout
+    assert '#SBATCH --gres=gpu:1' in catalogue
+    assert "--posterior-samples 1024" in heldout
+    assert "--posterior-samples 256" in catalogue
+    assert "--no-posterior-predictive" in catalogue
+    assert "full_test_indices.npy" in submitter
+    assert '--dataset "$CATALOG_DIR/test.parquet"' in catalogue
+    assert "raw ema" in heldout
+    assert "raw ema" in catalogue
+    assert "object-equal dense joint posterior mixture" in finalizer
+    assert "not relabeled as the parent prior" in finalizer
 
 
 def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:

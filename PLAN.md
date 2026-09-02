@@ -7727,3 +7727,37 @@ Completed locally:
   Ruff, Python compilation, Bash syntax, and `git diff --check` pass. Jean-Zay
   submission and remote artifact completion remain to be performed by the
   user after pulling this commit.
+
+## 2026-09-02 SC-DRWS epoch-160 parallel evaluation
+
+- Add an evaluation-only branch that waits for the exact durable
+  `checkpoints/epoch_0160` snapshot while the existing continuation chain keeps
+  training toward epoch 180. Never read the moving `latest.eqx` state.
+- Measure raw and EMA individual-posterior support with K=1024 on the frozen
+  512-object final-validation cohort, sharded across independent GPU tasks.
+  Include ordinary IW, dense PPC, and post-freeze MIRA/TARP without using truth
+  for training or checkpoint selection.
+- Infer raw and EMA dense joint posteriors for every observed-selected object in
+  the independent test catalogue with K=256, also sharded across independent
+  GPU tasks. Keep all per-object draws and produce deterministic observed-only
+  individual panels.
+- Report three distinct population objects: learned parent
+  `p_eta(theta|C0)`, beta-weighted observed-selected prior, and the descriptive
+  object-equal aggregate of catalogue posteriors (q and importance-resampled).
+  Never relabel the selected posterior stack as the parent distribution.
+- Add immutable receipts, checkpoint hashes, completion validation, monitoring,
+  focused tests, Python/shell linting, and paste-ready Jean-Zay submission.
+
+Completed locally:
+
+- Added an immediate CPU watcher for the exact truth-free epoch-160 component
+  snapshot; it never reads or copies the moving resumable state.
+- Added 8 one-H100 held-out tasks (`raw/EMA x 4`) at K=1024 with ordinary IW
+  and K=64 PPC, plus 16 one-H100 full independent-test tasks (`raw/EMA x 8`)
+  at K=256 with ordinary-IW resampling.
+- Added post-freeze 15D MIRA/TARP, parent and beta-selected prior closure,
+  object-equal q/IW posterior aggregates, distributional marginal/correlation
+  tables, and 16 observed-r-selected dense individual posterior panels.
+- Validation: `62 passed` across the SC-DRWS workflow and MIRA/TARP suites;
+  Ruff, full Python compilation, Bash syntax, and `git diff --check` pass.
+  Jean-Zay submission and remote completion remain to be performed by the user.
