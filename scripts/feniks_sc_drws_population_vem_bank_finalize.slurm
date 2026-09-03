@@ -25,6 +25,9 @@ module purge
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 if [[ -n "$GIT_BIN" ]]; then
-  export PATH="$(dirname "$GIT_BIN"):$PATH"
+  GIT_SHIM_DIR="${TMPDIR:-/tmp}/population-vem-git-${SLURM_JOB_ID}"
+  mkdir -p "$GIT_SHIM_DIR"
+  ln -sf "$GIT_BIN" "$GIT_SHIM_DIR/git"
+  export PATH="$GIT_SHIM_DIR:$PATH"
 fi
 python scripts/finalize_feniks_sc_drws_population_vem_banks.py --root "$VEM_ROOT"

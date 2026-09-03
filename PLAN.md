@@ -13,6 +13,13 @@ Completed locally: eight focused tests, Ruff, compileall, Bash syntax, direct
 main-checkout provenance read, and whitespace checks pass. Jean-Zay recovery
 submission remains explicit and has not been run from this checkout.
 
+Jean-Zay follow-up: recovery gate `1702560` found `git`, but prepending its
+whole binary directory shadowed the Conda interpreter with a Python lacking
+JAX. Restore only a `git` symlink through a private shim directory, and archive
+failed recovery receipts so the guarded recovery can be retried without
+discarding provenance or any completed bank. The retry change passes the eight
+focused tests, Ruff, compileall, Bash syntax, and whitespace checks locally.
+
 ## 2026-09-03 Population-VEM submit import preflight
 
 - The first Jean-Zay launch stopped before submission because the active Conda

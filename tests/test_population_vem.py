@@ -242,8 +242,11 @@ def test_population_vem_submission_uses_bounded_parallel_h100_stages() -> None:
         ROOT / "scripts/submit_feniks_sc_drws_population_vem_recovery.sh"
     ).read_text()
     assert 'GIT_BIN="${GIT_BIN:-$(command -v git || true)}"' in gate
-    assert 'export PATH="$(dirname "$GIT_BIN"):$PATH"' in gate
+    assert 'ln -sf "$GIT_BIN" "$GIT_SHIM_DIR/git"' in gate
+    assert 'export PATH="$GIT_SHIM_DIR:$PATH"' in gate
     assert "RECOVER_FAILED_CHAIN" in recovery
     assert "-name COMPLETE.json" in recovery
+    assert "recovery_history/failed-gate-" not in recovery
+    assert '"$RECOVERY_HISTORY/failed-gate-${BANK_GATE_JOB}.json"' in recovery
     assert "reused_initial_banks" in recovery
     assert "afterok:$NEW_BANK_GATE_JOB" in recovery

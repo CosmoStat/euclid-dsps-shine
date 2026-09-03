@@ -29,10 +29,12 @@ test ! -e "$VEM_ROOT/STAGE1_PASS.json" || {
   echo "[population-vem-recovery][error] stage 1 already has a receipt" >&2
   exit 2
 }
-test ! -e "$VEM_ROOT/RECOVERY_SUBMISSION.json" || {
-  echo "[population-vem-recovery][error] recovery was already submitted" >&2
-  exit 2
-}
+if [[ -e "$VEM_ROOT/RECOVERY_SUBMISSION.json" ]]; then
+  RECOVERY_HISTORY="$VEM_ROOT/recovery_history"
+  mkdir -p "$RECOVERY_HISTORY"
+  cp "$VEM_ROOT/RECOVERY_SUBMISSION.json" \
+    "$RECOVERY_HISTORY/failed-gate-${BANK_GATE_JOB}.json"
+fi
 
 for specification in q_fit:16 q_validation:4 selection_reference:8 selection_audit:8; do
   bank="${specification%%:*}"
