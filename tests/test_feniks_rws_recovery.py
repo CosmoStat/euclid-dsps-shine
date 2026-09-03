@@ -32,6 +32,7 @@ from scripts.finalize_feniks_sc_drws_epoch160 import (
 from scripts.finalize_feniks_sc_drws_postfreeze import (
     finalize as finalize_postfreeze,
 )
+from scripts.report_feniks_sc_drws import _create_staging_output
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "configs" / "experiments"
@@ -758,6 +759,17 @@ def test_epoch160_panel_uses_observed_flux_quantiles_only(tmp_path: Path) -> Non
     assert selected.tolist() == [1, 2, 9]
 
 
+def test_sc_drws_report_stages_a_complete_runtime_tree(tmp_path: Path) -> None:
+    output = tmp_path / "population" / "prior"
+
+    staging = _create_staging_output(output)
+
+    assert staging.parent == output.parent
+    assert staging.name.startswith(".prior.tmp-")
+    assert (staging / "runtime").is_dir()
+    assert not output.exists()
+
+
 def test_epoch160_population_bank_is_object_equal_and_keeps_dense_panel(
     tmp_path: Path,
 ) -> None:
@@ -813,6 +825,12 @@ def test_epoch160_submitter_shards_real_gpu_work_and_freezes_exact_checkpoint() 
     finalizer = (
         ROOT / "scripts/finalize_feniks_sc_drws_epoch160.py"
     ).read_text()
+    finalize_worker = (
+        ROOT / "scripts/feniks_sc_drws_epoch160_finalize_h100.slurm"
+    ).read_text()
+    retry = (
+        ROOT / "scripts/resubmit_feniks_sc_drws_epoch160_finalize.sh"
+    ).read_text()
 
     assert "checkpoints/epoch_$(printf '%04d' \"$EPOCH\")" in wait
     assert '[[ -s "$CHECKPOINT/raw_model.eqx"' in wait
@@ -828,6 +846,11 @@ def test_epoch160_submitter_shards_real_gpu_work_and_freezes_exact_checkpoint() 
     assert "raw ema" in heldout
     assert "raw ema" in catalogue
     assert "object-equal dense joint posterior mixture" in finalizer
+    assert "prior.incomplete-${SLURM_JOB_ID}" in finalize_worker
+    assert "missing held-out DONE" in retry
+    assert "missing catalogue DONE" in retry
+    assert "scripts/feniks_sc_drws_epoch160_finalize_h100.slurm" in retry
+    assert "--dependency" not in retry
     assert "not relabeled as the parent prior" in finalizer
 
 

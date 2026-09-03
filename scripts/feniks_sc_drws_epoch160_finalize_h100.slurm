@@ -58,10 +58,15 @@ for path in "$CONFIG" "$TRUTH_CONFIG" "$RECEIPT" "$CHECKPOINT" \
 done
 
 if [[ ! -s "$EVAL_ROOT/population/prior/report_receipt.json" ]]; then
-  test ! -e "$EVAL_ROOT/population/prior" || {
-    echo "[epoch160-finalize][error] incomplete prior report exists" >&2
-    exit 2
-  }
+  if [[ -e "$EVAL_ROOT/population/prior" ]]; then
+    QUARANTINE="$EVAL_ROOT/population/prior.incomplete-${SLURM_JOB_ID}"
+    test ! -e "$QUARANTINE" || {
+      echo "[epoch160-finalize][error] quarantine already exists: $QUARANTINE" >&2
+      exit 2
+    }
+    echo "[epoch160-finalize] quarantining receipt-less prior report -> $QUARANTINE"
+    mv "$EVAL_ROOT/population/prior" "$QUARANTINE"
+  fi
   python scripts/report_feniks_sc_drws.py \
     --config "$CONFIG" --checkpoint "$CHECKPOINT" \
     --train-indices-file "$MANIFEST_ROOT/train_indices.npy" \

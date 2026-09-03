@@ -62,7 +62,11 @@ PY
   echo
   echo "===== ERREURS ====="
   grep -hE "Traceback|RESOURCE_EXHAUSTED|Out of memory|ValueError|RuntimeError|TypeError" \
-    "$LOG_ROOT"/epoch160-*.err 2>/dev/null | tail -n 12 || true
+    "$LOG_ROOT/epoch160-wait-${WAIT_JOB}.err" \
+    "$LOG_ROOT"/epoch160-heldout-${HELDOUT_JOB}_*.err \
+    "$LOG_ROOT"/epoch160-catalogue-${CATALOGUE_JOB}_*.err \
+    "$LOG_ROOT/epoch160-finalize-${FINAL_JOB}.err" \
+    2>/dev/null | tail -n 12 || true
 
   echo
   echo "===== FINAL ====="

@@ -1,5 +1,32 @@
 # Plan
 
+## 2026-09-03 Epoch-160 finalizer recovery
+
+- Epoch-160 checkpoint freezing and all 8 held-out K=1024 plus 16 catalogue
+  K=256 tasks completed, but finalization job `1683703` failed before prior
+  evaluation because `report_feniks_sc_drws.py` passed a nonexistent
+  `population/prior/runtime` directory to the shared runtime writer.
+- Make no-truth prior-report publication atomic, create the runtime directory
+  before runtime preparation, quarantine the existing receipt-less output on
+  retry, and resubmit only the finalizer. Preserve all completed inference
+  shards and the frozen checkpoint.
+- Add regression coverage and run focused pytest, Ruff, compileall, shell
+  syntax, and diff checks before committing and pushing the repair.
+
+Completed locally:
+
+- The no-truth prior report now creates its runtime directory inside a sibling
+  staging tree and atomically publishes the complete report. The epoch-160
+  worker quarantines the receipt-less directory left by job `1683703`, without
+  deleting it or any completed posterior shard.
+- Added a recovery submitter that validates all 24 shard markers, submits only
+  the finalizer, and atomically refreshes the monitor environment. The monitor
+  now reads errors only from the current job IDs, so the historical traceback
+  does not mask retry health.
+- Validation: `63 passed` across recovery, SC-DRWS, MIRA, and TARP tests; Ruff,
+  full `compileall`, Bash/SLURM syntax, and `git diff --check` pass. No Jean-Zay
+  job was submitted locally.
+
 ## 2026-08-29 SC-DRWS prior-update memory repair
 
 - Long-running full job `1562322_0` completed repeated Phase-B wake/prior

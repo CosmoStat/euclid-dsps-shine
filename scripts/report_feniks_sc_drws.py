@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import jax
@@ -38,6 +39,17 @@ def _weighted_correlation(values: np.ndarray, weights: np.ndarray) -> np.ndarray
     return covariance / np.outer(scale, scale)
 
 
+def _create_staging_output(output: Path) -> Path:
+    """Create a complete runtime tree without exposing a partial report."""
+    if output.exists():
+        raise FileExistsError(f"report output already exists: {output}")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    staging = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    staging.mkdir(parents=False, exist_ok=False)
+    (staging / "runtime").mkdir()
+    return staging
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
@@ -50,11 +62,12 @@ def main() -> None:
     parser.add_argument("--decoder-batch-size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=260827)
     args = parser.parse_args()
-    args.out.mkdir(parents=True, exist_ok=False)
+    final_out = args.out
+    out = _create_staging_output(final_out)
     config = load_config(args.config)
     runtime = prepare_adaptive_training_runtime(
         config,
-        args.out / "runtime",
+        out / "runtime",
         train_indices_file=args.train_indices_file,
         validation_indices_file=args.validation_indices_file,
     )
@@ -69,7 +82,7 @@ def main() -> None:
         selected_resamples=args.selected_resamples,
         decoder_batch_size=args.decoder_batch_size,
     )
-    np.savez_compressed(args.out / "parent_and_selected_prior.npz", **arrays)
+    np.savez_compressed(out / "parent_and_selected_prior.npz", **arrays)
     rows = []
     for population, values in (
         ("parent", arrays["theta"]),
@@ -86,9 +99,9 @@ def main() -> None:
                     "q95": q95,
                 }
             )
-    pd.DataFrame(rows).to_csv(args.out / "population_marginals.csv", index=False)
+    pd.DataFrame(rows).to_csv(out / "population_marginals.csv", index=False)
     np.savez_compressed(
-        args.out / "population_correlations.npz",
+        out / "population_correlations.npz",
         parent=np.corrcoef(arrays["theta"], rowvar=False),
         beta_weighted_selected=_weighted_correlation(
             arrays["theta"], arrays["selected_weights"]
@@ -111,10 +124,10 @@ def main() -> None:
             "population_correlations.npz",
         ],
     }
-    (args.out / "report_receipt.json").write_text(
+    (out / "report_receipt.json").write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n"
     )
-    (args.out / "SC_DRWS_REPORT.md").write_text(
+    (out / "SC_DRWS_REPORT.md").write_text(
         "# Frozen SC-DRWS no-truth report\n\n"
         f"> {C0_SCOPE_STATEMENT}\n\n"
         f"Selection alpha: `{summary['alpha']:.7g}`; relative MC error: "
@@ -122,6 +135,7 @@ def main() -> None:
         "The selected distribution is derived by beta-weighting the single "
         "learned parent flow. Truth closure is not part of this report.\n"
     )
+    os.replace(out, final_out)
     print(json.dumps(receipt, indent=2), flush=True)
 
 
