@@ -219,6 +219,62 @@ def test_support_gate_uses_ess_pareto_and_maximum_weight() -> None:
     assert finalize._support_summary(failing)["status"] == "FAIL"
 
 
+def test_strict_json_encodes_nonfinite_diagnostics_as_null(tmp_path: Path) -> None:
+    finalize = _load_script("finalize_feniks_sc_drws_population_posterior.py")
+    path = tmp_path / "diagnostic.json"
+
+    finalize._write_json(
+        path,
+        {
+            "pareto_k": float("nan"),
+            "positive_infinity": np.float64("inf"),
+            "finite": np.float32(0.25),
+        },
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload == {
+        "pareto_k": None,
+        "positive_infinity": None,
+        "finite": 0.25,
+    }
+    assert "NaN" not in path.read_text(encoding="utf-8")
+
+
+def test_finalizer_recovery_requires_exact_manifest_and_commits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    finalize = _load_script("finalize_feniks_sc_drws_population_posterior.py")
+    root = tmp_path / "diagnostic"
+    root.mkdir()
+    manifest = {"code_commit": "inference-commit"}
+    manifest_path = root / "RUN_MANIFEST.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    recovery = root / "FINALIZER_RECOVERY.json"
+    recovery.write_text(
+        json.dumps(
+            {
+                "status": "AUTHORIZED",
+                "scope": "finalizer_only_nonfinite_json_recovery",
+                "inference_code_commit": "inference-commit",
+                "finalizer_code_commit": "recovery-commit",
+                "run_manifest_sha256": finalize.sha256_file(manifest_path),
+                "inference_shards_reused": True,
+                "new_inference_submitted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(finalize, "_runtime_commit", lambda _repo: "recovery-commit")
+    monkeypatch.setenv("FINALIZER_RECOVERY_RECEIPT", str(recovery))
+
+    provenance = finalize._validate_runtime_provenance(root, manifest, ROOT)
+
+    assert provenance["mode"] == "authorized_finalizer_recovery"
+    assert provenance["manifest_code_commit"] == "inference-commit"
+    assert provenance["runtime_code_commit"] == "recovery-commit"
+
+
 def test_corner_supports_q_iw_prior_truth_overlay(tmp_path: Path) -> None:
     import matplotlib
 
@@ -263,6 +319,10 @@ def test_population_posterior_slurm_contract_is_truth_free_and_parallel() -> Non
     finalizer = (
         ROOT / "scripts/finalize_feniks_sc_drws_population_posterior.py"
     ).read_text(encoding="utf-8")
+    recovery = (
+        ROOT
+        / "scripts/submit_feniks_sc_drws_population_posterior_finalizer_recovery.sh"
+    ).read_text(encoding="utf-8")
 
     assert '--posterior-samples "$POSTERIOR_DRAWS"' in worker
     assert "projected_parent_iw" in worker and "source_prior_iw" in worker
@@ -271,3 +331,6 @@ def test_population_posterior_slurm_contract_is_truth_free_and_parallel() -> Non
     assert '--dependency="afterok:$INFERENCE_JOB"' in submit
     assert '"truth_used_for_inference_or_support": False' in finalizer
     assert '"truth_used_for_final_closure": True' in finalizer
+    assert "feniks_sc_drws_population_posterior_finalize_h100.slurm" in recovery
+    assert "feniks_sc_drws_population_posterior_h100.slurm" not in recovery
+    assert '"new_inference_submitted": False' in recovery

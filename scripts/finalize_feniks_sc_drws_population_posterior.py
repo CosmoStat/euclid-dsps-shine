@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -47,16 +48,76 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, payload: Any) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        json.dumps(_json_safe(payload), indent=2, sort_keys=True, allow_nan=False)
+        + "\n",
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return [_json_safe(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return _json_safe(value.item())
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
 
 
 def _runtime_commit(repo: Path) -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
+
+
+def _validate_runtime_provenance(
+    root: Path, manifest: dict[str, Any], repo: Path
+) -> dict[str, Any]:
+    actual_commit = _runtime_commit(repo)
+    manifest_commit = str(manifest["code_commit"])
+    if actual_commit == manifest_commit:
+        return {
+            "mode": "manifest",
+            "manifest_code_commit": manifest_commit,
+            "runtime_code_commit": actual_commit,
+        }
+    raw_recovery = os.environ.get("FINALIZER_RECOVERY_RECEIPT")
+    if not raw_recovery:
+        raise ValueError(
+            f"runtime commit mismatch: {actual_commit} != {manifest_commit}"
+        )
+    recovery_path = Path(raw_recovery).resolve()
+    recovery = _read_json(recovery_path)
+    manifest_path = root / "RUN_MANIFEST.json"
+    expected = {
+        "status": "AUTHORIZED",
+        "scope": "finalizer_only_nonfinite_json_recovery",
+        "inference_code_commit": manifest_commit,
+        "finalizer_code_commit": actual_commit,
+        "run_manifest_sha256": sha256_file(manifest_path),
+        "inference_shards_reused": True,
+        "new_inference_submitted": False,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": recovery.get(key)}
+        for key, value in expected.items()
+        if recovery.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"invalid finalizer recovery authorization: {mismatches}")
+    return {
+        "mode": "authorized_finalizer_recovery",
+        "manifest_code_commit": manifest_commit,
+        "runtime_code_commit": actual_commit,
+        "authorization": str(recovery_path),
+        "authorization_sha256": sha256_file(recovery_path),
+        "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+    }
 
 
 def _read_parquet_files(paths: list[Path]) -> pd.DataFrame:
@@ -409,11 +470,7 @@ def main() -> None:
     root = args.root.resolve()
     manifest = _read_json(root / "RUN_MANIFEST.json")
     repo = Path(__file__).resolve().parents[1]
-    actual_commit = _runtime_commit(repo)
-    if actual_commit != manifest["code_commit"]:
-        raise ValueError(
-            f"runtime commit mismatch: {actual_commit} != {manifest['code_commit']}"
-        )
+    runtime_provenance = _validate_runtime_provenance(root, manifest, repo)
     final_path = root / "INDIVIDUAL_POSTERIOR_DIAGNOSTIC_COMPLETE.json"
     if final_path.is_file():
         print(final_path.read_text(encoding="utf-8"), flush=True)
@@ -680,13 +737,13 @@ def main() -> None:
                 (evaluation / "individual_panels/manifest.json").resolve()
             ),
         },
-        "runtime_provenance": {
-            "manifest_code_commit": manifest["code_commit"],
-            "runtime_code_commit": actual_commit,
-        },
+        "runtime_provenance": runtime_provenance,
     }
     _write_json(final_path, receipt)
-    print(json.dumps(receipt, indent=2, sort_keys=True), flush=True)
+    print(
+        json.dumps(_json_safe(receipt), indent=2, sort_keys=True, allow_nan=False),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

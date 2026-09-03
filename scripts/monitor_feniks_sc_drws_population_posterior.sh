@@ -100,7 +100,10 @@ PY
   fi
 
   echo
-  echo "===== RECENT ERRORS ====="
+  echo "===== RECENT/HISTORICAL ERRORS ====="
+  if [[ -s "$FINAL" ]]; then
+    echo "final receipt exists; lines below may belong to earlier failed attempts"
+  fi
   find "$POSTERIOR_LOG_ROOT" -maxdepth 1 -type f -name "*.err" \
     -exec grep -hE \
       "Traceback|RESOURCE_EXHAUSTED|Out of memory|ValueError|RuntimeError|SystemError|TypeError" \

@@ -8100,3 +8100,18 @@ Completed locally:
   The full repository run reached `810 passed, 8 skipped`; two unrelated legacy
   supervised-prior integrity tests reproducibly report `WARN` instead of
   `PASS` in both available local Python environments.
+
+Remote recovery:
+
+- Jean-Zay completed all eight K=1024 inference/IW shards in job `1720493`.
+  Finalizer `1720494` failed after support aggregation because a non-finite
+  per-object Pareto diagnostic reached strict JSON serialization.
+- Preserve every completed shard. Encode non-finite diagnostics as JSON `null`,
+  authorize a separately hashed finalizer-only recovery commit, and resubmit
+  only the dependent finalizer. The immutable inference manifest continues to
+  identify the original inference commit.
+- Recovery implementation and validation are complete: the authorization binds
+  the original manifest hash, inference commit, and recovery commit; the submit
+  script records that no new inference was submitted. Ruff, compileall, Bash
+  syntax, `git diff --check`, `7` recovery-focused tests, and `22` related tests
+  in `shine` pass.
