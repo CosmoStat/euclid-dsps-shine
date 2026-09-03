@@ -102,8 +102,11 @@ PY
 
   echo
   echo "===== RECENT ERRORS ====="
-  grep -hE "Traceback|RESOURCE_EXHAUSTED|Out of memory|ValueError|RuntimeError|SystemError" \
-    "$PROJECTION_LOG_ROOT"/*.err 2>/dev/null | tail -n 12 || true
+  find "$PROJECTION_LOG_ROOT" -maxdepth 1 -type f \
+    \( -name "*-${FIT_JOB}.err" -o -name "*-${EVALUATION_JOB}.err" \) \
+    -exec grep -hE \
+      "Traceback|RESOURCE_EXHAUSTED|Out of memory|ValueError|RuntimeError|SystemError" \
+      {} + 2>/dev/null | tail -n 12 || true
   echo
   echo "Ctrl-C stops only this monitor. Refresh in ${INTERVAL}s."
   sleep "$INTERVAL"
