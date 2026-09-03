@@ -15,6 +15,7 @@ the CDF and rank helpers here compare population distributions only.
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -28,6 +29,7 @@ from ..filters import load_filters
 from ..model import dynamic_model_args, load_context
 from .config import require_amortized_dependencies
 from .features import read_feature_stats
+from .population_vem import require_git_commit, sha256_file
 from .train import (
     JitLatentSpec,
     _latent_spec_for_amortized_config,
@@ -45,6 +47,55 @@ class WeightedDensityMetrics(NamedTuple):
     raw_gradient_norm: jnp.ndarray
     gradients_finite: jnp.ndarray
     update_applied: jnp.ndarray
+
+
+def require_projection_runtime_commit(
+    root: str | Path,
+    manifest: dict[str, Any],
+    repo: str | Path,
+) -> dict[str, Any]:
+    """Accept the frozen manifest commit or one narrowly authorized recovery."""
+    root = Path(root).resolve()
+    manifest_path = root / "RUN_MANIFEST.json"
+    manifest_commit = str(manifest["code_commit"])
+    recovery_path = root / "CODE_RECOVERY.json"
+    if not recovery_path.is_file():
+        actual = require_git_commit(repo, manifest_commit)
+        return {
+            "mode": "manifest",
+            "manifest_code_commit": manifest_commit,
+            "runtime_code_commit": actual,
+        }
+
+    recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+    submission = json.loads((root / "SUBMISSION.json").read_text(encoding="utf-8"))
+    beta_path = root / "BETA_TARGET_COMPLETE.json"
+    checks = {
+        "status": recovery.get("status") == "AUTHORIZED",
+        "scope": recovery.get("scope") == "fit_and_evaluation_only",
+        "root": Path(recovery.get("projection_root", "")).resolve() == root,
+        "manifest_sha256": recovery.get("manifest_sha256")
+        == sha256_file(manifest_path),
+        "beta_receipt_sha256": recovery.get("beta_receipt_sha256")
+        == sha256_file(beta_path),
+        "manifest_code_commit": recovery.get("manifest_code_commit") == manifest_commit,
+        "failed_fit_job": str(recovery.get("failed_fit_job"))
+        == str(submission.get("fit_job")),
+        "beta_banks_reused": recovery.get("beta_banks_reused") is True,
+        "truth_used": recovery.get("truth_used") is False,
+    }
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    if failed:
+        raise ValueError(f"invalid population-projection recovery: {failed}")
+    actual = require_git_commit(repo, str(recovery["runtime_code_commit"]))
+    return {
+        "mode": "authorized_recovery",
+        "manifest_code_commit": manifest_commit,
+        "runtime_code_commit": actual,
+        "recovery_receipt": str(recovery_path),
+        "recovery_receipt_sha256": sha256_file(recovery_path),
+        "failed_fit_job": str(recovery["failed_fit_job"]),
+    }
 
 
 def selection_runtime(config: dict[str, Any], feature_stats_path: str | Path):
@@ -394,7 +445,9 @@ def _pmean_tree(tree, axis_name: str):
 def _select_tree(candidate, fallback, condition):
     return jax.tree_util.tree_map(
         lambda proposed, original: (
-            jnp.where(condition, proposed, original) if proposed is not None else None
+            jnp.where(condition, proposed, original)
+            if eqx.is_array(proposed)
+            else proposed
         ),
         candidate,
         fallback,

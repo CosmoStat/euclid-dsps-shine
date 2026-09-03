@@ -21,10 +21,10 @@ from euclid_dsps.amortized.latent import latent_spec_from_config
 from euclid_dsps.amortized.population_projection import (
     inverse_selection_weights,
     make_pmap_weighted_density_step,
+    require_projection_runtime_commit,
 )
 from euclid_dsps.amortized.population_vem import (
     iter_array_bank_shards,
-    require_git_commit,
     resolve_manifest_config,
     sha256_file,
 )
@@ -264,7 +264,7 @@ def main() -> None:
     root = args.root.resolve()
     manifest = _read_json(root / "RUN_MANIFEST.json")
     repo = Path(__file__).resolve().parents[1]
-    require_git_commit(repo, manifest["code_commit"])
+    runtime_provenance = require_projection_runtime_commit(root, manifest, repo)
     beta_receipt = _read_json(root / "BETA_TARGET_COMPLETE.json")
     if (
         beta_receipt.get("status") != "PASS"
@@ -379,6 +379,7 @@ def main() -> None:
         "point_estimates_used": False,
         "dsps_calls_inside_optimizer": 0,
         "checkpoint_selection": "held-out weighted density only",
+        "runtime_provenance": runtime_provenance,
     }
     _write_json(complete_path, receipt)
     _write_json(

@@ -24,12 +24,12 @@ from euclid_dsps.amortized.population_projection import (
     distribution_comparison,
     evaluate_log_beta,
     inverse_selection_weights,
+    require_projection_runtime_commit,
     selection_runtime,
     weighted_cdf_values,
 )
 from euclid_dsps.amortized.population_vem import (
     iter_array_bank_shards,
-    require_git_commit,
     resolve_manifest_config,
     sha256_file,
 )
@@ -278,7 +278,7 @@ def main() -> None:
     root = args.root.resolve()
     manifest = _read_json(root / "RUN_MANIFEST.json")
     repo = Path(__file__).resolve().parents[1]
-    require_git_commit(repo, manifest["code_commit"])
+    runtime_provenance = require_projection_runtime_commit(root, manifest, repo)
     fit = _read_json(root / "PROJECTION_FIT_COMPLETE.json")
     if fit.get("status") != "COMPLETE" or fit.get("truth_used") is not False:
         raise ValueError("evaluation requires a complete truth-free projection fit")
@@ -540,6 +540,7 @@ def main() -> None:
         },
         "truth_used_for_training_or_checkpoint_selection": False,
         "truth_used_for_final_closure": True,
+        "runtime_provenance": runtime_provenance,
         "point_estimates_used": False,
         "redshift_median_gate_used": False,
         "scientific_promotion": False,

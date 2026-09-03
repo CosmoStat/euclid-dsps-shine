@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import jax
@@ -12,6 +15,7 @@ from euclid_dsps.amortized.population_projection import (
     distribution_comparison,
     inverse_selection_weights,
     make_pmap_weighted_density_step,
+    require_projection_runtime_commit,
     weighted_cdf_distance,
     weighted_cdf_values,
 )
@@ -36,6 +40,7 @@ SHA = "a" * 64
 class _LocationNormalPrior(eqx.Module):
     location: jax.Array
     latent_dim: int = eqx.field(static=True)
+    activation: Callable = jax.nn.tanh
 
     def log_prob(self, value):
         return -0.5 * jnp.sum(jnp.square(value - self.location), axis=-1)
@@ -173,6 +178,42 @@ def test_weighted_density_step_moves_toward_weighted_joint_draws() -> None:
     assert np.allclose(np.asarray(metrics.raw_gradient_norm), np.sqrt(2.0))
 
 
+def test_projection_runtime_accepts_narrow_code_recovery(tmp_path: Path) -> None:
+    runtime_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    manifest_commit = "0" * 40
+    manifest = {"code_commit": manifest_commit}
+    manifest_path = tmp_path / "RUN_MANIFEST.json"
+    beta_path = tmp_path / "BETA_TARGET_COMPLETE.json"
+    manifest_path.write_text(json.dumps(manifest))
+    beta_path.write_text(json.dumps({"status": "PASS", "truth_used": False}))
+    (tmp_path / "SUBMISSION.json").write_text(json.dumps({"fit_job": "1709290"}))
+    recovery = {
+        "status": "AUTHORIZED",
+        "scope": "fit_and_evaluation_only",
+        "projection_root": str(tmp_path.resolve()),
+        "manifest_sha256": sha256_file(manifest_path),
+        "beta_receipt_sha256": sha256_file(beta_path),
+        "manifest_code_commit": manifest_commit,
+        "runtime_code_commit": runtime_commit,
+        "failed_fit_job": "1709290",
+        "beta_banks_reused": True,
+        "truth_used": False,
+    }
+    recovery_path = tmp_path / "CODE_RECOVERY.json"
+    recovery_path.write_text(json.dumps(recovery))
+
+    provenance = require_projection_runtime_commit(tmp_path, manifest, ROOT)
+    assert provenance["mode"] == "authorized_recovery"
+    assert provenance["runtime_code_commit"] == runtime_commit
+
+    recovery["truth_used"] = True
+    recovery_path.write_text(json.dumps(recovery))
+    with pytest.raises(ValueError, match="truth_used"):
+        require_projection_runtime_commit(tmp_path, manifest, ROOT)
+
+
 def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     submit = (
         ROOT / "scripts/submit_feniks_sc_drws_population_projection.sh"
@@ -182,6 +223,9 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     ).read_text()
     monitor = (
         ROOT / "scripts/monitor_feniks_sc_drws_population_projection.sh"
+    ).read_text()
+    recovery = (
+        ROOT / "scripts/recover_feniks_sc_drws_population_projection.sh"
     ).read_text()
     assert "--array=0-19%20" in submit
     assert (
@@ -199,3 +243,5 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     assert "evaluate_redshift" in evaluate
     assert '"redshift_median_gate_used": False' in evaluate
     assert "distribution ranks are not posterior PIT" in monitor
+    assert "fit_and_evaluation_only" in recovery
+    assert "beta_banks_reused" in recovery

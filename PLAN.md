@@ -128,6 +128,14 @@ collapsed to a point estimate, and no new DSPS posterior inference is run.
 Fifty-one focused population, calibration, and SC-DRWS tests, Ruff, compileall,
 Bash syntax, and whitespace checks pass. No Jean-Zay job was submitted here.
 
+Recovery completed locally: the first remote fit job `1709290` failed during
+`jax.eval_shape` before its first update because the transactional tree
+selector passed a callable flow leaf to `jnp.where`. Conditional selection now
+touches only JAX array leaves. A narrow, provenance-checked recovery receipt
+preserves the completed beta banks and gate and submits only the four-H100 fit
+plus its dependent frozen evaluation. Fifty-two focused population,
+calibration, and SC-DRWS tests pass with the callable-leaf regression covered.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined
