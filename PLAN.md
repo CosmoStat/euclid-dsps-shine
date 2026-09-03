@@ -1,5 +1,46 @@
 # Plan
 
+## 2026-09-03 Selection-corrected population VEM follow-up
+
+- Freeze the epoch-160 model and build reusable, truth-free joint q banks once:
+  32 draws for 95% of the selected training objects and 64 draws for a fixed
+  5% validation cohort. Shard the work across H100 jobs and preserve row IDs,
+  model hashes, feature-stat hashes, and joint-draw provenance.
+- Audit the configured selection function separately on the frozen C0 closure
+  catalogue before optimizing the population prior. Keep this truth-bearing
+  diagnostic out of every training input and fail closed when the r<29
+  completeness model is not calibrated to the observed selection labels.
+- Optimize only the parent population flow with a selection-corrected M-step.
+  Reuse a fixed parent-prior reference bank so DSPS and beta are evaluated once,
+  distribute the data and normalization terms over four GPUs, bound each device
+  batch, gate reference-bank ESS/K and prior drift, and checkpoint every pass.
+- Run a short two-epoch, prior-frozen q refresh from the selected prior model;
+  this is an approximate AVI consistency update, not an exact importance-
+  corrected posterior claim. Avoid repeated high-K wake cycles.
+- Evaluate the refreshed q and parent/selected priors on the complete independent
+  selected catalogue with 32 joint draws per object, shard the evaluation, and
+  publish distinct population-support, calibration, redshift, and individual-
+  posterior claims in a durable final receipt.
+
+Completed locally:
+
+- Added an immutable five-stage chain: 36 one-H100 bank/audit tasks (at most 24
+  concurrent), a four-H100 fixed-reference prior M-step, a four-H100 two-epoch
+  AVI refresh, 16 one-H100 final bank tasks, and one H100 finalizer. The
+  independent test catalogue is untouched until the final closure.
+- The prior optimizer evaluates DSPS completeness only while constructing the
+  fixed banks, uses joint 15D q draws with equal object weights, keeps the
+  selection-normalization weights in log space, and rejects updates that fail
+  alpha-MC, reference-ESS, finite-gradient, or source-KL gates.
+- The final receipt distinguishes parent prior, selected prior, and aggregate
+  approximate q, reports redshift and 15D population distances, runs full-test
+  MIRA/TARP at K=32, and publishes population plus individual PNG/PDF figures.
+  It can certify a population target but cannot promote exact posteriors because
+  this bounded workflow deliberately performs no importance correction.
+- Validation passes: 7 focused tests, 84 SC-DRWS/selection/data-parallel
+  regressions, Ruff, compileall, CLI help checks, Bash/SLURM syntax, and diff
+  whitespace checks. No Jean-Zay job was submitted from this checkout.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined
