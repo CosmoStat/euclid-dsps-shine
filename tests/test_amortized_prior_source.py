@@ -24,6 +24,7 @@ if HAS_DEPS:
         RealNVPPrior,
         RQSplineCouplingPrior,
         StandardNormalPrior,
+        StructuredRQSplinePrior,
     )
     from euclid_dsps.amortized.train import (
         architecture_summary,
@@ -126,6 +127,35 @@ def test_build_joint_rq_spline_prior_from_config() -> None:
 
     assert isinstance(prior, RQSplineCouplingPrior)
     assert prior.sample(jax.random.PRNGKey(1), 5).shape == (5, 3)
+
+
+def test_build_structured_rq_spline_prior_from_config() -> None:
+    config = {
+        "amortized": {
+            "encoder": {"latent_dim": 5},
+            "features": {"n_flux_bands": 1, "n_error_bands": 1},
+            "prior": {
+                "source": "structured_rq_spline",
+                "core_dim": 2,
+                "core_layers": 2,
+                "conditional_layers": 2,
+                "hidden_size": 8,
+                "n_bins": 4,
+                "tail_bound": 4.0,
+                "init": "identity",
+                "init_scale": 0.0,
+            },
+        }
+    }
+
+    prior = build_prior_from_config(
+        config,
+        jax.random.PRNGKey(0),
+        latent_dim=5,
+    )
+
+    assert isinstance(prior, StructuredRQSplinePrior)
+    assert prior.sample(jax.random.PRNGKey(1), 5).shape == (5, 5)
 
 
 def test_architecture_summary_lists_only_trainable_joint_components() -> None:

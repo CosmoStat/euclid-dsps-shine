@@ -304,8 +304,24 @@ def main() -> None:
     ):
         if sha256_file(checkpoint) != record["checkpoint_sha256"]:
             raise ValueError(f"projection checkpoint SHA256 mismatch: {checkpoint}")
-    selected_model = load_checkpoint(selected_checkpoint, config)
-    parent_model = load_checkpoint(parent_checkpoint, config)
+
+    def checkpoint_config(record: dict[str, Any]) -> dict[str, Any]:
+        candidate_path = record.get("config")
+        if candidate_path is None:
+            return config
+        path = Path(candidate_path)
+        expected = record.get("config_sha256")
+        if expected is None or sha256_file(path) != expected:
+            raise ValueError(f"projection checkpoint config SHA256 mismatch: {path}")
+        candidate_config = load_config(path)
+        if tuple(latent_spec_from_config(candidate_config).names) != names:
+            raise ValueError("projection checkpoint changed the latent parameter order")
+        return candidate_config
+
+    selected_model = load_checkpoint(
+        selected_checkpoint, checkpoint_config(fit["selected"])
+    )
+    parent_model = load_checkpoint(parent_checkpoint, checkpoint_config(fit["parent"]))
 
     q_x = _load_q(Path(manifest["q_banks"]["validation"]["manifest"]))
     parent_target_x, parent_target_weights = _load_parent_target(

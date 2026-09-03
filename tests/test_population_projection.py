@@ -8,6 +8,7 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 import numpy as np
+import pandas as pd
 import pytest
 
 from euclid_dsps.amortized.config import require_amortized_dependencies
@@ -19,6 +20,12 @@ from euclid_dsps.amortized.population_projection import (
     uniform_cdf_distance,
     weighted_cdf_distance,
     weighted_cdf_values,
+)
+from euclid_dsps.amortized.population_projection_benchmark import (
+    CORE_PARAMETER_NAMES,
+    config_for_candidate,
+    select_truth_free_candidate,
+    summarize_truth_free_metrics,
 )
 from euclid_dsps.amortized.population_vem import (
     ArrayShardContract,
@@ -90,6 +97,65 @@ def test_matching_redshift_aggregate_does_not_imply_posterior_calibration() -> N
     assert weighted_cdf_distance(posterior.reshape(-1), np.repeat(truth, 32)) == 0.0
     pit = finite_rank_pit(posterior, truth)
     assert uniform_ks(pit) > 0.45
+
+
+def test_truth_free_architecture_score_excludes_sfh_and_redshift_medians() -> None:
+    names = CORE_PARAMETER_NAMES + tuple(f"sfh_{index}" for index in range(10))
+    rows = []
+    for comparison in (
+        "selected_flow_vs_q_aggregate",
+        "parent_flow_vs_inverse_beta_q",
+        "selected_parent_flow_vs_q_aggregate",
+    ):
+        for index, name in enumerate(names):
+            rows.append(
+                {
+                    "comparison": comparison,
+                    "parameter": name,
+                    "cdf_supremum": 0.04 if index < 5 else 0.95,
+                }
+            )
+    summary = summarize_truth_free_metrics(pd.DataFrame(rows), parameter_names=names)
+
+    assert summary["passes_all_truth_free_distribution_gates"]
+    assert summary["sfh_used_for_architecture_selection"] is False
+    assert summary["redshift_median_gate_used"] is False
+    assert summary["primary_score"] == pytest.approx(0.8)
+
+
+def test_truth_free_candidate_selection_is_lexicographic() -> None:
+    template = {
+        "status": "COMPLETE",
+        "truth_used": False,
+        "sfh_used_for_architecture_selection": False,
+        "redshift_median_gate_used": False,
+        "fit_validation_weighted_nll_mean": 30.0,
+    }
+    records = [
+        {
+            **template,
+            "candidate": "lower_nll_but_worse_core",
+            "primary_score": 1.2,
+            "secondary_mean_core_5d_cdf_supremum": 0.08,
+            "fit_validation_weighted_nll_mean": 20.0,
+        },
+        {
+            **template,
+            "candidate": "core_winner",
+            "primary_score": 1.0,
+            "secondary_mean_core_5d_cdf_supremum": 0.09,
+        },
+    ]
+    assert select_truth_free_candidate(records)["candidate"] == "core_winner"
+
+
+def test_candidate_config_changes_only_prior_architecture() -> None:
+    base = {"amortized": {"prior": {"source": "joint_realnvp"}}, "model": {"x": 1}}
+    candidate = {"prior": {"source": "structured_rq_spline", "core_dim": 5}}
+    result = config_for_candidate(base, candidate)
+    assert result["amortized"]["prior"]["source"] == "structured_rq_spline"
+    assert result["model"] == base["model"]
+    assert base["amortized"]["prior"]["source"] == "joint_realnvp"
 
 
 def test_q_beta_bank_preserves_draw_axis_and_selection_contract(tmp_path: Path) -> None:
@@ -401,3 +467,24 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
         "retain_initial_if_best=continuation is not None"
         in (ROOT / "scripts/train_feniks_sc_drws_population_projection.py").read_text()
     )
+
+
+def test_projection_architecture_benchmark_is_parallel_and_truth_separated() -> None:
+    submit = (
+        ROOT / "scripts/submit_feniks_sc_drws_population_projection_benchmark.sh"
+    ).read_text()
+    prepare = (
+        ROOT / "scripts/prepare_feniks_sc_drws_population_projection_benchmark.py"
+    ).read_text()
+    monitor = (
+        ROOT / "scripts/monitor_feniks_sc_drws_population_projection_benchmark.sh"
+    ).read_text()
+
+    assert "--array=0-2%3" in submit
+    assert "--array=0-3%4" in submit
+    assert 'dependency="afterok:$GATE_JOB"' in submit
+    assert '"new_posterior_inference": False' in submit
+    assert '"truth_used_before_winner_freeze": False' in submit
+    assert "closure_runs_after_winner_freeze" in prepare
+    assert "redshift_median_gate_used" in prepare
+    assert "q PIT KS" in monitor

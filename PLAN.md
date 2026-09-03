@@ -1,5 +1,30 @@
 # Plan
 
+## 2026-09-03 Truth-free population projection architecture benchmark
+
+- Reuse the immutable epoch-160 joint-q and inverse-selection beta banks; do
+  not run DSPS posterior inference again and do not expose truth to fitting or
+  architecture selection.
+- Compare the saturated affine baseline against three independently trained
+  exact-density candidates: a wider RealNVP, a full 15D RQ-spline coupling
+  flow, and a block-triangular RQ-spline flow
+  `p(core_5) p(SFH_10 | core_5)` that preserves the joint distribution while
+  giving redshift, mass, metallicity, and dust dedicated capacity.
+- Fit candidates as parallel four-H100 jobs, evaluate their fixed validation
+  distributions as parallel one-H100 jobs, and select the winner only from
+  predeclared truth-free CDF/rank and weighted-NLL metrics. Treat SFH metrics as
+  secondary diagnostics; never use a redshift median gate.
+- Run posterior PIT/coverage and population truth closure exactly once, after
+  the truth-free winner receipt is frozen. Publish candidate checkpoints,
+  metrics, provenance, plots, and copy-paste monitoring in a separate output
+  root so the completed v1/v2 projections remain untouched.
+
+Implementation complete locally; no Jean-Zay jobs were submitted from this
+checkout. Validation: `compileall`, Ruff, shell syntax, 36 focused flow/config/
+projection tests, and 40 SC-DRWS/VEM regression tests pass. The launcher uses a
+detached commit worktree, three parallel four-H100 fits, four parallel one-H100
+truth-free validations, a CPU winner gate, and one post-freeze H100 closure.
+
 ## 2026-09-03 Population-VEM stage-1 gate recovery
 
 - The 36 initial Jean-Zay bank tasks completed, but CPU gate `1702058`

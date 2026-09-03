@@ -70,6 +70,7 @@ from .flows import (
     RealNVPPrior,
     RQSplineCouplingPrior,
     StandardNormalPrior,
+    StructuredRQSplinePrior,
     assert_flow_integrity,
 )
 from .latent import (
@@ -315,6 +316,27 @@ def build_prior_from_config(
             init=str(prior_cfg.get("init", "default")),
             init_scale=float(prior_cfg.get("init_scale", 1.0)),
         )
+    if source in {
+        "structured_rq_spline",
+        "structured_rq_spline_coupling",
+        "block_rq_spline",
+    }:
+        return StructuredRQSplinePrior(
+            key,
+            latent_dim=int(latent_dim),
+            core_dim=int(prior_cfg.get("core_dim", 5)),
+            core_layers=int(prior_cfg.get("core_layers", 10)),
+            conditional_layers=int(prior_cfg.get("conditional_layers", 10)),
+            hidden_size=int(prior_cfg.get("hidden_size", 256)),
+            n_bins=int(prior_cfg.get("n_bins", 16)),
+            tail_bound=float(prior_cfg.get("tail_bound", 12.0)),
+            min_bin_width=float(prior_cfg.get("min_bin_width", 1.0e-3)),
+            min_bin_height=float(prior_cfg.get("min_bin_height", 1.0e-3)),
+            min_derivative=float(prior_cfg.get("min_derivative", 1.0e-3)),
+            permutation=str(prior_cfg.get("permutation", "alternating_roll")),
+            init=str(prior_cfg.get("init", "identity")),
+            init_scale=float(prior_cfg.get("init_scale", 0.0)),
+        )
     if source == "supervised_checkpoint":
         checkpoint = prior_cfg.get("checkpoint")
         if not checkpoint:
@@ -341,7 +363,7 @@ def build_prior_from_config(
     raise ValueError(
         "amortized.prior.source must be one of "
         "'standard_normal', 'supervised_checkpoint', 'spline15d_checkpoint', "
-        "'joint_realnvp', or 'rq_spline_coupling'"
+        "'joint_realnvp', 'rq_spline_coupling', or 'structured_rq_spline'"
     )
 
 
@@ -1962,9 +1984,8 @@ def load_checkpoint(
             raise ValueError(
                 "Amortized checkpoint sidecar is missing latent transform provenance"
             )
-        if (
-            recorded_hash is None
-            and sidecar["latent_spec"] != latent_spec_to_jsonable(active_spec)
+        if recorded_hash is None and sidecar["latent_spec"] != latent_spec_to_jsonable(
+            active_spec
         ):
             raise ValueError(
                 "Amortized checkpoint latent spec does not match the active config"
@@ -1978,7 +1999,9 @@ def load_checkpoint(
             model = eqx.tree_deserialise_leaves(path, template)
         else:
             _raise_realnvp_mask_checkpoint_error(path, exc)
-    if isinstance(model.prior, (RealNVPPrior, RQSplineCouplingPrior)):
+    if isinstance(
+        model.prior, (RealNVPPrior, RQSplineCouplingPrior, StructuredRQSplinePrior)
+    ):
         roundtrip_fail_atol = _checkpoint_prior_roundtrip_fail_atol(config)
         assert_flow_integrity(
             model.prior,
@@ -5285,6 +5308,9 @@ def _train_prior_jointly(prior_cfg: dict[str, Any]) -> bool:
         "rq_spline_coupling",
         "neural_spline",
         "neural_spline_flow",
+        "structured_rq_spline",
+        "structured_rq_spline_coupling",
+        "block_rq_spline",
     }
     return bool(prior_cfg.get("train_jointly", source in joint_sources))
 
@@ -5309,6 +5335,9 @@ def _log_prior_safety_messages(
             "rq_spline_coupling",
             "neural_spline",
             "neural_spline_flow",
+            "structured_rq_spline",
+            "structured_rq_spline_coupling",
+            "block_rq_spline",
         }
         and not train_prior
         and float(kl_weight_max) > 0.0
@@ -5554,6 +5583,9 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "checkpoint": cfg["prior"].get("checkpoint"),
             "latent_dim": int(cfg["encoder"].get("latent_dim", 16)),
             "n_layers": int(cfg["prior"].get("n_layers", 8)),
+            "core_dim": int(cfg["prior"].get("core_dim", 5)),
+            "core_layers": int(cfg["prior"].get("core_layers", 0)),
+            "conditional_layers": int(cfg["prior"].get("conditional_layers", 0)),
             "hidden_size": int(cfg["prior"].get("hidden_size", 128)),
             "scale_clamp": float(cfg["prior"].get("scale_clamp", 0.05)),
             "shift_clamp": float(cfg["prior"].get("shift_clamp", 5.0)),

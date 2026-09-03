@@ -18,6 +18,7 @@ if HAS_EQUINOX:
         RealNVPPrior,
         RQSplineCouplingPrior,
         StandardNormalPrior,
+        StructuredRQSplinePrior,
         assert_flow_integrity,
         assert_realnvp_integrity,
         flow_integrity_diagnostics,
@@ -285,3 +286,31 @@ def test_rq_spline_masks_and_permutations_are_not_trainable() -> None:
     assert diagnostics["status"] == "PASS"
     assert diagnostics["prior_type"] == "RQSplineCoupling"
     assert_flow_integrity(prior, context="test", sample_count=16)
+
+
+def test_structured_rq_spline_roundtrip_joint_density_and_identity() -> None:
+    prior = StructuredRQSplinePrior(
+        jax.random.PRNGKey(12),
+        latent_dim=7,
+        core_dim=3,
+        core_layers=4,
+        conditional_layers=4,
+        hidden_size=12,
+        n_bins=8,
+        tail_bound=5.0,
+        init="identity",
+        init_scale=0.0,
+    )
+    standard = StandardNormalPrior(latent_dim=7)
+    u = jnp.linspace(-0.8, 0.8, 35, dtype=jnp.float32).reshape(5, 7)
+
+    x, forward_logdet = prior.forward(u)
+    recovered, inverse_logdet = prior.inverse(x)
+
+    assert jnp.allclose(recovered, u, atol=1.0e-5)
+    assert jnp.allclose(forward_logdet + inverse_logdet, 0.0, atol=1.0e-5)
+    assert jnp.allclose(prior.log_prob(x), standard.log_prob(x), atol=1.0e-5)
+    assert prior.sample(jax.random.PRNGKey(13), (2, 3)).shape == (2, 3, 7)
+    diagnostics = flow_integrity_diagnostics(prior, sample_count=16)
+    assert diagnostics["status"] == "PASS"
+    assert diagnostics["prior_type"] == "StructuredRQSpline"
