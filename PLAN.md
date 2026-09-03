@@ -1,5 +1,38 @@
 # Plan
 
+## 2026-09-03 Epoch-160 aggregated science figures
+
+- Build publication-ready population plots from the authoritative combined
+  4,706-object selected-test posterior banks, rather than presenting the
+  small per-shard diagnostic figures as population results.
+- Compare dense raw/EMA q and ordinary-IW mixtures with selected-catalogue
+  truth, and compare the learned parent and beta-weighted selected priors with
+  their distinct C0/selected truth targets. Keep these probability objects
+  separate and never replace them with vectors of point estimates.
+- Produce aggregate correlation and held-out support panels, plus deterministic
+  individual posterior panels showing the learned parent prior, dense EMA q,
+  ordinary-IW resamples, and truth. Record source hashes, identities, draw
+  counts, support limitations, and generated artifacts in a durable manifest.
+- Validate the plotting script against the copied complete epoch-160 bundle,
+  inspect rendered PNGs, and run focused tests, Ruff, compileall, and diff
+  checks without modifying unrelated untracked report/slide/notebook work.
+
+Completed locally:
+
+- Added `scripts/plot_feniks_epoch160_aggregated.py`, which validates and pools
+  the four authoritative 4,706-object posterior banks, preserves object-equal
+  dense joint mixtures, and writes source/artifact hashes to a durable figure
+  manifest.
+- Rendered clean population marginals, prior recovery, recovery metrics,
+  correlation residuals, and held-out importance-support figures in PNG and
+  PDF form. The prior figure keeps the parent/C0 and selected/observed-selected
+  targets distinct.
+- Rendered six deterministic individual examples across observed r-flux
+  quantiles, with the learned parent prior, raw/EMA q, EMA IW resamples, and
+  frozen truth. A multipage PDF covers all 15 latent dimensions.
+- Visually inspected the rendered PNGs after fixing header layout, and passed
+  the focused plotting tests and Ruff checks.
+
 ## 2026-09-03 Catalogue-wide epoch-160 calibration
 
 - Reuse the completed truth-free epoch-160 posterior banks for all 4,706
