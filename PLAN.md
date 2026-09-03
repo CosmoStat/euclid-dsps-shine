@@ -157,6 +157,13 @@ new pass improves validation NLL. Fifty-six focused projection, population,
 calibration, and SC-DRWS tests pass with Ruff, compileall, Bash syntax, and
 whitespace checks.
 
+Continuation submission recovery completed locally: the first remote submission
+stopped before `sbatch` because the login-shell interpreter resolved an older
+installed `euclid_dsps` without `amortized.population_vem`. Export the active
+checkout on `PYTHONPATH` before preparation and fail loudly unless the imported
+package resolves inside that checkout. No continuation root or Slurm job was
+created by the failed attempt. The same 56 focused tests and static checks pass.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined

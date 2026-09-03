@@ -13,6 +13,7 @@ FIT_FINAL_LEARNING_RATE="${FIT_FINAL_LEARNING_RATE:-5.0e-7}"
 
 cd "$REPO_DIR"
 REPO_DIR="$(pwd -P)"
+export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"
 test -s "$ENV_FILE" || {
   echo "[projection-continuation][error] missing environment: $ENV_FILE" >&2
   exit 2
@@ -21,6 +22,24 @@ source "$ENV_FILE"
 SOURCE_PROJECTION_ROOT="${SOURCE_PROJECTION_ROOT_OVERRIDE:-$PROJECTION_ROOT}"
 CONTINUATION_ROOT="${CONTINUATION_ROOT:-$RECOVERY_ROOT/population_projection_epoch160_v2}"
 CONTINUATION_LOG_ROOT="${CONTINUATION_LOG_ROOT:-$CACHE_ROOT/slurm_logs/$(basename "$CONTINUATION_ROOT")}"
+
+python - "$REPO_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+import euclid_dsps
+import euclid_dsps.amortized.population_vem as population_vem
+
+repo = Path(sys.argv[1]).resolve()
+package = Path(euclid_dsps.__file__).resolve()
+module = Path(population_vem.__file__).resolve()
+if repo not in package.parents or repo not in module.parents:
+    raise SystemExit(
+        f"active-checkout import required: package={package} module={module} repo={repo}"
+    )
+print(f"[projection-continuation] euclid_dsps={package}")
+print(f"[projection-continuation] population_vem={module}")
+PY
 
 for path in \
   "$SOURCE_PROJECTION_ROOT/RUN_MANIFEST.json" \

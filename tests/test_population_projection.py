@@ -395,6 +395,8 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     assert "beta_banks_reused" in continuation
     assert 'FIT_PASSES="${FIT_PASSES:-48}"' in continuation
     assert "population_projection_beta_h100.slurm" not in continuation
+    assert 'export PYTHONPATH="$REPO_DIR${PYTHONPATH:+:$PYTHONPATH}"' in continuation
+    assert "active-checkout import required" in continuation
     assert (
         "retain_initial_if_best=continuation is not None"
         in (ROOT / "scripts/train_feniks_sc_drws_population_projection.py").read_text()
