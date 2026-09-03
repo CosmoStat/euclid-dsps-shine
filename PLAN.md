@@ -81,6 +81,23 @@ Completed locally:
   regressions, Ruff, compileall, CLI help checks, Bash/SLURM syntax, and diff
   whitespace checks. No Jean-Zay job was submitted from this checkout.
 
+### Iterative continuation
+
+- Add an immutable VEM-2 launch path whose source is the certified prior-frozen
+  q refresh from VEM-1, rather than the original epoch-160 checkpoint.
+- Keep the same train/validation/test cohorts and truth boundary, rebuild q and
+  selection-reference banks against the new source, and write the continuation
+  to a distinct root so both iterations remain auditable.
+- Require the continuation root explicitly and verify every parent receipt,
+  checkpoint, sidecar, feature-stat hash, and prior-frozen contract before any
+  Slurm job is submitted.
+
+Completed locally: the submitter now accepts `SOURCE_VEM_ROOT`, requires a new
+immutable `VEM_ROOT`, records the iteration and parent provenance, uses the
+certified prior-frozen refresh checkpoint as the next source, and isolates its
+logs. Forty focused population-VEM and SC-DRWS tests, Ruff, compileall, Bash
+syntax, and whitespace checks pass. No Jean-Zay job was submitted here.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined

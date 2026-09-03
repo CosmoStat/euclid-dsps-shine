@@ -629,6 +629,7 @@ def main() -> None:
             "importance-support promotion is outside this time-bounded workflow"
         ),
         "stage": 5,
+        "iteration": int(manifest.get("iteration", 1)),
         "method": manifest["method"],
         "test_objects": int(len(q_rows)),
         "q_draws_per_object": int(q_x.shape[1]),

@@ -8,9 +8,14 @@ CATALOG_DIR="${CATALOG_DIR:-Data/diffsky/synthetic/feniks_260617_spline15d_group
 RECOVERY_ROOT="${RECOVERY_ROOT:?Set RECOVERY_ROOT by sourcing the epoch-160 environment}"
 MANIFEST_ROOT="${MANIFEST_ROOT:-$RECOVERY_ROOT/manifests}"
 EPOCH160_ROOT="${EPOCH160_ROOT:-${EVAL_ROOT:-$RECOVERY_ROOT/epoch_0160_evaluation}}"
+SOURCE_VEM_ROOT="${SOURCE_VEM_ROOT:-}"
 CACHE_ROOT="${CACHE_ROOT:-${SCRATCH:?Set SCRATCH}/feniks_sc_drws_runtime}"
-VEM_ROOT="${VEM_ROOT:-$RECOVERY_ROOT/population_vem_epoch160_v1}"
-VEM_LOG_ROOT="${VEM_LOG_ROOT:-$CACHE_ROOT/slurm_logs/$(basename "$RECOVERY_ROOT")-population-vem}"
+if [[ -n "$SOURCE_VEM_ROOT" ]]; then
+  : "${VEM_ROOT:?Set a new VEM_ROOT for an iterative continuation}"
+else
+  VEM_ROOT="${VEM_ROOT:-$RECOVERY_ROOT/population_vem_epoch160_v1}"
+fi
+VEM_LOG_ROOT="${VEM_LOG_ROOT:-$CACHE_ROOT/slurm_logs/$(basename "$VEM_ROOT")}"
 CONFIG="configs/experiments/feniks_sc_drws_r29_current_production.yaml"
 TRUTH_CONFIG="configs/experiments/feniks_sc_drws_r29_truth_closure.yaml"
 
@@ -23,13 +28,24 @@ if ! git diff --quiet --exit-code || ! git diff --cached --quiet --exit-code; th
 fi
 CODE_COMMIT="$(git rev-parse HEAD)"
 for path in "$CONFIG" "$TRUTH_CONFIG" \
-  "$EPOCH160_ROOT/CHECKPOINT_FROZEN.json" \
   "$CATALOG_DIR/train.parquet" "$CATALOG_DIR/test.parquet" \
   "$MANIFEST_ROOT/manifest.json" \
   "$MANIFEST_ROOT/full_train_indices.npy" \
   "$MANIFEST_ROOT/full_test_indices.npy"; do
   test -s "$path" || { echo "[population-vem][error] missing: $path" >&2; exit 2; }
 done
+if [[ -n "$SOURCE_VEM_ROOT" ]]; then
+  for path in "$SOURCE_VEM_ROOT/RUN_MANIFEST.json" \
+    "$SOURCE_VEM_ROOT/POPULATION_VEM_COMPLETE.json" \
+    "$SOURCE_VEM_ROOT/q_refresh/Q_REFRESH_COMPLETE.json"; do
+    test -s "$path" || { echo "[population-vem][error] missing: $path" >&2; exit 2; }
+  done
+else
+  test -s "$EPOCH160_ROOT/CHECKPOINT_FROZEN.json" || {
+    echo "[population-vem][error] missing: $EPOCH160_ROOT/CHECKPOINT_FROZEN.json" >&2
+    exit 2
+  }
+fi
 if [[ -s "$VEM_ROOT/SUBMISSION.json" ]]; then
   echo "[population-vem][error] this immutable run was already submitted: $VEM_ROOT" >&2
   echo "Use its saved environment and monitor; do not duplicate the chain." >&2
@@ -53,9 +69,13 @@ if repo not in module.parents:
 print(f"[population-vem] local module preflight: {module}", flush=True)
 PY
 
+SOURCE_ARGS=(--freeze-receipt "$EPOCH160_ROOT/CHECKPOINT_FROZEN.json")
+if [[ -n "$SOURCE_VEM_ROOT" ]]; then
+  SOURCE_ARGS=(--source-vem-root "$SOURCE_VEM_ROOT")
+fi
 python scripts/prepare_feniks_sc_drws_population_vem.py \
   --config "$CONFIG" --truth-config "$TRUTH_CONFIG" \
-  --freeze-receipt "$EPOCH160_ROOT/CHECKPOINT_FROZEN.json" \
+  "${SOURCE_ARGS[@]}" \
   --train-catalog "$CATALOG_DIR/train.parquet" \
   --test-catalog "$CATALOG_DIR/test.parquet" \
   --train-indices "$MANIFEST_ROOT/full_train_indices.npy" \
@@ -115,10 +135,10 @@ FINAL_JOB="${FINAL_RAW%%;*}"
 ALL_JOBS="$BANK_JOB,$BANK_GATE_JOB,$PRIOR_JOB,$REFRESH_JOB,$EVAL_JOB,$FINAL_JOB"
 LATEST="outputs/logs/feniks_sc_drws_population_vem_latest.env"
 
-printf 'export BANK_JOB=%q\nexport BANK_GATE_JOB=%q\nexport PRIOR_JOB=%q\nexport REFRESH_JOB=%q\nexport EVAL_JOB=%q\nexport FINAL_JOB=%q\nexport ALL_JOBS=%q\nexport VEM_ROOT=%q\nexport VEM_LOG_ROOT=%q\nexport RECOVERY_ROOT=%q\nexport JOB_REPO_DIR=%q\nexport CODE_COMMIT=%q\n' \
+printf 'export BANK_JOB=%q\nexport BANK_GATE_JOB=%q\nexport PRIOR_JOB=%q\nexport REFRESH_JOB=%q\nexport EVAL_JOB=%q\nexport FINAL_JOB=%q\nexport ALL_JOBS=%q\nexport VEM_ROOT=%q\nexport VEM_LOG_ROOT=%q\nexport RECOVERY_ROOT=%q\nexport SOURCE_VEM_ROOT=%q\nexport JOB_REPO_DIR=%q\nexport CODE_COMMIT=%q\n' \
   "$BANK_JOB" "$BANK_GATE_JOB" "$PRIOR_JOB" "$REFRESH_JOB" \
   "$EVAL_JOB" "$FINAL_JOB" "$ALL_JOBS" "$VEM_ROOT" "$VEM_LOG_ROOT" \
-  "$RECOVERY_ROOT" "$JOB_REPO_DIR" "$CODE_COMMIT" > "$LATEST"
+  "$RECOVERY_ROOT" "$SOURCE_VEM_ROOT" "$JOB_REPO_DIR" "$CODE_COMMIT" > "$LATEST"
 
 python - "$VEM_ROOT" "$BANK_JOB" "$BANK_GATE_JOB" "$PRIOR_JOB" \
   "$REFRESH_JOB" "$EVAL_JOB" "$FINAL_JOB" "$ALL_JOBS" \

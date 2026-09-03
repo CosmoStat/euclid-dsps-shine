@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import jax
@@ -23,6 +24,7 @@ from euclid_dsps.amortized.population_vem import (
     write_array_bank_shard,
 )
 from euclid_dsps.config import load_config
+from scripts.prepare_feniks_sc_drws_population_vem import _resolve_source
 
 eqx, optax = require_amortized_dependencies()
 
@@ -208,6 +210,80 @@ def test_population_vem_refresh_is_small_prior_frozen_avi() -> None:
     assert config["output"]["save_posterior_preview"] is False
 
 
+def test_population_vem_continuation_uses_certified_refreshed_checkpoint(
+    tmp_path: Path,
+) -> None:
+    parent = tmp_path / "population_vem_epoch160_v1"
+    refresh = parent / "q_refresh"
+    refresh.mkdir(parents=True)
+    checkpoint = refresh / "best.eqx"
+    sidecar = refresh / "best.eqx.json"
+    feature_stats = parent / "feature_stats.json"
+    checkpoint.write_bytes(b"checkpoint")
+    sidecar.write_text("{}")
+    feature_stats.write_text("{}")
+
+    def digest(path: Path) -> str:
+        import hashlib
+
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    (parent / "RUN_MANIFEST.json").write_text(
+        json.dumps(
+            {
+                "iteration": 1,
+                "frozen_source": {
+                    "epoch": 160,
+                    "feature_stats": str(feature_stats),
+                    "feature_stats_sha256": digest(feature_stats),
+                    "latent_transform_sha256": "c" * 64,
+                },
+            }
+        )
+    )
+    (parent / "POPULATION_VEM_COMPLETE.json").write_text(
+        json.dumps(
+            {
+                "status": "DIAGNOSTIC_COMPLETE",
+                "truth_used_for_training_or_checkpoint_selection": False,
+            }
+        )
+    )
+    refresh_receipt = refresh / "Q_REFRESH_COMPLETE.json"
+    refresh_receipt.write_text(
+        json.dumps(
+            {
+                "status": "COMPLETE",
+                "truth_used": False,
+                "prior_bitwise_unchanged": True,
+                "checkpoint": str(checkpoint),
+                "checkpoint_sha256": digest(checkpoint),
+                "checkpoint_sidecar": str(sidecar),
+                "checkpoint_sidecar_sha256": digest(sidecar),
+            }
+        )
+    )
+    resolved = _resolve_source(
+        freeze_receipt=None,
+        source_vem_root=parent,
+        source_variant="raw",
+    )
+    assert resolved["iteration"] == 2
+    assert resolved["source_iteration"] == 1
+    assert resolved["variant"] == "vem_refresh"
+    assert resolved["checkpoint"] == checkpoint
+
+    payload = json.loads(refresh_receipt.read_text())
+    payload["prior_bitwise_unchanged"] = False
+    refresh_receipt.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="prior-frozen"):
+        _resolve_source(
+            freeze_receipt=None,
+            source_vem_root=parent,
+            source_variant="raw",
+        )
+
+
 def test_population_vem_submission_uses_bounded_parallel_h100_stages() -> None:
     submit = (ROOT / "scripts/submit_feniks_sc_drws_population_vem.sh").read_text()
     bank = (ROOT / "scripts/feniks_sc_drws_population_vem_bank_h100.slurm").read_text()
@@ -230,6 +306,9 @@ def test_population_vem_submission_uses_bounded_parallel_h100_stages() -> None:
     assert "git worktree add --detach" in submit
     assert "afterok:$BANK_JOB" in submit
     assert "afterok:$REFRESH_JOB" in submit
+    assert 'SOURCE_VEM_ROOT="${SOURCE_VEM_ROOT:-}"' in submit
+    assert "Set a new VEM_ROOT for an iterative continuation" in submit
+    assert '--source-vem-root "$SOURCE_VEM_ROOT"' in submit
     assert "#SBATCH --gres=gpu:1" in bank
     assert "#SBATCH --gres=gpu:4" in prior
     assert "#SBATCH --gres=gpu:4" in refresh

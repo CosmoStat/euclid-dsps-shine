@@ -423,7 +423,7 @@ def main() -> None:
             config=config,
             latent_spec=latent_spec,
             feature_stats=feature_stats,
-            epoch=160,
+            epoch=int(manifest["frozen_source"]["epoch"]),
             metric=validation["selected_validation_objective"],
             metric_name="fixed_q_selected_validation_objective",
         )
@@ -494,7 +494,8 @@ def main() -> None:
     receipt = {
         "status": "COMPLETE",
         "stage": 2,
-        "source_epoch": 160,
+        "source_epoch": int(manifest["frozen_source"]["epoch"]),
+        "vem_iteration": int(manifest.get("iteration", 1)),
         "checkpoint": str(best_checkpoint.resolve()),
         "checkpoint_sha256": sha256_file(best_checkpoint),
         "checkpoint_sidecar": str(best_checkpoint.with_suffix(".eqx.json").resolve()),

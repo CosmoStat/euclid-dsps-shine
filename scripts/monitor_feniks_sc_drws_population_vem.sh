@@ -11,6 +11,7 @@ while true; do
   date
   echo
   echo "===== FIVE-STAGE POPULATION VEM ====="
+  echo "root=$VEM_ROOT"
   squeue -r -j "$ALL_JOBS" -o "%.18i %.27j %.2t %.10M %R" 2>/dev/null || true
   sacct -X -j "$ALL_JOBS" \
     --format=JobID,JobName%27,State,Elapsed,Timelimit,ExitCode,NodeList \

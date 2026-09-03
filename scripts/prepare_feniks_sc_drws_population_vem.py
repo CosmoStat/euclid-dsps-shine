@@ -123,11 +123,111 @@ def _validate_selection_manifest(
         )
 
 
+def _resolve_source(
+    *,
+    freeze_receipt: Path | None,
+    source_vem_root: Path | None,
+    source_variant: str,
+) -> dict[str, Any]:
+    if (freeze_receipt is None) == (source_vem_root is None):
+        raise ValueError(
+            "supply exactly one of --freeze-receipt or --source-vem-root"
+        )
+    if source_vem_root is None:
+        receipt_path = _require_file(freeze_receipt)
+        freeze = _read_json(receipt_path)
+        if freeze.get("status") != "FROZEN" or int(freeze.get("epoch", -1)) != 160:
+            raise ValueError("population VEM requires the immutable epoch-160 receipt")
+        if freeze.get("truth_used_for_training_or_checkpoint_selection") is not False:
+            raise ValueError("epoch-160 source checkpoint is not certified truth-free")
+        component = freeze["components"][f"{source_variant}_model"]
+        checkpoint = _require_file(Path(component["path"]))
+        if sha256_file(checkpoint) != component["sha256"]:
+            raise ValueError("frozen source checkpoint SHA256 mismatch")
+        checkpoint_sidecar = _require_file(Path(component["sidecar"]))
+        feature_stats = _require_file(Path(freeze["feature_stats"]["path"]))
+        if sha256_file(feature_stats) != freeze["feature_stats"]["sha256"]:
+            raise ValueError("frozen feature-stat SHA256 mismatch")
+        return {
+            "epoch": 160,
+            "iteration": 1,
+            "source_iteration": 0,
+            "variant": source_variant,
+            "checkpoint": checkpoint,
+            "checkpoint_sha256": component["sha256"],
+            "checkpoint_sidecar": checkpoint_sidecar,
+            "feature_stats": feature_stats,
+            "feature_stats_sha256": freeze["feature_stats"]["sha256"],
+            "latent_transform_sha256": freeze["latent_transform_hash"],
+            "source_receipt": receipt_path,
+            "source_receipt_sha256": sha256_file(receipt_path),
+            "parent_vem_root": None,
+        }
+
+    parent_root = source_vem_root.resolve()
+    parent_manifest_path = _require_file(parent_root / "RUN_MANIFEST.json")
+    parent_complete_path = _require_file(parent_root / "POPULATION_VEM_COMPLETE.json")
+    refresh_path = _require_file(
+        parent_root / "q_refresh" / "Q_REFRESH_COMPLETE.json"
+    )
+    parent_manifest = _read_json(parent_manifest_path)
+    parent_complete = _read_json(parent_complete_path)
+    refresh = _read_json(refresh_path)
+    if parent_complete.get("status") not in {
+        "DIAGNOSTIC_COMPLETE",
+        "POPULATION_TARGET_PASS",
+    }:
+        raise ValueError("source population-VEM run is not complete")
+    if (
+        parent_complete.get("truth_used_for_training_or_checkpoint_selection")
+        is not False
+    ):
+        raise ValueError("source population-VEM run is not certified truth-free")
+    if (
+        refresh.get("status") != "COMPLETE"
+        or refresh.get("truth_used") is not False
+        or refresh.get("prior_bitwise_unchanged") is not True
+    ):
+        raise ValueError("source q refresh is not a certified prior-frozen checkpoint")
+    checkpoint = _require_file(Path(refresh["checkpoint"]))
+    checkpoint_sidecar = _require_file(Path(refresh["checkpoint_sidecar"]))
+    if sha256_file(checkpoint) != refresh["checkpoint_sha256"]:
+        raise ValueError("source q-refresh checkpoint SHA256 mismatch")
+    if sha256_file(checkpoint_sidecar) != refresh["checkpoint_sidecar_sha256"]:
+        raise ValueError("source q-refresh sidecar SHA256 mismatch")
+    parent_source = parent_manifest["frozen_source"]
+    feature_stats = _require_file(Path(parent_source["feature_stats"]))
+    if sha256_file(feature_stats) != parent_source["feature_stats_sha256"]:
+        raise ValueError("source population-VEM feature-stat SHA256 mismatch")
+    parent_iteration = int(parent_manifest.get("iteration", 1))
+    return {
+        "epoch": int(parent_source["epoch"]),
+        "iteration": parent_iteration + 1,
+        "source_iteration": parent_iteration,
+        "variant": "vem_refresh",
+        "checkpoint": checkpoint,
+        "checkpoint_sha256": refresh["checkpoint_sha256"],
+        "checkpoint_sidecar": checkpoint_sidecar,
+        "feature_stats": feature_stats,
+        "feature_stats_sha256": parent_source["feature_stats_sha256"],
+        "latent_transform_sha256": parent_source["latent_transform_sha256"],
+        "source_receipt": refresh_path,
+        "source_receipt_sha256": sha256_file(refresh_path),
+        "parent_vem_root": parent_root,
+        "parent_manifest": parent_manifest_path,
+        "parent_manifest_sha256": sha256_file(parent_manifest_path),
+        "parent_complete_receipt": parent_complete_path,
+        "parent_complete_receipt_sha256": sha256_file(parent_complete_path),
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--truth-config", type=Path, required=True)
-    parser.add_argument("--freeze-receipt", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--freeze-receipt", type=Path)
+    source.add_argument("--source-vem-root", type=Path)
     parser.add_argument("--train-catalog", type=Path, required=True)
     parser.add_argument("--test-catalog", type=Path, required=True)
     parser.add_argument("--train-indices", type=Path, required=True)
@@ -142,7 +242,6 @@ def main() -> None:
     repo = Path(__file__).resolve().parents[1]
     config_path = _require_file(args.config)
     truth_config_path = _require_file(args.truth_config)
-    receipt_path = _require_file(args.freeze_receipt)
     train_catalog = _require_file(args.train_catalog)
     test_catalog = _require_file(args.test_catalog)
     train_indices_path = _require_file(args.train_indices)
@@ -152,24 +251,22 @@ def main() -> None:
     if not 0.0 < float(args.validation_fraction) < 0.5:
         raise ValueError("validation_fraction must lie in (0, 0.5)")
 
-    freeze = _read_json(receipt_path)
-    if freeze.get("status") != "FROZEN" or int(freeze.get("epoch", -1)) != 160:
-        raise ValueError("population VEM requires the immutable epoch-160 receipt")
-    if freeze.get("truth_used_for_training_or_checkpoint_selection") is not False:
-        raise ValueError("epoch-160 source checkpoint is not certified truth-free")
-    component = freeze["components"][f"{args.source_variant}_model"]
-    checkpoint = _require_file(Path(component["path"]))
-    if sha256_file(checkpoint) != component["sha256"]:
-        raise ValueError("frozen source checkpoint SHA256 mismatch")
-    checkpoint_sidecar = _require_file(Path(component["sidecar"]))
-    feature_stats = _require_file(Path(freeze["feature_stats"]["path"]))
-    if sha256_file(feature_stats) != freeze["feature_stats"]["sha256"]:
-        raise ValueError("frozen feature-stat SHA256 mismatch")
+    source_info = _resolve_source(
+        freeze_receipt=args.freeze_receipt,
+        source_vem_root=args.source_vem_root,
+        source_variant=args.source_variant,
+    )
 
     config = load_config(config_path)
     latent_hash = latent_spec_hash(latent_spec_from_config(config))
-    if latent_hash != freeze["latent_transform_hash"]:
+    if latent_hash != source_info["latent_transform_sha256"]:
         raise ValueError("active config does not match the frozen latent transform")
+    if source_info["parent_vem_root"] is not None:
+        parent_manifest = _read_json(source_info["parent_manifest"])
+        if parent_manifest.get("config", {}).get(
+            "resolved_sha256"
+        ) != canonical_json_sha256(config):
+            raise ValueError("active config does not match the source population-VEM run")
     truth_config = load_config(truth_config_path)
     truth_names = tuple(
         (truth_config.get("truth", {}) or {}).get("parameter_columns", {})
@@ -203,6 +300,13 @@ def main() -> None:
         train_objects=len(selected_train),
         test_objects=len(selected_test),
     )
+    if source_info["parent_vem_root"] is not None:
+        parent_manifest = _read_json(source_info["parent_manifest"])
+        for name, digest in (("train", train_sha), ("test", test_sha)):
+            if parent_manifest.get("datasets", {}).get(name, {}).get("sha256") != digest:
+                raise ValueError(
+                    f"{name} catalogue does not match the source population-VEM run"
+                )
     generator = np.random.default_rng(int(args.seed))
     order = generator.permutation(len(selected_train))
     validation_count = max(
@@ -214,8 +318,9 @@ def main() -> None:
     audit_rows = np.arange(train_total, dtype=np.int64)
 
     requested = {
-        "source_checkpoint_sha256": component["sha256"],
-        "source_variant": args.source_variant,
+        "source_checkpoint_sha256": source_info["checkpoint_sha256"],
+        "source_variant": source_info["variant"],
+        "source_iteration": source_info["iteration"],
         "train_indices_sha256": train_indices_sha,
         "test_indices_sha256": test_indices_sha,
         "selection_manifest_sha256": sha256_file(selection_manifest_path),
@@ -242,6 +347,7 @@ def main() -> None:
         manifest = {
             "status": "PREPARED",
             "schema_version": 1,
+            "iteration": source_info["iteration"],
             "method": "selection_corrected_population_vem_fixed_reference_v1",
             "scientific_steps": [
                 "selection_audit_and_frozen_q_reference_banks",
@@ -265,18 +371,36 @@ def main() -> None:
                 "role": "isolated selection audit and final closure only",
             },
             "frozen_source": {
-                "epoch": 160,
-                "variant": args.source_variant,
-                "checkpoint": str(checkpoint),
-                "checkpoint_sha256": component["sha256"],
-                "checkpoint_sidecar": str(checkpoint_sidecar),
-                "checkpoint_sidecar_sha256": sha256_file(checkpoint_sidecar),
-                "feature_stats": str(feature_stats),
-                "feature_stats_sha256": freeze["feature_stats"]["sha256"],
+                "epoch": source_info["epoch"],
+                "iteration": source_info["source_iteration"],
+                "variant": source_info["variant"],
+                "checkpoint": str(source_info["checkpoint"]),
+                "checkpoint_sha256": source_info["checkpoint_sha256"],
+                "checkpoint_sidecar": str(source_info["checkpoint_sidecar"]),
+                "checkpoint_sidecar_sha256": sha256_file(
+                    source_info["checkpoint_sidecar"]
+                ),
+                "feature_stats": str(source_info["feature_stats"]),
+                "feature_stats_sha256": source_info["feature_stats_sha256"],
                 "latent_transform_sha256": latent_hash,
                 "truth_used": False,
-                "freeze_receipt": str(receipt_path),
-                "freeze_receipt_sha256": sha256_file(receipt_path),
+                "source_receipt": str(source_info["source_receipt"]),
+                "source_receipt_sha256": source_info["source_receipt_sha256"],
+                "freeze_receipt": (
+                    str(source_info["source_receipt"])
+                    if source_info["parent_vem_root"] is None
+                    else None
+                ),
+                "freeze_receipt_sha256": (
+                    source_info["source_receipt_sha256"]
+                    if source_info["parent_vem_root"] is None
+                    else None
+                ),
+                "parent_vem_root": (
+                    str(source_info["parent_vem_root"])
+                    if source_info["parent_vem_root"] is not None
+                    else None
+                ),
             },
             "datasets": {
                 "train": {
