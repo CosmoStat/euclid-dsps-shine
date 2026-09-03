@@ -20,6 +20,13 @@ failed recovery receipts so the guarded recovery can be retried without
 discarding provenance or any completed bank. The retry change passes the eight
 focused tests, Ruff, compileall, Bash syntax, and whitespace checks locally.
 
+The private shim was not visible to the legacy Python subprocess in recovery
+gate `1702696`. Remove the executable dependency entirely for recovery: execute
+the frozen finalizer but prepend the current checkout, containing only the
+metadata-only provenance repair, to its module path. Record both the bank-code
+commit and the recovery-code commit in the recovery receipt. Eight focused
+tests, Ruff, compileall, Bash syntax, and whitespace validation pass locally.
+
 ## 2026-09-03 Population-VEM submit import preflight
 
 - The first Jean-Zay launch stopped before submission because the active Conda

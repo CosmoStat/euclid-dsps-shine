@@ -14,20 +14,20 @@ REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 VEM_ROOT="${VEM_ROOT:?VEM_ROOT is required}"
-GIT_BIN="${GIT_BIN:-$(command -v git || true)}"
+VEM_RUNTIME_PYTHONPATH="${VEM_RUNTIME_PYTHONPATH:-}"
 
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 export JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu
-export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}" PIP_NO_INDEX=1
+if [[ -n "$VEM_RUNTIME_PYTHONPATH" ]]; then
+  export PYTHONPATH="$VEM_RUNTIME_PYTHONPATH:$REPO_DIR:${PYTHONPATH:-}"
+else
+  export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+fi
+export PIP_NO_INDEX=1
 
 cd "$REPO_DIR"
 module purge
 source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
-if [[ -n "$GIT_BIN" ]]; then
-  GIT_SHIM_DIR="${TMPDIR:-/tmp}/population-vem-git-${SLURM_JOB_ID}"
-  mkdir -p "$GIT_SHIM_DIR"
-  ln -sf "$GIT_BIN" "$GIT_SHIM_DIR/git"
-  export PATH="$GIT_SHIM_DIR:$PATH"
-fi
+python -c 'import sys; print("[population-vem-gate] python:", sys.executable); import jax; print("[population-vem-gate] jax:", jax.__file__)'
 python scripts/finalize_feniks_sc_drws_population_vem_banks.py --root "$VEM_ROOT"

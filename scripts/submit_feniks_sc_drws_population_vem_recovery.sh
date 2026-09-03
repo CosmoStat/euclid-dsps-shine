@@ -10,8 +10,6 @@ source "$LATEST"
 MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3}"
 CONDA_ENV="${CONDA_ENV:-shine}"
 CACHE_ROOT="${CACHE_ROOT:-${SCRATCH:?Set SCRATCH}/feniks_sc_drws_runtime}"
-GIT_BIN="${GIT_BIN:-$(command -v git || true)}"
-test -n "$GIT_BIN" || { echo "[population-vem-recovery][error] git is unavailable on the submit host" >&2; exit 2; }
 test "${RECOVER_FAILED_CHAIN:-0}" = 1 || {
   echo "[population-vem-recovery][error] set RECOVER_FAILED_CHAIN=1" >&2
   exit 2
@@ -19,6 +17,7 @@ test "${RECOVER_FAILED_CHAIN:-0}" = 1 || {
 
 cd "$REPO_DIR"
 REPO_DIR="$(pwd -P)"
+RECOVERY_CODE_COMMIT="$(git rev-parse HEAD)"
 test -d "$JOB_REPO_DIR" || { echo "[population-vem-recovery][error] missing code snapshot" >&2; exit 2; }
 ACTUAL_COMMIT="$(git -C "$JOB_REPO_DIR" rev-parse HEAD)"
 test "$ACTUAL_COMMIT" = "$CODE_COMMIT" || {
@@ -47,11 +46,12 @@ for specification in q_fit:16 q_validation:4 selection_reference:8 selection_aud
 done
 
 scancel "$PRIOR_JOB" "$REFRESH_JOB" "$EVAL_JOB" "$FINAL_JOB" 2>/dev/null || true
-EXPORTS="ALL,REPO_DIR=$JOB_REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,VEM_ROOT=$VEM_ROOT,CACHE_ROOT=$CACHE_ROOT,GIT_BIN=$GIT_BIN"
+EXPORTS="ALL,REPO_DIR=$JOB_REPO_DIR,MINICONDA_PATH=$MINICONDA_PATH,CONDA_ENV=$CONDA_ENV,VEM_ROOT=$VEM_ROOT,CACHE_ROOT=$CACHE_ROOT"
+GATE_EXPORTS="$EXPORTS,VEM_RUNTIME_PYTHONPATH=$REPO_DIR"
 
 GATE_RAW=$(sbatch --parsable \
   --output="$VEM_LOG_ROOT/bank-gate-recovery-%j.out" \
-  --error="$VEM_LOG_ROOT/bank-gate-recovery-%j.err" --export="$EXPORTS" \
+  --error="$VEM_LOG_ROOT/bank-gate-recovery-%j.err" --export="$GATE_EXPORTS" \
   scripts/feniks_sc_drws_population_vem_bank_finalize.slurm)
 NEW_BANK_GATE_JOB="${GATE_RAW%%;*}"
 PRIOR_RAW=$(sbatch --parsable --dependency="afterok:$NEW_BANK_GATE_JOB" \
@@ -86,7 +86,8 @@ cp "$RECOVERY_ENV" "$LATEST"
 
 python - "$VEM_ROOT/RECOVERY_SUBMISSION.json" "$BANK_GATE_JOB" \
   "$NEW_BANK_GATE_JOB" "$NEW_PRIOR_JOB" "$NEW_REFRESH_JOB" \
-  "$NEW_EVAL_JOB" "$NEW_FINAL_JOB" "$NEW_ALL_JOBS" <<'PY'
+  "$NEW_EVAL_JOB" "$NEW_FINAL_JOB" "$NEW_ALL_JOBS" "$CODE_COMMIT" \
+  "$RECOVERY_CODE_COMMIT" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -101,6 +102,8 @@ payload = {
     "evaluation_job": sys.argv[6],
     "final_job": sys.argv[7],
     "all_jobs": sys.argv[8],
+    "bank_code_commit": sys.argv[9],
+    "recovery_code_commit": sys.argv[10],
     "reused_initial_banks": True,
 }
 path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
