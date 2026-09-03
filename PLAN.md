@@ -1,5 +1,28 @@
 # Plan
 
+## 2026-09-03 Population-flow coupling coverage recovery
+
+- Preserve the completed architecture-v1 artifacts and the legacy
+  `alternating_roll` checkpoint semantics, but stop using that topology for new
+  candidates: combined with alternating masks it never transforms odd latent
+  coordinates, exactly matching the invariant stellar-mass and `dust_av`
+  validation metrics.
+- Switch new benchmark candidates to the existing `roll` topology, expose
+  per-coordinate transform counts in flow integrity diagnostics, and fail the
+  benchmark preflight if any candidate coordinate has zero active transforms.
+- Add a truth-free hard NLL non-regression gate against the saturated source
+  RealNVP before architecture ranking. The baseline remains eligible, so a
+  spline cannot win on marginal CDFs while degrading the joint validation NLL.
+- Validate locally, commit, and publish a fresh architecture-v2 launch. Do not
+  overwrite v1 and do not rerun posterior inference or use truth before winner
+  freeze.
+
+Implementation complete locally; no recovery jobs were submitted from this
+checkout. The legacy topology remains loadable and is reported as `WARN`, while
+new candidates use full-coverage indexed rolls and fail before fitting if any
+coordinate is inactive. Validation: Ruff, `compileall`, shell syntax, 38 focused
+flow/config/projection tests, and 57 SC-DRWS/VEM/SC-ASMC regressions pass.
+
 ## 2026-09-03 Truth-free population projection architecture benchmark
 
 - Reuse the immutable epoch-160 joint-q and inverse-selection beta banks; do

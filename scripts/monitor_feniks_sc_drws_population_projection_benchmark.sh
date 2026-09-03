@@ -67,6 +67,8 @@ for name in names:
     parent = c["parent_flow_vs_inverse_beta_q"]
     selected_parent = c["selected_parent_flow_vs_q_aggregate"]
     print(f"{name:<24} score={data['primary_score']:.3f} "
+          f"dNLLmax={data['maximum_validation_weighted_nll_regression_observed']:+.3f} "
+          f"nll_gate={data['passes_nll_non_regression_gate']} "
           f"z sel/parent/sel-parent={selected['redshift_cdf_supremum']:.3f}/"
           f"{parent['redshift_cdf_supremum']:.3f}/"
           f"{selected_parent['redshift_cdf_supremum']:.3f} "
@@ -77,7 +79,8 @@ winner = root / "TRUTH_FREE_ARCHITECTURE_WINNER.json"
 if winner.exists():
     data = json.load(open(winner))
     print(f"WINNER={data['winner']} score={data['winner_primary_score']:.3f} "
-          f"all_gates={data['winner_passes_all_truth_free_distribution_gates']}")
+          f"cdf_gates={data['winner_passes_all_truth_free_distribution_gates']} "
+          f"nll_gate={data['winner_passes_nll_non_regression_gate']}")
 else:
     print("winner: pending")
 PY

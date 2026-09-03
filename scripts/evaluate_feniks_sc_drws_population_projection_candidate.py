@@ -21,6 +21,7 @@ from euclid_dsps.amortized.population_projection import (
 )
 from euclid_dsps.amortized.population_projection_benchmark import (
     BASELINE_NAME,
+    MAXIMUM_VALIDATION_NLL_REGRESSION,
     summarize_truth_free_metrics,
 )
 from euclid_dsps.amortized.population_vem import resolve_manifest_config, sha256_file
@@ -173,12 +174,31 @@ def main() -> None:
     )
     metrics = pd.DataFrame(rows)
     summary = summarize_truth_free_metrics(metrics, parameter_names=names)
-    summary["fit_validation_weighted_nll_mean"] = float(
-        0.5
-        * (
-            float(fit["selected"]["best_validation_weighted_nll"])
-            + float(fit["parent"]["best_validation_weighted_nll"])
-        )
+    selected_nll = float(fit["selected"]["best_validation_weighted_nll"])
+    parent_nll = float(fit["parent"]["best_validation_weighted_nll"])
+    summary["fit_validation_weighted_nll_mean"] = 0.5 * (selected_nll + parent_nll)
+    baseline = manifest["architecture_benchmark"]["baseline"]
+    baseline_selected_nll = float(baseline["selected"]["best_validation_weighted_nll"])
+    baseline_parent_nll = float(baseline["parent"]["best_validation_weighted_nll"])
+    baseline_nll = 0.5 * (baseline_selected_nll + baseline_parent_nll)
+    regressions = {
+        "selected": selected_nll - baseline_selected_nll,
+        "parent": parent_nll - baseline_parent_nll,
+    }
+    summary["baseline_validation_weighted_nll_mean"] = baseline_nll
+    summary["validation_weighted_nll_regression"] = float(
+        summary["fit_validation_weighted_nll_mean"] - baseline_nll
+    )
+    summary["validation_weighted_nll_regression_by_target"] = regressions
+    summary["maximum_validation_weighted_nll_regression_observed"] = float(
+        max(regressions.values())
+    )
+    summary["maximum_validation_weighted_nll_regression"] = float(
+        MAXIMUM_VALIDATION_NLL_REGRESSION
+    )
+    summary["passes_nll_non_regression_gate"] = bool(
+        summary["maximum_validation_weighted_nll_regression_observed"]
+        <= MAXIMUM_VALIDATION_NLL_REGRESSION
     )
 
     attempt = (

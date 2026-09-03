@@ -547,7 +547,7 @@ class StructuredRQSplinePrior(eqx.Module):
         min_bin_width: float = 1.0e-3,
         min_bin_height: float = 1.0e-3,
         min_derivative: float = 1.0e-3,
-        permutation: str = "alternating_roll",
+        permutation: str = "roll",
         init: str = "identity",
         init_scale: float = 0.0,
     ) -> None:
@@ -735,9 +735,15 @@ def flow_integrity_diagnostics(
     masks_binary = all(bool(jnp.all((mask == 0) | (mask == 1))) for mask in masks)
     masks_static = all(not eqx.is_inexact_array(layer.mask) for layer in layers)
 
-    permutations = tuple(
-        jnp.asarray(perm) for perm in getattr(prior, "permutations", ())
-    )
+    if isinstance(prior, RealNVPPrior):
+        permutations = tuple(
+            _flow_permutation(prior.latent_dim, index, prior.permutation)
+            for index in range(len(prior.layers))
+        )
+    else:
+        permutations = tuple(
+            jnp.asarray(perm) for perm in getattr(prior, "permutations", ())
+        )
     permutation_dimensions = [int(prior.latent_dim)] * len(permutations)
     if isinstance(prior, StructuredRQSplinePrior):
         permutations = tuple(prior.core_prior.permutations) + tuple(
@@ -752,6 +758,11 @@ def flow_integrity_diagnostics(
         for perm, dimension in zip(permutations, permutation_dimensions, strict=True)
     )
     permutations_static = all(not eqx.is_inexact_array(perm) for perm in permutations)
+    transform_counts = flow_coordinate_transform_counts(prior)
+    minimum_transform_count = min(transform_counts)
+    untransformed_coordinate_indices = [
+        index for index, count in enumerate(transform_counts) if count == 0
+    ]
 
     k_u, k_sample = jax.random.split(key)
     u = jax.random.normal(
@@ -777,6 +788,13 @@ def flow_integrity_diagnostics(
         _integrity_check("masks_static_not_trainable", masks_static),
         _integrity_check("permutations_valid", permutations_valid),
         _integrity_check("permutations_static_not_trainable", permutations_static),
+        _integrity_check(
+            "all_coordinates_receive_active_transform",
+            True,
+            value=minimum_transform_count,
+            warn=1,
+            warn_when=minimum_transform_count == 0,
+        ),
         _integrity_check(
             "forward_inverse_roundtrip_max_abs",
             roundtrip_max_abs <= float(roundtrip_fail_atol),
@@ -809,6 +827,9 @@ def flow_integrity_diagnostics(
         "n_layers": int(len(layers)),
         "mask_dtypes": mask_dtypes,
         "permutation_dtypes": permutation_dtypes,
+        "coordinate_transform_counts": list(transform_counts),
+        "minimum_coordinate_transform_count": minimum_transform_count,
+        "untransformed_coordinate_indices": untransformed_coordinate_indices,
         "roundtrip_max_abs": roundtrip_max_abs,
         "roundtrip_median_abs": roundtrip_median_abs,
         "sample_abs_q99": sample_abs_q99,
@@ -952,6 +973,54 @@ def _flow_permutation(latent_dim: int, index: int, mode: str) -> jnp.ndarray:
     if normalized == "alternating_roll":
         return jnp.roll(indices, shift=1 if int(index) % 2 == 0 else -1)
     raise AssertionError(f"Unhandled flow permutation: {normalized}")
+
+
+def flow_coordinate_transform_counts(prior) -> tuple[int, ...]:
+    """Count active coupling transforms applied to each original coordinate."""
+    if isinstance(prior, StructuredRQSplinePrior):
+        core = _coupling_coordinate_transform_counts(
+            prior.core_prior.layers,
+            prior.core_prior.permutations,
+            prior.core_dim,
+        )
+        conditional = _coupling_coordinate_transform_counts(
+            prior.conditional_layers,
+            prior.conditional_permutations,
+            prior.sfh_dim,
+        )
+        return core + conditional
+    if isinstance(prior, RealNVPPrior):
+        permutations = tuple(
+            _flow_permutation(prior.latent_dim, index, prior.permutation)
+            for index in range(len(prior.layers))
+        )
+        return _coupling_coordinate_transform_counts(
+            prior.layers, permutations, prior.latent_dim
+        )
+    if isinstance(prior, RQSplineCouplingPrior):
+        return _coupling_coordinate_transform_counts(
+            prior.layers, prior.permutations, prior.latent_dim
+        )
+    raise TypeError("coordinate coverage requires a coupling-flow prior")
+
+
+def _coupling_coordinate_transform_counts(
+    layers: tuple,
+    permutations: tuple,
+    latent_dim: int,
+) -> tuple[int, ...]:
+    if len(layers) != len(permutations):
+        raise ValueError("coupling layers and permutations have different lengths")
+    labels = list(range(int(latent_dim)))
+    counts = [0] * int(latent_dim)
+    for layer, permutation in zip(layers, permutations, strict=True):
+        mask = jax.device_get(jnp.asarray(layer.mask, dtype=jnp.bool_)).tolist()
+        for position, masked in enumerate(mask):
+            if not bool(masked):
+                counts[labels[position]] += 1
+        order = jax.device_get(jnp.asarray(permutation, dtype=jnp.int32)).tolist()
+        labels = [labels[int(position)] for position in order]
+    return tuple(counts)
 
 
 def _validate_flow_permutation(mode: str) -> str:

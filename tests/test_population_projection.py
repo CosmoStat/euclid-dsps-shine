@@ -23,6 +23,7 @@ from euclid_dsps.amortized.population_projection import (
 )
 from euclid_dsps.amortized.population_projection_benchmark import (
     CORE_PARAMETER_NAMES,
+    TRAINED_CANDIDATES,
     config_for_candidate,
     select_truth_free_candidate,
     summarize_truth_free_metrics,
@@ -130,6 +131,7 @@ def test_truth_free_candidate_selection_is_lexicographic() -> None:
         "sfh_used_for_architecture_selection": False,
         "redshift_median_gate_used": False,
         "fit_validation_weighted_nll_mean": 30.0,
+        "passes_nll_non_regression_gate": True,
     }
     records = [
         {
@@ -149,6 +151,34 @@ def test_truth_free_candidate_selection_is_lexicographic() -> None:
     assert select_truth_free_candidate(records)["candidate"] == "core_winner"
 
 
+def test_truth_free_candidate_selection_rejects_joint_nll_regression() -> None:
+    template = {
+        "status": "COMPLETE",
+        "truth_used": False,
+        "sfh_used_for_architecture_selection": False,
+        "redshift_median_gate_used": False,
+        "secondary_mean_core_5d_cdf_supremum": 0.1,
+    }
+    records = [
+        {
+            **template,
+            "candidate": "marginal_but_bad_density",
+            "primary_score": 0.8,
+            "fit_validation_weighted_nll_mean": 70.0,
+            "passes_nll_non_regression_gate": False,
+        },
+        {
+            **template,
+            "candidate": "admissible_density",
+            "primary_score": 1.5,
+            "fit_validation_weighted_nll_mean": 29.0,
+            "passes_nll_non_regression_gate": True,
+        },
+    ]
+
+    assert select_truth_free_candidate(records)["candidate"] == "admissible_density"
+
+
 def test_candidate_config_changes_only_prior_architecture() -> None:
     base = {"amortized": {"prior": {"source": "joint_realnvp"}}, "model": {"x": 1}}
     candidate = {"prior": {"source": "structured_rq_spline", "core_dim": 5}}
@@ -156,6 +186,9 @@ def test_candidate_config_changes_only_prior_architecture() -> None:
     assert result["amortized"]["prior"]["source"] == "structured_rq_spline"
     assert result["model"] == base["model"]
     assert base["amortized"]["prior"]["source"] == "joint_realnvp"
+    assert all(
+        candidate["prior"]["permutation"] == "roll" for candidate in TRAINED_CANDIDATES
+    )
 
 
 def test_q_beta_bank_preserves_draw_axis_and_selection_contract(tmp_path: Path) -> None:
@@ -487,4 +520,5 @@ def test_projection_architecture_benchmark_is_parallel_and_truth_separated() -> 
     assert '"truth_used_before_winner_freeze": False' in submit
     assert "closure_runs_after_winner_freeze" in prepare
     assert "redshift_median_gate_used" in prepare
+    assert "maximum_validation_weighted_nll_regression" in prepare
     assert "q PIT KS" in monitor

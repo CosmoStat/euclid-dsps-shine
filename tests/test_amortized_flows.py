@@ -21,6 +21,7 @@ if HAS_EQUINOX:
         StructuredRQSplinePrior,
         assert_flow_integrity,
         assert_realnvp_integrity,
+        flow_coordinate_transform_counts,
         flow_integrity_diagnostics,
         realnvp_integrity_diagnostics,
     )
@@ -314,3 +315,30 @@ def test_structured_rq_spline_roundtrip_joint_density_and_identity() -> None:
     diagnostics = flow_integrity_diagnostics(prior, sample_count=16)
     assert diagnostics["status"] == "PASS"
     assert diagnostics["prior_type"] == "StructuredRQSpline"
+
+
+def test_coordinate_coverage_detects_alternating_mask_roll_lockout() -> None:
+    legacy = RealNVPPrior(
+        jax.random.PRNGKey(14),
+        latent_dim=5,
+        n_layers=10,
+        hidden_size=8,
+        permutation="alternating_roll",
+    )
+    covered = RealNVPPrior(
+        jax.random.PRNGKey(15),
+        latent_dim=5,
+        n_layers=10,
+        hidden_size=8,
+        permutation="roll",
+    )
+
+    legacy_counts = flow_coordinate_transform_counts(legacy)
+    covered_counts = flow_coordinate_transform_counts(covered)
+    legacy_diagnostics = flow_integrity_diagnostics(legacy, sample_count=16)
+
+    assert legacy_counts[1] == 0
+    assert legacy_counts[3] == 0
+    assert min(covered_counts) > 0
+    assert legacy_diagnostics["status"] == "WARN"
+    assert legacy_diagnostics["untransformed_coordinate_indices"] == [1, 3]

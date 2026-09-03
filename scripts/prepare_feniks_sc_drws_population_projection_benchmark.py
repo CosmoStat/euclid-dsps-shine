@@ -19,6 +19,7 @@ from euclid_dsps.amortized.latent import latent_spec_from_config
 from euclid_dsps.amortized.population_projection_benchmark import (
     BASELINE_NAME,
     CORE_PARAMETER_NAMES,
+    MAXIMUM_VALIDATION_NLL_REGRESSION,
     TRAINED_CANDIDATES,
     TRUTH_FREE_TOLERANCES,
     config_for_candidate,
@@ -103,6 +104,9 @@ def prepare_benchmark(
         "peak_learning_rate": float(peak_learning_rate),
         "final_learning_rate": float(final_learning_rate),
         "prior_samples": int(prior_samples),
+        "maximum_validation_weighted_nll_regression": float(
+            MAXIMUM_VALIDATION_NLL_REGRESSION
+        ),
     }
     if out.exists():
         existing = out / "RUN_MANIFEST.json"
@@ -141,7 +145,7 @@ def prepare_benchmark(
             {
                 "status": "PREPARED",
                 "schema_version": 3,
-                "method": "truth_free_population_projection_architecture_benchmark_v1",
+                "method": "truth_free_population_projection_architecture_benchmark_v2",
                 "code_commit": code_commit,
                 "request": request,
                 "architecture_benchmark": {
@@ -161,8 +165,15 @@ def prepare_benchmark(
                     },
                     "trained_candidates": candidate_records,
                     "candidate_selection": (
-                        "lexicographic truth-free validation: worst normalized core/redshift "
-                        "CDF gate, mean core CDF, then mean selected/parent weighted NLL"
+                        "hard truth-free NLL non-regression, then lexicographic validation: "
+                        "worst normalized core/redshift CDF gate, mean core CDF, and mean "
+                        "selected/parent weighted NLL"
+                    ),
+                    "maximum_validation_weighted_nll_regression": float(
+                        MAXIMUM_VALIDATION_NLL_REGRESSION
+                    ),
+                    "candidate_permutation_contract": (
+                        "all latent coordinates receive at least one active coupling transform"
                     ),
                     "tolerances": TRUTH_FREE_TOLERANCES,
                     "sfh_used_for_architecture_selection": False,

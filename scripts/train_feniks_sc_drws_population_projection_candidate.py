@@ -16,7 +16,10 @@ import numpy as np
 
 from euclid_dsps.amortized.config import require_amortized_dependencies
 from euclid_dsps.amortized.features import read_feature_stats
-from euclid_dsps.amortized.flows import assert_flow_integrity
+from euclid_dsps.amortized.flows import (
+    assert_flow_integrity,
+    flow_coordinate_transform_counts,
+)
 from euclid_dsps.amortized.latent import latent_spec_from_config
 from euclid_dsps.amortized.population_projection import (
     require_projection_runtime_commit,
@@ -125,6 +128,16 @@ def main() -> None:
         latent_dim=q_fit.shape[-1],
         active_spec=latent_spec,
     )
+    transform_counts = flow_coordinate_transform_counts(selected_initial)
+    if min(transform_counts) <= 0:
+        missing = [
+            latent_spec.names[index]
+            for index, count in enumerate(transform_counts)
+            if count <= 0
+        ]
+        raise ValueError(
+            f"candidate coupling topology leaves coordinates untransformed: {missing}"
+        )
     candidate_root.mkdir(parents=True, exist_ok=True)
     attempt = candidate_root / f".fit-attempt-{os.environ.get('SLURM_JOB_ID', 'local')}"
     if attempt.exists():
@@ -208,6 +221,8 @@ def main() -> None:
         "point_estimates_used": False,
         "new_posterior_inference": False,
         "checkpoint_selection": "held-out weighted density only",
+        "coordinate_transform_counts": list(transform_counts),
+        "all_coordinates_receive_active_transform": True,
         "runtime_provenance": runtime_provenance,
     }
     _write_json(receipt_path, receipt)

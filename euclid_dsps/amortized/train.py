@@ -333,7 +333,7 @@ def build_prior_from_config(
             min_bin_width=float(prior_cfg.get("min_bin_width", 1.0e-3)),
             min_bin_height=float(prior_cfg.get("min_bin_height", 1.0e-3)),
             min_derivative=float(prior_cfg.get("min_derivative", 1.0e-3)),
-            permutation=str(prior_cfg.get("permutation", "alternating_roll")),
+            permutation=str(prior_cfg.get("permutation", "roll")),
             init=str(prior_cfg.get("init", "identity")),
             init_scale=float(prior_cfg.get("init_scale", 0.0)),
         )

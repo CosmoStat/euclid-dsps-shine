@@ -26,7 +26,7 @@ TRAINED_CANDIDATES: tuple[dict[str, Any], ...] = (
             "train_jointly": True,
             "n_layers": 16,
             "hidden_size": 384,
-            "permutation": "alternating_roll",
+            "permutation": "roll",
             "scale_clamp": 0.35,
             "shift_clamp": 4.0,
             "init": "identity",
@@ -48,7 +48,7 @@ TRAINED_CANDIDATES: tuple[dict[str, Any], ...] = (
             "min_bin_width": 1.0e-3,
             "min_bin_height": 1.0e-3,
             "min_derivative": 1.0e-3,
-            "permutation": "alternating_roll",
+            "permutation": "roll",
             "init": "identity",
             "init_scale": 0.0,
         },
@@ -70,7 +70,7 @@ TRAINED_CANDIDATES: tuple[dict[str, Any], ...] = (
             "min_bin_width": 1.0e-3,
             "min_bin_height": 1.0e-3,
             "min_derivative": 1.0e-3,
-            "permutation": "alternating_roll",
+            "permutation": "roll",
             "init": "identity",
             "init_scale": 0.0,
         },
@@ -78,6 +78,7 @@ TRAINED_CANDIDATES: tuple[dict[str, Any], ...] = (
 )
 
 BASELINE_NAME = "source_realnvp"
+MAXIMUM_VALIDATION_NLL_REGRESSION = 0.5
 
 TRUTH_FREE_TOLERANCES = {
     "selected_redshift_cdf_supremum": 0.05,
@@ -175,9 +176,12 @@ def select_truth_free_candidate(records: list[dict[str, Any]]) -> dict[str, Any]
             raise ValueError("SFH cannot drive the core population architecture choice")
         if record.get("redshift_median_gate_used") is not False:
             raise ValueError("redshift medians cannot drive architecture selection")
+        if not isinstance(record.get("passes_nll_non_regression_gate"), bool):
+            raise ValueError("architecture selection requires an explicit NLL gate")
     return min(
         records,
         key=lambda item: (
+            not item["passes_nll_non_regression_gate"],
             float(item["primary_score"]),
             float(item["secondary_mean_core_5d_cdf_supremum"]),
             float(item["fit_validation_weighted_nll_mean"]),

@@ -83,6 +83,15 @@ def main() -> None:
                 "fit_validation_weighted_nll_mean": record[
                     "fit_validation_weighted_nll_mean"
                 ],
+                "validation_weighted_nll_regression": record[
+                    "validation_weighted_nll_regression"
+                ],
+                "maximum_validation_weighted_nll_regression_observed": record[
+                    "maximum_validation_weighted_nll_regression_observed"
+                ],
+                "passes_nll_non_regression_gate": record[
+                    "passes_nll_non_regression_gate"
+                ],
                 "passes_truth_free_gates": record[
                     "passes_all_truth_free_distribution_gates"
                 ],
@@ -134,6 +143,15 @@ def main() -> None:
         "winner_primary_score": winner["primary_score"],
         "winner_passes_all_truth_free_distribution_gates": winner[
             "passes_all_truth_free_distribution_gates"
+        ],
+        "winner_passes_nll_non_regression_gate": winner[
+            "passes_nll_non_regression_gate"
+        ],
+        "winner_validation_weighted_nll_regression": winner[
+            "validation_weighted_nll_regression"
+        ],
+        "winner_maximum_validation_weighted_nll_regression_observed": winner[
+            "maximum_validation_weighted_nll_regression_observed"
         ],
         "winner_metrics": winner["comparisons"],
         "selection_order": [item["candidate"] for item in records],

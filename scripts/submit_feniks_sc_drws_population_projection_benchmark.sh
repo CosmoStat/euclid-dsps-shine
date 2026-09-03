@@ -21,7 +21,7 @@ test -s "$SOURCE_ENV" || {
 }
 source "$SOURCE_ENV"
 SOURCE_PROJECTION_ROOT="${SOURCE_PROJECTION_ROOT_OVERRIDE:-$PROJECTION_ROOT}"
-BENCHMARK_ROOT="${BENCHMARK_ROOT:-$RECOVERY_ROOT/population_projection_epoch160_architecture_v1}"
+BENCHMARK_ROOT="${BENCHMARK_ROOT:-$RECOVERY_ROOT/population_projection_epoch160_architecture_v2}"
 BENCHMARK_LOG_ROOT="${BENCHMARK_LOG_ROOT:-$CACHE_ROOT/slurm_logs/$(basename "$BENCHMARK_ROOT")}"
 
 python - "$REPO_DIR" <<'PY'
