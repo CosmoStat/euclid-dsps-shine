@@ -52,6 +52,8 @@ class ArrayShardContract:
             "q_train",
             "q_validation",
             "q_evaluation",
+            "q_beta_fit",
+            "q_beta_validation",
             "selection_reference",
             "selection_audit",
             "prior_evaluation",
@@ -83,6 +85,8 @@ class ArrayShardContract:
                 "selection_reference",
                 "selection_audit",
                 "prior_evaluation",
+                "q_beta_fit",
+                "q_beta_validation",
             }
             and not self.selection_event
         ):
@@ -764,7 +768,36 @@ def _validate_arrays_for_kind(
 ) -> None:
     if not arrays:
         raise ValueError("array bank shard cannot be empty")
-    if contract.kind.startswith("q_"):
+    if contract.kind in {"q_beta_fit", "q_beta_validation"}:
+        required = {"row_index", "draw_index", "x", "log_q", "log_beta"}
+        missing = required - set(arrays)
+        if missing:
+            raise ValueError(f"q-beta bank shard is missing arrays: {sorted(missing)}")
+        rows = np.asarray(arrays["row_index"], dtype=np.int64)
+        draw_index = np.asarray(arrays["draw_index"], dtype=np.int64)
+        x = np.asarray(arrays["x"])
+        log_q = np.asarray(arrays["log_q"])
+        log_beta = np.asarray(arrays["log_beta"])
+        expected_draws = int(contract.draws_per_object or 0)
+        if rows.ndim != 1 or len(np.unique(rows)) != len(rows):
+            raise ValueError("q-beta row_index must be one-dimensional and unique")
+        if (
+            draw_index.shape != (expected_draws,)
+            or len(np.unique(draw_index)) != expected_draws
+            or np.any(draw_index < 0)
+        ):
+            raise ValueError("q-beta draw_index must identify unique source draws")
+        if x.ndim != 3 or x.shape[:2] != (len(rows), expected_draws):
+            raise ValueError("q-beta x must have shape [objects, draws, latent]")
+        if log_q.shape != (len(rows), expected_draws):
+            raise ValueError("q-beta log_q must have shape [objects, draws]")
+        if log_beta.shape != (len(rows), expected_draws):
+            raise ValueError("q-beta log_beta must have shape [objects, draws]")
+        if not np.all(np.isfinite(x)) or not np.all(np.isfinite(log_q)):
+            raise ValueError("q-beta bank contains non-finite draws or log densities")
+        if np.any(np.isnan(log_beta)) or np.any(log_beta > 0.0):
+            raise ValueError("q-beta log_beta must be <= 0 and not NaN")
+    elif contract.kind.startswith("q_"):
         required = {"row_index", "x", "log_q"}
         missing = required - set(arrays)
         if missing:

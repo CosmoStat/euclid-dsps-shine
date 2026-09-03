@@ -98,6 +98,36 @@ certified prior-frozen refresh checkpoint as the next source, and isolates its
 logs. Forty focused population-VEM and SC-DRWS tests, Ruff, compileall, Bash
 syntax, and whitespace checks pass. No Jean-Zay job was submitted here.
 
+### Direct population projection after VEM-2
+
+- Stop alternating VEM after the second iteration degraded the independent
+  closure. Reuse the VEM-2 initial q banks, which are dense joint draws from
+  the better VEM-1 prior-frozen q, over all 37,641 selected training objects.
+- Fit an explicit selected-population flow directly to the object-equal q
+  mixture. Separately reconstruct the C0 parent target with joint-draw weights
+  proportional to `1 / beta(theta)` and fit the parent flow by weighted MLE.
+  Evaluate beta once on 8 draws per fit object and 16 per validation object;
+  keep DSPS outside both optimizers.
+- Select checkpoints only by truth-free held-out density objectives. Preserve
+  every joint draw and weight; do not turn a posterior or population
+  distribution into per-object point estimates.
+- Separate scientific outputs by contract: redshift posterior calibration is
+  assessed object by object with finite-rank PIT and central coverage, while
+  q-aggregate/prior comparisons use full weighted CDF, distribution-rank, and
+  Wasserstein diagnostics. No redshift median criterion is allowed.
+- Reuse the unchanged 4,706-object VEM-1 q closure for PIT, MIRA, and TARP, then
+  publish independent selected-truth and C0-truth closure diagnostics only
+  after both flows have been frozen.
+
+Completed locally: a 20-shard H100 beta-cache stage reuses the fixed VEM-1 q
+draws stored by VEM-2; a four-H100 weighted-density stage fits separate
+selected and inverse-selection parent flows; and a frozen one-H100 evaluation
+publishes distribution projections separately from same-object redshift PIT,
+coverage, MIRA, and TARP. Checkpoint choice is truth-free, no posterior is
+collapsed to a point estimate, and no new DSPS posterior inference is run.
+Fifty-one focused population, calibration, and SC-DRWS tests, Ruff, compileall,
+Bash syntax, and whitespace checks pass. No Jean-Zay job was submitted here.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined

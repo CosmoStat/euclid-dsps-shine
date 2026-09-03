@@ -262,6 +262,7 @@ def evaluate(
     bootstrap: int,
     seed: int,
     expected_objects: int | None,
+    scope: str = "redshift_only_same_public_specz_objects",
 ) -> dict[str, Any]:
     if out.exists() and any(out.iterdir()):
         raise FileExistsError(f"Refusing to overwrite non-empty output: {out}")
@@ -358,7 +359,7 @@ def evaluate(
 
     payload = {
         "status": "complete",
-        "scope": "redshift_only_same_public_specz_objects",
+        "scope": str(scope),
         "n_objects": int(len(truth)),
         "samples_per_object": int(dense[0].values.shape[1]),
         "pit_contract": "(n_less + 0.5*n_equal + 0.5) / (n_samples + 1)",

@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pytest
+
+from euclid_dsps.amortized.config import require_amortized_dependencies
+from euclid_dsps.amortized.population_projection import (
+    distribution_comparison,
+    inverse_selection_weights,
+    make_pmap_weighted_density_step,
+    weighted_cdf_distance,
+    weighted_cdf_values,
+)
+from euclid_dsps.amortized.population_vem import (
+    ArrayShardContract,
+    is_array_bank_shard_complete,
+    merge_array_bank_shards,
+    sha256_file,
+    write_array_bank_shard,
+)
+from scripts.evaluate_redshift_pit_coverage import finite_rank_pit, uniform_ks
+from scripts.prepare_feniks_sc_drws_population_projection import (
+    _validate_source_bank,
+)
+
+eqx, optax = require_amortized_dependencies()
+
+ROOT = Path(__file__).resolve().parents[1]
+SHA = "a" * 64
+
+
+class _LocationNormalPrior(eqx.Module):
+    location: jax.Array
+    latent_dim: int = eqx.field(static=True)
+
+    def log_prob(self, value):
+        return -0.5 * jnp.sum(jnp.square(value - self.location), axis=-1)
+
+
+def test_inverse_selection_weights_are_joint_draw_weights() -> None:
+    weights, diagnostics = inverse_selection_weights(np.log([0.5, 1.0]))
+    assert np.allclose(weights, [4.0 / 3.0, 2.0 / 3.0])
+    assert np.isclose(diagnostics["alpha_harmonic"], 2.0 / 3.0)
+    assert np.isclose(diagnostics["ess"], 1.8)
+    assert diagnostics["weight_contract"].startswith("joint-draw weights")
+    with pytest.raises(ValueError, match="beta=0"):
+        inverse_selection_weights(np.asarray([-np.inf, 0.0]))
+
+
+def test_distribution_comparisons_use_complete_weighted_cdfs() -> None:
+    reference = np.asarray([0.0, 1.0, 2.0, 3.0])
+    query = np.asarray([-1.0, 0.0, 1.5, 4.0])
+    assert np.allclose(weighted_cdf_values(reference, query), [0.0, 0.25, 0.5, 1.0])
+    assert weighted_cdf_distance(reference, reference) == 0.0
+    shifted = distribution_comparison(reference + 0.5, reference)
+    assert shifted["cdf_supremum"] > 0.0
+    assert shifted["wasserstein"] > 0.0
+    assert "distribution_rank_uniform_ks" in shifted
+
+
+def test_matching_redshift_aggregate_does_not_imply_posterior_calibration() -> None:
+    truth = np.asarray([0.0, 1.0])
+    posterior = np.asarray([[1.0] * 32, [0.0] * 32])
+    assert weighted_cdf_distance(posterior.reshape(-1), np.repeat(truth, 32)) == 0.0
+    pit = finite_rank_pit(posterior, truth)
+    assert uniform_ks(pit) > 0.45
+
+
+def test_q_beta_bank_preserves_draw_axis_and_selection_contract(tmp_path: Path) -> None:
+    contract = ArrayShardContract(
+        kind="q_beta_fit",
+        dataset_sha256=SHA,
+        checkpoint_sha256="b" * 64,
+        latent_transform_sha256="c" * 64,
+        code_commit="deadbeef",
+        truth_used=False,
+        draws_per_object=2,
+        feature_stats_sha256="d" * 64,
+        row_indices_sha256="e" * 64,
+        selection_event="A=1[m_r_observed<29.0]",
+    )
+    arrays = {
+        "row_index": np.asarray([7, 9], dtype=np.int64),
+        "draw_index": np.asarray([0, 4], dtype=np.int64),
+        "x": np.ones((2, 2, 3), dtype=np.float32),
+        "log_q": np.zeros((2, 2), dtype=np.float32),
+        "log_beta": np.log(np.full((2, 2), 0.8)),
+    }
+    write_array_bank_shard(tmp_path / "beta", 0, arrays, contract)
+    assert is_array_bank_shard_complete(
+        tmp_path / "beta" / "shards" / "shard_00000", validate_arrays=True
+    )
+    invalid = {**arrays, "draw_index": np.asarray([0, 0])}
+    with pytest.raises(ValueError, match="unique source draws"):
+        write_array_bank_shard(tmp_path / "invalid", 0, invalid, contract)
+
+
+def test_projection_accepts_complete_truth_free_source_q_bank(tmp_path: Path) -> None:
+    root = tmp_path / "source"
+    rows = np.asarray([3, 7], dtype=np.int64)
+    cohort = root / "q_fit.npy"
+    cohort.parent.mkdir(parents=True)
+    np.save(cohort, rows, allow_pickle=False)
+    contract = ArrayShardContract(
+        kind="q_train",
+        dataset_sha256=SHA,
+        checkpoint_sha256="b" * 64,
+        latent_transform_sha256="c" * 64,
+        code_commit="source",
+        truth_used=False,
+        draws_per_object=3,
+        feature_stats_sha256="d" * 64,
+        row_indices_sha256=sha256_file(cohort),
+    )
+    write_array_bank_shard(
+        root / "banks" / "q_fit",
+        0,
+        {
+            "row_index": rows,
+            "x": np.ones((2, 3, 4), dtype=np.float32),
+            "log_q": np.zeros((2, 3), dtype=np.float32),
+        },
+        contract,
+    )
+    merge_array_bank_shards(root / "banks" / "q_fit", expected_shards=1)
+    source_manifest = {
+        "frozen_source": {"checkpoint_sha256": "b" * 64},
+        "banks": {
+            "q_fit": {
+                "draws_per_object": 3,
+                "shards": 1,
+                "objects": 2,
+                "cohort_path": str(cohort),
+                "cohort_sha256": sha256_file(cohort),
+            }
+        },
+    }
+    record = _validate_source_bank(root, source_manifest, "q_fit", "q_train")
+    assert record["objects"] == 2
+    assert record["draws_per_object"] == 3
+
+
+def test_weighted_density_step_moves_toward_weighted_joint_draws() -> None:
+    devices = tuple(jax.local_devices())
+    count = len(devices)
+    prior = _LocationNormalPrior(jnp.zeros(2), latent_dim=2)
+    optimizer = optax.sgd(0.1)
+    state = optimizer.init(eqx.filter(prior, eqx.is_inexact_array))
+
+    def replicate(tree):
+        return jax.tree_util.tree_map(
+            lambda value: (
+                jnp.broadcast_to(value, (count, *value.shape))
+                if eqx.is_array(value)
+                else value
+            ),
+            tree,
+        )
+
+    step = make_pmap_weighted_density_step(optimizer=optimizer)
+    x = jnp.ones((count, 4, 2))
+    weight = jnp.asarray(np.tile([2.0, 1.0, 0.5, 0.5], (count, 1)))
+    valid = jnp.ones((count, 4), dtype=jnp.bool_)
+    updated, _state, metrics = step(
+        replicate(prior), replicate(state), x, weight, valid
+    )
+    assert np.all(np.asarray(metrics.update_applied))
+    assert np.allclose(np.asarray(updated.location), 0.1)
+    assert np.allclose(np.asarray(metrics.raw_gradient_norm), np.sqrt(2.0))
+
+
+def test_projection_submission_reuses_banks_and_separates_pit() -> None:
+    submit = (
+        ROOT / "scripts/submit_feniks_sc_drws_population_projection.sh"
+    ).read_text()
+    evaluate = (
+        ROOT / "scripts/evaluate_feniks_sc_drws_population_projection.py"
+    ).read_text()
+    monitor = (
+        ROOT / "scripts/monitor_feniks_sc_drws_population_projection.sh"
+    ).read_text()
+    assert "--array=0-19%20" in submit
+    assert (
+        "--gres=gpu:4"
+        in (
+            ROOT / "scripts/feniks_sc_drws_population_projection_fit_h100.slurm"
+        ).read_text()
+    )
+    assert (
+        "new_posterior_inference"
+        in (
+            ROOT / "scripts/prepare_feniks_sc_drws_population_projection.py"
+        ).read_text()
+    )
+    assert "evaluate_redshift" in evaluate
+    assert '"redshift_median_gate_used": False' in evaluate
+    assert "distribution ranks are not posterior PIT" in monitor
