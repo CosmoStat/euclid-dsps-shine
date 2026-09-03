@@ -16,6 +16,7 @@ TRUTH_CONFIG="configs/experiments/feniks_sc_drws_r29_truth_closure.yaml"
 
 cd "$REPO_DIR"
 REPO_DIR="$(pwd -P)"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
 if ! git diff --quiet --exit-code || ! git diff --cached --quiet --exit-code; then
   echo "[population-vem][error] tracked source changes are not committed" >&2
   exit 2
@@ -35,6 +36,22 @@ if [[ -s "$VEM_ROOT/SUBMISSION.json" ]]; then
   exit 2
 fi
 mkdir -p "$VEM_LOG_ROOT" "$CACHE_ROOT/jax" outputs/logs
+
+python - "$REPO_DIR" <<'PY'
+from pathlib import Path
+import sys
+
+import euclid_dsps.amortized.population_vem as population_vem
+
+repo = Path(sys.argv[1]).resolve()
+module = Path(population_vem.__file__).resolve()
+if repo not in module.parents:
+    raise SystemExit(
+        "[population-vem][error] imported population_vem outside the active "
+        f"checkout: {module}"
+    )
+print(f"[population-vem] local module preflight: {module}", flush=True)
+PY
 
 python scripts/prepare_feniks_sc_drws_population_vem.py \
   --config "$CONFIG" --truth-config "$TRUTH_CONFIG" \

@@ -1,5 +1,18 @@
 # Plan
 
+## 2026-09-03 Population-VEM submit import preflight
+
+- The first Jean-Zay launch stopped before submission because the active Conda
+  environment resolved an older installed `euclid_dsps` package while the
+  preparation script was executed from `scripts/`.
+- Put the active checkout first on `PYTHONPATH` before any local preparation,
+  verify the imported `population_vem.py` path is inside that checkout, and add
+  regression coverage for the ordering. No population-VEM Slurm job was
+  submitted by the failed attempt.
+
+Completed locally: the submit preflight now fails clearly on a foreign package;
+focused tests, Ruff, compileall, Bash syntax, and whitespace checks pass.
+
 ## 2026-09-03 Selection-corrected population VEM follow-up
 
 - Freeze the epoch-160 model and build reusable, truth-free joint q banks once:

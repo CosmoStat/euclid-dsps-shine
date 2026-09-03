@@ -207,6 +207,11 @@ def test_population_vem_submission_uses_bounded_parallel_h100_stages() -> None:
     ).read_text()
     assert "--array=0-35%24" in submit
     assert "--array=0-15%16" in submit
+    assert 'export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"' in submit
+    assert submit.index("export PYTHONPATH=") < submit.index(
+        "python scripts/prepare_feniks_sc_drws_population_vem.py"
+    )
+    assert "imported population_vem outside the active" in submit
     assert "git worktree add --detach" in submit
     assert "afterok:$BANK_JOB" in submit
     assert "afterok:$REFRESH_JOB" in submit
