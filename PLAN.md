@@ -8064,3 +8064,39 @@ Completed locally:
 - Validation: `62 passed` across the SC-DRWS workflow and MIRA/TARP suites;
   Ruff, full Python compilation, Bash syntax, and `git diff --check` pass.
   Jean-Zay submission and remote completion remain to be performed by the user.
+
+## 2026-09-04 Projected-parent individual posterior diagnostic
+
+- Freeze the truth-free `realnvp_wide` architecture winner and evaluate its
+  parent prior without changing or retraining the epoch-160 conditional
+  proposal. Use the independent selected-test cohort only.
+- Select 64 objects deterministically across observed `lsst_r` flux, shard them
+  over eight one-H100 tasks, and draw 1024 joint proposal samples per object.
+  Truth must not participate in cohort or panel selection.
+- On the exact same proposal draws, compare ordinary/PSIS importance support
+  under the projected parent prior and the source prior. Retain dense joint
+  draws, per-object ESS, Pareto-k, maximum weights, and posterior-predictive
+  residuals.
+- After inference and support measurement are frozen, attach truth for closure
+  only and generate observed-space-selected individual corners overlaying the
+  parent prior, raw q, projected-parent IW, and truth. Report redshift PIT and
+  coverage as distributions, never as posterior medians.
+- Add immutable manifests, checkpoint/config hashes, fail-loud Slurm wrappers,
+  a persistent environment file, monitoring, focused tests, and local syntax
+  validation. This diagnostic cannot promote the posterior or trigger a full
+  catalogue run on its own.
+
+Completed locally:
+
+- Added preparation, eight-way one-H100 inference, same-draw source/projected
+  prior importance correction, a dependent H100 finalizer, and a reconnect-safe
+  monitor. Interrupted IW directories are rebuilt while complete inference
+  shards remain resumable.
+- The finalizer freezes support before reading truth, retains all joint q and
+  weighted/resampled IW banks, reports redshift finite-rank PIT/coverage and
+  weighted PPC, and writes eight core/full individual corner panels.
+- Validation passes: Ruff, Python compilation, Bash syntax, `git diff --check`,
+  `5` new focused tests, and `43` related inference/projection tests in `shine`.
+  The full repository run reached `810 passed, 8 skipped`; two unrelated legacy
+  supervised-prior integrity tests reproducibly report `WARN` instead of
+  `PASS` in both available local Python environments.

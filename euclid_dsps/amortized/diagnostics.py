@@ -1804,6 +1804,7 @@ def _write_multi_overlay_corner_plot(
     title: str,
     posterior_label: str,
     config: dict[str, Any] | None,
+    additional_overlays: list[dict[str, Any]] | None = None,
 ) -> Path | None:
     columns = _corner_columns_for_config(posterior, config)
     if len(columns) < 2 or posterior.empty:
@@ -1821,6 +1822,23 @@ def _write_multi_overlay_corner_plot(
             "points": False,
         },
     ]
+    for index, overlay in enumerate(additional_overlays or ()):
+        frame = overlay.get("frame")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("corner additional overlay frame must be a DataFrame")
+        frames.append(
+            {
+                "key": str(overlay.get("key", f"overlay_{index}")),
+                "label": str(overlay.get("label", f"overlay {index + 1}")),
+                "frame": _finite_sample_partial(frame, columns, max_rows=4_000),
+                "color": str(overlay.get("color", "#009E73")),
+                "linestyle": str(overlay.get("linestyle", "-")),
+                "linewidth": float(overlay.get("linewidth", 1.25)),
+                "fill_alpha": float(overlay.get("fill_alpha", 0.0)),
+                "contour_alpha": float(overlay.get("contour_alpha", 0.95)),
+                "points": bool(overlay.get("points", False)),
+            }
+        )
     if truth is not None and not truth.empty:
         frames.append(
             {
