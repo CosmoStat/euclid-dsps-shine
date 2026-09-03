@@ -48,6 +48,19 @@ PY
 
   echo
   echo "===== 2. TRUTH-FREE FLOW FITS ====="
+  if [[ -s "$PROJECTION_ROOT/RUN_MANIFEST.json" ]]; then
+    python - "$PROJECTION_ROOT/RUN_MANIFEST.json" <<'PY'
+import json, sys
+x = json.load(open(sys.argv[1]))
+continuation = x.get('continuation')
+if continuation:
+    print("continuation from:", continuation['source_projection_root'])
+    for name in ('selected', 'parent'):
+        d = continuation['initial'][name]
+        print(f"{name} start: passes={d['source_passes_completed']} "
+              f"validation NLL={d['source_best_validation_weighted_nll']:.6f}")
+PY
+  fi
   if [[ -s "$PROJECTION_ROOT/FIT_PROGRESS.json" ]]; then
     python - "$PROJECTION_ROOT/FIT_PROGRESS.json" <<'PY'
 import json, sys

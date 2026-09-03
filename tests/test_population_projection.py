@@ -31,6 +31,9 @@ from scripts.evaluate_redshift_pit_coverage import finite_rank_pit, uniform_ks
 from scripts.prepare_feniks_sc_drws_population_projection import (
     _validate_source_bank,
 )
+from scripts.prepare_feniks_sc_drws_population_projection_continuation import (
+    prepare_continuation,
+)
 
 eqx, optax = require_amortized_dependencies()
 
@@ -282,6 +285,73 @@ def test_projection_runtime_accepts_evaluation_only_recovery(tmp_path: Path) -> 
     assert provenance["runtime_code_commit"] == runtime_commit
 
 
+def test_projection_continuation_reuses_truth_free_checkpoints_and_banks(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("beta_fit", "beta_validation"):
+        bank = source / "banks" / name
+        bank.mkdir(parents=True)
+        (bank / "bank_manifest.json").write_text(
+            json.dumps({"status": "complete", "name": name})
+        )
+    records = {}
+    for label, target in (
+        ("selected", "selected_q_aggregate"),
+        ("parent", "parent_inverse_beta_q"),
+    ):
+        checkpoint = source / f"{label}.eqx"
+        sidecar = source / f"{label}.eqx.json"
+        checkpoint.write_bytes(label.encode())
+        sidecar.write_text(json.dumps({"label": label}))
+        records[label] = {
+            "target": target,
+            "checkpoint": str(checkpoint),
+            "checkpoint_sha256": sha256_file(checkpoint),
+            "checkpoint_sidecar": str(sidecar),
+            "checkpoint_sidecar_sha256": sha256_file(sidecar),
+            "best_validation_weighted_nll": 12.0,
+            "passes_completed": 16,
+        }
+    (source / "RUN_MANIFEST.json").write_text(
+        json.dumps({"status": "PREPARED", "resources": {"beta_tasks": 20}})
+    )
+    (source / "BETA_TARGET_COMPLETE.json").write_text(
+        json.dumps({"status": "PASS", "truth_used": False})
+    )
+    (source / "PROJECTION_FIT_COMPLETE.json").write_text(
+        json.dumps(
+            {
+                "status": "COMPLETE",
+                "truth_used": False,
+                "point_estimates_used": False,
+                "checkpoint_selection": "held-out weighted density only",
+                **records,
+            }
+        )
+    )
+
+    out = tmp_path / "continuation"
+    manifest = prepare_continuation(
+        source_root=source,
+        out=out,
+        repo=ROOT,
+        passes=48,
+        patience=8,
+        peak_learning_rate=1.0e-5,
+        final_learning_rate=5.0e-7,
+    )
+
+    assert manifest["continuation"]["truth_used"] is False
+    assert manifest["continuation"]["optimizer_state_reused"] is False
+    assert manifest["resources"]["beta_tasks"] == 0
+    assert manifest["resources"]["new_posterior_inference"] is False
+    assert (out / "banks" / "beta_fit").is_symlink()
+    assert (out / "banks" / "beta_validation").is_symlink()
+    assert (out / "SOURCE_PROJECTION_FIT_COMPLETE.json").is_file()
+
+
 def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     submit = (
         ROOT / "scripts/submit_feniks_sc_drws_population_projection.sh"
@@ -297,6 +367,9 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     ).read_text()
     evaluation_recovery = (
         ROOT / "scripts/recover_feniks_sc_drws_population_projection_evaluation.sh"
+    ).read_text()
+    continuation = (
+        ROOT / "scripts/submit_feniks_sc_drws_population_projection_continuation.sh"
     ).read_text()
     assert "--array=0-19%20" in submit
     assert (
@@ -318,3 +391,11 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     assert "beta_banks_reused" in recovery
     assert "evaluation_only" in evaluation_recovery
     assert "fit_reused" in evaluation_recovery
+    assert "new_posterior_inference" in continuation
+    assert "beta_banks_reused" in continuation
+    assert 'FIT_PASSES="${FIT_PASSES:-48}"' in continuation
+    assert "population_projection_beta_h100.slurm" not in continuation
+    assert (
+        "retain_initial_if_best=continuation is not None"
+        in (ROOT / "scripts/train_feniks_sc_drws_population_projection.py").read_text()
+    )

@@ -17,6 +17,10 @@ MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3
 CONDA_ENV="${CONDA_ENV:-shine}"
 PROJECTION_ROOT="${PROJECTION_ROOT:?PROJECTION_ROOT is required}"
 CACHE_ROOT="${CACHE_ROOT:?CACHE_ROOT is required}"
+FIT_PASSES="${FIT_PASSES:-16}"
+FIT_PATIENCE="${FIT_PATIENCE:-4}"
+FIT_PEAK_LEARNING_RATE="${FIT_PEAK_LEARNING_RATE:-5.0e-5}"
+FIT_FINAL_LEARNING_RATE="${FIT_FINAL_LEARNING_RATE:-2.0e-6}"
 
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-48}"
 export JAX_PLATFORMS=cuda JAX_ENABLE_X64=true XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -34,4 +38,8 @@ source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 mkdir -p "$CACHE_ROOT/jax"
 python scripts/train_feniks_sc_drws_population_projection.py \
-  --root "$PROJECTION_ROOT"
+  --root "$PROJECTION_ROOT" \
+  --passes "$FIT_PASSES" \
+  --patience "$FIT_PATIENCE" \
+  --peak-learning-rate "$FIT_PEAK_LEARNING_RATE" \
+  --final-learning-rate "$FIT_FINAL_LEARNING_RATE"

@@ -145,6 +145,18 @@ material range violations, and provides an evaluation-only recovery with
 chained code provenance. Fifty-five focused projection, population,
 calibration, and SC-DRWS tests pass.
 
+Population-flow continuation completed locally: the frozen evaluation completed but
+the truth-free validation projections remain above their CDF gates. Add a new
+immutable continuation root initialized from both best flow checkpoints, reuse
+the existing joint-q and beta banks without DSPS inference, and optimize for at
+most 48 lower-learning-rate passes with held-out NLL early stopping. Re-run the
+frozen evaluation only after both continued flows are committed; keep the
+unchanged q PIT failure explicit because this continuation cannot calibrate the
+individual amortized posterior. The source checkpoints remain eligible when no
+new pass improves validation NLL. Fifty-six focused projection, population,
+calibration, and SC-DRWS tests pass with Ruff, compileall, Bash syntax, and
+whitespace checks.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined

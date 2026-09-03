@@ -137,6 +137,7 @@ def _fit_target(
     patience: int,
     seed: int,
     progress_path: Path,
+    retain_initial_if_best: bool,
 ) -> tuple[Any, dict[str, Any]]:
     if len(train_x) != len(train_weights) or len(validation_x) != len(
         validation_weights
@@ -166,6 +167,22 @@ def _fit_target(
     output.mkdir(parents=True, exist_ok=True)
     shutil.copy2(feature_stats_path, output / "feature_stats.json")
     checkpoint = output / "checkpoints" / "best.eqx"
+    initial_validation_nll = None
+    if retain_initial_if_best:
+        initial_validation_nll = _validation_nll(
+            initial_prior, validation_x, validation_weights
+        )
+        best_score = initial_validation_nll
+        save_checkpoint(
+            checkpoint,
+            _model_with_prior(source_model, initial_prior),
+            config=config,
+            latent_spec=latent_spec,
+            feature_stats=feature_stats,
+            epoch=0,
+            metric=initial_validation_nll,
+            metric_name="weighted_validation_nll",
+        )
 
     for pass_index in range(1, int(passes) + 1):
         order = rng.permutation(len(train_x))
@@ -245,6 +262,7 @@ def _fit_target(
         "training_samples": int(len(train_x)),
         "validation_samples": int(len(validation_x)),
         "passes_completed": len(history),
+        "initial_validation_weighted_nll": initial_validation_nll,
         "best_validation_weighted_nll": best_score,
         "checkpoint": str(checkpoint),
         "history": history,
@@ -295,6 +313,39 @@ def main() -> None:
     feature_stats_path = Path(manifest["source"]["feature_stats"])
     feature_stats = read_feature_stats(feature_stats_path)
 
+    continuation = manifest.get("continuation")
+    initial_priors = {
+        "selected": source_model.prior,
+        "parent": source_model.prior,
+    }
+    if continuation is not None:
+        if (
+            continuation.get("truth_used") is not False
+            or continuation.get("checkpoint_initialization_only") is not True
+            or continuation.get("optimizer_state_reused") is not False
+        ):
+            raise ValueError("invalid population-projection continuation contract")
+        source_manifest_path = Path(continuation["source_manifest"])
+        if sha256_file(source_manifest_path) != continuation["source_manifest_sha256"]:
+            raise ValueError("source projection manifest changed")
+        source_fit_path = Path(continuation["source_fit_receipt"])
+        if sha256_file(source_fit_path) != continuation["source_fit_receipt_sha256"]:
+            raise ValueError("source projection fit receipt changed")
+        for name in ("beta_fit", "beta_validation"):
+            beta_record = continuation["beta_banks"][name]
+            beta_manifest = Path(beta_record["path"]) / "bank_manifest.json"
+            if sha256_file(beta_manifest) != beta_record["manifest_sha256"]:
+                raise ValueError(f"source {name} bank manifest changed")
+        for label in ("selected", "parent"):
+            record = continuation["initial"][label]
+            initial_checkpoint = Path(record["checkpoint"])
+            initial_sidecar = Path(record["checkpoint_sidecar"])
+            if sha256_file(initial_checkpoint) != record["checkpoint_sha256"]:
+                raise ValueError(f"{label} continuation checkpoint changed")
+            if sha256_file(initial_sidecar) != record["checkpoint_sidecar_sha256"]:
+                raise ValueError(f"{label} continuation sidecar changed")
+            initial_priors[label] = load_checkpoint(initial_checkpoint, config).prior
+
     q_fit = _load_q(Path(manifest["q_banks"]["fit"]["manifest"]))
     q_validation = _load_q(Path(manifest["q_banks"]["validation"]["manifest"]))
     selected_fit_weights = np.ones(len(q_fit), dtype=np.float32)
@@ -315,7 +366,7 @@ def main() -> None:
     attempt.mkdir(parents=True)
     selected_prior, selected = _fit_target(
         name="selected_q_aggregate",
-        initial_prior=source_model.prior,
+        initial_prior=initial_priors["selected"],
         source_model=source_model,
         train_x=q_fit,
         train_weights=selected_fit_weights,
@@ -334,11 +385,12 @@ def main() -> None:
         patience=int(args.patience),
         seed=int(args.seed),
         progress_path=root / "FIT_PROGRESS.json",
+        retain_initial_if_best=continuation is not None,
     )
     _ = selected_prior
     parent_prior, parent = _fit_target(
         name="parent_inverse_beta_q",
-        initial_prior=source_model.prior,
+        initial_prior=initial_priors["parent"],
         source_model=source_model,
         train_x=parent_fit_x,
         train_weights=parent_fit_weights,
@@ -357,6 +409,7 @@ def main() -> None:
         patience=int(args.patience),
         seed=int(args.seed) + 1,
         progress_path=root / "FIT_PROGRESS.json",
+        retain_initial_if_best=continuation is not None,
     )
     _ = parent_prior
     os.replace(attempt, final_fit)
@@ -370,6 +423,9 @@ def main() -> None:
         record["checkpoint_sidecar_sha256"] = sha256_file(
             checkpoint_path.with_suffix(".eqx.json")
         )
+    if continuation is not None:
+        selected["initialization"] = continuation["initial"]["selected"]
+        parent["initialization"] = continuation["initial"]["parent"]
     receipt = {
         "status": "COMPLETE",
         "stage": "direct_distribution_projection",
@@ -381,6 +437,7 @@ def main() -> None:
         "point_estimates_used": False,
         "dsps_calls_inside_optimizer": 0,
         "checkpoint_selection": "held-out weighted density only",
+        "continuation": continuation,
         "runtime_provenance": runtime_provenance,
     }
     _write_json(complete_path, receipt)
