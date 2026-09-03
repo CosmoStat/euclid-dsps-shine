@@ -1,5 +1,36 @@
 # Plan
 
+## 2026-09-03 Catalogue-wide epoch-160 calibration
+
+- Reuse the completed truth-free epoch-160 posterior banks for all 4,706
+  observed-selected rows in the independent test catalogue. Do not rerun DSPS
+  inference for this follow-up.
+- Evaluate raw/EMA q and ordinary-IW with shared MIRA/TARP randomness at the
+  common 32-draw budget, then evaluate raw/EMA q alone at the full existing
+  256-draw budget. Preserve dense joint draws and object identities throughout.
+- Publish an immutable diagnostic receipt that records checkpoint provenance,
+  object/draw counts, the existing K=1024 support failure, and the distinction
+  between selected posterior aggregates, the learned parent prior, and the
+  selection-weighted prior.
+- Add Jean-Zay submission and monitoring scripts plus focused contract tests;
+  run pytest, Ruff, compileall, shell syntax, and diff checks before committing.
+
+Completed locally:
+
+- Added a four-H100 diagnostic array that reuses the completed 4,706-object
+  selected-test banks: shared raw/EMA q/IW MIRA and TARP at 32 draws, plus
+  raw/EMA q-only MIRA and TARP at all 256 existing proposal draws. The workflow
+  performs no DSPS inference and writes task outputs through per-job staging
+  directories.
+- The CPU finalizer validates cohort, model, draw-count and frozen-truth
+  contracts and records the held-out K=1024 effective sample sizes so nominal
+  IW resamples cannot be presented as independent effective draws. A dedicated
+  monitor reports jobs, task completion, failures, plots, and the final receipt.
+- A real local smoke against the copied epoch-160 aggregate banks completed
+  MIRA and TARP for all four sources. Focused MIRA/TARP/recovery coverage totals
+  34 passing tests; Ruff, compileall, Bash/SLURM syntax, and diff checks pass.
+  No Jean-Zay job was submitted locally.
+
 ## 2026-09-03 Epoch-160 finalizer recovery
 
 - Epoch-160 checkpoint freezing and all 8 held-out K=1024 plus 16 catalogue
