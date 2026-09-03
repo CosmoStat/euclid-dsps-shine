@@ -53,8 +53,12 @@ def require_projection_runtime_commit(
     root: str | Path,
     manifest: dict[str, Any],
     repo: str | Path,
+    *,
+    stage: str,
 ) -> dict[str, Any]:
     """Accept the frozen manifest commit or one narrowly authorized recovery."""
+    if stage not in {"fit", "evaluation"}:
+        raise ValueError(f"unknown population-projection runtime stage: {stage}")
     root = Path(root).resolve()
     manifest_path = root / "RUN_MANIFEST.json"
     manifest_commit = str(manifest["code_commit"])
@@ -87,6 +91,52 @@ def require_projection_runtime_commit(
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
         raise ValueError(f"invalid population-projection recovery: {failed}")
+
+    evaluation_recovery_path = root / "EVALUATION_CODE_RECOVERY.json"
+    if stage == "evaluation" and evaluation_recovery_path.is_file():
+        evaluation_recovery = json.loads(
+            evaluation_recovery_path.read_text(encoding="utf-8")
+        )
+        recovery_submission = json.loads(
+            (root / "RECOVERY_SUBMISSION.json").read_text(encoding="utf-8")
+        )
+        fit_path = root / "PROJECTION_FIT_COMPLETE.json"
+        evaluation_checks = {
+            "status": evaluation_recovery.get("status") == "AUTHORIZED",
+            "scope": evaluation_recovery.get("scope") == "evaluation_only",
+            "root": Path(evaluation_recovery.get("projection_root", "")).resolve()
+            == root,
+            "code_recovery_sha256": evaluation_recovery.get("code_recovery_sha256")
+            == sha256_file(recovery_path),
+            "fit_receipt_sha256": evaluation_recovery.get("fit_receipt_sha256")
+            == sha256_file(fit_path),
+            "failed_evaluation_job": str(
+                evaluation_recovery.get("failed_evaluation_job")
+            )
+            == str(recovery_submission.get("recovery_evaluation_job")),
+            "fit_reused": evaluation_recovery.get("fit_reused") is True,
+            "truth_used": evaluation_recovery.get("truth_used") is False,
+        }
+        failed = sorted(
+            name for name, passed in evaluation_checks.items() if not passed
+        )
+        if failed:
+            raise ValueError(
+                f"invalid population-projection evaluation recovery: {failed}"
+            )
+        actual = require_git_commit(
+            repo, str(evaluation_recovery["runtime_code_commit"])
+        )
+        return {
+            "mode": "authorized_evaluation_recovery",
+            "manifest_code_commit": manifest_commit,
+            "runtime_code_commit": actual,
+            "recovery_receipt": str(recovery_path),
+            "recovery_receipt_sha256": sha256_file(recovery_path),
+            "evaluation_recovery_receipt": str(evaluation_recovery_path),
+            "evaluation_recovery_receipt_sha256": sha256_file(evaluation_recovery_path),
+            "failed_evaluation_job": str(evaluation_recovery["failed_evaluation_job"]),
+        }
     actual = require_git_commit(repo, str(recovery["runtime_code_commit"]))
     return {
         "mode": "authorized_recovery",
@@ -226,7 +276,8 @@ def weighted_cdf_values(
         probability = probability / total
     order = np.argsort(values, kind="mergesort")
     sorted_values = values[order]
-    cumulative = np.cumsum(probability[order])
+    cumulative = np.clip(np.cumsum(probability[order]), 0.0, 1.0)
+    cumulative[-1] = 1.0
     indices = np.searchsorted(sorted_values, points, side="right") - 1
     return np.where(indices >= 0, cumulative[np.maximum(indices, 0)], 0.0)
 
@@ -235,21 +286,27 @@ def uniform_cdf_distance(
     values: np.ndarray, weights: np.ndarray | None = None
 ) -> float:
     """Kolmogorov distance between values in [0, 1] and a uniform CDF."""
-    ordered = np.sort(np.asarray(values, dtype=np.float64).reshape(-1))
-    if ordered.size == 0 or not np.all(np.isfinite(ordered)):
+    ranks = np.asarray(values, dtype=np.float64).reshape(-1)
+    if ranks.size == 0 or not np.all(np.isfinite(ranks)):
         raise ValueError("rank values must be finite and non-empty")
-    if np.any((ordered < 0.0) | (ordered > 1.0)):
+    tolerance = 32.0 * np.finfo(np.float64).eps
+    if np.any((ranks < -tolerance) | (ranks > 1.0 + tolerance)):
         raise ValueError("rank values must lie in [0, 1]")
+    rank_order = np.argsort(ranks, kind="mergesort")
+    ordered = np.clip(ranks[rank_order], 0.0, 1.0)
     if weights is None:
         probability = np.full(ordered.size, 1.0 / ordered.size)
     else:
-        raw = np.asarray(weights, dtype=np.float64).reshape(-1)
-        if raw.shape != ordered.shape:
+        raw_weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+        if raw_weights.shape != ordered.shape:
             raise ValueError("rank weights must match rank values")
-        if not np.all(np.isfinite(raw)) or np.any(raw < 0.0) or raw.sum() <= 0.0:
+        if (
+            not np.all(np.isfinite(raw_weights))
+            or np.any(raw_weights < 0.0)
+            or raw_weights.sum() <= 0.0
+        ):
             raise ValueError("rank weights must be finite, non-negative, and nonzero")
-        order = np.argsort(np.asarray(values, dtype=np.float64).reshape(-1))
-        probability = raw[order] / raw.sum()
+        probability = raw_weights[rank_order] / raw_weights.sum()
     cumulative = np.cumsum(probability)
     previous = cumulative - probability
     upper = np.max(cumulative - ordered)

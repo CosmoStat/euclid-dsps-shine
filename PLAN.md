@@ -136,6 +136,15 @@ preserves the completed beta banks and gate and submits only the four-H100 fit
 plus its dependent frozen evaluation. Fifty-two focused population,
 calibration, and SC-DRWS tests pass with the callable-leaf regression covered.
 
+Evaluation-only recovery completed locally: remote fit `1710542` completed both
+16-pass density projections, while evaluation `1710543` rejected a weighted
+empirical-CDF rank infinitesimally outside `[0, 1]` due to cumulative floating
+point error. The repair preserves the complete fit receipt and checkpoints,
+clamps only roundoff-scale CDF excursions, retains fail-loud behavior for
+material range violations, and provides an evaluation-only recovery with
+chained code provenance. Fifty-five focused projection, population,
+calibration, and SC-DRWS tests pass.
+
 ## 2026-09-03 Epoch-160 aggregated science figures
 
 - Build publication-ready population plots from the authoritative combined

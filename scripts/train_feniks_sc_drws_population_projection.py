@@ -264,7 +264,9 @@ def main() -> None:
     root = args.root.resolve()
     manifest = _read_json(root / "RUN_MANIFEST.json")
     repo = Path(__file__).resolve().parents[1]
-    runtime_provenance = require_projection_runtime_commit(root, manifest, repo)
+    runtime_provenance = require_projection_runtime_commit(
+        root, manifest, repo, stage="fit"
+    )
     beta_receipt = _read_json(root / "BETA_TARGET_COMPLETE.json")
     if (
         beta_receipt.get("status") != "PASS"

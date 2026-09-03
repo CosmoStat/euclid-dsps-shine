@@ -16,6 +16,7 @@ from euclid_dsps.amortized.population_projection import (
     inverse_selection_weights,
     make_pmap_weighted_density_step,
     require_projection_runtime_commit,
+    uniform_cdf_distance,
     weighted_cdf_distance,
     weighted_cdf_values,
 )
@@ -65,6 +66,19 @@ def test_distribution_comparisons_use_complete_weighted_cdfs() -> None:
     assert shifted["cdf_supremum"] > 0.0
     assert shifted["wasserstein"] > 0.0
     assert "distribution_rank_uniform_ks" in shifted
+
+
+def test_uniform_cdf_distance_clamps_only_floating_point_roundoff() -> None:
+    values = np.asarray([0.0, 0.5, np.nextafter(1.0, 2.0)])
+    assert np.isfinite(uniform_cdf_distance(values))
+    with pytest.raises(ValueError, match=r"\[0, 1\]"):
+        uniform_cdf_distance(np.asarray([0.0, 1.0 + 1.0e-8]))
+
+
+def test_uniform_cdf_distance_keeps_weights_aligned_with_sorted_ranks() -> None:
+    ranks = np.asarray([0.1, 0.5, 0.9])
+    weights = np.asarray([0.2, 0.7, 0.1])
+    assert uniform_cdf_distance(ranks, weights) == pytest.approx(0.4)
 
 
 def test_matching_redshift_aggregate_does_not_imply_posterior_calibration() -> None:
@@ -204,14 +218,68 @@ def test_projection_runtime_accepts_narrow_code_recovery(tmp_path: Path) -> None
     recovery_path = tmp_path / "CODE_RECOVERY.json"
     recovery_path.write_text(json.dumps(recovery))
 
-    provenance = require_projection_runtime_commit(tmp_path, manifest, ROOT)
+    provenance = require_projection_runtime_commit(
+        tmp_path, manifest, ROOT, stage="fit"
+    )
     assert provenance["mode"] == "authorized_recovery"
     assert provenance["runtime_code_commit"] == runtime_commit
 
     recovery["truth_used"] = True
     recovery_path.write_text(json.dumps(recovery))
     with pytest.raises(ValueError, match="truth_used"):
-        require_projection_runtime_commit(tmp_path, manifest, ROOT)
+        require_projection_runtime_commit(tmp_path, manifest, ROOT, stage="fit")
+
+
+def test_projection_runtime_accepts_evaluation_only_recovery(tmp_path: Path) -> None:
+    runtime_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    manifest_commit = "0" * 40
+    manifest = {"code_commit": manifest_commit}
+    manifest_path = tmp_path / "RUN_MANIFEST.json"
+    beta_path = tmp_path / "BETA_TARGET_COMPLETE.json"
+    fit_path = tmp_path / "PROJECTION_FIT_COMPLETE.json"
+    manifest_path.write_text(json.dumps(manifest))
+    beta_path.write_text(json.dumps({"status": "PASS", "truth_used": False}))
+    fit_path.write_text(json.dumps({"status": "COMPLETE", "truth_used": False}))
+    (tmp_path / "SUBMISSION.json").write_text(json.dumps({"fit_job": "1709290"}))
+    code_recovery = {
+        "status": "AUTHORIZED",
+        "scope": "fit_and_evaluation_only",
+        "projection_root": str(tmp_path.resolve()),
+        "manifest_sha256": sha256_file(manifest_path),
+        "beta_receipt_sha256": sha256_file(beta_path),
+        "manifest_code_commit": manifest_commit,
+        "runtime_code_commit": "1" * 40,
+        "failed_fit_job": "1709290",
+        "beta_banks_reused": True,
+        "truth_used": False,
+    }
+    code_recovery_path = tmp_path / "CODE_RECOVERY.json"
+    code_recovery_path.write_text(json.dumps(code_recovery))
+    (tmp_path / "RECOVERY_SUBMISSION.json").write_text(
+        json.dumps({"recovery_evaluation_job": "1710543"})
+    )
+    evaluation_recovery = {
+        "status": "AUTHORIZED",
+        "scope": "evaluation_only",
+        "projection_root": str(tmp_path.resolve()),
+        "code_recovery_sha256": sha256_file(code_recovery_path),
+        "fit_receipt_sha256": sha256_file(fit_path),
+        "failed_evaluation_job": "1710543",
+        "runtime_code_commit": runtime_commit,
+        "fit_reused": True,
+        "truth_used": False,
+    }
+    (tmp_path / "EVALUATION_CODE_RECOVERY.json").write_text(
+        json.dumps(evaluation_recovery)
+    )
+
+    provenance = require_projection_runtime_commit(
+        tmp_path, manifest, ROOT, stage="evaluation"
+    )
+    assert provenance["mode"] == "authorized_evaluation_recovery"
+    assert provenance["runtime_code_commit"] == runtime_commit
 
 
 def test_projection_submission_reuses_banks_and_separates_pit() -> None:
@@ -226,6 +294,9 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     ).read_text()
     recovery = (
         ROOT / "scripts/recover_feniks_sc_drws_population_projection.sh"
+    ).read_text()
+    evaluation_recovery = (
+        ROOT / "scripts/recover_feniks_sc_drws_population_projection_evaluation.sh"
     ).read_text()
     assert "--array=0-19%20" in submit
     assert (
@@ -245,3 +316,5 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
     assert "distribution ranks are not posterior PIT" in monitor
     assert "fit_and_evaluation_only" in recovery
     assert "beta_banks_reused" in recovery
+    assert "evaluation_only" in evaluation_recovery
+    assert "fit_reused" in evaluation_recovery

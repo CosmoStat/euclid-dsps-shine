@@ -278,7 +278,9 @@ def main() -> None:
     root = args.root.resolve()
     manifest = _read_json(root / "RUN_MANIFEST.json")
     repo = Path(__file__).resolve().parents[1]
-    runtime_provenance = require_projection_runtime_commit(root, manifest, repo)
+    runtime_provenance = require_projection_runtime_commit(
+        root, manifest, repo, stage="evaluation"
+    )
     fit = _read_json(root / "PROJECTION_FIT_COMPLETE.json")
     if fit.get("status") != "COMPLETE" or fit.get("truth_used") is not False:
         raise ValueError("evaluation requires a complete truth-free projection fit")
