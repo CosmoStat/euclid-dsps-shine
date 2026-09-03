@@ -17,7 +17,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -139,13 +138,60 @@ def canonical_json_sha256(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _git_directory(repo: Path) -> Path:
+    marker = repo / ".git"
+    if marker.is_dir():
+        return marker.resolve()
+    if marker.is_file():
+        value = marker.read_text(encoding="utf-8").strip()
+        prefix = "gitdir:"
+        if not value.lower().startswith(prefix):
+            raise ValueError(f"invalid Git worktree marker: {marker}")
+        directory = Path(value[len(prefix) :].strip())
+        if not directory.is_absolute():
+            directory = marker.parent / directory
+        return directory.resolve()
+    raise FileNotFoundError(f"missing Git metadata: {marker}")
+
+
+def _read_git_head(repo: str | Path) -> str:
+    """Read HEAD from a repository or linked worktree without invoking Git."""
+    directory = _git_directory(Path(repo).resolve())
+    head = (directory / "HEAD").read_text(encoding="utf-8").strip()
+    if not head.startswith("ref: "):
+        actual = head
+    else:
+        reference = head.removeprefix("ref: ").strip()
+        common = directory
+        common_marker = directory / "commondir"
+        if common_marker.is_file():
+            common = (directory / common_marker.read_text().strip()).resolve()
+        loose = common / reference
+        if loose.is_file():
+            actual = loose.read_text(encoding="utf-8").strip()
+        else:
+            actual = ""
+            packed = common / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line.startswith(("#", "^")):
+                        continue
+                    fields = line.split()
+                    if len(fields) == 2 and fields[1] == reference:
+                        actual = fields[0]
+                        break
+            if not actual:
+                raise ValueError(f"cannot resolve Git reference {reference!r}")
+    if len(actual) not in {40, 64} or any(
+        character not in "0123456789abcdefABCDEF" for character in actual
+    ):
+        raise ValueError(f"invalid Git HEAD value: {actual!r}")
+    return actual.lower()
+
+
 def require_git_commit(repo: str | Path, expected: str) -> str:
     """Fail if a queued workflow is no longer using its frozen code commit."""
-    actual = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        cwd=Path(repo),
-        text=True,
-    ).strip()
+    actual = _read_git_head(repo)
     if actual != str(expected):
         raise ValueError(
             "population-VEM code provenance mismatch: "

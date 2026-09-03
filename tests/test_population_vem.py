@@ -18,6 +18,7 @@ from euclid_dsps.amortized.population_vem import (
     make_pmap_fixed_reference_prior_step,
     merge_array_bank_shards,
     read_array_bank_shard,
+    require_git_commit,
     selection_calibration_summary,
     write_array_bank_shard,
 )
@@ -137,6 +138,20 @@ def test_selection_calibration_summary_gates_global_and_redshift_errors() -> Non
     assert biased["global_absolute_error"] > 0.03
 
 
+def test_require_git_commit_reads_detached_worktree_without_git(tmp_path: Path) -> None:
+    commit = "a" * 40
+    common = tmp_path / "source" / ".git"
+    worktree_git = common / "worktrees" / "frozen"
+    checkout = tmp_path / "frozen"
+    worktree_git.mkdir(parents=True)
+    checkout.mkdir()
+    (checkout / ".git").write_text(f"gitdir: {worktree_git}\n")
+    (worktree_git / "HEAD").write_text(f"{commit}\n")
+    assert require_git_commit(checkout, commit) == commit
+    with pytest.raises(ValueError, match="code provenance mismatch"):
+        require_git_commit(checkout, "b" * 40)
+
+
 def test_pmap_prior_step_updates_all_replicas_with_finite_fixed_bank() -> None:
     devices = jax.local_devices()
     count = len(devices)
@@ -220,3 +235,15 @@ def test_population_vem_submission_uses_bounded_parallel_h100_stages() -> None:
     assert "#SBATCH --gres=gpu:4" in refresh
     assert "#SBATCH --gres=gpu:1" in final
     assert "--n-samples 2" in refresh
+    gate = (
+        ROOT / "scripts/feniks_sc_drws_population_vem_bank_finalize.slurm"
+    ).read_text()
+    recovery = (
+        ROOT / "scripts/submit_feniks_sc_drws_population_vem_recovery.sh"
+    ).read_text()
+    assert 'GIT_BIN="${GIT_BIN:-$(command -v git || true)}"' in gate
+    assert 'export PATH="$(dirname "$GIT_BIN"):$PATH"' in gate
+    assert "RECOVER_FAILED_CHAIN" in recovery
+    assert "-name COMPLETE.json" in recovery
+    assert "reused_initial_banks" in recovery
+    assert "afterok:$NEW_BANK_GATE_JOB" in recovery

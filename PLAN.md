@@ -1,5 +1,18 @@
 # Plan
 
+## 2026-09-03 Population-VEM stage-1 gate recovery
+
+- The 36 initial Jean-Zay bank tasks completed, but CPU gate `1702058`
+  failed before aggregation because `module purge` removed `git` from `PATH`.
+- Make commit provenance checks read Git metadata directly, while retaining a
+  captured executable fallback for the already-frozen `a4e5face71d6` code
+  snapshot. Add a guarded recovery submitter that reuses every completed bank,
+  cancels only the impossible downstream jobs, and resubmits stages 1b--5.
+
+Completed locally: eight focused tests, Ruff, compileall, Bash syntax, direct
+main-checkout provenance read, and whitespace checks pass. Jean-Zay recovery
+submission remains explicit and has not been run from this checkout.
+
 ## 2026-09-03 Population-VEM submit import preflight
 
 - The first Jean-Zay launch stopped before submission because the active Conda
