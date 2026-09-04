@@ -201,6 +201,54 @@ def test_prepare_freezes_truth_free_inference_and_observed_cohort(
     assert len(frozen["cohort"]["shards"]) == 2
     assert inference["truth"]["parameter_columns"] == {}
 
+    learned_checkpoint = tmp_path / "learned.eqx"
+    learned_sidecar = tmp_path / "learned.eqx.json"
+    learned_config = tmp_path / "learned.yaml"
+    learned_features = tmp_path / "learned_features.json"
+    for path in (
+        learned_checkpoint,
+        learned_sidecar,
+        learned_config,
+        learned_features,
+    ):
+        path.write_text(path.name, encoding="utf-8")
+    receipt = tmp_path / "NPE_WINNER_FROZEN.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "status": "FROZEN",
+                "truth_used_for_training_or_checkpoint_selection": False,
+                "prior_bitwise_unchanged": True,
+                "checkpoint": str(learned_checkpoint),
+                "checkpoint_sha256": prepare.sha256_file(learned_checkpoint),
+                "checkpoint_sidecar": str(learned_sidecar),
+                "checkpoint_sidecar_sha256": prepare.sha256_file(learned_sidecar),
+                "config": str(learned_config),
+                "config_sha256": prepare.sha256_file(learned_config),
+                "feature_stats": str(learned_features),
+                "feature_stats_sha256": prepare.sha256_file(learned_features),
+            }
+        ),
+        encoding="utf-8",
+    )
+    learned = prepare.prepare(
+        benchmark_root=benchmark,
+        out=tmp_path / "learned-diagnostic",
+        repo=ROOT,
+        objects=9,
+        shards=2,
+        panels=3,
+        posterior_draws=256,
+        resample_draws=64,
+        object_batch_size=4,
+        model_receipt=receipt,
+    )
+    assert [item["objects"] for item in learned["cohort"]["shards"]] == [5, 4]
+    assert learned["model"]["checkpoint"] == str(learned_checkpoint.resolve())
+    assert learned["model"]["freeze_receipt"]["sha256"] == prepare.sha256_file(
+        receipt
+    )
+
 
 def test_support_gate_uses_ess_pareto_and_maximum_weight() -> None:
     finalize = _load_script("finalize_feniks_sc_drws_population_posterior.py")

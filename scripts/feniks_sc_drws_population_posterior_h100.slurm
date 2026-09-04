@@ -89,6 +89,7 @@ print(shard["objects"])
 print(manifest["inference"]["posterior_draws_per_object"])
 print(manifest["inference"]["psis_resample_draws_per_object"])
 print(manifest["inference"]["prior_draws_per_shard"])
+print(manifest["inference"]["object_batch_size"])
 PY
 )
 CONFIG="${VALUES[0]}"
@@ -102,6 +103,7 @@ OBJECTS="${VALUES[7]}"
 POSTERIOR_DRAWS="${VALUES[8]}"
 RESAMPLE_DRAWS="${VALUES[9]}"
 PRIOR_DRAWS="${VALUES[10]}"
+OBJECT_BATCH_SIZE="${VALUES[11]}"
 
 test ! -e "$OUT/DONE" || {
   echo "[population-posterior] already complete: $OUT"
@@ -125,8 +127,8 @@ PY
 
 COMMON=(--dataset "$DATASET" --checkpoint "$CHECKPOINT"
   --feature-stats "$FEATURE_STATS" --row-indices-file "$INDICES"
-  --selection-mode sequential --limit "$OBJECTS" --batch-size "$OBJECTS"
-  --jax-batch-size "$OBJECTS" --posterior-samples "$POSTERIOR_DRAWS"
+  --selection-mode sequential --limit "$OBJECTS" --batch-size "$OBJECT_BATCH_SIZE"
+  --jax-batch-size "$OBJECT_BATCH_SIZE" --posterior-samples "$POSTERIOR_DRAWS"
   --prior-samples "$PRIOR_DRAWS" --decoder-sample-chunk-size 1
   --prior-predictive-batch-size 64 --shard-outputs)
 

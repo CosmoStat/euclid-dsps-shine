@@ -12,6 +12,9 @@ POSTERIOR_PANELS="${POSTERIOR_PANELS:-8}"
 POSTERIOR_DRAWS="${POSTERIOR_DRAWS:-1024}"
 POSTERIOR_RESAMPLE_DRAWS="${POSTERIOR_RESAMPLE_DRAWS:-256}"
 POSTERIOR_MAX_PARALLEL="${POSTERIOR_MAX_PARALLEL:-8}"
+POSTERIOR_OBJECT_BATCH_SIZE="${POSTERIOR_OBJECT_BATCH_SIZE:-8}"
+POSTERIOR_PRIOR_DRAWS="${POSTERIOR_PRIOR_DRAWS:-512}"
+POSTERIOR_MODEL_RECEIPT="${POSTERIOR_MODEL_RECEIPT:-}"
 
 cd "$REPO_DIR"
 REPO_DIR="$(pwd -P)"
@@ -57,6 +60,10 @@ fi
 CODE_COMMIT="$(git rev-parse HEAD)"
 mkdir -p "$POSTERIOR_LOG_ROOT" "$CACHE_ROOT/jax" outputs/logs
 
+PREPARE_MODEL_ARGS=()
+if [[ -n "$POSTERIOR_MODEL_RECEIPT" ]]; then
+  PREPARE_MODEL_ARGS+=(--model-receipt "$POSTERIOR_MODEL_RECEIPT")
+fi
 python scripts/prepare_feniks_sc_drws_population_posterior.py \
   --benchmark-root "$SOURCE_BENCHMARK_ROOT" \
   --out "$POSTERIOR_ROOT" \
@@ -64,7 +71,10 @@ python scripts/prepare_feniks_sc_drws_population_posterior.py \
   --shards "$POSTERIOR_SHARDS" \
   --panels "$POSTERIOR_PANELS" \
   --posterior-draws "$POSTERIOR_DRAWS" \
-  --resample-draws "$POSTERIOR_RESAMPLE_DRAWS"
+  --resample-draws "$POSTERIOR_RESAMPLE_DRAWS" \
+  --object-batch-size "$POSTERIOR_OBJECT_BATCH_SIZE" \
+  --prior-draws "$POSTERIOR_PRIOR_DRAWS" \
+  "${PREPARE_MODEL_ARGS[@]}"
 test ! -e "$POSTERIOR_ROOT/SUBMISSION.json" || {
   echo "[population-posterior][error] diagnostic already submitted" >&2
   exit 2
@@ -102,7 +112,8 @@ FINAL_RAW=$(sbatch --parsable --dependency="afterok:$INFERENCE_JOB" \
   "$JOB_REPO_DIR/scripts/feniks_sc_drws_population_posterior_finalize_h100.slurm")
 FINAL_JOB="${FINAL_RAW%%;*}"
 ALL_JOBS="$INFERENCE_JOB,$FINAL_JOB"
-LATEST="outputs/logs/feniks_sc_drws_population_posterior_latest.env"
+LATEST="${POSTERIOR_ENV:-outputs/logs/feniks_sc_drws_population_posterior_latest.env}"
+mkdir -p "$(dirname "$LATEST")"
 
 printf 'export INFERENCE_JOB=%q\nexport FINAL_JOB=%q\nexport ALL_JOBS=%q\nexport POSTERIOR_ROOT=%q\nexport POSTERIOR_LOG_ROOT=%q\nexport SOURCE_BENCHMARK_ROOT=%q\nexport RECOVERY_ROOT=%q\nexport JOB_REPO_DIR=%q\nexport CODE_COMMIT=%q\n' \
   "$INFERENCE_JOB" "$FINAL_JOB" "$ALL_JOBS" "$POSTERIOR_ROOT" \
@@ -134,4 +145,4 @@ echo "inference_job=$INFERENCE_JOB (${POSTERIOR_SHARDS} parallel one-H100 shards
 echo "final_job=$FINAL_JOB"
 echo "root=$POSTERIOR_ROOT"
 echo "latest_env=$LATEST"
-echo "monitor: bash scripts/monitor_feniks_sc_drws_population_posterior.sh 30"
+echo "monitor: bash scripts/monitor_feniks_sc_drws_population_posterior.sh $LATEST 30"

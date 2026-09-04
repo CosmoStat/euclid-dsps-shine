@@ -24,15 +24,21 @@ while true; do
     2>/dev/null || true
 
   echo
-  echo "===== 1. K=1024 SHARDS ====="
-  expected=$(python - "$POSTERIOR_ROOT/RUN_MANIFEST.json" <<'PY'
+  echo "===== 1. INFERENCE SHARDS ====="
+  readarray -t request < <(python - "$POSTERIOR_ROOT/RUN_MANIFEST.json" <<'PY'
 import json, sys
-print(len(json.load(open(sys.argv[1]))["cohort"]["shards"]))
+x=json.load(open(sys.argv[1]))
+print(len(x["cohort"]["shards"]))
+print(x["inference"]["posterior_draws_per_object"])
+print(x["cohort"]["objects"])
 PY
 )
+  expected="${request[0]}"
+  draws="${request[1]}"
+  objects="${request[2]}"
   complete=$(find "$POSTERIOR_ROOT/shards" -mindepth 2 -maxdepth 2 \
     -name DONE -type f 2>/dev/null | wc -l)
-  echo "complete=$complete/$expected"
+  echo "objects=$objects K=$draws complete=$complete/$expected"
   for gate in "$POSTERIOR_ROOT"/shards/shard_*/projected_parent_iw/support_gate.json; do
     [[ -s "$gate" ]] || continue
     python - "$gate" <<'PY'
@@ -66,7 +72,7 @@ print(f"parent-source delta ESS={d['median_raw_ess']:+.2f} "
       f"delta k>0.7={d['fraction_pareto_k_gt_0p7']:+.3f}")
 PY
   else
-    echo "attente de l'agrégation des huit shards"
+    echo "attente de l'agrégation des $expected shards"
   fi
 
   echo
@@ -94,6 +100,10 @@ print(f"panels={len(x['panels'])}")
 print("corners:", x["artifacts"]["panel_manifest"])
 print("PPC:", x["artifacts"]["ppc_plot"])
 print("support:", x["artifacts"]["support_plot"])
+print("population:", x["artifacts"]["population_plot"])
+print("redshift populations:", x["artifacts"]["redshift_population_plot"])
+print("MIRA:", x["artifacts"]["mira"])
+print("TARP:", x["artifacts"]["tarp"])
 PY
   else
     echo "attente"

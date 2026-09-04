@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import jax
+import jax.numpy as jnp
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -20,7 +22,17 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from euclid_dsps.amortized.catalog_identity import write_truth_snapshot
 from euclid_dsps.amortized.diagnostics import _write_multi_overlay_corner_plot
+from euclid_dsps.amortized.latent import latent_spec_from_config, x_to_theta
+from euclid_dsps.amortized.mira import evaluate_feniks_mira
+from euclid_dsps.amortized.population_projection import (
+    distribution_comparison,
+    evaluate_log_beta,
+    selection_runtime,
+    weighted_cdf_values,
+)
 from euclid_dsps.amortized.population_vem import sha256_file
+from euclid_dsps.amortized.tarp import evaluate_feniks_tarp
+from euclid_dsps.amortized.train import load_checkpoint
 from euclid_dsps.config import load_config
 from euclid_dsps.io import truth_column_from_spec, truth_value_from_spec
 
@@ -126,6 +138,13 @@ def _read_parquet_files(paths: list[Path]) -> pd.DataFrame:
     return pd.concat([pd.read_parquet(path) for path in paths], ignore_index=True)
 
 
+def _parquet_files(directory: Path) -> list[Path]:
+    paths = sorted(directory.glob("*.parquet"))
+    if not paths:
+        raise FileNotFoundError(f"no parquet files under {directory}")
+    return paths
+
+
 def _validate_counts(
     frame: pd.DataFrame,
     cohort: np.ndarray,
@@ -190,14 +209,20 @@ def _truth_frame(
     config: dict[str, Any],
     cohort: np.ndarray,
     parameter_names: tuple[str, ...],
+    filename: str = "inference_truth.parquet",
+    physical_filename: str = "individual_truth.parquet",
+    histogram_filename: str = "individual_truth_redshift_histogram.csv",
 ) -> pd.DataFrame:
     raw = write_truth_snapshot(
         evaluation,
         config,
         row_indices=cohort,
         limit=None,
-        filename="inference_truth.parquet",
+        filename=filename,
     )
+    histogram = evaluation / "inference_redshift_histogram.csv"
+    if histogram.is_file():
+        histogram.replace(evaluation / histogram_filename)
     if len(raw) != len(cohort):
         raise ValueError(f"expected {len(cohort)} truth rows, found {len(raw)}")
     specs = dict((config.get("truth", {}) or {}).get("parameter_columns") or {})
@@ -219,7 +244,7 @@ def _truth_frame(
     truth = pd.DataFrame(rows).sort_values("row_index").reset_index(drop=True)
     if not np.isfinite(truth[list(parameter_names)].to_numpy(dtype=float)).all():
         raise ValueError("truth closure contains non-finite latent parameters")
-    truth.to_parquet(evaluation / "individual_truth.parquet", index=False)
+    truth.to_parquet(evaluation / physical_filename, index=False)
     return truth
 
 
@@ -369,6 +394,176 @@ def _plot_ppc(path: Path, frames: list[pd.DataFrame]) -> None:
     plt.close(figure)
 
 
+def _x_to_theta_chunks(x: np.ndarray, latent_spec) -> np.ndarray:
+    pieces = []
+    for start in range(0, len(x), 32768):
+        pieces.append(
+            np.asarray(
+                jax.device_get(
+                    x_to_theta(jnp.asarray(x[start : start + 32768]), latent_spec)
+                ),
+                dtype=np.float64,
+            )
+        )
+    return np.concatenate(pieces)
+
+
+def _sample_parent(model, *, samples: int, seed: int) -> np.ndarray:
+    @jax.jit
+    def draw(key):
+        return model.prior.sample(key, int(samples))
+
+    return np.asarray(
+        jax.device_get(draw(jax.random.PRNGKey(int(seed)))), dtype=np.float32
+    )
+
+
+def _population_metric_rows(
+    *,
+    comparison: str,
+    source: np.ndarray,
+    target: np.ndarray,
+    parameter_names: tuple[str, ...],
+    source_weights: np.ndarray | None = None,
+    target_weights: np.ndarray | None = None,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "comparison": comparison,
+            "parameter": name,
+            **distribution_comparison(
+                source[:, index],
+                target[:, index],
+                source_weights=source_weights,
+                target_weights=target_weights,
+            ),
+        }
+        for index, name in enumerate(parameter_names)
+    ]
+
+
+def _plot_population_distributions(
+    path: Path,
+    *,
+    parameter_names: tuple[str, ...],
+    q: np.ndarray,
+    iw: np.ndarray,
+    iw_weights: np.ndarray,
+    selected_prior: np.ndarray,
+    selected_prior_weights: np.ndarray,
+    selected_truth: np.ndarray,
+    parent_prior: np.ndarray,
+    parent_truth: np.ndarray,
+) -> None:
+    dimensions = min(5, len(parameter_names))
+    figure, axes = plt.subplots(2, dimensions, figsize=(16, 6.4), constrained_layout=True)
+    axes = np.asarray(axes).reshape(2, dimensions)
+    for index in range(dimensions):
+        combined = np.concatenate(
+            (q[:, index], selected_truth[:, index], parent_truth[:, index])
+        )
+        low, high = np.quantile(combined[np.isfinite(combined)], [0.002, 0.998])
+        bins = np.linspace(low, high, 64)
+        for values, weights, label, color in (
+            (selected_truth[:, index], None, "selected truth", "#111111"),
+            (q[:, index], None, "q aggregate", "#0072B2"),
+            (iw[:, index], iw_weights, "projected-parent IW", "#CC79A7"),
+            (
+                selected_prior[:, index],
+                selected_prior_weights,
+                "selected parent prior",
+                "#009E73",
+            ),
+        ):
+            axes[0, index].hist(
+                values,
+                bins=bins,
+                weights=weights,
+                density=True,
+                histtype="step",
+                linewidth=1.5,
+                label=label,
+                color=color,
+            )
+        for values, label, color in (
+            (parent_truth[:, index], "C0 truth", "#111111"),
+            (parent_prior[:, index], "parent prior", "#009E73"),
+        ):
+            axes[1, index].hist(
+                values,
+                bins=bins,
+                density=True,
+                histtype="step",
+                linewidth=1.5,
+                label=label,
+                color=color,
+            )
+        axes[0, index].set_title(parameter_names[index], fontsize=9)
+        axes[1, index].set_xlabel(parameter_names[index], fontsize=9)
+    axes[0, 0].set_ylabel("Selected density")
+    axes[1, 0].set_ylabel("Parent density")
+    axes[0, 0].legend(frameon=False, fontsize=7)
+    axes[1, 0].legend(frameon=False, fontsize=7)
+    figure.suptitle("Independent-test joint-draw population closure")
+    figure.savefig(path, dpi=220)
+    figure.savefig(path.with_suffix(".pdf"))
+    plt.close(figure)
+
+
+def _plot_redshift_distributions(
+    path: Path,
+    *,
+    q: np.ndarray,
+    iw: np.ndarray,
+    iw_weights: np.ndarray,
+    selected_prior: np.ndarray,
+    selected_prior_weights: np.ndarray,
+    selected_truth: np.ndarray,
+    parent_prior: np.ndarray,
+    parent_truth: np.ndarray,
+) -> None:
+    finite = np.concatenate((q[:, 0], selected_truth[:, 0], parent_truth[:, 0]))
+    low, high = np.quantile(finite[np.isfinite(finite)], [0.001, 0.999])
+    grid = np.linspace(low, high, 600)
+    figure, axes = plt.subplots(1, 2, figsize=(11.5, 4.5), constrained_layout=True)
+    for values, weights, label, color in (
+        (selected_truth[:, 0], None, "selected truth", "#111111"),
+        (q[:, 0], None, "q aggregate", "#0072B2"),
+        (iw[:, 0], iw_weights, "projected-parent IW", "#CC79A7"),
+        (
+            selected_prior[:, 0],
+            selected_prior_weights,
+            "selected parent prior",
+            "#009E73",
+        ),
+    ):
+        axes[0].plot(
+            grid,
+            weighted_cdf_values(values, grid, weights),
+            label=label,
+            color=color,
+            linewidth=1.6,
+        )
+    for values, label, color in (
+        (parent_truth[:, 0], "C0 truth", "#111111"),
+        (parent_prior[:, 0], "parent prior", "#009E73"),
+    ):
+        axes[1].plot(
+            grid,
+            weighted_cdf_values(values, grid),
+            label=label,
+            color=color,
+            linewidth=1.6,
+        )
+    axes[0].set(title="Selected population", xlabel="redshift", ylabel="CDF")
+    axes[1].set(title="Parent C0 population", xlabel="redshift", ylabel="CDF")
+    axes[0].legend(frameon=False, fontsize=8)
+    axes[1].legend(frameon=False, fontsize=8)
+    figure.savefig(path, dpi=220)
+    figure.savefig(path.with_suffix(".pdf"))
+    plt.close(figure)
+
+
 def _write_corners(
     *,
     out: Path,
@@ -508,12 +703,19 @@ def main() -> None:
         shards.append(shard)
 
     q = _read_parquet_files(
-        [shard / "inference/posterior_samples/batch_000001.parquet" for shard in shards]
+        [
+            path
+            for shard in shards
+            for path in _parquet_files(shard / "inference/posterior_samples")
+        ]
     )
     residuals = _read_parquet_files(
         [
-            shard / "inference/posterior_predictive_residuals/batch_000001.parquet"
+            path
             for shard in shards
+            for path in _parquet_files(
+                shard / "inference/posterior_predictive_residuals"
+            )
         ]
     )
     priors = _read_parquet_files(
@@ -521,26 +723,30 @@ def main() -> None:
     )
     parent_weighted = _read_parquet_files(
         [
-            shard / "projected_parent_iw/weighted_samples/batch_000000.parquet"
+            path
             for shard in shards
+            for path in _parquet_files(shard / "projected_parent_iw/weighted_samples")
         ]
     )
     parent_resampled = _read_parquet_files(
         [
-            shard / "projected_parent_iw/resampled_samples/batch_000000.parquet"
+            path
             for shard in shards
+            for path in _parquet_files(shard / "projected_parent_iw/resampled_samples")
         ]
     )
     source_weighted = _read_parquet_files(
         [
-            shard / "source_prior_iw/weighted_samples/batch_000000.parquet"
+            path
             for shard in shards
+            for path in _parquet_files(shard / "source_prior_iw/weighted_samples")
         ]
     )
     source_resampled = _read_parquet_files(
         [
-            shard / "source_prior_iw/resampled_samples/batch_000000.parquet"
+            path
             for shard in shards
+            for path in _parquet_files(shard / "source_prior_iw/resampled_samples")
         ]
     )
     parent_diagnostics = _read_parquet_files(
@@ -570,7 +776,8 @@ def main() -> None:
     evaluation.mkdir(parents=True, exist_ok=False)
     dense = evaluation / "dense_joint_draws"
     dense.mkdir()
-    q.to_parquet(dense / "q_k1024.parquet", index=False)
+    q_path = dense / f"q_k{expected_draws}.parquet"
+    q.to_parquet(q_path, index=False)
     parent_weighted.to_parquet(dense / "projected_parent_weighted.parquet", index=False)
     parent_resampled.to_parquet(
         dense / "projected_parent_psis_resampled.parquet", index=False
@@ -632,9 +839,9 @@ def main() -> None:
         .copy()
     )
     q_calibration["sample_id"] = q_calibration.groupby("row_index").cumcount()
-    q_calibration_path = dense / "q_calibration_k256.parquet"
+    q_calibration_path = dense / f"q_calibration_k{resample_draws}.parquet"
     q_calibration.to_parquet(q_calibration_path, index=False)
-    calibration = evaluate_redshift(
+    common_calibration = evaluate_redshift(
         truth_path=evaluation / "individual_truth.parquet",
         posterior_specs=[
             ("q", q_calibration_path),
@@ -651,6 +858,53 @@ def main() -> None:
         seed=293400,
         expected_objects=len(cohort),
         scope="frozen_observed_flux_stratified_independent_test_closure",
+    )
+    q_full_calibration = evaluate_redshift(
+        truth_path=evaluation / "individual_truth.parquet",
+        posterior_specs=[("q", q_path)],
+        out=evaluation / "redshift_calibration_q_full",
+        truth_column="z_obs",
+        samples_per_object=expected_draws,
+        bootstrap=500,
+        seed=293401,
+        expected_objects=len(cohort),
+        scope="frozen_full_draw_q_independent_test_closure",
+    )
+    redshift_calibration = dict(common_calibration["models"])
+    redshift_calibration["q_common_draws"] = {
+        **redshift_calibration.pop("q"),
+        "model": "q_common_draws",
+    }
+    redshift_calibration["q"] = q_full_calibration["models"]["q"]
+    posterior_specs = (
+        ("q", q_calibration_path),
+        ("source_prior_iw", dense / "source_prior_psis_resampled.parquet"),
+        (
+            "projected_parent_iw",
+            dense / "projected_parent_psis_resampled.parquet",
+        ),
+    )
+    mira = evaluate_feniks_mira(
+        truth_path=evaluation / "individual_truth.parquet",
+        posterior_specs=posterior_specs,
+        out_dir=evaluation / "mira",
+        num_regions=32,
+        num_bootstrap=128,
+        samples_per_object=resample_draws,
+        seed=293500,
+        parameters=parameter_names,
+        drop_nonfinite_truth=True,
+    )
+    tarp = evaluate_feniks_tarp(
+        truth_path=evaluation / "individual_truth.parquet",
+        posterior_specs=posterior_specs,
+        out_dir=evaluation / "tarp",
+        num_alpha_bins=min(32, resample_draws),
+        num_bootstrap=128,
+        samples_per_object=resample_draws,
+        seed=293600,
+        parameters=parameter_names,
+        drop_nonfinite_truth=True,
     )
 
     ppc_tables = []
@@ -678,6 +932,137 @@ def main() -> None:
         config=truth_config,
         parent_diagnostics=parent_diagnostics,
     )
+
+    model_config_path = Path(manifest["model"]["config"])
+    if sha256_file(model_config_path) != manifest["model"]["config_sha256"]:
+        raise ValueError("population model config SHA256 mismatch")
+    model_config = load_config(model_config_path)
+    latent_spec = latent_spec_from_config(model_config)
+    if tuple(latent_spec.names) != parameter_names:
+        raise ValueError("population model and truth parameter order differ")
+    checkpoint = Path(manifest["model"]["checkpoint"])
+    if sha256_file(checkpoint) != manifest["model"]["checkpoint_sha256"]:
+        raise ValueError("population model checkpoint SHA256 mismatch")
+    model = load_checkpoint(checkpoint, model_config)
+    parent_x = _sample_parent(model, samples=65536, seed=293700)
+    parent_theta = _x_to_theta_chunks(parent_x, latent_spec)
+    selection_config_path = Path(manifest["population_selection"]["config"])
+    if sha256_file(selection_config_path) != manifest["population_selection"][
+        "config_sha256"
+    ]:
+        raise ValueError("population selection config SHA256 mismatch")
+    selection_feature_stats = Path(
+        manifest["population_selection"]["feature_stats"]
+    )
+    if sha256_file(selection_feature_stats) != manifest["population_selection"][
+        "feature_stats_sha256"
+    ]:
+        raise ValueError("population selection feature-stat SHA256 mismatch")
+    beta_runtime = selection_runtime(
+        load_config(selection_config_path), selection_feature_stats
+    )
+    parent_log_beta = evaluate_log_beta(
+        model, parent_x, beta_runtime, chunk_size=512
+    )
+    parent_beta = np.where(
+        np.isfinite(parent_log_beta), np.exp(parent_log_beta), 0.0
+    )
+    if not np.isfinite(parent_beta.sum()) or parent_beta.sum() <= 0.0:
+        raise ValueError("projected parent has no finite selected mass")
+    selected_prior_weights = parent_beta / parent_beta.sum()
+
+    c0_objects = int(manifest["dataset"]["c0_objects"])
+    c0_truth = _truth_frame(
+        evaluation=evaluation,
+        config=truth_config,
+        cohort=np.arange(c0_objects, dtype=np.int64),
+        parameter_names=parameter_names,
+        filename="population_truth_c0_source.parquet",
+        physical_filename="population_truth_c0.parquet",
+        histogram_filename="population_truth_c0_redshift_histogram.csv",
+    )
+    q_theta = q.loc[:, list(parameter_names)].to_numpy(dtype=np.float64)
+    parent_iw_theta = parent_weighted.loc[:, list(parameter_names)].to_numpy(
+        dtype=np.float64
+    )
+    parent_iw_weights = pd.to_numeric(
+        parent_weighted["psis_weight"], errors="coerce"
+    ).to_numpy(dtype=np.float64)
+    object_weight_sum = (
+        pd.Series(parent_iw_weights, index=parent_weighted.index)
+        .groupby(parent_weighted["row_index"])
+        .transform("sum")
+        .to_numpy(dtype=np.float64)
+    )
+    parent_iw_weights = np.divide(
+        parent_iw_weights,
+        object_weight_sum * len(cohort),
+        out=np.zeros_like(parent_iw_weights),
+        where=np.isfinite(object_weight_sum) & (object_weight_sum > 0.0),
+    )
+    selected_truth = truth.loc[:, list(parameter_names)].to_numpy(dtype=np.float64)
+    parent_truth = c0_truth.loc[:, list(parameter_names)].to_numpy(dtype=np.float64)
+    population_rows = []
+    population_rows.extend(
+        _population_metric_rows(
+            comparison="q_aggregate_vs_selected_truth",
+            source=q_theta,
+            target=selected_truth,
+            parameter_names=parameter_names,
+        )
+    )
+    population_rows.extend(
+        _population_metric_rows(
+            comparison="projected_parent_iw_aggregate_vs_selected_truth",
+            source=parent_iw_theta,
+            target=selected_truth,
+            source_weights=parent_iw_weights,
+            parameter_names=parameter_names,
+        )
+    )
+    population_rows.extend(
+        _population_metric_rows(
+            comparison="selected_parent_prior_vs_selected_truth",
+            source=parent_theta,
+            target=selected_truth,
+            source_weights=selected_prior_weights,
+            parameter_names=parameter_names,
+        )
+    )
+    population_rows.extend(
+        _population_metric_rows(
+            comparison="parent_prior_vs_c0_truth",
+            source=parent_theta,
+            target=parent_truth,
+            parameter_names=parameter_names,
+        )
+    )
+    population = pd.DataFrame(population_rows)
+    population_path = evaluation / "population_distribution_metrics.csv"
+    population.to_csv(population_path, index=False)
+    _plot_population_distributions(
+        evaluation / "population_distribution_closure.png",
+        parameter_names=parameter_names,
+        q=q_theta,
+        iw=parent_iw_theta,
+        iw_weights=parent_iw_weights,
+        selected_prior=parent_theta,
+        selected_prior_weights=selected_prior_weights,
+        selected_truth=selected_truth,
+        parent_prior=parent_theta,
+        parent_truth=parent_truth,
+    )
+    _plot_redshift_distributions(
+        evaluation / "redshift_population_distributions.png",
+        q=q_theta,
+        iw=parent_iw_theta,
+        iw_weights=parent_iw_weights,
+        selected_prior=parent_theta,
+        selected_prior_weights=selected_prior_weights,
+        selected_truth=selected_truth,
+        parent_prior=parent_theta,
+        parent_truth=parent_truth,
+    )
     support_delta = {
         "median_raw_ess": parent_support["median_raw_ess"]
         - source_support["median_raw_ess"],
@@ -694,11 +1079,27 @@ def main() -> None:
         "winner": manifest["benchmark"]["winner"],
         "objects": int(len(cohort)),
         "proposal_draws_per_object": expected_draws,
-        "calibration_draws_per_object": resample_draws,
+        "q_calibration_draws_per_object": expected_draws,
+        "common_iw_calibration_draws_per_object": resample_draws,
         "projected_parent_support": parent_support,
         "source_prior_support": source_support,
         "same_draw_support_delta_parent_minus_source": support_delta,
-        "redshift_calibration": calibration["models"],
+        "redshift_calibration": redshift_calibration,
+        "mira_status": mira["status"],
+        "tarp_status": tarp["status"],
+        "population_distributions": {
+            comparison: {
+                "redshift_cdf_supremum": float(
+                    group.loc[group["parameter"].eq("z_obs"), "cdf_supremum"].iloc[0]
+                ),
+                "maximum_core_5d_cdf_supremum": float(
+                    group.loc[
+                        group["parameter"].isin(CORE_PARAMETERS), "cdf_supremum"
+                    ].max()
+                ),
+            }
+            for comparison, group in population.groupby("comparison")
+        },
         "posterior_predictive_by_band": str(
             (evaluation / "posterior_predictive_by_band.csv").resolve()
         ),
@@ -706,12 +1107,20 @@ def main() -> None:
         "truth_boundary": manifest["truth_boundary"],
         "truth_used_for_inference_or_support": False,
         "truth_used_for_final_closure": True,
+        "point_estimates_used": False,
         "scientific_promotion": False,
         "interpretation": (
             "A support failure means projected-parent IW corners and calibration "
             "remain diagnostic; PSIS cannot replace missing proposal support."
         ),
         "artifacts": {
+            "q_joint_draws": str(q_path.resolve()),
+            "selected_test_truth": str(
+                (evaluation / "individual_truth.parquet").resolve()
+            ),
+            "parent_c0_truth": str(
+                (evaluation / "population_truth_c0.parquet").resolve()
+            ),
             "support_comparison": str(
                 (evaluation / "same_draw_support_comparison.csv").resolve()
             ),
@@ -730,11 +1139,32 @@ def main() -> None:
                     evaluation / "redshift_calibration/redshift_pit_coverage.png"
                 ).resolve()
             ),
+            "redshift_q_full_calibration": str(
+                (
+                    evaluation
+                    / "redshift_calibration_q_full/redshift_calibration_summary.json"
+                ).resolve()
+            ),
+            "redshift_q_full_calibration_plot": str(
+                (
+                    evaluation
+                    / "redshift_calibration_q_full/redshift_pit_coverage.png"
+                ).resolve()
+            ),
             "ppc_plot": str(
                 (evaluation / "posterior_predictive_residuals.png").resolve()
             ),
             "panel_manifest": str(
                 (evaluation / "individual_panels/manifest.json").resolve()
+            ),
+            "mira": str((evaluation / "mira/mira_summary.json").resolve()),
+            "tarp": str((evaluation / "tarp/tarp_summary.json").resolve()),
+            "population_metrics": str(population_path.resolve()),
+            "population_plot": str(
+                (evaluation / "population_distribution_closure.png").resolve()
+            ),
+            "redshift_population_plot": str(
+                (evaluation / "redshift_population_distributions.png").resolve()
             ),
         },
         "runtime_provenance": runtime_provenance,

@@ -8115,3 +8115,51 @@ Remote recovery:
   script records that no new inference was submitted. Ruff, compileall, Bash
   syntax, `git diff --check`, `7` recovery-focused tests, and `22` related tests
   in `shine` pass.
+
+## 2026-09-04 Frozen-prior NPE and full-test posterior closure
+
+- Freeze the truth-free `realnvp_wide` projected parent and the independent
+  selected-test cohort. Do not update the population prior while repairing the
+  amortized posterior, and never use catalogue truth for optimization or
+  checkpoint selection.
+- Run two independent chains from one immutable manifest. The first immediately
+  evaluates the current conditional posterior on all 4,706 selected-test
+  objects with low-draw, massively sharded inference. The second trains the
+  posterior with model-generated, selection-aware sleep/NPE only under the
+  frozen projected parent.
+- Keep the workflow distributional end to end: dense joint draws, exact
+  proposal densities, ordinary/PSIS importance diagnostics, object-aligned
+  PIT/coverage, MIRA/TARP, PPC, selected-posterior aggregates, direct parent and
+  beta-selected-parent distributions, and observed-only corner-panel selection.
+  Point estimates must not be used as training or population targets.
+- Implement five fail-loud stages: (1) frozen provenance and simulator/observed
+  support preflight, (2) current-q full-test baseline, (3) warm-start and
+  from-scratch sleep-only NPE arms, (4) matched full-test evaluation of the
+  truth-free validation winner, and (5) frozen closure/decision. Stages 2 and 3
+  may run concurrently; stage 4 waits only for stage 3, and stage 5 waits for
+  both matched evaluations.
+- Optimize Jean-Zay cost by using one latent/simulation pair per NPE update,
+  `selection_candidate_factor=2`, multi-H100 data parallelism, K=256 for the
+  4,706-object population banks, and K=1024 only on a deterministic 512-object
+  support cohort. No prior M-step or further catalogue-scale run is authorized
+  unless the posterior support and calibration gates pass.
+- Implemented the complete launch graph. Stage 2 submits matched current-q
+  `4706 x K256` and `512 x K1024` arrays (32 shards each, at most 16 H100s per
+  array); stage 3 concurrently compares warm-start and random-encoder pure-sleep
+  arms on four H100s each. A CPU truth-free gate freezes the lowest fixed-seed
+  validation sleep NLL, after which stage 4 submits the same two evaluations for
+  the winner and stage 5 compares matched receipts.
+- Extended the posterior finalizer to retain all dense joint draws, run q-only
+  PIT/coverage at the full K, common-draw q/IW PIT plus MIRA/TARP, PPC, twelve
+  observed-flux-selected individual q/IW/prior/truth corners, and direct parent
+  plus beta-selected-parent population distributions against the independent
+  C0/selected truth. Truth is attached only after the support receipt is frozen;
+  no point estimate is used as a posterior or population target.
+- Added immutable model-receipt overrides, non-divisible cohort sharding,
+  bounded object batches, source/config/checkpoint hashes, direct bitwise prior
+  checks, reconnectable monitoring, and fail-closed calibration/support gates.
+  Local validation: Ruff, Python compileall, Bash/SLURM syntax,
+  `git diff --check`, and all 37 focused population/posterior tests pass. The
+  full repository suite reaches 816 passed and 8 skipped; two pre-existing
+  supervised-prior integrity tests report `WARN` instead of their expected
+  `PASS` under both local Python environments, in untouched code.

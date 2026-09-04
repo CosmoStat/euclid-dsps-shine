@@ -113,16 +113,23 @@ def prepare(
     panels: int,
     posterior_draws: int,
     resample_draws: int,
+    object_batch_size: int = 8,
+    prior_draws: int = 512,
+    model_receipt: Path | None = None,
 ) -> dict[str, Any]:
     benchmark_root = benchmark_root.resolve()
     out = out.resolve()
     repo = repo.resolve()
-    if objects <= 0 or shards <= 0 or objects % shards:
-        raise ValueError("objects must be positive and divisible by shards")
+    if objects <= 0 or shards <= 0 or shards > objects:
+        raise ValueError("objects/shards must be positive and shards <= objects")
     if panels <= 0 or panels > objects:
         raise ValueError("panels must lie in [1, objects]")
     if posterior_draws <= 0 or resample_draws <= 0:
         raise ValueError("draw counts must be positive")
+    if resample_draws > posterior_draws:
+        raise ValueError("resample_draws cannot exceed posterior_draws")
+    if object_batch_size <= 0 or prior_draws <= 0:
+        raise ValueError("object_batch_size and prior_draws must be positive")
 
     benchmark_manifest_path = _require_file(benchmark_root / "RUN_MANIFEST.json")
     winner_path = _require_file(benchmark_root / "TRUTH_FREE_ARCHITECTURE_WINNER.json")
@@ -144,31 +151,74 @@ def prepare(
     if fit.get("status") != "COMPLETE" or fit.get("truth_used") is not False:
         raise ValueError("winner fit receipt is not complete and truth-free")
 
-    parent = fit["parent"]
+    projection_parent = fit["parent"]
+    parent = projection_parent
     parent_checkpoint = _require_file(parent["checkpoint"])
     parent_sidecar = _require_file(parent["checkpoint_sidecar"])
+    projection_config_path = _require_file(parent["config"])
     if winner["artifacts"]["parent_checkpoint"] != str(parent_checkpoint):
         raise ValueError("winner and fit receipts disagree on the parent checkpoint")
     if sha256_file(parent_checkpoint) != parent["checkpoint_sha256"]:
         raise ValueError("projected-parent checkpoint SHA256 mismatch")
     if sha256_file(parent_sidecar) != parent["checkpoint_sidecar_sha256"]:
         raise ValueError("projected-parent sidecar SHA256 mismatch")
+    if sha256_file(projection_config_path) != parent["config_sha256"]:
+        raise ValueError("projected-parent config SHA256 mismatch")
+
+    model_receipt_record = None
+    if model_receipt is not None:
+        model_receipt = _require_file(model_receipt)
+        frozen_model = _read_json(model_receipt)
+        if (
+            frozen_model.get("status") != "FROZEN"
+            or frozen_model.get("truth_used_for_training_or_checkpoint_selection")
+            is not False
+            or frozen_model.get("prior_bitwise_unchanged") is not True
+        ):
+            raise ValueError("posterior model receipt is not a certified frozen-q receipt")
+        parent_checkpoint = _require_file(frozen_model["checkpoint"])
+        parent_sidecar = _require_file(frozen_model["checkpoint_sidecar"])
+        candidate_config_path = _require_file(frozen_model["config"])
+        feature_stats = _require_file(frozen_model["feature_stats"])
+        for path, key, label in (
+            (parent_checkpoint, "checkpoint_sha256", "posterior checkpoint"),
+            (parent_sidecar, "checkpoint_sidecar_sha256", "posterior sidecar"),
+            (candidate_config_path, "config_sha256", "posterior config"),
+            (feature_stats, "feature_stats_sha256", "posterior feature statistics"),
+        ):
+            if sha256_file(path) != frozen_model[key]:
+                raise ValueError(f"{label} SHA256 mismatch")
+        parent = {
+            "checkpoint_sha256": frozen_model["checkpoint_sha256"],
+            "checkpoint_sidecar_sha256": frozen_model[
+                "checkpoint_sidecar_sha256"
+            ],
+            "config_sha256": frozen_model["config_sha256"],
+        }
+        model_receipt_record = {
+            "path": str(model_receipt),
+            "sha256": sha256_file(model_receipt),
+        }
 
     source = benchmark_manifest["source"]
     source_checkpoint = _require_file(source["checkpoint"])
     source_sidecar = _require_file(source["checkpoint_sidecar"])
-    feature_stats = _require_file(source["feature_stats"])
+    source_feature_stats = _require_file(source["feature_stats"])
     for path, expected, label in (
         (source_checkpoint, source["checkpoint_sha256"], "source checkpoint"),
         (source_sidecar, source["checkpoint_sidecar_sha256"], "source sidecar"),
-        (feature_stats, source["feature_stats_sha256"], "feature statistics"),
+        (
+            source_feature_stats,
+            source["feature_stats_sha256"],
+            "feature statistics",
+        ),
     ):
         if sha256_file(path) != expected:
             raise ValueError(f"{label} SHA256 mismatch")
 
-    candidate_config_path = _require_file(parent["config"])
-    if sha256_file(candidate_config_path) != parent["config_sha256"]:
-        raise ValueError("winner candidate config SHA256 mismatch")
+    if model_receipt is None:
+        candidate_config_path = projection_config_path
+        feature_stats = source_feature_stats
     candidate_config = load_config(candidate_config_path)
     source_config_path = _require_file(benchmark_manifest["config"]["path"])
     if sha256_file(source_config_path) != benchmark_manifest["config"]["sha256"]:
@@ -178,9 +228,15 @@ def prepare(
     if sha256_file(truth_config_path) != benchmark_manifest["truth_config"]["sha256"]:
         raise ValueError("truth closure config SHA256 mismatch")
     truth_source_config = load_config(truth_config_path)
-    dataset = _require_file(benchmark_manifest["datasets"]["test"]["path"])
-    if sha256_file(dataset) != benchmark_manifest["datasets"]["test"]["sha256"]:
+    test_dataset = benchmark_manifest["datasets"]["test"]
+    dataset = _require_file(test_dataset["path"])
+    if sha256_file(dataset) != test_dataset["sha256"]:
         raise ValueError("independent test catalogue SHA256 mismatch")
+    c0_objects = int(
+        test_dataset.get("c0_objects", pq.ParquetFile(dataset).metadata.num_rows)
+    )
+    if c0_objects <= 0 or c0_objects > pq.ParquetFile(dataset).metadata.num_rows:
+        raise ValueError("invalid independent C0 object count")
 
     calibration_manifest_path = _require_file(source["calibration_manifest"])
     if sha256_file(calibration_manifest_path) != source["calibration_manifest_sha256"]:
@@ -220,6 +276,11 @@ def prepare(
         "panels": int(panels),
         "posterior_draws": int(posterior_draws),
         "resample_draws": int(resample_draws),
+        "object_batch_size": int(object_batch_size),
+        "prior_draws": int(prior_draws),
+        "model_receipt_sha256": (
+            None if model_receipt_record is None else model_receipt_record["sha256"]
+        ),
         "selection": "deterministic observed lsst_r flux quantiles",
     }
     if out.exists():
@@ -315,7 +376,11 @@ def prepare(
                 "winner": winner["winner"],
             },
             "model": {
-                "role": "source conditional q with projected parent prior",
+                "role": (
+                    "source conditional q with projected parent prior"
+                    if model_receipt_record is None
+                    else "frozen prior-sleep-NPE q with projected parent prior"
+                ),
                 "checkpoint": str(parent_checkpoint),
                 "checkpoint_sha256": parent["checkpoint_sha256"],
                 "checkpoint_sidecar": str(parent_sidecar),
@@ -323,7 +388,15 @@ def prepare(
                 "config": str((out / "inference_config.yaml").resolve()),
                 "config_sha256": sha256_file(staging / "inference_config.yaml"),
                 "feature_stats": str(feature_stats),
+                "feature_stats_sha256": sha256_file(feature_stats),
+                "freeze_receipt": model_receipt_record,
+            },
+            "population_selection": {
+                "config": str(projection_config_path),
+                "config_sha256": projection_parent["config_sha256"],
+                "feature_stats": str(source_feature_stats),
                 "feature_stats_sha256": source["feature_stats_sha256"],
+                "role": "truth-free beta(theta) evaluation only",
             },
             "source_model": {
                 "role": "same q with pre-projection source prior baseline",
@@ -341,8 +414,9 @@ def prepare(
             },
             "dataset": {
                 "path": str(dataset),
-                "sha256": benchmark_manifest["datasets"]["test"]["sha256"],
+                "sha256": test_dataset["sha256"],
                 "role": "independent selected test catalogue",
+                "c0_objects": c0_objects,
             },
             "cohort": {
                 "path": str((out / "manifests" / "cohort.npy").resolve()),
@@ -365,7 +439,8 @@ def prepare(
             "inference": {
                 "posterior_draws_per_object": int(posterior_draws),
                 "psis_resample_draws_per_object": int(resample_draws),
-                "prior_draws_per_shard": 512,
+                "object_batch_size": int(object_batch_size),
+                "prior_draws_per_shard": int(prior_draws),
                 "support_gate": {
                     "minimum_median_raw_ess_fraction": 0.05,
                     "maximum_fraction_pareto_k_gt_0p7": 0.20,
@@ -408,6 +483,9 @@ def main() -> None:
     parser.add_argument("--panels", type=int, default=8)
     parser.add_argument("--posterior-draws", type=int, default=1024)
     parser.add_argument("--resample-draws", type=int, default=256)
+    parser.add_argument("--object-batch-size", type=int, default=8)
+    parser.add_argument("--prior-draws", type=int, default=512)
+    parser.add_argument("--model-receipt", type=Path)
     args = parser.parse_args()
     prepare(
         benchmark_root=args.benchmark_root,
@@ -418,6 +496,9 @@ def main() -> None:
         panels=args.panels,
         posterior_draws=args.posterior_draws,
         resample_draws=args.resample_draws,
+        object_batch_size=args.object_batch_size,
+        prior_draws=args.prior_draws,
+        model_receipt=args.model_receipt,
     )
 
 
