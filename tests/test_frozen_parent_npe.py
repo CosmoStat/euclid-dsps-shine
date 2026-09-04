@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -77,6 +78,44 @@ def test_sleep_npe_config_freezes_prior_and_excludes_truth() -> None:
     assert amortized["objective"]["wake"]["train_prior"] is False
     assert amortized["training"]["best_checkpoint_metric"] == "validation_sleep_nll"
     assert amortized["training"]["data_parallel"] == "pmap"
+
+
+def test_scratch_builder_cli_maps_config_to_config_path(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = _load_script("build_feniks_sc_drws_scratch_encoder_checkpoint.py")
+    seen = {}
+
+    def fake_build(**kwargs):
+        seen.update(kwargs)
+        return {"status": "COMPLETE"}
+
+    monkeypatch.setattr(module, "build", fake_build)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_feniks_sc_drws_scratch_encoder_checkpoint.py",
+            "--config",
+            str(tmp_path / "config.yaml"),
+            "--parent-checkpoint",
+            str(tmp_path / "parent.eqx"),
+            "--feature-stats",
+            str(tmp_path / "features.json"),
+            "--out",
+            str(tmp_path / "out"),
+            "--seed",
+            "17",
+        ],
+    )
+
+    module.main()
+
+    assert seen["config_path"] == tmp_path / "config.yaml"
+    assert seen["parent_checkpoint"] == tmp_path / "parent.eqx"
+    assert seen["feature_stats_path"] == tmp_path / "features.json"
+    assert seen["seed"] == 17
+    assert json.loads(capsys.readouterr().out)["status"] == "COMPLETE"
 
 
 def test_prepare_sleep_npe_freezes_cohorts_and_parent(
@@ -220,6 +259,19 @@ def test_five_stage_submission_contract_is_parallel_and_distributional() -> None
     assert "point_estimates_used" in (
         ROOT / "scripts/finalize_feniks_sc_drws_frozen_parent_npe_closure.py"
     ).read_text(encoding="utf-8")
+
+
+def test_scratch_only_recovery_reuses_warm_and_replaces_dependencies() -> None:
+    recovery = (
+        ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_recovery.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "RECOVER_SCRATCH_ARM" in recovery
+    assert "--array=1-1%1" in recovery
+    assert '${ORIGINAL_ARM_JOB}_0:$SCRATCH_RECOVERY_JOB' in recovery
+    assert 'scancel "$OLD_GATE_JOB" "$OLD_SUBMIT_EVALUATION_JOB"' in recovery
+    assert "baseline_jobs_reused" in recovery
+    assert "NPE_RECOVERY_COMMIT" in recovery
 
 
 def test_matched_closure_compares_full_and_support_cohorts(tmp_path: Path) -> None:

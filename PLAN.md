@@ -8163,3 +8163,10 @@ Remote recovery:
   full repository suite reaches 816 passed and 8 skipped; two pre-existing
   supervised-prior integrity tests report `WARN` instead of their expected
   `PASS` under both local Python environments, in untouched code.
+- Jean-Zay launch `1751670` exposed a CLI-only scratch-arm failure before
+  training: argparse produced `config`, while the builder function requires
+  `config_path`. The warm arm and both current-q posterior arrays remain valid
+  and must not be repeated. Fix the explicit CLI mapping and provide a narrow
+  recovery that reuses task `1751670_0`, resubmits only task 1, replaces the
+  blocked gate/evaluation submitter, and records both the immutable manifest
+  commit and descendant execution-fix commit.

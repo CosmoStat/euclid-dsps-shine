@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import jax
@@ -111,6 +112,11 @@ def validate(*, root: Path, arm: str, initial_checkpoint: Path) -> dict:
             checkpoint.with_suffix(".eqx.json")
         ),
         "initial_checkpoint": str(initial_checkpoint.resolve()),
+        "runtime_code_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+        ).strip(),
         "prior_bitwise_unchanged": checks["prior_bitwise_unchanged"],
         "truth_used": False,
     }

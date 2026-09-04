@@ -94,7 +94,14 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
-    print(json.dumps(build(**vars(args)), indent=2, sort_keys=True), flush=True)
+    payload = build(
+        config_path=args.config,
+        parent_checkpoint=args.parent_checkpoint,
+        feature_stats_path=args.feature_stats,
+        out=args.out,
+        seed=args.seed,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
 
 
 if __name__ == "__main__":

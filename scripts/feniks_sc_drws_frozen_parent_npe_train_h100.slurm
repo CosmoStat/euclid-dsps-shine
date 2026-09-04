@@ -44,6 +44,7 @@ mkdir -p "$CACHE_ROOT/jax" "$MPLCONFIGDIR" "$NPE_ROOT/arms/$ARM"
 
 readarray -t VALUES < <(python - "$NPE_ROOT" "$REPO_DIR" <<'PY'
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -54,8 +55,20 @@ manifest = json.loads((root / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
 actual = subprocess.check_output(
     ["git", "rev-parse", "HEAD"], cwd=repo, text=True
 ).strip()
-if actual != manifest["code_commit"]:
-    raise SystemExit(f"runtime commit mismatch: {actual} != {manifest['code_commit']}")
+manifest_commit = manifest["code_commit"]
+expected = os.environ.get("NPE_RECOVERY_COMMIT", manifest_commit)
+if actual != expected:
+    raise SystemExit(f"runtime commit mismatch: {actual} != {expected}")
+if expected != manifest_commit:
+    status = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", manifest_commit, expected],
+        cwd=repo,
+        check=False,
+    ).returncode
+    if status != 0:
+        raise SystemExit(
+            f"recovery commit is not descended from manifest: {expected}"
+        )
 print(manifest["config"]["path"])
 print(manifest["dataset"]["train"])
 print(manifest["cohorts"]["train"]["path"])

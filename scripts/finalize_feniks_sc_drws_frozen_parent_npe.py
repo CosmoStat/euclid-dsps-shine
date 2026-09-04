@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -43,8 +44,18 @@ def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
     actual = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()
-    if actual != manifest["code_commit"]:
-        raise ValueError(f"runtime commit mismatch: {actual} != {manifest['code_commit']}")
+    manifest_commit = manifest["code_commit"]
+    expected = os.environ.get("NPE_RECOVERY_COMMIT", manifest_commit)
+    if actual != expected:
+        raise ValueError(f"runtime commit mismatch: {actual} != {expected}")
+    if expected != manifest_commit:
+        status = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", manifest_commit, expected],
+            cwd=repo,
+            check=False,
+        ).returncode
+        if status != 0:
+            raise ValueError("recovery runtime does not descend from manifest commit")
     final_path = root / "NPE_WINNER_FROZEN.json"
     if final_path.is_file():
         return _read_json(final_path)
@@ -59,6 +70,13 @@ def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
         ):
             raise ValueError(f"arm is not eligible: {name}")
         arms.append(receipt)
+    allowed_arm_commits = {manifest_commit, actual}
+    for receipt in arms:
+        arm_commit = receipt.get("runtime_code_commit", manifest_commit)
+        if arm_commit not in allowed_arm_commits:
+            raise ValueError(
+                f"unrecognized runtime commit for {receipt['arm']}: {arm_commit}"
+            )
     arms.sort(key=lambda row: (float(row["validation_sleep_nll"]), row["arm"]))
     winner = arms[0]
 
@@ -107,6 +125,19 @@ def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
             "checkpoint_sha256"
         ],
         "prior_bitwise_unchanged": True,
+        "runtime_provenance": {
+            "manifest_code_commit": manifest_commit,
+            "finalizer_code_commit": actual,
+            "arm_code_commits": {
+                row["arm"]: row.get("runtime_code_commit", manifest_commit)
+                for row in arms
+            },
+            "mode": (
+                "descendant_execution_fix_recovery"
+                if actual != manifest_commit
+                else "manifest"
+            ),
+        },
         "truth_used_for_training_or_checkpoint_selection": False,
         "scientific_promotion": False,
     }
