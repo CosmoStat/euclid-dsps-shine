@@ -274,6 +274,84 @@ def test_scratch_only_recovery_reuses_warm_and_replaces_dependencies() -> None:
     assert "NPE_RECOVERY_COMMIT" in recovery
 
 
+def test_gate_runtime_recovery_uses_git_metadata_without_executable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    module = _load_script("finalize_feniks_sc_drws_frozen_parent_npe.py")
+    root = tmp_path / "npe"
+    repo = tmp_path / "worktree"
+    root.mkdir()
+    (repo / ".git").mkdir(parents=True)
+    manifest_commit = "a" * 40
+    finalizer_commit = "b" * 40
+    (repo / ".git" / "HEAD").write_text(finalizer_commit + "\n", encoding="utf-8")
+    manifest = {
+        "code_commit": manifest_commit,
+        "request": {"arms": ["warm_start", "scratch_encoder"]},
+    }
+    (root / "RUN_MANIFEST.json").write_text(
+        json.dumps(manifest), encoding="utf-8"
+    )
+    for arm in manifest["request"]["arms"]:
+        directory = root / "arms" / arm
+        directory.mkdir(parents=True)
+        (directory / "ARM_COMPLETE.json").write_text(
+            json.dumps({"status": "PASS", "arm": arm}), encoding="utf-8"
+        )
+    authorization = root / "GATE_RECOVERY_AUTHORIZATION.json"
+    authorization.write_text(
+        json.dumps(
+            {
+                "status": "AUTHORIZED",
+                "scope": "gate_finalizer_only_no_git_binary",
+                "npe_root": str(root.resolve()),
+                "manifest_sha256": module.sha256_file(root / "RUN_MANIFEST.json"),
+                "manifest_code_commit": manifest_commit,
+                "finalizer_code_commit": finalizer_commit,
+                "failed_gate_job": "1751918",
+                "warm_receipt_sha256": module.sha256_file(
+                    root / "arms/warm_start/ARM_COMPLETE.json"
+                ),
+                "scratch_receipt_sha256": module.sha256_file(
+                    root / "arms/scratch_encoder/ARM_COMPLETE.json"
+                ),
+                "training_reused": True,
+                "baseline_reused": True,
+                "truth_used": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NPE_GATE_RECOVERY_RECEIPT", str(authorization))
+    monkeypatch.setenv("NPE_FAILED_GATE_JOB", "1751918")
+
+    provenance = module._runtime_provenance(
+        root=root.resolve(), repo=repo, manifest=manifest
+    )
+
+    assert provenance["mode"] == "authorized_gate_finalizer_recovery"
+    assert provenance["finalizer_code_commit"] == finalizer_commit
+    assert provenance["failed_gate_job"] == "1751918"
+
+
+def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
+    recovery = (
+        ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_gate_recovery.sh"
+    ).read_text(encoding="utf-8")
+    monitor = (
+        ROOT / "scripts/monitor_feniks_sc_drws_frozen_parent_npe.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "RECOVER_GATE_ONLY" in recovery
+    assert "gate_finalizer_only_no_git_binary" in recovery
+    assert "warm_receipt_sha256" in recovery
+    assert "scratch_receipt_sha256" in recovery
+    assert "training_reused" in recovery
+    assert "baseline_reused" in recovery
+    assert "feniks_sc_drws_frozen_parent_npe_train_h100.slurm" not in recovery
+    assert "Set SCRATCH or CACHE_ROOT" in monitor
+
+
 def test_matched_closure_compares_full_and_support_cohorts(tmp_path: Path) -> None:
     module = _load_script("finalize_feniks_sc_drws_frozen_parent_npe_closure.py")
     root = tmp_path / "npe"

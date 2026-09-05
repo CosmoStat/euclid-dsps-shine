@@ -5,6 +5,7 @@ ENV_FILE="${1:-outputs/logs/feniks_sc_drws_frozen_parent_npe_latest.env}"
 INTERVAL="${2:-30}"
 test -s "$ENV_FILE" || { echo "missing environment: $ENV_FILE" >&2; exit 2; }
 source "$ENV_FILE"
+CACHE_ROOT="${CACHE_ROOT:-${SCRATCH:?Set SCRATCH or CACHE_ROOT}/feniks_sc_drws_runtime}"
 test -s "$BASELINE_ENV" || { echo "missing baseline environment: $BASELINE_ENV" >&2; exit 2; }
 INITIAL_NPE_JOBS="$ALL_JOBS"
 source "$BASELINE_ENV"

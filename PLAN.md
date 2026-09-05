@@ -8170,3 +8170,11 @@ Remote recovery:
   recovery that reuses task `1751670_0`, resubmits only task 1, replaces the
   blocked gate/evaluation submitter, and records both the immutable manifest
   commit and descendant execution-fix commit.
+- Both arms subsequently passed (`warm_start` validation sleep NLL 19.4334,
+  `scratch_encoder` 22.5754), but recovery gate `1751918` failed before model
+  selection because the CPU partition omits the `git` executable after
+  `module purge`. Reuse both certified arm receipts and both completed baseline
+  evaluations. Validate the detached-worktree HEAD without a subprocess, bind
+  the manifest and arm receipt hashes in a gate-only authorization, and
+  resubmit only the gate plus its stage-4 submitter. Persist `CACHE_ROOT` in all
+  environment files and give the monitor a `$SCRATCH` fallback.

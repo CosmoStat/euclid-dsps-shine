@@ -7,7 +7,6 @@ import argparse
 import json
 import os
 import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,7 @@ import jax
 import numpy as np
 
 from euclid_dsps.amortized.config import require_amortized_dependencies
-from euclid_dsps.amortized.population_vem import sha256_file
+from euclid_dsps.amortized.population_vem import require_git_commit, sha256_file
 from euclid_dsps.amortized.train import load_checkpoint
 from euclid_dsps.config import load_config
 
@@ -37,25 +36,65 @@ def _equal_trees(left, right) -> bool:
     )
 
 
+def _runtime_provenance(
+    *, root: Path, repo: Path, manifest: dict[str, Any]
+) -> dict[str, Any]:
+    manifest_commit = str(manifest["code_commit"])
+    raw_authorization = os.environ.get("NPE_GATE_RECOVERY_RECEIPT")
+    if not raw_authorization:
+        actual = require_git_commit(repo, manifest_commit)
+        return {
+            "mode": "manifest",
+            "manifest_code_commit": manifest_commit,
+            "finalizer_code_commit": actual,
+        }
+
+    authorization_path = Path(raw_authorization).resolve()
+    authorization = _read_json(authorization_path)
+    actual = require_git_commit(repo, str(authorization["finalizer_code_commit"]))
+    arm_receipts = {
+        name: root / "arms" / name / "ARM_COMPLETE.json"
+        for name in manifest["request"]["arms"]
+    }
+    checks = {
+        "status": authorization.get("status") == "AUTHORIZED",
+        "scope": authorization.get("scope")
+        == "gate_finalizer_only_no_git_binary",
+        "root": Path(authorization.get("npe_root", "")).resolve() == root,
+        "manifest_sha256": authorization.get("manifest_sha256")
+        == sha256_file(root / "RUN_MANIFEST.json"),
+        "manifest_code_commit": authorization.get("manifest_code_commit")
+        == manifest_commit,
+        "warm_receipt_sha256": authorization.get("warm_receipt_sha256")
+        == sha256_file(arm_receipts["warm_start"]),
+        "scratch_receipt_sha256": authorization.get("scratch_receipt_sha256")
+        == sha256_file(arm_receipts["scratch_encoder"]),
+        "failed_gate_job": str(authorization.get("failed_gate_job"))
+        == str(os.environ.get("NPE_FAILED_GATE_JOB")),
+        "training_reused": authorization.get("training_reused") is True,
+        "baseline_reused": authorization.get("baseline_reused") is True,
+        "truth_used": authorization.get("truth_used") is False,
+    }
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    if failed:
+        raise ValueError(f"invalid frozen-NPE gate recovery: {failed}")
+    return {
+        "mode": "authorized_gate_finalizer_recovery",
+        "manifest_code_commit": manifest_commit,
+        "finalizer_code_commit": actual,
+        "authorization": str(authorization_path),
+        "authorization_sha256": sha256_file(authorization_path),
+        "failed_gate_job": str(authorization["failed_gate_job"]),
+    }
+
+
 def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
     root = root.resolve()
     repo = repo.resolve()
     manifest = _read_json(root / "RUN_MANIFEST.json")
-    actual = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=repo, text=True
-    ).strip()
+    provenance = _runtime_provenance(root=root, repo=repo, manifest=manifest)
     manifest_commit = manifest["code_commit"]
-    expected = os.environ.get("NPE_RECOVERY_COMMIT", manifest_commit)
-    if actual != expected:
-        raise ValueError(f"runtime commit mismatch: {actual} != {expected}")
-    if expected != manifest_commit:
-        status = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", manifest_commit, expected],
-            cwd=repo,
-            check=False,
-        ).returncode
-        if status != 0:
-            raise ValueError("recovery runtime does not descend from manifest commit")
+    actual = provenance["finalizer_code_commit"]
     final_path = root / "NPE_WINNER_FROZEN.json"
     if final_path.is_file():
         return _read_json(final_path)
@@ -126,17 +165,11 @@ def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
         ],
         "prior_bitwise_unchanged": True,
         "runtime_provenance": {
-            "manifest_code_commit": manifest_commit,
-            "finalizer_code_commit": actual,
+            **provenance,
             "arm_code_commits": {
                 row["arm"]: row.get("runtime_code_commit", manifest_commit)
                 for row in arms
             },
-            "mode": (
-                "descendant_execution_fix_recovery"
-                if actual != manifest_commit
-                else "manifest"
-            ),
         },
         "truth_used_for_training_or_checkpoint_selection": False,
         "scientific_promotion": False,
