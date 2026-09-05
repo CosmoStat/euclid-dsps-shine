@@ -283,6 +283,7 @@ def test_gate_runtime_recovery_uses_git_metadata_without_executable(
     root.mkdir()
     (repo / ".git").mkdir(parents=True)
     manifest_commit = "a" * 40
+    scratch_commit = "c" * 40
     finalizer_commit = "b" * 40
     (repo / ".git" / "HEAD").write_text(finalizer_commit + "\n", encoding="utf-8")
     manifest = {
@@ -296,7 +297,16 @@ def test_gate_runtime_recovery_uses_git_metadata_without_executable(
         directory = root / "arms" / arm
         directory.mkdir(parents=True)
         (directory / "ARM_COMPLETE.json").write_text(
-            json.dumps({"status": "PASS", "arm": arm}), encoding="utf-8"
+            json.dumps(
+                {
+                    "status": "PASS",
+                    "arm": arm,
+                    "runtime_code_commit": (
+                        scratch_commit if arm == "scratch_encoder" else manifest_commit
+                    ),
+                }
+            ),
+            encoding="utf-8",
         )
     authorization = root / "GATE_RECOVERY_AUTHORIZATION.json"
     authorization.write_text(
@@ -315,6 +325,8 @@ def test_gate_runtime_recovery_uses_git_metadata_without_executable(
                 "scratch_receipt_sha256": module.sha256_file(
                     root / "arms/scratch_encoder/ARM_COMPLETE.json"
                 ),
+                "warm_runtime_code_commit": manifest_commit,
+                "scratch_runtime_code_commit": scratch_commit,
                 "training_reused": True,
                 "baseline_reused": True,
                 "truth_used": False,
@@ -332,6 +344,10 @@ def test_gate_runtime_recovery_uses_git_metadata_without_executable(
     assert provenance["mode"] == "authorized_gate_finalizer_recovery"
     assert provenance["finalizer_code_commit"] == finalizer_commit
     assert provenance["failed_gate_job"] == "1751918"
+    assert set(provenance["authorized_arm_code_commits"]) == {
+        manifest_commit,
+        scratch_commit,
+    }
 
 
 def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
@@ -346,6 +362,8 @@ def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
     assert "gate_finalizer_only_no_git_binary" in recovery
     assert "warm_receipt_sha256" in recovery
     assert "scratch_receipt_sha256" in recovery
+    assert "scratch_runtime_code_commit" in recovery
+    assert 'git merge-base --is-ancestor "$arm_commit" "$CODE_COMMIT"' in recovery
     assert "training_reused" in recovery
     assert "baseline_reused" in recovery
     assert "feniks_sc_drws_frozen_parent_npe_train_h100.slurm" not in recovery

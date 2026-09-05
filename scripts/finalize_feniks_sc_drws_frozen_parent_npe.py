@@ -47,6 +47,7 @@ def _runtime_provenance(
             "mode": "manifest",
             "manifest_code_commit": manifest_commit,
             "finalizer_code_commit": actual,
+            "authorized_arm_code_commits": [manifest_commit],
         }
 
     authorization_path = Path(raw_authorization).resolve()
@@ -55,6 +56,11 @@ def _runtime_provenance(
     arm_receipts = {
         name: root / "arms" / name / "ARM_COMPLETE.json"
         for name in manifest["request"]["arms"]
+    }
+    arm_payloads = {name: _read_json(path) for name, path in arm_receipts.items()}
+    arm_commits = {
+        name: str(payload.get("runtime_code_commit", manifest_commit))
+        for name, payload in arm_payloads.items()
     }
     checks = {
         "status": authorization.get("status") == "AUTHORIZED",
@@ -69,6 +75,14 @@ def _runtime_provenance(
         == sha256_file(arm_receipts["warm_start"]),
         "scratch_receipt_sha256": authorization.get("scratch_receipt_sha256")
         == sha256_file(arm_receipts["scratch_encoder"]),
+        "warm_runtime_code_commit": authorization.get(
+            "warm_runtime_code_commit"
+        )
+        == arm_commits["warm_start"],
+        "scratch_runtime_code_commit": authorization.get(
+            "scratch_runtime_code_commit"
+        )
+        == arm_commits["scratch_encoder"],
         "failed_gate_job": str(authorization.get("failed_gate_job"))
         == str(os.environ.get("NPE_FAILED_GATE_JOB")),
         "training_reused": authorization.get("training_reused") is True,
@@ -85,6 +99,7 @@ def _runtime_provenance(
         "authorization": str(authorization_path),
         "authorization_sha256": sha256_file(authorization_path),
         "failed_gate_job": str(authorization["failed_gate_job"]),
+        "authorized_arm_code_commits": sorted(set(arm_commits.values())),
     }
 
 
@@ -94,7 +109,6 @@ def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
     manifest = _read_json(root / "RUN_MANIFEST.json")
     provenance = _runtime_provenance(root=root, repo=repo, manifest=manifest)
     manifest_commit = manifest["code_commit"]
-    actual = provenance["finalizer_code_commit"]
     final_path = root / "NPE_WINNER_FROZEN.json"
     if final_path.is_file():
         return _read_json(final_path)
@@ -109,7 +123,7 @@ def freeze(*, root: Path, repo: Path) -> dict[str, Any]:
         ):
             raise ValueError(f"arm is not eligible: {name}")
         arms.append(receipt)
-    allowed_arm_commits = {manifest_commit, actual}
+    allowed_arm_commits = set(provenance["authorized_arm_code_commits"])
     for receipt in arms:
         arm_commit = receipt.get("runtime_code_commit", manifest_commit)
         if arm_commit not in allowed_arm_commits:

@@ -8178,3 +8178,14 @@ Remote recovery:
   the manifest and arm receipt hashes in a gate-only authorization, and
   resubmit only the gate plus its stage-4 submitter. Persist `CACHE_ROOT` in all
   environment files and give the monitor a `$SCRATCH` fallback.
+- Gate retry `1779366` reached model selection but rejected the certified
+  scratch receipt because it was produced by the intermediate CLI-fix commit,
+  distinct from both the original manifest and current finalizer commits. Bind
+  each arm's runtime commit to its already hashed receipt, verify on the login
+  node that manifest -> arm -> finalizer ancestry holds, and authorize exactly
+  those arm commits in the CPU finalizer without executing Git there.
+- Implemented the per-arm authorization and login-node ancestry checks. The
+  authorization is unique to failed gate `1779366`, remains bound to both arm
+  receipt hashes, and cannot authorize training or baseline recomputation.
+  Compile, shell syntax, Ruff, diff checks, and the 41 focused NPE/population
+  tests pass; only the replacement CPU gate and stage-4 submitter remain remote.

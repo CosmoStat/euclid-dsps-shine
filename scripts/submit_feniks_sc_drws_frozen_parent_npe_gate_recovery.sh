@@ -49,6 +49,25 @@ git merge-base --is-ancestor "$MANIFEST_COMMIT" "$CODE_COMMIT" || {
   echo "[npe-gate-recovery][error] recovery commit does not descend from manifest" >&2
   exit 2
 }
+readarray -t ARM_COMMITS < <(python - "$NPE_ROOT" "$MANIFEST_COMMIT" <<'PY'
+import json,sys
+from pathlib import Path
+root=Path(sys.argv[1]); fallback=sys.argv[2]
+for arm in ('warm_start','scratch_encoder'):
+    receipt=json.load(open(root/'arms'/arm/'ARM_COMPLETE.json'))
+    print(receipt.get('runtime_code_commit', fallback))
+PY
+)
+for arm_commit in "${ARM_COMMITS[@]}"; do
+  git merge-base --is-ancestor "$MANIFEST_COMMIT" "$arm_commit" || {
+    echo "[npe-gate-recovery][error] arm commit is not descended from manifest: $arm_commit" >&2
+    exit 2
+  }
+  git merge-base --is-ancestor "$arm_commit" "$CODE_COMMIT" || {
+    echo "[npe-gate-recovery][error] finalizer does not descend from arm: $arm_commit" >&2
+    exit 2
+  }
+done
 
 JOB_REPO_DIR="${FROZEN_NPE_GATE_CODE_ROOT:-$CACHE_ROOT/code/frozen-npe-gate-${CODE_COMMIT:0:12}}"
 mkdir -p "$(dirname "$JOB_REPO_DIR")" "$NPE_LOG_ROOT"
@@ -62,7 +81,7 @@ if [[ ! -e "$JOB_REPO_DIR/Data/diffsky" ]]; then
   ln -s "$REPO_DIR/Data/diffsky" "$JOB_REPO_DIR/Data/diffsky"
 fi
 
-AUTHORIZATION="$NPE_ROOT/GATE_RECOVERY_AUTHORIZATION.json"
+AUTHORIZATION="$NPE_ROOT/GATE_RECOVERY_AUTHORIZATION_${FAILED_GATE_JOB}.json"
 python - "$AUTHORIZATION" "$NPE_ROOT" "$MANIFEST" "$MANIFEST_COMMIT" \
   "$CODE_COMMIT" "$FAILED_GATE_JOB" <<'PY'
 import hashlib,json,sys
@@ -87,6 +106,8 @@ payload={
     'failed_gate_job':sys.argv[6],
     'warm_receipt_sha256':sha256(root/'arms/warm_start/ARM_COMPLETE.json'),
     'scratch_receipt_sha256':sha256(root/'arms/scratch_encoder/ARM_COMPLETE.json'),
+    'warm_runtime_code_commit':json.load(open(root/'arms/warm_start/ARM_COMPLETE.json')).get('runtime_code_commit',sys.argv[4]),
+    'scratch_runtime_code_commit':json.load(open(root/'arms/scratch_encoder/ARM_COMPLETE.json')).get('runtime_code_commit',sys.argv[4]),
     'training_reused':True,
     'baseline_reused':True,
     'truth_used':False,
