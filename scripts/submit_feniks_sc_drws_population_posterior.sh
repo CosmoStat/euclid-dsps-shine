@@ -15,6 +15,7 @@ POSTERIOR_MAX_PARALLEL="${POSTERIOR_MAX_PARALLEL:-8}"
 POSTERIOR_OBJECT_BATCH_SIZE="${POSTERIOR_OBJECT_BATCH_SIZE:-8}"
 POSTERIOR_PRIOR_DRAWS="${POSTERIOR_PRIOR_DRAWS:-512}"
 POSTERIOR_MODEL_RECEIPT="${POSTERIOR_MODEL_RECEIPT:-}"
+POPULATION_POSTERIOR_RUNTIME_COMMIT="${POPULATION_POSTERIOR_RUNTIME_COMMIT:-}"
 
 cd "$REPO_DIR"
 REPO_DIR="$(pwd -P)"
@@ -53,11 +54,30 @@ for path in \
     exit 2
   }
 done
-if ! git diff --quiet --exit-code || ! git diff --cached --quiet --exit-code; then
-  echo "[population-posterior][error] tracked source changes are not committed" >&2
-  exit 2
+if command -v git >/dev/null 2>&1; then
+  if ! git diff --quiet --exit-code || ! git diff --cached --quiet --exit-code; then
+    echo "[population-posterior][error] tracked source changes are not committed" >&2
+    exit 2
+  fi
+  CODE_COMMIT="$(git rev-parse HEAD)"
+  if [[ -n "$POPULATION_POSTERIOR_RUNTIME_COMMIT" \
+    && "$CODE_COMMIT" != "$POPULATION_POSTERIOR_RUNTIME_COMMIT" ]]; then
+    echo "[population-posterior][error] authorized runtime commit mismatch" >&2
+    exit 2
+  fi
+else
+  test -n "$POPULATION_POSTERIOR_RUNTIME_COMMIT" || {
+    echo "[population-posterior][error] git absent and no runtime commit supplied" >&2
+    exit 2
+  }
+  CODE_COMMIT="$(python - "$REPO_DIR" "$POPULATION_POSTERIOR_RUNTIME_COMMIT" <<'PY'
+import sys
+from euclid_dsps.amortized.population_vem import require_git_commit
+print(require_git_commit(sys.argv[1], sys.argv[2]))
+PY
+)"
 fi
-CODE_COMMIT="$(git rev-parse HEAD)"
+export POPULATION_POSTERIOR_RUNTIME_COMMIT="$CODE_COMMIT"
 mkdir -p "$POSTERIOR_LOG_ROOT" "$CACHE_ROOT/jax" outputs/logs
 
 PREPARE_MODEL_ARGS=()
@@ -83,11 +103,16 @@ test ! -e "$POSTERIOR_ROOT/SUBMISSION.json" || {
 JOB_REPO_DIR="${POPULATION_POSTERIOR_CODE_ROOT:-$CACHE_ROOT/code/population-posterior-${CODE_COMMIT:0:12}}"
 mkdir -p "$(dirname "$JOB_REPO_DIR")"
 if [[ -e "$JOB_REPO_DIR" ]]; then
-  test "$(git -C "$JOB_REPO_DIR" rev-parse HEAD)" = "$CODE_COMMIT" || {
-    echo "[population-posterior][error] code snapshot has wrong commit" >&2
+  python - "$JOB_REPO_DIR" "$CODE_COMMIT" <<'PY'
+import sys
+from euclid_dsps.amortized.population_vem import require_git_commit
+require_git_commit(sys.argv[1], sys.argv[2])
+PY
+else
+  command -v git >/dev/null 2>&1 || {
+    echo "[population-posterior][error] cannot create code snapshot without git" >&2
     exit 2
   }
-else
   git worktree add --detach "$JOB_REPO_DIR" "$CODE_COMMIT"
 fi
 if [[ ! -e "$JOB_REPO_DIR/Data/diffsky" ]]; then

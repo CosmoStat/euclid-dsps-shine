@@ -370,6 +370,27 @@ def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
     assert "Set SCRATCH or CACHE_ROOT" in monitor
 
 
+def test_stage4_only_recovery_reuses_frozen_winner_and_submits_no_training() -> None:
+    recovery = (
+        ROOT
+        / "scripts/submit_feniks_sc_drws_frozen_parent_npe_stage4_recovery.sh"
+    ).read_text(encoding="utf-8")
+    submitter = (
+        ROOT / "scripts/feniks_sc_drws_frozen_parent_npe_submit_evaluation.slurm"
+    ).read_text(encoding="utf-8")
+
+    assert "RECOVER_STAGE4_ONLY" in recovery
+    assert "stage4_submitter_only_no_git_binary" in recovery
+    assert "winner_receipt_sha256" in recovery
+    assert "stage4_inference_reused':False" in recovery
+    assert 'git merge-base --is-ancestor "$WINNER_FINALIZER_COMMIT"' in recovery
+    assert "feniks_sc_drws_frozen_parent_npe_train_h100.slurm" not in recovery
+    assert "submit_feniks_sc_drws_full_test_posterior.sh" not in recovery
+    assert "NPE_STAGE4_CODE_COMMIT" in submitter
+    assert "require_git_commit(repo, runtime_commit)" in submitter
+    assert "POPULATION_POSTERIOR_RUNTIME_COMMIT" in submitter
+
+
 def test_matched_closure_compares_full_and_support_cohorts(tmp_path: Path) -> None:
     module = _load_script("finalize_feniks_sc_drws_frozen_parent_npe_closure.py")
     root = tmp_path / "npe"

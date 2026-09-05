@@ -17,6 +17,9 @@ NPE_ROOT="${NPE_ROOT:?NPE_ROOT is required}"
 CACHE_ROOT="${CACHE_ROOT:?CACHE_ROOT is required}"
 BENCHMARK_ENV="${BENCHMARK_ENV:?BENCHMARK_ENV is required}"
 BASELINE_ENV="${BASELINE_ENV:?BASELINE_ENV is required}"
+NPE_STAGE4_CODE_COMMIT="${NPE_STAGE4_CODE_COMMIT:?NPE_STAGE4_CODE_COMMIT is required}"
+NPE_STAGE4_RECOVERY_RECEIPT="${NPE_STAGE4_RECOVERY_RECEIPT:-}"
+NPE_FAILED_SUBMITTER_JOB="${NPE_FAILED_SUBMITTER_JOB:-}"
 
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu
@@ -29,6 +32,50 @@ source "$MINICONDA_PATH/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV"
 test -s "$NPE_ROOT/NPE_WINNER_FROZEN.json"
 test -s "$BASELINE_ENV"
+python - "$REPO_DIR" "$NPE_ROOT" "$NPE_STAGE4_CODE_COMMIT" \
+  "$NPE_STAGE4_RECOVERY_RECEIPT" "$NPE_FAILED_SUBMITTER_JOB" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from euclid_dsps.amortized.population_vem import require_git_commit, sha256_file
+
+repo = Path(sys.argv[1]).resolve()
+root = Path(sys.argv[2]).resolve()
+runtime_commit = sys.argv[3]
+authorization_path = sys.argv[4]
+failed_submitter = sys.argv[5]
+require_git_commit(repo, runtime_commit)
+if authorization_path:
+    path = Path(authorization_path).resolve()
+    authorization = json.loads(path.read_text(encoding="utf-8"))
+    winner_path = root / "NPE_WINNER_FROZEN.json"
+    winner = json.loads(winner_path.read_text(encoding="utf-8"))
+    expected = {
+        "status": "AUTHORIZED",
+        "scope": "stage4_submitter_only_no_git_binary",
+        "npe_root": str(root),
+        "winner_receipt_sha256": sha256_file(winner_path),
+        "winner_finalizer_code_commit": winner["runtime_provenance"][
+            "finalizer_code_commit"
+        ],
+        "stage4_code_commit": runtime_commit,
+        "failed_submitter_job": failed_submitter,
+        "training_reused": True,
+        "baseline_reused": True,
+        "stage4_inference_reused": False,
+        "truth_used": False,
+    }
+    mismatches = {
+        key: {"expected": value, "actual": authorization.get(key)}
+        for key, value in expected.items()
+        if authorization.get(key) != value
+    }
+    if mismatches:
+        raise ValueError(f"invalid stage-4 recovery authorization: {mismatches}")
+print(f"[frozen-npe-stage4] commit={runtime_commit} recovery={bool(authorization_path)}")
+PY
+export POPULATION_POSTERIOR_RUNTIME_COMMIT="$NPE_STAGE4_CODE_COMMIT"
 
 FULL_ROOT="$NPE_ROOT/evaluation/full_test_k256"
 SUPPORT_ROOT="$NPE_ROOT/evaluation/support_k1024"

@@ -17,7 +17,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 import yaml
 
-from euclid_dsps.amortized.population_vem import sha256_file
+from euclid_dsps.amortized.population_vem import require_git_commit, sha256_file
 from euclid_dsps.config import load_config
 
 
@@ -35,6 +35,9 @@ def _require_file(path: str | Path) -> Path:
 
 
 def _git_commit(repo: Path) -> str:
+    expected = os.environ.get("POPULATION_POSTERIOR_RUNTIME_COMMIT")
+    if expected:
+        return require_git_commit(repo, expected)
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=repo, text=True
     ).strip()

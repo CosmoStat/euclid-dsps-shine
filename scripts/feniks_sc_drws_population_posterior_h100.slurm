@@ -44,17 +44,16 @@ mkdir -p "$OUT" "$MPLCONFIGDIR" "$CACHE_ROOT/jax"
 readarray -t VALUES < <(python - "$MANIFEST" "$TASK" "$REPO_DIR" <<'PY'
 import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
+
+from euclid_dsps.amortized.population_vem import require_git_commit
 
 manifest_path = Path(sys.argv[1])
 task = int(sys.argv[2])
 repo = Path(sys.argv[3]).resolve()
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-actual = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-if actual != manifest["code_commit"]:
-    raise SystemExit(f"runtime commit mismatch: {actual} != {manifest['code_commit']}")
+require_git_commit(repo, manifest["code_commit"])
 shard = manifest["cohort"]["shards"][task]
 records = (
     (manifest["model"]["checkpoint"], manifest["model"]["checkpoint_sha256"]),

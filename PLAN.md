@@ -8189,3 +8189,15 @@ Remote recovery:
   receipt hashes, and cannot authorize training or baseline recomputation.
   Compile, shell syntax, Ruff, diff checks, and the 41 focused NPE/population
   tests pass; only the replacement CPU gate and stage-4 submitter remain remote.
+- Gate `1783398` completed and froze `warm_start` at validation sleep NLL
+  `19.433409` with the parent prior bitwise unchanged. Stage-4 submitter
+  `1783399` then failed before creating any environment, submission receipt, or
+  GPU job because `submit_feniks_sc_drws_population_posterior.sh` still invoked
+  Git after the CPU `module purge`. Make nested posterior submission accept and
+  verify a frozen worktree commit without a Git executable, and add a stage-4
+  only recovery bound to the frozen-winner receipt and failed submitter.
+- Implemented the no-Git frozen-worktree path in preparation, submission, and
+  H100 provenance checks, plus the receipt-bound stage-4-only recovery. Shell
+  syntax, compile, Ruff, diff checks, and 43 focused tests pass. The full local
+  suite cannot collect three unrelated spline tests because this local `shine`
+  environment lacks `jax_cosmo`; remote stage 4 remains to be submitted.

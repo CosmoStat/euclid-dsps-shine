@@ -22,6 +22,18 @@ def _load_script(name: str):
     return module
 
 
+def test_prepare_commit_fallback_reads_frozen_worktree_without_git(
+    tmp_path: Path, monkeypatch
+) -> None:
+    prepare = _load_script("prepare_feniks_sc_drws_population_posterior.py")
+    commit = "a" * 40
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text(commit + "\n", encoding="utf-8")
+    monkeypatch.setenv("POPULATION_POSTERIOR_RUNTIME_COMMIT", commit)
+
+    assert prepare._git_commit(tmp_path) == commit
+
+
 def test_observed_flux_cohort_and_panels_do_not_read_truth(tmp_path: Path) -> None:
     prepare = _load_script("prepare_feniks_sc_drws_population_posterior.py")
     rng = np.random.default_rng(41)
@@ -377,6 +389,10 @@ def test_population_posterior_slurm_contract_is_truth_free_and_parallel() -> Non
     assert "worker inference config must be truth-free" in worker
     assert '--array="0-${LAST_TASK}%${POSTERIOR_MAX_PARALLEL}"' in submit
     assert '--dependency="afterok:$INFERENCE_JOB"' in submit
+    assert "POPULATION_POSTERIOR_RUNTIME_COMMIT" in submit
+    assert "command -v git" in submit
+    assert "require_git_commit" in worker
+    assert 'subprocess.check_output(["git"' not in worker
     assert '"truth_used_for_inference_or_support": False' in finalizer
     assert '"truth_used_for_final_closure": True' in finalizer
     assert "feniks_sc_drws_population_posterior_finalize_h100.slurm" in recovery
