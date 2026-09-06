@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -87,6 +88,7 @@ from .likelihood import photometric_loglike, photometric_normalized_residual
 from .posterior import (
     ConditionalFlowEncoder,
     PriorTransportGaussianEncoder,
+    conditional_flow_topology,
     defensive_posterior_proposal,
     posterior_entropy_diagnostics,
     posterior_log_prob,
@@ -139,6 +141,9 @@ class LossBatch(NamedTuple):
     mask: jnp.ndarray
     features: jnp.ndarray
     truth_theta: jnp.ndarray
+    sleep_x: jnp.ndarray | None = None
+    sleep_model_flux: jnp.ndarray | None = None
+    sleep_physical_valid: jnp.ndarray | None = None
 
 
 class JitLatentSpec(NamedTuple):
@@ -1034,6 +1039,17 @@ def train_amortized_fs2(
     )
     input_noise_cfg = _input_noise_config(cfg.get("input_noise", {}))
     sleep_runtime_cfg = _sleep_runtime_config(config, feature_stats)
+    sleep_cache = _prepare_sleep_noiseless_cache(
+        model=model,
+        config=config,
+        sleep_runtime_config=sleep_runtime_cfg,
+        latent_spec=latent_spec,
+        context=context,
+        model_args=model_args,
+        parameter_names=latent_spec.names,
+        calibration_config=calibration_runtime_config,
+        seed=int(seed) + 62_771,
+    )
     selection_runtime_cfg = _selection_correction_runtime_config(
         config,
         feature_stats,
@@ -1179,6 +1195,7 @@ def train_amortized_fs2(
         )
     )
     validation_bin_rows: list[dict[str, float | int | str]] = []
+    component_gradient_audit: dict[str, Any] | None = None
     train_rng = np.random.default_rng(int(seed) + 10_000)
     _log(
         verbose,
@@ -1278,6 +1295,11 @@ def train_amortized_fs2(
                 else None
             ),
         )
+        sleep_cache_order = None
+        sleep_cache_cursor = 0
+        if sleep_cache is not None:
+            sleep_cache_order = np.arange(len(sleep_cache["x"]), dtype=np.int64)
+            train_rng.shuffle(sleep_cache_order)
         with _progress_bar(
             enabled=bool(progress),
             total=expected_batches,
@@ -1292,6 +1314,65 @@ def train_amortized_fs2(
                     noise_key,
                     input_noise_cfg,
                 )
+                if sleep_cache is not None:
+                    candidate_factor = int(
+                        sleep_runtime_cfg.get("selection_candidate_factor", 1)
+                    )
+                    count = int(batch.flux.shape[0]) * max(candidate_factor, 1)
+                    selected, sleep_cache_cursor = _take_cyclic_cache_indices(
+                        sleep_cache_order,
+                        sleep_cache_cursor,
+                        count,
+                    )
+                    loss_batch = _attach_sleep_noiseless_cache(
+                        loss_batch,
+                        sleep_cache,
+                        selected,
+                        candidate_factor=max(candidate_factor, 1),
+                    )
+                if component_gradient_audit is None and bool(
+                    cfg["training"].get("component_gradient_audit_first_batch", False)
+                ):
+                    if train_prior:
+                        raise ValueError(
+                            "component gradient audit is restricted to frozen-prior "
+                            "posterior training"
+                        )
+                    audit_objects = min(
+                        int(cfg["training"].get("component_gradient_audit_objects", 8)),
+                        int(batch.flux.shape[0]),
+                    )
+                    if audit_objects <= 0:
+                        raise ValueError("component gradient audit requires objects")
+                    key, audit_key = jax.random.split(key)
+                    audit_start = time.time()
+                    audit_values = _objective_component_gradient_audit_jit(
+                        model,
+                        _slice_loss_batch(loss_batch, audit_objects),
+                        jit_latent_spec,
+                        jit_context,
+                        model_args,
+                        jit_latent_spec.names,
+                        audit_key,
+                        cfg["likelihood"],
+                        calibration_runtime_config,
+                        objective_config,
+                    )
+                    component_gradient_audit = jax.tree_util.tree_map(
+                        lambda value: float(np.asarray(jax.device_get(value))),
+                        audit_values,
+                    )
+                    component_gradient_audit.update(
+                        {
+                            "objects": audit_objects,
+                            "elapsed_time_s": float(time.time() - audit_start),
+                            "prior_frozen_for_updates": True,
+                        }
+                    )
+                    write_json(
+                        out / "objective_component_gradient_audit.json",
+                        component_gradient_audit,
+                    )
                 if bool(data_parallel["enabled"]):
                     if (
                         pmap_train_step is None
@@ -1723,6 +1804,39 @@ def train_amortized_fs2(
             metric_name=f"{best_checkpoint_metric}_fallback_train_loss",
         )
 
+    completed_training_rows = _training_rows(rows)
+    completed_validation_rows = [
+        row for row in rows if row.get("split") == "validation"
+    ]
+    sleep_candidate_factor = int(sleep_runtime_cfg.get("selection_candidate_factor", 1))
+    observed_elbo_cfg = dict(cfg["objective"].get("observed_elbo", {}) or {})
+    training_objects = sum(
+        int(row.get("n_objects", 0)) for row in completed_training_rows
+    )
+    validation_objects = sum(
+        int(row.get("n_objects", 0)) for row in completed_validation_rows
+    )
+    sleep_cached_pair_lookups = int(training_objects * max(sleep_candidate_factor, 1))
+    sleep_decoder_evaluations = sleep_cached_pair_lookups if sleep_cache is None else 0
+    validation_sleep_decoder_evaluations = int(
+        validation_objects * max(sleep_candidate_factor, 1)
+    )
+    cache_generation_evaluations = (
+        0
+        if sleep_cache is None or not bool(sleep_cache["receipt"].get("created"))
+        else int(sleep_cache["receipt"]["candidates"])
+    )
+    observed_decoder_evaluations = int(
+        (training_objects + validation_objects)
+        * (
+            int(observed_elbo_cfg.get("n_samples", 4))
+            if bool(observed_elbo_cfg.get("enabled", False))
+            else 0
+        )
+    )
+    component_audit_decoder_evaluations = int(
+        (component_gradient_audit or {}).get("decoder_evaluations", 0.0)
+    )
     summary = {
         "epochs": int(epochs),
         "start_epoch": int(start_epoch),
@@ -1780,6 +1894,29 @@ def train_amortized_fs2(
         ),
         "wake": dict(cfg["objective"].get("wake", {}) or {}),
         "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
+        "observed_elbo": observed_elbo_cfg,
+        "decoder_budget": {
+            "contract": "counted DSPS parameter-to-photometry evaluations",
+            "sleep_cache": (None if sleep_cache is None else sleep_cache["receipt"]),
+            "sleep_cached_pair_lookups": sleep_cached_pair_lookups,
+            "sleep_cache_generation_evaluations": cache_generation_evaluations,
+            "training_sleep_noiseless_flux_evaluations": sleep_decoder_evaluations,
+            "validation_sleep_noiseless_flux_evaluations": (
+                validation_sleep_decoder_evaluations
+            ),
+            "observed_reverse_kl_evaluations": observed_decoder_evaluations,
+            "component_gradient_audit_evaluations": (
+                component_audit_decoder_evaluations
+            ),
+            "total_evaluations": (
+                cache_generation_evaluations
+                + sleep_decoder_evaluations
+                + validation_sleep_decoder_evaluations
+                + observed_decoder_evaluations
+                + component_audit_decoder_evaluations
+            ),
+        },
+        "objective_component_gradient_audit": component_gradient_audit,
         "selection_correction": dict(selection_runtime_cfg),
         "wake_updates": int(
             sum(
@@ -1957,6 +2094,11 @@ def save_checkpoint(
         "amortized": amortized_config(config),
         "architecture": architecture_summary(config),
     }
+    if isinstance(model.encoder, ConditionalFlowEncoder):
+        sidecar["posterior_topology"] = conditional_flow_topology(
+            model.encoder,
+            coordinate_names=tuple(latent_spec.names),
+        )
     write_json(path.with_suffix(path.suffix + ".json"), sidecar)
 
 
@@ -1999,6 +2141,20 @@ def load_checkpoint(
             model = eqx.tree_deserialise_leaves(path, template)
         else:
             _raise_realnvp_mask_checkpoint_error(path, exc)
+    if isinstance(model.encoder, ConditionalFlowEncoder) and sidecar_path.is_file():
+        recorded_topology = sidecar.get("posterior_topology")
+        if recorded_topology is not None:
+            actual_topology = conditional_flow_topology(
+                model.encoder,
+                coordinate_names=tuple(active_spec.names),
+            )
+            if recorded_topology.get("fingerprint_sha256") != actual_topology.get(
+                "fingerprint_sha256"
+            ):
+                raise ValueError(
+                    "Amortized checkpoint posterior topology fingerprint does not "
+                    f"match serialized arrays: checkpoint={path}"
+                )
     if isinstance(
         model.prior, (RealNVPPrior, RQSplineCouplingPrior, StructuredRQSplinePrior)
     ):
@@ -2555,7 +2711,7 @@ def _evaluation_metrics(
         )
         return metrics, object_metrics
     if objective_mode(objective_config) == "reweighted_wake_sleep":
-        _loss, metrics = _model_generated_sleep_loss(
+        _loss, metrics = _reweighted_sleep_objective_loss(
             model,
             batch,
             latent_spec,
@@ -3076,7 +3232,7 @@ def _loss_with_metrics(
             objective_config,
         )
     if objective_mode(objective_config) == "reweighted_wake_sleep":
-        return _model_generated_sleep_loss(
+        return _reweighted_sleep_objective_loss(
             model,
             batch,
             latent_spec,
@@ -3979,34 +4135,53 @@ def _model_generated_sleep_loss(
     n_objects = int(batch.features.shape[0])
     candidate_factor = int(sleep.get("selection_candidate_factor", 1))
     n_candidates = n_objects * max(candidate_factor, 1)
-    samples = jax.lax.stop_gradient(model.prior.sample(prior_key, n_candidates))
-    safe_samples, physical_valid = safe_decoder_inputs(samples, latent_spec)
-    model_flux_raw = model_flux_from_x(
-        safe_samples,
-        latent_spec,
-        context,
-        model_args,
-        parameter_names,
-    )
     scale_cfg = global_sed_scale_config(calibration_config)
     band_cfg = per_band_flux_calibration_config(calibration_config)
     log_alpha_sed = model.sed_scale.log_alpha_sed
-    model_flux = (
-        apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
-        if scale_cfg.enabled
-        else model_flux_raw
-    )
     log_alpha_band = (
         model.band_calibration.log_alpha_band
         if band_cfg.enabled and model.band_calibration is not None
-        else jnp.zeros((model_flux_raw.shape[-1],), dtype=model_flux_raw.dtype)
+        else jnp.zeros((batch.flux.shape[-1],), dtype=batch.flux.dtype)
     )
-    model_flux = (
-        apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
-        if band_cfg.enabled
-        else model_flux
-    )
-    physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
+    if batch.sleep_x is None:
+        samples = jax.lax.stop_gradient(model.prior.sample(prior_key, n_candidates))
+        safe_samples, physical_valid = safe_decoder_inputs(samples, latent_spec)
+        model_flux_raw = model_flux_from_x(
+            safe_samples,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+        )
+        model_flux = (
+            apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
+            if scale_cfg.enabled
+            else model_flux_raw
+        )
+        model_flux = (
+            apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+            if band_cfg.enabled
+            else model_flux
+        )
+        physical_valid &= jnp.all(jnp.isfinite(model_flux), axis=-1)
+    else:
+        samples = jax.lax.stop_gradient(jnp.reshape(batch.sleep_x, (n_candidates, -1)))
+        model_flux_raw = jax.lax.stop_gradient(
+            jnp.reshape(batch.sleep_model_flux, (n_candidates, -1))
+        )
+        physical_valid = jax.lax.stop_gradient(
+            jnp.reshape(batch.sleep_physical_valid, (n_candidates,))
+        )
+        model_flux = (
+            apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
+            if scale_cfg.enabled
+            else model_flux_raw
+        )
+        model_flux = (
+            apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
+            if band_cfg.enabled
+            else model_flux
+        )
     candidate_mask = _repeat_sleep_rows(batch.mask, n_candidates)
     flux_err = _sleep_flux_error(model_flux, batch, sleep)
     noise, noise_family = _sample_sleep_noise(
@@ -4143,10 +4318,275 @@ def _model_generated_sleep_loss(
             1.0 if noise_family == "student_t" else 0.0,
             dtype=sleep_nll.dtype,
         ),
+        "sleep_loss_weight": jnp.asarray(1.0, dtype=sleep_nll.dtype),
+        "observed_elbo_active": zero,
+        "observed_elbo_weight": zero,
+        "observed_reverse_kl": zero,
+        "observed_negative_loglike": zero,
+        "observed_loglike_mean": zero,
+        "observed_logprior_mean": zero,
+        "observed_logq_mean": zero,
+        "observed_physical_valid_fraction": zero,
+        "observed_decoder_evaluations": zero,
         "posterior_mixture_components": mixture["components"],
         "posterior_mixture_entropy": mixture["entropy"],
         "posterior_mixture_max_weight": mixture["max_weight"],
         **entropy_metrics,
+    }
+
+
+def observed_reverse_kl_loss(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    likelihood_config,
+    calibration_config,
+    *,
+    n_samples: int,
+):
+    """Reverse KL on observed photometry using direct reparameterized q draws."""
+    count = int(n_samples)
+    if count <= 0:
+        raise ValueError("observed reverse-KL requires at least one direct q draw")
+    posterior = sample_posterior(model, key, batch.features, count)
+    target = posterior_log_target(
+        model,
+        posterior.x,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        likelihood_config,
+        calibration_config,
+    )
+    finite = (
+        target.physical_valid
+        & jnp.isfinite(posterior.logq)
+        & jnp.isfinite(target.loglike)
+        & jnp.isfinite(target.logprior)
+    )
+    finite_count = jnp.maximum(jnp.sum(finite), 1)
+
+    def finite_mean(value):
+        return jnp.sum(jnp.where(finite, value, 0.0)) / finite_count
+
+    reverse_kl = finite_mean(posterior.logq - target.logtarget)
+    return reverse_kl, {
+        "reverse_kl": reverse_kl,
+        "negative_loglike": finite_mean(-target.loglike),
+        "loglike_mean": finite_mean(target.loglike),
+        "logprior_mean": finite_mean(target.logprior),
+        "logq_mean": finite_mean(posterior.logq),
+        "physical_valid_fraction": jnp.mean(finite.astype(jnp.float32)),
+        "decoder_evaluations": jnp.asarray(
+            posterior.x.shape[0] * posterior.x.shape[1], dtype=reverse_kl.dtype
+        ),
+    }
+
+
+def _reweighted_sleep_objective_loss(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    likelihood_config,
+    calibration_config,
+    objective_config,
+    log_std_floor=None,
+    flow_scale_clamp=None,
+):
+    """Pure sleep, optionally augmented by an observed-data reverse KL."""
+    observed = dict(objective_config.get("observed_elbo", {}) or {})
+    if not bool(observed.get("enabled", False)):
+        return _model_generated_sleep_loss(
+            model,
+            batch,
+            latent_spec,
+            context,
+            model_args,
+            parameter_names,
+            key,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+            log_std_floor=log_std_floor,
+            flow_scale_clamp=flow_scale_clamp,
+        )
+    weight = float(observed.get("weight", 0.0))
+    sleep_weight = float(observed.get("sleep_weight", 1.0))
+    if weight <= 0.0:
+        raise ValueError("enabled observed ELBO requires objective weight > 0")
+    if sleep_weight <= 0.0:
+        raise ValueError("observed ELBO requires a positive sleep anchor weight")
+    sleep_key, observed_key = jax.random.split(key)
+    sleep_loss, metrics = _model_generated_sleep_loss(
+        model,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        sleep_key,
+        likelihood_config,
+        calibration_config,
+        objective_config,
+        log_std_floor=log_std_floor,
+        flow_scale_clamp=flow_scale_clamp,
+    )
+    observed_loss, observed_metrics = observed_reverse_kl_loss(
+        model,
+        batch,
+        latent_spec,
+        context,
+        model_args,
+        parameter_names,
+        observed_key,
+        likelihood_config,
+        calibration_config,
+        n_samples=int(observed.get("n_samples", 4)),
+    )
+    total = sleep_weight * sleep_loss + weight * observed_loss
+    metrics = dict(metrics)
+    metrics.update(
+        {
+            "loss": total,
+            "sleep_loss_weight": jnp.asarray(sleep_weight, dtype=total.dtype),
+            "observed_elbo_active": jnp.asarray(1.0, dtype=total.dtype),
+            "observed_elbo_weight": jnp.asarray(weight, dtype=total.dtype),
+            "observed_reverse_kl": observed_metrics["reverse_kl"],
+            "observed_negative_loglike": observed_metrics["negative_loglike"],
+            "observed_loglike_mean": observed_metrics["loglike_mean"],
+            "observed_logprior_mean": observed_metrics["logprior_mean"],
+            "observed_logq_mean": observed_metrics["logq_mean"],
+            "observed_physical_valid_fraction": observed_metrics[
+                "physical_valid_fraction"
+            ],
+            "observed_decoder_evaluations": observed_metrics["decoder_evaluations"],
+        }
+    )
+    return total, metrics
+
+
+@eqx.filter_jit
+def _objective_component_gradient_audit_jit(
+    model,
+    batch,
+    latent_spec,
+    context,
+    model_args,
+    parameter_names,
+    key,
+    likelihood_config,
+    calibration_config,
+    objective_config,
+):
+    """Measure sleep and observed gradients once without changing parameters."""
+    actual_context = context.value if isinstance(context, _StaticArg) else context
+    sleep_key, observed_key = jax.random.split(key)
+
+    def sleep_objective(candidate):
+        return _model_generated_sleep_loss(
+            candidate,
+            batch,
+            latent_spec,
+            actual_context,
+            model_args,
+            parameter_names,
+            sleep_key,
+            likelihood_config,
+            calibration_config,
+            objective_config,
+        )[0]
+
+    sleep_value, sleep_grads = eqx.filter_value_and_grad(sleep_objective)(model)
+    sleep_masked = _apply_training_grad_masks(
+        sleep_grads,
+        update_phase="encoder_sleep",
+        train_alpha=False,
+        train_band_calibration=False,
+    )
+    result = {
+        "sleep_loss": sleep_value,
+        **_gradient_component_summary("sleep_raw", sleep_grads),
+        **_gradient_component_summary("sleep_after_freeze", sleep_masked),
+    }
+    observed = dict(objective_config.get("observed_elbo", {}) or {})
+    observed_samples = (
+        int(observed.get("n_samples", 4)) if bool(observed.get("enabled", False)) else 0
+    )
+    if observed_samples > 0:
+
+        def observed_objective(candidate):
+            return observed_reverse_kl_loss(
+                candidate,
+                batch,
+                latent_spec,
+                actual_context,
+                model_args,
+                parameter_names,
+                observed_key,
+                likelihood_config,
+                calibration_config,
+                n_samples=observed_samples,
+            )[0]
+
+        observed_value, observed_grads = eqx.filter_value_and_grad(observed_objective)(
+            model
+        )
+        observed_masked = _apply_training_grad_masks(
+            observed_grads,
+            update_phase="encoder_sleep",
+            train_alpha=False,
+            train_band_calibration=False,
+        )
+        result.update(
+            {
+                "observed_reverse_kl": observed_value,
+                **_gradient_component_summary("observed_raw", observed_grads),
+                **_gradient_component_summary("observed_after_freeze", observed_masked),
+            }
+        )
+    else:
+        zero = jnp.asarray(0.0, dtype=sleep_value.dtype)
+        result.update(
+            {
+                "observed_reverse_kl": zero,
+                "observed_raw_encoder_grad_norm": zero,
+                "observed_raw_prior_grad_norm": zero,
+                "observed_raw_joint_grad_norm": zero,
+                "observed_after_freeze_encoder_grad_norm": zero,
+                "observed_after_freeze_prior_grad_norm": zero,
+                "observed_after_freeze_joint_grad_norm": zero,
+            }
+        )
+    candidate_factor = max(
+        int(objective_config.get("sleep", {}).get("selection_candidate_factor", 1)),
+        1,
+    )
+    live_sleep_evaluations = (
+        int(batch.flux.shape[0]) * candidate_factor if batch.sleep_x is None else 0
+    )
+    result["decoder_evaluations"] = jnp.asarray(
+        live_sleep_evaluations + int(batch.flux.shape[0]) * observed_samples,
+        dtype=sleep_value.dtype,
+    )
+    return result
+
+
+def _gradient_component_summary(prefix: str, grads) -> dict[str, jnp.ndarray]:
+    norms = _component_grad_norms_jax(grads)
+    return {
+        f"{prefix}_encoder_grad_norm": norms["encoder_grad_norm"],
+        f"{prefix}_prior_grad_norm": norms["prior_grad_norm"],
+        f"{prefix}_joint_grad_norm": norms["joint_grad_norm"],
     }
 
 
@@ -4584,6 +5024,51 @@ def _loss_batch_with_input_noise(
     )
 
 
+def _attach_sleep_noiseless_cache(
+    batch: LossBatch,
+    cache: dict[str, Any],
+    selected: np.ndarray,
+    *,
+    candidate_factor: int,
+) -> LossBatch:
+    objects = int(batch.flux.shape[0])
+    expected = objects * int(candidate_factor)
+    if len(selected) != expected:
+        raise ValueError("sleep cache selection has the wrong candidate count")
+    shape = (objects, int(candidate_factor))
+    return batch._replace(
+        sleep_x=jnp.asarray(cache["x"][selected]).reshape((*shape, -1)),
+        sleep_model_flux=jnp.asarray(cache["model_flux"][selected]).reshape(
+            (*shape, -1)
+        ),
+        sleep_physical_valid=jnp.asarray(cache["physical_valid"][selected]).reshape(
+            shape
+        ),
+    )
+
+
+def _slice_loss_batch(batch: LossBatch, count: int) -> LossBatch:
+    def take(value):
+        return None if value is None else value[: int(count)]
+
+    return LossBatch(*(take(value) for value in batch))
+
+
+def _take_cyclic_cache_indices(
+    order: np.ndarray | None,
+    cursor: int,
+    count: int,
+) -> tuple[np.ndarray, int]:
+    if order is None or len(order) <= 0:
+        raise ValueError("sleep cache order is empty")
+    if count <= 0 or count > len(order):
+        raise ValueError("sleep cache is smaller than one training batch")
+    indices = np.arange(int(cursor), int(cursor) + int(count)) % len(order)
+    return np.asarray(order[indices], dtype=np.int64), int(
+        (cursor + count) % len(order)
+    )
+
+
 def _input_noise_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     cfg = dict(raw or {})
     apply_to = str(cfg.get("apply_to", "train")).strip().lower()
@@ -4665,6 +5150,152 @@ def _sleep_runtime_config(
     runtime["sigma_sys_mag"] = float(model.get("sigma_sys_mag", 0.0))
     runtime["min_sigma_fnu_cgs"] = float(model.get("min_sigma_fnu_cgs", 1.0e-40))
     return runtime
+
+
+def _prepare_sleep_noiseless_cache(
+    *,
+    model: AmortizedModel,
+    config: dict[str, Any],
+    sleep_runtime_config: dict[str, Any],
+    latent_spec: LatentSpec,
+    context: Any,
+    model_args: Any,
+    parameter_names: tuple[str, ...],
+    calibration_config: dict[str, Any],
+    seed: int,
+) -> dict[str, Any] | None:
+    """Create or validate a reusable prior-x/noiseless-photometry sleep bank."""
+    objective = dict(amortized_config(config)["objective"] or {})
+    sleep = dict(objective.get("sleep", {}) or {})
+    cache_cfg = dict(sleep.get("noiseless_flux_cache", {}) or {})
+    if not bool(cache_cfg.get("enabled", False)):
+        return None
+    if not bool(sleep_runtime_config.get("enabled", False)):
+        raise ValueError("sleep cache requires model-generated sleep to be enabled")
+    if amortized_config(config)["prior"].get("train_jointly") is not False:
+        raise ValueError("a reusable sleep cache requires a frozen prior")
+    raw_path = cache_cfg.get("path")
+    if not raw_path:
+        raise ValueError("enabled sleep noiseless_flux_cache requires an explicit path")
+    path = Path(str(raw_path)).resolve()
+    sidecar = path.with_suffix(path.suffix + ".json")
+    candidates = int(cache_cfg.get("candidates", 131_072))
+    decoder_batch_size = int(cache_cfg.get("decoder_batch_size", 256))
+    candidate_factor = int(sleep_runtime_config.get("selection_candidate_factor", 1))
+    minimum = int(amortized_config(config)["training"].get("jax_batch_size", 1))
+    minimum *= max(candidate_factor, 1)
+    if candidates < minimum or decoder_batch_size <= 0:
+        raise ValueError(
+            "sleep cache candidates must cover one JAX batch and decoder batch "
+            "size must be positive"
+        )
+    prior_fingerprint = _array_tree_sha256(model.prior)
+    calibration_fingerprint = hashlib.sha256(
+        json.dumps(
+            calibration_config,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+    expected = {
+        "schema_version": 1,
+        "generator": "direct_frozen_parent",
+        "density_space": "latent_x",
+        "photometry_space": "raw_noiseless_decoder_flux_before_calibration",
+        "parameter_names": list(parameter_names),
+        "prior_fingerprint_sha256": prior_fingerprint,
+        "calibration_fingerprint_sha256": calibration_fingerprint,
+        "candidates": candidates,
+        "noise_cached": False,
+        "noise_resampled_each_optimization_step": True,
+        "mask_context_from_observed_training_rows": True,
+        "selection_applied_after_fresh_noise": True,
+        "catalogue_truth_used": False,
+    }
+    created = False
+    if path.is_file() or sidecar.is_file():
+        if not path.is_file() or not sidecar.is_file():
+            raise ValueError("sleep cache data and sidecar must both exist")
+        recorded = json.loads(sidecar.read_text(encoding="utf-8"))
+        for key, value in expected.items():
+            if recorded.get(key) != value:
+                raise ValueError(f"sleep cache contract mismatch for {key}")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        x_chunks = []
+        flux_chunks = []
+        valid_chunks = []
+        for start in range(0, candidates, decoder_batch_size):
+            count = min(decoder_batch_size, candidates - start)
+            key = jax.random.fold_in(jax.random.PRNGKey(int(seed)), start)
+            x = jax.lax.stop_gradient(model.prior.sample(key, count))
+            safe_x, valid = safe_decoder_inputs(x, latent_spec)
+            raw_flux = model_flux_from_x(
+                safe_x,
+                latent_spec,
+                context,
+                model_args,
+                parameter_names,
+            )
+            scale_cfg = global_sed_scale_config(calibration_config)
+            band_cfg = per_band_flux_calibration_config(calibration_config)
+            flux = (
+                apply_global_sed_scale_to_flux(
+                    raw_flux,
+                    model.sed_scale.log_alpha_sed,
+                )
+                if scale_cfg.enabled
+                else raw_flux
+            )
+            if band_cfg.enabled and model.band_calibration is not None:
+                flux = apply_per_band_flux_calibration_to_flux(
+                    flux,
+                    model.band_calibration.log_alpha_band,
+                )
+            valid &= jnp.all(jnp.isfinite(flux), axis=-1)
+            x_chunks.append(np.asarray(jax.device_get(x), dtype=np.float32))
+            flux_chunks.append(np.asarray(jax.device_get(raw_flux), dtype=np.float32))
+            valid_chunks.append(np.asarray(jax.device_get(valid), dtype=bool))
+        with path.open("wb") as stream:
+            np.savez(
+                stream,
+                x=np.concatenate(x_chunks, axis=0),
+                model_flux=np.concatenate(flux_chunks, axis=0),
+                physical_valid=np.concatenate(valid_chunks, axis=0),
+            )
+        write_json(sidecar, expected)
+        created = True
+    with np.load(path, allow_pickle=False) as stored:
+        result = {
+            "x": np.asarray(stored["x"], dtype=np.float32),
+            "model_flux": np.asarray(stored["model_flux"], dtype=np.float32),
+            "physical_valid": np.asarray(stored["physical_valid"], dtype=bool),
+        }
+    if result["x"].shape != (candidates, len(parameter_names)):
+        raise ValueError("sleep cache latent array has the wrong shape")
+    if result["model_flux"].shape[0] != candidates:
+        raise ValueError("sleep cache photometry array has the wrong row count")
+    if result["physical_valid"].shape != (candidates,):
+        raise ValueError("sleep cache validity array has the wrong shape")
+    result["receipt"] = {
+        **expected,
+        "path": str(path),
+        "sidecar": str(sidecar),
+        "created": created,
+        "physical_valid_fraction": float(np.mean(result["physical_valid"])),
+    }
+    return result
+
+
+def _array_tree_sha256(tree: Any) -> str:
+    state = hashlib.sha256()
+    for leaf in jax.tree_util.tree_leaves(eqx.filter(tree, eqx.is_array)):
+        value = np.asarray(jax.device_get(leaf))
+        state.update(str(value.dtype).encode("ascii"))
+        state.update(np.asarray(value.shape, dtype=np.int64).tobytes())
+        state.update(np.ascontiguousarray(value).tobytes())
+    return state.hexdigest()
 
 
 def _selection_correction_runtime_config(
@@ -5475,6 +6106,7 @@ def _objective_config_for_epoch(
         "sample_strategy": str(objective.get("sample_strategy", "random")),
         "wake": dict(objective.get("wake", {}) or {}),
         "sleep": dict(objective.get("sleep", {}) or {}),
+        "observed_elbo": dict(objective.get("observed_elbo", {}) or {}),
         "selection_correction": dict(objective.get("selection_correction", {}) or {}),
     }
 
@@ -5573,6 +6205,9 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "flow_output_space": str(
                 cfg["encoder"].get("flow_output_space", "prior_base")
             ),
+            "flow_permutation_requested": str(
+                cfg["encoder"].get("flow_permutation", "indexed_roll")
+            ),
         },
         "prior": {
             "type": cfg["prior"].get("type", "realnvp"),
@@ -5646,6 +6281,7 @@ def architecture_summary(config: dict[str, Any]) -> dict[str, Any]:
             "sample_strategy": str(cfg["objective"].get("sample_strategy", "random")),
             "wake": dict(cfg["objective"].get("wake", {}) or {}),
             "sleep": dict(cfg["objective"].get("sleep", {}) or {}),
+            "observed_elbo": dict(cfg["objective"].get("observed_elbo", {}) or {}),
             "adaptive_smc": dict(cfg["objective"].get("adaptive_smc", {}) or {}),
             "selection_correction": dict(
                 cfg["objective"].get("selection_correction", {}) or {}
@@ -5870,6 +6506,8 @@ def _shard_loss_batch(batch: LossBatch, n_devices: int) -> LossBatch:
         return batch
 
     def shard_array(value):
+        if value is None:
+            return None
         value = jnp.asarray(value)
         if value.shape[0] % int(n_devices) != 0:
             raise ValueError(
@@ -5886,6 +6524,9 @@ def _shard_loss_batch(batch: LossBatch, n_devices: int) -> LossBatch:
         mask=shard_array(batch.mask),
         features=shard_array(batch.features),
         truth_theta=shard_array(batch.truth_theta),
+        sleep_x=shard_array(batch.sleep_x),
+        sleep_model_flux=shard_array(batch.sleep_model_flux),
+        sleep_physical_valid=shard_array(batch.sleep_physical_valid),
     )
 
 

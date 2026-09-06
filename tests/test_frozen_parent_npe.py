@@ -80,6 +80,39 @@ def test_sleep_npe_config_freezes_prior_and_excludes_truth() -> None:
     assert amortized["training"]["data_parallel"] == "pmap"
 
 
+def test_topology_corrected_configs_are_truth_free_and_population_is_gated() -> None:
+    sleep = load_config(
+        ROOT
+        / "configs/experiments/feniks_sc_drws_r29_frozen_parent_topology_sleep_npe.yaml"
+    )
+    observed = load_config(
+        ROOT
+        / "configs/experiments/feniks_sc_drws_r29_frozen_parent_topology_sleep_elbo_npe.yaml"
+    )
+    population = load_config(
+        ROOT
+        / "configs/experiments/feniks_sc_drws_r29_population_marginal_vi_gated.yaml"
+    )
+    for config in (sleep, observed, population):
+        assert config["truth"]["parameter_columns"] == {}
+        assert config["amortized"]["encoder"]["flow_permutation"] == "indexed_roll"
+        assert config["amortized"]["prior"]["train_jointly"] is False
+    assert sleep["amortized"]["objective"]["observed_elbo"]["enabled"] is False
+    assert observed["amortized"]["objective"]["observed_elbo"] == {
+        "enabled": True,
+        "weight": 0.05,
+        "sleep_weight": 1.0,
+        "n_samples": 4,
+    }
+    assert population["amortized"]["population_vi"]["enabled"] is False
+    assert (
+        population["amortized"]["population_vi"]["object_subsampling"][
+            "allow_good_ess_filter"
+        ]
+        is False
+    )
+
+
 def test_scratch_builder_cli_maps_config_to_config_path(
     tmp_path: Path, monkeypatch, capsys
 ) -> None:
@@ -168,9 +201,7 @@ def test_prepare_sleep_npe_freezes_cohorts_and_parent(
             },
         },
     }
-    (benchmark / "RUN_MANIFEST.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
+    (benchmark / "RUN_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
     (benchmark / "TRUTH_FREE_ARCHITECTURE_WINNER.json").write_text(
         json.dumps(
             {
@@ -205,7 +236,9 @@ def test_prepare_sleep_npe_freezes_cohorts_and_parent(
     }
     monkeypatch.setattr(module, "load_config", lambda _path: config)
     monkeypatch.setattr(
-        module, "latent_spec_from_config", lambda _config: SimpleNamespace(names=("z_obs",))
+        module,
+        "latent_spec_from_config",
+        lambda _config: SimpleNamespace(names=("z_obs",)),
     )
 
     out = tmp_path / "npe"
@@ -243,9 +276,9 @@ def test_five_stage_submission_contract_is_parallel_and_distributional() -> None
         ROOT / "scripts/feniks_sc_drws_frozen_parent_npe_submit_evaluation.slurm"
     ).read_text(encoding="utf-8")
 
-    assert combined.index("submit_feniks_sc_drws_full_test_posterior.sh") < combined.index(
-        "submit_feniks_sc_drws_frozen_parent_npe.sh"
-    )
+    assert combined.index(
+        "submit_feniks_sc_drws_full_test_posterior.sh"
+    ) < combined.index("submit_feniks_sc_drws_frozen_parent_npe.sh")
     assert "POSTERIOR_OBJECTS=4706" in baseline
     assert "POSTERIOR_DRAWS=256" in baseline
     assert "POSTERIOR_OBJECTS=512" in baseline
@@ -268,7 +301,7 @@ def test_scratch_only_recovery_reuses_warm_and_replaces_dependencies() -> None:
 
     assert "RECOVER_SCRATCH_ARM" in recovery
     assert "--array=1-1%1" in recovery
-    assert '${ORIGINAL_ARM_JOB}_0:$SCRATCH_RECOVERY_JOB' in recovery
+    assert "${ORIGINAL_ARM_JOB}_0:$SCRATCH_RECOVERY_JOB" in recovery
     assert 'scancel "$OLD_GATE_JOB" "$OLD_SUBMIT_EVALUATION_JOB"' in recovery
     assert "baseline_jobs_reused" in recovery
     assert "NPE_RECOVERY_COMMIT" in recovery
@@ -290,9 +323,7 @@ def test_gate_runtime_recovery_uses_git_metadata_without_executable(
         "code_commit": manifest_commit,
         "request": {"arms": ["warm_start", "scratch_encoder"]},
     }
-    (root / "RUN_MANIFEST.json").write_text(
-        json.dumps(manifest), encoding="utf-8"
-    )
+    (root / "RUN_MANIFEST.json").write_text(json.dumps(manifest), encoding="utf-8")
     for arm in manifest["request"]["arms"]:
         directory = root / "arms" / arm
         directory.mkdir(parents=True)
@@ -354,9 +385,9 @@ def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
     recovery = (
         ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_gate_recovery.sh"
     ).read_text(encoding="utf-8")
-    monitor = (
-        ROOT / "scripts/monitor_feniks_sc_drws_frozen_parent_npe.sh"
-    ).read_text(encoding="utf-8")
+    monitor = (ROOT / "scripts/monitor_feniks_sc_drws_frozen_parent_npe.sh").read_text(
+        encoding="utf-8"
+    )
 
     assert "RECOVER_GATE_ONLY" in recovery
     assert "gate_finalizer_only_no_git_binary" in recovery
@@ -372,8 +403,7 @@ def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
 
 def test_stage4_only_recovery_reuses_frozen_winner_and_submits_no_training() -> None:
     recovery = (
-        ROOT
-        / "scripts/submit_feniks_sc_drws_frozen_parent_npe_stage4_recovery.sh"
+        ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_stage4_recovery.sh"
     ).read_text(encoding="utf-8")
     submitter = (
         ROOT / "scripts/feniks_sc_drws_frozen_parent_npe_submit_evaluation.slurm"

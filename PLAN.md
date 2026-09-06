@@ -8201,3 +8201,59 @@ Remote recovery:
   syntax, compile, Ruff, diff checks, and 43 focused tests pass. The full local
   suite cannot collect three unrelated spline tests because this local `shine`
   environment lacks `jax_cosmo`; remote stage 4 remains to be submitted.
+- Analyse the completed matched frozen-parent NPE experiment, separate
+  posterior calibration from importance-support and population-distribution
+  closure, and package a compact online-review bundle. Preserve all CSV/JSON
+  receipts and diagnostic figures while excluding the multi-gigabyte dense
+  joint-draw banks and redundant full-15D corner images from the ZIP.
+- Completed the frozen-parent NPE analysis bundle. It contains an explicit
+  scientific assessment, matched key metrics, 48 core-5 corners, all JSON/CSV
+  receipts and plots, and 56 lightweight Parquet diagnostics. The 40 MiB ZIP
+  passes `unzip -t`; dense joint-draw banks, duplicate PDFs, and full-15D
+  corner PNGs remain available only in the 2.1 GiB local result tree.
+# 2026-09-06 - Topology-corrected frozen-parent NPE continuation
+
+- [completed] Reproduce and expose the topology held by the serialized
+  conditional flow, including masks, permutations, per-coordinate coupling
+  counts, untransformed coordinates, and a stable SHA256 fingerprint. Historical
+  checkpoints remain readable; fingerprint enforcement only applies when a
+  sidecar records one.
+- [completed] Rebuild a topology-corrected `indexed_roll` posterior and transfer
+  only the compatible residual-photometry trunk. Keep the posterior heads,
+  couplings, masks, and permutations newly initialized; verify the frozen parent
+  bitwise, reload the checkpoint, and check direct sample/log-density agreement.
+- [completed] Add an opt-in `sleep + observed reverse-KL` objective using direct
+  reparameterized q draws and the canonical posterior target. Preserve entropy,
+  prior and likelihood densities in latent-x space, keep the prior frozen for
+  updates while retaining its derivative with respect to x, and record separate
+  component gradients and decoder costs.
+- [completed] Cache only direct frozen-parent latents and raw noiseless DSPS
+  fluxes for sleep. Refresh noise, errors, masks, context, and noisy r<29
+  selection at every optimization step; bind the cache to prior and calibration
+  fingerprints and forbid it while the prior is trainable.
+- [completed] Add truth-free observed and model-generated validation: exact
+  direct-proposal weights, raw ESS, finite/non-finite Pareto diagnostics, maximum
+  weights, log-density decomposition, independent-draw stability, held-out-band
+  prediction with the bands removed from both features and likelihood,
+  finite-rank simulated calibration, posterior geometry, boundary concentration,
+  and flux/error Jacobian sensitivity. Catalogue truth is rejected at the input
+  boundary.
+- [completed] Replace the historical TARP curve-ordinate KS p-value with an
+  explicitly randomized finite-rank uniform test and cover its K-grid contract
+  with an analytic unit test.
+- [completed] Add a frozen-proposal population marginal-likelihood objective
+  with the selection normalizer, full proposal denominator, fixed direct
+  particles, all-object finite/support gates, and no good-ESS filtering. The
+  first M-step is separately activatable only after a posterior-bound
+  `POPULATION_VI_READY.json`; another q adaptation is mandatory before any
+  subsequent prior step.
+- [completed] Add separate B pure-sleep, C sleep-plus-photometric-ELBO, and gated
+  population configs; an immutable Jean-Zay pilot; parallel A/B/C truth-free
+  validation; a reconnectable monitor; and a one-H100 population M-step wrapper.
+  The pilot never auto-submits population training.
+- [completed] Local verification: Ruff, Python compilation, Bash/SLURM syntax,
+  CLI help smoke tests, `git diff --check`, and 105 focused/adjacent tests pass.
+  The full repository suite has no new failure; the same two unrelated legacy
+  supervised-prior tests still expect `PASS` where their untouched integrity
+  diagnostic returns `WARN`. No cluster training or long experiment was launched
+  locally.

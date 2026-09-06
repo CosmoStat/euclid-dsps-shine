@@ -581,7 +581,12 @@ def _sample_observed_sleep_batch(
 def _shard_loss_batch(batch: LossBatch, n_devices: int) -> LossBatch:
     local = int(batch.features.shape[0]) // int(n_devices)
     return LossBatch(
-        *(value.reshape(int(n_devices), local, *value.shape[1:]) for value in batch)
+        *(
+            None
+            if value is None
+            else value.reshape(int(n_devices), local, *value.shape[1:])
+            for value in batch
+        )
     )
 
 

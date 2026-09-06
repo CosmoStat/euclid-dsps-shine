@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, NamedTuple
 
 import jax
@@ -130,14 +132,10 @@ class _ConditionalCoupling(eqx.Module):
         self.min_derivative = float(min_derivative)
 
     def forward(self, value, context, *, scale_clamp=None):
-        return self._transform(
-            value, context, inverse=False, scale_clamp=scale_clamp
-        )
+        return self._transform(value, context, inverse=False, scale_clamp=scale_clamp)
 
     def inverse(self, value, context, *, scale_clamp=None):
-        return self._transform(
-            value, context, inverse=True, scale_clamp=scale_clamp
-        )
+        return self._transform(value, context, inverse=True, scale_clamp=scale_clamp)
 
     def _transform(self, value, context, *, inverse: bool, scale_clamp=None):
         value = jnp.asarray(value, dtype=jnp.float32)
@@ -493,6 +491,138 @@ class ConditionalFlowEncoder(eqx.Module):
             )
             logdet = logdet + delta
         return value, logdet
+
+
+def conditional_flow_topology(
+    encoder: ConditionalFlowEncoder,
+    *,
+    coordinate_names: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, Any]:
+    """Describe coupling coverage from the arrays actually held by a flow.
+
+    Masks and permutations are serialized Equinox leaves.  This diagnostic
+    deliberately inspects those leaves instead of inferring topology from the
+    active YAML, which may differ when an historical checkpoint is restored.
+    """
+    if not isinstance(encoder, ConditionalFlowEncoder):
+        raise TypeError("conditional-flow topology requires ConditionalFlowEncoder")
+    latent_dim = int(encoder.latent_dim)
+    if coordinate_names is None:
+        names = tuple(f"x_{index:02d}" for index in range(latent_dim))
+    else:
+        names = tuple(str(name) for name in coordinate_names)
+        if len(names) != latent_dim:
+            raise ValueError(
+                "coordinate_names length does not match conditional-flow latent_dim"
+            )
+    if len(encoder.layers) != len(encoder.permutations):
+        raise ValueError("conditional-flow layers and permutations differ in length")
+
+    origins = np.arange(latent_dim, dtype=np.int64)
+    counts = np.zeros(latent_dim, dtype=np.int64)
+    masks: list[list[bool] | None] = []
+    permutations: list[list[int]] = []
+    for layer_index, (layer, raw_permutation) in enumerate(
+        zip(encoder.layers, encoder.permutations, strict=True)
+    ):
+        permutation = np.asarray(jax.device_get(raw_permutation), dtype=np.int64)
+        if permutation.shape != (latent_dim,) or not np.array_equal(
+            np.sort(permutation), np.arange(latent_dim)
+        ):
+            raise ValueError(
+                f"invalid conditional-flow permutation at layer {layer_index}"
+            )
+        if isinstance(layer, _ConditionalCoupling):
+            mask = np.asarray(jax.device_get(layer.mask), dtype=bool)
+            if mask.shape != (latent_dim,):
+                raise ValueError(
+                    f"invalid conditional-flow mask at layer {layer_index}"
+                )
+            active = ~mask
+            masks.append(mask.tolist())
+        else:
+            active = np.ones(latent_dim, dtype=bool)
+            masks.append(None)
+        counts[origins[active]] += 1
+        origins = origins[permutation]
+        permutations.append(permutation.tolist())
+
+    core = {
+        "schema_version": 1,
+        "family": str(encoder.family),
+        "output_space": str(encoder.output_space),
+        "latent_dim": latent_dim,
+        "layers": len(encoder.layers),
+        "coordinate_names": list(names),
+        "transform_counts": counts.tolist(),
+        "untransformed_coordinates": [
+            names[index] for index, count in enumerate(counts) if count == 0
+        ],
+        "masks": masks,
+        "permutations": permutations,
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(core, sort_keys=True, separators=(",", ":"), allow_nan=False).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    return {
+        **core,
+        "minimum_transform_count": int(np.min(counts)) if counts.size else 0,
+        "maximum_transform_count": int(np.max(counts)) if counts.size else 0,
+        "all_coordinates_transformed": bool(np.all(counts > 0)),
+        "fingerprint_sha256": fingerprint,
+    }
+
+
+def transfer_residual_photometry_trunk(
+    source: ConditionalFlowEncoder,
+    target: ConditionalFlowEncoder,
+) -> ConditionalFlowEncoder:
+    """Copy only the compatible photometry representation into a new flow.
+
+    The posterior base heads, context head, coupling nets, masks and
+    permutations intentionally remain those of ``target``.  This prevents an
+    historical flow topology from leaking into a rebuilt checkpoint.
+    """
+    if not isinstance(source, ConditionalFlowEncoder) or not isinstance(
+        target, ConditionalFlowEncoder
+    ):
+        raise TypeError("trunk transfer requires two conditional-flow encoders")
+    if not isinstance(source.base, ResidualPhotometryEncoder) or not isinstance(
+        target.base, ResidualPhotometryEncoder
+    ):
+        raise TypeError("trunk transfer requires residual photometry encoders")
+    source_shape = (
+        source.base.input_dim,
+        source.base.trunk_width,
+        len(source.base.blocks),
+        source.base.representation_width,
+    )
+    target_shape = (
+        target.base.input_dim,
+        target.base.trunk_width,
+        len(target.base.blocks),
+        target.base.representation_width,
+    )
+    if source_shape != target_shape:
+        raise ValueError(
+            "residual photometry trunk shapes differ: "
+            f"source={source_shape}, target={target_shape}"
+        )
+    return eqx.tree_at(
+        lambda encoder: (
+            encoder.base.input_projection,
+            encoder.base.blocks,
+            encoder.base.representation_projection,
+        ),
+        target,
+        (
+            source.base.input_projection,
+            source.base.blocks,
+            source.base.representation_projection,
+        ),
+    )
 
 
 def sample_posterior(

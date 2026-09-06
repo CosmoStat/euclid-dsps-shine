@@ -18,6 +18,7 @@ if HAS_EQUINOX:
     from euclid_dsps.amortized.flows import RealNVPPrior, StandardNormalPrior
     from euclid_dsps.amortized.posterior import (
         ConditionalFlowEncoder,
+        conditional_flow_topology,
         defensive_mixture_log_prob,
         defensive_posterior_proposal,
         posterior_encoder_state,
@@ -26,16 +27,20 @@ if HAS_EQUINOX:
         posterior_reference_from_base_mean,
         sample_posterior,
         sample_posterior_from_state,
+        transfer_residual_photometry_trunk,
     )
     from euclid_dsps.amortized.train import (
         JitLatentSpec,
         LossBatch,
+        _apply_training_grad_masks,
+        _attach_sleep_noiseless_cache,
         _encoder_epoch_index,
         _estimate_selection_log_alpha,
         _evaluation_metrics,
         _loss_and_grads_jit,
         _loss_with_metrics,
         _normalized_particle_weights,
+        _objective_component_gradient_audit_jit,
         _prior_mstep_loss,
         _sample_sleep_noise,
         _selection_alpha_gradient_preflight,
@@ -43,8 +48,10 @@ if HAS_EQUINOX:
         _sleep_flux_error,
         _sleep_m5_flux_error,
         _sleep_observed_selection_mask,
+        _take_cyclic_cache_indices,
         _training_update_phase,
         _wake_update_active,
+        observed_reverse_kl_loss,
     )
     from euclid_dsps.calibration import (
         GlobalSedScaleState,
@@ -67,6 +74,218 @@ def test_defensive_mixture_uses_complete_component_density() -> None:
     actual = defensive_mixture_log_prob(log_density, fractions)
     expected = jnp.log(jnp.sum(fractions[:, None, None] * jnp.exp(log_density), axis=0))
     assert jnp.allclose(actual, expected, atol=1.0e-7)
+
+
+def test_conditional_flow_topology_reproduces_historical_gap_and_fixed_counts() -> None:
+    common = dict(
+        input_dim=54,
+        latent_dim=15,
+        hidden_sizes=(16,),
+        activation="gelu",
+        log_std_min=-4.0,
+        log_std_max=2.5,
+        initial_log_std=0.25,
+        family="realnvp",
+        n_layers=6,
+        hidden_size=12,
+        output_space="latent_x",
+    )
+    historical = ConditionalFlowEncoder(
+        jax.random.PRNGKey(101), **common, permutation="alternating_roll"
+    )
+    corrected = ConditionalFlowEncoder(
+        jax.random.PRNGKey(102), **common, permutation="indexed_roll"
+    )
+    old = conditional_flow_topology(historical)
+    new = conditional_flow_topology(corrected)
+
+    assert old["transform_counts"] == [0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 0, 6, 3]
+    assert old["all_coordinates_transformed"] is False
+    assert new["transform_counts"] == [3, 3, 3, 3, 3, 2, 4, 2, 4, 3, 3, 3, 2, 4, 3]
+    assert new["minimum_transform_count"] == 2
+    assert new["all_coordinates_transformed"] is True
+    assert old["fingerprint_sha256"] != new["fingerprint_sha256"]
+
+
+def test_residual_trunk_transfer_excludes_all_posterior_heads_and_flow() -> None:
+    common = dict(
+        input_dim=12,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-4.0,
+        log_std_max=2.5,
+        initial_log_std=0.0,
+        family="realnvp",
+        n_layers=4,
+        hidden_size=8,
+        output_space="latent_x",
+        context_encoder_type="residual_photometry",
+        residual_trunk_width=16,
+        residual_blocks=2,
+        residual_representation_width=12,
+        residual_context_dim=8,
+    )
+    source = ConditionalFlowEncoder(
+        jax.random.PRNGKey(103), **common, permutation="alternating_roll"
+    )
+    target = ConditionalFlowEncoder(
+        jax.random.PRNGKey(104), **common, permutation="indexed_roll"
+    )
+    transferred = transfer_residual_photometry_trunk(source, target)
+
+    assert jnp.array_equal(
+        transferred.base.input_projection.weight,
+        source.base.input_projection.weight,
+    )
+    assert jnp.array_equal(
+        transferred.base.representation_projection.weight,
+        source.base.representation_projection.weight,
+    )
+    assert jnp.array_equal(
+        transferred.base.mean_head.weight, target.base.mean_head.weight
+    )
+    assert jnp.array_equal(
+        transferred.base.context_head.weight, target.base.context_head.weight
+    )
+    assert jnp.array_equal(
+        transferred.layers[0].net.layers[0].weight,
+        target.layers[0].net.layers[0].weight,
+    )
+    assert (
+        conditional_flow_topology(transferred)["fingerprint_sha256"]
+        == conditional_flow_topology(target)["fingerprint_sha256"]
+    )
+
+
+def test_observed_reverse_kl_updates_q_but_frozen_phase_masks_prior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    import euclid_dsps.amortized.train as train_module
+
+    encoder = ConditionalFlowEncoder(
+        jax.random.PRNGKey(105),
+        input_dim=6,
+        latent_dim=4,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+        family="realnvp",
+        n_layers=4,
+        hidden_size=8,
+        output_space="latent_x",
+        permutation="indexed_roll",
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=RealNVPPrior(
+            jax.random.PRNGKey(106), latent_dim=4, n_layers=2, hidden_size=8
+        ),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    batch = LossBatch(
+        flux=jnp.ones((3, 2)),
+        flux_err=jnp.ones((3, 2)),
+        mask=jnp.ones((3, 2), dtype=bool),
+        features=jnp.ones((3, 6)),
+        truth_theta=jnp.zeros((3, 0)),
+    )
+    spec = JitLatentSpec(
+        names=("a", "b", "c", "d"),
+        lower=-10.0 * jnp.ones(4),
+        upper=10.0 * jnp.ones(4),
+        raw_center=jnp.zeros(4),
+        raw_scale=jnp.ones(4),
+    )
+
+    def fake_target(candidate, x, *_args, **_kwargs):
+        center = batch.features[:, :4]
+        loglike = -0.5 * jnp.sum((x - center[None, ...]) ** 2, axis=-1)
+        logprior = candidate.prior.log_prob(x)
+        return SimpleNamespace(
+            logtarget=loglike + logprior,
+            loglike=loglike,
+            logprior=logprior,
+            physical_valid=jnp.ones_like(loglike, dtype=bool),
+        )
+
+    monkeypatch.setattr(train_module, "posterior_log_target", fake_target)
+    monkeypatch.setattr(
+        train_module,
+        "model_flux_from_x",
+        lambda x, *_args, **_kwargs: x[..., :2],
+    )
+
+    def objective(candidate):
+        return observed_reverse_kl_loss(
+            candidate,
+            batch,
+            spec,
+            None,
+            None,
+            spec.names,
+            jax.random.PRNGKey(107),
+            {},
+            {},
+            n_samples=4,
+        )[0]
+
+    value, grads = eqx.filter_value_and_grad(objective)(model)
+    assert jnp.isfinite(value)
+    assert any(
+        jnp.any(jnp.abs(leaf) > 0.0)
+        for leaf in jax.tree_util.tree_leaves(grads.encoder)
+        if eqx.is_inexact_array(leaf)
+    )
+    masked = _apply_training_grad_masks(
+        grads,
+        update_phase="encoder_sleep",
+        train_alpha=False,
+        train_band_calibration=False,
+    )
+    assert all(
+        jnp.all(leaf == 0.0)
+        for leaf in jax.tree_util.tree_leaves(masked.prior)
+        if eqx.is_inexact_array(leaf)
+    )
+    audit = _objective_component_gradient_audit_jit(
+        model,
+        batch,
+        spec,
+        None,
+        None,
+        spec.names,
+        jax.random.PRNGKey(108),
+        {"type": "gaussian", "error_floor_frac": 0.0},
+        {},
+        {
+            "sleep": {
+                "enabled": True,
+                "error_model": "observed_catalog",
+                "noise_family": "gaussian",
+                "selection_candidate_factor": 1,
+                "feature_flux_scale": (1.0, 1.0),
+                "feature_err_scale": (1.0, 1.0),
+                "flux_transform": "asinh",
+                "append_mask": True,
+                "error_epsilon": 1.0e-6,
+            },
+            "observed_elbo": {
+                "enabled": True,
+                "weight": 0.05,
+                "sleep_weight": 1.0,
+                "n_samples": 4,
+            },
+        },
+    )
+    assert audit["sleep_raw_encoder_grad_norm"] > 0.0
+    assert audit["observed_raw_encoder_grad_norm"] > 0.0
+    assert audit["observed_after_freeze_prior_grad_norm"] == 0.0
+    assert audit["decoder_evaluations"] == 15.0
 
 
 @pytest.mark.parametrize("family", ["realnvp", "rq_spline"])
@@ -408,6 +627,35 @@ def test_sleep_selection_uses_post_noise_observed_flux() -> None:
     assert selected.tolist() == [True, False]
     assert bool(model_flux[0, 0] < 1.0 < noisy_flux[0, 0])
     assert bool(noisy_flux[1, 0] < 1.0 < model_flux[1, 0])
+
+
+def test_sleep_noiseless_cache_attaches_complete_candidate_groups() -> None:
+    batch = LossBatch(
+        flux=jnp.ones((2, 3)),
+        flux_err=jnp.ones((2, 3)),
+        mask=jnp.ones((2, 3), dtype=bool),
+        features=jnp.ones((2, 9)),
+        truth_theta=jnp.zeros((2, 0)),
+    )
+    cache = {
+        "x": np.arange(24, dtype=np.float32).reshape(6, 4),
+        "model_flux": np.arange(18, dtype=np.float32).reshape(6, 3),
+        "physical_valid": np.asarray([True, False, True, True, False, True]),
+    }
+    order = np.asarray([5, 3, 1, 4, 0, 2], dtype=np.int64)
+    selected, cursor = _take_cyclic_cache_indices(order, 4, 4)
+    attached = _attach_sleep_noiseless_cache(
+        batch,
+        cache,
+        selected,
+        candidate_factor=2,
+    )
+
+    assert cursor == 2
+    assert selected.tolist() == [0, 2, 5, 3]
+    assert attached.sleep_x.shape == (2, 2, 4)
+    assert attached.sleep_model_flux.shape == (2, 2, 3)
+    assert attached.sleep_physical_valid.tolist() == [[True, True], [True, True]]
 
 
 def test_rws_weights_ignore_common_selection_normalizer() -> None:

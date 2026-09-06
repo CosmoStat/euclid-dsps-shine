@@ -1,0 +1,24 @@
+extends: feniks_sc_drws_r29_frozen_parent_topology_sleep_npe.yaml
+
+# Arm C: continue the topology-corrected pure-sleep model with a bounded
+# observed-data reverse-KL term.  The sleep anchor remains active.
+amortized:
+  objective:
+    observed_elbo:
+      enabled: true
+      weight: 0.05
+      sleep_weight: 1.0
+      n_samples: 4
+
+  training:
+    epochs: 4
+    learning_rate: 1.0e-5
+    validation_every: 1
+    best_checkpoint_metric: validation_loss
+    best_checkpoint_min_epoch: 1
+
+  output:
+    checkpoint_every: 1
+
+truth:
+  parameter_columns: {}

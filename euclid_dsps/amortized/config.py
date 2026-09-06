@@ -118,6 +118,18 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["objective"]["sleep"].setdefault("error_model", "m5_depth")
     raw["objective"]["sleep"].setdefault("noise_family", "match_likelihood")
     raw["objective"]["sleep"].setdefault("entropy_samples", 1)
+    raw["objective"]["sleep"].setdefault("noiseless_flux_cache", {})
+    raw["objective"]["sleep"]["noiseless_flux_cache"].setdefault("enabled", False)
+    raw["objective"]["sleep"]["noiseless_flux_cache"].setdefault("path", None)
+    raw["objective"]["sleep"]["noiseless_flux_cache"].setdefault("candidates", 131_072)
+    raw["objective"]["sleep"]["noiseless_flux_cache"].setdefault(
+        "decoder_batch_size", 256
+    )
+    raw["objective"].setdefault("observed_elbo", {})
+    raw["objective"]["observed_elbo"].setdefault("enabled", False)
+    raw["objective"]["observed_elbo"].setdefault("weight", 0.0)
+    raw["objective"]["observed_elbo"].setdefault("sleep_weight", 1.0)
+    raw["objective"]["observed_elbo"].setdefault("n_samples", 4)
     raw["objective"].setdefault("selection_correction", {})
     raw["objective"]["selection_correction"].setdefault("enabled", False)
     raw["objective"]["selection_correction"].setdefault(
@@ -167,6 +179,8 @@ def amortized_config(config: dict[str, Any]) -> dict[str, Any]:
     raw["training"].setdefault("kl_weight_max", 0.5)
     raw["training"].setdefault("validation_every", 1)
     raw["training"].setdefault("validation_sleep_seed", 260821)
+    raw["training"].setdefault("component_gradient_audit_first_batch", False)
+    raw["training"].setdefault("component_gradient_audit_objects", 8)
     raw["training"].setdefault("best_checkpoint_metric", "validation_negative_loglike")
     raw["training"].setdefault("best_checkpoint_min_epoch", None)
     raw["training"].setdefault("likelihood_temperature_initial", 1.0)

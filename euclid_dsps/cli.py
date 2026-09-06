@@ -648,6 +648,13 @@ def _add_amortized_train_arguments(
         ),
     )
     parser.add_argument(
+        "--sleep-noiseless-cache",
+        help=(
+            "Reuse or create a frozen-parent latent/noiseless-flux bank for "
+            "model-generated sleep training. Noise and masks are still renewed."
+        ),
+    )
+    parser.add_argument(
         "--start-epoch",
         type=int,
         default=1,
@@ -1420,6 +1427,7 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     prior = dict(amortized.get("prior", {}) or {})
     objective = dict(amortized.get("objective", {}) or {})
     wake = dict(objective.get("wake", {}) or {})
+    sleep = dict(objective.get("sleep", {}) or {})
     posterior_regularization = dict(amortized.get("posterior_regularization", {}) or {})
     input_noise = dict(amortized.get("input_noise", {}) or {})
     if args.selection_mode is not None:
@@ -1460,6 +1468,11 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         if int(args.wake_every_encoder_epochs) < 1:
             raise ValueError("--wake-every-encoder-epochs must be >= 1")
         wake["every_encoder_epochs"] = int(args.wake_every_encoder_epochs)
+    if getattr(args, "sleep_noiseless_cache", None) is not None:
+        cache = dict(sleep.get("noiseless_flux_cache", {}) or {})
+        cache["enabled"] = True
+        cache["path"] = str(args.sleep_noiseless_cache)
+        sleep["noiseless_flux_cache"] = cache
     if getattr(args, "likelihood_temperature_initial", None) is not None:
         training["likelihood_temperature_initial"] = float(
             args.likelihood_temperature_initial
@@ -1492,6 +1505,7 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     amortized["training"] = training
     amortized["prior"] = prior
     objective["wake"] = wake
+    objective["sleep"] = sleep
     amortized["objective"] = objective
     if posterior_regularization:
         amortized["posterior_regularization"] = posterior_regularization

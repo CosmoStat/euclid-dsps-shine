@@ -1379,7 +1379,9 @@ def _shard_loss_batch(batch: LossBatch, devices: int) -> LossBatch:
         raise ValueError("loss batch is not divisible by devices")
     return LossBatch(
         *(
-            jnp.asarray(value).reshape(devices, local, *value.shape[1:])
+            None
+            if value is None
+            else jnp.asarray(value).reshape(devices, local, *value.shape[1:])
             for value in batch
         )
     )

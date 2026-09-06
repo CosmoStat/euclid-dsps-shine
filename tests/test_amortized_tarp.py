@@ -11,6 +11,7 @@ from euclid_dsps.amortized.mira import FENIKS_SPLINE15D_PARAMETERS
 from euclid_dsps.amortized.tarp import (
     _tarp_ecp,
     evaluate_feniks_tarp,
+    randomized_finite_rank_uniform_ks,
     tarp_coverage_values,
 )
 
@@ -55,6 +56,23 @@ def test_tarp_ecp_matches_histogram_definition() -> None:
     ecp, alpha = _tarp_ecp(values, num_alpha_bins=4)
     assert np.array_equal(alpha, np.asarray([0.0, 0.25, 0.5, 0.75, 1.0]))
     np.testing.assert_allclose(ecp, np.asarray([0.0, 0.5, 0.5, 0.75, 1.0]))
+
+
+def test_tarp_ks_uses_randomized_finite_ranks_not_curve_ordinates() -> None:
+    k = 8
+    ranks = np.tile(np.arange(k + 1), 256)
+    result = randomized_finite_rank_uniform_ks(
+        ranks / float(k), posterior_samples=k, seed=19
+    )
+    assert result["ks_pvalue_method"] == "randomized_finite_rank_uniform"
+    assert result["ks_statistic"] < 0.03
+
+
+def test_tarp_randomized_rank_rejects_values_off_finite_grid() -> None:
+    with np.testing.assert_raises_regex(ValueError, "expected K grid"):
+        randomized_finite_rank_uniform_ks(
+            np.asarray([0.13, 0.42]), posterior_samples=8, seed=3
+        )
 
 
 def test_feniks_tarp_workflow_writes_auditable_outputs(tmp_path: Path) -> None:

@@ -467,7 +467,12 @@ def prepare_adaptive_training_runtime(
 
 def _loss_batch_take(batch: LossBatch, indices: np.ndarray) -> LossBatch:
     selected = jnp.asarray(indices, dtype=jnp.int32)
-    return LossBatch(*(jnp.take(value, selected, axis=0) for value in batch))
+    return LossBatch(
+        *(
+            None if value is None else jnp.take(value, selected, axis=0)
+            for value in batch
+        )
+    )
 
 
 def _pad_loss_batch(batch: LossBatch, target_count: int) -> tuple[LossBatch, int]:

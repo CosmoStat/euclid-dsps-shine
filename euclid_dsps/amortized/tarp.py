@@ -243,7 +243,13 @@ def evaluate_feniks_tarp(
             bootstrap_mean, bootstrap_std, bootstrap_q025, bootstrap_q975 = (
                 _bootstrap_curve_summary(model_bootstrap, len(alpha))
             )
-            scalars = _tarp_scalar_summary(ecp, alpha)
+            scalars = _tarp_scalar_summary(
+                ecp,
+                alpha,
+                coverage_values=coverage[model_index],
+                posterior_samples=posterior.shape[2],
+                seed=_derived_seed(reference_seed, model_index, 79),
+            )
             bootstrap_atc = (
                 np.asarray([_tarp_atc(values, alpha) for values in model_bootstrap])
                 if num_bootstrap
@@ -398,6 +404,10 @@ def evaluate_feniks_tarp(
             "posterior_clipped": False,
         },
         "bootstrap_unit": "held_out_object",
+        "ks_pvalue_contract": (
+            "randomized finite-rank coverage values tested against uniform; "
+            "the historical kstest(ecp, alpha) curve-ordinate test is not used"
+        ),
         "truth_selection": {
             "column_map": truth_column_map,
             "drop_nonfinite_parameters": bool(drop_nonfinite_truth),
@@ -452,17 +462,65 @@ def _tarp_bootstrap_ecp(
     return result, alpha
 
 
-def _tarp_scalar_summary(ecp: np.ndarray, alpha: np.ndarray) -> dict[str, float]:
-    differences = ecp - alpha
+def randomized_finite_rank_uniform_ks(
+    coverage_values: np.ndarray,
+    *,
+    posterior_samples: int,
+    seed: int,
+) -> dict[str, float | str]:
+    """Test finite posterior ranks after exact randomized de-discretization."""
+    values = np.asarray(coverage_values, dtype=np.float64)
+    count = int(posterior_samples)
+    if count < 2 or values.ndim != 1 or not np.all(np.isfinite(values)):
+        raise ValueError("finite-rank KS requires finite 1D ranks and K >= 2")
+    ranks = np.rint(values * count).astype(np.int64)
+    if (
+        np.any(ranks < 0)
+        or np.any(ranks > count)
+        or not np.allclose(values, ranks / float(count), atol=1.0e-7, rtol=0.0)
+    ):
+        raise ValueError("coverage values are not ranks on the expected K grid")
+    rng = np.random.default_rng(int(seed))
+    randomized = (ranks + rng.uniform(size=len(ranks))) / float(count + 1)
     try:
         from scipy.stats import kstest
 
-        ks_pvalue = float(kstest(ecp, alpha).pvalue)
-    except (ImportError, ValueError):
-        ks_pvalue = float("nan")
+        result = kstest(randomized, "uniform")
+        statistic = float(result.statistic)
+        pvalue = float(result.pvalue)
+    except ImportError:
+        ordered = np.sort(randomized)
+        empirical = np.arange(1, len(ordered) + 1, dtype=float) / len(ordered)
+        statistic = float(
+            max(
+                np.max(empirical - ordered),
+                np.max(ordered - (empirical - 1.0 / len(ordered))),
+            )
+        )
+        pvalue = float("nan")
+    return {
+        "ks_statistic": statistic,
+        "ks_pvalue": pvalue,
+        "ks_pvalue_method": "randomized_finite_rank_uniform",
+    }
+
+
+def _tarp_scalar_summary(
+    ecp: np.ndarray,
+    alpha: np.ndarray,
+    *,
+    coverage_values: np.ndarray,
+    posterior_samples: int,
+    seed: int,
+) -> dict[str, float | str]:
+    differences = ecp - alpha
     return {
         "atc": _tarp_atc(ecp, alpha),
-        "ks_pvalue": ks_pvalue,
+        **randomized_finite_rank_uniform_ks(
+            coverage_values,
+            posterior_samples=posterior_samples,
+            seed=seed,
+        ),
         "coverage_rmse": float(np.sqrt(np.mean(differences**2))),
         "coverage_max_abs_error": float(np.max(np.abs(differences))),
     }
