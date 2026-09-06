@@ -8257,3 +8257,8 @@ Remote recovery:
   supervised-prior tests still expect `PASS` where their untouched integrity
   diagnostic returns `WARN`. No cluster training or long experiment was launched
   locally.
+- [completed] Repair the first Jean-Zay pilot launch failure before submission:
+  explicitly map `--topology-config` and `--elbo-config` to `prepare()`'s
+  `*_config_path` arguments and cover the complete CLI mapping with a regression
+  test. The failed command never entered `prepare()` and submitted no Slurm job,
+  so the immutable pilot can be launched again without recovery or cleanup.

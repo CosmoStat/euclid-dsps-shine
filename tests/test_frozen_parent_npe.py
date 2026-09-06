@@ -151,6 +151,56 @@ def test_scratch_builder_cli_maps_config_to_config_path(
     assert json.loads(capsys.readouterr().out)["status"] == "COMPLETE"
 
 
+def test_topology_pilot_cli_maps_config_paths(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    module = _load_script("prepare_feniks_sc_drws_topology_npe_pilot.py")
+    seen = {}
+
+    def fake_prepare(**kwargs):
+        seen.update(kwargs)
+        return {"status": "PREPARED"}
+
+    monkeypatch.setattr(module, "prepare", fake_prepare)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prepare_feniks_sc_drws_topology_npe_pilot.py",
+            "--source-root",
+            str(tmp_path / "source"),
+            "--topology-config",
+            str(tmp_path / "topology.yaml"),
+            "--elbo-config",
+            str(tmp_path / "elbo.yaml"),
+            "--out",
+            str(tmp_path / "out"),
+            "--repo",
+            str(tmp_path / "repo"),
+            "--validation-objects",
+            "64",
+            "--support-objects",
+            "32",
+            "--seed",
+            "19",
+        ],
+    )
+
+    module.main()
+
+    assert seen == {
+        "source_root": tmp_path / "source",
+        "topology_config_path": tmp_path / "topology.yaml",
+        "elbo_config_path": tmp_path / "elbo.yaml",
+        "out": tmp_path / "out",
+        "repo": tmp_path / "repo",
+        "validation_objects": 64,
+        "support_objects": 32,
+        "seed": 19,
+    }
+    assert json.loads(capsys.readouterr().out)["status"] == "PREPARED"
+
+
 def test_prepare_sleep_npe_freezes_cohorts_and_parent(
     tmp_path: Path, monkeypatch
 ) -> None:

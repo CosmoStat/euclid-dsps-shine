@@ -336,7 +336,17 @@ def main() -> None:
     parser.add_argument("--support-objects", type=int, default=128)
     parser.add_argument("--seed", type=int, default=260906)
     args = parser.parse_args()
-    print(json.dumps(prepare(**vars(args)), indent=2, sort_keys=True))
+    payload = prepare(
+        source_root=args.source_root,
+        topology_config_path=args.topology_config,
+        elbo_config_path=args.elbo_config,
+        out=args.out,
+        repo=args.repo,
+        validation_objects=args.validation_objects,
+        support_objects=args.support_objects,
+        seed=args.seed,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
