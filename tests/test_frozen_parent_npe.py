@@ -201,6 +201,26 @@ def test_topology_pilot_cli_maps_config_paths(
     assert json.loads(capsys.readouterr().out)["status"] == "PREPARED"
 
 
+def test_topology_validation_timeout_recovery_reuses_training() -> None:
+    recovery = (
+        ROOT
+        / "scripts/submit_feniks_sc_drws_topology_npe_validation_recovery.sh"
+    ).read_text(encoding="utf-8")
+    validation = (
+        ROOT / "scripts/feniks_sc_drws_topology_npe_validate_h100.slurm"
+    ).read_text(encoding="utf-8")
+
+    assert "RECOVER_VALIDATION_TIMEOUTS" in recovery
+    assert 'TOPOLOGY_VALIDATION_RECOVERY_TIME:-08:00:00' in recovery
+    assert 'scope": "validation_timeouts_only"' in recovery
+    assert '"training_reused": True' in recovery
+    assert '"new_training_submitted": False' in recovery
+    assert "truth_used_for_training_or_checkpoint_selection" in recovery
+    assert "feniks_sc_drws_topology_npe_train_h100.slurm" not in recovery
+    assert recovery.count("feniks_sc_drws_topology_npe_validate_h100.slurm") == 3
+    assert "#SBATCH --time=08:00:00" in validation
+
+
 def test_prepare_sleep_npe_freezes_cohorts_and_parent(
     tmp_path: Path, monkeypatch
 ) -> None:

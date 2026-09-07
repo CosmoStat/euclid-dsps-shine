@@ -8262,3 +8262,9 @@ Remote recovery:
   `*_config_path` arguments and cover the complete CLI mapping with a regression
   test. The failed command never entered `prepare()` and submitted no Slurm job,
   so the immutable pilot can be launched again without recovery or cleanup.
+- [completed] Recover Jean-Zay pilot `1829245-1829250` after all three matched
+  truth-free validations reached their four-hour limit. Preserve the completed
+  B/C checkpoints and frozen prior, cancel the dependency-blocked finalizer,
+  resubmit only A/B/C validation from the immutable pilot worktree with an
+  eight-hour limit, and queue a replacement finalizer. Record both the original
+  and replacement jobs in a durable receipt; no training is resubmitted.
