@@ -5249,11 +5249,16 @@ def _prepare_sleep_noiseless_cache(
         "selection_applied_after_fresh_noise": True,
         "catalogue_truth_used": False,
     }
+    from euclid_dsps.model import photometry_numerics
+
+    expected["photometry_numerics"] = photometry_numerics(config.get("model"))
     created = False
     if path.is_file() or sidecar.is_file():
         if not path.is_file() or not sidecar.is_file():
             raise ValueError("sleep cache data and sidecar must both exist")
         recorded = json.loads(sidecar.read_text(encoding="utf-8"))
+        # Old banks were generated with the historical integrator, never the opt-in.
+        recorded.setdefault("photometry_numerics", photometry_numerics({}))
         for key, value in expected.items():
             if recorded.get(key) != value:
                 raise ValueError(f"sleep cache contract mismatch for {key}")

@@ -20,7 +20,18 @@ for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAI
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
 mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
-if mode in ('redshift_decomposition', 'photometry_reference'):
+if mode == 'full_decoder_qualification':
+    partial = root/'FULL_DECODER_PARTIAL.json'
+    cases = json.loads(partial.read_text())['cases'] if partial.is_file() else []
+    for variant in ('legacy', 'merged'):
+        done = [c for c in cases if c['variant'] == variant]
+        print(variant, 'completed points:', len(done), 'checks:', [c['numerical_checks'] for c in done])
+    report = root/'FULL_DECODER_QUALIFICATION.json'
+    if report.is_file():
+        value = json.loads(report.read_text())
+        print('candidate numerical checks:', value['candidate_numerical_checks'], 'next:', value['next_stage'])
+    print('No bank reuse, local VI, NPE or population training authorized')
+elif mode in ('redshift_decomposition', 'photometry_reference'):
     partial = root/('PHOTOMETRY_REFERENCE_PARTIAL.json' if mode == 'photometry_reference' else 'REDSHIFT_DECOMPOSITION_PARTIAL.json')
     completed = len(json.loads(partial.read_text())['points']) if partial.is_file() else 0
     print('Completed ' + mode + ' points:', str(completed) + '/3')

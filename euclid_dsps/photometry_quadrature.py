@@ -1,7 +1,7 @@
-"""Diagnostic integration of existing linear SED/filter interpolants.
+"""Integration of existing linear SED/filter interpolants.
 
-The training decoder is unchanged. The candidate resolves BOTH wavelength
-grids; the independent NumPy reference integrates each affine-product segment.
+The default decoder remains legacy. Versioned merged integration resolves BOTH
+wavelength grids; the NumPy reference integrates each affine-product segment.
 """
 
 from __future__ import annotations

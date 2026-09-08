@@ -1,5 +1,38 @@
 # Plan
 
+## 2026-09-08 Full-decoder quadrature qualification (implemented)
+
+- Job 1918919: fixed-spectrum reference PASS at three points and 54 band
+  derivatives; legacy projection differs from the reference derivative even
+  where its own AD/FD converge. This is not full-posterior validation.
+- Add versioned opt-in merged Gauss4 photometry; keep the historical default.
+  Protect reusable sleep banks against mixing numerical integrators.
+- Require the frozen reference receipt, compare complete canonical targets on
+  three generated and three direct-q points, all coordinates, matched contexts.
+  Measure flux differences, gradient convergence, runtime and device memory.
+- Keep residual mixed precision visible. No NPE, local optimization, catalogue
+  regeneration or population training until the results have been inspected.
+- Implemented `model.photometry_integrator=merged_gauss4_v1`, opt-in projection
+  float64 with strict x64 requirement and unchanged SFH/SSP/IGM arithmetic.
+  Historical default remains bitwise identical on the synthetic regression case;
+  cache receipts cannot silently cross the legacy/merged numerical contracts.
+- Full diagnostic requires the previous reference PASS and hashes, records six
+  fixed parameter/context pairs, compares all fifteen latent-x directions with
+  FD/JVP, canonical/centered likelihood and reverse-mode target derivatives.
+  Durable per-coordinate CSV/progress, mixed dtype traces and numerical checks
+  remain separate from workflow completion and scientific promotion.
+- Budget: one node/one H100/16 CPU threads, sequential variants, 90-minute Slurm
+  ceiling (1.5 GPU-hours), 80-minute process ceiling and 6000 component calls.
+  Record steady single-point forward time, compilation-inclusive case time and
+  whole-process allocator peaks; not a large-training-batch qualification.
+- Initial targeted model/photometry/local-VI suite: 95 passed, three real-asset
+  skips. No catalogue fit or real SSP/checkpoint/H100 run available locally.
+  Runbook: `docs/feniks_full_decoder_qualification_runbook.md`.
+- Final qualification/workflow/frozen-NPE/posterior regression suite: 58 passed,
+  including a deliberately wrong flux gradient rejected by the new checks,
+  full synthetic SED derivatives, cache contract migration, receipt readback and
+  tamper rejection. Compileall, Ruff, CLI help, Bash syntax and diff checks pass.
+
 ## 2026-09-08 Isolate observed likelihood gradient discrepancy
 
 - v2 evidence: logprior AD=1.16517 and finite differences agree; loglike

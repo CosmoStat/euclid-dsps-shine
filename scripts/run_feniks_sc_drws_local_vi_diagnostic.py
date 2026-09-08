@@ -119,6 +119,31 @@ def check_config(config):
         raise ValueError("simulation context/noise contract changed")
 
 
+def verify_photometry_reference(path, source_root):
+    path = Path(path).resolve()
+    final = read(path / "FINAL.json")
+    if final.get("status") != "PHOTOMETRY_REFERENCE_COMPLETE":
+        raise ValueError("fixed-spectrum qualification incomplete")
+    for name, item in final["artifacts"].items():
+        if sha256_file(path / name) != item["sha256"]:
+            raise ValueError(f"reference artifact changed: {name}")
+    report = read(path / "PHOTOMETRY_REFERENCE.json")
+    if report.get("numerical_reference_checks") != "PASS" or len(report["points"]) != 3:
+        raise ValueError("fixed-spectrum numerical checks must pass at three points")
+    manifest = read(path / "RUN_MANIFEST.json")
+    if Path(manifest["source_root"]).resolve() != Path(
+        source_root
+    ).resolve() or manifest["source_manifest_sha256"] != sha256_file(
+        Path(source_root) / "RUN_MANIFEST.json"
+    ):
+        raise ValueError("reference belongs to another source experiment")
+    return dict(
+        path=str(path),
+        final_sha256=sha256_file(path / "FINAL.json"),
+        manifest_sha256=sha256_file(path / "RUN_MANIFEST.json"),
+    )
+
+
 def prepare(
     root,
     source_root,
@@ -128,12 +153,28 @@ def prepare(
     gradient_isolation=False,
     redshift_decomposition=False,
     photometry_reference=False,
+    full_decoder_reference=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
-    if sum((gradient_isolation, redshift_decomposition, photometry_reference)) > 1:
+    if (
+        sum(
+            (
+                gradient_isolation,
+                redshift_decomposition,
+                photometry_reference,
+                full_decoder_reference is not None,
+            )
+        )
+        > 1
+    ):
         raise ValueError("choose only one diagnostic mode")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
+    qualification_reference = (
+        None
+        if full_decoder_reference is None
+        else verify_photometry_reference(full_decoder_reference, source_root)
+    )
     if not 2 <= objects <= 16 or not 1 <= steps <= 64 or not 32 <= draws <= 128:
         raise ValueError(
             "bounded budget: 2..16 objects/group, 1..64 steps, 32..128 evaluation draws"
@@ -187,7 +228,9 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="photometry_reference"
+        mode="full_decoder_qualification"
+        if full_decoder_reference is not None
+        else "photometry_reference"
         if photometry_reference
         else "redshift_decomposition"
         if redshift_decomposition
@@ -246,6 +289,17 @@ def prepare(
         population_training_started=False,
         interpretation="diagnostic only; observed validation has been used in earlier experiments",
     )
+    if full_decoder_reference is not None:
+        manifest.update(
+            qualification_reference=qualification_reference,
+            seconds=4800,
+            maximum_decoder_evaluations=6000,
+            allocation_gpu_hours=1.5,
+            decomposition_cache_indices=[0, 1, 2],
+            steps=0,
+            starts=0,
+            candidate_integrator="merged_gauss4_v1",
+        )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest
 
@@ -644,7 +698,11 @@ def run(root):
         first = PosteriorObservation(
             *[jnp.asarray(x[:1]) for x in (arrays.flux, arrays.flux_err, arrays.mask)]
         )
-        if manifest.get("mode") in {"redshift_decomposition", "photometry_reference"}:
+        if manifest.get("mode") in {
+            "redshift_decomposition",
+            "photometry_reference",
+            "full_decoder_qualification",
+        }:
             from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
             from euclid_dsps.calibration import (
                 global_sed_scale_config,
@@ -700,7 +758,131 @@ def run(root):
                     ),
                 )
 
-            if manifest["mode"] == "photometry_reference":
+            if manifest["mode"] == "full_decoder_qualification":
+                from euclid_dsps.amortized.decoder_qualification import qualify
+                from euclid_dsps.model import photometry_numerics
+
+                reference = manifest["qualification_reference"]
+                if (
+                    verify_photometry_reference(
+                        reference["path"], manifest["source_root"]
+                    )
+                    != reference
+                ):
+                    raise ValueError("qualification reference receipt changed")
+                if (
+                    photometry_numerics(config.get("model"))["integrator"]
+                    != "legacy_trapezoid_v1"
+                ):
+                    raise ValueError(
+                        "qualification requires a historical source target"
+                    )
+                corrected = copy.copy(context)
+                corrected.model_config = dict(
+                    context.model_config,
+                    photometry_integrator=manifest["candidate_integrator"],
+                )
+                corrected_args = dynamic_model_args(corrected)
+                candidate_config = copy.deepcopy(config)
+                candidate_config["model"]["photometry_integrator"] = manifest[
+                    "candidate_integrator"
+                ]
+                (root / "candidate_config.yaml").write_text(
+                    yaml.safe_dump(candidate_config, sort_keys=False)
+                )
+
+                @eqx.filter_jit
+                def corrected_target(x, observation):
+                    return posterior_log_target(
+                        model,
+                        x,
+                        observation,
+                        spec,
+                        corrected,
+                        corrected_args,
+                        spec.names,
+                        likelihood,
+                        calibration,
+                    )
+
+                n_contexts = min(3, len(rows))
+                contexts = [
+                    PosteriorObservation(
+                        *[
+                            jnp.asarray(a[i : i + 1])
+                            for a in (arrays.flux, arrays.flux_err, arrays.mask)
+                        ]
+                    )
+                    for i in range(n_contexts)
+                ]
+                features = make_encoder_features(
+                    jnp.asarray(arrays.flux[:n_contexts]),
+                    jnp.asarray(arrays.flux_err[:n_contexts]),
+                    stats,
+                    jnp.asarray(arrays.mask[:n_contexts]),
+                )
+                q_points = sample_posterior(
+                    model, jax.random.PRNGKey(260908), features, 1
+                ).x.reshape(-1, len(spec.names))
+                points = jnp.concatenate((points, q_points), axis=0)
+                observations = [contexts[i % n_contexts] for i in range(3)] + contexts
+                np.savez_compressed(
+                    root / "QUALIFICATION_POINTS.npz",
+                    x=np.asarray(points),
+                    row_indices=np.array(
+                        [rows[i % n_contexts] for i in range(3)]
+                        + list(rows[:n_contexts])
+                    ),
+                    origins=np.array(
+                        ["frozen_parent_cache"] * 3 + ["direct_q"] * n_contexts
+                    ),
+                    coordinate_names=np.asarray(spec.names),
+                )
+
+                def qualification_progress(label, i, stage, measurements, completed):
+                    pd.DataFrame(measurements).to_csv(
+                        root / "decoder_qualification.csv", index=False
+                    )
+                    write(
+                        root / "FULL_DECODER_PARTIAL.json",
+                        finite_json(dict(cases=completed)),
+                    )
+                    write(
+                        root / "PROGRESS.json",
+                        dict(
+                            stage="full_decoder_qualification",
+                            variant=label,
+                            point_index=i,
+                            branch=stage,
+                            budget=budget.snapshot(),
+                        ),
+                    )
+
+                result, _ = qualify(
+                    target,
+                    corrected_target,
+                    points,
+                    observations,
+                    budget,
+                    names=spec.names,
+                    bands=stats.band_names,
+                    progress=qualification_progress,
+                )
+                result["candidate_numerics"] = photometry_numerics(
+                    corrected.model_config
+                )
+                result["old_sleep_cache_used_only_for_parameters_and_legacy_check"] = (
+                    True
+                )
+                report_name = "FULL_DECODER_QUALIFICATION.json"
+                artifacts = (
+                    "CACHE_FLUX_AUDIT.json",
+                    report_name,
+                    "decoder_qualification.csv",
+                    "QUALIFICATION_POINTS.npz",
+                    "candidate_config.yaml",
+                )
+            elif manifest["mode"] == "photometry_reference":
                 from euclid_dsps.amortized.photometry_reference import (
                     analyze_snapshot,
                     export_spectra,
@@ -1152,6 +1334,7 @@ def main():
     parser.add_argument("--gradient-isolation", action="store_true")
     parser.add_argument("--redshift-decomposition", action="store_true")
     parser.add_argument("--photometry-reference", action="store_true")
+    parser.add_argument("--full-decoder-reference", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1165,6 +1348,7 @@ def main():
             args.gradient_isolation,
             args.redshift_decomposition,
             args.photometry_reference,
+            args.full_decoder_reference,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

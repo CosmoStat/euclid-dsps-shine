@@ -347,7 +347,9 @@ def test_high_ess_does_not_certify_missing_mode():
     assert logz == pytest.approx(-np.log(2))
 
 
-@pytest.mark.parametrize("isolation", [False, True, "decomposition", "reference"])
+@pytest.mark.parametrize(
+    "isolation", [False, True, "decomposition", "reference", "full"]
+)
 def test_prepare_and_complete_runner_with_mock_physics(
     tmp_path, monkeypatch, isolation
 ):
@@ -433,6 +435,38 @@ def test_prepare_and_complete_runner_with_mock_physics(
             sidecar_sha256=runner.sha256_file(sidecar),
         ),
     )
+    reference_path = None
+    if isolation == "full":
+        from types import SimpleNamespace
+
+        from euclid_dsps.amortized import decoder_qualification
+
+        reference_path = tmp_path / "reference"
+        runner.write(
+            reference_path / "PHOTOMETRY_REFERENCE.json",
+            dict(numerical_reference_checks="PASS", points=[{}, {}, {}]),
+        )
+        runner.write(
+            reference_path / "RUN_MANIFEST.json",
+            dict(
+                source_root=str(source),
+                source_manifest_sha256=runner.sha256_file(source / "RUN_MANIFEST.json"),
+            ),
+        )
+        runner.write(
+            reference_path / "FINAL.json",
+            dict(
+                status="PHOTOMETRY_REFERENCE_COMPLETE",
+                artifacts={
+                    "PHOTOMETRY_REFERENCE.json": dict(
+                        sha256=runner.sha256_file(
+                            reference_path / "PHOTOMETRY_REFERENCE.json"
+                        )
+                    )
+                },
+            ),
+        )
+        monkeypatch.setattr(decoder_qualification, "STEPS", (0.02, 0.01, 0.005))
     runner.prepare(
         root,
         source,
@@ -442,6 +476,7 @@ def test_prepare_and_complete_runner_with_mock_physics(
         gradient_isolation=isolation is True,
         redshift_decomposition=isolation == "decomposition",
         photometry_reference=isolation == "reference",
+        full_decoder_reference=reference_path,
     )
     with pytest.raises(FileExistsError):
         runner.prepare(root, source, objects=2, steps=1, draws=32)
@@ -451,6 +486,12 @@ def test_prepare_and_complete_runner_with_mock_physics(
     monkeypatch.setattr(runner, "latent_spec_from_config", lambda c: spec)
     monkeypatch.setattr(runner, "load_filters", lambda *args: None)
     monkeypatch.setattr(runner, "load_context", lambda *args, **kwargs: None)
+    if isolation == "full":
+        monkeypatch.setattr(
+            runner,
+            "load_context",
+            lambda *args, **kwargs: SimpleNamespace(model_config=config["model"]),
+        )
     monkeypatch.setattr(runner, "dynamic_model_args", lambda c: None)
     monkeypatch.setattr(runner, "_model_flux_from_x_sample_chunks", flux)
     monkeypatch.setattr(
@@ -486,6 +527,22 @@ def test_prepare_and_complete_runner_with_mock_physics(
         monkeypatch.setattr(pr, "export_spectra", mock_export)
         monkeypatch.setattr(pr, "analyze_snapshot", mock_analyze)
     result = runner.run(root)
+    if isolation == "full":
+        assert result["status"] == "FULL_DECODER_QUALIFICATION_COMPLETE"
+        report = runner.read(root / "FULL_DECODER_QUALIFICATION.json")
+        assert len(report["cases"]) == 10
+        assert report["prior_bitwise_unchanged"] is True
+        assert report["npe_training_started"] is False
+        assert report["old_flux_bank_reuse_authorized"] is False
+        assert (root / "candidate_config.yaml").is_file()
+        assert runner.read(root / "RUN_MANIFEST.json")["allocation_gpu_hours"] == 1.5
+        from scripts.summarize_feniks_sc_drws_decoder_qualification import summarize
+
+        assert summarize(root)["status"] == result["status"]
+        (reference_path / "PHOTOMETRY_REFERENCE.json").write_text("{}")
+        with pytest.raises(ValueError, match="reference artifact changed"):
+            runner.verify_photometry_reference(reference_path, source)
+        return
     if isolation == "reference":
         assert result["status"] == "PHOTOMETRY_REFERENCE_COMPLETE"
         assert not (root / "cases").exists()

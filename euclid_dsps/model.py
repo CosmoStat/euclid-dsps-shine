@@ -359,6 +359,7 @@ def load_context(
 
 def _normalized_model_config(model_config: dict[str, Any] | None) -> dict[str, Any]:
     config = dict(model_config or {})
+    photometry_numerics(config)
     sfh_model = str(config.get("sfh_model", "lognormal"))
     config.setdefault("sfh_model", sfh_model)
     config.setdefault("ssp_model", "dense")
@@ -4011,10 +4012,10 @@ def fixed_spectrum_projection_jax(
     method="legacy",
     order=8,
 ):
-    """Diagnostic only: compare photometry quadrature with fixed physical assets.
+    """Project one spectrum with legacy or merged numerical integration.
 
-    This function is not selected by training configuration. Float64 inputs are
-    supplied by the reference runner; production predict_mags_jax is unchanged.
+    Reference diagnostics compare the methods directly. predict_mags_jax uses
+    merged only under the versioned opt-in and supplies explicit float64 inputs.
     """
     from dsps import calc_obs_mag
     from dsps.cosmology import DEFAULT_COSMOLOGY
@@ -4059,6 +4060,18 @@ def fixed_spectrum_dimming_factor_jax(z):
     )
 
 
+def photometry_numerics(model_config: dict[str, Any] | None) -> dict[str, Any]:
+    """Versioned numerical contract; missing historical key means legacy."""
+    name = (model_config or {}).get("photometry_integrator", "legacy_trapezoid_v1")
+    if name not in {"legacy_trapezoid_v1", "merged_gauss4_v1"}:
+        raise ValueError(f"unsupported photometry_integrator: {name}")
+    return dict(
+        integrator=name,
+        projection_dtype="float64" if name == "merged_gauss4_v1" else "historical",
+        spectrum_construction="unchanged_mixed_precision",
+    )
+
+
 def predict_mags_jax(
     context: DspsContext, wave: jnp.ndarray, dusted_sed: jnp.ndarray, z_obs: jnp.ndarray
 ) -> jnp.ndarray:
@@ -4075,6 +4088,28 @@ def predict_mags_jax(
             )
             for curve in context.filters.values()
         )
+    numerics = photometry_numerics(context.model_config)
+    if numerics["integrator"] == "merged_gauss4_v1":
+        if not jax.config.x64_enabled:
+            raise ValueError("merged_gauss4_v1 requires JAX_ENABLE_X64=true")
+        from euclid_dsps.photometry import AB_ZEROPOINT_FNU_CGS
+
+        # Promote arithmetic, not stored spectral information; SFH/SSP stay unchanged.
+        fluxes = jnp.stack(
+            [
+                fixed_spectrum_projection_jax(
+                    jnp.asarray(wave, dtype=jnp.float64),
+                    jnp.asarray(dusted_sed, dtype=jnp.float64),
+                    jnp.asarray(fw, dtype=jnp.float64),
+                    jnp.asarray(ft, dtype=jnp.float64),
+                    jnp.asarray(z_obs, dtype=jnp.float64),
+                    method="merged",
+                    order=4,
+                )
+                for fw, ft in filter_arrays
+            ]
+        )
+        return -2.5 * jnp.log10(fluxes / AB_ZEROPOINT_FNU_CGS)
     mags = []
     for filter_wave, filter_transmission in filter_arrays:
         mags.append(
