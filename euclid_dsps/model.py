@@ -2864,6 +2864,8 @@ def normalize_sfh_to_stellar_mass_jax(
     t_obs: jnp.ndarray,
     log10_stellar_mass: jnp.ndarray,
     frac_surviving_by_age: jnp.ndarray | None = None,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Scale an SFH so the DSPS surviving mass matches log10_stellar_mass."""
     from dsps.imf.surviving_mstar import surviving_mstar
@@ -2878,11 +2880,11 @@ def normalize_sfh_to_stellar_mass_jax(
     if frac_surviving_by_age is None:
         frac_surviving_by_age = surviving_mstar(ssp_lg_age_gyr + 9.0)
     else:
-        frac_surviving_by_age = jnp.asarray(frac_surviving_by_age, dtype=jnp.float32)
+        frac_surviving_by_age = jnp.asarray(frac_surviving_by_age, dtype=numerical_dtype)
     mean_frac_surviving = jnp.sum(age_weights * frac_surviving_by_age)
     mean_frac_surviving = jnp.clip(mean_frac_surviving, 1.0e-4, 1.0)
     formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
-    target_surviving_mass = 10.0 ** jnp.asarray(log10_stellar_mass, dtype=jnp.float32)
+    target_surviving_mass = 10.0 ** jnp.asarray(log10_stellar_mass, dtype=numerical_dtype)
     target_formed_mass = target_surviving_mass / mean_frac_surviving
     scale = target_formed_mass / jnp.maximum(formed_mass, 1.0e-30)
     scaled_sfr = jnp.clip(gal_sfr_table * scale, 1.0e-30, jnp.inf)

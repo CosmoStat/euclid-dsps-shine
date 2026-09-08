@@ -347,7 +347,7 @@ def test_high_ess_does_not_certify_missing_mode():
     assert logz == pytest.approx(-np.log(2))
 
 
-@pytest.mark.parametrize("isolation", [False, True])
+@pytest.mark.parametrize("isolation", [False, True, "decomposition"])
 def test_prepare_and_complete_runner_with_mock_physics(
     tmp_path, monkeypatch, isolation
 ):
@@ -419,7 +419,7 @@ def test_prepare_and_complete_runner_with_mock_physics(
         return 100 + 0.2 * x
 
     cache = source / "cache.npz"
-    cache_x = jnp.array([[0.1, 0.2], [-0.1, -0.2]])
+    cache_x = jnp.array([[0.1, 0.2], [-0.1, -0.2], [0.2, 0.1]])
     np.savez(cache, x=cache_x, model_flux=flux(cache_x))
     sidecar = cache.with_suffix(".npz.json")
     runner.write(
@@ -434,7 +434,13 @@ def test_prepare_and_complete_runner_with_mock_physics(
         ),
     )
     runner.prepare(
-        root, source, objects=2, steps=1, draws=32, gradient_isolation=isolation
+        root,
+        source,
+        objects=2,
+        steps=1,
+        draws=32,
+        gradient_isolation=isolation is True,
+        redshift_decomposition=isolation == "decomposition",
     )
     with pytest.raises(FileExistsError):
         runner.prepare(root, source, objects=2, steps=1, draws=32)
@@ -451,7 +457,25 @@ def test_prepare_and_complete_runner_with_mock_physics(
         "posterior_log_target",
         lambda *args: posterior_log_target(*args, model_flux_fn=flux),
     )
+    if isolation == "decomposition":
+        from euclid_dsps.amortized import redshift_decomposition as rd
+
+        def mock_decompose(context, spec, points, observation, budget, **kwargs):
+            assert points.shape == (3, 2)
+            assert kwargs["canonical_flux"](points[0]).shape == (1, 1, 2)
+            rows = [dict(branch="mock", point_index=0, ad=1.0, fd=1.0)]
+            kwargs["progress"](0, "mock", rows, [])
+            return dict(status="REDSHIFT_DECOMPOSITION_COMPLETE", points=[]), rows
+
+        monkeypatch.setattr(rd, "decompose_redshift", mock_decompose)
     result = runner.run(root)
+    if isolation == "decomposition":
+        assert result["status"] == "REDSHIFT_DECOMPOSITION_COMPLETE"
+        assert result["local_optimization_started"] is False
+        assert not (root / "cases").exists()
+        assert runner.read(root / "RUN_MANIFEST.json")["allocation_gpu_hours"] == 0.75
+        assert (root / "redshift_decomposition.csv").is_file()
+        return
     if isolation:
         assert result["status"] == "GRADIENT_ISOLATION_COMPLETE"
         assert result["local_optimization_started"] is False

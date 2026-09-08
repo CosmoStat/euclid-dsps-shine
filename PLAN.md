@@ -8395,6 +8395,31 @@ Remote recovery:
   are unchanged; only the DSPS execution batching changes. This recovers the
   three H100 diagnostics after the unchunked `[64, 256, 15]` decode requested a
   72.81 GiB allocation.
+# 2026-09-08: redshift branch diagnostic (implemented)
+
+- Isolate age/SFH, IGM, and observer-frame projection at three fixed generated
+  cache points, without fitting or reading catalogue truth. Retain the original
+  point and report physical versus latent redshift step sizes.
+- Audit float64 only for explicitly precision-preserving sub-calculations
+  (age/mass weights and frozen-spectrum projection), not by relabelling the
+  mixed-precision production decoder. Preserve historical physics and runs.
+- Record branch center agreement, chain-rule reconstruction, multiscale AD/FD,
+  and precision traces before proposing any decoder correction or VI restart.
+- Implemented opt-in `LOCAL_VI_REDSHIFT_DECOMPOSITION=1`, three fixed cache
+  entries, eight scalar-input curves each, ten steps, one H100/45 minutes,
+  40-minute internal budget and 1000 component-evaluation ceiling. No local
+  optimization, posterior selection or population training follows this job.
+- Cache/live flux checks and canonical center agreement protect the comparison.
+  Float64 arithmetic is certified by nested JAX traces only for age/mass weights
+  and frozen-spectrum projection. Default production casts remain unchanged.
+- Verification: initial model/spline/local-VI/diagnostic suite 97 passed and
+  three asset-dependent skips; updated runner subset 25 passed; final dedicated
+  decomposition suite seven passed, including real DSPS on synthetic spectra
+  and tabulated survival. Ruff/compileall/CLI-help/Bash checks passed. No real
+  SED assets, cluster checkpoint, catalogue fits or GPU run available locally.
+- Next decision is branch/precision localization from the new JSON/CSV, not
+  loosening convergence tolerances or starting another NPE/VI training run.
+
 # 2026-09-08: balanced frozen-parent NPE continuation (implemented)
 
 - Completed pilot has no eligible posterior: all A/B/C fail importance support;

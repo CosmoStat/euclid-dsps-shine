@@ -19,8 +19,15 @@ for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAI
         if name == 'FINAL.json':
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
-print('Completed observed cases:', len(list((root/'cases').glob('observed_*/COMPLETE.json'))))
-print('Completed simulated cases:', len(list((root/'cases').glob('simulated_*/COMPLETE.json'))))
+mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
+if mode == 'redshift_decomposition':
+    partial = root/'REDSHIFT_DECOMPOSITION_PARTIAL.json'
+    completed = len(json.loads(partial.read_text())['points']) if partial.is_file() else 0
+    print('Completed redshift decomposition points:', str(completed) + '/3')
+    print('No local VI or population training in this mode')
+elif mode == 'local_vi':
+    print('Completed observed cases:', len(list((root/'cases').glob('observed_*/COMPLETE.json'))))
+    print('Completed simulated cases:', len(list((root/'cases').glob('simulated_*/COMPLETE.json'))))
 PY
   if [[ -s "$DIAGNOSTIC_ROOT/FINAL.json" || -s "$DIAGNOSTIC_ROOT/FAILED.json" ]]; then
     break

@@ -120,9 +120,17 @@ def check_config(config):
 
 
 def prepare(
-    root, source_root, objects=16, steps=64, draws=128, gradient_isolation=False
+    root,
+    source_root,
+    objects=16,
+    steps=64,
+    draws=128,
+    gradient_isolation=False,
+    redshift_decomposition=False,
 ):
     root, source_root = root.resolve(), source_root.resolve()
+    if gradient_isolation and redshift_decomposition:
+        raise ValueError("choose only one diagnostic mode")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
     if not 2 <= objects <= 16 or not 1 <= steps <= 64 or not 32 <= draws <= 128:
@@ -178,7 +186,11 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="gradient_isolation" if gradient_isolation else "local_vi",
+        mode="redshift_decomposition"
+        if redshift_decomposition
+        else "gradient_isolation"
+        if gradient_isolation
+        else "local_vi",
         status="PREPARED",
         code_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
@@ -206,11 +218,24 @@ def prepare(
         gradient_draws=4,
         learning_rate=0.001,
         seed=260908,
-        seconds=1080 if gradient_isolation else 9900,
-        maximum_decoder_evaluations=500 if gradient_isolation else 45000,
+        seconds=2400
+        if redshift_decomposition
+        else 1080
+        if gradient_isolation
+        else 9900,
+        maximum_decoder_evaluations=1000
+        if redshift_decomposition
+        else 500
+        if gradient_isolation
+        else 45000,
         maximum_gpus=1,
         maximum_nodes=1,
-        allocation_gpu_hours=1 / 3 if gradient_isolation else 3,
+        allocation_gpu_hours=0.75
+        if redshift_decomposition
+        else 1 / 3
+        if gradient_isolation
+        else 3,
+        decomposition_cache_indices=[0, 1, 2] if redshift_decomposition else [],
         truth_used=False,
         scientific_promotion=False,
         population_training_started=False,
@@ -614,6 +639,113 @@ def run(root):
         first = PosteriorObservation(
             *[jnp.asarray(x[:1]) for x in (arrays.flux, arrays.flux_err, arrays.mask)]
         )
+        if manifest.get("mode") == "redshift_decomposition":
+            from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
+            from euclid_dsps.calibration import (
+                global_sed_scale_config,
+                per_band_flux_calibration_config,
+            )
+
+            if (
+                global_sed_scale_config(calibration).enabled
+                or per_band_flux_calibration_config(calibration).enabled
+            ):
+                raise ValueError(
+                    "branch diagnostic currently requires disabled flux calibration; never silently remove it"
+                )
+            with np.load(cache["path"], allow_pickle=False) as bank:
+                points = jnp.asarray(bank["x"][manifest["decomposition_cache_indices"]])
+                expected_flux = bank["model_flux"][
+                    manifest["decomposition_cache_indices"]
+                ]
+            cache_checks = []
+            for index, point in enumerate(points):
+                budget.charge(1)
+                live = target(point[None, None, :], first).model_flux_raw.reshape(-1)
+                unit = np.maximum(
+                    np.abs(expected_flux[index]), np.asarray(stats.flux_scale)
+                )
+                delta = assert_close(
+                    "cache/live flux",
+                    live / unit,
+                    expected_flux[index] / unit,
+                    atol=0.002,
+                    rtol=0.002,
+                )
+                cache_checks.append(dict(point_index=index, scaled_max_delta=delta))
+            write(
+                root / "CACHE_FLUX_AUDIT.json", dict(status="PASS", points=cache_checks)
+            )
+
+            def branch_progress(index, branch, measurements, completed):
+                pd.DataFrame(measurements).to_csv(
+                    root / "redshift_decomposition.csv", index=False
+                )
+                write(
+                    root / "REDSHIFT_DECOMPOSITION_PARTIAL.json",
+                    finite_json(dict(points=completed)),
+                )
+                write(
+                    root / "PROGRESS.json",
+                    dict(
+                        stage="redshift_decomposition",
+                        point_index=index,
+                        branch=branch,
+                        budget=budget.snapshot(),
+                    ),
+                )
+
+            result, _ = decompose_redshift(
+                context,
+                spec,
+                points,
+                first,
+                budget,
+                band_names=stats.band_names,
+                progress=branch_progress,
+                canonical_flux=lambda point: (
+                    target(point[None, None, :], first).model_flux_raw
+                ),
+            )
+            if (
+                _array_tree_sha256(
+                    (model.prior, model.sed_scale, model.band_calibration)
+                )
+                != frozen_hash
+            ):
+                raise ValueError("frozen model changed")
+            result.update(
+                prior_bitwise_unchanged=True,
+                row_index=int(rows[0]),
+                object_id=str(arrays.object_id[0]),
+                budget=budget.snapshot(),
+                runtime=dict(
+                    python=sys.version,
+                    jax=jax.__version__,
+                    backend=jax.default_backend(),
+                    devices=[str(d) for d in jax.local_devices()],
+                    jax_enable_x64=bool(jax.config.x64_enabled),
+                ),
+            )
+            write(root / "REDSHIFT_DECOMPOSITION.json", finite_json(result))
+            final = dict(
+                status=result["status"],
+                scientific_promotion=False,
+                local_optimization_started=False,
+                population_training_started=False,
+                truth_used=False,
+                budget=budget.snapshot(),
+                artifacts={
+                    name: dict(path=str(root / name), sha256=sha256_file(root / name))
+                    for name in (
+                        "CACHE_FLUX_AUDIT.json",
+                        "REDSHIFT_DECOMPOSITION.json",
+                        "redshift_decomposition.csv",
+                    )
+                },
+            )
+            write(root / "FINAL.json", final)
+            return final
         if manifest.get("mode") == "gradient_isolation":
             from euclid_dsps.amortized.gradient_isolation import isolate_gradient
 
@@ -784,7 +916,7 @@ def run(root):
                             ),
                         )
                         print(
-                            f"[local-vi] {group} {index} start={start} step={iteration+1} loss={metrics['negative_elbo']:.6g}",
+                            f"[local-vi] {group} {index} start={start} step={iteration + 1} loss={metrics['negative_elbo']:.6g}",
                             flush=True,
                         )
                 local_folder = folder / f"start_{start}"
@@ -969,6 +1101,7 @@ def main():
     parser.add_argument("--steps", type=int, default=64)
     parser.add_argument("--draws", type=int, default=128)
     parser.add_argument("--gradient-isolation", action="store_true")
+    parser.add_argument("--redshift-decomposition", action="store_true")
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -980,6 +1113,7 @@ def main():
             args.steps,
             args.draws,
             args.gradient_isolation,
+            args.redshift_decomposition,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:
