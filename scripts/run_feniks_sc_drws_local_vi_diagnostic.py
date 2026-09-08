@@ -35,6 +35,7 @@ from euclid_dsps.amortized.local_vi_diagnostic import (
     BudgetExceeded,
     analytic_controls,
     assert_close,
+    gradient_audit,
     initialize,
     log_prob,
     make_step,
@@ -317,26 +318,28 @@ def contract_audit(
     direction /= jnp.linalg.norm(direction)
 
     def objective(z):
-        return jnp.sum(target(z, observation).logtarget)
+        values = target(z, observation)
+        return {
+            name: jnp.sum(getattr(values, name))
+            for name in ("loglike", "logprior", "logtarget")
+        }
 
-    budget.charge(1, gradient=True)
-    derivative = jnp.sum(jax.grad(objective)(point) * direction)
-    estimates = []
-    for epsilon in (0.01, 0.005):
-        budget.charge(2)
-        estimates.append(
-            (
-                objective(point + epsilon * direction)
-                - objective(point - epsilon * direction)
-            )
-            / (2 * epsilon)
+    gradient = gradient_audit(objective, point, direction, budget)
+    write(root / "GRADIENT_AUDIT.json", finite_json(gradient))
+    result["gradient_audit"] = {
+        "status": gradient["status"],
+        "path": str(root / "GRADIENT_AUDIT.json"),
+        "sha256": sha256_file(root / "GRADIENT_AUDIT.json"),
+    }
+    if gradient["status"] != "PASS":
+        result.update(
+            status=gradient["status"], truth_used=False, scientific_promotion=False
         )
-    assert_close(
-        "finite difference convergence", estimates[0], estimates[1], atol=0.1, rtol=0.05
-    )
-    result["gradient_delta"] = assert_close(
-        "target input gradient", derivative, estimates[1], atol=0.1, rtol=0.05
-    )
+        write(root / "CONTRACT_AUDIT.json", finite_json(result))
+        raise ValueError(
+            f"gradient audit {gradient['status']}; inspect {root / 'GRADIENT_AUDIT.json'}; "
+            "no local optimization started"
+        )
     result.update(status="PASS", truth_used=False, scientific_promotion=False)
     write(root / "CONTRACT_AUDIT.json", result)
     return result

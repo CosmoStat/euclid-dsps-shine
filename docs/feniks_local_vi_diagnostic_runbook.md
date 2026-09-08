@@ -39,6 +39,21 @@ sleep/inference feature parity (including a masked band), theta/x round trip,
 canonical-target/export parity, effective noise scale, source-cache/live flux
 parity and a finite-difference check of the target gradient through the decoder.
 
+The gradient audit writes `GRADIENT_AUDIT.json` before deciding whether to
+continue. It records loglike, logprior and logtarget separately, their automatic
+derivatives, both function values at six prespecified step sizes (0.02 down to
+0.000625), and a floating-point resolution screen. Select a resolved three-step
+finite-difference plateau without consulting AD, then compare AD at the same
+absolute/relative tolerances (0.1/0.05). No plateau means `INCONCLUSIVE`, and a
+resolved disagreement means `FAIL`; both stop before local optimization. The
+resolution screen is not a rigorous bound on roundoff inside DSPS.
+
+Job 1913341 in v1 failed the older two-step convergence check before optimization.
+The log's absolute difference alone cannot distinguish truncation, roundoff or
+an actual derivative problem. Preserve that run; use a distinct v2 root with
+the instrumented audit. No physics or training settings are changed by this
+recovery, and a passing result is not presumed.
+
 Legacy catalogue truth/reporting references are removed from a separate resolved
 configuration before loading any rows. The source files are preserved, all
 physical settings retained, and the read columns recorded. Dataset, source

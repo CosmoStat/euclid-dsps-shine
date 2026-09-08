@@ -1,5 +1,24 @@
 # Plan
 
+## 2026-09-08 Local-VI gradient audit failure
+
+- Jean-Zay job 1913341 stopped before local optimization: central differences
+  at h=.01 and .005 disagree by 5.1818. This alone does not identify a bad
+  derivative, float32 cancellation or truncation/non-smoothness.
+- Replace the two-step scalar assertion with a bounded multi-scale audit of
+  loglike, logprior and logtarget; persist values, AD derivatives and resolution
+  estimates before failing. Keep tolerances, target and training unchanged.
+- Require a resolved finite-difference plateau independent of AD, then compare
+  AD. Non-convergence stays inconclusive/blocked, never an automatic pass.
+- Preserve v1; prepare a new immutable v2 diagnostic after targeted tests.
+- Implemented six steps and a three-step resolved plateau for each component.
+  `GRADIENT_AUDIT.json` and the partial `CONTRACT_AUDIT.json` survive a failed
+  or inconclusive gradient check. No scientific tolerances were widened.
+- Verified 17 local diagnostic tests, including truncation refinement, wrong
+  AD, unresolved float32 cancellation, cancelling component errors and durable
+  failure receipts; mock-physics end-to-end still passes. Real SED cause remains
+  undetermined until the new cluster audit is inspected. No job submitted here.
+
 ## 2026-09-08 Implement bounded local-VI diagnostic
 
 - Implement a separate, truth-free single-H100 runner: contract checks, then

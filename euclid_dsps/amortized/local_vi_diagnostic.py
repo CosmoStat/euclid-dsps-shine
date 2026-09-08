@@ -200,3 +200,97 @@ def assert_close(name, actual, expected, *, atol=5e-4, rtol=5e-4):
             f"{name}: mismatch, max absolute delta={np.max(np.abs(actual-expected))}"
         )
     return float(np.max(np.abs(actual - expected)))
+
+
+def gradient_audit(objective, point, direction, budget, *, atol=0.1, rtol=0.05):
+    """Check a scalar-component dict using AD-independent FD plateau selection.
+
+    ULP estimates are a resolution screen, not rigorous propagated error bounds.
+    They reject poorly resolved comparisons rather than enlarge tolerances.
+    """
+    steps = (0.02, 0.01, 0.005, 0.0025, 0.00125, 0.000625)
+    budget.charge(1)
+    center = jax.device_get(objective(point))
+    names = tuple(center)
+    budget.charge(len(names), gradient=True)
+    jacobian = jax.jacrev(objective)(point)
+    automatic = {name: float(jnp.sum(jacobian[name] * direction)) for name in names}
+    values = []
+    for h in steps:
+        budget.charge(2)
+        plus = jax.device_get(objective(point + h * direction))
+        minus = jax.device_get(objective(point - h * direction))
+        row = {}
+        for name in names:
+            fp, fm = np.asarray(plus[name]), np.asarray(minus[name])
+            ulp_sum = abs(float(np.spacing(fp))) + abs(float(np.spacing(fm)))
+            # The total may be promoted to float64 after summing float32 terms.
+            if name == "logtarget" and {"loglike", "logprior"} <= set(names):
+                ulp_sum = max(
+                    ulp_sum,
+                    sum(
+                        abs(float(np.spacing(np.asarray(side[part]))))
+                        for side in (plus, minus)
+                        for part in ("loglike", "logprior")
+                    ),
+                )
+            row[name] = dict(
+                plus=float(fp),
+                minus=float(fm),
+                central_difference=(float(fp) - float(fm)) / (2 * h),
+                resolution_screen=4 * ulp_sum / (2 * h),
+            )
+        values.append(row)
+    components = {}
+    for name in names:
+        samples = [dict(step=h, **row[name]) for h, row in zip(steps, values, strict=True)]
+        stable_windows = []
+        for end in range(2, len(samples)):
+            window = samples[end - 2 : end + 1]
+            derivatives = np.array([x["central_difference"] for x in window])
+            tolerance = atol + rtol * abs(derivatives[-1])
+            resolved = all(
+                np.isfinite(x["resolution_screen"])
+                and x["resolution_screen"] <= tolerance
+                for x in window
+            )
+            if (
+                np.all(np.isfinite(derivatives))
+                and resolved
+                and np.ptp(derivatives) <= tolerance
+            ):
+                stable_windows.append(end)
+        selected = stable_windows[-1] if stable_windows else None
+        ad = automatic[name]
+        status = "INCONCLUSIVE"
+        if not np.isfinite(ad) or not np.isfinite(float(center[name])):
+            status = "FAIL"
+        elif selected is not None:
+            fd = samples[selected]["central_difference"]
+            status = "PASS" if abs(ad - fd) <= atol + rtol * abs(fd) else "FAIL"
+        components[name] = dict(
+            status=status,
+            center=float(center[name]),
+            dtype=str(np.asarray(center[name]).dtype),
+            autodiff=ad,
+            samples=samples,
+            selected_step=steps[selected] if selected is not None else None,
+            stable_window_end_indices=stable_windows,
+        )
+    statuses = [value["status"] for value in components.values()]
+    return dict(
+        status=(
+            "FAIL"
+            if "FAIL" in statuses
+            else ("PASS" if all(s == "PASS" for s in statuses) else "INCONCLUSIVE")
+        ),
+        components=components,
+        atol=atol,
+        rtol=rtol,
+        point=np.asarray(point).tolist(),
+        direction=np.asarray(direction).tolist(),
+        selection="finest resolved three-step FD plateau, chosen without consulting AD",
+        resolution_interpretation="ULP screen only; not a bound on internal decoder roundoff",
+        truth_used=False,
+        scientific_promotion=False,
+    )

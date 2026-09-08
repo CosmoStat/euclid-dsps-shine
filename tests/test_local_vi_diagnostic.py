@@ -13,6 +13,7 @@ from euclid_dsps.amortized.local_vi_diagnostic import (
     BudgetExceeded,
     analytic_controls,
     assert_close,
+    gradient_audit,
     initialize,
     log_prob,
     make_step,
@@ -156,6 +157,68 @@ def test_parity_failures_are_explicit():
         assert_close("check", [1.0], [2.0])
     with pytest.raises(ValueError, match="nonfinite"):
         assert_close("check", [np.nan], [1.0])
+
+
+def test_gradient_audit_refines_truncation_without_relaxing_tolerances():
+    def objective(x):
+        return {"f": jnp.sum(x + 10000 * x**3)}
+
+    result = gradient_audit(objective, jnp.zeros(1), jnp.ones(1), Budget(60, 100))
+    assert result["status"] == "PASS"
+    assert result["atol"] == 0.1 and result["rtol"] == 0.05
+    values = result["components"]["f"]["samples"]
+    assert abs(values[1]["central_difference"] - values[2]["central_difference"]) > 0.5
+    assert result["components"]["f"]["selected_step"] < 0.005
+
+
+def test_gradient_audit_rejects_wrong_ad_and_unresolved_float32():
+    def wrong(x):
+        return {"f": jnp.sum(jax.lax.stop_gradient(2 * x))}
+
+    result = gradient_audit(wrong, jnp.zeros(1), jnp.ones(1), Budget(60, 100))
+    assert result["status"] == "FAIL"
+    assert result["components"]["f"]["selected_step"] is not None
+
+    def unresolved(x):
+        return {"f": jnp.asarray(1e8 + 2 * jnp.sum(x), dtype=jnp.float32)}
+
+    result = gradient_audit(unresolved, jnp.zeros(1), jnp.ones(1), Budget(60, 100))
+    assert result["status"] == "INCONCLUSIVE"
+    assert result["components"]["f"]["selected_step"] is None
+
+
+def test_gradient_audit_checks_components_not_only_cancelling_total():
+    def objective(x):
+        value = jnp.sum(jax.lax.stop_gradient(2 * x))
+        return dict(loglike=value, logprior=-value, logtarget=value - value)
+
+    result = gradient_audit(objective, jnp.zeros(1), jnp.ones(1), Budget(60, 100))
+    assert result["status"] == "FAIL"
+    assert result["components"]["logtarget"]["status"] == "PASS"
+    assert result["components"]["loglike"]["status"] == "FAIL"
+
+
+def test_gradient_audit_failure_saves_contract_evidence(tmp_path, monkeypatch):
+    # Reuse the complete contract fixture, but inject a recorded inconclusive audit.
+    import scripts.run_feniks_sc_drws_local_vi_diagnostic as runner
+
+    monkeypatch.setattr(
+        runner,
+        "gradient_audit",
+        lambda *a: {
+            "status": "INCONCLUSIVE",
+            "components": {"loglike": {"autodiff": float("nan")}},
+        },
+    )
+    with pytest.raises(ValueError, match="gradient audit INCONCLUSIVE"):
+        test_contract_audit_with_analytic_decoder(tmp_path, monkeypatch)
+    assert runner.read(tmp_path / "CONTRACT_AUDIT.json")["status"] == "INCONCLUSIVE"
+    assert (
+        runner.read(tmp_path / "GRADIENT_AUDIT.json")["components"]["loglike"][
+            "autodiff"
+        ]
+        is None
+    )
 
 
 def test_perturbation_preserves_coupling_structure():
