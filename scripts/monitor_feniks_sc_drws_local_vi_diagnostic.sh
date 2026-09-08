@@ -20,7 +20,15 @@ for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAI
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
 mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
-if mode in ('full_decoder_qualification', 'mdf_precision_qualification'):
+if mode == 'target_resolution_audit':
+    partial = root/'TARGET_RESOLUTION_PARTIAL.json'
+    if partial.is_file():
+        value = json.loads(partial.read_text())
+        for c in value['checks']:
+            print('point', c['point_index'], c['coordinate'], c['component'], c['status'])
+        print('next:', value['next_stage'])
+    print('No NPE, local VI or population training authorized')
+elif mode in ('full_decoder_qualification', 'mdf_precision_qualification'):
     partial = root/'FULL_DECODER_PARTIAL.json'
     cases = json.loads(partial.read_text())['cases'] if partial.is_file() else []
     variants = ('merged_mdf32', 'merged_mdf64') if mode == 'mdf_precision_qualification' else ('legacy', 'merged')

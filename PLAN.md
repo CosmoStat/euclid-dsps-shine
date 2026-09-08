@@ -1,5 +1,34 @@
 # Plan
 
+## 2026-09-09 Residual audit and remaining redshift convergence (implemented)
+
+- Job 1921589: MDF64 resolves all metallicity checks; four of six full points
+  pass. Five remaining required checks are INCONCLUSIVE, not FAIL.
+- Four density curves agree at coarse steps but the artificial float32 ULP
+  screen on a float64 quadratic sum blocks them. Redshift still lacks a stable
+  plateau before mixed-precision noise appears; one favorable step is not proof.
+- Add a bounded, receipt-linked replay of unresolved checks, stable per-band
+  Gaussian differences, actual representable steps, and FD-only plateau and
+  truncation checks. Keep historical reports and tolerances unchanged.
+- Maintain Markdown and Sphinx RST debug chronology, distinguishing cluster
+  evidence, local tests, prepared work, and conditions for resuming training.
+- Added `LOCAL_VI_TARGET_RESOLUTION_REFERENCE`: source-linked residual-only
+  audit, unchanged merged/MDF64 target and tolerances, 25 prespecified steps,
+  asymmetric representable stencils and FD-only Richardson/plateau comparison.
+  Actual flux-output ULPs are propagated through stable Gaussian differences;
+  unknown upstream rounding remains explicit, not magically certified away.
+- Export complete perturbation fluxes/JVPs for CPU replay with final hashes.
+  The summary recomputes decisions; no old receipt or scientific gate is changed.
+- Verification: 39 targeted tests passed (including synthetic real-DSPS SED
+  smoke and mock end-to-end residual submission inputs/finalization/replay),
+  compileall/Ruff/CLI help/Bash checks pass. Sphinx HTML builds with `-W`.
+  No H100 residual audit or catalogue training executed locally. Legacy fit
+  commands remain unavailable because their named configs are absent.
+- Tracking: `docs/feniks_decoder_debug_log.md` and the indexed Sphinx page
+  `docs/source/feniks_decoder_debug.rst`. One node/one H100/16 CPUs, maximum
+  45 minutes, internal 40 minutes and 1000 decoder evaluations, no follow-on
+  training. Resolve remaining evidence before simulator review/new banks/VI.
+
 ## 2026-09-08 Full-decoder quadrature qualification (implemented)
 
 - Job 1918919: fixed-spectrum reference PASS at three points and 54 band

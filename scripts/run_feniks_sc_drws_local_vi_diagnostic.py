@@ -144,7 +144,9 @@ def verify_photometry_reference(path, source_root):
     )
 
 
-def verify_decoder_reference(path, source_root):
+def verify_decoder_reference(
+    path, source_root, *, expected_mode="full_decoder_qualification"
+):
     path = Path(path).resolve()
     final = read(path / "FINAL.json")
     required = {"FULL_DECODER_QUALIFICATION.json", "QUALIFICATION_POINTS.npz"}
@@ -159,7 +161,7 @@ def verify_decoder_reference(path, source_root):
             raise ValueError(f"decoder reference artifact changed: {name}")
     old = read(path / "RUN_MANIFEST.json")
     if (
-        old["mode"] != "full_decoder_qualification"
+        old["mode"] != expected_mode
         or Path(old["source_root"]).resolve() != Path(source_root).resolve()
         or old["source_manifest_sha256"]
         != sha256_file(Path(source_root) / "RUN_MANIFEST.json")
@@ -178,6 +180,37 @@ def verify_decoder_reference(path, source_root):
     )
 
 
+def verify_resolution_reference(path, source_root):
+    receipt = verify_decoder_reference(
+        path, source_root, expected_mode="mdf_precision_qualification"
+    )
+    report = read(Path(path) / "FULL_DECODER_QUALIFICATION.json")
+    if (
+        report.get("mdf_reference_checks") != "PASS"
+        or report.get("prior_bitwise_unchanged") is not True
+    ):
+        raise ValueError("MDF reference and frozen prior must pass")
+    candidate = report["variant_labels"][-1]
+    pending = []
+    for case in report["cases"]:
+        if case["variant"] == candidate and not all(
+            c["passed"] and c["reverse_passed"]
+            for c in case["canonical_centered_gradient"]
+        ):
+            raise ValueError("resolve gradient identities before residual audit")
+        if case["variant"] == candidate:
+            pending.extend(
+                c
+                for c in case["checks"]
+                if c["status"] != "PASS" and c["component"] != "canonical_loglike"
+            )
+    if not 1 <= len(pending) <= 8:
+        raise ValueError("bounded residual audit requires 1..8 unresolved checks")
+    if any(c["component"] == "logprior" for c in pending):
+        raise ValueError("residual audit does not resolve logprior failures")
+    return receipt
+
+
 def prepare(
     root,
     source_root,
@@ -189,6 +222,7 @@ def prepare(
     photometry_reference=False,
     full_decoder_reference=None,
     mdf_precision_reference=None,
+    target_resolution_reference=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -199,6 +233,7 @@ def prepare(
                 photometry_reference,
                 full_decoder_reference is not None,
                 mdf_precision_reference is not None,
+                target_resolution_reference is not None,
             )
         )
         > 1
@@ -212,8 +247,12 @@ def prepare(
         else verify_photometry_reference(full_decoder_reference, source_root)
     )
     mdf_reference = None
-    if mdf_precision_reference is not None:
-        mdf_reference = verify_decoder_reference(mdf_precision_reference, source_root)
+    if mdf_precision_reference is not None or target_resolution_reference is not None:
+        mdf_reference = (
+            verify_resolution_reference(target_resolution_reference, source_root)
+            if target_resolution_reference is not None
+            else verify_decoder_reference(mdf_precision_reference, source_root)
+        )
         objects = read(Path(mdf_reference["path"]) / "RUN_MANIFEST.json")[
             "objects_per_group"
         ]
@@ -270,7 +309,9 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="mdf_precision_qualification"
+        mode="target_resolution_audit"
+        if target_resolution_reference is not None
+        else "mdf_precision_qualification"
         if mdf_precision_reference is not None
         else "full_decoder_qualification"
         if full_decoder_reference is not None
@@ -333,7 +374,7 @@ def prepare(
         population_training_started=False,
         interpretation="diagnostic only; observed validation has been used in earlier experiments",
     )
-    if full_decoder_reference is not None or mdf_precision_reference is not None:
+    if full_decoder_reference is not None or mdf_reference is not None:
         manifest.update(
             qualification_reference=qualification_reference,
             seconds=4800,
@@ -354,6 +395,10 @@ def prepare(
             != read(Path(mdf_reference["path"]) / "RUN_MANIFEST.json")["rows_sha256"]
         ):
             raise ValueError("MDF comparison must replay identical observed rows")
+    if target_resolution_reference is not None:
+        manifest.update(
+            seconds=2400, maximum_decoder_evaluations=1000, allocation_gpu_hours=0.75
+        )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest
 
@@ -757,6 +802,7 @@ def run(root):
             "photometry_reference",
             "full_decoder_qualification",
             "mdf_precision_qualification",
+            "target_resolution_audit",
         }:
             from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
             from euclid_dsps.calibration import (
@@ -816,18 +862,24 @@ def run(root):
             if manifest["mode"] in {
                 "full_decoder_qualification",
                 "mdf_precision_qualification",
+                "target_resolution_audit",
             }:
                 from euclid_dsps.amortized.decoder_qualification import qualify
                 from euclid_dsps.model import photometry_numerics
 
-                mdf_mode = manifest["mode"] == "mdf_precision_qualification"
+                resolution_mode = manifest["mode"] == "target_resolution_audit"
+                mdf_mode = (
+                    manifest["mode"] == "mdf_precision_qualification" or resolution_mode
+                )
                 reference = (
                     manifest["mdf_precision_reference"]
                     if mdf_mode
                     else manifest["qualification_reference"]
                 )
                 verify_reference = (
-                    verify_decoder_reference
+                    verify_resolution_reference
+                    if resolution_mode
+                    else verify_decoder_reference
                     if mdf_mode
                     else verify_photometry_reference
                 )
@@ -953,6 +1005,7 @@ def run(root):
                         for key in ("x", "row_indices", "origins", "coordinate_names"):
                             if not np.array_equal(previous[key], replay[key]):
                                 raise ValueError(f"qualification replay differs: {key}")
+                if mdf_mode and not resolution_mode:
                     from euclid_dsps.amortized.mdf_precision import probe
                     from euclid_dsps.model import (
                         _context_ssp_lgmet,
@@ -998,17 +1051,54 @@ def run(root):
                         ),
                     )
 
-                result, _ = qualify(
-                    baseline_target,
-                    corrected_target,
-                    points,
-                    observations,
-                    budget,
-                    names=spec.names,
-                    bands=stats.band_names,
-                    progress=qualification_progress,
-                    labels=labels,
-                )
+                if resolution_mode:
+                    from euclid_dsps.amortized.target_resolution import analyze, collect
+
+                    def resolution_progress(snapshot):
+                        write(root / "TARGET_RESOLUTION_SNAPSHOT.json", snapshot)
+                        partial, table = analyze(snapshot)
+                        write(
+                            root / "TARGET_RESOLUTION_PARTIAL.json",
+                            finite_json(partial),
+                        )
+                        pd.DataFrame(table).to_csv(
+                            root / "target_resolution.csv", index=False
+                        )
+                        write(
+                            root / "PROGRESS.json",
+                            dict(
+                                stage="target_resolution_audit",
+                                completed_checks=len(snapshot["cases"]),
+                                budget=budget.snapshot(),
+                            ),
+                        )
+
+                    source_report = read(
+                        Path(reference["path"]) / "FULL_DECODER_QUALIFICATION.json"
+                    )
+                    snapshot = collect(
+                        corrected_target,
+                        points,
+                        observations,
+                        source_report,
+                        budget,
+                        names=tuple(spec.names),
+                        bands=tuple(stats.band_names),
+                        progress=resolution_progress,
+                    )
+                    result, _ = analyze(snapshot)
+                else:
+                    result, _ = qualify(
+                        baseline_target,
+                        corrected_target,
+                        points,
+                        observations,
+                        budget,
+                        names=spec.names,
+                        bands=stats.band_names,
+                        progress=qualification_progress,
+                        labels=labels,
+                    )
                 result["candidate_numerics"] = photometry_numerics(
                     corrected.model_config
                 )
@@ -1023,7 +1113,7 @@ def run(root):
                     "QUALIFICATION_POINTS.npz",
                     "candidate_config.yaml",
                 )
-                if mdf_mode:
+                if mdf_mode and not resolution_mode:
                     result["precision_scope"] = (
                         "MDF weights and induced contractions only; inputs, assets and downstream casts remain mixed precision"
                     )
@@ -1035,6 +1125,18 @@ def run(root):
                         result["candidate_numerical_checks"] = "NOT_PASSED"
                         result["next_stage"] = "INVESTIGATE_MDF_WEIGHTS"
                     artifacts += ("MDF_WEIGHT_PROBES.json", "mdf_weight_probes.csv")
+                if resolution_mode:
+                    report_name = "TARGET_RESOLUTION.json"
+                    result["identical_source_points_verified"] = True
+                    result["source_reference"] = reference
+                    artifacts = (
+                        "CACHE_FLUX_AUDIT.json",
+                        report_name,
+                        "target_resolution.csv",
+                        "TARGET_RESOLUTION_SNAPSHOT.json",
+                        "QUALIFICATION_POINTS.npz",
+                        "candidate_config.yaml",
+                    )
             elif manifest["mode"] == "photometry_reference":
                 from euclid_dsps.amortized.photometry_reference import (
                     analyze_snapshot,
@@ -1489,6 +1591,7 @@ def main():
     parser.add_argument("--photometry-reference", action="store_true")
     parser.add_argument("--full-decoder-reference", type=Path)
     parser.add_argument("--mdf-precision-reference", type=Path)
+    parser.add_argument("--target-resolution-reference", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1504,6 +1607,7 @@ def main():
             args.photometry_reference,
             args.full_decoder_reference,
             args.mdf_precision_reference,
+            args.target_resolution_reference,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

@@ -104,6 +104,7 @@ parameters physically.
    diffsky_dataset
    diffsky_synthetic_closure
    forward_model
+   feniks_decoder_debug
    prior_learning
    spline15d_realnvp
    amortized_inference

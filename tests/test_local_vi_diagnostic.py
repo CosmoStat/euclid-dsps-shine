@@ -556,6 +556,40 @@ def test_prepare_and_complete_runner_with_mock_physics(
         assert precision_report["identical_source_points_verified"] is True
         assert precision_report["variant_labels"] == ["merged_mdf32", "merged_mdf64"]
         assert (precision_root / "MDF_WEIGHT_PROBES.json").is_file()
+        # Exercise the residual-only follow-up on a synthetic unresolved check.
+        candidate_case = next(
+            c for c in precision_report["cases"] if c["variant"] == "merged_mdf64"
+        )
+        pending = next(
+            c for c in candidate_case["checks"] if c["component"] == "centered_loglike"
+        )
+        pending["status"] = "INCONCLUSIVE"
+        precision_path = precision_root / "FULL_DECODER_QUALIFICATION.json"
+        runner.write(precision_path, precision_report)
+        precision_final = runner.read(precision_root / "FINAL.json")
+        precision_final["artifacts"][precision_path.name]["sha256"] = (
+            runner.sha256_file(precision_path)
+        )
+        runner.write(precision_root / "FINAL.json", precision_final)
+        residual_root = tmp_path / "residual"
+        prepared = runner.prepare(
+            residual_root, source, target_resolution_reference=precision_root
+        )
+        assert prepared["maximum_decoder_evaluations"] == 1000
+        assert prepared["allocation_gpu_hours"] == 0.75
+        residual_final = runner.run(residual_root)
+        assert residual_final["status"] == "TARGET_RESOLUTION_COMPLETE"
+        assert residual_final["population_training_started"] is False
+        from scripts.summarize_feniks_sc_drws_target_resolution import (
+            summarize as summarize_residual,
+        )
+
+        residual_report = summarize_residual(residual_root)
+        assert len(residual_report["checks"]) == 1
+        assert residual_report["checks"][0]["status"] == "PASS"
+        (residual_root / "TARGET_RESOLUTION_SNAPSHOT.json").write_text("{}")
+        with pytest.raises(ValueError, match="changed artifact"):
+            summarize_residual(residual_root)
         (root / "QUALIFICATION_POINTS.npz").write_bytes(b"changed")
         with pytest.raises(ValueError, match="decoder reference artifact changed"):
             runner.verify_decoder_reference(root, source)
