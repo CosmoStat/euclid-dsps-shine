@@ -1,5 +1,61 @@
 # Plan
 
+## 2026-09-08 Implement bounded local-VI diagnostic
+
+- Implement a separate, truth-free single-H100 runner: contract checks, then
+  same-family local VI with two starts on 16 observed and 16 generated objects.
+- Use corrected balanced B as the fixed-family source (rather than historical
+  A's known incomplete topology); retain A/D as external historical controls.
+- Freeze context, prior, calibration and features; optimize only local Gaussian
+  base and coupling parameters. Preserve full density and entropy terms.
+- Add finite-rank likelihood controls, per-object replicated support/residual
+  diagnostics, checkpoint round trips, strict cost/deadline stops and artifacts.
+- No population step, automatic sweep or cancellation of existing jobs.
+  Implemented in a separate runner and immutable one-H100 launcher; existing
+  workflows and historical gates remain unchanged.
+- Completed contract audits, frozen-parent local base/coupling optimization,
+  fresh replicated direct-draw diagnostics, generated likelihood ranks,
+  per-case histories/checkpoints and paired CSV/PNG reports. Stop at 45,000
+  decoder evaluations or 9,900 process seconds, with a two-case cost preflight
+  and three-hour Slurm limit. No posterior is automatically selected/promoted.
+- Strip legacy truth/reporting column references from a separate resolved
+  read config before accessing the catalogue. Verify original artifact hashes
+  and preserve physical settings. Reject unsupported noise/missing-data
+  contexts, changed parents and nonfinite updates without filtering cases.
+- Verification: 40 focused/adjacent tests pass, including an end-to-end CPU
+  mock-physics run through parquet loading, contracts, VI, checkpoint reload
+  and reports; Gaussian optimization and a missed-mode high-ESS negative
+  control; compileall, Ruff, CLI help and shell syntax pass. Real DSPS assets
+  and the source B checkpoint are not available locally, so no SED/H100 run
+  or cluster submission is claimed. No MCMC-based smoke was run.
+- Runbook: `docs/feniks_local_vi_diagnostic_runbook.md`. Remaining task is the
+  bounded Jean-Zay execution and artifact readback before choosing a next
+  amortization, optimization or model-adequacy intervention.
+
+## 2026-09-08 Diagnostic reset before further VI training
+
+- Planning phase requested after balanced-v2 K256 failed for every candidate.
+  Audit target/feature/noise consistency, diagnostic sensitivity, amortization
+  versus approximation error, and population-model adequacy separately.
+- No new training, cluster cancellation, population update or gate change is
+  authorized by this planning phase. Preserve the frozen experiment contract.
+- Prepare a bounded, decision-driven plan in
+  `docs/feniks_vi_diagnostic_attack_plan_20260908.md`; record executed analytical
+  checks separately from proposed SED experiments. Analysis completed.
+- Verified that balanced selection already excludes B/C/D after their supplied
+  K256 failures; K1024 cannot restore eligibility under the frozen contract.
+- CPU negative control using existing rank functions: a prior-only proposal
+  passes marginal/projection SBC but fails likelihood-rank SBC (KS .9491).
+  Exact Gaussian posterior positive control passes all three (likelihood KS
+  .0214). This exposes diagnostic insensitivity, not a proven SED encoder bug.
+- Next proposed experiment: contract audit, then 16 observed + 16 generated
+  cases with two-start same-family local VI; one H100, three-hour hard ceiling
+  after a two-object cost measurement. No new global sweep. Separate inference
+  readiness from population adequacy in any future protocol, without modifying
+  historical gates or allowing unreliable population integration.
+- Delivered the plan only; no science code changes or remote actions. Existing
+  SED run conclusions remain provisional until artifact-level readback.
+
 ## 2026-09-08 Balanced NPE single-GPU launch repair
 
 - Job `1892569` completed the two-object SED smoke, then failed before the
