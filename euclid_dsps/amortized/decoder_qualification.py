@@ -45,7 +45,18 @@ def resolved_check(fd, resolution, ad, *, atol, rtol):
     )
 
 
-def qualify(legacy, candidate, points, observations, budget, *, names, bands, progress):
+def qualify(
+    legacy,
+    candidate,
+    points,
+    observations,
+    budget,
+    *,
+    names,
+    bands,
+    progress,
+    labels=("legacy", "merged"),
+):
     """Check all latent-x coordinates with full SED and canonical likelihood.
 
     Caller enforces Gaussian likelihood, complete masks, zero floors and fixed
@@ -54,10 +65,12 @@ def qualify(legacy, candidate, points, observations, budget, *, names, bands, pr
     """
     if not len(points) or not len(names) or not len(bands):
         raise ValueError("nonempty qualification required")
+    if len(labels) != 2 or labels[0] == labels[1]:
+        raise ValueError("two distinct variant labels required")
     rows, cases = [], []
     components = [*bands, "centered_loglike", "logprior", "canonical_loglike"]
     centers = {}
-    for label, target in (("legacy", legacy), ("merged", candidate)):
+    for label, target in zip(labels, (legacy, candidate), strict=True):
 
         def measure(x, observation, target=target):
             values = target(x, observation)
@@ -181,7 +194,7 @@ def qualify(legacy, candidate, points, observations, budget, *, names, bands, pr
             passed = all(c["status"] == "PASS" for c in required) and all(
                 c["passed"] and c["reverse_passed"] for c in chains
             )
-            delta = center[: len(bands)] - centers["legacy", index][: len(bands)]
+            delta = center[: len(bands)] - centers[labels[0], index][: len(bands)]
             memory = jax.local_devices()[0].memory_stats() or {}
             cases.append(
                 dict(
@@ -201,18 +214,19 @@ def qualify(legacy, candidate, points, observations, budget, *, names, bands, pr
                     },
                     forward_delta_sigma=delta.tolist(),
                     max_abs_forward_delta_sigma=float(np.max(abs(delta))),
-                    loglike_delta=float(center[-1] - centers["legacy", index][-1]),
-                    prior_delta=float(center[-2] - centers["legacy", index][-2]),
+                    loglike_delta=float(center[-1] - centers[labels[0], index][-1]),
+                    prior_delta=float(center[-2] - centers[labels[0], index][-2]),
                 )
             )
             progress(label, index, "point_complete", rows, cases)
         # Free the old compilation before compiling the candidate full target.
         jax.clear_caches()
     numerical = all(
-        c["numerical_checks"] == "PASS" for c in cases if c["variant"] == "merged"
+        c["numerical_checks"] == "PASS" for c in cases if c["variant"] == labels[1]
     )
     return dict(
         status="FULL_DECODER_QUALIFICATION_COMPLETE",
+        variant_labels=list(labels),
         cases=cases,
         candidate_numerical_checks="PASS" if numerical else "NOT_PASSED",
         next_stage="SIMULATOR_COMPATIBILITY_REVIEW_REQUIRED"

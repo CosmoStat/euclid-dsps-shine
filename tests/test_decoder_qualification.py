@@ -176,3 +176,7 @@ def test_sleep_cache_numerics_cannot_be_mixed(tmp_path):
     config["model"]["photometry_integrator"] = "legacy_trapezoid_v1"
     with pytest.raises(ValueError, match="photometry_numerics"):
         _prepare_sleep_noiseless_cache(**kwargs)
+    config["model"]["photometry_integrator"] = "merged_gauss4_v1"
+    config["model"]["mdf_weight_precision"] = "float64_v1"
+    with pytest.raises(ValueError, match="photometry_numerics"):
+        _prepare_sleep_noiseless_cache(**kwargs)

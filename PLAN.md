@@ -8513,3 +8513,30 @@ Remote recovery:
 - Remaining limits: no guarantee of support improvement; confirmation is a
   reserved subset of previously used validation, not a new catalogue; projection
   calibration is necessary evidence, not a joint-posterior certificate.
+
+# 2026-09-09: isolate remaining MDF precision failures (implemented)
+
+- Remote full-decoder qualification completed, not passed: nine metallicity
+  AD/FD failures and unresolved weak directions remain with merged quadrature.
+  Matching reverse/JVP identities do not certify the physical derivatives.
+- Compare unchanged merged arithmetic with float64 MDF weight arithmetic at
+  the exact six saved points. Preserve DSPS triweight equations, scatter,
+  assets, likelihood, prior, and existing tolerances; no automatic training.
+- Export small weight/derivative probes with an independent polynomial
+  reference to distinguish weight arithmetic from downstream mixed precision.
+- Implemented opt-in MDF weight precision and induced float64 contractions,
+  retaining historical defaults and downstream casts. Numerical cache contracts
+  reject cross-precision bank reuse. This is not a full-float64 decoder.
+- New `LOCAL_VI_MDF_PRECISION_REFERENCE` mode verifies the completed decoder
+  receipt and exact saved point/context identity. Compare merged_mdf32/64 on
+  every coordinate; weight-reference discrepancies also block qualification.
+- Verification: 89 targeted tests passed, three asset-dependent tests skipped;
+  compileall, Ruff, CLI help, Bash syntax and diff checks pass. Includes real
+  DSPS synthetic SED forward/gradient smoke, compressed/survival contractions,
+  analytic polynomial controls, unchanged historical weights, cache exclusion,
+  and mock end-to-end preparation/replay/receipt integrity.
+- Legacy one-row/batch fit commands from AGENTS.md could not run: their named
+  config files are absent. No H100 qualification or catalogue fit is claimed.
+- Runbook: `docs/feniks_mdf_precision_runbook.md`. One H100, 90-minute allocation
+  ceiling, 6000 decoder calls; no local VI, NPE or population job follows.
+  Inspect numerical results and simulator compatibility before rebuilding banks.

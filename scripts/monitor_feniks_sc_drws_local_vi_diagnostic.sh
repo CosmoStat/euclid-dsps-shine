@@ -20,10 +20,11 @@ for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAI
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
 mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
-if mode == 'full_decoder_qualification':
+if mode in ('full_decoder_qualification', 'mdf_precision_qualification'):
     partial = root/'FULL_DECODER_PARTIAL.json'
     cases = json.loads(partial.read_text())['cases'] if partial.is_file() else []
-    for variant in ('legacy', 'merged'):
+    variants = ('merged_mdf32', 'merged_mdf64') if mode == 'mdf_precision_qualification' else ('legacy', 'merged')
+    for variant in variants:
         done = [c for c in cases if c['variant'] == variant]
         print(variant, 'completed points:', len(done), 'checks:', [c['numerical_checks'] for c in done])
     report = root/'FULL_DECODER_QUALIFICATION.json'

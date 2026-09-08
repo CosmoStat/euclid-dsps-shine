@@ -33,7 +33,7 @@ def summarize(root):
             case["max_abs_forward_delta_sigma"],
             case["steady_forward_seconds"],
         )
-        if case["variant"] == "merged":
+        if case["variant"] == result.get("variant_labels", ["legacy", "merged"])[-1]:
             bad = Counter(
                 c["coordinate"] + ":" + c["status"]
                 for c in case["checks"]
@@ -53,6 +53,20 @@ def summarize(root):
                 case["floating_trace_dtypes"],
                 "memory:",
                 case["device_memory"],
+            )
+    weights_path = root / "MDF_WEIGHT_PROBES.json"
+    if weights_path.is_file():
+        weights = json.loads(weights_path.read_text())
+        print("MDF analytic reference:", weights["candidate_reference_checks"])
+        print(
+            "MDF weights: variant point max value/reference error max AD/reference error"
+        )
+        for c in weights["cases"]:
+            print(
+                c["variant"],
+                c["point_index"],
+                c["max_abs_weight_error"],
+                c["max_abs_derivative_error"],
             )
     print(
         "Catalogue simulator compatibility NOT VERIFIED; no NPE/population promotion."

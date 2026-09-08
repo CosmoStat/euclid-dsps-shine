@@ -2975,16 +2975,20 @@ def lognormal_mdf_lgmet_weights_jax(
     ssp_lgmet: jnp.ndarray,
     lgmet_abs_median: jnp.ndarray,
     scatter_dex: jnp.ndarray,
+    *,
+    numerical_dtype=jnp.float32,
 ) -> jnp.ndarray:
     """Return DSPS lognormal-MDF weights over the SSP metallicity grid."""
+    if numerical_dtype == jnp.float64 and not jax.config.x64_enabled:
+        raise ValueError("float64 MDF weights require JAX_ENABLE_X64=true")
     from dsps.sed.metallicity_weights import calc_lgmet_weights_from_lognormal_mdf
 
     weights = calc_lgmet_weights_from_lognormal_mdf(
-        jnp.asarray(lgmet_abs_median, dtype=jnp.float32),
-        jnp.maximum(jnp.asarray(scatter_dex, dtype=jnp.float32), 1.0e-6),
-        jnp.asarray(ssp_lgmet, dtype=jnp.float32),
+        jnp.asarray(lgmet_abs_median, dtype=numerical_dtype),
+        jnp.maximum(jnp.asarray(scatter_dex, dtype=numerical_dtype), 1.0e-6),
+        jnp.asarray(ssp_lgmet, dtype=numerical_dtype),
     )
-    weights = jnp.clip(jnp.asarray(weights, dtype=jnp.float32), 0.0, jnp.inf)
+    weights = jnp.clip(jnp.asarray(weights, dtype=numerical_dtype), 0.0, jnp.inf)
     return weights / jnp.maximum(jnp.sum(weights), 1.0e-30)
 
 
@@ -2995,7 +2999,10 @@ def context_ssp_lognormal_mdf_jax(
 ) -> jnp.ndarray:
     """Return age-by-wave SSP flux integrated over a lognormal metallicity MDF."""
     weights = lognormal_mdf_lgmet_weights_jax(
-        _context_ssp_lgmet(context), lgmet_abs_median, scatter_dex
+        _context_ssp_lgmet(context),
+        lgmet_abs_median,
+        scatter_dex,
+        numerical_dtype=_mdf_weight_dtype(context.model_config),
     )
     if (
         context.compressed_ssp_basis_jax is None
@@ -3060,6 +3067,7 @@ def _diffsky_basic_surviving_mstar_by_age_jax(
             _context_ssp_lgmet(context),
             lgmet_abs,
             jnp.asarray(model_config.get("stellar_metallicity_scatter_dex", 0.2)),
+            numerical_dtype=_mdf_weight_dtype(model_config),
         )
         return jnp.nan_to_num(
             jnp.einsum("m,ma->a", weights, jnp.asarray(grid, dtype=jnp.float32)),
@@ -4060,16 +4068,31 @@ def fixed_spectrum_dimming_factor_jax(z):
     )
 
 
+def _mdf_weight_dtype(model_config):
+    name = (model_config or {}).get("mdf_weight_precision", "float32_legacy")
+    if name not in {"float32_legacy", "float64_v1"}:
+        raise ValueError(f"unsupported mdf_weight_precision: {name}")
+    return jnp.float64 if name == "float64_v1" else jnp.float32
+
+
 def photometry_numerics(model_config: dict[str, Any] | None) -> dict[str, Any]:
     """Versioned numerical contract; missing historical key means legacy."""
     name = (model_config or {}).get("photometry_integrator", "legacy_trapezoid_v1")
     if name not in {"legacy_trapezoid_v1", "merged_gauss4_v1"}:
         raise ValueError(f"unsupported photometry_integrator: {name}")
-    return dict(
+    dtype = _mdf_weight_dtype(model_config)
+    result = dict(
         integrator=name,
         projection_dtype="float64" if name == "merged_gauss4_v1" else "historical",
         spectrum_construction="unchanged_mixed_precision",
     )
+    # Preserve historical receipts byte-for-byte; the opt-in changes the cache key.
+    if dtype == jnp.float64:
+        result.update(
+            mdf_weight_precision="float64_v1",
+            spectrum_construction="float64_mdf_weights_mixed_downstream",
+        )
+    return result
 
 
 def predict_mags_jax(

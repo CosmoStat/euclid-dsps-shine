@@ -482,7 +482,8 @@ def test_prepare_and_complete_runner_with_mock_physics(
         runner.prepare(root, source, objects=2, steps=1, draws=32)
     monkeypatch.setattr(runner.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(runner, "load_checkpoint", lambda *args: model)
-    spec = LatentSpec(("x0", "x1"), jnp.array([-10.0, -10.0]), jnp.array([10.0, 10.0]))
+    names = ("log10_stellar_metallicity", "x1") if isolation == "full" else ("x0", "x1")
+    spec = LatentSpec(names, jnp.array([-10.0, -10.0]), jnp.array([10.0, 10.0]))
     monkeypatch.setattr(runner, "latent_spec_from_config", lambda c: spec)
     monkeypatch.setattr(runner, "load_filters", lambda *args: None)
     monkeypatch.setattr(runner, "load_context", lambda *args, **kwargs: None)
@@ -490,7 +491,9 @@ def test_prepare_and_complete_runner_with_mock_physics(
         monkeypatch.setattr(
             runner,
             "load_context",
-            lambda *args, **kwargs: SimpleNamespace(model_config=config["model"]),
+            lambda *args, **kwargs: SimpleNamespace(
+                model_config=config["model"], z_sun=0.02
+            ),
         )
     monkeypatch.setattr(runner, "dynamic_model_args", lambda c: None)
     monkeypatch.setattr(runner, "_model_flux_from_x_sample_chunks", flux)
@@ -539,6 +542,23 @@ def test_prepare_and_complete_runner_with_mock_physics(
         from scripts.summarize_feniks_sc_drws_decoder_qualification import summarize
 
         assert summarize(root)["status"] == result["status"]
+        import euclid_dsps.model as sed
+
+        monkeypatch.setattr(
+            sed, "_context_ssp_lgmet", lambda ctx: jnp.linspace(-4, -1, 8)
+        )
+        precision_root = tmp_path / "precision"
+        runner.prepare(precision_root, source, mdf_precision_reference=root)
+        result64 = runner.run(precision_root)
+        assert result64["local_optimization_started"] is False
+        assert result64["population_training_started"] is False
+        precision_report = summarize(precision_root)
+        assert precision_report["identical_source_points_verified"] is True
+        assert precision_report["variant_labels"] == ["merged_mdf32", "merged_mdf64"]
+        assert (precision_root / "MDF_WEIGHT_PROBES.json").is_file()
+        (root / "QUALIFICATION_POINTS.npz").write_bytes(b"changed")
+        with pytest.raises(ValueError, match="decoder reference artifact changed"):
+            runner.verify_decoder_reference(root, source)
         (reference_path / "PHOTOMETRY_REFERENCE.json").write_text("{}")
         with pytest.raises(ValueError, match="reference artifact changed"):
             runner.verify_photometry_reference(reference_path, source)

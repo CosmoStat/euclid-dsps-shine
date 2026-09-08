@@ -144,6 +144,40 @@ def verify_photometry_reference(path, source_root):
     )
 
 
+def verify_decoder_reference(path, source_root):
+    path = Path(path).resolve()
+    final = read(path / "FINAL.json")
+    required = {"FULL_DECODER_QUALIFICATION.json", "QUALIFICATION_POINTS.npz"}
+    if final.get(
+        "status"
+    ) != "FULL_DECODER_QUALIFICATION_COMPLETE" or not required <= set(
+        final["artifacts"]
+    ):
+        raise ValueError("complete full decoder reference and saved points required")
+    for name, item in final["artifacts"].items():
+        if sha256_file(path / name) != item["sha256"]:
+            raise ValueError(f"decoder reference artifact changed: {name}")
+    old = read(path / "RUN_MANIFEST.json")
+    if (
+        old["mode"] != "full_decoder_qualification"
+        or Path(old["source_root"]).resolve() != Path(source_root).resolve()
+        or old["source_manifest_sha256"]
+        != sha256_file(Path(source_root) / "RUN_MANIFEST.json")
+    ):
+        raise ValueError("decoder reference belongs to another source or mode")
+    for name, field in (
+        ("config.yaml", "config_sha256"),
+        ("observed_rows.npy", "rows_sha256"),
+    ):
+        if sha256_file(path / name) != old[field]:
+            raise ValueError(f"decoder reference input changed: {name}")
+    return dict(
+        path=str(path),
+        final_sha256=sha256_file(path / "FINAL.json"),
+        manifest_sha256=sha256_file(path / "RUN_MANIFEST.json"),
+    )
+
+
 def prepare(
     root,
     source_root,
@@ -154,6 +188,7 @@ def prepare(
     redshift_decomposition=False,
     photometry_reference=False,
     full_decoder_reference=None,
+    mdf_precision_reference=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -163,6 +198,7 @@ def prepare(
                 redshift_decomposition,
                 photometry_reference,
                 full_decoder_reference is not None,
+                mdf_precision_reference is not None,
             )
         )
         > 1
@@ -175,6 +211,12 @@ def prepare(
         if full_decoder_reference is None
         else verify_photometry_reference(full_decoder_reference, source_root)
     )
+    mdf_reference = None
+    if mdf_precision_reference is not None:
+        mdf_reference = verify_decoder_reference(mdf_precision_reference, source_root)
+        objects = read(Path(mdf_reference["path"]) / "RUN_MANIFEST.json")[
+            "objects_per_group"
+        ]
     if not 2 <= objects <= 16 or not 1 <= steps <= 64 or not 32 <= draws <= 128:
         raise ValueError(
             "bounded budget: 2..16 objects/group, 1..64 steps, 32..128 evaluation draws"
@@ -228,7 +270,9 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="full_decoder_qualification"
+        mode="mdf_precision_qualification"
+        if mdf_precision_reference is not None
+        else "full_decoder_qualification"
         if full_decoder_reference is not None
         else "photometry_reference"
         if photometry_reference
@@ -289,7 +333,7 @@ def prepare(
         population_training_started=False,
         interpretation="diagnostic only; observed validation has been used in earlier experiments",
     )
-    if full_decoder_reference is not None:
+    if full_decoder_reference is not None or mdf_precision_reference is not None:
         manifest.update(
             qualification_reference=qualification_reference,
             seconds=4800,
@@ -300,6 +344,16 @@ def prepare(
             starts=0,
             candidate_integrator="merged_gauss4_v1",
         )
+    if mdf_reference is not None:
+        manifest.update(
+            mdf_precision_reference=mdf_reference,
+            candidate_mdf_weight_precision="float64_v1",
+        )
+        if (
+            sha256_file(root / "observed_rows.npy")
+            != read(Path(mdf_reference["path"]) / "RUN_MANIFEST.json")["rows_sha256"]
+        ):
+            raise ValueError("MDF comparison must replay identical observed rows")
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest
 
@@ -702,6 +756,7 @@ def run(root):
             "redshift_decomposition",
             "photometry_reference",
             "full_decoder_qualification",
+            "mdf_precision_qualification",
         }:
             from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
             from euclid_dsps.calibration import (
@@ -758,15 +813,26 @@ def run(root):
                     ),
                 )
 
-            if manifest["mode"] == "full_decoder_qualification":
+            if manifest["mode"] in {
+                "full_decoder_qualification",
+                "mdf_precision_qualification",
+            }:
                 from euclid_dsps.amortized.decoder_qualification import qualify
                 from euclid_dsps.model import photometry_numerics
 
-                reference = manifest["qualification_reference"]
+                mdf_mode = manifest["mode"] == "mdf_precision_qualification"
+                reference = (
+                    manifest["mdf_precision_reference"]
+                    if mdf_mode
+                    else manifest["qualification_reference"]
+                )
+                verify_reference = (
+                    verify_decoder_reference
+                    if mdf_mode
+                    else verify_photometry_reference
+                )
                 if (
-                    verify_photometry_reference(
-                        reference["path"], manifest["source_root"]
-                    )
+                    verify_reference(reference["path"], manifest["source_root"])
                     != reference
                 ):
                     raise ValueError("qualification reference receipt changed")
@@ -782,11 +848,47 @@ def run(root):
                     context.model_config,
                     photometry_integrator=manifest["candidate_integrator"],
                 )
+                baseline_target = target
+                labels = ("legacy", "merged")
+                if mdf_mode:
+                    if (
+                        context.model_config.get("stellar_metallicity_model")
+                        != "lognormal_mdf_fixed_scatter"
+                    ):
+                        raise ValueError(
+                            "MDF precision diagnostic requires fixed-scatter MDF"
+                        )
+                    baseline_context = copy.copy(corrected)
+                    baseline_args = dynamic_model_args(baseline_context)
+
+                    @eqx.filter_jit
+                    def baseline_target(x, observation):
+                        return posterior_log_target(
+                            model,
+                            x,
+                            observation,
+                            spec,
+                            baseline_context,
+                            baseline_args,
+                            spec.names,
+                            likelihood,
+                            calibration,
+                        )
+
+                    corrected.model_config = dict(
+                        corrected.model_config,
+                        mdf_weight_precision=manifest["candidate_mdf_weight_precision"],
+                    )
+                    labels = ("merged_mdf32", "merged_mdf64")
                 corrected_args = dynamic_model_args(corrected)
                 candidate_config = copy.deepcopy(config)
                 candidate_config["model"]["photometry_integrator"] = manifest[
                     "candidate_integrator"
                 ]
+                if mdf_mode:
+                    candidate_config["model"]["mdf_weight_precision"] = manifest[
+                        "candidate_mdf_weight_precision"
+                    ]
                 (root / "candidate_config.yaml").write_text(
                     yaml.safe_dump(candidate_config, sort_keys=False)
                 )
@@ -838,6 +940,44 @@ def run(root):
                     ),
                     coordinate_names=np.asarray(spec.names),
                 )
+                if mdf_mode:
+                    with (
+                        np.load(
+                            Path(reference["path"]) / "QUALIFICATION_POINTS.npz",
+                            allow_pickle=False,
+                        ) as previous,
+                        np.load(
+                            root / "QUALIFICATION_POINTS.npz", allow_pickle=False
+                        ) as replay,
+                    ):
+                        for key in ("x", "row_indices", "origins", "coordinate_names"):
+                            if not np.array_equal(previous[key], replay[key]):
+                                raise ValueError(f"qualification replay differs: {key}")
+                    from euclid_dsps.amortized.mdf_precision import probe
+                    from euclid_dsps.model import (
+                        _context_ssp_lgmet,
+                        log10_stellar_metallicity_to_absolute_jax,
+                    )
+
+                    theta = x_to_theta(points, spec)
+                    centers = jax.vmap(
+                        lambda m: log10_stellar_metallicity_to_absolute_jax(
+                            m, context.z_sun
+                        )
+                    )(theta[:, spec.names.index("log10_stellar_metallicity")])
+                    scatter = float(
+                        context.model_config.get("stellar_metallicity_scatter_dex", 0.2)
+                    )
+                    weight_report, weight_rows = probe(
+                        _context_ssp_lgmet(context),
+                        np.asarray(centers),
+                        scatter,
+                        budget,
+                    )
+                    write(root / "MDF_WEIGHT_PROBES.json", finite_json(weight_report))
+                    pd.DataFrame(weight_rows).to_csv(
+                        root / "mdf_weight_probes.csv", index=False
+                    )
 
                 def qualification_progress(label, i, stage, measurements, completed):
                     pd.DataFrame(measurements).to_csv(
@@ -859,7 +999,7 @@ def run(root):
                     )
 
                 result, _ = qualify(
-                    target,
+                    baseline_target,
                     corrected_target,
                     points,
                     observations,
@@ -867,6 +1007,7 @@ def run(root):
                     names=spec.names,
                     bands=stats.band_names,
                     progress=qualification_progress,
+                    labels=labels,
                 )
                 result["candidate_numerics"] = photometry_numerics(
                     corrected.model_config
@@ -882,6 +1023,18 @@ def run(root):
                     "QUALIFICATION_POINTS.npz",
                     "candidate_config.yaml",
                 )
+                if mdf_mode:
+                    result["precision_scope"] = (
+                        "MDF weights and induced contractions only; inputs, assets and downstream casts remain mixed precision"
+                    )
+                    result["identical_source_points_verified"] = True
+                    result["mdf_reference_checks"] = weight_report[
+                        "candidate_reference_checks"
+                    ]
+                    if weight_report["candidate_reference_checks"] != "PASS":
+                        result["candidate_numerical_checks"] = "NOT_PASSED"
+                        result["next_stage"] = "INVESTIGATE_MDF_WEIGHTS"
+                    artifacts += ("MDF_WEIGHT_PROBES.json", "mdf_weight_probes.csv")
             elif manifest["mode"] == "photometry_reference":
                 from euclid_dsps.amortized.photometry_reference import (
                     analyze_snapshot,
@@ -1335,6 +1488,7 @@ def main():
     parser.add_argument("--redshift-decomposition", action="store_true")
     parser.add_argument("--photometry-reference", action="store_true")
     parser.add_argument("--full-decoder-reference", type=Path)
+    parser.add_argument("--mdf-precision-reference", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1349,6 +1503,7 @@ def main():
             args.redshift_decomposition,
             args.photometry_reference,
             args.full_decoder_reference,
+            args.mdf_precision_reference,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:
