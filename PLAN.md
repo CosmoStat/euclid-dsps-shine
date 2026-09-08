@@ -8286,3 +8286,30 @@ Remote recovery:
   are unchanged; only the DSPS execution batching changes. This recovers the
   three H100 diagnostics after the unchunked `[64, 256, 15]` decode requested a
   72.81 GiB allocation.
+# 2026-09-08: balanced frozen-parent NPE continuation (implemented)
+
+- Completed pilot has no eligible posterior: all A/B/C fail importance support;
+  B passes marginal simulated ranks but fails held-out photometry; C reverses
+  that tradeoff. No population update is justified by these receipts.
+- Prepare a bounded continuation from the corrected B checkpoint, preserving
+  the parent and all historical artifacts. Compare continued sleep and two
+  small, prespecified observed-ELBO weights from a common sleep anchor.
+- Add selection-preserving missing-band training, common simulated validation
+  inputs, joint projection ranks, and a reserved confirmation cohort. Keep
+  population training disabled; technical completion is not promotion.
+- Implemented an opt-in selection-preserving sleep conditioning mask, strict
+  finite-draw observed ELBO, and common sleep random numbers. Added full/masked
+  simulated joint projections with training-only normalization and a shared
+  generated-input fingerprint. Historical defaults remain unchanged.
+- The runner preserves checkpoints/cache hashes, reserves confirmation rows,
+  resumes validation shards, records each Slurm submission, and caps peak
+  allocation at four one-GPU jobs. Source B -> S24 -> B/C/D8 -> matched A/B/C/D
+  validation -> frozen-candidate confirmation -> technical receipt. No prior
+  or population job is submitted. Allocation ceiling is 66 GPU-hours.
+- Verification: 83 targeted tests passed; compileall, CLI help and bash syntax
+  passed. The new joint-rank test detects wrong Gaussian correlations despite
+  calibrated marginals. A two-row/four-draw real SED smoke is scheduled before
+  S on Jean-Zay, not claimed as executed locally. No cluster job launched here.
+- Remaining limits: no guarantee of support improvement; confirmation is a
+  reserved subset of previously used validation, not a new catalogue; projection
+  calibration is necessary evidence, not a joint-posterior certificate.

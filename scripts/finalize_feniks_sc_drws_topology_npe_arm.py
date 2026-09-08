@@ -34,8 +34,9 @@ def finalize(*, root: Path, arm: str) -> dict:
     root = root.resolve()
     manifest = json.loads((root / "RUN_MANIFEST.json").read_text(encoding="utf-8"))
     arm = str(arm).upper()
-    if arm not in {"B", "C"}:
-        raise ValueError("arm must be B or C")
+    balanced = manifest.get("method") == "balanced_frozen_parent_npe_v1"
+    if arm not in ({"S", "B", "C", "D"} if balanced else {"B", "C"}):
+        raise ValueError("invalid training arm")
     config_path = root / "arms" / arm / "runtime_config.yaml"
     if not config_path.is_file():
         raise FileNotFoundError(config_path)
@@ -53,19 +54,34 @@ def finalize(*, root: Path, arm: str) -> dict:
     model = load_checkpoint(checkpoint, config)
     if not _same_arrays(source.prior, model.prior):
         raise ValueError("frozen parent changed during posterior training")
+    if balanced:
+        for name in ("sed_scale", "band_calibration"):
+            if not _same_arrays(getattr(source, name), getattr(model, name)):
+                raise ValueError(f"frozen calibration changed: {name}")
+        if (
+            sha256_file(train / "feature_stats.json")
+            != manifest["source"]["feature_stats_sha256"]
+        ):
+            raise ValueError("frozen feature statistics changed")
     names = tuple(latent_spec_from_config(config).names)
     topology = conditional_flow_topology(model.encoder, coordinate_names=names)
     if int(topology["minimum_transform_count"]) < 2:
         raise ValueError("trained posterior violates the topology coverage contract")
+    if (
+        balanced
+        and topology["fingerprint_sha256"]
+        != manifest["source"]["topology"]["fingerprint_sha256"]
+    ):
+        raise ValueError("continuation changed the certified coupling topology")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     metrics = pd.read_csv(metrics_path)
     train_rows = metrics[metrics["split"] == "train"]
     if train_rows.empty or not np.all(train_rows["update_applied"].to_numpy() > 0.5):
         raise ValueError("posterior arm contains missing or rejected updates")
     observed = dict(config["amortized"]["objective"]["observed_elbo"])
-    if arm == "B" and observed.get("enabled"):
+    if arm in {"S", "B"} and observed.get("enabled"):
         raise ValueError("arm B unexpectedly enabled observed reverse KL")
-    if arm == "C" and not observed.get("enabled"):
+    if arm in {"C", "D"} and not observed.get("enabled"):
         raise ValueError("arm C did not enable observed reverse KL")
     receipt = {
         "status": "COMPLETE",

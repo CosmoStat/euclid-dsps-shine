@@ -232,6 +232,7 @@ def test_observed_reverse_kl_updates_q_but_frozen_phase_masks_prior(
             {},
             {},
             n_samples=4,
+            require_all_finite=True,
         )[0]
 
     value, grads = eqx.filter_value_and_grad(objective)(model)

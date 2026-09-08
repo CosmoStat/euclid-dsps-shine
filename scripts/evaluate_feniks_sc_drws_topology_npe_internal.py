@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -23,14 +24,16 @@ from euclid_dsps.amortized.npe_validation import (
     mask_held_out_bands,
     summarize_model_generated_rank_calibration,
     summarize_normalized_residuals,
+    summarize_projected_rank_calibration,
 )
-from euclid_dsps.amortized.posterior import sample_posterior
+from euclid_dsps.amortized.posterior import posterior_log_prob, sample_posterior
 from euclid_dsps.amortized.posterior_target import (
     _apply_model_calibration,
     safe_decoder_inputs,
 )
 from euclid_dsps.amortized.train import (
     LossBatch,
+    _array_tree_sha256,
     _repeat_sleep_rows,
     _sample_sleep_noise,
     _sleep_encoder_features,
@@ -152,6 +155,11 @@ def evaluate(
         **dict(config["amortized"].get("truth_free_validation", {}) or {}),
     }
     sleep = _sleep_runtime_config(config, stats)
+    held_names = tuple(truth_free_validation["held_out_bands"])
+    held_indices = [arrays.band_names.index(name) for name in held_names]
+    if truth_free_validation.get("preserve_selection_band", False):
+        if not held_indices or sleep.get("selection_band_index") in held_indices:
+            raise ValueError("held-out validation must preserve the selection band")
     n_objects = int(len(rows))
     candidate_factor = max(4, int(sleep.get("selection_candidate_factor", 1)))
     candidates = n_objects * candidate_factor
@@ -223,22 +231,50 @@ def evaluate(
         np.asarray(jax.device_get(generated_x)),
         parameter_names=spec.names,
         seed=int(seed) + 1,
-        maximum_ks=float(
-            truth_free_validation["maximum_model_generated_pit_ks"]
-        ),
+        maximum_ks=float(truth_free_validation["maximum_model_generated_pit_ks"]),
         maximum_coverage_ece=float(
             truth_free_validation["maximum_model_generated_coverage_ece"]
         ),
     )
+    joint_summary = {"status": "NOT_REQUESTED"}
+    simulation_fingerprint = hashlib.sha256()
+    for value in (generated_x, noisy_flux, generated_error, generated_mask):
+        array = np.asarray(jax.device_get(value))
+        simulation_fingerprint.update(str((array.shape, array.dtype)).encode())
+        simulation_fingerprint.update(array.tobytes())
+    simulated_nll = float(
+        -jnp.mean(posterior_log_prob(model, generated_features, generated_x))
+    )
+    if truth_free_validation.get("joint_projections", 0):
+        bank_path = Path(truth_free_validation["projection_scale_bank"])
+        bank_receipt = json.loads(bank_path.with_suffix(".npz.json").read_text())
+        if (
+            bank_receipt.get("catalogue_truth_used") is not False
+            or bank_receipt.get("generator") != "direct_frozen_parent"
+            or bank_receipt.get("prior_fingerprint_sha256")
+            != _array_tree_sha256(model.prior)
+        ):
+            raise ValueError(
+                "projection normalization requires the frozen-parent training bank"
+            )
+        with np.load(bank_path, allow_pickle=False) as bank:
+            scale = np.maximum(np.std(bank["x"], axis=0, dtype=np.float64), 1e-6)
+        joint_summary = summarize_projected_rank_calibration(
+            np.asarray(generated_posterior.x),
+            np.asarray(generated_x),
+            scale=scale,
+            seed=int(truth_free_validation.get("projection_seed", 260908)),
+            projections=int(truth_free_validation["joint_projections"]),
+            maximum_ks=float(truth_free_validation["maximum_model_generated_pit_ks"]),
+            maximum_coverage_ece=float(
+                truth_free_validation["maximum_model_generated_coverage_ece"]
+            ),
+        )
     roundtrip = theta_to_x(x_to_theta(generated_x, spec), spec)
     roundtrip_error = float(
         np.max(np.abs(np.asarray(jax.device_get(roundtrip - generated_x))))
     )
 
-    held_names = tuple(
-        truth_free_validation["held_out_bands"]
-    )
-    held_indices = [arrays.band_names.index(name) for name in held_names]
     observed_features, observed_conditioning_mask = mask_held_out_bands(
         jnp.asarray(arrays.flux),
         jnp.asarray(arrays.flux_err),
@@ -288,6 +324,29 @@ def evaluate(
         reference_features,
         int(posterior_draws),
     )
+    masked_rank_summary = summarize_model_generated_rank_calibration(
+        np.asarray(reference_q.x),
+        np.asarray(generated_x),
+        parameter_names=spec.names,
+        seed=int(seed) + 2,
+        maximum_ks=float(truth_free_validation["maximum_model_generated_pit_ks"]),
+        maximum_coverage_ece=float(
+            truth_free_validation["maximum_model_generated_coverage_ece"]
+        ),
+    )
+    masked_joint_summary = {"status": "NOT_REQUESTED"}
+    if truth_free_validation.get("joint_projections", 0):
+        masked_joint_summary = summarize_projected_rank_calibration(
+            np.asarray(reference_q.x),
+            np.asarray(generated_x),
+            scale=scale,
+            seed=int(truth_free_validation.get("projection_seed", 260908)),
+            projections=int(truth_free_validation["joint_projections"]),
+            maximum_ks=float(truth_free_validation["maximum_model_generated_pit_ks"]),
+            maximum_coverage_ece=float(
+                truth_free_validation["maximum_model_generated_coverage_ece"]
+            ),
+        )
     reference_model_flux, _ = _decode(
         model,
         reference_q.x,
@@ -393,6 +452,11 @@ def evaluate(
             "sfh_parameters": [name for name in spec.names if name.startswith("sfh_")],
         },
         "model_generated_calibration": rank_summary,
+        "joint_projection_calibration": joint_summary,
+        "masked_model_generated_calibration": masked_rank_summary,
+        "masked_joint_projection_calibration": masked_joint_summary,
+        "simulation_sha256": simulation_fingerprint.hexdigest(),
+        "simulation_nll": simulated_nll,
         "held_out_band": heldout,
         "held_out_observed_residuals": observed_residual_summary,
         "held_out_model_generated_reference": reference_residual_summary,

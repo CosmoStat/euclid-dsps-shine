@@ -4223,6 +4223,10 @@ def _model_generated_sleep_loss(
         physical_valid = jnp.take(physical_valid, selected, axis=0)
     else:
         candidate_valid_fraction = jnp.mean(physical_valid.astype(jnp.float32))
+    # Apply missing-band conditioning only after the noisy-flux selection event.
+    candidate_mask = _sleep_conditioning_mask(
+        candidate_mask, jax.random.fold_in(key, 7183), sleep
+    )
     features = _sleep_encoder_features(noisy_flux, flux_err, candidate_mask, sleep)
     logq = posterior_log_prob(
         model,
@@ -4347,6 +4351,7 @@ def observed_reverse_kl_loss(
     calibration_config,
     *,
     n_samples: int,
+    require_all_finite: bool = False,
 ):
     """Reverse KL on observed photometry using direct reparameterized q draws."""
     count = int(n_samples)
@@ -4376,6 +4381,8 @@ def observed_reverse_kl_loss(
         return jnp.sum(jnp.where(finite, value, 0.0)) / finite_count
 
     reverse_kl = finite_mean(posterior.logq - target.logtarget)
+    if require_all_finite:
+        reverse_kl = jnp.where(jnp.all(finite), reverse_kl, jnp.inf)
     return reverse_kl, {
         "reverse_kl": reverse_kl,
         "negative_loglike": finite_mean(-target.loglike),
@@ -4406,6 +4413,8 @@ def _reweighted_sleep_objective_loss(
     """Pure sleep, optionally augmented by an observed-data reverse KL."""
     observed = dict(objective_config.get("observed_elbo", {}) or {})
     if not bool(observed.get("enabled", False)):
+        if bool(observed.get("common_sleep_random_numbers", False)):
+            key = jax.random.split(key)[0]
         return _model_generated_sleep_loss(
             model,
             batch,
@@ -4452,6 +4461,7 @@ def _reweighted_sleep_objective_loss(
         likelihood_config,
         calibration_config,
         n_samples=int(observed.get("n_samples", 4)),
+        require_all_finite=bool(observed.get("require_all_finite", False)),
     )
     total = sleep_weight * sleep_loss + weight * observed_loss
     metrics = dict(metrics)
@@ -5097,6 +5107,23 @@ def _input_noise_config(raw: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _sleep_conditioning_mask(
+    mask: jnp.ndarray, key: jax.Array, sleep: dict[str, Any]
+) -> jnp.ndarray:
+    """Drop a prescribed band group, never the catalogue selection band."""
+    probability = float(sleep.get("conditioning_mask_probability", 0.0))
+    indices = tuple(sleep.get("conditioning_mask_indices", ()))
+    if not 0.0 <= probability < 1.0:
+        raise ValueError("conditioning mask probability must lie in [0, 1)")
+    if probability == 0.0:
+        return mask
+    if not indices or sleep.get("selection_band_index") in indices:
+        raise ValueError("conditioning masks must exclude the selection band")
+    drop = jax.random.bernoulli(key, probability, (mask.shape[0],))
+    bands = jnp.zeros(mask.shape[1], dtype=bool).at[jnp.asarray(indices)].set(True)
+    return mask & ~(drop[:, None] & bands[None, :])
+
+
 def _sleep_runtime_config(
     config: dict[str, Any],
     feature_stats: FeatureStats,
@@ -5125,6 +5152,15 @@ def _sleep_runtime_config(
         "error_epsilon": float(feature_stats.error_epsilon),
         **_sleep_selection_config(sleep, bands),
     }
+    masking = dict(sleep.get("conditioning_mask", {}) or {})
+    probability = float(masking.get("probability", 0.0))
+    indices = tuple(bands.index(name) for name in masking.get("bands", ()))
+    if not 0.0 <= probability < 1.0:
+        raise ValueError("conditioning mask probability must lie in [0, 1)")
+    if probability and (not indices or runtime.get("selection_band_index") in indices):
+        raise ValueError("conditioning masks must exclude the selection band")
+    runtime["conditioning_mask_probability"] = probability
+    runtime["conditioning_mask_indices"] = indices
     if requested == "observed_catalog":
         return runtime
     model = dict(

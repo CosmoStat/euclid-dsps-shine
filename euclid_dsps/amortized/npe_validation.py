@@ -116,12 +116,12 @@ def summarize_truth_free_joint_bank(
         "pareto_k": {
             "finite_fraction": float(np.mean(finite_k)),
             "nonfinite_fraction": float(np.mean(~finite_k)),
-            "finite_gt_0p7_fraction": float(np.mean(pareto[finite_k] > 0.7))
-            if finite_k.any()
-            else None,
-            "finite_gt_1_fraction": float(np.mean(pareto[finite_k] > 1.0))
-            if finite_k.any()
-            else None,
+            "finite_gt_0p7_fraction": (
+                float(np.mean(pareto[finite_k] > 0.7)) if finite_k.any() else None
+            ),
+            "finite_gt_1_fraction": (
+                float(np.mean(pareto[finite_k] > 1.0)) if finite_k.any() else None
+            ),
             "gt_0p7_or_nonfinite_fraction": float(np.mean(~finite_k | (pareto > 0.7))),
         },
         "maximum_raw_weight": {
@@ -258,6 +258,42 @@ def explicit_mixture_log_prob(
         log_prob + jnp.log(weight),
         axis=-1,
     )
+
+
+def summarize_projected_rank_calibration(
+    posterior_samples: np.ndarray,
+    generated_x: np.ndarray,
+    *,
+    scale: np.ndarray,
+    seed: int,
+    projections: int = 32,
+    maximum_ks: float = 0.12,
+    maximum_coverage_ece: float = 0.12,
+) -> dict[str, Any]:
+    """Test fixed random joint projections; scale must come from training only."""
+    samples = np.asarray(posterior_samples, dtype=float)
+    generated = np.asarray(generated_x, dtype=float)
+    scale = np.asarray(scale, dtype=float)
+    if samples.ndim != 3 or scale.shape != (samples.shape[-1],):
+        raise ValueError("projection scale must match the latent dimension")
+    if not np.all(np.isfinite(scale) & (scale > 0)) or projections <= 0:
+        raise ValueError("projection scale and count must be positive and finite")
+    directions = np.random.default_rng(seed).normal(size=(projections, len(scale)))
+    directions /= np.linalg.norm(directions, axis=1, keepdims=True)
+    summary = summarize_model_generated_rank_calibration(
+        np.einsum("knd,pd->knp", samples / scale, directions),
+        np.einsum("nd,pd->np", generated / scale, directions),
+        parameter_names=[f"projection_{i:02d}" for i in range(projections)],
+        seed=seed + 1,
+        maximum_ks=maximum_ks,
+        maximum_coverage_ece=maximum_coverage_ece,
+    )
+    return {
+        **summary,
+        "directions": directions.tolist(),
+        "scale": scale.tolist(),
+        "interpretation": "joint projection diagnostic, not proof of full calibration",
+    }
 
 
 def summarize_model_generated_rank_calibration(
