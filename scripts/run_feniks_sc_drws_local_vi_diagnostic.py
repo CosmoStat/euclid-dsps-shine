@@ -119,7 +119,9 @@ def check_config(config):
         raise ValueError("simulation context/noise contract changed")
 
 
-def prepare(root, source_root, objects=16, steps=64, draws=128):
+def prepare(
+    root, source_root, objects=16, steps=64, draws=128, gradient_isolation=False
+):
     root, source_root = root.resolve(), source_root.resolve()
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
@@ -176,6 +178,7 @@ def prepare(root, source_root, objects=16, steps=64, draws=128):
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
+        mode="gradient_isolation" if gradient_isolation else "local_vi",
         status="PREPARED",
         code_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
@@ -203,11 +206,11 @@ def prepare(root, source_root, objects=16, steps=64, draws=128):
         gradient_draws=4,
         learning_rate=0.001,
         seed=260908,
-        seconds=9900,
-        maximum_decoder_evaluations=45000,
+        seconds=1080 if gradient_isolation else 9900,
+        maximum_decoder_evaluations=500 if gradient_isolation else 45000,
         maximum_gpus=1,
         maximum_nodes=1,
-        allocation_gpu_hours=3,
+        allocation_gpu_hours=1 / 3 if gradient_isolation else 3,
         truth_used=False,
         scientific_promotion=False,
         population_training_started=False,
@@ -611,6 +614,71 @@ def run(root):
         first = PosteriorObservation(
             *[jnp.asarray(x[:1]) for x in (arrays.flux, arrays.flux_err, arrays.mask)]
         )
+        if manifest.get("mode") == "gradient_isolation":
+            from euclid_dsps.amortized.gradient_isolation import isolate_gradient
+
+            with np.load(cache["path"], allow_pickle=False) as bank:
+                point = jnp.asarray(bank["x"][:1])[:, None, :]
+            direction = jax.random.normal(
+                jax.random.PRNGKey(62), point.shape, dtype=point.dtype
+            )
+            direction /= jnp.linalg.norm(direction)
+
+            def progress(label, measurements):
+                pd.DataFrame(measurements).to_csv(
+                    root / "gradient_isolation.csv", index=False
+                )
+                write(
+                    root / "PROGRESS.json",
+                    dict(
+                        stage="gradient_isolation",
+                        direction=label,
+                        budget=budget.snapshot(),
+                    ),
+                )
+
+            write(
+                root / "PROGRESS.json",
+                dict(stage="gradient_isolation_jacobian", budget=budget.snapshot()),
+            )
+            isolated, measurements = isolate_gradient(
+                target,
+                first,
+                point,
+                direction,
+                budget,
+                band_names=stats.band_names,
+                coordinate_names=spec.names,
+                progress=progress,
+            )
+            if (
+                _array_tree_sha256(
+                    (model.prior, model.sed_scale, model.band_calibration)
+                )
+                != frozen_hash
+            ):
+                raise ValueError("frozen model changed")
+            isolated.update(
+                budget=budget.snapshot(),
+                prior_bitwise_unchanged=True,
+                row_index=int(rows[0]),
+                object_id=str(arrays.object_id[0]),
+            )
+            write(root / "GRADIENT_ISOLATION.json", finite_json(isolated))
+            final = dict(
+                status="GRADIENT_ISOLATION_COMPLETE",
+                budget=budget.snapshot(),
+                scientific_promotion=False,
+                local_optimization_started=False,
+                population_training_started=False,
+                truth_used=False,
+                artifacts={
+                    name: dict(path=str(root / name), sha256=sha256_file(root / name))
+                    for name in ("GRADIENT_ISOLATION.json", "gradient_isolation.csv")
+                },
+            )
+            write(root / "FINAL.json", final)
+            return final
         write(
             root / "PROGRESS.json",
             dict(stage="contract_audit", budget=budget.snapshot()),
@@ -900,12 +968,18 @@ def main():
     parser.add_argument("--objects", type=int, default=16)
     parser.add_argument("--steps", type=int, default=64)
     parser.add_argument("--draws", type=int, default=128)
+    parser.add_argument("--gradient-isolation", action="store_true")
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
             parser.error("prepare requires --source-root")
         value = prepare(
-            args.root, args.source_root, args.objects, args.steps, args.draws
+            args.root,
+            args.source_root,
+            args.objects,
+            args.steps,
+            args.draws,
+            args.gradient_isolation,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

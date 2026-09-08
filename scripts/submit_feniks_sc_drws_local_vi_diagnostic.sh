@@ -18,11 +18,17 @@ command -v sbatch >/dev/null || { echo 'sbatch missing: submit from Jean-Zay fro
 git diff --quiet
 git diff --cached --quiet
 COMMIT="$(git rev-parse HEAD)"
+EXTRA=()
+WALLTIME="03:00:00"
+if [[ "${LOCAL_VI_GRADIENT_ISOLATION:-0}" == "1" ]]; then
+  EXTRA+=(--gradient-isolation)
+  WALLTIME="00:20:00"
+fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
   python scripts/run_feniks_sc_drws_local_vi_diagnostic.py prepare \
   --source-root "$SOURCE_ROOT" --root "$DIAGNOSTIC_ROOT" \
   --objects "${LOCAL_VI_OBJECTS:-16}" --steps "${LOCAL_VI_STEPS:-64}" \
-  --draws "${LOCAL_VI_DRAWS:-128}"
+  --draws "${LOCAL_VI_DRAWS:-128}" "${EXTRA[@]}"
 SNAPSHOT="$CACHE_ROOT/code/local-vi-diagnostic-${COMMIT:0:12}"
 export DIAGNOSTIC_LOG_ROOT="$CACHE_ROOT/slurm_logs/$(basename "$DIAGNOSTIC_ROOT")"
 mkdir -p "$(dirname "$SNAPSHOT")" "$DIAGNOSTIC_LOG_ROOT" outputs/logs
@@ -40,6 +46,7 @@ LOCAL_REPO="$REPO_DIR"
 export REPO_DIR="$SNAPSHOT"
 touch "$DIAGNOSTIC_ROOT/SUBMISSION_INFLIGHT"
 JOB="$(sbatch --parsable --export=ALL \
+  --time="$WALLTIME" \
   --output="$DIAGNOSTIC_LOG_ROOT/diagnostic-%j.out" \
   --error="$DIAGNOSTIC_LOG_ROOT/diagnostic-%j.err" \
   "$REPO_DIR/scripts/feniks_sc_drws_local_vi_diagnostic_h100.slurm")"
@@ -54,7 +61,8 @@ from pathlib import Path
 import shlex
 root = Path(os.environ['DIAGNOSTIC_ROOT'])
 payload = {key: os.environ[key] for key in ('DIAGNOSTIC_ROOT','DIAGNOSTIC_LOG_ROOT','DIAGNOSTIC_JOB','REPO_DIR')}
-(root/'SUBMISSION.json').write_text(json.dumps({'status':'SUBMITTED', 'jobs':payload, 'gpus':1, 'nodes':1, 'gpu_hours_ceiling':3}, indent=2)+'\n')
+manifest = json.loads((root/'RUN_MANIFEST.json').read_text())
+(root/'SUBMISSION.json').write_text(json.dumps({'status':'SUBMITTED', 'jobs':payload, 'gpus':1, 'nodes':1, 'gpu_hours_ceiling':manifest['allocation_gpu_hours'], 'mode':manifest['mode']}, indent=2)+'\n')
 body = ''.join(f'export {key}={shlex.quote(value)}\n' for key,value in payload.items())
 (root/'submission.env').write_text(body)
 Path(os.environ['DIAGNOSTIC_ENV']).write_text(body)

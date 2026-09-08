@@ -96,7 +96,7 @@ git pull --ff-only origin feature/feniks-exact-posterior-benchmark
 export REPO_DIR="$PWD"
 export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"
 unset DIAGNOSTIC_ROOT
-unset LOCAL_VI_OBJECTS LOCAL_VI_STEPS LOCAL_VI_DRAWS
+unset LOCAL_VI_OBJECTS LOCAL_VI_STEPS LOCAL_VI_DRAWS LOCAL_VI_GRADIENT_ISOLATION
 bash scripts/submit_feniks_sc_drws_local_vi_diagnostic.sh \
   outputs/logs/feniks_sc_drws_balanced_npe_latest.env
 ```
@@ -150,3 +150,47 @@ python -m json.tool "$DIAGNOSTIC_ROOT/FINAL.json"
 Local tests replace DSPS with analytical flux maps where stated. They verify
 software behavior, not FENIKS physics or H100 timing. No real SED run is claimed
 until its cluster receipts have been inspected.
+
+## Isolate the v2 likelihood discrepancy without training
+
+Job 1913854 reports agreement for the prior derivative, but likelihood AD
+49.2304 versus central differences 39.40..62.95. That does not identify the
+cause; in particular, the last-scalar ULP screen is not a bound on internal
+float32 roundoff. Do not increase tolerances or change the prior based on this.
+
+Enable the separate forensic mode to reuse the same deterministic cohort,
+parent-cache point and direction. It checks the likelihood algebra with frozen
+fluxes; the error-normalized flux Jacobian; finite differences in the original
+direction and each latent coordinate; and bandwise Gaussian square differences
+computed on the host without subtracting the large log-normalization constant.
+This does not change DSPS precision or the training likelihood. All current
+casts, transforms and physical assumptions are preserved.
+
+```bash
+cd "$WORK/dsps-popcosmos"
+source "$WORK/miniconda3/etc/profile.d/conda.sh"
+conda activate shine
+git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+source outputs/logs/feniks_sc_drws_balanced_npe_latest.env
+export REPO_DIR="$PWD"
+export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"
+export DIAGNOSTIC_ROOT="$(dirname "$BALANCED_ROOT")/frozen_parent_gradient_isolation_v1"
+export LOCAL_VI_GRADIENT_ISOLATION=1
+unset LOCAL_VI_OBJECTS LOCAL_VI_STEPS LOCAL_VI_DRAWS
+bash scripts/submit_feniks_sc_drws_local_vi_diagnostic.sh
+bash scripts/monitor_feniks_sc_drws_local_vi_diagnostic.sh
+```
+
+Allocation: one node, one H100, 20 minutes (one third GPU-hour) maximum,
+500 decoder evaluations ceiling and 1,080 process seconds. Default 15D/18-band
+work is 193 forward and 19 gradient evaluations, excluding likelihood-only
+arithmetic that does not call DSPS. The job never enters local VI, regardless
+of results. `GRADIENT_ISOLATION_COMPLETE` means measurements were written, not
+that the derivative is certified. Existing v1/v2 results remain unchanged.
+
+Outputs: `GRADIENT_ISOLATION.json` includes the likelihood-only control,
+canonical and reconstructed gradients and full flux Jacobian;
+`gradient_isolation.csv` holds every band/step/direction contribution and is
+updated after each direction. Both exact point/direction arrays and the
+observed object identity are recorded for comparison against v2. The monitor
+reports the direction currently completed; failed jobs retain partial evidence.

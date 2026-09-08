@@ -347,7 +347,10 @@ def test_high_ess_does_not_certify_missing_mode():
     assert logz == pytest.approx(-np.log(2))
 
 
-def test_prepare_and_complete_runner_with_mock_physics(tmp_path, monkeypatch):
+@pytest.mark.parametrize("isolation", [False, True])
+def test_prepare_and_complete_runner_with_mock_physics(
+    tmp_path, monkeypatch, isolation
+):
     """Exercise real parquet/receipts/optimization, replacing DSPS and GPU only."""
     import pandas as pd
     import yaml
@@ -430,7 +433,9 @@ def test_prepare_and_complete_runner_with_mock_physics(tmp_path, monkeypatch):
             sidecar_sha256=runner.sha256_file(sidecar),
         ),
     )
-    runner.prepare(root, source, objects=2, steps=1, draws=32)
+    runner.prepare(
+        root, source, objects=2, steps=1, draws=32, gradient_isolation=isolation
+    )
     with pytest.raises(FileExistsError):
         runner.prepare(root, source, objects=2, steps=1, draws=32)
     monkeypatch.setattr(runner.jax, "default_backend", lambda: "gpu")
@@ -447,6 +452,15 @@ def test_prepare_and_complete_runner_with_mock_physics(tmp_path, monkeypatch):
         lambda *args: posterior_log_target(*args, model_flux_fn=flux),
     )
     result = runner.run(root)
+    if isolation:
+        assert result["status"] == "GRADIENT_ISOLATION_COMPLETE"
+        assert result["local_optimization_started"] is False
+        assert not (root / "cases").exists()
+        assert len(pd.read_csv(root / "gradient_isolation.csv")) == 36
+        assert runner.read(root / "RUN_MANIFEST.json")[
+            "allocation_gpu_hours"
+        ] == pytest.approx(1 / 3)
+        return
     assert result["status"] == "DIAGNOSTIC_COMPLETE"
     assert result["cases_complete"] == 4
     assert result["prior_bitwise_unchanged"] is True

@@ -1,5 +1,25 @@
 # Plan
 
+## 2026-09-08 Isolate observed likelihood gradient discrepancy
+
+- v2 evidence: logprior AD=1.16517 and finite differences agree; loglike
+  AD=49.2304 versus FD=39.40..62.95 remains unresolved. Final-scalar ULP
+  estimates do not explain the full discrepancy. Do not claim a broken prior,
+  wrong AD or float32 as the proven cause from this one direction.
+- Implement a separate 20-minute, one-H100 forensic mode at the same point:
+  per-band flux Jacobian, coordinate and original-direction differences,
+  centered Gaussian differences without the large normalization constant,
+  and a likelihood-only derivative test with fixed decoder fluxes.
+- Keep all physics/precision/gates unchanged. This mode never starts VI,
+  even if its checks agree; save raw evidence for the next decision.
+- Implemented `LOCAL_VI_GRADIENT_ISOLATION=1`, a separate 20-minute submission
+  mode with 500-evaluation cap, same point/cohort, partial CSVs and a dedicated
+  final receipt. No optimizer or population submission is reachable in this mode.
+- Verification: 20 focused tests pass, including correct and deliberately broken
+  flux gradients at cgs scales and an end-to-end mock-physics isolation run.
+  Compileall, Ruff, bash syntax and whitespace checks pass. The real DSPS cause
+  remains unverified; no cluster job has been submitted from this checkout.
+
 ## 2026-09-08 Local-VI gradient audit failure
 
 - Jean-Zay job 1913341 stopped before local optimization: central differences
