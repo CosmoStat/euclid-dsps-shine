@@ -8280,3 +8280,9 @@ Remote recovery:
   predates `truth_free_validation`. Make repeated internal recovery submit only
   arms still lacking their durable validation receipt, so completed B/C
   diagnostics are preserved when recovering A.
+- [completed] Bound peak GPU memory in internal held-out predictive validation
+  by decoding posterior samples in explicit sample-axis chunks and recording the
+  chunk size. The prior/posterior draws, object cohort, likelihood, and metrics
+  are unchanged; only the DSPS execution batching changes. This recovers the
+  three H100 diagnostics after the unchunked `[64, 256, 15]` decode requested a
+  72.81 GiB allocation.

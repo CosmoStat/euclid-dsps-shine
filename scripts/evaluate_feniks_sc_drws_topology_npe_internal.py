@@ -69,7 +69,35 @@ def _residual_frame(
     )
 
 
-def _decode(model, x, spec, context, model_args, config):
+def _decode(
+    model,
+    x,
+    spec,
+    context,
+    model_args,
+    config,
+    *,
+    sample_chunk_size: int | None = None,
+):
+    if x.ndim == 3 and sample_chunk_size is not None:
+        if sample_chunk_size <= 0:
+            raise ValueError("sample_chunk_size must be positive")
+        flux_chunks = []
+        valid_chunks = []
+        for start in range(0, int(x.shape[0]), sample_chunk_size):
+            flux, valid = _decode(
+                model,
+                x[start : start + sample_chunk_size],
+                spec,
+                context,
+                model_args,
+                config,
+            )
+            flux_chunks.append(jax.block_until_ready(flux))
+            valid_chunks.append(jax.block_until_ready(valid))
+        return jnp.concatenate(flux_chunks, axis=0), jnp.concatenate(
+            valid_chunks, axis=0
+        )
     safe, valid = safe_decoder_inputs(x, spec)
     raw = model_flux_from_x(safe, spec, context, model_args, spec.names)
     flux = _apply_model_calibration(
@@ -91,6 +119,7 @@ def evaluate(
     out: Path,
     objects: int,
     posterior_draws: int,
+    decoder_sample_chunk_size: int,
     seed: int,
 ) -> dict:
     config = load_config(config_path)
@@ -226,7 +255,13 @@ def evaluate(
         int(posterior_draws),
     )
     observed_model_flux, _ = _decode(
-        model, observed_q.x, spec, context, model_args, config
+        model,
+        observed_q.x,
+        spec,
+        context,
+        model_args,
+        config,
+        sample_chunk_size=int(decoder_sample_chunk_size),
     )
     held_mask = np.zeros_like(arrays.mask, dtype=bool)
     held_mask[:, held_indices] = arrays.mask[:, held_indices]
@@ -254,7 +289,13 @@ def evaluate(
         int(posterior_draws),
     )
     reference_model_flux, _ = _decode(
-        model, reference_q.x, spec, context, model_args, config
+        model,
+        reference_q.x,
+        spec,
+        context,
+        model_args,
+        config,
+        sample_chunk_size=int(decoder_sample_chunk_size),
     )
     reference_held_mask = np.zeros_like(np.asarray(generated_mask), dtype=bool)
     reference_held_mask[:, held_indices] = np.asarray(generated_mask)[:, held_indices]
@@ -339,6 +380,7 @@ def evaluate(
         "truth_used": False,
         "objects": n_objects,
         "posterior_draws": int(posterior_draws),
+        "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
         "noise_family": noise_family,
         "selection": {
             "event": "noisy_lsst_r_ab_lt_29",
@@ -376,6 +418,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--objects", type=int, default=256)
     parser.add_argument("--posterior-draws", type=int, default=64)
+    parser.add_argument("--decoder-sample-chunk-size", type=int, default=1)
     parser.add_argument("--seed", type=int, default=260906)
     args = parser.parse_args()
     print(json.dumps(evaluate(**vars(args)), indent=2, sort_keys=True))

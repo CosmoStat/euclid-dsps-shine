@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from types import SimpleNamespace
 
 import jax.numpy as jnp
 import numpy as np
@@ -21,6 +22,41 @@ if HAS_EQUINOX:
         summarize_model_generated_rank_calibration,
         summarize_truth_free_joint_bank,
     )
+
+
+def test_internal_validation_chunked_decode_matches_direct(monkeypatch) -> None:
+    from scripts import evaluate_feniks_sc_drws_topology_npe_internal as module
+
+    monkeypatch.setattr(
+        module,
+        "safe_decoder_inputs",
+        lambda x, spec: (x, jnp.all(jnp.isfinite(x), axis=-1)),
+    )
+    monkeypatch.setattr(
+        module,
+        "model_flux_from_x",
+        lambda x, spec, context, model_args, names: jnp.stack(
+            (jnp.sum(x, axis=-1), jnp.mean(x, axis=-1)), axis=-1
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "_apply_model_calibration",
+        lambda model, flux, config: flux,
+    )
+    x = jnp.arange(5 * 3 * 2, dtype=jnp.float32).reshape(5, 3, 2)
+    args = (
+        object(),
+        x,
+        SimpleNamespace(names=("x0", "x1")),
+        object(),
+        object(),
+        {"calibration": {}},
+    )
+    direct_flux, direct_valid = module._decode(*args)
+    chunked_flux, chunked_valid = module._decode(*args, sample_chunk_size=2)
+    np.testing.assert_allclose(chunked_flux, direct_flux)
+    np.testing.assert_array_equal(chunked_valid, direct_valid)
 
 
 def test_truth_columns_are_rejected_before_validation() -> None:

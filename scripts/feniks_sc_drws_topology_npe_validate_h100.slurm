@@ -113,7 +113,8 @@ python scripts/evaluate_feniks_sc_drws_topology_npe_internal.py \
   --config "$CONFIG" --checkpoint "$CHECKPOINT" \
   --feature-stats "$FEATURE_STATS" --dataset "$DATASET" \
   --row-indices "$TRACKING_INDICES" --out "$OUT/internal" \
-  --objects "$TRACKING_OBJECTS" --posterior-draws 64 --seed "$((264000 + TASK))"
+  --objects "$TRACKING_OBJECTS" --posterior-draws 64 \
+  --decoder-sample-chunk-size 1 --seed "$((264000 + TASK))"
 
 python - "$OUT" "$ARM" <<'PY'
 import json
