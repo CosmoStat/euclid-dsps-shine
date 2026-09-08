@@ -8275,3 +8275,8 @@ Remote recovery:
   truth-free internal-only recovery that requires completed K256/K1024 receipts,
   reuses all existing inference, records cross-commit authorization, and queues
   only the three internal diagnostics plus the fail-closed finalizer.
+- [completed] Make the internal validator apply the pilot's fixed held-out-band
+  and simulated-calibration contract to historical arm A, whose source config
+  predates `truth_free_validation`. Make repeated internal recovery submit only
+  arms still lacking their durable validation receipt, so completed B/C
+  diagnostics are preserved when recovering A.

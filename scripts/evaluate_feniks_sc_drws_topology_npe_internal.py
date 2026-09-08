@@ -44,6 +44,12 @@ from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
 
+_DEFAULT_TRUTH_FREE_VALIDATION = {
+    "held_out_bands": ("lsst_u", "lsst_r", "euclid_nisp_h"),
+    "maximum_model_generated_pit_ks": 0.12,
+    "maximum_model_generated_coverage_ece": 0.12,
+}
+
 
 def _residual_frame(
     residual: np.ndarray,
@@ -112,6 +118,10 @@ def evaluate(
     )
     model_args = dynamic_model_args(context)
     likelihood = config["amortized"]["likelihood"]
+    truth_free_validation = {
+        **_DEFAULT_TRUTH_FREE_VALIDATION,
+        **dict(config["amortized"].get("truth_free_validation", {}) or {}),
+    }
     sleep = _sleep_runtime_config(config, stats)
     n_objects = int(len(rows))
     candidate_factor = max(4, int(sleep.get("selection_candidate_factor", 1)))
@@ -185,14 +195,10 @@ def evaluate(
         parameter_names=spec.names,
         seed=int(seed) + 1,
         maximum_ks=float(
-            config["amortized"]["truth_free_validation"].get(
-                "maximum_model_generated_pit_ks", 0.12
-            )
+            truth_free_validation["maximum_model_generated_pit_ks"]
         ),
         maximum_coverage_ece=float(
-            config["amortized"]["truth_free_validation"].get(
-                "maximum_model_generated_coverage_ece", 0.12
-            )
+            truth_free_validation["maximum_model_generated_coverage_ece"]
         ),
     )
     roundtrip = theta_to_x(x_to_theta(generated_x, spec), spec)
@@ -201,7 +207,7 @@ def evaluate(
     )
 
     held_names = tuple(
-        config["amortized"]["truth_free_validation"].get("held_out_bands", ())
+        truth_free_validation["held_out_bands"]
     )
     held_indices = [arrays.band_names.index(name) for name in held_names]
     observed_features, observed_conditioning_mask = mask_held_out_bands(
