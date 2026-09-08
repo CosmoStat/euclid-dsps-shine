@@ -127,9 +127,10 @@ def prepare(
     draws=128,
     gradient_isolation=False,
     redshift_decomposition=False,
+    photometry_reference=False,
 ):
     root, source_root = root.resolve(), source_root.resolve()
-    if gradient_isolation and redshift_decomposition:
+    if sum((gradient_isolation, redshift_decomposition, photometry_reference)) > 1:
         raise ValueError("choose only one diagnostic mode")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
@@ -186,7 +187,9 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="redshift_decomposition"
+        mode="photometry_reference"
+        if photometry_reference
+        else "redshift_decomposition"
         if redshift_decomposition
         else "gradient_isolation"
         if gradient_isolation
@@ -219,23 +222,25 @@ def prepare(
         learning_rate=0.001,
         seed=260908,
         seconds=2400
-        if redshift_decomposition
+        if (redshift_decomposition or photometry_reference)
         else 1080
         if gradient_isolation
         else 9900,
         maximum_decoder_evaluations=1000
-        if redshift_decomposition
+        if (redshift_decomposition or photometry_reference)
         else 500
         if gradient_isolation
         else 45000,
         maximum_gpus=1,
         maximum_nodes=1,
         allocation_gpu_hours=0.75
-        if redshift_decomposition
+        if (redshift_decomposition or photometry_reference)
         else 1 / 3
         if gradient_isolation
         else 3,
-        decomposition_cache_indices=[0, 1, 2] if redshift_decomposition else [],
+        decomposition_cache_indices=[0, 1, 2]
+        if (redshift_decomposition or photometry_reference)
+        else [],
         truth_used=False,
         scientific_promotion=False,
         population_training_started=False,
@@ -639,7 +644,7 @@ def run(root):
         first = PosteriorObservation(
             *[jnp.asarray(x[:1]) for x in (arrays.flux, arrays.flux_err, arrays.mask)]
         )
-        if manifest.get("mode") == "redshift_decomposition":
+        if manifest.get("mode") in {"redshift_decomposition", "photometry_reference"}:
             from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
             from euclid_dsps.calibration import (
                 global_sed_scale_config,
@@ -695,18 +700,66 @@ def run(root):
                     ),
                 )
 
-            result, _ = decompose_redshift(
-                context,
-                spec,
-                points,
-                first,
-                budget,
-                band_names=stats.band_names,
-                progress=branch_progress,
-                canonical_flux=lambda point: (
-                    target(point[None, None, :], first).model_flux_raw
-                ),
-            )
+            if manifest["mode"] == "photometry_reference":
+                from euclid_dsps.amortized.photometry_reference import (
+                    analyze_snapshot,
+                    export_spectra,
+                    write_progress,
+                )
+
+                snapshot_arrays = export_spectra(
+                    root,
+                    context,
+                    spec,
+                    points,
+                    first,
+                    budget,
+                    band_names=stats.band_names,
+                )
+                write(
+                    root / "SNAPSHOT.json",
+                    dict(
+                        status="EXPORTED",
+                        code_commit=manifest["code_commit"],
+                        truth_used=False,
+                        archive="FIXED_SPECTRA.npz",
+                        sha256=sha256_file(root / "FIXED_SPECTRA.npz"),
+                    ),
+                )
+                result, _ = analyze_snapshot(
+                    snapshot_arrays,
+                    budget,
+                    progress=lambda i, s, r, p: write_progress(
+                        root, i, s, r, p, budget
+                    ),
+                )
+                report_name = "PHOTOMETRY_REFERENCE.json"
+                artifacts = (
+                    "CACHE_FLUX_AUDIT.json",
+                    report_name,
+                    "photometry_reference.csv",
+                    "SNAPSHOT.json",
+                    "FIXED_SPECTRA.npz",
+                )
+            else:
+                result, _ = decompose_redshift(
+                    context,
+                    spec,
+                    points,
+                    first,
+                    budget,
+                    band_names=stats.band_names,
+                    progress=branch_progress,
+                    canonical_flux=lambda point: (
+                        target(point[None, None, :], first).model_flux_raw
+                    ),
+                )
+                report_name = "REDSHIFT_DECOMPOSITION.json"
+                artifacts = (
+                    "CACHE_FLUX_AUDIT.json",
+                    report_name,
+                    "redshift_decomposition.csv",
+                )
             if (
                 _array_tree_sha256(
                     (model.prior, model.sed_scale, model.band_calibration)
@@ -727,7 +780,7 @@ def run(root):
                     jax_enable_x64=bool(jax.config.x64_enabled),
                 ),
             )
-            write(root / "REDSHIFT_DECOMPOSITION.json", finite_json(result))
+            write(root / report_name, finite_json(result))
             final = dict(
                 status=result["status"],
                 scientific_promotion=False,
@@ -737,11 +790,7 @@ def run(root):
                 budget=budget.snapshot(),
                 artifacts={
                     name: dict(path=str(root / name), sha256=sha256_file(root / name))
-                    for name in (
-                        "CACHE_FLUX_AUDIT.json",
-                        "REDSHIFT_DECOMPOSITION.json",
-                        "redshift_decomposition.csv",
-                    )
+                    for name in artifacts
                 },
             )
             write(root / "FINAL.json", final)
@@ -1102,6 +1151,7 @@ def main():
     parser.add_argument("--draws", type=int, default=128)
     parser.add_argument("--gradient-isolation", action="store_true")
     parser.add_argument("--redshift-decomposition", action="store_true")
+    parser.add_argument("--photometry-reference", action="store_true")
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1114,6 +1164,7 @@ def main():
             args.draws,
             args.gradient_isolation,
             args.redshift_decomposition,
+            args.photometry_reference,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

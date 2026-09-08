@@ -347,7 +347,7 @@ def test_high_ess_does_not_certify_missing_mode():
     assert logz == pytest.approx(-np.log(2))
 
 
-@pytest.mark.parametrize("isolation", [False, True, "decomposition"])
+@pytest.mark.parametrize("isolation", [False, True, "decomposition", "reference"])
 def test_prepare_and_complete_runner_with_mock_physics(
     tmp_path, monkeypatch, isolation
 ):
@@ -441,6 +441,7 @@ def test_prepare_and_complete_runner_with_mock_physics(
         draws=32,
         gradient_isolation=isolation is True,
         redshift_decomposition=isolation == "decomposition",
+        photometry_reference=isolation == "reference",
     )
     with pytest.raises(FileExistsError):
         runner.prepare(root, source, objects=2, steps=1, draws=32)
@@ -468,7 +469,31 @@ def test_prepare_and_complete_runner_with_mock_physics(
             return dict(status="REDSHIFT_DECOMPOSITION_COMPLETE", points=[]), rows
 
         monkeypatch.setattr(rd, "decompose_redshift", mock_decompose)
+    if isolation == "reference":
+        from euclid_dsps.amortized import photometry_reference as pr
+
+        def mock_export(root, context, spec, points, observation, budget, **kwargs):
+            assert points.shape == (3, 2)
+            np.savez(root / "FIXED_SPECTRA.npz", x=np.asarray(points))
+            return dict(x=np.asarray(points))
+
+        def mock_analyze(arrays, budget, **kwargs):
+            kwargs["progress"](
+                0, "point_complete", [dict(point_index=0, method="mock")], []
+            )
+            return dict(status="PHOTOMETRY_REFERENCE_COMPLETE", points=[]), []
+
+        monkeypatch.setattr(pr, "export_spectra", mock_export)
+        monkeypatch.setattr(pr, "analyze_snapshot", mock_analyze)
     result = runner.run(root)
+    if isolation == "reference":
+        assert result["status"] == "PHOTOMETRY_REFERENCE_COMPLETE"
+        assert not (root / "cases").exists()
+        assert (root / "FIXED_SPECTRA.npz").exists()
+        assert result["scientific_promotion"] is False
+        assert runner.read(root / "RUN_MANIFEST.json")["mode"] == "photometry_reference"
+        assert runner.read(root / "RUN_MANIFEST.json")["allocation_gpu_hours"] == 0.75
+        return
     if isolation == "decomposition":
         assert result["status"] == "REDSHIFT_DECOMPOSITION_COMPLETE"
         assert result["local_optimization_started"] is False

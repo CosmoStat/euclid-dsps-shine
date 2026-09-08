@@ -20,10 +20,10 @@ for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAI
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
 mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
-if mode == 'redshift_decomposition':
-    partial = root/'REDSHIFT_DECOMPOSITION_PARTIAL.json'
+if mode in ('redshift_decomposition', 'photometry_reference'):
+    partial = root/('PHOTOMETRY_REFERENCE_PARTIAL.json' if mode == 'photometry_reference' else 'REDSHIFT_DECOMPOSITION_PARTIAL.json')
     completed = len(json.loads(partial.read_text())['points']) if partial.is_file() else 0
-    print('Completed redshift decomposition points:', str(completed) + '/3')
+    print('Completed ' + mode + ' points:', str(completed) + '/3')
     print('No local VI or population training in this mode')
 elif mode == 'local_vi':
     print('Completed observed cases:', len(list((root/'cases').glob('observed_*/COMPLETE.json'))))

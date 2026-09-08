@@ -4001,6 +4001,64 @@ def _jax_result_derived_array(result: JaxModelResult) -> jnp.ndarray:
     )
 
 
+def fixed_spectrum_projection_jax(
+    wave,
+    spectrum,
+    filter_wave,
+    transmission,
+    z,
+    *,
+    method="legacy",
+    order=8,
+):
+    """Diagnostic only: compare photometry quadrature with fixed physical assets.
+
+    This function is not selected by training configuration. Float64 inputs are
+    supplied by the reference runner; production predict_mags_jax is unchanged.
+    """
+    from dsps import calc_obs_mag
+    from dsps.cosmology import DEFAULT_COSMOLOGY
+    from dsps.photometry.photometry_kernels import AB0
+    from dsps.utils import trapz
+
+    from euclid_dsps.photometry import abmag_to_fnu_cgs_jax
+    from euclid_dsps.photometry_quadrature import (
+        filter_integral_jax,
+        merged_integral_jax,
+    )
+
+    if method == "legacy":
+        return abmag_to_fnu_cgs_jax(
+            calc_obs_mag(
+                wave, spectrum, filter_wave, transmission, z, *DEFAULT_COSMOLOGY
+            )
+        )
+    if method not in {"merged", "merged_legacy_ab"}:
+        raise ValueError(f"unknown diagnostic projection: {method}")
+    numerator = merged_integral_jax(
+        wave, spectrum, filter_wave, transmission, z, order=order
+    )
+    normalization = (
+        trapz(filter_wave, transmission / filter_wave)
+        if method == "merged_legacy_ab"
+        else filter_integral_jax(filter_wave, transmission, order=order)
+    )
+    factor = fixed_spectrum_dimming_factor_jax(z)
+    return factor * numerator / (AB0 * normalization)
+
+
+def fixed_spectrum_dimming_factor_jax(z):
+    """Same AB zero point and cosmological dimming as production photometry."""
+    from dsps.cosmology import DEFAULT_COSMOLOGY
+    from dsps.photometry.photometry_kernels import _cosmological_dimming
+
+    from euclid_dsps.photometry import AB_ZEROPOINT_FNU_CGS
+
+    return AB_ZEROPOINT_FNU_CGS * 10 ** (
+        -0.4 * _cosmological_dimming(z, *DEFAULT_COSMOLOGY)
+    )
+
+
 def predict_mags_jax(
     context: DspsContext, wave: jnp.ndarray, dusted_sed: jnp.ndarray, z_obs: jnp.ndarray
 ) -> jnp.ndarray:

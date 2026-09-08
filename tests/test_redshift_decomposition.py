@@ -60,7 +60,7 @@ def test_mass_normalization_default_unchanged():
         np.testing.assert_array_equal(a, b)
 
 
-def test_real_dsps_synthetic_branch_smoke(monkeypatch):
+def test_real_dsps_synthetic_branch_smoke(monkeypatch, tmp_path):
     # Synthetic spectra only; the age, SFH, IGM and filter kernels are real.
     context = _synthetic_context(
         dict(
@@ -125,6 +125,26 @@ def test_real_dsps_synthetic_branch_smoke(monkeypatch):
     assert all(r["finite"] for r in rows)
     assert report["local_optimization_started"] is False
     assert report["truth_used"] is False
+    from euclid_dsps.amortized.photometry_reference import export_spectra
+
+    arrays = export_spectra(
+        tmp_path,
+        context,
+        spec,
+        point[None],
+        PosteriorObservation(
+            jnp.asarray(full)[None],
+            jnp.asarray(full * 0.1)[None],
+            jnp.ones((1, 1), bool),
+        ),
+        Budget(120, 100),
+        band_names=["wide"],
+    )
+    with np.load(tmp_path / "FIXED_SPECTRA.npz", allow_pickle=False) as bank:
+        np.testing.assert_array_equal(bank["x"], point[None])
+        assert bank["spectra_jit"].shape == (1, 96)
+        assert bank["filter_wave_00"].shape == (128,)
+    assert np.isfinite(arrays["model_flux_jit"]).all()
 
 
 def test_mutually_exclusive_modes_before_io(tmp_path):

@@ -28,6 +28,10 @@ if [[ "${LOCAL_VI_REDSHIFT_DECOMPOSITION:-0}" == "1" ]]; then
   EXTRA+=(--redshift-decomposition)
   WALLTIME="00:45:00"
 fi
+if [[ "${LOCAL_VI_PHOTOMETRY_REFERENCE:-0}" == "1" ]]; then
+  EXTRA+=(--photometry-reference)
+  WALLTIME="00:45:00"
+fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
   python scripts/run_feniks_sc_drws_local_vi_diagnostic.py prepare \
   --source-root "$SOURCE_ROOT" --root "$DIAGNOSTIC_ROOT" \

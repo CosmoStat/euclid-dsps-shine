@@ -8395,6 +8395,39 @@ Remote recovery:
   are unchanged; only the DSPS execution batching changes. This recovers the
   three H100 diagnostics after the unchunked `[64, 256, 15]` decode requested a
   72.81 GiB allocation.
+# 2026-09-08: photometric integration reference (implemented)
+
+- Job 1915987 localizes the main point-0 instability to fixed-spectrum projection;
+  float64 projection alone does not resolve it. Stellar weights converge in
+  float64. Branch AD identities also differ and must not be silently certified.
+- Export fixed spectra/filters at the same three generated points, including
+  eager versus compiled spectra. Compare legacy projection to a merged-knot
+  Gauss quadrature candidate and an independent NumPy analytic integral of the
+  same piecewise-linear spectrum/transmission. Audit normalization separately.
+- Test smooth spectra, narrow lines and moving support analytically. Extend
+  float64 stencils below the nearest interpolation knot and count crossings.
+  Keep the training decoder unchanged until numerical and forward checks pass.
+- If integration changes materially, regenerate sleep/validation banks and
+  re-evaluate the frozen parent before matched NPE retraining; never reuse old
+  simulator banks as though they came from a new likelihood.
+- Implemented opt-in `LOCAL_VI_PHOTOMETRY_REFERENCE=1`: one H100, 45-minute
+  Slurm ceiling, 1000 component evaluations, three fixed generated points.
+  Candidate quadrature is diagnostic-only; production projection is unchanged.
+  An independent analytic integral checks centers and both sides of twenty
+  FD stencils, with step selection independent of AD and explicit dtype traces.
+- Export `FIXED_SPECTRA.npz` and a hash receipt for CPU-only replay without the
+  source SSP bank/checkpoint. Record normalization, eager/JIT spectrum and
+  native/candidate flux differences. No training or promotion follows this job.
+- Verification: targeted model/local-VI/decomposition/quadrature suite 91 passed,
+  three real-asset-dependent skips; compileall, Ruff, CLI help, shell syntax and
+  whitespace checks pass. Synthetic real-DSPS spectrum export and mock workflow
+  finalization are tested. No real SSP/checkpoint/H100 execution is claimed.
+- Final quadrature/replay subset: six passed, including CPU replay, source/module
+  fingerprints, immutable outputs and rejection of altered export/results.
+- Runbook: `docs/feniks_photometry_reference_runbook.md`. Numerical success still
+  requires full-decoder qualification and catalogue-simulator compatibility
+  before rebuilding banks and running a matched NPE comparison.
+
 # 2026-09-08: redshift branch diagnostic (implemented)
 
 - Isolate age/SFH, IGM, and observer-frame projection at three fixed generated
