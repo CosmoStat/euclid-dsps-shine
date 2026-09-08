@@ -8268,3 +8268,10 @@ Remote recovery:
   resubmit only A/B/C validation from the immutable pilot worktree with an
   eight-hour limit, and queue a replacement finalizer. Record both the original
   and replacement jobs in a durable receipt; no training is resubmitted.
+- [completed] Repair the post-inference internal-validation failure caused by
+  two new scripts calling the obsolete `load_context(config)` API. Load the
+  configured filter curves and pass the complete SSP/model context explicitly
+  in both internal validation and the gated population M-step. Add an immutable,
+  truth-free internal-only recovery that requires completed K256/K1024 receipts,
+  reuses all existing inference, records cross-commit authorization, and queues
+  only the three internal diagnostics plus the fail-closed finalizer.

@@ -30,6 +30,7 @@ from euclid_dsps.amortized.train import (
     save_checkpoint,
 )
 from euclid_dsps.config import load_config
+from euclid_dsps.filters import load_filters
 from euclid_dsps.io import ensure_dir, write_json
 from euclid_dsps.model import dynamic_model_args, load_context
 
@@ -194,7 +195,15 @@ def train(
     selection_runtime = _selection_correction_runtime_config(
         selection_config, feature_stats
     )
-    context = load_context(config)
+    filters = load_filters(config["bands"])
+    context = load_context(
+        config["ssp_path"],
+        filters,
+        n_sfh_bins=int(config.get("model", {}).get("n_sfh_bins", 96)),
+        cosmos_config=config.get("cosmos_sed"),
+        nebular_emission=config.get("nebular_emission", "ssp_flux"),
+        model_config=config.get("model"),
+    )
     model_args = dynamic_model_args(context)
     reference_x = jax.lax.stop_gradient(
         model.prior.sample(
