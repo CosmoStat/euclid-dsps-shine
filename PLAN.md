@@ -1,5 +1,19 @@
 # Plan
 
+## 2026-09-08 Balanced NPE single-GPU launch repair
+
+- Job `1892569` completed the two-object SED smoke, then failed before the
+  first optimizer step: the runner forced `pmap` on a one-H100 allocation.
+- Set both generated training configs and the CLI override to `single` for
+  S/B/C/D. Keep the one-GPU resource allocation and scientific recipe unchanged.
+- Test actual runner arguments against the one-device training resolver.
+  Preserve v1 and prepare an explicit v2 launch after cancelling only its
+  dependency-blocked descendants. No historical checkpoints are overwritten.
+- Completed: 16 balanced-run tests pass, including all four training CLI paths
+  exercised against the one-device resolver; Ruff, compileall and whitespace
+  checks pass. The cluster log certifies the old SED smoke only. The corrected
+  H100 training has not been executed locally or submitted from this checkout.
+
 ## 2026-09-03 Population-flow coupling coverage recovery
 
 - Preserve the completed architecture-v1 artifacts and the legacy

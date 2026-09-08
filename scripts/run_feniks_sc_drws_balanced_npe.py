@@ -195,6 +195,7 @@ def prepare(source_root: Path, root: Path, recipe_path: Path, repo: Path) -> dic
                     "common_sleep_random_numbers": True,
                 }
                 amortized["training"].update(
+                    data_parallel="single",
                     learning_rate=recipe["learning_rate"],
                     validation_every=1,
                     validation_sleep_seed=recipe["seed"],
@@ -382,7 +383,7 @@ def train(root: Path, manifest: dict, arm: str) -> dict:
         "--best-checkpoint-min-epoch",
         1,
         "--data-parallel",
-        "pmap",
+        "single",
         "--freeze-prior",
         "--seed",
         manifest["recipe"]["seed"],

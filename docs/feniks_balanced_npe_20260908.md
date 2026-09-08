@@ -129,6 +129,39 @@ python -m json.tool "$BALANCED_ROOT/BALANCED_NPE_COMPLETE.json"
 
 ## Limits and next decision
 
+### Single-GPU repair after job 1892569
+
+The v1 anchor passed the two-object/four-draw SED smoke but failed before
+optimization because the runner forced `pmap` with only one visible H100.
+S/B/C/D now explicitly use `single` in both generated configs and CLI calls.
+The allocation remains one GPU per task, with a maximum of four concurrent
+tasks (one to four nodes depending on scheduler packing). No scientific loss,
+cohort, threshold, or prior-freezing rule changes.
+
+For this specific pre-training failure, preserve the entire v1 directory and
+launch a fresh v2 manifest/code snapshot. The tiny SED smoke is repeated; there
+are no completed v1 training or validation results to recompute. Do not use
+`RESUME_SUBMISSION=1`: it reuses recorded job IDs, including failed jobs.
+After pulling the repair commit, run on the login node:
+
+```bash
+(
+  set -euo pipefail
+  source outputs/logs/feniks_sc_drws_balanced_npe_latest.env
+  export BALANCED_ROOT="$(dirname "$BALANCED_ROOT")/frozen_parent_balanced_npe_v2"
+  scancel --state=PENDING 1892570 1892572 1892573 1892574 1892575
+  export REPO_DIR="$PWD"
+  export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"
+  unset RESUME_SUBMISSION
+  bash scripts/submit_feniks_sc_drws_balanced_npe.sh \
+    outputs/logs/feniks_sc_drws_topology_npe_pilot_latest.env
+)
+bash scripts/monitor_feniks_sc_drws_balanced_npe.sh
+```
+
+The launcher refuses an existing v2 root. Inspect a previous submission rather
+than deleting its outputs or submitting another duplicate chain.
+
 This is a controlled attempt, not a promise that more sleep or smaller ELBO
 weights suffice. Projection SBC does not prove all conditional modes are
 present. A generated reference can share model error; held-out prediction and

@@ -170,6 +170,40 @@ def test_partial_training_is_preserved(tmp_path, monkeypatch):
     assert (out / "keep").read_text() == "partial"
 
 
+@pytest.mark.parametrize("arm", ("S", "B", "C", "D"))
+def test_training_command_matches_single_gpu_allocation(tmp_path, monkeypatch, arm):
+    from euclid_dsps.amortized.train import _resolve_data_parallel_training
+
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("{}")
+    runner.write(tmp_path / "SED_SMOKE_COMPLETE.json", {"status": "COMPLETE"})
+    source = {"checkpoint": "source.eqx", "feature_stats": "stats.json"}
+    if arm != "S":
+        runner.write(tmp_path / "arms/S/ARM_COMPLETE.json", source)
+    manifest = {
+        "source": source,
+        "configs": {arm: {"path": str(cfg)}},
+        "dataset": {"path": "observed.parquet"},
+        "cohorts": {name: {"path": name + ".npy"} for name in ("train", "validation")},
+        "recipe": {"anchor_epochs": 24, "candidate_epochs": 8, "seed": 260908},
+    }
+    monkeypatch.setattr(runner, "verify_cache", lambda root: None)
+    monkeypatch.setattr(runner, "verified_artifacts", lambda value: value)
+    monkeypatch.setattr(runner, "certify_training", lambda root, arm: {"arm": arm})
+    calls = []
+    monkeypatch.setattr(runner, "cli", lambda *args: calls.append(args))
+    monkeypatch.setattr(jax, "local_devices", lambda: (object(),))
+    assert runner.train(tmp_path, manifest, arm) == {"arm": arm}
+    assert len(calls) == 1
+    command = calls[0]
+    mode = command[command.index("--data-parallel") + 1]
+    assert mode == "single"
+    actual = _resolve_data_parallel_training({"data_parallel": mode}, jax_batch_size=256)
+    assert actual["enabled"] is False
+    assert actual["per_device_batch_size"] == 256
+    assert "--freeze-prior" in command
+
+
 def test_prepare_reserves_confirmation_and_disables_truth_in_every_config(
     tmp_path, monkeypatch
 ):
@@ -246,8 +280,10 @@ def test_prepare_reserves_confirmation_and_disables_truth_in_every_config(
     assert not np.intersect1d(confirmation, val).size
     assert not np.intersect1d(confirmation, rows["validation_pilot"]).size
     assert len(confirmation) == 256
-    for entry in manifest["configs"].values():
+    for arm, entry in manifest["configs"].items():
         resolved = yaml.safe_load(Path(entry["path"]).read_text())
+        if arm != "A":
+            assert resolved["amortized"]["training"]["data_parallel"] == "single"
         inference = resolved["amortized"]["inference"]
         assert inference["write_truth_snapshot"] is False
         assert inference["write_truth_diagnostics"] is False
