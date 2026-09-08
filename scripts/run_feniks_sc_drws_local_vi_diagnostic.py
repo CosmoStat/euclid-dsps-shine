@@ -211,6 +211,56 @@ def verify_resolution_reference(path, source_root):
     return receipt
 
 
+def verify_redshift_precision_reference(path, source_root):
+    path = Path(path).resolve()
+    final, manifest = read(path / "FINAL.json"), read(path / "RUN_MANIFEST.json")
+    if (
+        final.get("status") != "TARGET_RESOLUTION_COMPLETE"
+        or manifest.get("mode") != "target_resolution_audit"
+        or manifest["source_manifest_sha256"]
+        != sha256_file(Path(source_root) / "RUN_MANIFEST.json")
+    ):
+        raise ValueError("complete same-source target resolution reference required")
+    for name in (
+        "TARGET_RESOLUTION.json",
+        "TARGET_RESOLUTION_SNAPSHOT.json",
+        "QUALIFICATION_POINTS.npz",
+    ):
+        if name not in final["artifacts"]:
+            raise ValueError(f"missing resolution artifact: {name}")
+    for name, item in final["artifacts"].items():
+        if sha256_file(path / name) != item["sha256"]:
+            raise ValueError(f"resolution reference artifact changed: {name}")
+    report = read(path / "TARGET_RESOLUTION.json")
+    remaining = [c for c in report["checks"] if c["status"] != "PASS"]
+    if len(remaining) != 1 or any(
+        remaining[0].get(k) != v
+        for k, v in dict(
+            point_index=4, coordinate="z_obs", component="lsst_z", status="INCONCLUSIVE"
+        ).items()
+    ):
+        raise ValueError(
+            "this bounded diagnostic requires only point4 z_obs lsst_z unresolved"
+        )
+    mdf = manifest["mdf_precision_reference"]
+    if verify_resolution_reference(mdf["path"], source_root) != mdf:
+        raise ValueError("MDF source reference changed")
+    with (
+        np.load(path / "QUALIFICATION_POINTS.npz", allow_pickle=False) as current,
+        np.load(
+            Path(mdf["path"]) / "QUALIFICATION_POINTS.npz", allow_pickle=False
+        ) as previous,
+    ):
+        for key in ("x", "row_indices", "origins", "coordinate_names"):
+            if not np.array_equal(current[key], previous[key]):
+                raise ValueError(f"resolution reference points changed: {key}")
+    return dict(
+        path=str(path),
+        final_sha256=sha256_file(path / "FINAL.json"),
+        manifest_sha256=sha256_file(path / "RUN_MANIFEST.json"),
+    )
+
+
 def prepare(
     root,
     source_root,
@@ -223,6 +273,7 @@ def prepare(
     full_decoder_reference=None,
     mdf_precision_reference=None,
     target_resolution_reference=None,
+    redshift_precision_reference=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -234,6 +285,7 @@ def prepare(
                 full_decoder_reference is not None,
                 mdf_precision_reference is not None,
                 target_resolution_reference is not None,
+                redshift_precision_reference is not None,
             )
         )
         > 1
@@ -247,12 +299,21 @@ def prepare(
         else verify_photometry_reference(full_decoder_reference, source_root)
     )
     mdf_reference = None
+    redshift_reference = None
+    if redshift_precision_reference is not None:
+        redshift_reference = verify_redshift_precision_reference(
+            redshift_precision_reference, source_root
+        )
+        mdf_reference = read(Path(redshift_reference["path"]) / "RUN_MANIFEST.json")[
+            "mdf_precision_reference"
+        ]
     if mdf_precision_reference is not None or target_resolution_reference is not None:
         mdf_reference = (
             verify_resolution_reference(target_resolution_reference, source_root)
             if target_resolution_reference is not None
             else verify_decoder_reference(mdf_precision_reference, source_root)
         )
+    if mdf_reference is not None:
         objects = read(Path(mdf_reference["path"]) / "RUN_MANIFEST.json")[
             "objects_per_group"
         ]
@@ -309,7 +370,9 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="target_resolution_audit"
+        mode="redshift_precision_audit"
+        if redshift_precision_reference is not None
+        else "target_resolution_audit"
         if target_resolution_reference is not None
         else "mdf_precision_qualification"
         if mdf_precision_reference is not None
@@ -398,6 +461,13 @@ def prepare(
     if target_resolution_reference is not None:
         manifest.update(
             seconds=2400, maximum_decoder_evaluations=1000, allocation_gpu_hours=0.75
+        )
+    if redshift_reference is not None:
+        manifest.update(
+            redshift_precision_reference=redshift_reference,
+            seconds=2400,
+            maximum_decoder_evaluations=1000,
+            allocation_gpu_hours=0.75,
         )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest
@@ -803,6 +873,7 @@ def run(root):
             "full_decoder_qualification",
             "mdf_precision_qualification",
             "target_resolution_audit",
+            "redshift_precision_audit",
         }:
             from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
             from euclid_dsps.calibration import (
@@ -863,11 +934,16 @@ def run(root):
                 "full_decoder_qualification",
                 "mdf_precision_qualification",
                 "target_resolution_audit",
+                "redshift_precision_audit",
             }:
                 from euclid_dsps.amortized.decoder_qualification import qualify
                 from euclid_dsps.model import photometry_numerics
 
-                resolution_mode = manifest["mode"] == "target_resolution_audit"
+                redshift_precision_mode = manifest["mode"] == "redshift_precision_audit"
+                resolution_mode = (
+                    manifest["mode"] == "target_resolution_audit"
+                    or redshift_precision_mode
+                )
                 mdf_mode = (
                     manifest["mode"] == "mdf_precision_qualification" or resolution_mode
                 )
@@ -1051,7 +1127,59 @@ def run(root):
                         ),
                     )
 
-                if resolution_mode:
+                if redshift_precision_mode:
+                    from euclid_dsps.amortized.redshift_precision import (
+                        analyze,
+                        collect,
+                    )
+
+                    resolution_reference = manifest["redshift_precision_reference"]
+                    if (
+                        verify_redshift_precision_reference(
+                            resolution_reference["path"], manifest["source_root"]
+                        )
+                        != resolution_reference
+                    ):
+                        raise ValueError("redshift precision source changed")
+
+                    def redshift_progress(snapshot):
+                        write(
+                            root / "REDSHIFT_PRECISION_SNAPSHOT.json",
+                            finite_json(snapshot),
+                        )
+                        partial, table = analyze(snapshot)
+                        write(
+                            root / "REDSHIFT_PRECISION_PARTIAL.json",
+                            finite_json(partial),
+                        )
+                        pd.DataFrame(table).to_csv(
+                            root / "redshift_precision.csv", index=False
+                        )
+                        write(
+                            root / "PROGRESS.json",
+                            dict(
+                                stage="redshift_precision_audit",
+                                completed_branches=len(snapshot["branches"]),
+                                budget=budget.snapshot(),
+                            ),
+                        )
+
+                    snapshot = collect(
+                        corrected,
+                        spec,
+                        points[4],
+                        observations[4],
+                        corrected_target,
+                        read(
+                            Path(resolution_reference["path"])
+                            / "TARGET_RESOLUTION.json"
+                        ),
+                        budget,
+                        bands=tuple(stats.band_names),
+                        progress=redshift_progress,
+                    )
+                    result, _ = analyze(snapshot)
+                elif resolution_mode:
                     from euclid_dsps.amortized.target_resolution import analyze, collect
 
                     def resolution_progress(snapshot):
@@ -1137,6 +1265,17 @@ def run(root):
                         "QUALIFICATION_POINTS.npz",
                         "candidate_config.yaml",
                     )
+                if redshift_precision_mode:
+                    report_name = "REDSHIFT_PRECISION.json"
+                    result["source_resolution_reference"] = resolution_reference
+                    artifacts = (
+                        "CACHE_FLUX_AUDIT.json",
+                        report_name,
+                        "redshift_precision.csv",
+                        "REDSHIFT_PRECISION_SNAPSHOT.json",
+                        "QUALIFICATION_POINTS.npz",
+                        "candidate_config.yaml",
+                    )
             elif manifest["mode"] == "photometry_reference":
                 from euclid_dsps.amortized.photometry_reference import (
                     analyze_snapshot,
@@ -1206,8 +1345,14 @@ def run(root):
                 raise ValueError("frozen model changed")
             result.update(
                 prior_bitwise_unchanged=True,
-                row_index=int(rows[0]),
-                object_id=str(arrays.object_id[0]),
+                row_index=int(
+                    rows[1 if manifest["mode"] == "redshift_precision_audit" else 0]
+                ),
+                object_id=str(
+                    arrays.object_id[
+                        1 if manifest["mode"] == "redshift_precision_audit" else 0
+                    ]
+                ),
                 budget=budget.snapshot(),
                 runtime=dict(
                     python=sys.version,
@@ -1592,6 +1737,7 @@ def main():
     parser.add_argument("--full-decoder-reference", type=Path)
     parser.add_argument("--mdf-precision-reference", type=Path)
     parser.add_argument("--target-resolution-reference", type=Path)
+    parser.add_argument("--redshift-precision-reference", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1608,6 +1754,7 @@ def main():
             args.full_decoder_reference,
             args.mdf_precision_reference,
             args.target_resolution_reference,
+            args.redshift_precision_reference,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

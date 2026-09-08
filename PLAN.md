@@ -1,5 +1,26 @@
 # Plan
 
+## 2026-09-09 Point-4 redshift precision isolation (implemented)
+
+- Cluster job 1922142 resolves four density checks within existing tolerances;
+  point 4 / z_obs / lsst_z remains INCONCLUSIVE. Two favorable intermediate
+  steps are not a convergence plateau. Output ULPs do not bound upstream noise.
+- Add a receipt-linked, single-point branch audit under merged/MDF64, including
+  a diagnostic float64 redshift-dependent path, all bands, unchanged stencils
+  and tolerances. Keep production arithmetic and historical receipts unchanged.
+- No NPE, local VI or population launch. Update Markdown/RST evidence tracking.
+- Added ten sequential branch curves, physical-z/tangent-vs-latent separation,
+  trace-enforced float64 z-path and native-SED-cast control. Production defaults
+  and previous numerical decisions are unchanged. Hash-linked CPU replay added.
+- Local verification: 103 tests passed, 3 skipped across model, numerical and
+  workflow tests; includes three synthetic SED/IGM cases, source-AD guard,
+  wrong-gradient rejection, receipt tampering and mock end-to-end branch mode.
+  Compileall/Ruff/Bash syntax/CLI help and Sphinx HTML -W checked. No Jean-Zay
+  run submitted here. Legacy fit smoke configs are absent; no catalogue fit.
+- Launch LOCAL_VI_REDSHIFT_PRECISION_REFERENCE from target_resolution_v1 into
+  a fresh redshift_precision_v1 root. One H100/node, 16 CPUs, 45-minute ceiling,
+  1000 component calls. No automatic promotion even if branch stencils pass.
+
 ## 2026-09-09 Residual audit and remaining redshift convergence (implemented)
 
 - Job 1921589: MDF64 resolves all metallicity checks; four of six full points

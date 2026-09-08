@@ -20,7 +20,16 @@ for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAI
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
 mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
-if mode == 'target_resolution_audit':
+if mode == 'redshift_precision_audit':
+    partial = root/'REDSHIFT_PRECISION_PARTIAL.json'
+    if partial.is_file():
+        value = json.loads(partial.read_text())
+        print('Branches:', value['completed_branches'], '/', value['expected_branches'])
+        for b in value['branches']:
+            c = next(c for c in b['checks'] if c['component'] == 'lsst_z')
+            print(b['name'], 'lsst_z:', c['status'], 'all bands/density:', b['all_checks_passed'])
+    print('No NPE, local VI or population training authorized')
+elif mode == 'target_resolution_audit':
     partial = root/'TARGET_RESOLUTION_PARTIAL.json'
     if partial.is_file():
         value = json.loads(partial.read_text())

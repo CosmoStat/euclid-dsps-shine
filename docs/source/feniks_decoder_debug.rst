@@ -3,7 +3,8 @@ FENIKS Decoder Debug Tracking
 
 Last updated: 2026-09-09. Historical cluster evidence is transcribed from
 operator-provided logs and receipts, not independently downloaded in this update.
-The new residual audit is implemented but has not yet run on Jean-Zay.
+The residual audit has run on Jean-Zay (1922142). The targeted redshift-precision
+follow-up is implemented locally, not yet executed on the cluster.
 
 .. warning::
 
@@ -14,10 +15,12 @@ Current State
 -------------
 
 The versioned merged quadrature plus MDF64 candidate passes all metallicity
-checks at six tested inputs. Four full points pass. Five required checks remain
-INCONCLUSIVE: point 1 dust_delta and SFH08/09/10 centered likelihood derivatives,
-and point 4 redshift in lsst_z. No required FAIL remains in the displayed MDF64
-summary. This does not certify individual posterior distributions.
+checks at six tested inputs. The residual audit resolves the four point-1 density
+checks within their existing tolerances. Point-4 redshift in lsst_z remains
+INCONCLUSIVE: two favorable intermediate stencils precede unstable finer ones.
+The four density PASS results select noisy fine stencils, not high-precision
+agreement; earlier coarse stencils were more accurate. Historical full-audit
+receipts are unchanged. This does not certify individual posterior distributions.
 
 Evidence Timeline
 -----------------
@@ -53,8 +56,38 @@ Evidence Timeline
      - 1921589 / 293d5a9
      - Metallicity resolves; four of six points pass. Five checks inconclusive.
    * - Residual audit
+     - 1922142 / 7824dc9
+     - Four density checks PASS; point-4 redshift remains inconclusive.
+   * - Point-4 precision isolation
      - Implemented; not submitted here
-     - Correct the likelihood-resolution proxy; inspect denser redshift stencils.
+     - Split stellar, IGM and projection paths; compare mixed and z-dependent
+       float64 arithmetic with all-band stencils and trace checks.
+
+Point-4 Follow-up
+-----------------
+
+The new mode requires the completed target-resolution receipt and unchanged
+MDF source, points and contexts. It evaluates ten branches sequentially at the
+same point: canonical latent target, mixed full/stellar/IGM/projection, float64
+redshift-dependent full/stellar/IGM/projection, and float64 age weights with
+native SED casts. Non-redshift parameters and dust transmission remain fixed.
+The float64 branches must have exclusively float64 floating JAX traces.
+
+The physical-redshift branches use a linear tangent coordinate with the central
+dz/dx, not the nonlinear latent transform at finite displacement. Both are
+recorded separately; do not interpret finite-step differences as identical
+targets. Stored SSP/filter precision is not recovered by casting.
+
+All bands and the centered likelihood retain the old tolerances and FD-only
+plateau selector. Center flux shifts and branch-sum derivative identities are
+reported, not hidden. No production configuration enables this diagnostic path.
+One H100, one node, 16 CPU threads, 45 minutes and 1000 component evaluations
+maximum; no automatic follow-up training.
+
+After this new run::
+
+   source outputs/logs/feniks_sc_drws_local_vi_diagnostic_latest.env
+   python scripts/summarize_feniks_sc_drws_redshift_precision.py "$DIAGNOSTIC_ROOT"
 
 Residual Audit Contract
 -----------------------

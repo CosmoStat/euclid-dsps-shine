@@ -2473,6 +2473,117 @@ def run_spline15d_model_jax(
     )
 
 
+def diagnostic_spline_redshift_branches(context, params):
+    """Forensic z-only functions, never selected by a production configuration.
+
+    Non-redshift parameters, MDF/SSP arrays and dust transmission are fixed at
+    the supplied point. zpath64 promotes age/mass arithmetic, SED contractions,
+    IGM and projection, not the information content of stored assets.
+    """
+    from dsps.cosmology import DEFAULT_COSMOLOGY, age_at_z
+    from dsps.sed.stellar_age_weights import calc_age_weights_from_sfh_table
+
+    from euclid_dsps.photometry import abmag_to_fnu_cgs_jax
+    from euclid_dsps.prior_learning.spline15d import (
+        SFH_CONTRAST_NAMES,
+        reconstruct_relative_sfh_jax,
+    )
+
+    cfg = context.model_config
+    if not jax.config.x64_enabled:
+        raise ValueError("redshift precision branches require JAX_ENABLE_X64")
+    if (
+        cfg.get("sfh_model") != "spline15d"
+        or cfg.get("agn_model", "none") != "none"
+        or cfg.get("photometry_integrator") != "merged_gauss4_v1"
+        or cfg.get("mdf_weight_precision") != "float64_v1"
+    ):
+        raise ValueError("diagnostic requires spline15d, no AGN, merged/MDF64")
+    z0 = jnp.asarray(params["z_obs"], dtype=jnp.float64)
+    wave = _context_ssp_wave(context)
+    ages = _context_ssp_lg_age_gyr(context)
+    met = log10_stellar_metallicity_to_absolute_jax(
+        params["log10_stellar_metallicity"], context.z_sun
+    )
+    ssp = jnp.clip(diffsky_basic_ssp_flux_by_age_jax(context, cfg, met), 0, jnp.inf)
+    surviving = _diffsky_basic_surviving_mstar_by_age_jax(context, cfg, met)
+    surviving = None if surviving is None else surviving.astype(jnp.float64)
+    contrasts = jnp.asarray([params[n] for n in SFH_CONTRAST_NAMES], dtype=jnp.float64)
+    mass = jnp.asarray(params["log10_stellar_mass"], dtype=jnp.float64)
+    cosmology = tuple(jnp.asarray(v, dtype=jnp.float64) for v in DEFAULT_COSMOLOGY)
+    dust_params = diffsky_basic_dust_params_jax(params)
+    transmission = apply_popcosmos_dust_by_age_jax(
+        wave, ages, jnp.ones_like(ssp), *dust_params, cfg
+    ).astype(jnp.float64)
+    spectrum_kernel = ssp.astype(jnp.float64) * transmission
+    ages64, wave64 = ages.astype(jnp.float64), wave.astype(jnp.float64)
+    projection_context = copy.copy(context)
+    projection_context.jax_filters = tuple(
+        (w.astype(jnp.float64), t.astype(jnp.float64)) for w, t in context.jax_filters
+    )
+
+    def age_mass64(z):
+        time = jnp.ravel(age_at_z(z, *cosmology))[0]
+        grid = jnp.linspace(
+            0.05, jnp.maximum(time, 0.06), context.n_sfh_bins, dtype=jnp.float64
+        )
+        raw = reconstruct_relative_sfh_jax(grid, contrasts)
+        sfr, formed, _ = normalize_sfh_to_stellar_mass_jax(
+            grid, raw, ages64, time, mass, surviving, numerical_dtype=jnp.float64
+        )
+        return calc_age_weights_from_sfh_table(grid, sfr, ages64, time) * formed
+
+    def stellar64(z):
+        return jnp.nan_to_num(
+            age_mass64(z) @ spectrum_kernel, nan=0.0, posinf=1e30, neginf=0.0
+        )
+
+    def stellar_mixed(z):
+        return run_spline15d_model_jax(context, {**params, "z_obs": z}).pre_igm_sed
+
+    def age64_cast_sed(z):
+        by_age = ssp * age_mass64(z)[:, None]
+        dusted = apply_popcosmos_dust_by_age_jax(
+            wave, ages, by_age, *dust_params, cfg
+        ).sum(axis=0)
+        return jnp.nan_to_num(dusted, nan=0.0, posinf=1e30, neginf=0.0).astype(
+            jnp.float32
+        )
+
+    def project(spectrum, z):
+        return abmag_to_fnu_cgs_jax(
+            predict_mags_jax(projection_context, wave64, spectrum, z)
+        )
+
+    branches = {}
+    for label, stellar, dtype in (
+        ("mixed", stellar_mixed, jnp.float32),
+        ("zpath64", stellar64, jnp.float64),
+    ):
+        # Bind functions explicitly: both branch families must retain their dtype.
+        def igm(spectrum, z, dtype=dtype):
+            return apply_igm_transmission_jax(
+                wave64, spectrum, z, cfg, numerical_dtype=dtype
+            )
+
+        rest = stellar(z0)
+        post = igm(rest, z0)
+        branches[label + "_full"] = lambda z, stellar=stellar, igm=igm: project(
+            igm(stellar(z), z), z
+        )
+        branches[label + "_stellar"] = lambda z, stellar=stellar, igm=igm: project(
+            igm(stellar(z), z0), z0
+        )
+        branches[label + "_igm"] = lambda z, rest=rest, igm=igm: project(
+            igm(rest, z), z0
+        )
+        branches[label + "_projection"] = lambda z, post=post: project(post, z)
+    branches["age64_native_sed_casts"] = lambda z: project(
+        apply_igm_transmission_jax(wave, age64_cast_sed(z), z, cfg), z
+    )
+    return branches
+
+
 def run_diffsky_basic_model_mags_jax(
     context: DspsContext, params: dict[str, Any]
 ) -> jnp.ndarray:
@@ -3266,35 +3377,43 @@ def apply_igm_transmission_jax(
     rest_sed: jnp.ndarray,
     z_obs: jnp.ndarray,
     model_config: dict[str, Any] | None,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
     """Apply the configured IGM transmission model."""
     mode = str(_normalized_model_config(model_config).get("igm_model", "none"))
     if mode == "none":
         return rest_sed
     if mode == "madau95_approx":
-        wave = jnp.maximum(jnp.asarray(wave_rest, dtype=jnp.float32), 1.0)
-        z = jnp.maximum(jnp.asarray(z_obs, dtype=jnp.float32), 0.0)
+        wave = jnp.maximum(jnp.asarray(wave_rest, dtype=numerical_dtype), 1.0)
+        z = jnp.maximum(jnp.asarray(z_obs, dtype=numerical_dtype), 0.0)
         below_lya = jnp.clip((1216.0 - wave) / 1216.0, 0.0, 1.0)
         below_limit = jnp.clip((912.0 - wave) / 912.0, 0.0, 1.0)
         tau_forest = 0.35 * z**1.6 * below_lya**1.2 * (1216.0 / wave) ** 0.7
         tau_continuum = 1.8 * z**2.0 * below_limit**1.5 * (912.0 / wave) ** 2.0
         transmission = jnp.exp(-jnp.clip(tau_forest + tau_continuum, 0.0, 80.0))
-        return jnp.asarray(rest_sed, dtype=jnp.float32) * transmission
+        return jnp.asarray(rest_sed, dtype=numerical_dtype) * transmission
     if mode == "fsps_madau95":
         return jnp.asarray(
-            rest_sed, dtype=jnp.float32
-        ) * fsps_madau95_igm_transmission_jax(wave_rest, z_obs)
+            rest_sed, dtype=numerical_dtype
+        ) * fsps_madau95_igm_transmission_jax(
+            wave_rest, z_obs, numerical_dtype=numerical_dtype
+        )
     raise ValueError(f"Unsupported model.igm_model: {mode}")
 
 
 def fsps_madau95_igm_transmission_jax(
-    wave_rest: jnp.ndarray, z_obs: jnp.ndarray, factor: float = 1.0
+    wave_rest: jnp.ndarray,
+    z_obs: jnp.ndarray,
+    factor: float = 1.0,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
     """JAX port of FSPS ``igm_absorb.f90`` Madau95 transmission."""
-    wave = jnp.maximum(jnp.asarray(wave_rest, dtype=jnp.float32), 1.0)
-    z1 = 1.0 + jnp.maximum(jnp.asarray(z_obs, dtype=jnp.float32), 0.0)
+    wave = jnp.maximum(jnp.asarray(wave_rest, dtype=numerical_dtype), 1.0)
+    z1 = 1.0 + jnp.maximum(jnp.asarray(z_obs, dtype=numerical_dtype), 0.0)
     lobs = wave * z1
-    lylim = jnp.asarray(911.75, dtype=jnp.float32)
+    lylim = jnp.asarray(911.75, dtype=numerical_dtype)
     lyw = jnp.asarray(
         [
             1215.67,
@@ -3315,7 +3434,7 @@ def fsps_madau95_igm_transmission_jax(
             914.919,
             914.576,
         ],
-        dtype=jnp.float32,
+        dtype=numerical_dtype,
     )
     lycoeff = jnp.asarray(
         [
@@ -3337,7 +3456,7 @@ def fsps_madau95_igm_transmission_jax(
             0.0003334,
             0.00031644,
         ],
-        dtype=jnp.float32,
+        dtype=numerical_dtype,
     )
     tau = jnp.zeros_like(wave)
     for index in range(17):
@@ -3360,7 +3479,9 @@ def fsps_madau95_igm_transmission_jax(
     max_index = jnp.argmax(tau)
     tau_max = tau[max_index]
     tau = jnp.where(jnp.arange(wave.shape[0]) <= max_index, tau_max, tau)
-    return jnp.exp(-jnp.clip(tau * jnp.asarray(factor, dtype=jnp.float32), 0.0, 80.0))
+    return jnp.exp(
+        -jnp.clip(tau * jnp.asarray(factor, dtype=numerical_dtype), 0.0, 80.0)
+    )
 
 
 def interpolate_gas_ssp_grid_jax(

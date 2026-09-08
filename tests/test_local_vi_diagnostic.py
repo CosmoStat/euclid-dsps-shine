@@ -587,7 +587,86 @@ def test_prepare_and_complete_runner_with_mock_physics(
         residual_report = summarize_residual(residual_root)
         assert len(residual_report["checks"]) == 1
         assert residual_report["checks"][0]["status"] == "PASS"
+        # Mock the expensive branch collector, exercising the new linked mode,
+        # immutable inputs, artifacts, CPU replay and failure on tampering.
+        from euclid_dsps.amortized import redshift_precision
+
+        residual_report["checks"] = [
+            dict(
+                point_index=4,
+                coordinate="z_obs",
+                component="lsst_z",
+                status="INCONCLUSIVE",
+                ad=0.2,
+            )
+        ]
+        runner.write(residual_root / "TARGET_RESOLUTION.json", residual_report)
+        rf = runner.read(residual_root / "FINAL.json")
+        rf["artifacts"]["TARGET_RESOLUTION.json"]["sha256"] = runner.sha256_file(
+            residual_root / "TARGET_RESOLUTION.json"
+        )
+        runner.write(residual_root / "FINAL.json", rf)
+
+        def branch_collect(*args, progress, **kwargs):
+            case = dict(
+                component="lsst_z",
+                anchor=[1.0],
+                observed=[1.0],
+                sigma=[1.0],
+                flux_jvp=[2.0],
+                band_index=0,
+                flux_dtype="float64",
+                ad=2.0,
+                point_index=4,
+                coordinate="z_obs",
+                source_ad_delta=0.0,
+                atol=0.01,
+                rtol=0.01,
+                samples=[
+                    dict(
+                        step=h,
+                        actual_plus_step=h,
+                        actual_minus_step=h,
+                        plus=[1 + 2 * h],
+                        minus=[1 - 2 * h],
+                    )
+                    for h in redshift_precision.STEPS
+                ],
+            )
+            value = dict(
+                branches=[
+                    dict(
+                        name="zpath64_full",
+                        floating_dtypes=["float64"],
+                        max_center_delta_sigma=0.0,
+                        snapshot=dict(cases=[case], expected_checks=1),
+                    )
+                ],
+                expected_branches=1,
+                physical_z=1.0,
+                dz_dx=0.5,
+                source_ad_delta=0.0,
+            )
+            progress(value)
+            return value
+
+        monkeypatch.setattr(redshift_precision, "collect", branch_collect)
+        branch_root = tmp_path / "redshift_precision"
+        prepared = runner.prepare(
+            branch_root, source, redshift_precision_reference=residual_root
+        )
+        assert prepared["maximum_decoder_evaluations"] == 1000
+        final_branch = runner.run(branch_root)
+        assert final_branch["status"] == "REDSHIFT_PRECISION_COMPLETE"
+        assert final_branch["local_optimization_started"] is False
+        from scripts.summarize_feniks_sc_drws_redshift_precision import (
+            summarize as summarize_branch,
+        )
+
+        assert summarize_branch(branch_root)["branches"][0]["all_checks_passed"]
         (residual_root / "TARGET_RESOLUTION_SNAPSHOT.json").write_text("{}")
+        with pytest.raises(ValueError, match="resolution reference artifact changed"):
+            runner.verify_redshift_precision_reference(residual_root, source)
         with pytest.raises(ValueError, match="changed artifact"):
             summarize_residual(residual_root)
         (root / "QUALIFICATION_POINTS.npz").write_bytes(b"changed")

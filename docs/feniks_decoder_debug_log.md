@@ -140,6 +140,80 @@ python scripts/summarize_feniks_sc_drws_target_resolution.py "$DIAGNOSTIC_ROOT"
 The summary verifies final hashes and recomputes decisions from the snapshot.
 An existing output root is never overwritten; use a new version for a retry.
 
+## Step 11: residual audit result, job 1922142
+
+Operator-provided evidence, 2026-09-09 01:07: `TARGET_RESOLUTION_COMPLETE`,
+1m01 Slurm elapsed, 258 forward and 5 gradient evaluations, CPU replay PASS.
+The four point-1 density checks pass the original tolerances. Their selected
+fine stencils differ from AD by about 3--8%; coarse stencils were more accurate.
+This is not a high-precision certificate. The selector is unchanged and does
+not choose steps using their agreement with AD.
+
+Point 4 / z_obs / lsst_z remains INCONCLUSIVE. AD=-0.579424; FD=-0.581997
+at h=0.0003125 and -0.573820 at h~0.000221, but -0.598115 at h=0.00015625
+and -1.334922 at h~0.00001. Two favorable steps are insufficient. Output ULP
+estimates near 1e-10 do not bound rounding inside the mixed-precision decoder.
+Do not loosen tolerances or restart NPE from this evidence.
+
+## Step 12: targeted redshift-dependent precision (prepared)
+
+This mode reuses point 4, its observed context, source receipts and parameters.
+It compares ten branches sequentially: canonical latent target; mixed full,
+stellar, IGM and projection; float64-z-path full, stellar, IGM and projection;
+and float64 age/mass weights followed by native SED casts. All bands and the
+centered likelihood are exported, not just the one unresolved band.
+
+The diagnostic promotes redshift-dependent age/mass/SFH arithmetic, contractions,
+IGM and projection. MDF/SSP arrays and dust transmission are fixed at the central
+non-redshift parameters, retaining stored/native precision. Float64 branches
+are checked by traversing their JAX traces. No YAML option switches production
+to this path. The IGM helper defaults remain historical float32.
+
+Branches use physical z=z0+(dz/dx)*u; canonical_x retains the original nonlinear
+latent mapping and its casts. All derivatives are per equivalent latent unit,
+but finite stencils are not identical between those two coordinate paths.
+Central flux shifts and sum-of-branches minus full derivatives are reported.
+Old thresholds, FD-only plateau selection and receipts remain unchanged.
+
+Launch from the updated branch, with a new output root:
+
+```bash
+cd "$WORK/dsps-popcosmos"
+source "$WORK/miniconda3/etc/profile.d/conda.sh"
+conda activate shine
+git switch feature/feniks-exact-posterior-benchmark
+git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+source outputs/logs/feniks_sc_drws_balanced_npe_latest.env
+export REPO_DIR="$PWD"
+export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"
+export LOCAL_VI_REDSHIFT_PRECISION_REFERENCE="$(dirname "$BALANCED_ROOT")/frozen_parent_target_resolution_v1"
+export DIAGNOSTIC_ROOT="$(dirname "$BALANCED_ROOT")/frozen_parent_redshift_precision_v1"
+unset DIAGNOSTIC_LOG_ROOT LOCAL_VI_GRADIENT_ISOLATION LOCAL_VI_REDSHIFT_DECOMPOSITION
+unset LOCAL_VI_PHOTOMETRY_REFERENCE LOCAL_VI_FULL_DECODER_REFERENCE
+unset LOCAL_VI_MDF_PRECISION_REFERENCE LOCAL_VI_TARGET_RESOLUTION_REFERENCE
+unset LOCAL_VI_OBJECTS LOCAL_VI_STEPS LOCAL_VI_DRAWS
+bash scripts/submit_feniks_sc_drws_local_vi_diagnostic.sh \
+  outputs/logs/feniks_sc_drws_balanced_npe_latest.env
+bash scripts/monitor_feniks_sc_drws_local_vi_diagnostic.sh
+```
+
+Budget: one node, one H100, 16 CPU threads, maximum 45 minutes (0.75 GPU-hours),
+internal 40 minutes / 1000 evaluations. Ten 25-step curves cost 510 forward
+calls and 10 JVP calls, plus setup and three legacy cache checks. Setup work and
+branch calls are not claimed to be equal-cost full decoder evaluations.
+No arrays, optimizer, NPE or population submission follow.
+
+```bash
+source outputs/logs/feniks_sc_drws_local_vi_diagnostic_latest.env
+python scripts/summarize_feniks_sc_drws_redshift_precision.py "$DIAGNOSTIC_ROOT"
+```
+
+Artifacts: `REDSHIFT_PRECISION.json`, `redshift_precision.csv`, full flux/JVP
+stencils in `REDSHIFT_PRECISION_SNAPSHOT.json`, parameter archive and hashed
+final receipt. The summary verifies hashes and replays all decisions on CPU.
+Even a successful float64 branch does not qualify the production full target:
+review the localized cause, implement a versioned correction, then requalify.
+
 ## Conditions for restarting training
 
 1. Remaining numerical checks resolved and full-target audit consistently
@@ -158,14 +232,23 @@ We are closer to the numerical prerequisite for a bounded training experiment.
 Neither its success nor usable population-level inference is guaranteed by this
 debug progress. The already-seen validation cohort is not a fresh test set.
 
-## Local verification
+## Local verification (latest implementation)
+
+103 tests passed, 3 skipped across the numerical/model/workflow suites. New
+coverage includes three synthetic SED/IGM cases with exclusively float64
+z-path traces, AD/FD and branch-chain checks, unchanged native outputs, an
+analytic collector/source-AD guard and mock receipt-linked cluster workflow.
+Compileall, Ruff, Bash syntax, CLI help and Sphinx HTML with `-W` pass.
+No real checkpoint/H100 point-4 follow-up was run locally or submitted here.
+
+### Previous residual-audit implementation
 
 39 targeted tests pass, covering the Gaussian difference identity,
 likelihood-offset invariance, actual float32 step sizes, asymmetric quadratic
 stencils, wrong-gradient rejection, missing-plateau rejection, synthetic DSPS
 SED evaluation and receipt-linked workflow/replay. Compileall, Ruff, CLI help,
-Bash syntax and Sphinx HTML with warnings-as-errors pass. Cluster step 10 remains
-unexecuted here. The legacy fit smoke configurations named in AGENTS.md are
+Bash syntax and Sphinx HTML with warnings-as-errors pass. Cluster execution is
+recorded above in step 11 from operator logs. The legacy fit smoke configurations named in AGENTS.md are
 absent; no catalogue fit or H100 verification is claimed.
 
 Related runbooks: [full decoder](feniks_full_decoder_qualification_runbook.md),
