@@ -158,6 +158,7 @@ class JitLatentSpec(NamedTuple):
     transform_family: jnp.ndarray | None = None
     transform_location: jnp.ndarray | None = None
     transform_lambda: jnp.ndarray | None = None
+    arithmetic_precision: str = "float32_legacy"
 
 
 class _StaticArg:
@@ -496,6 +497,7 @@ def _spline15d_latent_spec_from_checkpoint(
         transform_family=jnp.asarray(family, dtype=jnp.int32),
         transform_location=jnp.asarray(location, dtype=jnp.float32),
         transform_lambda=jnp.asarray(lam, dtype=jnp.float32),
+        arithmetic_precision=active_spec.arithmetic_precision,
     )
 
 
@@ -953,6 +955,7 @@ def train_amortized_fs2(
         raw_center=latent_spec.raw_center,
         raw_scale=latent_spec.raw_scale,
         normalization=latent_spec.normalization,
+        arithmetic_precision=latent_spec.arithmetic_precision,
         transform_family=latent_spec.transform_family,
         transform_location=latent_spec.transform_location,
         transform_lambda=latent_spec.transform_lambda,
@@ -2099,6 +2102,13 @@ def save_checkpoint(
             model.encoder,
             coordinate_names=tuple(latent_spec.names),
         )
+    if config.get("model", {}).get("spline_precision") == "float64_v1":
+        from euclid_dsps.model import photometry_numerics
+
+        sidecar["decoder_numerics"] = photometry_numerics(config["model"])
+        sidecar["likelihood_arithmetic_precision"] = config["amortized"][
+            "likelihood"
+        ].get("arithmetic_precision")
     write_json(path.with_suffix(path.suffix + ".json"), sidecar)
 
 
@@ -2113,6 +2123,17 @@ def load_checkpoint(
     sidecar_path = path.with_suffix(path.suffix + ".json")
     if sidecar_path.is_file():
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        if "decoder_numerics" in sidecar:
+            from euclid_dsps.model import photometry_numerics
+
+            if sidecar["decoder_numerics"] != photometry_numerics(
+                config.get("model")
+            ) or sidecar["likelihood_arithmetic_precision"] != config["amortized"][
+                "likelihood"
+            ].get("arithmetic_precision"):
+                raise ValueError(
+                    "checkpoint numerical contract differs from active config"
+                )
         recorded_hash = sidecar.get(
             "latent_spec_hash", sidecar.get("latent_transform_hash")
         )
@@ -2565,6 +2586,7 @@ def evaluate_validation_epoch(
             raw_center=latent_spec.raw_center,
             raw_scale=latent_spec.raw_scale,
             normalization=latent_spec.normalization,
+            arithmetic_precision=latent_spec.arithmetic_precision,
             transform_family=latent_spec.transform_family,
             transform_location=latent_spec.transform_location,
             transform_lambda=latent_spec.transform_lambda,
@@ -2797,6 +2819,9 @@ def _evaluation_metrics(
         student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+        arithmetic_precision=str(
+            likelihood_config.get("arithmetic_precision", "float32_legacy")
+        ),
     )
     logp = jnp.zeros_like(logq) if deterministic else posterior.logprior
     kl = logq - logp
@@ -5252,6 +5277,18 @@ def _prepare_sleep_noiseless_cache(
     from euclid_dsps.model import photometry_numerics
 
     expected["photometry_numerics"] = photometry_numerics(config.get("model"))
+    if (
+        getattr(latent_spec, "arithmetic_precision", "float32_legacy")
+        != "float32_legacy"
+    ):
+        expected["latent_spec_hash"] = latent_spec_hash(latent_spec)
+    flux_dtype = (
+        np.float64
+        if config.get("model", {}).get("spline_precision") == "float64_v1"
+        else np.float32
+    )
+    if flux_dtype == np.float64:
+        expected["stored_flux_dtype"] = "float64"
     created = False
     if path.is_file() or sidecar.is_file():
         if not path.is_file() or not sidecar.is_file():
@@ -5296,7 +5333,7 @@ def _prepare_sleep_noiseless_cache(
                 )
             valid &= jnp.all(jnp.isfinite(flux), axis=-1)
             x_chunks.append(np.asarray(jax.device_get(x), dtype=np.float32))
-            flux_chunks.append(np.asarray(jax.device_get(raw_flux), dtype=np.float32))
+            flux_chunks.append(np.asarray(jax.device_get(raw_flux), dtype=flux_dtype))
             valid_chunks.append(np.asarray(jax.device_get(valid), dtype=bool))
         with path.open("wb") as stream:
             np.savez(
@@ -5310,7 +5347,7 @@ def _prepare_sleep_noiseless_cache(
     with np.load(path, allow_pickle=False) as stored:
         result = {
             "x": np.asarray(stored["x"], dtype=np.float32),
-            "model_flux": np.asarray(stored["model_flux"], dtype=np.float32),
+            "model_flux": np.asarray(stored["model_flux"], dtype=flux_dtype),
             "physical_valid": np.asarray(stored["physical_valid"], dtype=bool),
         }
     if result["x"].shape != (candidates, len(parameter_names)):

@@ -29,6 +29,17 @@ class LatentSpec:
     transform_family: jnp.ndarray | None = None
     transform_location: jnp.ndarray | None = None
     transform_lambda: jnp.ndarray | None = None
+    arithmetic_precision: str = "float32_legacy"
+
+
+def latent_dtype(spec: LatentSpec):
+    if spec.arithmetic_precision == "float32_legacy":
+        return jnp.float32
+    if spec.arithmetic_precision != "float64_v1":
+        raise ValueError("unsupported latent arithmetic_precision")
+    if not jax.config.x64_enabled:
+        raise ValueError("float64 latent arithmetic requires JAX_ENABLE_X64")
+    return jnp.float64
 
 
 def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
@@ -98,6 +109,7 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
         )
     return LatentSpec(
         names=names,
+        arithmetic_precision=str(latent.get("arithmetic_precision", "float32_legacy")),
         lower=jnp.asarray(lower, dtype=jnp.float32),
         upper=jnp.asarray(upper, dtype=jnp.float32),
         raw_center=jnp.asarray(raw_center, dtype=jnp.float32),
@@ -123,7 +135,7 @@ def latent_spec_from_config(config: dict[str, Any]) -> LatentSpec:
 
 def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map network latent ``x`` to bounded physical ``theta``."""
-    x = _validate_last_dim(jnp.asarray(x, dtype=jnp.float32), spec)
+    x = _validate_last_dim(jnp.asarray(x, dtype=latent_dtype(spec)), spec)
     if str(spec.normalization) == "bounded_mixed_warp":
         raw = network_x_to_raw_x(x, spec)
         unit = jax.nn.sigmoid(raw)
@@ -164,7 +176,7 @@ def x_to_theta(x: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
 
 def theta_to_x(theta: jnp.ndarray, spec: LatentSpec) -> jnp.ndarray:
     """Map bounded physical ``theta`` to network latent ``x``."""
-    theta = _validate_last_dim(jnp.asarray(theta, dtype=jnp.float32), spec)
+    theta = _validate_last_dim(jnp.asarray(theta, dtype=latent_dtype(spec)), spec)
     if str(spec.normalization) == "bounded_mixed_warp":
         family = _bounded_transform_family(spec)
         location = _bounded_transform_location(spec)
@@ -229,7 +241,7 @@ def x_to_theta_log_abs_det_jacobian(
     """
     if str(spec.normalization) != "bounded_mixed_warp":
         raise ValueError("x_to_theta_log_abs_det_jacobian requires bounded_mixed_warp")
-    x = _validate_last_dim(jnp.asarray(x, dtype=jnp.float32), spec)
+    x = _validate_last_dim(jnp.asarray(x, dtype=latent_dtype(spec)), spec)
     raw = network_x_to_raw_x(x, spec)
     unit = jax.nn.sigmoid(raw)
     family = _bounded_transform_family(spec)
@@ -295,7 +307,7 @@ def _gas_metallicity_indices(names: tuple[str, ...]) -> tuple[int, int] | None:
 
 def latent_spec_to_jsonable(spec: LatentSpec) -> dict[str, Any]:
     """Return a JSON-serializable latent spec payload."""
-    return {
+    result = {
         "names": list(spec.names),
         "lower": np.asarray(spec.lower).astype(float).tolist(),
         "upper": np.asarray(spec.upper).astype(float).tolist(),
@@ -306,6 +318,9 @@ def latent_spec_to_jsonable(spec: LatentSpec) -> dict[str, Any]:
         "transform_location": _optional_array_to_list(spec.transform_location),
         "transform_lambda": _optional_array_to_list(spec.transform_lambda),
     }
+    if spec.arithmetic_precision != "float32_legacy":
+        result["arithmetic_precision"] = spec.arithmetic_precision
+    return result
 
 
 def latent_spec_hash(spec: LatentSpec) -> str:
@@ -388,13 +403,15 @@ def _spline15d_transform_family(spec: LatentSpec) -> jnp.ndarray:
 def _spline15d_transform_location(spec: LatentSpec) -> jnp.ndarray:
     if spec.transform_location is None:
         raise ValueError("spline15d_mixed requires transform_location")
-    return jnp.asarray(spec.transform_location, dtype=jnp.float32)
+    return jnp.asarray(spec.transform_location, dtype=latent_dtype(spec))
 
 
 def _spline15d_transform_lambda(spec: LatentSpec) -> jnp.ndarray:
     if spec.transform_lambda is None:
         raise ValueError("spline15d_mixed requires transform_lambda")
-    return jnp.maximum(jnp.asarray(spec.transform_lambda, dtype=jnp.float32), 1.0e-12)
+    return jnp.maximum(
+        jnp.asarray(spec.transform_lambda, dtype=latent_dtype(spec)), 1.0e-12
+    )
 
 
 def _bounded_transform_family(spec: LatentSpec) -> jnp.ndarray:
@@ -406,13 +423,15 @@ def _bounded_transform_family(spec: LatentSpec) -> jnp.ndarray:
 def _bounded_transform_location(spec: LatentSpec) -> jnp.ndarray:
     if spec.transform_location is None:
         raise ValueError("bounded_mixed_warp requires transform_location")
-    return jnp.asarray(spec.transform_location, dtype=jnp.float32)
+    return jnp.asarray(spec.transform_location, dtype=latent_dtype(spec))
 
 
 def _bounded_transform_lambda(spec: LatentSpec) -> jnp.ndarray:
     if spec.transform_lambda is None:
         raise ValueError("bounded_mixed_warp requires transform_lambda")
-    return jnp.maximum(jnp.asarray(spec.transform_lambda, dtype=jnp.float32), 1.0e-12)
+    return jnp.maximum(
+        jnp.asarray(spec.transform_lambda, dtype=latent_dtype(spec)), 1.0e-12
+    )
 
 
 def _bounded_physical_warp(
@@ -430,13 +449,13 @@ def _bounded_physical_warp(
 def _latent_center(spec: LatentSpec) -> jnp.ndarray:
     if spec.raw_center is None:
         return jnp.zeros_like(spec.lower)
-    return jnp.asarray(spec.raw_center, dtype=jnp.float32)
+    return jnp.asarray(spec.raw_center, dtype=latent_dtype(spec))
 
 
 def _latent_scale(spec: LatentSpec) -> jnp.ndarray:
     if spec.raw_scale is None:
         return jnp.ones_like(spec.lower)
-    return jnp.maximum(jnp.asarray(spec.raw_scale, dtype=jnp.float32), 1.0e-6)
+    return jnp.maximum(jnp.asarray(spec.raw_scale, dtype=latent_dtype(spec)), 1.0e-6)
 
 
 def _latent_normalization_from_config(

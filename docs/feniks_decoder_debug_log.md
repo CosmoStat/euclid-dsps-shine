@@ -16,13 +16,24 @@ not targets for repairing the code. No MCMC, SMC, AIS or nested sampling is used
 
 ## Current decision
 
-The merged quadrature and MDF64 candidate now passes all metallicity checks at
-six tested inputs. Four complete points pass. Five required checks remain
-INCONCLUSIVE: four centered log-likelihood checks at point 1 and one redshift
-flux check at point 4. No remaining required FAIL is reported for this candidate.
+Job 1922455 resolves the isolated point-4 redshift check with the diagnostic
+`zpath64_full` branch: all bands and centered likelihood pass. Its maximum
+center-flux shift is 2.1533e-5 photometric sigma; the lsst_z AD/FD difference is
+1.62e-6 and the branch-sum identity agrees at about 1e-13. This is a physical-z
+tangent diagnostic with fixed non-z parameters, not the production 15D path.
 
 This is numerical progress, not evidence of improved posterior support after
 retraining. The population prior is still frozen; population training is blocked.
+
+The next implementation is opt-in `spline_precision: float64_v1`, including
+latent transforms, age/SFH/mass arithmetic, MDF, dust/IGM, merged projection and
+likelihood accumulation. Stored SSP assets and learned arrays are unchanged.
+The bounded overnight pilot first requalifies the actual nonlinear x-to-target
+path at all six inputs and all fifteen coordinates. It cannot treat the isolated
+branch result as its qualification receipt.
+
+See [the overnight runbook](feniks_precision_night_runbook.md) for the single-job
+launch, budgets, conditional stages and next-morning artifact checks.
 
 ## Step-by-step record
 
@@ -232,7 +243,7 @@ We are closer to the numerical prerequisite for a bounded training experiment.
 Neither its success nor usable population-level inference is guaranteed by this
 debug progress. The already-seen validation cohort is not a fresh test set.
 
-## Local verification (latest implementation)
+## Previous redshift-isolation verification
 
 103 tests passed, 3 skipped across the numerical/model/workflow suites. New
 coverage includes three synthetic SED/IGM cases with exclusively float64
@@ -240,6 +251,36 @@ z-path traces, AD/FD and branch-chain checks, unchanged native outputs, an
 analytic collector/source-AD guard and mock receipt-linked cluster workflow.
 Compileall, Ruff, Bash syntax, CLI help and Sphinx HTML with `-W` pass.
 No real checkpoint/H100 point-4 follow-up was run locally or submitted here.
+
+## Step 13: integrated precision and gated overnight pilot (prepared)
+
+The complete spline arithmetic is now opt-in, rather than a diagnostic helper
+that holds other parameters fixed. Latent conversion and likelihood accumulation
+are versioned too. New checkpoints record this contract and reject incompatible
+loads; an explicit migration verifies identical model arrays. New simulation
+banks record decoder numerics, latent-spec hash and float64 flux storage.
+
+The overnight job has one GPU and sequential, fail-closed stages: full 15D
+qualification at six inputs, gradient smoke, fresh bank, four sleep epochs,
+four sleep-plus-ELBO epochs, matched 64-object K256 and internal simulated /
+held-out-band diagnostics. No population step is queued. The numerical tolerances
+are unchanged; the candidate canonical likelihood FD is also required to pass.
+The frozen prior's actual output precision is retained in its resolution screen.
+
+Local verification: 196 tests passed, 3 skipped in the targeted model, posterior,
+precision and workflow suites. Tests include two synthetic SED/IGM full-target
+15-coordinate AD/FD cases, unchanged legacy outputs, exact checkpoint migration,
+incompatible-contract rejection, cohort separation and mocked staged execution
+that stops after a failed smoke. The CPU mock-decoder optimizer smoke completed
+one epoch on 16 generated objects in 28.6 seconds; it is not an SED NPE result.
+Compileall, Ruff, Bash syntax, CLI help and Sphinx HTML with warnings-as-errors
+pass. The older AGENTS one-row/batch fit config paths are absent in this checkout;
+those fit commands and a real-checkpoint/H100 training run were not executed.
+After the final guard changes, the focused precision/qualification/workflow
+rerun also passed: 33 tests, 4 deselected.
+
+Qualification and posterior improvements are still to be measured on Jean-Zay.
+See [the launch and readback runbook](feniks_precision_night_runbook.md).
 
 ### Previous residual-audit implementation
 

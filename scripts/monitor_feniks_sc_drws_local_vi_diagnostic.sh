@@ -10,17 +10,33 @@ from pathlib import Path
 import sys
 root = Path(sys.argv[1])
 print('root=', root)
-for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'FAILED.json', 'FINAL.json'):
+for name in ('CONTRACT_AUDIT.json', 'COST_PREFLIGHT.json', 'PROGRESS.json', 'NIGHT_PROGRESS.json', 'FAILED.json', 'FINAL.json', 'NIGHT_FINAL.json'):
     path = root/name
     if path.is_file():
         value = json.loads(path.read_text())
         if name == 'CONTRACT_AUDIT.json':
             value = {'status': value['status']}
-        if name == 'FINAL.json':
+        if name in ('FINAL.json', 'NIGHT_FINAL.json'):
             value = {k: value[k] for k in ('status', 'cases_complete', 'reason', 'budget', 'scientific_promotion') if k in value}
         print(name, json.dumps(value, sort_keys=True))
 mode = json.loads((root/'RUN_MANIFEST.json').read_text()).get('mode', 'local_vi')
-if mode == 'redshift_precision_audit':
+if mode == 'precision_night':
+    partial = root/'FULL_DECODER_PARTIAL.json'
+    if partial.is_file():
+        cases = json.loads(partial.read_text())['cases']
+        print('Qualification:', len(cases), '/6', [c['numerical_checks'] for c in cases])
+    for arm in ('smoke', 'B', 'C'):
+        receipt = root/'arms'/arm/'ARM_COMPLETE.json'
+        progress = root/'arms'/arm/'train/training_progress.json'
+        if receipt.is_file():
+            print('Train', arm, 'COMPLETE')
+        elif progress.is_file():
+            print('Train', arm, progress.read_text())
+    for arm in 'ABC':
+        metadata = root/'validation'/arm/'tracking_k256/inference/shard_metadata'
+        print(arm, 'K256:', len(list(metadata.glob('batch_*.json'))), '/32')
+    print('Sequential fixed-parent pilot; no population training or scientific promotion')
+elif mode == 'redshift_precision_audit':
     partial = root/'REDSHIFT_PRECISION_PARTIAL.json'
     if partial.is_file():
         value = json.loads(partial.read_text())
@@ -58,7 +74,8 @@ elif mode == 'local_vi':
     print('Completed observed cases:', len(list((root/'cases').glob('observed_*/COMPLETE.json'))))
     print('Completed simulated cases:', len(list((root/'cases').glob('simulated_*/COMPLETE.json'))))
 PY
-  if [[ -s "$DIAGNOSTIC_ROOT/FINAL.json" || -s "$DIAGNOSTIC_ROOT/FAILED.json" ]]; then
+  NIGHT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("mode") == "precision_night")' "$DIAGNOSTIC_ROOT/RUN_MANIFEST.json")"
+  if [[ -s "$DIAGNOSTIC_ROOT/FAILED.json" || -s "$DIAGNOSTIC_ROOT/NIGHT_FINAL.json" || ( "$NIGHT" != "True" && -s "$DIAGNOSTIC_ROOT/FINAL.json" ) ]]; then
     break
   fi
   STATE="$(sacct -X -n -P -j "$DIAGNOSTIC_JOB" --format=State | head -n 1)"

@@ -48,6 +48,10 @@ if [[ -n "${LOCAL_VI_REDSHIFT_PRECISION_REFERENCE:-}" ]]; then
   EXTRA+=(--redshift-precision-reference "$LOCAL_VI_REDSHIFT_PRECISION_REFERENCE")
   WALLTIME="00:45:00"
 fi
+if [[ -n "${LOCAL_VI_PRECISION_NIGHT_REFERENCE:-}" ]]; then
+  EXTRA+=(--precision-night-reference "$LOCAL_VI_PRECISION_NIGHT_REFERENCE")
+  WALLTIME="10:00:00"
+fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
   python scripts/run_feniks_sc_drws_local_vi_diagnostic.py prepare \
   --source-root "$SOURCE_ROOT" --root "$DIAGNOSTIC_ROOT" \

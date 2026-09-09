@@ -664,6 +664,27 @@ def test_prepare_and_complete_runner_with_mock_physics(
         )
 
         assert summarize_branch(branch_root)["branches"][0]["all_checks_passed"]
+        from scripts import feniks_precision_night as night
+
+        night_root = tmp_path / "night"
+        prepared_night = runner.prepare(
+            night_root, source, precision_night_reference=branch_root
+        )
+        assert prepared_night["mode"] == "precision_night"
+        assert prepared_night["allocation_gpu_hours"] == 10
+        continued = []
+
+        def capture_continuation(*args):
+            continued.append(args)
+            return {"status": "MOCK_NIGHT_CONTINUATION"}
+
+        monkeypatch.setattr(night, "continue_night", capture_continuation)
+        assert runner.run(night_root)["status"] == "MOCK_NIGHT_CONTINUATION"
+        assert len(continued) == 1
+        cfg = continued[0][2]
+        assert cfg["model"]["spline_precision"] == "float64_v1"
+        assert cfg["amortized"]["likelihood"]["arithmetic_precision"] == "float64_v1"
+        assert continued[0][6]["variant_labels"] == ["legacy", "spline64"]
         (residual_root / "TARGET_RESOLUTION_SNAPSHOT.json").write_text("{}")
         with pytest.raises(ValueError, match="resolution reference artifact changed"):
             runner.verify_redshift_precision_reference(residual_root, source)

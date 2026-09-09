@@ -274,6 +274,7 @@ def prepare(
     mdf_precision_reference=None,
     target_resolution_reference=None,
     redshift_precision_reference=None,
+    precision_night_reference=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -286,6 +287,7 @@ def prepare(
                 mdf_precision_reference is not None,
                 target_resolution_reference is not None,
                 redshift_precision_reference is not None,
+                precision_night_reference is not None,
             )
         )
         > 1
@@ -300,6 +302,14 @@ def prepare(
     )
     mdf_reference = None
     redshift_reference = None
+    night_reference = None
+    if precision_night_reference is not None:
+        from scripts.feniks_precision_night import verify_reference
+
+        night_reference = verify_reference(precision_night_reference, source_root)
+        mdf_reference = read(Path(night_reference["path"]) / "RUN_MANIFEST.json")[
+            "mdf_precision_reference"
+        ]
     if redshift_precision_reference is not None:
         redshift_reference = verify_redshift_precision_reference(
             redshift_precision_reference, source_root
@@ -370,7 +380,9 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="redshift_precision_audit"
+        mode="precision_night"
+        if precision_night_reference is not None
+        else "redshift_precision_audit"
         if redshift_precision_reference is not None
         else "target_resolution_audit"
         if target_resolution_reference is not None
@@ -468,6 +480,18 @@ def prepare(
             seconds=2400,
             maximum_decoder_evaluations=1000,
             allocation_gpu_hours=0.75,
+        )
+    if night_reference is not None:
+        recipe_path = Path("configs/experiments/feniks_sc_drws_precision_night.yaml")
+        recipe = yaml.safe_load(recipe_path.read_text())
+        manifest.update(
+            precision_night_reference=night_reference,
+            night_recipe=recipe,
+            night_recipe_sha256=sha256_file(recipe_path),
+            seconds=4800,
+            maximum_decoder_evaluations=6000,
+            allocation_gpu_hours=10,
+            interpretation="gated fixed-parent numerical pilot; no population promotion",
         )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest
@@ -785,6 +809,16 @@ def run(root):
     budget = Budget(manifest["seconds"], manifest["maximum_decoder_evaluations"])
     write(root / "PROGRESS.json", {"stage": "loading", "budget": budget.snapshot()})
     try:
+        if manifest.get("mode") == "precision_night":
+            recipe_path = (
+                Path(__file__).resolve().parents[1]
+                / "configs/experiments/feniks_sc_drws_precision_night.yaml"
+            )
+            if (
+                sha256_file(recipe_path) != manifest["night_recipe_sha256"]
+                or yaml.safe_load(recipe_path.read_text()) != manifest["night_recipe"]
+            ):
+                raise ValueError("night recipe differs from immutable source")
         for name, expected in (
             ("config.yaml", manifest["config_sha256"]),
             ("observed_rows.npy", manifest["rows_sha256"]),
@@ -874,6 +908,7 @@ def run(root):
             "mdf_precision_qualification",
             "target_resolution_audit",
             "redshift_precision_audit",
+            "precision_night",
         }:
             from euclid_dsps.amortized.redshift_decomposition import decompose_redshift
             from euclid_dsps.calibration import (
@@ -935,14 +970,17 @@ def run(root):
                 "mdf_precision_qualification",
                 "target_resolution_audit",
                 "redshift_precision_audit",
+                "precision_night",
             }:
                 from euclid_dsps.amortized.decoder_qualification import qualify
                 from euclid_dsps.model import photometry_numerics
 
                 redshift_precision_mode = manifest["mode"] == "redshift_precision_audit"
+                night_mode = manifest["mode"] == "precision_night"
                 resolution_mode = (
                     manifest["mode"] == "target_resolution_audit"
                     or redshift_precision_mode
+                    or night_mode
                 )
                 mdf_mode = (
                     manifest["mode"] == "mdf_precision_qualification" or resolution_mode
@@ -1008,6 +1046,12 @@ def run(root):
                         mdf_weight_precision=manifest["candidate_mdf_weight_precision"],
                     )
                     labels = ("merged_mdf32", "merged_mdf64")
+                candidate_spec = spec
+                candidate_likelihood = likelihood
+                if night_mode:
+                    from scripts.feniks_precision_night import candidate_configuration
+
+                    corrected.model_config["spline_precision"] = "float64_v1"
                 corrected_args = dynamic_model_args(corrected)
                 candidate_config = copy.deepcopy(config)
                 candidate_config["model"]["photometry_integrator"] = manifest[
@@ -1017,6 +1061,10 @@ def run(root):
                     candidate_config["model"]["mdf_weight_precision"] = manifest[
                         "candidate_mdf_weight_precision"
                     ]
+                if night_mode:
+                    candidate_config = candidate_configuration(candidate_config)
+                    candidate_spec = latent_spec_from_config(candidate_config)
+                    candidate_likelihood = candidate_config["amortized"]["likelihood"]
                 (root / "candidate_config.yaml").write_text(
                     yaml.safe_dump(candidate_config, sort_keys=False)
                 )
@@ -1027,11 +1075,11 @@ def run(root):
                         model,
                         x,
                         observation,
-                        spec,
+                        candidate_spec,
                         corrected,
                         corrected_args,
                         spec.names,
-                        likelihood,
+                        candidate_likelihood,
                         calibration,
                     )
 
@@ -1127,7 +1175,26 @@ def run(root):
                         ),
                     )
 
-                if redshift_precision_mode:
+                if night_mode:
+                    from scripts.feniks_precision_night import verify_reference
+
+                    ref = manifest["precision_night_reference"]
+                    if verify_reference(ref["path"], manifest["source_root"]) != ref:
+                        raise ValueError("night source changed")
+                    result, _ = qualify(
+                        target,
+                        corrected_target,
+                        points,
+                        observations,
+                        budget,
+                        names=spec.names,
+                        bands=stats.band_names,
+                        progress=qualification_progress,
+                        labels=("legacy", "spline64"),
+                        candidate_only=True,
+                        candidate_float64=True,
+                    )
+                elif redshift_precision_mode:
                     from euclid_dsps.amortized.redshift_precision import (
                         analyze,
                         collect,
@@ -1253,7 +1320,7 @@ def run(root):
                         result["candidate_numerical_checks"] = "NOT_PASSED"
                         result["next_stage"] = "INVESTIGATE_MDF_WEIGHTS"
                     artifacts += ("MDF_WEIGHT_PROBES.json", "mdf_weight_probes.csv")
-                if resolution_mode:
+                if resolution_mode and not night_mode:
                     report_name = "TARGET_RESOLUTION.json"
                     result["identical_source_points_verified"] = True
                     result["source_reference"] = reference
@@ -1376,6 +1443,19 @@ def run(root):
                 },
             )
             write(root / "FINAL.json", final)
+            if manifest["mode"] == "precision_night":
+                from scripts.feniks_precision_night import continue_night
+
+                return continue_night(
+                    root,
+                    manifest,
+                    candidate_config,
+                    candidate_spec,
+                    model,
+                    stats,
+                    result,
+                    budget.snapshot()["elapsed_seconds"],
+                )
             return final
         if manifest.get("mode") == "gradient_isolation":
             from euclid_dsps.amortized.gradient_isolation import isolate_gradient
@@ -1657,6 +1737,8 @@ def run(root):
             population_training_started=False,
             truth_used=False,
         )
+        if manifest.get("mode") == "precision_night":
+            write(root / "NIGHT_FINAL.json", dict(final, training_started=False))
     except Exception as error:
         write(
             root / "FAILED.json",
@@ -1738,6 +1820,7 @@ def main():
     parser.add_argument("--mdf-precision-reference", type=Path)
     parser.add_argument("--target-resolution-reference", type=Path)
     parser.add_argument("--redshift-precision-reference", type=Path)
+    parser.add_argument("--precision-night-reference", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1755,6 +1838,7 @@ def main():
             args.mdf_precision_reference,
             args.target_resolution_reference,
             args.redshift_precision_reference,
+            args.precision_night_reference,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

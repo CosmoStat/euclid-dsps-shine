@@ -133,6 +133,9 @@ def negative_elbo(
         student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+        arithmetic_precision=str(
+            likelihood_config.get("arithmetic_precision", "float32_legacy")
+        ),
     )
     logp = jnp.zeros_like(logq) if deterministic else posterior.logprior
     kl_mc = logq - logp

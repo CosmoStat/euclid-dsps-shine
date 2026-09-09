@@ -133,3 +133,29 @@ rebuild versioned simulation banks, then run bounded frozen-parent local VI and
 matched NPE validation. Never reuse old flux banks across numerical conventions.
 Population learning requires separate posterior-support and integration checks.
 No result here establishes identifiability of all SFH directions.
+
+Integrated Precision and Overnight Pilot
+----------------------------------------
+
+Job 1922455 completed the targeted redshift precision diagnostic. On point 4,
+``zpath64_full`` passed all bands and centered likelihood. The lsst_z AD/FD
+difference was about 1.62e-6, the maximum center-flux shift 2.15e-5 photometric
+sigma, and the branch-sum derivative discrepancy about 1e-13. These are results
+reported from the cluster, not a new local execution. The diagnostic varied
+physical z with other parameters fixed; it did not qualify the production 15D
+nonlinear latent transform.
+
+The new opt-in ``spline_precision: float64_v1`` integrates the arithmetic into
+the real spline decoder, with versioned latent and likelihood precision.
+Historical defaults and stored SSP assets remain unchanged. A single sequential
+one-H100, ten-hour-ceiling pilot requalifies six complete 15D inputs before any
+training. It then runs a gradient smoke, a fresh simulation bank, four sleep
+epochs and four sleep-plus-ELBO epochs, followed by matched A/B/C diagnostics.
+Any numerical failure or inconclusive check blocks training. Population
+learning remains disabled even when every technical stage completes.
+
+The new reference A uses unchanged source weights with the new decoder; B and C
+are compared under that same decoder. This is a bounded fixed-parent experiment,
+not a production launch or proof of catalogue-simulator compatibility.
+
+:download:`Download the overnight runbook <../feniks_precision_night_runbook.md>`

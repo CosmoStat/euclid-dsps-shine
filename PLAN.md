@@ -1,5 +1,28 @@
 # Plan
 
+## 2026-09-09 Versioned precision and gated overnight experiment (implemented)
+
+- Job 1922455: all zpath64 branches pass at point4 with tiny center shifts;
+  canonical latent target remains inconclusive and mixed full has failures.
+- Integrated opt-in spline64 arithmetic, including latent transforms and
+  likelihood, without changing defaults, priors, noise, selection or bounds.
+- Prepared one sequential overnight job: all-coordinate qualification, fresh
+  small bank/gradient smoke, bounded sleep and sleep+ELBO continuations and
+  truth-free validation. Fail closed; no population training or promotion.
+- One H100 / one node / 10-hour ceiling, qualification before any training;
+  1024-point gradient smoke, 16384-point new bank, 8192 training rows, 4+4
+  epochs and matched A/B/C K256 on 64 observed validation objects. No old flux
+  bank reuse. A uses unchanged weights under corrected numerics.
+- Checkpoint migration verifies all model arrays after save/reload. Numerical
+  contracts enter latent hashes, sidecars and cache provenance. Historical
+  defaults/checkpoints remain readable. Documented recipe and overnight commands.
+- Local checks: 196 passed / 3 skipped in targeted model, posterior and workflow
+  suites; CPU synthetic mock-decoder optimizer smoke (16 objects, one epoch),
+  compileall, Ruff, Bash syntax, CLI help and Sphinx -W pass. No H100 run submitted.
+- Remaining: six real-checkpoint full-target qualification inputs, H100 runtime,
+  new posterior-support results and catalogue simulator compatibility. Neither
+  a pointwise derivative pass nor a completed pilot enables population training.
+
 ## 2026-09-09 Point-4 redshift precision isolation (implemented)
 
 - Cluster job 1922142 resolves four density checks within existing tolerances;

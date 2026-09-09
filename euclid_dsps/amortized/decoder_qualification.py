@@ -56,6 +56,8 @@ def qualify(
     bands,
     progress,
     labels=("legacy", "merged"),
+    candidate_only=False,
+    candidate_float64=False,
 ):
     """Check all latent-x coordinates with full SED and canonical likelihood.
 
@@ -71,6 +73,8 @@ def qualify(
     components = [*bands, "centered_loglike", "logprior", "canonical_loglike"]
     centers = {}
     for label, target in zip(labels, (legacy, candidate), strict=True):
+        if candidate_only and label == labels[0]:
+            continue
 
         def measure(x, observation, target=target):
             values = target(x, observation)
@@ -102,6 +106,8 @@ def qualify(
             started = time.monotonic()
             progress(label, index, "start", rows, cases)
             point = jnp.asarray(point).reshape(1, 1, -1)
+            if candidate_float64 and label == labels[1]:
+                point = point.astype(jnp.float64)
             if not np.all(np.asarray(obs.mask)) or np.any(
                 np.asarray(obs.flux_err) <= 0
             ):
@@ -110,9 +116,33 @@ def qualify(
                 )
             budget.charge(1)
             center = np.asarray(measured(point, obs))
+            candidate_prior_dtype = np.float64
+            if candidate_float64 and label == labels[1]:
+                budget.charge(1)
+                native_values = target(point, obs)
+                if (
+                    native_values.model_flux.dtype != jnp.float64
+                    or native_values.loglike.dtype != jnp.float64
+                ):
+                    raise ValueError("candidate flux/likelihood did not retain float64")
+                candidate_prior_dtype = np.asarray(native_values.logprior).dtype
             if not np.isfinite(center).all():
                 raise ValueError(f"nonfinite full target: {label} point {index}")
             centers[label, index] = center
+            if candidate_only:
+                budget.charge(1)
+                previous = legacy(point, obs)
+                centers[labels[0], index] = np.concatenate(
+                    (
+                        np.asarray(previous.model_flux).reshape(-1)
+                        / np.asarray(obs.flux_err).reshape(-1),
+                        [
+                            0.0,
+                            float(jnp.sum(previous.logprior)),
+                            float(jnp.sum(previous.loglike)),
+                        ],
+                    )
+                )
             budget.charge(1, gradient=True)
             reverse = np.asarray(reverse_fn(point, obs)).reshape(-1)
             # Measure steady single-object cost after compilation separately.
@@ -134,14 +164,31 @@ def qualify(
                     minus = np.asarray(measured(point - h * tangent, obs))
                     fd = (plus - minus) / (2 * h)
                     # Conservative float32 output screen: the full path remains mixed.
+                    screen_dtype = (
+                        np.float64
+                        if candidate_float64 and label == labels[1]
+                        else np.float32
+                    )
                     ulp = (
                         4
                         * (
-                            abs(np.spacing(plus.astype(np.float32))).astype(float)
-                            + abs(np.spacing(minus.astype(np.float32))).astype(float)
+                            abs(np.spacing(plus.astype(screen_dtype))).astype(float)
+                            + abs(np.spacing(minus.astype(screen_dtype))).astype(float)
                         )
                         / (2 * h)
                     )
+                    if candidate_float64 and label == labels[1]:
+                        # The frozen flow may still accumulate logprior in float32.
+                        ulp[-2] = (
+                            4
+                            * (
+                                abs(np.spacing(plus[-2].astype(candidate_prior_dtype)))
+                                + abs(
+                                    np.spacing(minus[-2].astype(candidate_prior_dtype))
+                                )
+                            )
+                            / (2 * h)
+                        )
                     fds.append(fd)
                     resolutions.append(ulp)
                     for j, component in enumerate(components):
@@ -190,7 +237,11 @@ def qualify(
                 progress(label, index, name, rows, cases)
             # Canonical scalar FD is retained but may be unresolved after its float32
             # normalization sum. Require centered FD and agreement of canonical AD.
-            required = [c for c in checks if c["component"] != "canonical_loglike"]
+            required = [
+                c
+                for c in checks
+                if candidate_float64 or c["component"] != "canonical_loglike"
+            ]
             passed = all(c["status"] == "PASS" for c in required) and all(
                 c["passed"] and c["reverse_passed"] for c in chains
             )
@@ -233,7 +284,11 @@ def qualify(
         if numerical
         else "INVESTIGATE_FULL_TARGET",
         coordinates="latent_x, not physical theta; fixed observations and errors",
-        resolution_contract="conservative float32 output ULP screen, not an internal rounding-error bound",
+        resolution_contract=(
+            "float64 candidate output ULP with FD plateau; not an internal rounding bound"
+            if candidate_float64
+            else "conservative float32 output ULP screen, not an internal rounding-error bound"
+        ),
         catalogue_simulator_compatibility="NOT_VERIFIED",
         old_flux_bank_reuse_authorized=False,
         local_optimization_started=False,

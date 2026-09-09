@@ -1057,8 +1057,7 @@ def _load_compressed_agn_component_grid(
 
     if basis.ndim != 2 or basis.shape[1] != len(wave):
         raise ValueError(
-            "Compressed AGN component grid agn_basis must have shape "
-            "(n_basis, n_wave)"
+            "Compressed AGN component grid agn_basis must have shape (n_basis, n_wave)"
         )
     if fagn_handling == "linear_runtime_multiplier":
         expected_coeff_shape = (
@@ -1078,15 +1077,14 @@ def _load_compressed_agn_component_grid(
             basis.shape[0],
         )
         shape_message = (
-            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, " "n_ssp_lg_age_gyr, n_basis)"
+            "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr, n_basis)"
         )
         scale_shape_message = (
             "(n_fagn_grid, n_agn_tau_grid, n_ssp_lgmet, n_ssp_lg_age_gyr)"
         )
     if coeff.shape != expected_coeff_shape:
         raise ValueError(
-            "Compressed AGN component grid agn_coeff must have shape "
-            f"{shape_message}"
+            f"Compressed AGN component grid agn_coeff must have shape {shape_message}"
         )
     expected_scale_shape = expected_coeff_shape[:-1]
     if scale.shape != expected_scale_shape:
@@ -2399,16 +2397,19 @@ def run_spline15d_model_jax(
 
     model_config = _normalized_model_config(context.model_config)
     _validate_diffsky_basic_metallicity_model(model_config)
-    z_obs = jnp.asarray(params["z_obs"], dtype=jnp.float32)
+    dtype = spline_numerical_dtype(model_config)
+    z_obs = jnp.asarray(params["z_obs"], dtype=dtype)
     t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
     gal_t_table = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), context.n_sfh_bins)
     contrasts = jnp.stack(
-        [jnp.asarray(params[name], dtype=jnp.float32) for name in SFH_CONTRAST_NAMES]
+        [jnp.asarray(params[name], dtype=dtype) for name in SFH_CONTRAST_NAMES]
     )
     raw_sfr_table = reconstruct_relative_sfh_jax(gal_t_table, contrasts)
     ssp_lg_age_gyr = _context_ssp_lg_age_gyr(context)
+    if dtype == jnp.float64:
+        ssp_lg_age_gyr = ssp_lg_age_gyr.astype(dtype)
     lgmet_abs = log10_stellar_metallicity_to_absolute_jax(
-        params["log10_stellar_metallicity"], context.z_sun
+        params["log10_stellar_metallicity"], context.z_sun, numerical_dtype=dtype
     )
     frac_surviving_by_age = _diffsky_basic_surviving_mstar_by_age_jax(
         context, model_config, lgmet_abs
@@ -2420,6 +2421,7 @@ def run_spline15d_model_jax(
         t_obs,
         params["log10_stellar_mass"],
         frac_surviving_by_age,
+        numerical_dtype=dtype,
     )
     age_weights = calc_age_weights_from_sfh_table(
         gal_t_table, gal_sfr_table, ssp_lg_age_gyr, t_obs
@@ -2429,7 +2431,9 @@ def run_spline15d_model_jax(
     intrinsic_sed = jnp.nan_to_num(
         sed_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
     )
-    tau2, dust_index_n, tau1_over_tau2 = diffsky_basic_dust_params_jax(params)
+    tau2, dust_index_n, tau1_over_tau2 = diffsky_basic_dust_params_jax(
+        params, numerical_dtype=dtype
+    )
     wave = _context_ssp_wave(context)
     dusted_by_age = apply_popcosmos_dust_by_age_jax(
         wave,
@@ -2439,6 +2443,7 @@ def run_spline15d_model_jax(
         dust_index_n,
         tau1_over_tau2,
         model_config,
+        numerical_dtype=dtype,
     )
     dusted_sed = jnp.nan_to_num(
         dusted_by_age.sum(axis=0), nan=0.0, posinf=1.0e30, neginf=0.0
@@ -2449,6 +2454,7 @@ def run_spline15d_model_jax(
         jnp.zeros_like(dusted_sed),
         z_obs,
         model_config,
+        numerical_dtype=dtype,
     )
     model_mags = predict_mags_jax(context, wave, post_igm_sed, z_obs)
     return JaxModelResult(
@@ -2890,6 +2896,8 @@ def build_diffsky_basic_sfh_table_jax(
 
 def diffsky_basic_dust_params_jax(
     params: dict[str, Any],
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Map HLTDS dust latents to the existing DSPS attenuation kernel.
 
@@ -2899,11 +2907,13 @@ def diffsky_basic_dust_params_jax(
     because no object-level birth-cloud latent is present in the prepared HLTDS
     table.
     """
-    tau2 = jnp.asarray(params.get("dust_av", 0.0), dtype=jnp.float32) / jnp.asarray(
-        1.086, dtype=jnp.float32
+    tau2 = jnp.asarray(params.get("dust_av", 0.0), dtype=numerical_dtype) / jnp.asarray(
+        1.086, dtype=numerical_dtype
     )
-    dust_index_n = jnp.asarray(params.get("dust_delta", 0.0), dtype=jnp.float32)
-    tau1_over_tau2 = jnp.asarray(params.get("tau1_over_tau2", 0.0), dtype=jnp.float32)
+    dust_index_n = jnp.asarray(params.get("dust_delta", 0.0), dtype=numerical_dtype)
+    tau1_over_tau2 = jnp.asarray(
+        params.get("tau1_over_tau2", 0.0), dtype=numerical_dtype
+    )
     return (
         jnp.maximum(tau2, 0.0),
         dust_index_n,
@@ -2992,11 +3002,15 @@ def normalize_sfh_to_stellar_mass_jax(
     if frac_surviving_by_age is None:
         frac_surviving_by_age = surviving_mstar(ssp_lg_age_gyr + 9.0)
     else:
-        frac_surviving_by_age = jnp.asarray(frac_surviving_by_age, dtype=numerical_dtype)
+        frac_surviving_by_age = jnp.asarray(
+            frac_surviving_by_age, dtype=numerical_dtype
+        )
     mean_frac_surviving = jnp.sum(age_weights * frac_surviving_by_age)
     mean_frac_surviving = jnp.clip(mean_frac_surviving, 1.0e-4, 1.0)
     formed_mass = jnp.trapezoid(gal_sfr_table, gal_t_table) * 1.0e9
-    target_surviving_mass = 10.0 ** jnp.asarray(log10_stellar_mass, dtype=numerical_dtype)
+    target_surviving_mass = 10.0 ** jnp.asarray(
+        log10_stellar_mass, dtype=numerical_dtype
+    )
     target_formed_mass = target_surviving_mass / mean_frac_surviving
     scale = target_formed_mass / jnp.maximum(formed_mass, 1.0e-30)
     scaled_sfr = jnp.clip(gal_sfr_table * scale, 1.0e-30, jnp.inf)
@@ -3240,11 +3254,14 @@ def interpolate_popcosmos_ssp_stellar_metallicity_jax(
 
 
 def log10_stellar_metallicity_to_absolute_jax(
-    log10_stellar_metallicity: jnp.ndarray, z_sun: float
+    log10_stellar_metallicity: jnp.ndarray,
+    z_sun: float,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
     """Convert log10(Zstar/Zsun) to absolute log10(Zstar)."""
-    return jnp.log10(jnp.asarray(z_sun, dtype=jnp.float32)) + jnp.asarray(
-        log10_stellar_metallicity, dtype=jnp.float32
+    return jnp.log10(jnp.asarray(z_sun, dtype=numerical_dtype)) + jnp.asarray(
+        log10_stellar_metallicity, dtype=numerical_dtype
     )
 
 
@@ -3256,6 +3273,8 @@ def apply_popcosmos_dust_by_age_jax(
     dust_index_n: jnp.ndarray,
     tau1_over_tau2: jnp.ndarray,
     model_config: dict[str, Any] | None,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
     """Apply the configured PopCosmos-like age-dependent attenuation model."""
     config = _normalized_model_config(model_config)
@@ -3269,6 +3288,7 @@ def apply_popcosmos_dust_by_age_jax(
             dust_index_n,
             tau1_over_tau2,
             birth_cloud_slope=float(config.get("birth_cloud_slope", -1.0)),
+            numerical_dtype=numerical_dtype,
         )
     if mode == "prospector_fsps":
         return apply_prospector_fsps_dust_by_age_jax(
@@ -3280,6 +3300,7 @@ def apply_popcosmos_dust_by_age_jax(
             tau1_over_tau2,
             dust_tesc_logyr=float(config.get("dust_tesc_logyr", 7.0)),
             dust1_index=float(config.get("dust1_index", -1.0)),
+            numerical_dtype=numerical_dtype,
         )
     raise ValueError(f"Unsupported model.dust_model: {mode}")
 
@@ -3292,23 +3313,27 @@ def apply_charlot_fall_by_age_jax(
     dust_index_n: jnp.ndarray,
     tau1_over_tau2: jnp.ndarray,
     birth_cloud_slope: float = -1.0,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
     """Apply Charlot-Fall diffuse and birth-cloud attenuation by SSP age."""
-    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=jnp.float32), 1.0)
-    tau2_safe = jnp.maximum(jnp.asarray(tau2, dtype=jnp.float32), 0.0)
+    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=numerical_dtype), 1.0)
+    tau2_safe = jnp.maximum(jnp.asarray(tau2, dtype=numerical_dtype), 0.0)
     diffuse = tau2_safe * (wave_safe / 5500.0) ** jnp.asarray(
-        dust_index_n, dtype=jnp.float32
+        dust_index_n, dtype=numerical_dtype
     )
-    tau1 = jnp.maximum(jnp.asarray(tau1_over_tau2, dtype=jnp.float32), 0.0) * tau2_safe
+    tau1 = (
+        jnp.maximum(jnp.asarray(tau1_over_tau2, dtype=numerical_dtype), 0.0) * tau2_safe
+    )
     birth = tau1 * (wave_safe / 5500.0) ** jnp.asarray(
-        birth_cloud_slope, dtype=jnp.float32
+        birth_cloud_slope, dtype=numerical_dtype
     )
-    age_gyr = 10.0 ** jnp.asarray(ssp_lg_age_gyr, dtype=jnp.float32)
+    age_gyr = 10.0 ** jnp.asarray(ssp_lg_age_gyr, dtype=numerical_dtype)
     young = age_gyr <= 0.01
     old_trans = jnp.exp(-jnp.clip(diffuse, 0.0, 80.0))
     young_trans = jnp.exp(-jnp.clip(diffuse + birth, 0.0, 80.0))
     transmission = jnp.where(young[:, None], young_trans[None, :], old_trans[None, :])
-    return jnp.asarray(sed_by_age, dtype=jnp.float32) * transmission
+    return jnp.asarray(sed_by_age, dtype=numerical_dtype) * transmission
 
 
 def apply_prospector_fsps_dust_by_age_jax(
@@ -3320,6 +3345,8 @@ def apply_prospector_fsps_dust_by_age_jax(
     tau1_over_tau2: jnp.ndarray,
     dust_tesc_logyr: float = 7.0,
     dust1_index: float = -1.0,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
     """Approximate Prospector/FSPS dust_type=4 plus birth-cloud attenuation.
 
@@ -3328,29 +3355,38 @@ def apply_prospector_fsps_dust_by_age_jax(
     birth-cloud component is a V-band optical depth with FSPS-style power-law
     index ``dust1_index`` and applies only below ``dust_tesc_logyr``.
     """
-    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=jnp.float32), 1.0)
-    tau2_safe = jnp.maximum(jnp.asarray(tau2, dtype=jnp.float32), 0.0)
-    tau1 = jnp.maximum(jnp.asarray(tau1_over_tau2, dtype=jnp.float32), 0.0) * tau2_safe
-    diffuse_shape = _prospector_fsps_diffuse_shape_jax(wave_safe, dust_index_n)
+    wave_safe = jnp.maximum(jnp.asarray(wave, dtype=numerical_dtype), 1.0)
+    tau2_safe = jnp.maximum(jnp.asarray(tau2, dtype=numerical_dtype), 0.0)
+    tau1 = (
+        jnp.maximum(jnp.asarray(tau1_over_tau2, dtype=numerical_dtype), 0.0) * tau2_safe
+    )
+    diffuse_shape = _prospector_fsps_diffuse_shape_jax(
+        wave_safe, dust_index_n, numerical_dtype=numerical_dtype
+    )
     diffuse = tau2_safe * diffuse_shape
-    birth = tau1 * (wave_safe / 5500.0) ** jnp.asarray(dust1_index, dtype=jnp.float32)
-    age_logyr = jnp.asarray(ssp_lg_age_gyr, dtype=jnp.float32) + 9.0
-    young = age_logyr <= jnp.asarray(dust_tesc_logyr, dtype=jnp.float32)
+    birth = tau1 * (wave_safe / 5500.0) ** jnp.asarray(
+        dust1_index, dtype=numerical_dtype
+    )
+    age_logyr = jnp.asarray(ssp_lg_age_gyr, dtype=numerical_dtype) + 9.0
+    young = age_logyr <= jnp.asarray(dust_tesc_logyr, dtype=numerical_dtype)
     old_trans = jnp.exp(-jnp.clip(diffuse, 0.0, 80.0))
     young_trans = jnp.exp(-jnp.clip(diffuse + birth, 0.0, 80.0))
     transmission = jnp.where(young[:, None], young_trans[None, :], old_trans[None, :])
-    return jnp.asarray(sed_by_age, dtype=jnp.float32) * transmission
+    return jnp.asarray(sed_by_age, dtype=numerical_dtype) * transmission
 
 
 def _prospector_fsps_diffuse_shape_jax(
-    wave_angstrom: jnp.ndarray, dust_index_n: jnp.ndarray
+    wave_angstrom: jnp.ndarray,
+    dust_index_n: jnp.ndarray,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> jnp.ndarray:
-    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=jnp.float32), 1.0)
-    slope = jnp.asarray(dust_index_n, dtype=jnp.float32)
-    calzetti = _fsps_calzetti_tau_shape_jax(wave)
+    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=numerical_dtype), 1.0)
+    slope = jnp.asarray(dust_index_n, dtype=numerical_dtype)
+    calzetti = _fsps_calzetti_tau_shape_jax(wave, numerical_dtype=numerical_dtype)
     eb = 0.85 - 1.9 * slope
-    lamuvb = jnp.asarray(2175.0, dtype=jnp.float32)
-    dlam = jnp.asarray(350.0, dtype=jnp.float32)
+    lamuvb = jnp.asarray(2175.0, dtype=numerical_dtype)
+    dlam = jnp.asarray(350.0, dtype=numerical_dtype)
     drude = eb * (wave * dlam) ** 2 / ((wave**2 - lamuvb**2) ** 2 + (wave * dlam) ** 2)
     shape = (calzetti + drude / 4.05) * (wave / 5500.0) ** slope
     return jnp.clip(
@@ -3358,9 +3394,11 @@ def _prospector_fsps_diffuse_shape_jax(
     )
 
 
-def _fsps_calzetti_tau_shape_jax(wave_angstrom: jnp.ndarray) -> jnp.ndarray:
+def _fsps_calzetti_tau_shape_jax(
+    wave_angstrom: jnp.ndarray, *, numerical_dtype: Any = jnp.float32
+) -> jnp.ndarray:
     """FSPS Calzetti optical-depth shape used inside dust_type=4."""
-    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=jnp.float32), 1.0)
+    wave = jnp.maximum(jnp.asarray(wave_angstrom, dtype=numerical_dtype), 1.0)
     inv_micron = 10_000.0 / wave
     red = 1.17 * (-1.857 + 1.04 * inv_micron) + 1.78
     blue = (
@@ -3816,8 +3854,7 @@ def agn_component_from_ssp_grid_jax(
         or context.agn_component_grid_jax is None
     ):
         raise ValueError(
-            "model.agn_model='fsps_component_grid' requires a loaded AGN "
-            "component grid"
+            "model.agn_model='fsps_component_grid' requires a loaded AGN component grid"
         )
     if age_weights is None or formed_mass is None or stellar_lgmet_abs is None:
         raise ValueError(
@@ -4043,19 +4080,28 @@ def combine_agn_and_igm_jax(
     agn_sed: jnp.ndarray,
     z_obs: jnp.ndarray,
     model_config: dict[str, Any] | None,
+    *,
+    numerical_dtype: Any = jnp.float32,
 ) -> tuple[jnp.ndarray, jnp.ndarray]:
     """Combine stellar/gas and AGN spectra with the configured IGM ordering."""
     config = _normalized_model_config(model_config)
     order = str(config.get("agn_igm_order", "pre_igm"))
-    wave = jnp.asarray(wave, dtype=jnp.float32)
-    dusted = jnp.asarray(dusted_sed, dtype=jnp.float32)
-    agn = jnp.asarray(agn_sed, dtype=jnp.float32)
+    wave = jnp.asarray(wave, dtype=numerical_dtype)
+    dusted = jnp.asarray(dusted_sed, dtype=numerical_dtype)
+    agn = jnp.asarray(agn_sed, dtype=numerical_dtype)
     if order == "pre_igm":
         pre_igm = dusted + agn
-        post_igm = apply_igm_transmission_jax(wave, pre_igm, z_obs, config)
+        post_igm = apply_igm_transmission_jax(
+            wave, pre_igm, z_obs, config, numerical_dtype=numerical_dtype
+        )
     elif order == "fsps_after_igm":
         pre_igm = dusted
-        post_igm = apply_igm_transmission_jax(wave, dusted, z_obs, config) + agn
+        post_igm = (
+            apply_igm_transmission_jax(
+                wave, dusted, z_obs, config, numerical_dtype=numerical_dtype
+            )
+            + agn
+        )
     else:
         raise ValueError(f"Unsupported model.agn_igm_order: {order}")
     return (
@@ -4196,6 +4242,27 @@ def _mdf_weight_dtype(model_config):
     return jnp.float64 if name == "float64_v1" else jnp.float32
 
 
+def spline_numerical_dtype(model_config):
+    cfg = model_config or {}
+    name = cfg.get("spline_precision", "float32_legacy")
+    if name == "float32_legacy":
+        return jnp.float32
+    if (
+        name != "float64_v1"
+        or cfg.get("sfh_model") != "spline15d"
+        or cfg.get("agn_model", "none") != "none"
+        or cfg.get("stellar_metallicity_model") != "lognormal_mdf_fixed_scatter"
+        or cfg.get("photometry_integrator") != "merged_gauss4_v1"
+        or cfg.get("mdf_weight_precision") != "float64_v1"
+    ):
+        raise ValueError(
+            "spline_precision=float64_v1 requires spline15d/noAGN/merged/MDF64"
+        )
+    if not jax.config.x64_enabled:
+        raise ValueError("spline_precision requires JAX_ENABLE_X64")
+    return jnp.float64
+
+
 def photometry_numerics(model_config: dict[str, Any] | None) -> dict[str, Any]:
     """Versioned numerical contract; missing historical key means legacy."""
     name = (model_config or {}).get("photometry_integrator", "legacy_trapezoid_v1")
@@ -4212,6 +4279,11 @@ def photometry_numerics(model_config: dict[str, Any] | None) -> dict[str, Any]:
         result.update(
             mdf_weight_precision="float64_v1",
             spectrum_construction="float64_mdf_weights_mixed_downstream",
+        )
+    if spline_numerical_dtype(model_config) == jnp.float64:
+        result.update(
+            spline_precision="float64_v1",
+            spectrum_construction="float64_spline_arithmetic_stored_assets_unchanged",
         )
     return result
 

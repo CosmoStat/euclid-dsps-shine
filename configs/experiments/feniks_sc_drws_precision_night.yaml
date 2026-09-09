@@ -1,0 +1,20 @@
+# Fixed, bounded experiment. Qualification failure stops the job before training.
+seed: 260909
+train_objects: 8192
+validation_objects: 256
+tracking_objects: 64
+tracking_draws: 256
+sleep_candidates: 16384
+smoke_candidates: 1024
+smoke_train_objects: 128
+smoke_validation_objects: 32
+sleep_epochs: 4
+elbo_epochs: 4
+observed_weight: 0.001
+observed_draws: 4
+jax_batch_size: 8
+decoder_batch_size: 8
+learning_rate: 0.00003
+maximum_seconds: 34200
+scientific_promotion: false
+population_training_started: false
