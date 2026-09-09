@@ -862,6 +862,27 @@ def evaluate_distribution(
 def run(root):
     manifest = read(root / "RUN_MANIFEST.json")
     require_git_commit(Path(__file__).resolve().parents[1], manifest["code_commit"])
+    if "night_extension" in manifest:
+        if (root / "FINAL.json").exists():
+            raise FileExistsError("final receipt exists")
+        if (root / "PROGRESS.json").exists():
+            raise FileExistsError("partial attempt preserved; choose a new diagnostic root")
+        from scripts.feniks_objective_night import gate
+
+        try:
+            manifest["night_gate_reference"] = gate(root)
+        except (ValueError, KeyError, OSError, TypeError) as exc:
+            write(
+                root / "FINAL.json",
+                dict(
+                    status="NIGHT_EXTENSION_NOT_STARTED",
+                    reason=str(exc),
+                    scientific_promotion=False,
+                    optimization_started=False,
+                ),
+            )
+            return
+        write(root / "RUN_MANIFEST.json", manifest)
     if jax.default_backend() != "gpu" or len(jax.local_devices()) != 1:
         raise ValueError("expected exactly one visible GPU")
     if (root / "FINAL.json").exists():

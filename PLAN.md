@@ -1,5 +1,20 @@
 # Plan
 
+## 2026-09-10 Gated overnight objective extension
+
+- Implemented: dependent 10-hour, single-H100 fixed-parent extension,
+  with CPU readback of completed pilot before model loading. Fail closed on
+  incomplete evidence, insufficient wake acceptance or absent paired ESS gain.
+  Reused development cohort, not global amortized or population training.
+- Same original source; 32768 decoder draws per arm/start, fresh optimization
+  and evaluation seeds. Criteria are resource gates, not posterior qualification.
+- Validated: 24 tests, including integrity, insufficient ESS gain, rejected
+  wake, extended optimizer budgets and evaluation seeds; Ruff, compileall,
+  Bash syntax and Sphinx -W pass. No remote job submitted here. Legacy fit/
+  posterior configs remain absent; those smoke runs were not performed.
+- Handoff: submit_feniks_sc_drws_objective_night.sh with pilot ID 1962310;
+  afterany dependency plus durable NIGHT_EXTENSION_NOT_STARTED if gate fails.
+
 ## 2026-09-10 Versioned transport64 objective pilot
 
 - Implemented: job 1961888 reports 32/32 transport64 audits PASS while native

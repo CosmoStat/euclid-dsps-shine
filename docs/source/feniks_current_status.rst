@@ -16,6 +16,17 @@ puis de nouveaux audits bloquants precedent toute mise a jour. Pas de RWS
 populationnel ni de lancement nocturne automatique.
 :download:`Protocole et commandes <../feniks_transport64_pilot_runbook.md>`.
 
+Extension nocturne preparee
+------------------------------------------------------------
+
+Un lanceur peut attendre le pilote 1962310, verifier ses artefacts et n'autoriser
+une extension que si wake accepte suffisamment de lots et ameliore l'ESS pairee
+dans chacun des deux groupes. Plafond : un H100, 10 heures; 32768 tirages
+d'adaptation par bras/depart. Meme cohorte de developpement, nouveaux tirages
+d'evaluation; **pas d'entrainement amorti global multi-GPU ni populationnel**.
+Un refus produit ``NIGHT_EXTENSION_NOT_STARTED`` et ne lance aucune optimisation.
+:download:`Conditions, commandes et suivi <../feniks_objective_night_runbook.md>`.
+
 Historique : audit 1960443
 ------------------------------------------------------------
 

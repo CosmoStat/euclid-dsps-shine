@@ -30,7 +30,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
     )
 
     source = manifest["objective_pilot"]
-    recipe = manifest["objective_recipe"]
+    recipe = manifest.get("objective_execution_recipe", manifest["objective_recipe"])
     transport64 = (
         manifest.get("transport_contract") == "conditional_transport_float64_v1"
     )
@@ -66,6 +66,8 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         verify_source(source)
         if "transport_precision_reference" in manifest:
             verify_source(manifest["transport_precision_reference"])
+        if "night_gate_reference" in manifest:
+            verify_source(manifest["night_gate_reference"])
         if fingerprint != _array_tree_sha256(model):
             raise ValueError("frozen parent changed during objective pilot")
         for audit in audits:
@@ -288,7 +290,9 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         prepared
     ):
         folder = root / "cases" / case
-        eval_seed = 60000000 + number * 100000
+        eval_seed = (
+            60000000 + number * 100000 + manifest.get("experiment_seed_offset", 0)
+        )
         evaluate_distribution(
             folder / "amortized",
             encoder,
@@ -336,6 +340,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                         + start * 10000
                         + (5000 if arm == "wake" else 0)
                         + iteration
+                        + manifest.get("experiment_seed_offset", 0)
                     )
                     if arm == "reverse":
                         budget.charge(draws, gradient=True)

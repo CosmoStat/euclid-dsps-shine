@@ -78,11 +78,19 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   fi
   export JAX_ENABLE_X64=true
 fi
+DEPENDENCY=()
+if [[ -n "${LOCAL_VI_NIGHT_PILOT_ROOT:-}" ]]; then
+  [[ "${LOCAL_VI_NIGHT_DEPENDENCY:-}" =~ ^[0-9]+$ ]] || { echo 'Night extension needs a numeric pilot job ID'; exit 2; }
+  WALLTIME="10:00:00"
+  DEPENDENCY=(--dependency="afterany:$LOCAL_VI_NIGHT_DEPENDENCY" --kill-on-invalid-dep=yes)
+  python scripts/feniks_objective_night.py "$LOCAL_VI_NIGHT_PILOT_ROOT" "$DIAGNOSTIC_ROOT" --dependency "$LOCAL_VI_NIGHT_DEPENDENCY"
+else
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
   python scripts/run_feniks_sc_drws_local_vi_diagnostic.py prepare \
   --source-root "$SOURCE_ROOT" --root "$DIAGNOSTIC_ROOT" \
   --objects "${LOCAL_VI_OBJECTS:-16}" --steps "${LOCAL_VI_STEPS:-64}" \
   --draws "${LOCAL_VI_DRAWS:-128}" "${EXTRA[@]}"
+fi
 SNAPSHOT="$CACHE_ROOT/code/local-vi-diagnostic-${COMMIT:0:12}"
 export DIAGNOSTIC_LOG_ROOT="$CACHE_ROOT/slurm_logs/$(basename "$DIAGNOSTIC_ROOT")"
 mkdir -p "$(dirname "$SNAPSHOT")" "$DIAGNOSTIC_LOG_ROOT" outputs/logs
@@ -100,6 +108,7 @@ LOCAL_REPO="$REPO_DIR"
 export REPO_DIR="$SNAPSHOT"
 touch "$DIAGNOSTIC_ROOT/SUBMISSION_INFLIGHT"
 JOB="$(sbatch --parsable --export=ALL \
+  "${DEPENDENCY[@]}" \
   --time="$WALLTIME" \
   --output="$DIAGNOSTIC_LOG_ROOT/diagnostic-%j.out" \
   --error="$DIAGNOSTIC_LOG_ROOT/diagnostic-%j.err" \

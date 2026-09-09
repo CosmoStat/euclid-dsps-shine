@@ -82,7 +82,10 @@ elif mode == 'local_vi':
             print('Full VI objective audit:', audit['status'], len(audit['audits']), '/', 4*total)
         controlled = json.loads((root/'RUN_MANIFEST.json').read_text()).get('optimization_regimes')
         probe = json.loads((root/'RUN_MANIFEST.json').read_text()).get('support_probe')
-        print('Versioned transport64 reverse/wake pilot; frozen parent; no promotion' if 'transport_contract' in manifest else
+        if (root/'NIGHT_GATE.json').is_file():
+            print('Night resource gate:', json.loads((root/'NIGHT_GATE.json').read_text())['status'])
+        print('Gated overnight local reverse/wake extension; not global NN or population training' if 'night_extension' in manifest else
+              'Versioned transport64 reverse/wake pilot; frozen parent; no promotion' if 'transport_contract' in manifest else
               'Transport precision audit only; no optimization or promotion' if 'transport_precision_reference' in manifest else
               'Audit-gated reverse/wake pilot; frozen source and parent; no promotion' if 'objective_pilot' in manifest else
               'Final checkpoint replay K4096; no optimization or promotion' if manifest.get('method') == 'qualified_long_replay_v1' else

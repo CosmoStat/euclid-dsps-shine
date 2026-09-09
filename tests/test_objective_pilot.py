@@ -159,6 +159,11 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
 
             manifest["method"] = "qualified_objective_transport64_pilot_v1"
             manifest["transport_contract"] = "conditional_transport_float64_v1"
+            manifest["objective_execution_recipe"] = {
+                **recipe,
+                "decoder_draw_budgets": [4, 12],
+            }
+            manifest["experiment_seed_offset"] = 100000000
             monkeypatch.setattr(
                 feniks_transport_precision,
                 "pin_reference",
@@ -198,6 +203,7 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
 
         def evaluate(*a, **k):
             assert isinstance(a[1], transport.DiagnosticTransport64)
+            assert a[8] >= 160000000
             return old_evaluate(*a, **k)
 
         def batch(*a, **k):
