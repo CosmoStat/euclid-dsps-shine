@@ -242,6 +242,45 @@ def test_followup_prepare_and_real_local_optimizer_mock_decoder(
         assert metadata["gradient_draws"] == 16
         assert metadata["learning_rate"] == 0.0001
         assert metadata["initialization"] == 0
+        import shutil
+
+        from scripts.audit_feniks_saved_draws import audit
+        from scripts.feniks_support_probe import pin_source, verify_source
+
+        reference = pin_source(out, manifest)
+        verify_source(reference)
+        audit_frame = audit(out, root.parent / "cpu_audit")
+        assert len(audit_frame) == len(trajectory)
+        assert set(audit_frame.status) == {"DESCRIPTIVE_ONLY"}
+        probe = root.parent / "probe"
+        probe.mkdir()
+        for name in ("config.yaml", "observed_rows.npy"):
+            shutil.copyfile(out / name, probe / name)
+        probe_manifest = dict(
+            manifest,
+            support_probe=reference,
+            steps=0,
+            trajectory_steps=[],
+            optimization_regimes=[
+                dict(name="x1", factor=1.0, mixture=False),
+                dict(name="mix", factor=1.5, mixture=True),
+            ],
+        )
+        follow.write(probe / "RUN_MANIFEST.json", probe_manifest)
+        monkeypatch.setattr(
+            runner, "make_step", lambda *a, **k: pytest.fail("probe must not optimize")
+        )
+        probe_result = runner.run(probe)
+        assert probe_result["cases_complete"] == 4
+        assert probe_result["prior_bitwise_unchanged"]
+        assert probe_result["budget"]["gradient_evaluations"] <= 5
+        draws = np.load(probe / "cases/observed_000/amortized/direct_draws.npz")
+        old_draws = np.load(out / "cases/observed_000/amortized/direct_draws.npz")
+        assert not np.array_equal(draws["x"], old_draws["x"])
+        receipt = out / "cases/observed_000/start_4/REGIME.json"
+        receipt.write_text("{}")
+        with pytest.raises(ValueError, match="source changed"):
+            verify_source(reference)
 
 
 def test_calibration_audit_does_not_reclassify_small_sample_fail():

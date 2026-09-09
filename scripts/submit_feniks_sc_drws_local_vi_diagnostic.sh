@@ -53,6 +53,9 @@ if [[ -n "${LOCAL_VI_PRECISION_NIGHT_REFERENCE:-}" ]]; then
   WALLTIME="10:00:00"
 fi
 if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
+  if [[ -n "${LOCAL_VI_SUPPORT_PROBE_ROOT:-}" ]]; then
+    EXTRA+=(--support-probe-root "$LOCAL_VI_SUPPORT_PROBE_ROOT")
+  fi
   if [[ "${LOCAL_VI_CONTROLLED_OPTIMIZATION:-0}" == 1 ]]; then
     EXTRA+=(--controlled-optimization)
   fi

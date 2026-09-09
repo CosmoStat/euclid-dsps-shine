@@ -17,6 +17,10 @@ optimizer comparison is now implemented; its cluster execution is pending.
 Current State
 -------------
 
+Illustrated current results and next experiment: :doc:`feniks_current_status`.
+Job 1948458 has now completed: smaller steps reduce instability, but all
+48 observed final local distributions still have bad Pareto-k.
+
 The integrated spline64 candidate passed all six full-target qualification
 points in job 1923347. The numerical blockers documented below are historical;
 their receipts remain unchanged. The same job completed smoke, sleep and

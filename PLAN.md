@@ -1,5 +1,28 @@
 # Plan
 
+## 2026-09-09 Support probe and illustrated status (implemented, cluster pending)
+
+- User reports job 1948458 complete: smaller steps reduce instability, but
+  all 48 observed final fits have bad Pareto-k. MC16 is not a general rescue.
+- Publish attributed numerical plots and an HTML explanation of the workflow,
+  evidence and remaining questions. No invented remote artifact access.
+- Add CPU saved-draw concentration audit and a frozen-checkpoint direct-draw
+  dispersion/explicit-mixture probe. Fixed candidates, fresh evaluations,
+  exact mixture density; no optimizer, teacher or population promotion.
+- Added Sphinx current-state page, attributed JSON evidence, reproducible PNG
+  trajectories/ESS table and explicitly conceptual mixture illustration.
+  HTML built at outputs/docs_support_probe/feniks_current_status.html.
+- Implemented CPU bank/hash/concentration readback and four fixed proposals
+  from both final slow_mc16 starts. Exact 50/50 mixture log density, fresh
+  evaluation keys, source receipts/hash and simulated-input identity guards.
+  No optimizer; 1 H100/node, 3h ceiling, 50000 evaluation budget.
+- Verification: 33 targeted tests passed, plus rerun integration with zero
+  optimization steps passed. Covers mixture normalization/density/reload,
+  immutable parent, new draws, CPU audit and tamper rejection. Compileall,
+  Ruff, shell syntax, CLI help and Sphinx -W pass. Figures visually inspected.
+- No cluster execution here; legacy AGENTS fit/posterior configs still absent,
+  so those smoke commands were not run. Historical unrelated work preserved.
+
 ## 2026-09-09 Controlled local optimization (implemented, cluster pending)
 
 - Job 1938818 completed, but local support worsens in 15/16 observed fits.

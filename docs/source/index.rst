@@ -105,6 +105,7 @@ parameters physically.
    diffsky_synthetic_closure
    forward_model
    feniks_decoder_debug
+   feniks_current_status
    prior_learning
    spline15d_realnvp
    amortized_inference

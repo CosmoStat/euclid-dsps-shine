@@ -25,6 +25,25 @@ class LocalParameters(eqx.Module):
     layers: tuple
 
 
+class MixtureParameters(eqx.Module):
+    local: LocalParameters
+    anchor: LocalParameters
+
+
+def broaden(encoder, parameters, factor):
+    """Scale the effective base std, rejecting saturation instead of clipping."""
+    effective = jnp.clip(
+        parameters.log_std, encoder.base.log_std_min, encoder.base.log_std_max
+    ) + np.log(factor)
+    if (
+        factor < 1
+        or not np.isfinite(factor)
+        or np.any(np.asarray(effective) > encoder.base.log_std_max)
+    ):
+        raise ValueError("requested broadening exceeds the base scale contract")
+    return eqx.tree_at(lambda p: p.log_std, parameters, effective)
+
+
 def initialize(model, features):
     encoder = model.encoder
     if not isinstance(encoder, ConditionalFlowEncoder) or (
@@ -41,6 +60,13 @@ def initialize(model, features):
 
 
 def sample(encoder, parameters, context, key, draws):
+    if isinstance(parameters, MixtureParameters):
+        left, right, choose = jax.random.split(key, 3)
+        a, _ = sample(encoder, parameters.local, context, left, draws)
+        b, _ = sample(encoder, parameters.anchor, context, right, draws)
+        select = jax.random.bernoulli(choose, 0.5, a.shape[:-1] + (1,))
+        x = jnp.where(select, a, b)
+        return x, log_prob(encoder, parameters, context, x)
     log_std = jnp.clip(
         parameters.log_std, encoder.base.log_std_min, encoder.base.log_std_max
     )
@@ -54,6 +80,11 @@ def sample(encoder, parameters, context, key, draws):
 
 
 def log_prob(encoder, parameters, context, x):
+    if isinstance(parameters, MixtureParameters):
+        return jnp.logaddexp(
+            log_prob(encoder, parameters.local, context, x),
+            log_prob(encoder, parameters.anchor, context, x),
+        ) - np.log(2.0)
     local_encoder = eqx.tree_at(lambda e: e.layers, encoder, parameters.layers)
     base, inverse_logdet = local_encoder.inverse(x, context)
     log_std = jnp.clip(
@@ -197,7 +228,7 @@ def assert_close(name, actual, expected, *, atol=5e-4, rtol=5e-4):
         raise ValueError(f"{name}: nonfinite or shape mismatch")
     if not np.allclose(actual, expected, atol=atol, rtol=rtol):
         raise ValueError(
-            f"{name}: mismatch, max absolute delta={np.max(np.abs(actual-expected))}"
+            f"{name}: mismatch, max absolute delta={np.max(np.abs(actual - expected))}"
         )
     return float(np.max(np.abs(actual - expected)))
 
@@ -243,7 +274,9 @@ def gradient_audit(objective, point, direction, budget, *, atol=0.1, rtol=0.05):
         values.append(row)
     components = {}
     for name in names:
-        samples = [dict(step=h, **row[name]) for h, row in zip(steps, values, strict=True)]
+        samples = [
+            dict(step=h, **row[name]) for h, row in zip(steps, values, strict=True)
+        ]
         stable_windows = []
         for end in range(2, len(samples)):
             window = samples[end - 2 : end + 1]

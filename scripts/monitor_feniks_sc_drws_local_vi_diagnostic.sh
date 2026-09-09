@@ -78,7 +78,9 @@ elif mode == 'local_vi':
     if 'qualified_night' in manifest:
         print('Qualified source arm:', manifest['qualified_night']['arm'])
         controlled = json.loads((root/'RUN_MANIFEST.json').read_text()).get('optimization_regimes')
-        print('Three regimes, two starts, saved trajectories; no promotion' if controlled else
+        probe = json.loads((root/'RUN_MANIFEST.json').read_text()).get('support_probe')
+        print('Fixed dispersion/mixture probe; no optimization or promotion' if probe else
+              'Three regimes, two starts, saved trajectories; no promotion' if controlled else
               'Two nearby starts; final direct draws only; no global NPE or population training')
 PY
   NIGHT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("mode") == "precision_night")' "$DIAGNOSTIC_ROOT/RUN_MANIFEST.json")"

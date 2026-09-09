@@ -75,6 +75,30 @@ def test_local_flow_matches_original_and_restored_density(tmp_path):
     assert _array_tree_sha256(initial.layers) == _array_tree_sha256(restored.layers)
 
 
+def test_broadened_mixture_exact_density_and_sampling(tmp_path):
+    from euclid_dsps.amortized.local_vi_diagnostic import MixtureParameters, broaden
+
+    model = model_fixture()
+    p, context = initialize(model, jnp.ones((1, 6)))
+    q = broaden(model.encoder, p, 1.5)
+    np.testing.assert_allclose(np.exp(q.log_std - p.log_std), 1.5, rtol=1e-6)
+    mixture = MixtureParameters(q, p)
+    x, logq = sample(model.encoder, mixture, context, jax.random.PRNGKey(912), 4096)
+    expected = jnp.logaddexp(
+        log_prob(model.encoder, q, context, x), log_prob(model.encoder, p, context, x)
+    ) - np.log(2)
+    np.testing.assert_allclose(logq, expected, atol=1e-6)
+    # Integral of p/q_mix under q_mix must be one, not a component-only density.
+    ratio = np.exp(np.asarray(log_prob(model.encoder, p, context, x) - logq))
+    assert abs(ratio.mean() - 1) < 0.04
+    assert ratio.max() <= 2.00001
+    eqx.tree_serialise_leaves(tmp_path / "mixture.eqx", mixture)
+    restored = eqx.tree_deserialise_leaves(tmp_path / "mixture.eqx", mixture)
+    np.testing.assert_allclose(log_prob(model.encoder, restored, context, x), logq)
+    with pytest.raises(ValueError, match="scale contract"):
+        broaden(model.encoder, p, 10000)
+
+
 def test_local_optimization_updates_base_and_couplings_without_changing_parent():
     model = model_fixture()
     initial, context = initialize(model, jnp.ones((1, 6)))

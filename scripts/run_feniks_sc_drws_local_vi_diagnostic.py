@@ -278,6 +278,7 @@ def prepare(
     qualified_night_root=None,
     local_arm="C",
     controlled_optimization=False,
+    support_probe_root=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -309,8 +310,9 @@ def prepare(
             draws,
             local_arm,
             controlled=controlled_optimization,
+            support_probe_root=support_probe_root,
         )
-    if controlled_optimization:
+    if controlled_optimization or support_probe_root is not None:
         raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
@@ -851,6 +853,10 @@ def run(root):
     budget = Budget(manifest["seconds"], manifest["maximum_decoder_evaluations"])
     write(root / "PROGRESS.json", {"stage": "loading", "budget": budget.snapshot()})
     try:
+        if "support_probe" in manifest:
+            from scripts.feniks_support_probe import verify_source
+
+            verify_source(manifest["support_probe"])
         if "qualified_night" in manifest:
             from scripts.feniks_qualified_local_vi import verify_night
 
@@ -1611,15 +1617,26 @@ def run(root):
                 )
             ],
         )
-        optimizers = [
-            make_step(
-                model.encoder,
-                target,
-                draws=r["gradient_draws"],
-                learning_rate=r["learning_rate"],
+        if "support_probe" in manifest:
+            from scripts.feniks_support_probe import check_simulations
+
+            check_simulations(
+                Path(manifest["support_probe"]["path"]) / "SIMULATED_INPUTS.npz",
+                root / "SIMULATED_INPUTS.npz",
             )
-            for r in regimes
-        ]
+        optimizers = (
+            []
+            if "support_probe" in manifest
+            else [
+                make_step(
+                    model.encoder,
+                    target,
+                    draws=r["gradient_draws"],
+                    learning_rate=r["learning_rate"],
+                )
+                for r in regimes
+            ]
+        )
         completed, started_cases = [], time.monotonic()
         for case_number, (group, index, observation, generated) in enumerate(cases):
             case_start = time.monotonic()
@@ -1629,6 +1646,8 @@ def run(root):
             )
             initial, encoded_context = initialize(model, features)
             seed = manifest["seed"] + 100000 + case_number * 1000
+            if "support_probe" in manifest:
+                seed += 2000000
             write(
                 root / "PROGRESS.json",
                 dict(
@@ -1655,13 +1674,31 @@ def run(root):
             fitted = []
             for start in range(2 * len(regimes)):
                 regime = regimes[start // 2]
-                optimizer, step = optimizers[start // 2]
+                if "support_probe" not in manifest:
+                    optimizer, step = optimizers[start // 2]
                 initialization = start % 2
                 parameters = (
                     initial
                     if initialization == 0
                     else perturb(initial, jax.random.PRNGKey(seed + 20))
                 )
+                if "support_probe" in manifest:
+                    from euclid_dsps.amortized.local_vi_diagnostic import (
+                        MixtureParameters,
+                        broaden,
+                    )
+
+                    source_path = (
+                        Path(manifest["support_probe"]["path"])
+                        / "cases"
+                        / f"{group}_{index:03d}"
+                        / f"start_{4 + initialization}"
+                        / "parameters.eqx"
+                    )
+                    local = eqx.tree_deserialise_leaves(source_path, initial)
+                    parameters = broaden(model.encoder, local, regime["factor"])
+                    if regime["mixture"]:
+                        parameters = MixtureParameters(parameters, initial)
                 local_folder = folder / f"start_{start}"
                 local_folder.mkdir(parents=True, exist_ok=True)
                 write(
@@ -1672,9 +1709,15 @@ def run(root):
                         scientific_promotion=False,
                     ),
                 )
-                state = optimizer.init(eqx.filter(parameters, eqx.is_inexact_array))
+                state = (
+                    None
+                    if "support_probe" in manifest
+                    else optimizer.init(eqx.filter(parameters, eqx.is_inexact_array))
+                )
                 history = []
-                for iteration in range(manifest["steps"]):
+                for iteration in range(
+                    0 if "support_probe" in manifest else manifest["steps"]
+                ):
                     budget.charge(regime["gradient_draws"], gradient=True)
                     parameters, state, metrics = step(
                         parameters,
@@ -1747,7 +1790,8 @@ def run(root):
                 )
                 eqx.tree_serialise_leaves(local_folder / "parameters.eqx", parameters)
                 restored = eqx.tree_deserialise_leaves(
-                    local_folder / "parameters.eqx", initial
+                    local_folder / "parameters.eqx",
+                    parameters if "support_probe" in manifest else initial,
                 )
                 # Evaluate only fresh direct draws of the restored final iterate.
                 write(
@@ -1829,7 +1873,10 @@ def run(root):
             truth_used=False,
             scientific_promotion=False,
             population_training_started=False,
-            interpretation="same-family local optimization diagnostic, not a posterior or calibration certificate",
+            interpretation=manifest.get(
+                "interpretation",
+                "same-family local optimization diagnostic, not a posterior or calibration certificate",
+            ),
             artifacts={
                 name: {"path": str(root / name), "sha256": sha256_file(root / name)}
                 for name in (
@@ -1937,6 +1984,7 @@ def main():
     parser.add_argument("--qualified-night-root", type=Path)
     parser.add_argument("--local-arm", choices=("B", "C"), default="C")
     parser.add_argument("--controlled-optimization", action="store_true")
+    parser.add_argument("--support-probe-root", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1958,6 +2006,7 @@ def main():
             args.qualified_night_root,
             args.local_arm,
             args.controlled_optimization,
+            args.support_probe_root,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

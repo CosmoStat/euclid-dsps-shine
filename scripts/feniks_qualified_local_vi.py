@@ -100,6 +100,7 @@ def prepare(
     draws=128,
     arm="C",
     controlled=False,
+    support_probe_root=None,
 ):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
@@ -215,6 +216,27 @@ def prepare(
             trajectory_steps=[s for s in (8, 16, 32) if s < steps],
             maximum_decoder_evaluations=180000,
             interpretation="Paired development experiment, not checkpoint selection. Three regimes, two identical initializations each; fresh evaluation draws shared across regimes and steps, never used by the optimizer. No scientific promotion.",
+        )
+    if support_probe_root is not None:
+        from scripts.feniks_support_probe import pin_source
+
+        if controlled or objects != 8 or steps != 64 or draws != 128:
+            raise ValueError("support probe requires fixed 8/64/128 recipe")
+        reference = pin_source(support_probe_root, manifest)
+        manifest.update(
+            method="qualified_support_probe_v1",
+            support_probe=reference,
+            steps=0,
+            source_checkpoint_step=64,
+            optimization_started=False,
+            optimization_regimes=[
+                dict(name="local_x1", factor=1.0, mixture=False),
+                dict(name="local_x1p5", factor=1.5, mixture=False),
+                dict(name="local_x2", factor=2.0, mixture=False),
+                dict(name="mixture_x1p5", factor=1.5, mixture=True),
+            ],
+            maximum_decoder_evaluations=50000,
+            interpretation="Fixed final slow_mc16 checkpoints, two starts, four direct-draw proposals. No optimization, winner selection, or scientific promotion.",
         )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest

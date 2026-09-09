@@ -324,3 +324,17 @@ Next: three prespecified local optimization regimes, two paired starts,
 saved intermediate distributions and independent evaluation replicates.
 See `feniks_controlled_local_vi_runbook.md`. This tests optimizer sensitivity;
 it does not assume that more NPE training solves the remaining problem.
+
+## 2026-09-09: Controlled job 1948458 complete; support still inadequate
+
+Operator readback: 16 cases, 102655 forward and 49155 gradient evaluations,
+1215s measured diagnostic time, Slurm 21m33s, contract PASS. All 48 observed
+final distributions have bad Pareto-k. Smaller steps reduce excursions but
+photometric/ELBO improvement still does not guarantee importance support.
+MC16 is not systematically better. Illustrations use explicitly attributed
+transcribed values in `controlled_vi_evidence.json`, not downloaded artifacts.
+
+Next implemented stage: saved-draw CPU concentration audit, then four fixed
+dispersion/mixture proposals from both final slow_mc16 starts. New draws,
+exact mixture densities, no optimizer or teacher. See
+`feniks_support_probe_runbook.md` and HTML `feniks_current_status.html`.
