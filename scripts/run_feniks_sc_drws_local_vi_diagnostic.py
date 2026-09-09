@@ -275,6 +275,8 @@ def prepare(
     target_resolution_reference=None,
     redshift_precision_reference=None,
     precision_night_reference=None,
+    qualified_night_root=None,
+    local_arm="C",
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -288,11 +290,18 @@ def prepare(
                 target_resolution_reference is not None,
                 redshift_precision_reference is not None,
                 precision_night_reference is not None,
+                qualified_night_root is not None,
             )
         )
         > 1
     ):
         raise ValueError("choose only one diagnostic mode")
+    if qualified_night_root is not None:
+        from scripts.feniks_qualified_local_vi import prepare as prepare_qualified
+
+        return prepare_qualified(
+            root, source_root, qualified_night_root, objects, steps, draws, local_arm
+        )
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
     qualification_reference = (
@@ -591,7 +600,11 @@ def contract_audit(
     result["cache_flux_scaled_delta"] = assert_close(
         "cache/live flux", cached_live / unit, expected / unit, atol=0.002, rtol=0.002
     )
+    # Promote the perturbation input itself: an x64 target alone cannot recover
+    # perturbations already rounded in a float32 finite-difference stencil.
     point = cache_x[0:1]
+    if getattr(spec, "arithmetic_precision", "float32_legacy") == "float64_v1":
+        point = point.astype(jnp.float64)
     direction = jax.random.normal(
         jax.random.PRNGKey(62), point.shape, dtype=point.dtype
     )
@@ -736,10 +749,22 @@ def evaluate_distribution(
     summary, _ = summarize_truth_free_joint_bank(
         frame, parameter_names=spec.names, identity_column="object_id"
     )
-    logz = []
+    logz, replicates = [], []
     for part in chunks:
         weights = part["loglike"] + part["logprior"] - part["logq"]
         logz.append(float(jax.scipy.special.logsumexp(weights[:, 0]) - np.log(draws)))
+        logw = weights[:, 0].astype(np.float64)
+        normalized = np.exp(logw - np.max(logw))
+        normalized /= np.sum(normalized)
+        replicates.append(
+            dict(
+                draws=draws,
+                raw_ess=float(1 / np.sum(normalized**2)),
+                maximum_raw_weight=float(np.max(normalized)),
+                latent_mean=part["x"][:, 0].mean(axis=0).tolist(),
+                latent_std=part["x"][:, 0].std(axis=0).tolist(),
+            )
+        )
     residual = np.asarray(
         photometric_normalized_residual(
             observation.flux,
@@ -753,6 +778,9 @@ def evaluate_distribution(
     valid_residuals = residual[:, np.asarray(observation.mask)[0]]
     summary.update(
         replicate_log_evidence=logz,
+        independent_replicates=replicates,
+        pooled_draws=2 * draws,
+        evaluation_contract="Two fresh direct-draw replicates; pooled support is not either replicate's support. No resampling or best-start selection.",
         replicate_abs_log_evidence_delta=abs(logz[0] - logz[1]),
         negative_elbo=float(
             np.mean(values["logq"] - values["logprior"] - values["loglike"])
@@ -809,6 +837,13 @@ def run(root):
     budget = Budget(manifest["seconds"], manifest["maximum_decoder_evaluations"])
     write(root / "PROGRESS.json", {"stage": "loading", "budget": budget.snapshot()})
     try:
+        if "qualified_night" in manifest:
+            from scripts.feniks_qualified_local_vi import verify_night
+
+            ref = manifest["qualified_night"]
+            verified = verify_night(Path(ref["path"]), ref["arm"])
+            if verified["inventory_sha256"] != ref["inventory_sha256"]:
+                raise ValueError("qualified night inventory changed after preparation")
         if manifest.get("mode") == "precision_night":
             recipe_path = (
                 Path(__file__).resolve().parents[1]
@@ -857,6 +892,11 @@ def run(root):
         frozen_hash = _array_tree_sha256(
             (model.prior, model.sed_scale, model.band_calibration)
         )
+        if (
+            "qualified_night" in manifest
+            and frozen_hash != manifest["qualified_night"]["frozen_array_sha256"]
+        ):
+            raise ValueError("qualified prior/calibration arrays changed")
         cache = manifest["cache"]
         for path, expected in (
             (Path(cache["path"]), cache["sha256"]),
@@ -1776,6 +1816,7 @@ def report(root, records):
                     evidence_delta=value["replicate_abs_log_evidence_delta"],
                     residual_median=value["residual_median_abs"],
                     residual_rms=value["residual_rms"],
+                    residual_fraction_gt5=value["residual_fraction_abs_gt5"],
                 )
             )
     frame = pd.DataFrame(rows)
@@ -1821,6 +1862,8 @@ def main():
     parser.add_argument("--target-resolution-reference", type=Path)
     parser.add_argument("--redshift-precision-reference", type=Path)
     parser.add_argument("--precision-night-reference", type=Path)
+    parser.add_argument("--qualified-night-root", type=Path)
+    parser.add_argument("--local-arm", choices=("B", "C"), default="C")
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1839,6 +1882,8 @@ def main():
             args.target_resolution_reference,
             args.redshift_precision_reference,
             args.precision_night_reference,
+            args.qualified_night_root,
+            args.local_arm,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

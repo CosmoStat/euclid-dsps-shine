@@ -294,3 +294,20 @@ absent; no catalogue fit or H100 verification is claimed.
 
 Related runbooks: [full decoder](feniks_full_decoder_qualification_runbook.md),
 [MDF precision](feniks_mdf_precision_runbook.md).
+# September 9: qualified decoder, unresolved posterior approximation
+
+Operator evidence, job 1923347, precision_night_v1: completed in 4:05:02;
+six integrated spline64 qualification inputs PASS; smoke/B/C complete.
+Same 64-object K256 support: A ESS/K=0.02112, B=0.01128, C=0.01158;
+bad-k fractions 0.90625/0.953125/0.953125. All support gates FAIL. C lowers
+residual RMS from A's 20.62 to 7.58 and absolute median from 2.039 to 1.892.
+This fixes an execution/numerical blocker, not posterior/population validity.
+
+Next patch: receipt-linked local VI under the exact qualified C target;
+8 observations + 8 new simulations, two nearby starts, 64 steps and independent
+direct-draw evaluations. Also CPU-only readback of losses/gradients and absolute
+held-out references: the relative RMS PASS can be vacuous when the simulated-q
+reference has huge tails. No old gate, receipt or training threshold is changed.
+The diagnostic cannot prove mode completeness and does not produce a teacher.
+See `feniks_qualified_local_vi_runbook.md` for budgets and reproducible commands.
+New local-VI cluster results are pending; no job submitted by this patch.

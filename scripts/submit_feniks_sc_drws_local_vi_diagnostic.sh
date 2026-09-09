@@ -52,6 +52,11 @@ if [[ -n "${LOCAL_VI_PRECISION_NIGHT_REFERENCE:-}" ]]; then
   EXTRA+=(--precision-night-reference "$LOCAL_VI_PRECISION_NIGHT_REFERENCE")
   WALLTIME="10:00:00"
 fi
+if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
+  EXTRA+=(--qualified-night-root "$LOCAL_VI_QUALIFIED_NIGHT_ROOT" --local-arm "${LOCAL_VI_ARM:-C}")
+  WALLTIME="03:00:00"
+  export JAX_ENABLE_X64=true
+fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
   python scripts/run_feniks_sc_drws_local_vi_diagnostic.py prepare \
   --source-root "$SOURCE_ROOT" --root "$DIAGNOSTIC_ROOT" \

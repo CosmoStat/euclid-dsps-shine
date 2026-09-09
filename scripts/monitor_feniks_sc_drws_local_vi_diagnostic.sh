@@ -71,8 +71,13 @@ elif mode in ('redshift_decomposition', 'photometry_reference'):
     print('Completed ' + mode + ' points:', str(completed) + '/3')
     print('No local VI or population training in this mode')
 elif mode == 'local_vi':
-    print('Completed observed cases:', len(list((root/'cases').glob('observed_*/COMPLETE.json'))))
-    print('Completed simulated cases:', len(list((root/'cases').glob('simulated_*/COMPLETE.json'))))
+    manifest = json.loads((root/'RUN_MANIFEST.json').read_text())
+    total = manifest['objects_per_group']
+    print('Completed observed cases:', len(list((root/'cases').glob('observed_*/COMPLETE.json'))), '/', total)
+    print('Completed simulated cases:', len(list((root/'cases').glob('simulated_*/COMPLETE.json'))), '/', total)
+    if 'qualified_night' in manifest:
+        print('Qualified source arm:', manifest['qualified_night']['arm'])
+        print('Two nearby starts; final direct draws only; no global NPE or population training')
 PY
   NIGHT="$(python -c 'import json,sys; print(json.load(open(sys.argv[1])).get("mode") == "precision_night")' "$DIAGNOSTIC_ROOT/RUN_MANIFEST.json")"
   if [[ -s "$DIAGNOSTIC_ROOT/FAILED.json" || -s "$DIAGNOSTIC_ROOT/NIGHT_FINAL.json" || ( "$NIGHT" != "True" && -s "$DIAGNOSTIC_ROOT/FINAL.json" ) ]]; then

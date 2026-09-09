@@ -1,5 +1,35 @@
 # Plan
 
+## 2026-09-09 Qualified local VI follow-up (implemented, cluster pending)
+
+- User-supplied job 1923347 completed: six numerical qualification points pass,
+  smoke/B/C training and A/B/C evaluation complete. All posterior support gates
+  still fail. C improves photometric tails, not effective importance support.
+- Resume bounded same-family per-object VI from qualified night C, using its
+  exact numerical configuration, frozen parent and fresh observed-context
+  simulations. Eight observed + eight simulated cases, two starts, 64 steps,
+  two independent 128-draw evaluations per final distribution; no NPE teacher.
+- Add receipt/hash guards, CPU-only night audit and tests. Examine the enormous
+  held-out simulated residual references before interpreting relative PASS.
+- Preserve historical results and gates. No population update, no long sweep,
+  no catalogue truth reads, and no automatic scientific promotion.
+- Implemented CPU readback with absolute held-out references and loss/gradient
+  summaries; descriptive simultaneous rank bounds do not reclassify gates.
+  New launcher selects C explicitly, pins receipts/numerics/parameter order,
+  and enforces x64 during front-end preparation as well as GPU execution.
+- Verification: 50 targeted tests pass (qualified preparation/real local
+  optimizer with mock physics, old diagnostic modes, synthetic full-SED
+  qualification, checkpoint precision contracts, analytical Gaussian and
+  missing-mode controls). Independent K128 replicate support is now explicit
+  alongside pooled K256; no best-start selection. Compileall, Ruff, Bash syntax,
+  CLI help and Sphinx -W pass. No new H100 run has been submitted here.
+- Legacy one-row/batch fit configs named in AGENTS.md remain absent; these
+  catalogue fits were not run. No MCMC test or catalogue-truth path executed.
+- Runbook: docs/feniks_qualified_local_vi_runbook.md. One H100/node, sequential
+  cases, three-hour ceiling and first-pair cost preflight. Qualification on six
+  points is empirical, and 64 local steps/two nearby starts cannot establish
+  mode completeness, family adequacy or catalogue-simulator compatibility.
+
 ## 2026-09-09 Versioned precision and gated overnight experiment (implemented)
 
 - Job 1922455: all zpath64 branches pass at point4 with tiny center shifts;

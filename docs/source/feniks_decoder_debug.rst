@@ -3,24 +3,26 @@ FENIKS Decoder Debug Tracking
 
 Last updated: 2026-09-09. Historical cluster evidence is transcribed from
 operator-provided logs and receipts, not independently downloaded in this update.
-The residual audit has run on Jean-Zay (1922142). The targeted redshift-precision
-follow-up is implemented locally, not yet executed on the cluster.
+The precision-night job (1923347) has completed on Jean-Zay. Its numerical
+qualification passed, but posterior support remains poor. The qualified local
+VI follow-up below is implemented, not yet executed on the cluster.
 
 .. warning::
 
    Job completion, numerical qualification, posterior validation and population
-   readiness are distinct. No diagnostic here automatically starts training.
+   readiness are distinct. The explicitly gated night pilot trains q only;
+   no diagnostic here authorizes population training or scientific promotion.
 
 Current State
 -------------
 
-The versioned merged quadrature plus MDF64 candidate passes all metallicity
-checks at six tested inputs. The residual audit resolves the four point-1 density
-checks within their existing tolerances. Point-4 redshift in lsst_z remains
-INCONCLUSIVE: two favorable intermediate stencils precede unstable finer ones.
-The four density PASS results select noisy fine stencils, not high-precision
-agreement; earlier coarse stencils were more accurate. Historical full-audit
-receipts are unchanged. This does not certify individual posterior distributions.
+The integrated spline64 candidate passed all six full-target qualification
+points in job 1923347. The numerical blockers documented below are historical;
+their receipts remain unchanged. The same job completed smoke, sleep and
+sleep-plus-ELBO training. All A/B/C posterior support gates still fail. C reduces
+photometric tails but does not provide usable importance integration. The next
+bounded test adapts the same flow separately to observed and simulated cases,
+keeping the qualified decoder and prior frozen.
 
 Evidence Timeline
 -----------------
@@ -59,9 +61,15 @@ Evidence Timeline
      - 1922142 / 7824dc9
      - Four density checks PASS; point-4 redshift remains inconclusive.
    * - Point-4 precision isolation
-     - Implemented; not submitted here
-     - Split stellar, IGM and projection paths; compare mixed and z-dependent
-       float64 arithmetic with all-band stencils and trace checks.
+     - 1922455
+     - zpath64 branches pass at point 4; integrate and qualify the full target.
+   * - Integrated precision night
+     - 1923347 / 43c2886
+     - Six full-target inputs PASS; A/B/C posterior support still FAIL.
+   * - Qualified local VI
+     - Prepared; not submitted here
+     - Eight observed and eight new simulated cases, two starts, same family
+       and fixed prior; no automatic global training.
 
 Point-4 Follow-up
 -----------------
@@ -159,3 +167,19 @@ are compared under that same decoder. This is a bounded fixed-parent experiment,
 not a production launch or proof of catalogue-simulator compatibility.
 
 :download:`Download the overnight runbook <../feniks_precision_night_runbook.md>`
+
+Qualified Local Follow-up
+-------------------------
+
+The CPU-only night readback exposes absolute held-out residual references and
+training gradients. Tiny observed/reference RMS ratios can be caused by a bad
+simulated-q reference; they do not certify predictive performance. The small-N
+rank audit reports a descriptive simultaneous bound without changing gates.
+
+The GPU follow-up preserves C's target and optimizes local base/coupling
+parameters only. It uses eight observations and eight newly selected simulations,
+64 steps per start and two nearby starts, with two independent 128-draw final
+evaluations. It is limited to one H100/node for three hours with a measured
+cost preflight. Neither an ELBO gain nor high ESS proves mode completeness.
+
+:download:`Download the qualified local VI runbook <../feniks_qualified_local_vi_runbook.md>`
