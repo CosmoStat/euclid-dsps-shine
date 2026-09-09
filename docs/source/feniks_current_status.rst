@@ -1,7 +1,32 @@
 FENIKS : ou en est-on ?
 ============================================================
 
-Etat au 9 septembre 2026, apres le replay 1959175
+Etat au 9 septembre 2026, apres l'audit 1960443
+------------------------------------------------------------
+
+**Dernier resultat : 31/32 audits natifs PASS, un INCONCLUSIVE. Aucun
+optimiseur du pilote reverse/wake n'a demarre.** Le cas restant est
+``simulated_004``, depart 1, direction 0 du bloc ``log_std`` : vraisemblance
+et objectif total. Les identites de decomposition passent.
+
+Les differences finies de la vraisemblance donnent -4.0713 et -4.0567 aux pas
+0.0025 et 0.00125, contre AD=-4.0579, puis deviennent moins stables aux petits
+pas. Deux points proches ne remplacent pas la fenetre stable de trois pas
+requise. ``parameter64`` ne change pas ces resultats : promouvoir les seuls
+parametres ne retire pas les conversions float32 internes du transport.
+
+.. image:: _static/feniks_debug/transport_resolution.png
+   :alt: Stencils natifs de simulated_004 depart 1, transcrits des logs du job 1960443
+   :width: 100%
+
+**Suite implementee, non encore executee sur H100 :** replay des 32 audits,
+transport historique contre transport conditionnel float64, avec les memes
+bruits, directions, observations et cible. Pas d'optimisation, pas de
+changement des seuils, pas de promotion. La cible interne n'est pas convertie
+integralement en float64. Les latents et flux des stencils sont sauvegardes.
+:download:`Commandes et interpretation <../feniks_transport_precision_runbook.md>`.
+
+Resultats anterieurs : replay 1959175
 ------------------------------------------------------------
 
 **Decodeur qualifie sur les points testes. Propositions locales toujours
@@ -71,7 +96,7 @@ actuel est faux, ni que la famille de flows est incapable de representer la cibl
 La suite implementee : audit puis pilote correctif
 ------------------------------------------------------------
 
-**Statut : prepare pour execution, pas encore mesure sur H100.**
+**Statut : execute comme job 1960443, bloque par l'audit ci-dessus.**
 Runbook detaille : :download:`commandes et protocole <../feniks_objective_pilot_runbook.md>`.
 
 .. image:: _static/feniks_debug/objective_protocol.png

@@ -11,7 +11,10 @@ import pandas as pd
 
 def summarize(root):
     manifest = json.loads((root / "RUN_MANIFEST.json").read_text())
-    if manifest["method"] != "qualified_objective_pilot_v1":
+    if manifest["method"] not in (
+        "qualified_objective_pilot_v1",
+        "qualified_transport_precision_audit_v1",
+    ):
         raise ValueError("expected objective pilot root")
     path = root / "OBJECTIVE_AUDIT.json"
     if not path.exists():
@@ -25,11 +28,10 @@ def summarize(root):
             if actual != expected:
                 raise ValueError(f"objective audit artifact changed: {name}")
     print("Native objective audit:", audit["status"])
-    print(
-        pd.DataFrame(audit["audits"])[["case", "start", "status"]].to_string(
-            index=False
-        )
-    )
+    columns = ["case", "start", "status"]
+    if "transport_precision_reference" in manifest:
+        columns += ["native_reference_status", "transport64_status"]
+    print(pd.DataFrame(audit["audits"])[columns].to_string(index=False))
     for item in audit["audits"]:
         if item["status"] == "PASS":
             continue
@@ -63,6 +65,39 @@ def summarize(root):
             "identities:",
             identities,
         )
+    if "transport_precision_reference" in manifest:
+        for item in audit["audits"]:
+            p = (
+                root
+                / "cases"
+                / item["case"]
+                / f"audit_start_{item['start']}"
+                / "TRANSPORT_PRECISION.json"
+            )
+            detail = json.loads(p.read_text())
+            unresolved64 = [
+                f"{check['block']}:{check['direction']}:{name}:{value['status']}"
+                for check in detail["transport64_audit"]
+                .get("variants", {})
+                .get("native", {})
+                .get("checks", [])
+                for name, value in check["components"].items()
+                if value["status"] != "PASS"
+            ]
+            print(
+                item["case"],
+                item["start"],
+                "dtypes:",
+                detail["dtypes"],
+                "center deltas:",
+                detail["center_max_abs_delta"],
+                "transport64 unresolved:",
+                unresolved64,
+            )
+        print(
+            "Transport precision diagnostic only. No optimizer, no override of the original audit, no selection or promotion."
+        )
+        return
     rows = []
     for case in sorted((root / "cases").glob("*")):
         for p in sorted(case.rglob("SUMMARY.json")):

@@ -1048,8 +1048,9 @@ def _rational_quadratic_spline(
     min_bin_width: float,
     min_bin_height: float,
     min_derivative: float,
+    preserve_dtype: bool = False,
 ):
-    inputs = jnp.asarray(inputs, dtype=jnp.float32)
+    inputs = jnp.asarray(inputs, dtype=None if preserve_dtype else jnp.float32)
     raw_params = jnp.asarray(raw_params, dtype=inputs.dtype)
     widths, heights, derivatives = _spline_parameters(
         raw_params,

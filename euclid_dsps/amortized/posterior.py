@@ -137,9 +137,11 @@ class _ConditionalCoupling(eqx.Module):
     def inverse(self, value, context, *, scale_clamp=None):
         return self._transform(value, context, inverse=True, scale_clamp=scale_clamp)
 
-    def _transform(self, value, context, *, inverse: bool, scale_clamp=None):
-        value = jnp.asarray(value, dtype=jnp.float32)
-        context = _broadcast_context(context, value.shape[:-1])
+    def _transform(
+        self, value, context, *, inverse: bool, scale_clamp=None, preserve_dtype=False
+    ):
+        value = jnp.asarray(value, dtype=None if preserve_dtype else jnp.float32)
+        context = _broadcast_context(context, value.shape[:-1], dtype=value.dtype)
         mask = jnp.asarray(self.mask, dtype=value.dtype)
         active = 1.0 - mask
         masked = value * mask
@@ -171,6 +173,7 @@ class _ConditionalCoupling(eqx.Module):
                 min_bin_width=self.min_bin_width,
                 min_bin_height=self.min_bin_height,
                 min_derivative=self.min_derivative,
+                preserve_dtype=preserve_dtype,
             )
             logdet = jnp.sum(active * element_logdet, axis=-1)
         return masked + active * transformed, logdet
@@ -1211,8 +1214,8 @@ def _sample_standard_normal(key, shape, *, dtype, strategy: str) -> jnp.ndarray:
     raise ValueError("sample_strategy must be random or antithetic")
 
 
-def _broadcast_context(context, leading_shape):
-    context = jnp.asarray(context, dtype=jnp.float32)
+def _broadcast_context(context, leading_shape, *, dtype=jnp.float32):
+    context = jnp.asarray(context, dtype=dtype)
     while context.ndim < len(leading_shape) + 1:
         context = context[None, ...]
     return jnp.broadcast_to(context, tuple(leading_shape) + (context.shape[-1],))

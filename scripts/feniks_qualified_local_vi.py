@@ -126,6 +126,7 @@ def prepare(
     long_optimization=False,
     long_replay_root=None,
     objective_pilot_root=None,
+    objective_precision_root=None,
 ):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
@@ -138,6 +139,8 @@ def prepare(
     )
 
     root, night_root = Path(root).resolve(), Path(night_root).resolve()
+    if objective_precision_root is not None and objective_pilot_root is None:
+        raise ValueError("precision replay requires an objective pilot source")
     if objective_pilot_root is not None and (
         controlled
         or long_optimization
@@ -323,6 +326,16 @@ def prepare(
                 maximum_weight=0.2,
             ),
             interpretation="Full native VI objective audit gates a fixed reverse/wake diagnostic on all final source starts. Matched decoder-draw count, not matched FLOPs or updates. No truth, point targets, selection or promotion.",
+        )
+    if objective_precision_root is not None:
+        from scripts.feniks_transport_precision import pin_reference
+
+        manifest["transport_precision_reference"] = pin_reference(
+            objective_precision_root, manifest
+        )
+        manifest["method"] = "qualified_transport_precision_audit_v1"
+        manifest["interpretation"] = (
+            "Audit-only native versus float64 conditional transport, all prescribed starts, identical source/noise/directions. Frozen context and target; no optimization or promotion."
         )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest

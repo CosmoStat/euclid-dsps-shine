@@ -1,5 +1,6 @@
 """Audit-gated local objective comparison with immutable parent and source."""
 
+import json
 import time
 from pathlib import Path
 
@@ -44,6 +45,8 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
 
     def unchanged():
         verify_source(source)
+        if "transport_precision_reference" in manifest:
+            verify_source(manifest["transport_precision_reference"])
         if fingerprint != _array_tree_sha256(model):
             raise ValueError("frozen parent changed during objective pilot")
         for audit in audits:
@@ -110,6 +113,66 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             pd.DataFrame(audit.get("rows", [])).to_csv(
                 location / "stencils.csv", index=False
             )
+            extra, names = {}, ["AUDIT.json", "stencils.csv"]
+            if "transport_precision_reference" in manifest:
+                from euclid_dsps.amortized.local_transport_precision import (
+                    compare_transport,
+                )
+
+                previous = json.loads(
+                    (
+                        Path(manifest["transport_precision_reference"]["path"])
+                        / "cases"
+                        / case
+                        / f"audit_start_{start}"
+                        / "AUDIT.json"
+                    ).read_text()
+                )
+                if (audit["seed"], audit["noise_sha256"]) != (
+                    previous["seed"],
+                    previous["noise_sha256"],
+                ):
+                    raise ValueError(
+                        "precision replay must reuse the original audit noise and seed"
+                    )
+                progress(
+                    "transport_precision_audit",
+                    case=case,
+                    start=start,
+                    audits_complete=len(audits),
+                )
+                comparison = compare_transport(
+                    model.encoder,
+                    parameters,
+                    context,
+                    observation,
+                    target,
+                    budget,
+                    seed=audit["seed"],
+                    draws=recipe["audit_draws"],
+                )
+                pd.DataFrame(comparison.pop("traces")).to_csv(
+                    location / "transport_trace.csv", index=False
+                )
+                np.savez_compressed(
+                    location / "transport_values.npz", **comparison.pop("arrays")
+                )
+                pd.DataFrame(comparison["transport64_audit"]["rows"]).to_csv(
+                    location / "transport64_stencils.csv", index=False
+                )
+                comparison["native_reference_status"] = previous["status"]
+                comparison["native_replay_status"] = audit["status"]
+                write(location / "TRANSPORT_PRECISION.json", finite_json(comparison))
+                names += [
+                    "transport_trace.csv",
+                    "transport64_stencils.csv",
+                    "TRANSPORT_PRECISION.json",
+                    "transport_values.npz",
+                ]
+                extra = dict(
+                    transport64_status=comparison["transport64_audit"]["status"],
+                    native_reference_status=previous["status"],
+                )
             audits.append(
                 dict(
                     case=case,
@@ -120,8 +183,9 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                         str((location / name).relative_to(root)): sha256_file(
                             location / name
                         )
-                        for name in ("AUDIT.json", "stencils.csv")
+                        for name in names
                     },
+                    **extra,
                 )
             )
             write(
@@ -139,6 +203,13 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             scientific_promotion=False,
         ),
     )
+    if "transport_precision_reference" in manifest:
+        return finish(
+            "TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE",
+            audits_complete=len(audits),
+            cases_complete=0,
+            optimization_started=False,
+        )
     if not passed:
         return finish(
             "OBJECTIVE_AUDIT_NOT_PASSED", cases_complete=0, optimization_started=False

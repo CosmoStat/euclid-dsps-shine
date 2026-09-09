@@ -170,6 +170,8 @@ def audit_objective(
     *,
     seed: int = 260912,
     draws: int = 8,
+    noise=None,
+    directions=None,
 ) -> dict:
     """Audit six fixed directions in native and parameter-promoted arithmetic.
 
@@ -184,21 +186,28 @@ def audit_objective(
         raise ValueError("objective audit requires LocalParameters and positive draws")
     count = int(draws) * int(np.prod(parameters.mean.shape[:-1]))
     key = jax.random.PRNGKey(seed)
-    noise = jax.random.normal(
-        key, (int(draws),) + parameters.mean.shape, dtype=parameters.mean.dtype
-    )
+    if noise is None:
+        noise = jax.random.normal(
+            key, (int(draws),) + parameters.mean.shape, dtype=parameters.mean.dtype
+        )
+    if noise.shape != (int(draws),) + parameters.mean.shape:
+        raise ValueError("audit noise shape mismatch")
     native = eqx.filter(parameters, eqx.is_inexact_array)
     promoted = jax.tree.map(lambda x: x.astype(jnp.float64), native)
     _, static = eqx.partition(parameters, eqx.is_inexact_array)
-    directions = [
-        (
-            block,
-            i,
-            _direction(parameters, block, np.random.default_rng(seed + 10 * j + i)),
-        )
-        for j, block in enumerate(("mean", "log_std", "layers"))
-        for i in range(2)
-    ]
+    directions = (
+        directions
+        if directions is not None
+        else [
+            (
+                block,
+                i,
+                _direction(parameters, block, np.random.default_rng(seed + 10 * j + i)),
+            )
+            for j, block in enumerate(("mean", "log_std", "layers"))
+            for i in range(2)
+        ]
+    )
     variants, rows = {}, []
     for variant, dynamic in (("native", native), ("parameter64", promoted)):
 

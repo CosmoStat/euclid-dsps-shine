@@ -57,8 +57,11 @@ def test_pilot_rejects_changed_protocol_before_preparation(tmp_path, extra):
     assert not (tmp_path / "out").exists()
 
 
-@pytest.mark.parametrize("audit_status", ["PASS", "INCONCLUSIVE", "FAIL"])
-def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status):
+@pytest.mark.parametrize(
+    "audit_status,precision",
+    [("PASS", False), ("INCONCLUSIVE", False), ("FAIL", False), ("PASS", True)],
+)
+def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precision):
     import euclid_dsps.amortized.local_vi_objective_audit as audit
     import euclid_dsps.amortized.local_wake_diagnostic as wake
 
@@ -112,19 +115,51 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status):
         objective_pilot=dict(path=str(source), hashes=hashes),
         objective_recipe=recipe,
     )
+    if precision:
+        import euclid_dsps.amortized.local_transport_precision as transport
+
+        reference = tmp_path / "reference"
+        reference_hashes = {}
+        for number, (group, *_) in enumerate(cases):
+            for start in (0, 1):
+                name = f"cases/{group}_000/audit_start_{start}/AUDIT.json"
+                write(
+                    reference / name,
+                    dict(
+                        status="PASS",
+                        seed=50000000 + number * 100000 + start * 10000,
+                        noise_sha256="pinned",
+                    ),
+                )
+                reference_hashes[name] = sha256_file(reference / name)
+        manifest["method"] = "qualified_transport_precision_audit_v1"
+        manifest["transport_precision_reference"] = dict(
+            path=str(reference), hashes=reference_hashes
+        )
+        monkeypatch.setattr(
+            transport,
+            "compare_transport",
+            lambda *a, **k: dict(
+                transport64_audit=dict(status="PASS", rows=[]),
+                traces=[],
+                arrays={},
+                dtypes={},
+                center_max_abs_delta={},
+            ),
+        )
     write(root / "RUN_MANIFEST.json", manifest)
     audited = []
 
     def fake_audit(*a, **k):
         audited.append(k["seed"])
-        return dict(status=audit_status, rows=[])
+        return dict(status=audit_status, rows=[], seed=k["seed"], noise_sha256="pinned")
 
     monkeypatch.setattr(audit, "audit_objective", fake_audit)
     old_reverse, old_wake = pilot.make_step, wake.make_wake_step
 
     def guarded(factory):
         def construct(*a, **k):
-            assert audit_status == "PASS" and len(audited) == 4
+            assert not precision and audit_status == "PASS" and len(audited) == 4
             return factory(*a, **k)
 
         return construct
@@ -145,7 +180,12 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status):
     assert _array_tree_sha256(model) == frozen
     assert result["scientific_promotion"] is False
     assert len(audited) == 4 and len(set(audited)) == 4
-    if audit_status == "PASS":
+    if precision:
+        assert result["status"] == "TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE"
+        assert result["optimization_started"] is False
+        assert result["cases_complete"] == 0
+        assert not list(root.glob("cases/*/*/optimization.csv"))
+    elif audit_status == "PASS":
         assert result["status"] == "OBJECTIVE_PILOT_COMPLETE"
         assert result["cases_complete"] == 2
         receipt = json.loads((root / "cases/observed_000/COMPLETE.json").read_text())
@@ -165,7 +205,7 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status):
         capture_output=True,
         text=True,
     )
-    assert "No selection or promotion" in output.stdout
+    assert "no selection or promotion" in output.stdout.lower()
     detailed = root / "cases/observed_000/audit_start_0/stencils.csv"
     detailed.write_text("changed evidence")
     from scripts.summarize_feniks_sc_drws_objective_pilot import summarize

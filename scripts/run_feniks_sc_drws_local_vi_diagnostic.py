@@ -282,6 +282,7 @@ def prepare(
     long_optimization=False,
     long_replay_root=None,
     objective_pilot_root=None,
+    objective_precision_root=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -317,6 +318,7 @@ def prepare(
             long_optimization=long_optimization,
             long_replay_root=long_replay_root,
             objective_pilot_root=objective_pilot_root,
+            objective_precision_root=objective_precision_root,
         )
     if (
         controlled_optimization
@@ -324,6 +326,7 @@ def prepare(
         or long_optimization
         or long_replay_root is not None
         or objective_pilot_root is not None
+        or objective_precision_root is not None
     ):
         raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
@@ -869,6 +872,10 @@ def run(root):
             from scripts.feniks_support_probe import verify_source
 
             verify_source(manifest["objective_pilot"])
+        if "transport_precision_reference" in manifest:
+            from scripts.feniks_support_probe import verify_source
+
+            verify_source(manifest["transport_precision_reference"])
         if "support_probe" in manifest:
             from scripts.feniks_support_probe import verify_source
 
@@ -2013,6 +2020,7 @@ def main():
     parser.add_argument("--long-optimization", action="store_true")
     parser.add_argument("--long-replay-root", type=Path)
     parser.add_argument("--objective-pilot-root", type=Path)
+    parser.add_argument("--objective-precision-root", type=Path)
     parser.add_argument("--support-probe-root", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -2039,6 +2047,7 @@ def main():
             args.long_optimization,
             args.long_replay_root,
             args.objective_pilot_root,
+            args.objective_precision_root,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

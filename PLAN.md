@@ -1,5 +1,23 @@
 # Plan
 
+## 2026-09-09 Transport precision localization after job 1960443
+
+- Implemented: separate audit-only replay, same source checkpoints/noise/directions,
+  native transport versus explicitly float64 diagnostic transport. No optimizer
+  or override of the original 31 PASS / 1 INCONCLUSIVE receipt.
+- Record latent/flux finite differences and dtypes; retain fixed target and
+  context. Preserve default production arithmetic and checkpoint structures.
+- Added hashed per-draw latent/flux stencil archives and receipt-checked CPU
+  readback. Even all-PASS diagnostic results cannot construct an optimizer.
+- Updated HTML status and operator-transcribed stencil figure; launch protocol
+  is `docs/feniks_transport_precision_runbook.md`. H100 results remain pending.
+- Validation: 113 tests pass across transport, objective audit, orchestration,
+  qualified/local VI and flow/posterior regressions; two additional reference
+  tests pass. Transport tests rerun after archive assertions: 3 passed.
+  Ruff, compileall, Bash syntax,
+  CLI help and warning-free Sphinx build pass. Legacy AGENTS fit/posterior
+  smoke configurations are absent from this checkout; those runs are not done.
+
 ## 2026-09-09 Full VI objective audit and guarded wake pilot
 
 - Implemented: audit the actual fixed-noise VI parameter gradient, then gate a
