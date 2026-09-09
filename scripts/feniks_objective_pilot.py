@@ -1,0 +1,331 @@
+"""Audit-gated local objective comparison with immutable parent and source."""
+
+import time
+from pathlib import Path
+
+import equinox as eqx
+import jax
+import numpy as np
+import pandas as pd
+
+from euclid_dsps.amortized.features import make_encoder_features
+from euclid_dsps.amortized.local_vi_diagnostic import (
+    BudgetExceeded,
+    initialize,
+    make_step,
+)
+from euclid_dsps.amortized.population_vem import sha256_file
+from euclid_dsps.amortized.train import _array_tree_sha256
+from scripts.feniks_support_probe import check_simulations, verify_source
+from scripts.run_feniks_sc_drws_balanced_npe import write
+
+
+def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
+    from euclid_dsps.amortized.local_vi_objective_audit import audit_objective
+    from euclid_dsps.amortized.local_wake_diagnostic import make_wake_step, wake_batch
+    from scripts.run_feniks_sc_drws_local_vi_diagnostic import (
+        evaluate_distribution,
+        finite_json,
+    )
+
+    source = manifest["objective_pilot"]
+    recipe = manifest["objective_recipe"]
+    check_simulations(
+        Path(source["path"]) / "SIMULATED_INPUTS.npz", root / "SIMULATED_INPUTS.npz"
+    )
+    fingerprint = _array_tree_sha256(model)
+    prepared, audits = [], []
+
+    def progress(stage, **fields):
+        write(
+            root / "PROGRESS.json",
+            dict(stage=stage, **fields, budget=budget.snapshot()),
+        )
+
+    def unchanged():
+        verify_source(source)
+        if fingerprint != _array_tree_sha256(model):
+            raise ValueError("frozen parent changed during objective pilot")
+        for audit in audits:
+            for name, digest in audit["artifacts"].items():
+                if sha256_file(root / name) != digest:
+                    raise ValueError(f"objective audit artifact changed: {name}")
+
+    def finish(status, **fields):
+        unchanged()
+        final = dict(
+            status=status,
+            **fields,
+            budget=budget.snapshot(),
+            scientific_promotion=False,
+            truth_used=False,
+            population_training_started=False,
+            prior_bitwise_unchanged=True,
+            artifacts={
+                name: dict(sha256=sha256_file(root / name))
+                for name in ("OBJECTIVE_AUDIT.json", "SIMULATED_INPUTS.npz")
+            },
+        )
+        write(root / "FINAL.json", finite_json(final))
+        return final
+
+    # Audit every prescribed start before constructing any optimizer.
+    for number, (group, index, observation, generated) in enumerate(cases):
+        case = f"{group}_{index:03d}"
+        folder = root / "cases" / case
+        features = make_encoder_features(
+            observation.flux, observation.flux_err, stats, observation.mask
+        )
+        anchor, context = initialize(model, features)
+        starts = []
+        for start in (0, 1):
+            path = (
+                Path(source["path"])
+                / "cases"
+                / case
+                / f"start_{start}"
+                / "parameters.eqx"
+            )
+            parameters = eqx.tree_deserialise_leaves(path, anchor)
+            starts.append(parameters)
+            progress(
+                "full_vi_objective_audit",
+                case=case,
+                start=start,
+                audits_complete=len(audits),
+            )
+            audit = audit_objective(
+                model.encoder,
+                parameters,
+                context,
+                observation,
+                target,
+                budget,
+                seed=50000000 + number * 100000 + start * 10000,
+                draws=recipe["audit_draws"],
+            )
+            location = folder / f"audit_start_{start}"
+            location.mkdir(parents=True, exist_ok=True)
+            write(location / "AUDIT.json", finite_json(audit))
+            pd.DataFrame(audit.get("rows", [])).to_csv(
+                location / "stencils.csv", index=False
+            )
+            audits.append(
+                dict(
+                    case=case,
+                    start=start,
+                    status=audit["status"],
+                    source_checkpoint_sha256=sha256_file(path),
+                    artifacts={
+                        str((location / name).relative_to(root)): sha256_file(
+                            location / name
+                        )
+                        for name in ("AUDIT.json", "stencils.csv")
+                    },
+                )
+            )
+            write(
+                root / "OBJECTIVE_AUDIT.json",
+                dict(status="RUNNING", audits=audits, optimization_started=False),
+            )
+        prepared.append((case, observation, generated, anchor, context, starts))
+    passed = all(item["status"] == "PASS" for item in audits)
+    write(
+        root / "OBJECTIVE_AUDIT.json",
+        dict(
+            status="PASS" if passed else "NOT_PASSED",
+            audits=audits,
+            optimization_started=False,
+            scientific_promotion=False,
+        ),
+    )
+    if not passed:
+        return finish(
+            "OBJECTIVE_AUDIT_NOT_PASSED", cases_complete=0, optimization_started=False
+        )
+    unchanged()
+    reverse_optimizer, reverse_step = make_step(
+        model.encoder,
+        target,
+        draws=recipe["reverse_draws"],
+        learning_rate=recipe["learning_rate"],
+    )
+    wake_optimizer, wake_step = make_wake_step(
+        model.encoder,
+        learning_rate=recipe["learning_rate"],
+        minimum_ess=recipe["minimum_ess"],
+        maximum_weight=recipe["maximum_weight"],
+    )
+    completed, began = [], time.monotonic()
+    for number, (case, observation, generated, anchor, context, starts) in enumerate(
+        prepared
+    ):
+        folder = root / "cases" / case
+        eval_seed = 60000000 + number * 100000
+        evaluate_distribution(
+            folder / "amortized",
+            model.encoder,
+            anchor,
+            context,
+            observation,
+            target,
+            spec,
+            budget,
+            eval_seed,
+            recipe["final_evaluation_draws"],
+            generated,
+        )
+        outcomes = []
+        for start, original in enumerate(starts):
+            evaluate_distribution(
+                folder / f"source_{start}",
+                model.encoder,
+                original,
+                context,
+                observation,
+                target,
+                spec,
+                budget,
+                eval_seed + 100 + start * 10,
+                recipe["final_evaluation_draws"],
+                generated,
+            )
+            for arm in ("reverse", "wake"):
+                parameters = original
+                optimizer, step = (
+                    (reverse_optimizer, reverse_step)
+                    if arm == "reverse"
+                    else (wake_optimizer, wake_step)
+                )
+                state = optimizer.init(eqx.filter(parameters, eqx.is_inexact_array))
+                draws = recipe[f"{arm}_draws"]
+                local = folder / f"{arm}_{start}"
+                local.mkdir(parents=True, exist_ok=True)
+                history = []
+                for iteration in range(recipe["decoder_draw_budgets"][-1] // draws):
+                    key = jax.random.PRNGKey(
+                        70000000
+                        + number * 100000
+                        + start * 10000
+                        + (5000 if arm == "wake" else 0)
+                        + iteration
+                    )
+                    if arm == "reverse":
+                        budget.charge(draws, gradient=True)
+                        parameters, state, metrics = step(
+                            parameters, state, context, observation, key
+                        )
+                    else:
+                        x, logweights, batch_info = wake_batch(
+                            model.encoder,
+                            parameters,
+                            anchor,
+                            context,
+                            observation,
+                            target,
+                            budget,
+                            key,
+                            draws=draws,
+                        )
+                        parameters, state, metrics = step(
+                            parameters, state, context, x, logweights
+                        )
+                        metrics = dict(
+                            metrics, **{f"batch_{k}": v for k, v in batch_info.items()}
+                        )
+                    metrics = {
+                        k: np.asarray(v).item()
+                        for k, v in jax.device_get(metrics).items()
+                    }
+                    used = (iteration + 1) * draws
+                    history.append(
+                        dict(attempt=iteration + 1, decoder_draws=used, **metrics)
+                    )
+                    pd.DataFrame(history).to_csv(
+                        local / "optimization.csv", index=False
+                    )
+                    if not metrics["finite"]:
+                        raise ValueError(
+                            f"nonfinite objective update: {case} {arm} {start}"
+                        )
+                    progress(
+                        "objective_pilot",
+                        case=case,
+                        arm=arm,
+                        start=start,
+                        decoder_draws=used,
+                        cases_complete=len(completed),
+                    )
+                    if used in recipe["decoder_draw_budgets"]:
+                        checkpoint = local / f"draws_{used:05d}"
+                        checkpoint.mkdir(parents=True, exist_ok=True)
+                        eqx.tree_serialise_leaves(
+                            checkpoint / "parameters.eqx", parameters
+                        )
+                        restored = eqx.tree_deserialise_leaves(
+                            checkpoint / "parameters.eqx", original
+                        )
+                        final = used == recipe["decoder_draw_budgets"][-1]
+                        result = evaluate_distribution(
+                            checkpoint,
+                            model.encoder,
+                            restored,
+                            context,
+                            observation,
+                            target,
+                            spec,
+                            budget,
+                            eval_seed + 100 + start * 10,
+                            recipe["final_evaluation_draws"]
+                            if final
+                            else recipe["intermediate_evaluation_draws"],
+                            generated,
+                        )
+                        outcomes.append(
+                            dict(
+                                arm=arm,
+                                start=start,
+                                decoder_draws=used,
+                                checkpoint_sha256=sha256_file(
+                                    checkpoint / "parameters.eqx"
+                                ),
+                                applied_updates=sum(
+                                    h.get("update_applied", True) for h in history
+                                ),
+                                attempts=len(history),
+                                summary=result,
+                            )
+                        )
+                # Rejected wake batches stay in the trajectory; never retry until accepted.
+        unchanged()
+        write(
+            folder / "COMPLETE.json",
+            finite_json(
+                dict(
+                    case=case,
+                    outcomes=outcomes,
+                    prior_bitwise_unchanged=True,
+                    scientific_promotion=False,
+                )
+            ),
+        )
+        completed.append(case)
+        if len(completed) == 2:
+            estimate = (time.monotonic() - began) / 2 * (len(prepared) - 2)
+            remaining = budget.seconds - (time.monotonic() - budget.started)
+            write(
+                root / "COST_PREFLIGHT.json",
+                dict(
+                    cases_measured=2,
+                    estimated_remaining_seconds=estimate,
+                    remaining_budget_seconds=remaining,
+                    safety_factor=1.25,
+                ),
+            )
+            if 1.25 * estimate > remaining:
+                raise BudgetExceeded("objective pilot exceeds remaining allocation")
+    return finish(
+        "OBJECTIVE_PILOT_COMPLETE",
+        cases_complete=len(completed),
+        optimization_started=True,
+    )

@@ -281,6 +281,7 @@ def prepare(
     support_probe_root=None,
     long_optimization=False,
     long_replay_root=None,
+    objective_pilot_root=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -315,12 +316,14 @@ def prepare(
             support_probe_root=support_probe_root,
             long_optimization=long_optimization,
             long_replay_root=long_replay_root,
+            objective_pilot_root=objective_pilot_root,
         )
     if (
         controlled_optimization
         or support_probe_root is not None
         or long_optimization
         or long_replay_root is not None
+        or objective_pilot_root is not None
     ):
         raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
@@ -862,6 +865,10 @@ def run(root):
     budget = Budget(manifest["seconds"], manifest["maximum_decoder_evaluations"])
     write(root / "PROGRESS.json", {"stage": "loading", "budget": budget.snapshot()})
     try:
+        if "objective_pilot" in manifest:
+            from scripts.feniks_support_probe import verify_source
+
+            verify_source(manifest["objective_pilot"])
         if "support_probe" in manifest:
             from scripts.feniks_support_probe import verify_source
 
@@ -1616,6 +1623,10 @@ def run(root):
             flux_err=arrays.flux_err,
             mask=arrays.mask,
         )
+        if "objective_pilot" in manifest:
+            from scripts.feniks_objective_pilot import run_pilot
+
+            return run_pilot(root, manifest, model, stats, spec, cases, target, budget)
         regimes = manifest.get(
             "optimization_regimes",
             [
@@ -2001,6 +2012,7 @@ def main():
     parser.add_argument("--controlled-optimization", action="store_true")
     parser.add_argument("--long-optimization", action="store_true")
     parser.add_argument("--long-replay-root", type=Path)
+    parser.add_argument("--objective-pilot-root", type=Path)
     parser.add_argument("--support-probe-root", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -2026,6 +2038,7 @@ def main():
             args.support_probe_root,
             args.long_optimization,
             args.long_replay_root,
+            args.objective_pilot_root,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

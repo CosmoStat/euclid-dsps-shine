@@ -368,3 +368,36 @@ independent seeds, source hashes and identical simulated context checks. No
 optimizer or checkpoint selection. See `feniks_long_replay_runbook.md`.
 This is a stability diagnostic before deciding on an objective/family change,
 not a posterior repair or authorization to train the population.
+
+## 2026-09-09: replay 1959175 confirms the support problem
+
+Operator readback: completed in 12m59s, contract PASS, all 16 cases, 196687
+forward evaluations and 3 contract-audit gradients. No checkpoint changed.
+At K4096, all 16 observed local proposals and 15/16 simulated local proposals
+have bad Pareto-k. All four local good-k outcomes at K1024 fail on this replay;
+one different simulated proposal has good k. Local ELBO/residuals generally
+reproduce much better than the weight diagnostics.
+
+Observed_002/start_0 retains RMS 1.816/1.810 while ESS changes from 43.75/1024
+to 4.14/4096. Simulated_003 retains amortized ESS about 384/4096, good k and RMS
+2.69; local proposals have ESS about 40/80, bad k and RMS 0.89/0.87. These are
+operator-supplied examples, not a selected evaluation cohort or fetched data.
+Weight concentration alone does not prove missing modes or an incapable flow.
+
+Next implemented experiment: full fixed-noise VI gradient audit for all fixed
+final-512 starts, followed only on all-native-PASS by a matched decoder-sample
+budget comparison. Reverse-KL control uses 128 MC32 updates; the wake candidate
+uses 16 attempts of 256 fresh draws from the exact normalized 50/50 mixture of
+current local q and frozen amortized C. Stopped draws/weights, weighted inverse
+log density, ESS >=16 and maximum weight <=0.20 are mandatory. Rejected attempts
+preserve parameters and Adam state and consume their budget; no success-only
+retry loop or accumulated bank. Parameter64 is a precision diagnostic, not an
+override of a native FAIL/INCONCLUSIVE. Final evaluation uses independent K4096.
+
+This tests objective/gradient hypotheses without choosing a best checkpoint,
+turning weighted draws into point labels, changing the target or prior, using
+catalogue truth, or authorizing population training. Equal decoder-sample counts
+do not imply equal backward cost or wall time. Wake finite-K bias and rejection
+selection bias remain explicit limitations. See `feniks_objective_pilot_runbook.md`
+and the updated HTML current-status page. The new H100 experiment is pending;
+no remote result is claimed by this documentation update.

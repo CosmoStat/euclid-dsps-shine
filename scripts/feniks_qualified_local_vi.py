@@ -125,6 +125,7 @@ def prepare(
     support_probe_root=None,
     long_optimization=False,
     long_replay_root=None,
+    objective_pilot_root=None,
 ):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
@@ -137,6 +138,14 @@ def prepare(
     )
 
     root, night_root = Path(root).resolve(), Path(night_root).resolve()
+    if objective_pilot_root is not None and (
+        controlled
+        or long_optimization
+        or support_probe_root is not None
+        or long_replay_root is not None
+        or (objects, steps, draws, arm) != (8, 64, 128, "C")
+    ):
+        raise ValueError("objective pilot requires the fixed exclusive C recipe")
     if long_replay_root is not None and (
         controlled
         or long_optimization
@@ -288,6 +297,32 @@ def prepare(
             optimization_regimes=[dict(name="final_replay", factor=1.0, mixture=False)],
             maximum_decoder_evaluations=250000,
             interpretation="All final step-512 checkpoints and frozen C anchors, two independent K2048 replicates each, new evaluation seeds. No optimization, selection or promotion. Development cohort only.",
+        )
+    if objective_pilot_root is not None:
+        from scripts.feniks_support_probe import pin_source
+
+        manifest.update(
+            method="qualified_objective_pilot_v1",
+            objective_pilot=pin_source(
+                objective_pilot_root, manifest, long_replay=True
+            ),
+            source_checkpoint_step=512,
+            steps=128,
+            gradient_draws=32,
+            evaluation_draws=2048,
+            maximum_decoder_evaluations=1200000,
+            objective_recipe=dict(
+                audit_draws=8,
+                reverse_draws=32,
+                wake_draws=256,
+                decoder_draw_budgets=[1024, 4096],
+                intermediate_evaluation_draws=512,
+                final_evaluation_draws=2048,
+                learning_rate=0.0001,
+                minimum_ess=16,
+                maximum_weight=0.2,
+            ),
+            interpretation="Full native VI objective audit gates a fixed reverse/wake diagnostic on all final source starts. Matched decoder-draw count, not matched FLOPs or updates. No truth, point targets, selection or promotion.",
         )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest

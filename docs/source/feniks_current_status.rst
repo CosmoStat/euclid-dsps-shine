@@ -1,116 +1,186 @@
 FENIKS : ou en est-on ?
 ============================================================
 
-Etat au 9 septembre 2026, apres le job 1957394
+Etat au 9 septembre 2026, apres le replay 1959175
 ------------------------------------------------------------
 
-**Le calcul numerique a ete qualifie sur les points testes. L'inference
-posterior n'est pas encore qualifiee. L'apprentissage populationnel reste bloque.**
+**Decodeur qualifie sur les points testes. Propositions locales toujours
+insuffisantes pour une inference par importance fiable. Pas de promotion
+posterior ni d'apprentissage populationnel.**
 
-Cette page distingue les resultats transmis par l'operateur des experiences
-encore a lancer. Les figures sont reconstruites a partir des chiffres colles
-dans la conversation, pas d'un acces direct aux fichiers Jean-Zay.
+Les resultats ci-dessous proviennent des journaux transmis par l'operateur.
+Nous n'avons pas telecharge les artefacts Jean-Zay. Les figures d'exemples sont
+des transcriptions attribuees, pas une nouvelle mesure ou un test independant.
 
-Dernier resultat : le probe de dispersion ne resout pas le support
-========================================================================
+Ce que le dernier run etablit
+-----------------------------
 
-Les 64 propositions observees et 63/64 propositions simulees du probe ont un
-Pareto-k defavorable. L'elargissement uniforme et le melange teste ne suffisent
-pas. Sur trois cas inspectes de l'audit precedent, l'ESS vaut environ 1 : les
-deplacements ponderes ne sont donc pas des cibles d'entrainement fiables.
+Le job ``1959175`` a termine en 12m59s, avec contrat ``PASS`` et 16/16 cas.
+Il reevalue les memes checkpoints finaux de VI locale longue, sans les modifier,
+avec de nouveaux tirages : deux repetitions K2048, soit K4096 par distribution.
+Les trois evaluations de gradient appartiennent au controle du contrat, pas
+a un entrainement.
 
-**Run long termine :** 512 etapes MC32, deux departs, 16 cas, contrat PASS.
-Les residus progressent mais 13/16 propositions observees et 15/16 simulees
-ont encore un mauvais Pareto-k final. L'audit CPU a lu 144 distributions.
-Simulated_003 illustre le probleme : RMS final environ 0.86/0.88 mais ESS
-environ 5/7 sur 1024, contre 115 pour l'ancre amortie.
+* Les **16/16 propositions locales observees** ont ``bad_k=1`` a K4096.
+* Les **15/16 propositions locales simulees** ont ``bad_k=1`` a K4096.
+* Les quatre propositions locales ayant ``bad_k=0`` a K1024 ne conservent pas
+  ce resultat. Un autre cas simule passe ponctuellement a K4096.
+* Les ELBO et residus des checkpoints locaux sont generalement bien reproduits,
+  contrairement aux poids d'importance. Plus de tirages ne change pas la
+  proposition; cela peut exposer des poids extremes jusque-la peu observes.
 
-**Suite preparee, pas encore executee :** reevaluation des deux checkpoints
-finaux de tous les cas et de leurs ancres, avec de nouvelles graines et deux
-repetitions K2048 (K4096 total). Aucune optimisation ni selection. Ce controle
-mesure la stabilite des poids; il ne peut pas prouver l'absence de modes rates.
-Le runbook est ``docs/feniks_long_replay_runbook.md``.
+.. image:: _static/feniks_debug/replay_examples.png
+   :alt: Replays K1024 et K4096 de checkpoints fixes, ESS/K et RMS pour deux exemples
+   :width: 100%
 
-Ce que fait le systeme
+**observed_002, depart 0 :** RMS 1.816 puis 1.810, mais ESS environ 44/1024
+puis 4/4096. **simulated_003 :** l'ancre amortie conserve environ 384/4096
+d'ESS avec ``bad_k=0``; les deux propositions locales donnent environ 40 et
+80/4096, avec ``bad_k=1``, malgre des RMS proches de 0.89 et 0.87.
+Les deux cas illustrent le mecanisme; ils ne servent pas a choisir la cohorte.
+
+Une ESS faible n'est pas une preuve de modes manquants. Elle mesure ici une
+concentration empirique des poids. Un bon ``k`` ponctuel ne certifie pas non
+plus une proposition, et une petite difference entre deux estimations
+d'evidence peut survenir lorsque les deux repetitions manquent la meme region.
+
+Pourquoi changer maintenant ce que l'on teste ?
 ------------------------------------------------------------
 
-Le prior decrit les parametres possibles des galaxies. Le decodeur transforme
-ces parametres en flux photometriques. La vraisemblance compare ces flux aux
-mesures et a leurs incertitudes. Le reseau NPE propose une **distribution
-jointe** de parametres conditionnee par les flux observes.
+Le prior fixe decrit les parametres possibles. Le decodeur calcule leurs flux.
+La vraisemblance compare ces flux aux mesures et a leurs erreurs. Le reseau
+amorti fournit une distribution jointe conditionnelle; la VI locale adapte
+cette distribution, sans apprendre le prior ou le decodeur.
 
-La VI locale adapte cette distribution pour une galaxie, sans changer le prior
-ni le decodeur. Son objectif est la moyenne de ``logq - logprior - loglike``
-(ELBO negative). Ce n'est pas un objectif direct d'ESS.
+En notant :math:`x` les coordonnees latentes, :math:`y` les flux observes et
+:math:`q_\phi` la proposition, l'objectif actuel est
 
-Pour verifier les tirages, on calcule les poids proportionnels a
-``exp(logprior + loglike - logq)``. Si quelques tirages portent presque tout
-le poids, l'integration reste fragile meme si les flux sont mieux reproduits.
-L'ESS mesure cette concentration; Pareto-k et les repetitions independantes
-apportent d'autres controles. Aucun indicateur seul ne certifie le posterior.
+.. math::
+
+   \mathcal L_{\mathrm{VI}}(\phi)
+   = \mathbb E_{q_\phi(x\mid y)}
+     [\log q_\phi(x\mid y)-\log p(x)-\log p(y\mid x)]
+   = D_{\mathrm{KL}}(q_\phi\Vert p(x\mid y))-\log p(y).
+
+L'integration utilise en revanche les poids
+:math:`w(x)=p(x)p(y\mid x)/q_\phi(x\mid y)`.
+Reduire l'objectif VI n'est pas optimiser directement leur concentration.
+Le replay motive une comparaison d'objectifs; il ne prouve ni que le gradient
+actuel est faux, ni que la famille de flows est incapable de representer la cible.
+
+La suite implementee : audit puis pilote correctif
+------------------------------------------------------------
+
+**Statut : prepare pour execution, pas encore mesure sur H100.**
+Runbook detaille : :download:`commandes et protocole <../feniks_objective_pilot_runbook.md>`.
+
+.. image:: _static/feniks_debug/objective_protocol.png
+   :alt: Audit natif obligatoire puis comparaison controlee reverse-KL et wake avec poids exacts
+   :width: 100%
+
+1. Verifier le gradient de **l'objectif VI entier**, pas seulement celui du
+   decodeur. Le bruit Monte-Carlo reste fixe entre AD et differences finies.
+   Deux directions par bloc couvrent moyenne, log-ecart-type et couches du flow.
+   Les termes ``logq``, ``-logprior``, ``-loglike`` et leur somme sont inspectes,
+   ainsi que l'identite entre la densite de tirage et la densite inverse.
+2. L'arithmetique native constitue le controle principal. Une copie des
+   parametres en float64 sert a localiser un probleme de precision, sans
+   supprimer tous les casts float32 internes. **Cette copie ne peut pas
+   autoriser le pilote si le controle natif ne passe pas.**
+3. Si tous les controles natifs passent, comparer un controle reverse-KL
+   (128 mises a jour, MC32) a un candidat wake (16 tentatives, 256 tirages).
+   Les deux bras repartent du meme checkpoint final 512 pour chaque depart.
+4. Le candidat tire dans un melange 50/50 entre sa proposition courante et
+   l'ancre amortie C figee. Il apprend par log-densite inverse ponderee, avec
+   **tirages et poids detaches du gradient**, sans parametre-vrai catalogue,
+   sans cible ponctuelle ni banque accumulee.
+5. Une tentative wake avec ESS < 16 ou poids maximal > 0.20 n'effectue aucune
+   mise a jour des parametres **ni de l'etat Adam**. Elle consomme son budget;
+   on ne retire pas jusqu'a obtenir un lot favorable. Tous les cas restent
+   dans le rapport, y compris si aucune tentative n'est acceptee.
+
+Le budget appaire est de 4096 evaluations de tirages par le decodeur, par bras
+et par depart. **Ce n'est pas une egalite de temps, de FLOPs ou de travail de
+retropropagation.** Les checkpoints sont fixes apres 1024 puis 4096 tirages
+du budget d'adaptation, avec evaluations independantes K1024 puis K4096.
+Le run utilise un H100, un noeud, des bras sequentiels et une allocation de 3h.
+
+L'estimateur wake auto-normalise est biaise a K fini. Le garde-fou de
+concentration introduit lui aussi une selection des mises a jour, donc peut
+biaiser l'adaptation. Ce protocole est un test de correction, pas une garantie
+de couverture. Le melange explore seulement ce que ses composantes proposent.
+L'ancre n'est pas un posterior de reference.
+
+La mise a jour wake de la proposition suit le principe de
+`Reweighted Wake-Sleep <https://arxiv.org/abs/1406.2751>`_
+et l'objectif wake-phi presente dans
+`Le et al. (2020), equation 7 <https://proceedings.mlr.press/v115/le20a/le20a.pdf>`_.
+L'emploi d'un melange defensif et des gardes ci-dessus est le choix local de
+ce pilote; les resultats de ces articles ne valident pas FENIKS.
+
+Comment lire la prochaine sortie
+--------------------------------
+
+* Audit ``FAIL`` : investiguer le terme et le bloc signales avant adaptation.
+* Audit ``INCONCLUSIVE`` : pas de comparaison AD/FD resolue au niveau requis;
+  le pilote reste bloque. Ce statut ne prouve pas un gradient incorrect.
+* Audit ``PASS`` puis nombreuses tentatives wake rejetees : la proposition
+  exploratoire ne fournit pas assez de poids repartis pour cette adaptation.
+  Ne pas desserrer les seuils pour continuer.
+* Wake accepte mais sans support meilleur sur les tirages independants :
+  la correction testee ne suffit pas. Une loss wake basse n'est pas une gate.
+* Amelioration conjointe ESS, queues, repetitions et prediction sur les deux
+  departs : resultat de developpement a confirmer sur une cohorte independante,
+  pas une autorisation automatique d'entrainement populationnel.
 
 Le chemin parcouru
 ------------------
 
-1. Topologie du flow : toutes les coordonnees sont maintenant transformees.
-2. Projection photometrique : correction de l'integration numerique.
-3. Precision MDF puis age/SFH/masse : correction des desaccords de gradients.
-4. Job 1923347 : six points de qualification passent; le pilote NPE ne
-   recupere cependant pas le support posterior.
-5. Job 1938818 : VI locale, 8 observations et 8 simulations, deux departs;
-   les residus diminuent mais le support se degrade souvent.
-6. Job 1948458 : comparaison controlee, trois reglages et deux departs chacun,
-   64 etapes; termine en 21m33s. Le petit pas limite les excursions extremes,
-   sans recovery generale. Les 48 fits observes finaux ont tous un mauvais k.
+.. list-table:: Journal des decisions
+   :header-rows: 1
+   :widths: 16 34 50
 
-Ce que nous venons de tester
-------------------------------------------------------------
+   * - Etape / job
+     - Question
+     - Resultat ou decision
+   * - Topologie / projection
+     - Chaque coordonnee est-elle transformee ? Photometrie integree correctement ?
+     - Topologie du flow et quadrature corrigees; anciens chemins conserves et versions explicites.
+   * - MDF / age-SFH / 1923347
+     - Les derives numeriques sont-elles coherentes ?
+     - Six points spline64 qualifies. Pilote NPE termine mais support non qualifie.
+   * - VI locale / 1938818
+     - Une adaptation individuelle courte suffit-elle ?
+     - Deux departs, 64 etapes : residus meilleurs, support souvent degrade.
+   * - Controle / 1948458
+     - Pas d'optimisation et bruit MC en cause ?
+     - Petits pas limitent les excursions; 48/48 propositions observees finales ont mauvais k.
+   * - Dispersion / 1952467
+     - Elargir la base ou melanger avec l'ancre suffit-il ?
+     - Non generalement : mauvais k pour 64/64 propositions observees et 63/64 simulees.
+   * - VI longue / 1957394
+     - 512 etapes MC32 corrigent-elles le support ?
+     - Progression non uniforme; mauvais k final pour 13/16 observees et 15/16 simulees.
+   * - Replay / 1959175
+     - Les resultats des checkpoints fixes se reproduisent-ils a K4096 ?
+     - Residus locaux generalement stables; mauvais k pour 16/16 observees et 15/16 simulees.
+   * - Objectif / prepare
+     - Gradient VI complet correct ? Adaptation wake plus utile que reverse-KL ?
+     - Audit natif obligatoire puis comparaison figee en budget, sans selection ni promotion.
 
-``original`` utilise Adam a 0.001 avec 4 tirages par gradient; ``slow`` utilise
-0.0001 avec 4 tirages; ``slow_mc16`` utilise 0.0001 avec 16 tirages.
-Les contextes, le prior et les departs sont apparies. Les evaluations aux
-etapes 8/16/32/64 utilisent deux repetitions de 128 tirages, regroupees en K256.
-Les cles d'evaluation sont partagees entre reglages, mais pas avec l'optimiseur.
-Les huit objets ne sont pas un echantillon de validation independant.
+Archives visuelles : VI controlee, job 1948458
+----------------------------------------------
+
+Ces figures restent les resultats **historiques** du run court, pas ceux du
+replay ni du nouveau pilote.
 
 .. image:: _static/feniks_debug/trajectories.png
-   :alt: Deux exemples montrant une baisse de RMS sans amelioration durable de l'ESS
+   :alt: Trajectoires historiques de deux exemples de VI courte
    :width: 100%
-
-Exemples choisis pour illustrer le mecanisme, pas une moyenne de population.
-Le point zero utilise une autre realisation Monte-Carlo que les etapes locales.
-La baisse de RMS ne garantit ni une bonne couverture ni un bon support.
 
 .. image:: _static/feniks_debug/final_support.png
-   :alt: ESS finale des huit objets observes pour chaque reglage et depart
+   :alt: ESS des 48 propositions observees finales du run controle 1948458
    :width: 100%
-
-Le tableau couvre tous les fits observes finaux de ce run. Les nombres sont
-des ESS brutes, pas des nombres de galaxies et pas un taux de reussite.
-
-La prochaine question
-------------------------------------------------------------
-
-La VI a-t-elle perdu une dispersion utile ? On va analyser les tirages deja
-sauves, puis tester des propositions figees : base locale elargie de facteurs
-1, 1.5 et 2, et melange 50/50 entre base locale elargie et proposition amortie.
-La densite du melange sera calculee sur **les deux composantes pour chaque
-tirage**. Ni clipping des poids, ni remplacement par un point estime.
-
-Ces tests emploient de nouveaux tirages. Ils ne selectionnent aucun checkpoint
-et ne certifient aucun enseignant NPE. Un resultat favorable devra etre confirme
-sur une cohorte independante avant toute promotion. Un resultat negatif
-orientera vers l'objectif ou la geometrie, sans prouver a lui seul une
-impossibilite de la famille.
-
-.. image:: _static/feniks_debug/principle.png
-   :alt: Illustration conceptuelle d'une proposition locale et d'un melange plus large
-   :width: 100%
-
-Schema pedagogique en une dimension, **pas un resultat FENIKS**. Elargir peut
-aussi deteriorer les poids : c'est une hypothese testee, pas une correction
-automatiquement benefique. Les facteurs portent sur la base du flow, pas
-directement sur chaque parametre physique.
 
 Fichiers et suivi
 ------------------------------------------------------------
@@ -119,12 +189,14 @@ Racine des experiences sur Jean-Zay::
 
    /lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
 
-Dernier run termine : ``frozen_parent_controlled_local_vi_v1``.
-Run suivant : ``frozen_parent_support_probe_v1`` (prepare par le nouveau lanceur,
-pas encore execute lors de cette mise a jour).
+Dernier run termine : ``frozen_parent_long_replay_v1``, job ``1959175``.
+Source des checkpoints finaux : ``frozen_parent_long_local_vi_v1``.
+Prochaine destination : ``frozen_parent_objective_pilot_v1``.
+Les repertoires sources ne sont pas modifies; un nouvel essai exige une
+nouvelle destination. Le lanceur et le moniteur restent dans ``scripts/``.
 
 Les recus ``FINAL.json`` et ``CONTRACT_AUDIT.json`` attestent l'execution et
-le contrat numerique, pas une promotion scientifique. Les tirages sont dans
-``cases/*/start_*/direct_draws.npz``; les trajectoires dans ``step_*/``.
-
-Voir :doc:`feniks_decoder_debug` pour le journal historique.
+les controles qu'ils enumerent, pas une promotion scientifique. Les tirages
+restent disponibles dans ``cases/*/start_*/direct_draws.npz``. Le journal
+long est :doc:`feniks_decoder_debug`; les commandes detaillees sont dans
+``docs/feniks_objective_pilot_runbook.md``.

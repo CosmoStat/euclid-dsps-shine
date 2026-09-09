@@ -67,6 +67,9 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   if [[ -n "${LOCAL_VI_LONG_REPLAY_ROOT:-}" ]]; then
     EXTRA+=(--long-replay-root "$LOCAL_VI_LONG_REPLAY_ROOT")
   fi
+  if [[ -n "${LOCAL_VI_OBJECTIVE_PILOT_ROOT:-}" ]]; then
+    EXTRA+=(--objective-pilot-root "$LOCAL_VI_OBJECTIVE_PILOT_ROOT")
+  fi
   export JAX_ENABLE_X64=true
 fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \

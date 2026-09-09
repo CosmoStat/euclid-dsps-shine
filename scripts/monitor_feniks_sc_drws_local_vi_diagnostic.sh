@@ -77,9 +77,13 @@ elif mode == 'local_vi':
     print('Completed simulated cases:', len(list((root/'cases').glob('simulated_*/COMPLETE.json'))), '/', total)
     if 'qualified_night' in manifest:
         print('Qualified source arm:', manifest['qualified_night']['arm'])
+        if 'objective_pilot' in manifest and (root/'OBJECTIVE_AUDIT.json').is_file():
+            audit = json.loads((root/'OBJECTIVE_AUDIT.json').read_text())
+            print('Full VI objective audit:', audit['status'], len(audit['audits']), '/', 4*total)
         controlled = json.loads((root/'RUN_MANIFEST.json').read_text()).get('optimization_regimes')
         probe = json.loads((root/'RUN_MANIFEST.json').read_text()).get('support_probe')
-        print('Final checkpoint replay K4096; no optimization or promotion' if manifest.get('method') == 'qualified_long_replay_v1' else
+        print('Audit-gated reverse/wake pilot; frozen source and parent; no promotion' if 'objective_pilot' in manifest else
+              'Final checkpoint replay K4096; no optimization or promotion' if manifest.get('method') == 'qualified_long_replay_v1' else
               'Fixed dispersion/mixture probe; no optimization or promotion' if probe else
               'Fixed regimes, two starts, saved trajectories; no promotion' if controlled else
               'Two nearby starts; final direct draws only; no global NPE or population training')

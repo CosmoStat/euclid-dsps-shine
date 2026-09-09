@@ -59,8 +59,10 @@ def initialize(model, features):
     )
 
 
-def sample(encoder, parameters, context, key, draws):
+def sample(encoder, parameters, context, key, draws, *, noise=None):
     if isinstance(parameters, MixtureParameters):
+        if noise is not None:
+            raise ValueError("fixed noise is only defined for a single local flow")
         left, right, choose = jax.random.split(key, 3)
         a, _ = sample(encoder, parameters.local, context, left, draws)
         b, _ = sample(encoder, parameters.anchor, context, right, draws)
@@ -70,9 +72,14 @@ def sample(encoder, parameters, context, key, draws):
     log_std = jnp.clip(
         parameters.log_std, encoder.base.log_std_min, encoder.base.log_std_max
     )
-    eps = jax.random.normal(
-        key, (int(draws),) + parameters.mean.shape, dtype=parameters.mean.dtype
-    )
+    if noise is None:
+        eps = jax.random.normal(
+            key, (int(draws),) + parameters.mean.shape, dtype=parameters.mean.dtype
+        )
+    else:
+        eps = jnp.asarray(noise, dtype=parameters.mean.dtype)
+        if eps.shape != (int(draws),) + parameters.mean.shape:
+            raise ValueError("fixed noise shape differs from the requested draws")
     base = parameters.mean + jnp.exp(log_std) * eps
     local_encoder = eqx.tree_at(lambda e: e.layers, encoder, parameters.layers)
     x, logdet = local_encoder.forward(base, context)
@@ -101,19 +108,38 @@ def perturb(parameters, key, scale=0.05):
     return eqx.tree_at(lambda p: p.mean, parameters, mean)
 
 
+def objective_components(
+    encoder, parameters, context, observation, target, key, draws, *, noise=None
+):
+    """The actual pathwise objective used by make_step, before optimizer clipping."""
+    x, logq = sample(encoder, parameters, context, key, draws, noise=noise)
+    values = target(x, observation)
+    finite = jnp.all(jnp.isfinite(logq) & jnp.isfinite(values.logtarget))
+    value = jnp.mean(logq - values.logtarget)
+    return (
+        dict(
+            total=jnp.where(finite, value, jnp.inf),
+            logq=jnp.mean(logq),
+            negative_logprior=-jnp.mean(values.logprior),
+            negative_loglike=-jnp.mean(values.loglike),
+        ),
+        x,
+        logq,
+    )
+
+
 def make_step(encoder, target: Callable, *, draws=4, learning_rate=1e-3, clip=5.0):
     """Only LocalParameters are differentiated; frozen target retains x gradients."""
     optimizer = optax.chain(optax.clip_by_global_norm(clip), optax.adam(learning_rate))
 
     def loss(parameters, context, observation, key):
-        x, logq = sample(encoder, parameters, context, key, draws)
-        values = target(x, observation)
-        finite = jnp.all(jnp.isfinite(logq) & jnp.isfinite(values.logtarget))
-        value = jnp.mean(logq - values.logtarget)
-        return jnp.where(finite, value, jnp.inf), (
-            jnp.mean(logq),
-            jnp.mean(values.logprior),
-            jnp.mean(values.loglike),
+        parts, _, _ = objective_components(
+            encoder, parameters, context, observation, target, key, draws
+        )
+        return parts["total"], (
+            parts["logq"],
+            -parts["negative_logprior"],
+            -parts["negative_loglike"],
         )
 
     @eqx.filter_jit

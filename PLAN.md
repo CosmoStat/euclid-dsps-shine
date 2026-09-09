@@ -1,5 +1,33 @@
 # Plan
 
+## 2026-09-09 Full VI objective audit and guarded wake pilot
+
+- Implemented: audit the actual fixed-noise VI parameter gradient, then gate a
+  matched decoder-draw-budget reverse/wake comparison on all 32 native audit points.
+- Replay 1959175 leaves 31/32 local proposals with bad k. Stable ELBO/residuals
+  do not certify support. No further blind duration or K extension.
+- Freeze all source final checkpoints and C anchors. No truth, population update,
+  pointwise targets, best-checkpoint selection or accumulated importance bank.
+- Native flow still contains float32 casts; promoting parameter copies alone
+  is not a full64 flow and cannot qualify the original optimizer.
+- Fresh exact 50/50 local/C mixture draws feed a stopped-sample, stopped-weight
+  wake objective. ESS >=16 and max weight <=0.20 are optimizer preconditions;
+  rejection preserves parameters and Adam state and consumes the fixed budget.
+- Audit JSON/stencil hashes are pinned and rechecked before adaptation, after
+  each case and on CPU readback. Fixed checkpoints and independent evaluations;
+  no retry-until-pass or implicit winning start.
+- Verification: 68 affected tests passed, including the real conditional flow,
+  injected wrong AD rules, native unresolved precision, optimizer state guards,
+  source/recipe refusal, audit-first orchestration and altered audit evidence.
+  Test x64 fixtures now enable and restore their own settings rather than
+  depending on the caller's environment. Compileall, Ruff, Bash syntax, CLI
+  help and Sphinx -W passed; desktop/mobile HTML and PNGs visually inspected.
+- HTML: outputs/docs_support_probe/feniks_current_status.html. Illustrated
+  analysis and commands: docs/feniks_objective_pilot_runbook.md. One H100/node,
+  serial arms, 3h allocation, 1.2M decoder-evaluation ceiling. H100 run pending;
+  CPU mock-target tests do not qualify science. Legacy AGENTS fit/posterior
+  configs remain absent, so those smoke commands were not run.
+
 ## 2026-09-09 Standalone CPU audit import repair
 
 - Operator audit failed before execution with ModuleNotFoundError for
