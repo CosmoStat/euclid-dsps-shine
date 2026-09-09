@@ -91,6 +91,28 @@ def verify_night(root: Path, arm: str = "C") -> dict:
     )
 
 
+def long_optimization_recipe():
+    return dict(
+        method="qualified_long_local_vi_v1",
+        steps=512,
+        evaluation_draws=512,
+        gradient_draws=32,
+        learning_rate=0.0001,
+        optimization_regimes=[
+            dict(name="long_mc32", learning_rate=0.0001, gradient_draws=32)
+        ],
+        trajectory_steps=[64, 128, 256],
+        maximum_decoder_evaluations=900000,
+        interpretation="Fixed 512-step MC32 experiment from arm C, two starts, all 16 development cases. Two independent K512 evaluation replicates per checkpoint; shared evaluation noise across steps, disjoint optimization streams. No checkpoint selection or promotion.",
+    )
+
+
+def optimization_seed(manifest, seed, initialization, iteration):
+    if manifest["method"] == "qualified_long_local_vi_v1":
+        return seed + 10000000 + initialization * 10000 + iteration
+    return seed + 100 + iteration + initialization * 100
+
+
 def prepare(
     root,
     source_root,
@@ -101,6 +123,7 @@ def prepare(
     arm="C",
     controlled=False,
     support_probe_root=None,
+    long_optimization=False,
 ):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
@@ -113,6 +136,10 @@ def prepare(
     )
 
     root, night_root = Path(root).resolve(), Path(night_root).resolve()
+    if long_optimization and (controlled or support_probe_root is not None):
+        raise ValueError("long optimization cannot be combined with other probes")
+    if long_optimization and ((objects, steps, draws) != (8, 64, 128) or arm != "C"):
+        raise ValueError("long optimization uses a fixed recipe; leave defaults")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
     if not (2 <= objects <= 8 and 1 <= steps <= 64 and 32 <= draws <= 128):
@@ -238,5 +265,7 @@ def prepare(
             maximum_decoder_evaluations=50000,
             interpretation="Fixed final slow_mc16 checkpoints, two starts, four direct-draw proposals. No optimization, winner selection, or scientific promotion.",
         )
+    if long_optimization:
+        manifest.update(long_optimization_recipe())
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest

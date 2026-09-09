@@ -168,7 +168,7 @@ def test_require_qualified_not_merely_completed(night):
         follow.verify_night(root)
 
 
-@pytest.mark.parametrize("controlled", [False, True])
+@pytest.mark.parametrize("controlled", [False, True, "long"])
 def test_followup_prepare_and_real_local_optimizer_mock_decoder(
     night, monkeypatch, controlled
 ):
@@ -185,9 +185,14 @@ def test_followup_prepare_and_real_local_optimizer_mock_decoder(
         steps=1,
         draws=32,
         qualified_night_root=root,
-        controlled_optimization=controlled,
+        controlled_optimization=controlled is True,
     )
-    if controlled:
+    if controlled == "long":
+        manifest.update(follow.long_optimization_recipe())
+        # Exercise the real long-mode runner with a bounded mock-decoder smoke.
+        manifest.update(steps=2, trajectory_steps=[1], evaluation_draws=32)
+        follow.write(out / "RUN_MANIFEST.json", manifest)
+    if controlled is True:
         manifest["steps"] = 2
         manifest["trajectory_steps"] = [1]
         follow.write(out / "RUN_MANIFEST.json", manifest)
@@ -231,7 +236,12 @@ def test_followup_prepare_and_real_local_optimizer_mock_decoder(
     assert len(summary["independent_replicates"]) == 2
     bank = np.load(out / "cases/observed_000/start_0/direct_draws.npz")
     assert not np.array_equal(bank["x"][:32], bank["x"][32:])
-    if controlled:
+    if controlled == "long":
+        metadata = follow.read(out / "cases/observed_000/start_0/REGIME.json")
+        assert metadata["name"] == "long_mc32"
+        assert metadata["gradient_draws"] == 32
+        assert (out / "cases/observed_000/start_0/step_0001/SUMMARY.json").exists()
+    if controlled is True:
         from scripts.summarize_feniks_sc_drws_controlled_local_vi import collect
 
         trajectory = collect(out)

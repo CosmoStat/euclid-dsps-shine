@@ -8698,3 +8698,16 @@ Remote recovery:
 - Runbook: `docs/feniks_mdf_precision_runbook.md`. One H100, 90-minute allocation
   ceiling, 6000 decoder calls; no local VI, NPE or population job follows.
   Inspect numerical results and simulator compatibility before rebuilding banks.
+# Long local VI follow-up (2026-09-09)
+
+- Implemented: fixed 512-step, MC32, two-start experiment on all 16 development
+  cases; independent evaluation streams and K1024 at fixed checkpoints.
+- Support probe 1952467 did not recover reliable support. Concentration audit
+  has ESS near one in the three inspected cases; weighted means are not targets.
+- No checkpoint selection, truth-based tuning or population promotion.
+- Verification: dedicated mock-decoder long-mode integration passed; seed-range,
+  fixed-recipe and incompatible-mode tests added. Compileall, Ruff, Bash syntax
+  and Sphinx -W pass. Legacy fit/posterior smoke configs listed in AGENTS.md are
+  absent; no local full DSPS/H100 run or scientific qualification is claimed.
+- Runbook: docs/feniks_long_local_vi_runbook.md; current HTML rebuilt under
+  outputs/docs_support_probe/feniks_current_status.html.

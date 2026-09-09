@@ -1,7 +1,7 @@
 FENIKS : ou en est-on ?
 ============================================================
 
-Etat au 9 septembre 2026, apres le job 1948458
+Etat au 9 septembre 2026, apres le job 1952467
 ------------------------------------------------------------
 
 **Le calcul numerique a ete qualifie sur les points testes. L'inference
@@ -10,6 +10,20 @@ posterior n'est pas encore qualifiee. L'apprentissage populationnel reste bloque
 Cette page distingue les resultats transmis par l'operateur des experiences
 encore a lancer. Les figures sont reconstruites a partir des chiffres colles
 dans la conversation, pas d'un acces direct aux fichiers Jean-Zay.
+
+Dernier resultat : le probe de dispersion ne resout pas le support
+========================================================================
+
+Les 64 propositions observees et 63/64 propositions simulees du probe ont un
+Pareto-k defavorable. L'elargissement uniforme et le melange teste ne suffisent
+pas. Sur trois cas inspectes de l'audit precedent, l'ESS vaut environ 1 : les
+deplacements ponderes ne sont donc pas des cibles d'entrainement fiables.
+
+**Suite preparee, pas encore executee :** deux departs depuis C, 512 etapes,
+learning rate 1e-4, MC32, evaluations K1024 aux etapes 64/128/256/512.
+On teste progression contre plateau, sans choisir de checkpoint. Les graines
+d'evaluation sont separees de celles de l'optimisation. Le prior reste gele.
+Le runbook est ``docs/feniks_long_local_vi_runbook.md``.
 
 Ce que fait le systeme
 ------------------------------------------------------------

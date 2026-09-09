@@ -279,6 +279,7 @@ def prepare(
     local_arm="C",
     controlled_optimization=False,
     support_probe_root=None,
+    long_optimization=False,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -311,8 +312,9 @@ def prepare(
             local_arm,
             controlled=controlled_optimization,
             support_probe_root=support_probe_root,
+            long_optimization=long_optimization,
         )
-    if controlled_optimization or support_probe_root is not None:
+    if controlled_optimization or support_probe_root is not None or long_optimization:
         raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
@@ -1646,6 +1648,8 @@ def run(root):
             )
             initial, encoded_context = initialize(model, features)
             seed = manifest["seed"] + 100000 + case_number * 1000
+            if manifest["method"] == "qualified_long_local_vi_v1":
+                seed = manifest["seed"] + 3000000 + case_number * 100000
             if "support_probe" in manifest:
                 seed += 2000000
             write(
@@ -1715,6 +1719,8 @@ def run(root):
                     else optimizer.init(eqx.filter(parameters, eqx.is_inexact_array))
                 )
                 history = []
+                from scripts.feniks_qualified_local_vi import optimization_seed
+
                 for iteration in range(
                     0 if "support_probe" in manifest else manifest["steps"]
                 ):
@@ -1725,7 +1731,7 @@ def run(root):
                         encoded_context,
                         observation,
                         jax.random.PRNGKey(
-                            seed + 100 + iteration + initialization * 100
+                            optimization_seed(manifest, seed, initialization, iteration)
                         ),
                     )
                     metrics = {
@@ -1984,6 +1990,7 @@ def main():
     parser.add_argument("--qualified-night-root", type=Path)
     parser.add_argument("--local-arm", choices=("B", "C"), default="C")
     parser.add_argument("--controlled-optimization", action="store_true")
+    parser.add_argument("--long-optimization", action="store_true")
     parser.add_argument("--support-probe-root", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -2007,6 +2014,7 @@ def main():
             args.local_arm,
             args.controlled_optimization,
             args.support_probe_root,
+            args.long_optimization,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

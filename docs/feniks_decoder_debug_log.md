@@ -345,3 +345,15 @@ The operator's first CPU audit failed at import of population_vem; the shell
 chain therefore did not submit a support-probe job. Monitor still showed old
 job 1948458. The utility now uses standard-library hashlib without importing
 euclid_dsps. An isolated subprocess test verifies execution outside the repo.
+# 2026-09-09: support probe readback and long local VI
+
+Job 1952467 completed, but 64/64 observed and 63/64 simulated tested proposals
+had bad Pareto-k. The tested uniform broadening/mixture is not a general repair.
+The inspected controlled-run concentration examples have ESS near one, so their
+weighted coordinates must not become posterior summaries or optimization targets.
+
+Implemented a fixed long-mode follow-up: all 16 development cases, two starts
+from frozen C, MC32 / learning rate 1e-4 / 512 updates. Save steps 64, 128, 256,
+512 with two independent K512 replicates, optimizer-disjoint evaluation streams,
+and no best-checkpoint selection. This is prepared code, not a completed H100
+experiment. See `feniks_long_local_vi_runbook.md` for launch and limitations.

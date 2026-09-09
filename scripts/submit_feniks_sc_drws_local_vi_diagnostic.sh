@@ -61,6 +61,9 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   fi
   EXTRA+=(--qualified-night-root "$LOCAL_VI_QUALIFIED_NIGHT_ROOT" --local-arm "${LOCAL_VI_ARM:-C}")
   WALLTIME="03:00:00"
+  if [[ "${LOCAL_VI_LONG_OPTIMIZATION:-0}" == "1" ]]; then
+    EXTRA+=(--long-optimization)
+  fi
   export JAX_ENABLE_X64=true
 fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
