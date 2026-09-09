@@ -31,6 +31,25 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
 
     source = manifest["objective_pilot"]
     recipe = manifest["objective_recipe"]
+    transport64 = (
+        manifest.get("transport_contract") == "conditional_transport_float64_v1"
+    )
+    if bool(manifest.get("transport_contract")) != transport64:
+        raise ValueError("unsupported transport contract")
+    if transport64 and "transport_precision_reference" not in manifest:
+        raise ValueError("transport64 pilot requires pinned qualification")
+    encoder = model.encoder
+    if transport64:
+        from euclid_dsps.amortized.local_transport_precision import (
+            DiagnosticTransport64,
+            promote,
+        )
+        from scripts.feniks_transport_precision import pin_reference
+
+        reference = manifest["transport_precision_reference"]
+        if pin_reference(reference["path"], manifest, qualified=True) != reference:
+            raise ValueError("transport qualification changed since preparation")
+        encoder = DiagnosticTransport64(encoder)
     check_simulations(
         Path(source["path"]) / "SIMULATED_INPUTS.npz", root / "SIMULATED_INPUTS.npz"
     )
@@ -64,6 +83,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             truth_used=False,
             population_training_started=False,
             prior_bitwise_unchanged=True,
+            transport_contract=manifest.get("transport_contract", "historical_native"),
             artifacts={
                 name: dict(sha256=sha256_file(root / name))
                 for name in ("OBJECTIVE_AUDIT.json", "SIMULATED_INPUTS.npz")
@@ -90,6 +110,32 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                 / "parameters.eqx"
             )
             parameters = eqx.tree_deserialise_leaves(path, anchor)
+            audit_options = {}
+            if transport64:
+                from euclid_dsps.amortized.local_vi_objective_audit import _direction
+
+                seed = 50000000 + number * 100000 + start * 10000
+                audit_options = dict(
+                    noise=jax.random.normal(
+                        jax.random.PRNGKey(seed),
+                        (recipe["audit_draws"],) + parameters.mean.shape,
+                        dtype=parameters.mean.dtype,
+                    ),
+                    directions=[
+                        (
+                            block,
+                            i,
+                            _direction(
+                                parameters,
+                                block,
+                                np.random.default_rng(seed + 10 * j + i),
+                            ),
+                        )
+                        for j, block in enumerate(("mean", "log_std", "layers"))
+                        for i in range(2)
+                    ],
+                )
+                parameters = promote(parameters)
             starts.append(parameters)
             progress(
                 "full_vi_objective_audit",
@@ -98,7 +144,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                 audits_complete=len(audits),
             )
             audit = audit_objective(
-                model.encoder,
+                encoder,
                 parameters,
                 context,
                 observation,
@@ -106,6 +152,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                 budget,
                 seed=50000000 + number * 100000 + start * 10000,
                 draws=recipe["audit_draws"],
+                **audit_options,
             )
             location = folder / f"audit_start_{start}"
             location.mkdir(parents=True, exist_ok=True)
@@ -114,7 +161,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                 location / "stencils.csv", index=False
             )
             extra, names = {}, ["AUDIT.json", "stencils.csv"]
-            if "transport_precision_reference" in manifest:
+            if "transport_precision_reference" in manifest and not transport64:
                 from euclid_dsps.amortized.local_transport_precision import (
                     compare_transport,
                 )
@@ -192,7 +239,16 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                 root / "OBJECTIVE_AUDIT.json",
                 dict(status="RUNNING", audits=audits, optimization_started=False),
             )
-        prepared.append((case, observation, generated, anchor, context, starts))
+        prepared.append(
+            (
+                case,
+                observation,
+                generated,
+                promote(anchor) if transport64 else anchor,
+                context,
+                starts,
+            )
+        )
     passed = all(item["status"] == "PASS" for item in audits)
     write(
         root / "OBJECTIVE_AUDIT.json",
@@ -203,7 +259,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             scientific_promotion=False,
         ),
     )
-    if "transport_precision_reference" in manifest:
+    if "transport_precision_reference" in manifest and not transport64:
         return finish(
             "TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE",
             audits_complete=len(audits),
@@ -216,13 +272,13 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         )
     unchanged()
     reverse_optimizer, reverse_step = make_step(
-        model.encoder,
+        encoder,
         target,
         draws=recipe["reverse_draws"],
         learning_rate=recipe["learning_rate"],
     )
     wake_optimizer, wake_step = make_wake_step(
-        model.encoder,
+        encoder,
         learning_rate=recipe["learning_rate"],
         minimum_ess=recipe["minimum_ess"],
         maximum_weight=recipe["maximum_weight"],
@@ -235,7 +291,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         eval_seed = 60000000 + number * 100000
         evaluate_distribution(
             folder / "amortized",
-            model.encoder,
+            encoder,
             anchor,
             context,
             observation,
@@ -250,7 +306,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         for start, original in enumerate(starts):
             evaluate_distribution(
                 folder / f"source_{start}",
-                model.encoder,
+                encoder,
                 original,
                 context,
                 observation,
@@ -288,7 +344,7 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                         )
                     else:
                         x, logweights, batch_info = wake_batch(
-                            model.encoder,
+                            encoder,
                             parameters,
                             anchor,
                             context,
@@ -333,13 +389,27 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                         eqx.tree_serialise_leaves(
                             checkpoint / "parameters.eqx", parameters
                         )
+                        if transport64:
+                            write(
+                                checkpoint / "TRANSPORT_CONTRACT.json",
+                                dict(
+                                    version=manifest["transport_contract"],
+                                    checkpoint_sha256=sha256_file(
+                                        checkpoint / "parameters.eqx"
+                                    ),
+                                    manifest_sha256=sha256_file(
+                                        root / "RUN_MANIFEST.json"
+                                    ),
+                                    interpretation="Local parameters require the versioned conditional transport; not a native encoder checkpoint.",
+                                ),
+                            )
                         restored = eqx.tree_deserialise_leaves(
                             checkpoint / "parameters.eqx", original
                         )
                         final = used == recipe["decoder_draw_budgets"][-1]
                         result = evaluate_distribution(
                             checkpoint,
-                            model.encoder,
+                            encoder,
                             restored,
                             context,
                             observation,

@@ -82,7 +82,8 @@ elif mode == 'local_vi':
             print('Full VI objective audit:', audit['status'], len(audit['audits']), '/', 4*total)
         controlled = json.loads((root/'RUN_MANIFEST.json').read_text()).get('optimization_regimes')
         probe = json.loads((root/'RUN_MANIFEST.json').read_text()).get('support_probe')
-        print('Transport precision audit only; no optimization or promotion' if 'transport_precision_reference' in manifest else
+        print('Versioned transport64 reverse/wake pilot; frozen parent; no promotion' if 'transport_contract' in manifest else
+              'Transport precision audit only; no optimization or promotion' if 'transport_precision_reference' in manifest else
               'Audit-gated reverse/wake pilot; frozen source and parent; no promotion' if 'objective_pilot' in manifest else
               'Final checkpoint replay K4096; no optimization or promotion' if manifest.get('method') == 'qualified_long_replay_v1' else
               'Fixed dispersion/mixture probe; no optimization or promotion' if probe else

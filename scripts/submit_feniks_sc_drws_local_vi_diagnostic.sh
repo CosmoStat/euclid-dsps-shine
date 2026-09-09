@@ -73,6 +73,9 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   if [[ -n "${LOCAL_VI_OBJECTIVE_PRECISION_ROOT:-}" ]]; then
     EXTRA+=(--objective-precision-root "$LOCAL_VI_OBJECTIVE_PRECISION_ROOT")
   fi
+  if [[ "${LOCAL_VI_OBJECTIVE_TRANSPORT64:-0}" == "1" ]]; then
+    EXTRA+=(--objective-transport64)
+  fi
   export JAX_ENABLE_X64=true
 fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \

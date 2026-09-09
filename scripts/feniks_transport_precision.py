@@ -7,12 +7,22 @@ from scripts.feniks_support_probe import verify_source
 from scripts.run_feniks_sc_drws_balanced_npe import read
 
 
-def pin_reference(root, manifest):
+def pin_reference(root, manifest, *, qualified=False):
     root = Path(root).resolve()
     old, final = read(root / "RUN_MANIFEST.json"), read(root / "FINAL.json")
     if (
-        old["method"] != "qualified_objective_pilot_v1"
-        or final["status"] != "OBJECTIVE_AUDIT_NOT_PASSED"
+        old["method"]
+        != (
+            "qualified_transport_precision_audit_v1"
+            if qualified
+            else "qualified_objective_pilot_v1"
+        )
+        or final["status"]
+        != (
+            "TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE"
+            if qualified
+            else "OBJECTIVE_AUDIT_NOT_PASSED"
+        )
         or final["optimization_started"] is not False
         or final["scientific_promotion"] is not False
     ):
@@ -53,4 +63,15 @@ def pin_reference(root, manifest):
         hashes.update(audit["artifacts"])
     reference = dict(path=str(root), hashes=hashes)
     verify_source(reference)
+    if qualified:
+        for audit in aggregate["audits"]:
+            name = f"cases/{audit['case']}/audit_start_{audit['start']}/TRANSPORT_PRECISION.json"
+            if name not in hashes:
+                raise ValueError("missing hashed transport qualification")
+            detail = read(root / name)
+            if (
+                audit.get("transport64_status") != "PASS"
+                or detail["transport64_audit"]["status"] != "PASS"
+            ):
+                raise ValueError("every transport64 audit must PASS")
     return reference

@@ -1,5 +1,22 @@
 # Plan
 
+## 2026-09-10 Versioned transport64 objective pilot
+
+- Implemented: job 1961888 reports 32/32 transport64 audits PASS while native
+  reproduces 31 PASS / 1 INCONCLUSIVE. Integrate the tested transport into all
+  pilot operations, with pinned qualification, fresh audits and checkpoint
+  contracts. No population training or automatic overnight escalation.
+- Pinned qualification is checked during preparation and runtime; fresh
+  float64 audits gate all updates. Every sampling/density/evaluation path uses
+  the same adapter. Checkpoint sidecars pin contract, parameters and manifest.
+- Validation: 50 focused tests across objective orchestration/reference,
+  transport, wake, objective audit and qualified VI; Ruff, compileall, CLI help,
+  Bash syntax and warning-free Sphinx pass. No H100 run performed locally.
+  Legacy fit/posterior smoke configs remain absent, so those are not run.
+- Handoff: submit_feniks_sc_drws_transport64_pilot.sh; bounded 1 H100 / 1 node /
+  3-hour job. Larger fixed-parent wake requires actual support and acceptance
+  readback; no population RWS is authorized by numerical audits alone.
+
 ## 2026-09-09 Transport precision localization after job 1960443
 
 - Implemented: separate audit-only replay, same source checkpoints/noise/directions,

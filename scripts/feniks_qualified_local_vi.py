@@ -127,6 +127,7 @@ def prepare(
     long_replay_root=None,
     objective_pilot_root=None,
     objective_precision_root=None,
+    objective_transport64=False,
 ):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
@@ -139,6 +140,10 @@ def prepare(
     )
 
     root, night_root = Path(root).resolve(), Path(night_root).resolve()
+    if objective_transport64 and objective_precision_root is None:
+        raise ValueError(
+            "transport64 pilot requires a completed precision qualification"
+        )
     if objective_precision_root is not None and objective_pilot_root is None:
         raise ValueError("precision replay requires an objective pilot source")
     if objective_pilot_root is not None and (
@@ -331,11 +336,17 @@ def prepare(
         from scripts.feniks_transport_precision import pin_reference
 
         manifest["transport_precision_reference"] = pin_reference(
-            objective_precision_root, manifest
+            objective_precision_root, manifest, qualified=objective_transport64
         )
         manifest["method"] = "qualified_transport_precision_audit_v1"
         manifest["interpretation"] = (
             "Audit-only native versus float64 conditional transport, all prescribed starts, identical source/noise/directions. Frozen context and target; no optimization or promotion."
         )
+        if objective_transport64:
+            manifest["method"] = "qualified_objective_transport64_pilot_v1"
+            manifest["transport_contract"] = "conditional_transport_float64_v1"
+            manifest["interpretation"] = (
+                "Versioned float64 conditional transport for fresh audit, reverse/wake updates and direct evaluation. Frozen context and target. No population training or promotion."
+            )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest

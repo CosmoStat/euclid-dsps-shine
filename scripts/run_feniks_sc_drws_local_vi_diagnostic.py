@@ -283,6 +283,7 @@ def prepare(
     long_replay_root=None,
     objective_pilot_root=None,
     objective_precision_root=None,
+    objective_transport64=False,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -319,6 +320,7 @@ def prepare(
             long_replay_root=long_replay_root,
             objective_pilot_root=objective_pilot_root,
             objective_precision_root=objective_precision_root,
+            objective_transport64=objective_transport64,
         )
     if (
         controlled_optimization
@@ -327,6 +329,7 @@ def prepare(
         or long_replay_root is not None
         or objective_pilot_root is not None
         or objective_precision_root is not None
+        or objective_transport64
     ):
         raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
@@ -2021,6 +2024,7 @@ def main():
     parser.add_argument("--long-replay-root", type=Path)
     parser.add_argument("--objective-pilot-root", type=Path)
     parser.add_argument("--objective-precision-root", type=Path)
+    parser.add_argument("--objective-transport64", action="store_true")
     parser.add_argument("--support-probe-root", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -2048,6 +2052,7 @@ def main():
             args.long_replay_root,
             args.objective_pilot_root,
             args.objective_precision_root,
+            args.objective_transport64,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

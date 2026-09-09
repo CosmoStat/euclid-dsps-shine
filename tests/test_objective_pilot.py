@@ -59,7 +59,14 @@ def test_pilot_rejects_changed_protocol_before_preparation(tmp_path, extra):
 
 @pytest.mark.parametrize(
     "audit_status,precision",
-    [("PASS", False), ("INCONCLUSIVE", False), ("FAIL", False), ("PASS", True)],
+    [
+        ("PASS", False),
+        ("INCONCLUSIVE", False),
+        ("FAIL", False),
+        ("PASS", True),
+        ("PASS", "transport64"),
+        ("FAIL", "transport64"),
+    ],
 )
 def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precision):
     import euclid_dsps.amortized.local_vi_objective_audit as audit
@@ -147,10 +154,24 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
                 center_max_abs_delta={},
             ),
         )
+        if precision == "transport64":
+            from scripts import feniks_transport_precision
+
+            manifest["method"] = "qualified_objective_transport64_pilot_v1"
+            manifest["transport_contract"] = "conditional_transport_float64_v1"
+            monkeypatch.setattr(
+                feniks_transport_precision,
+                "pin_reference",
+                lambda *a, **k: manifest["transport_precision_reference"],
+            )
     write(root / "RUN_MANIFEST.json", manifest)
     audited = []
 
     def fake_audit(*a, **k):
+        if precision == "transport64":
+            assert isinstance(a[0], transport.DiagnosticTransport64)
+            assert a[1].mean.dtype == jnp.float64
+            assert "noise" in k and "directions" in k
         audited.append(k["seed"])
         return dict(status=audit_status, rows=[], seed=k["seed"], noise_sha256="pinned")
 
@@ -159,13 +180,32 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
 
     def guarded(factory):
         def construct(*a, **k):
-            assert not precision and audit_status == "PASS" and len(audited) == 4
+            assert (
+                precision is not True and audit_status == "PASS" and len(audited) == 4
+            )
+            if precision == "transport64":
+                assert isinstance(a[0], transport.DiagnosticTransport64)
             return factory(*a, **k)
 
         return construct
 
     monkeypatch.setattr(pilot, "make_step", guarded(old_reverse))
     monkeypatch.setattr(wake, "make_wake_step", guarded(old_wake))
+    if precision == "transport64":
+        from scripts import run_feniks_sc_drws_local_vi_diagnostic as runner
+
+        old_evaluate, old_batch = runner.evaluate_distribution, wake.wake_batch
+
+        def evaluate(*a, **k):
+            assert isinstance(a[1], transport.DiagnosticTransport64)
+            return old_evaluate(*a, **k)
+
+        def batch(*a, **k):
+            assert isinstance(a[0], transport.DiagnosticTransport64)
+            return old_batch(*a, **k)
+
+        monkeypatch.setattr(runner, "evaluate_distribution", evaluate)
+        monkeypatch.setattr(wake, "wake_batch", batch)
 
     @eqx.filter_jit
     def target(x, obs):
@@ -180,7 +220,7 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
     assert _array_tree_sha256(model) == frozen
     assert result["scientific_promotion"] is False
     assert len(audited) == 4 and len(set(audited)) == 4
-    if precision:
+    if precision is True:
         assert result["status"] == "TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE"
         assert result["optimization_started"] is False
         assert result["cases_complete"] == 0
@@ -191,6 +231,14 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
         receipt = json.loads((root / "cases/observed_000/COMPLETE.json").read_text())
         assert len(receipt["outcomes"]) == 8
         assert all(o["applied_updates"] == o["attempts"] for o in receipt["outcomes"])
+        if precision == "transport64":
+            paths = list(root.glob("cases/*/*/draws_*/TRANSPORT_CONTRACT.json"))
+            assert len(paths) == 16
+            for path in paths:
+                contract = json.loads(path.read_text())
+                assert contract["checkpoint_sha256"] == sha256_file(
+                    path.parent / "parameters.eqx"
+                )
     else:
         assert result["status"] == "OBJECTIVE_AUDIT_NOT_PASSED"
         assert result["optimization_started"] is False
@@ -206,6 +254,17 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
         text=True,
     )
     assert "no selection or promotion" in output.stdout.lower()
+    if precision == "transport64" and audit_status == "PASS":
+        path = paths[0]
+        original_contract = path.read_text()
+        contract = json.loads(original_contract)
+        contract["version"] = "historical_native"
+        path.write_text(json.dumps(contract))
+        from scripts.summarize_feniks_sc_drws_objective_pilot import summarize
+
+        with pytest.raises(ValueError, match="transport checkpoint contract mismatch"):
+            summarize(root)
+        path.write_text(original_contract)
     detailed = root / "cases/observed_000/audit_start_0/stencils.csv"
     detailed.write_text("changed evidence")
     from scripts.summarize_feniks_sc_drws_objective_pilot import summarize

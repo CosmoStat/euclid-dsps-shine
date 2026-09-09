@@ -14,6 +14,7 @@ def summarize(root):
     if manifest["method"] not in (
         "qualified_objective_pilot_v1",
         "qualified_transport_precision_audit_v1",
+        "qualified_objective_transport64_pilot_v1",
     ):
         raise ValueError("expected objective pilot root")
     path = root / "OBJECTIVE_AUDIT.json"
@@ -27,9 +28,17 @@ def summarize(root):
                 actual = hashlib.file_digest(stream, "sha256").hexdigest()
             if actual != expected:
                 raise ValueError(f"objective audit artifact changed: {name}")
-    print("Native objective audit:", audit["status"])
+    print(
+        "Objective audit:",
+        audit["status"],
+        "transport:",
+        manifest.get("transport_contract", "historical_native"),
+    )
     columns = ["case", "start", "status"]
-    if "transport_precision_reference" in manifest:
+    if (
+        "transport_precision_reference" in manifest
+        and "transport_contract" not in manifest
+    ):
         columns += ["native_reference_status", "transport64_status"]
     print(pd.DataFrame(audit["audits"])[columns].to_string(index=False))
     for item in audit["audits"]:
@@ -65,7 +74,10 @@ def summarize(root):
             "identities:",
             identities,
         )
-    if "transport_precision_reference" in manifest:
+    if (
+        "transport_precision_reference" in manifest
+        and "transport_contract" not in manifest
+    ):
         for item in audit["audits"]:
             p = (
                 root
@@ -104,6 +116,20 @@ def summarize(root):
             rel = p.relative_to(case)
             summary = json.loads(p.read_text())
             used = int(rel.parts[1][6:]) if len(rel.parts) == 3 else 0
+            if used and "transport_contract" in manifest:
+                contract = json.loads(
+                    (p.parent / "TRANSPORT_CONTRACT.json").read_text()
+                )
+                with (p.parent / "parameters.eqx").open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                with (root / "RUN_MANIFEST.json").open("rb") as stream:
+                    manifest_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if (
+                    contract["version"],
+                    contract["checkpoint_sha256"],
+                    contract["manifest_sha256"],
+                ) != (manifest["transport_contract"], digest, manifest_digest):
+                    raise ValueError("transport checkpoint contract mismatch")
             history = p.parent.parent / "optimization.csv"
             attempts = (
                 pd.read_csv(history) if used and history.exists() else pd.DataFrame()

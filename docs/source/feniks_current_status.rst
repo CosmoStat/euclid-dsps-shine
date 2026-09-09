@@ -1,7 +1,22 @@
 FENIKS : ou en est-on ?
 ============================================================
 
-Etat au 9 septembre 2026, apres l'audit 1960443
+Etat au 10 septembre 2026, apres le diagnostic 1961888
+------------------------------------------------------------
+
+**Transport64 : 32/32 audits PASS. Le replay natif reproduit 31 PASS et un
+INCONCLUSIVE.** Le job 1961888 a termine en 10m07s, sans optimisation.
+Ces resultats transmis par l'operateur etayent une limitation de resolution
+du transport dans le stencil bloque, pas une qualification du posterior.
+
+**Suite preparee : pilote reverse/wake sous contrat
+``conditional_transport_float64_v1``**, avec le meme chemin pour audit,
+optimisation, tirages et densite inverse. Les 32 qualifications sont verifiees,
+puis de nouveaux audits bloquants precedent toute mise a jour. Pas de RWS
+populationnel ni de lancement nocturne automatique.
+:download:`Protocole et commandes <../feniks_transport64_pilot_runbook.md>`.
+
+Historique : audit 1960443
 ------------------------------------------------------------
 
 **Dernier resultat : 31/32 audits natifs PASS, un INCONCLUSIVE. Aucun
@@ -19,7 +34,7 @@ parametres ne retire pas les conversions float32 internes du transport.
    :alt: Stencils natifs de simulated_004 depart 1, transcrits des logs du job 1960443
    :width: 100%
 
-**Suite implementee, non encore executee sur H100 :** replay des 32 audits,
+**Diagnostic execute comme job 1961888 :** replay des 32 audits,
 transport historique contre transport conditionnel float64, avec les memes
 bruits, directions, observations et cible. Pas d'optimisation, pas de
 changement des seuils, pas de promotion. La cible interne n'est pas convertie
