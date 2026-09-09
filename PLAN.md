@@ -1,5 +1,25 @@
 # Plan
 
+## 2026-09-09 Controlled local optimization (implemented, cluster pending)
+
+- Job 1938818 completed, but local support worsens in 15/16 observed fits.
+  Simulated cases also fail: improved residuals are not posterior recovery.
+- Add a prespecified paired optimization experiment: original settings,
+  smaller learning rate, then more gradient draws at that same smaller rate.
+  Record intermediate distributions without selecting a winning checkpoint.
+- Preserve the same eight observed contexts, simulations and two starts;
+  frozen target, no catalogue truth, no population update. Test and document
+  before handing off a new immutable cluster run.
+- Implemented original/slow/slow-MC16 regimes, paired starts and saved
+  checkpoints/direct draws at 8/16/32/64 updates, with shared evaluation keys
+  independent of optimization. CPU readback includes density and scale changes.
+- 32 targeted tests pass, including real optimizer/mock-decoder execution of
+  all regimes and intermediate readback; compileall, Ruff, shell syntax, CLI
+  help and Sphinx -W pass. Fixed a summary-schema error caught by integration.
+- Legacy fit/posterior smoke configs in AGENTS.md are absent; those commands
+  were not run. No H100 execution here. One H100/node, sequential, 3h ceiling,
+  180000 evaluation budget. Runbook: docs/feniks_controlled_local_vi_runbook.md.
+
 ## 2026-09-09 Qualified local VI follow-up (implemented, cluster pending)
 
 - User-supplied job 1923347 completed: six numerical qualification points pass,

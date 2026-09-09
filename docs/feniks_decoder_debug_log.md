@@ -311,3 +311,16 @@ reference has huge tails. No old gate, receipt or training threshold is changed.
 The diagnostic cannot prove mode completeness and does not produce a teacher.
 See `feniks_qualified_local_vi_runbook.md` for budgets and reproducible commands.
 New local-VI cluster results are pending; no job submitted by this patch.
+
+## 2026-09-09: Qualified local VI did not recover support
+
+User-provided job 1938818 completed with contract PASS, 8 observed and 8
+simulated cases. Observed median ESS/K: 0.019134 amortized, 0.004227 and
+0.005909 local. Simulated medians: 0.009241, 0.007065 and 0.005179.
+Photometric improvement did not imply reliable importance weights. Two local
+fits of observed case 5 had nonfinite Pareto-k; no scientific promotion.
+
+Next: three prespecified local optimization regimes, two paired starts,
+saved intermediate distributions and independent evaluation replicates.
+See `feniks_controlled_local_vi_runbook.md`. This tests optimizer sensitivity;
+it does not assume that more NPE training solves the remaining problem.

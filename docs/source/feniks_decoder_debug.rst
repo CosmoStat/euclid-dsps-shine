@@ -5,7 +5,8 @@ Last updated: 2026-09-09. Historical cluster evidence is transcribed from
 operator-provided logs and receipts, not independently downloaded in this update.
 The precision-night job (1923347) has completed on Jean-Zay. Its numerical
 qualification passed, but posterior support remains poor. The qualified local
-VI follow-up below is implemented, not yet executed on the cluster.
+VI follow-up completed in job 1938818 without support recovery. A controlled
+optimizer comparison is now implemented; its cluster execution is pending.
 
 .. warning::
 
@@ -20,9 +21,10 @@ The integrated spline64 candidate passed all six full-target qualification
 points in job 1923347. The numerical blockers documented below are historical;
 their receipts remain unchanged. The same job completed smoke, sleep and
 sleep-plus-ELBO training. All A/B/C posterior support gates still fail. C reduces
-photometric tails but does not provide usable importance integration. The next
-bounded test adapts the same flow separately to observed and simulated cases,
-keeping the qualified decoder and prior frozen.
+photometric tails but does not provide usable importance integration. Job
+1938818 subsequently completed local adaptation without support recovery.
+The next bounded test compares learning rate and gradient draw count while
+keeping the qualified decoder, prior and development contexts frozen.
 
 Evidence Timeline
 -----------------
@@ -183,3 +185,13 @@ evaluations. It is limited to one H100/node for three hours with a measured
 cost preflight. Neither an ELBO gain nor high ESS proves mode completeness.
 
 :download:`Download the qualified local VI runbook <../feniks_qualified_local_vi_runbook.md>`
+Controlled local optimization, 2026-09-09
+---------------------------------------
+
+Job 1938818 passed its numerical contract but local importance support
+decreased in 15/16 observed fits; simulated cases also remained problematic.
+Residual improvements do not qualify the posterior. The next bounded test
+compares three optimizer regimes on the same development contexts, with
+saved distributions at steps 8, 16, 32 and 64. No best-checkpoint selection,
+teacher or population promotion is performed. See
+``docs/feniks_controlled_local_vi_runbook.md`` for protocol and commands.

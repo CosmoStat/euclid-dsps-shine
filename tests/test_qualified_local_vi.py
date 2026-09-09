@@ -168,7 +168,10 @@ def test_require_qualified_not_merely_completed(night):
         follow.verify_night(root)
 
 
-def test_followup_prepare_and_real_local_optimizer_mock_decoder(night, monkeypatch):
+@pytest.mark.parametrize("controlled", [False, True])
+def test_followup_prepare_and_real_local_optimizer_mock_decoder(
+    night, monkeypatch, controlled
+):
     import scripts.run_feniks_sc_drws_local_vi_diagnostic as runner
     from euclid_dsps.amortized.latent import LatentSpec
     from euclid_dsps.amortized.posterior_target import posterior_log_target
@@ -182,7 +185,12 @@ def test_followup_prepare_and_real_local_optimizer_mock_decoder(night, monkeypat
         steps=1,
         draws=32,
         qualified_night_root=root,
+        controlled_optimization=controlled,
     )
+    if controlled:
+        manifest["steps"] = 2
+        manifest["trajectory_steps"] = [1]
+        follow.write(out / "RUN_MANIFEST.json", manifest)
     assert manifest["mode"] == "local_vi"
     assert manifest["qualified_night"]["arm"] == "C"
     assert manifest["population_training_started"] is False
@@ -223,6 +231,17 @@ def test_followup_prepare_and_real_local_optimizer_mock_decoder(night, monkeypat
     assert len(summary["independent_replicates"]) == 2
     bank = np.load(out / "cases/observed_000/start_0/direct_draws.npz")
     assert not np.array_equal(bank["x"][:32], bank["x"][32:])
+    if controlled:
+        from scripts.summarize_feniks_sc_drws_controlled_local_vi import collect
+
+        trajectory = collect(out)
+        assert len(trajectory) == 4 * (1 + 6 * 2)
+        assert set(trajectory.regime) == {"amortized", "original", "slow", "slow_mc16"}
+        assert set(trajectory.step) == {0, 1, 2}
+        metadata = follow.read(out / "cases/observed_000/start_4/REGIME.json")
+        assert metadata["gradient_draws"] == 16
+        assert metadata["learning_rate"] == 0.0001
+        assert metadata["initialization"] == 0
 
 
 def test_calibration_audit_does_not_reclassify_small_sample_fail():

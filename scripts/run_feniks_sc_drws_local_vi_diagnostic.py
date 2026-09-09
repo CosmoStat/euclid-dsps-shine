@@ -277,6 +277,7 @@ def prepare(
     precision_night_reference=None,
     qualified_night_root=None,
     local_arm="C",
+    controlled_optimization=False,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -300,8 +301,17 @@ def prepare(
         from scripts.feniks_qualified_local_vi import prepare as prepare_qualified
 
         return prepare_qualified(
-            root, source_root, qualified_night_root, objects, steps, draws, local_arm
+            root,
+            source_root,
+            qualified_night_root,
+            objects,
+            steps,
+            draws,
+            local_arm,
+            controlled=controlled_optimization,
         )
+    if controlled_optimization:
+        raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
     qualification_reference = (
@@ -780,6 +790,10 @@ def evaluate_distribution(
         replicate_log_evidence=logz,
         independent_replicates=replicates,
         pooled_draws=2 * draws,
+        density_means={
+            name: float(np.mean(values[name]))
+            for name in ("logq", "logprior", "loglike")
+        },
         evaluation_contract="Two fresh direct-draw replicates; pooled support is not either replicate's support. No resampling or best-start selection.",
         replicate_abs_log_evidence_delta=abs(logz[0] - logz[1]),
         negative_elbo=float(
@@ -1587,9 +1601,25 @@ def run(root):
             flux_err=arrays.flux_err,
             mask=arrays.mask,
         )
-        optimizer, step = make_step(
-            model.encoder, target, draws=4, learning_rate=manifest["learning_rate"]
+        regimes = manifest.get(
+            "optimization_regimes",
+            [
+                dict(
+                    name="original",
+                    learning_rate=manifest["learning_rate"],
+                    gradient_draws=manifest["gradient_draws"],
+                )
+            ],
         )
+        optimizers = [
+            make_step(
+                model.encoder,
+                target,
+                draws=r["gradient_draws"],
+                learning_rate=r["learning_rate"],
+            )
+            for r in regimes
+        ]
         completed, started_cases = [], time.monotonic()
         for case_number, (group, index, observation, generated) in enumerate(cases):
             case_start = time.monotonic()
@@ -1623,28 +1653,46 @@ def run(root):
                 generated,
             )
             fitted = []
-            for start in range(2):
+            for start in range(2 * len(regimes)):
+                regime = regimes[start // 2]
+                optimizer, step = optimizers[start // 2]
+                initialization = start % 2
                 parameters = (
                     initial
-                    if start == 0
+                    if initialization == 0
                     else perturb(initial, jax.random.PRNGKey(seed + 20))
+                )
+                local_folder = folder / f"start_{start}"
+                local_folder.mkdir(parents=True, exist_ok=True)
+                write(
+                    local_folder / "REGIME.json",
+                    dict(
+                        **regime,
+                        initialization=initialization,
+                        scientific_promotion=False,
+                    ),
                 )
                 state = optimizer.init(eqx.filter(parameters, eqx.is_inexact_array))
                 history = []
                 for iteration in range(manifest["steps"]):
-                    budget.charge(4, gradient=True)
+                    budget.charge(regime["gradient_draws"], gradient=True)
                     parameters, state, metrics = step(
                         parameters,
                         state,
                         encoded_context,
                         observation,
-                        jax.random.PRNGKey(seed + 100 + iteration + start * 100),
+                        jax.random.PRNGKey(
+                            seed + 100 + iteration + initialization * 100
+                        ),
                     )
                     metrics = {
                         k: np.asarray(v).item()
                         for k, v in jax.device_get(metrics).items()
                     }
                     history.append({"step": iteration + 1, **metrics})
+                    pd.DataFrame(history).to_csv(
+                        local_folder / "optimization.csv", index=False
+                    )
                     if not metrics["finite"]:
                         write(
                             folder / f"start_{start}" / "NONFINITE.json",
@@ -1669,6 +1717,28 @@ def run(root):
                         print(
                             f"[local-vi] {group} {index} start={start} step={iteration + 1} loss={metrics['negative_elbo']:.6g}",
                             flush=True,
+                        )
+                    if iteration + 1 in manifest.get("trajectory_steps", []):
+                        checkpoint_folder = local_folder / f"step_{iteration + 1:04d}"
+                        checkpoint_folder.mkdir(parents=True, exist_ok=True)
+                        eqx.tree_serialise_leaves(
+                            checkpoint_folder / "parameters.eqx", parameters
+                        )
+                        intermediate = eqx.tree_deserialise_leaves(
+                            checkpoint_folder / "parameters.eqx", initial
+                        )
+                        evaluate_distribution(
+                            checkpoint_folder,
+                            model.encoder,
+                            intermediate,
+                            encoded_context,
+                            observation,
+                            target,
+                            spec,
+                            budget,
+                            seed + 500 + initialization * 10,
+                            manifest["evaluation_draws"],
+                            generated,
                         )
                 local_folder = folder / f"start_{start}"
                 local_folder.mkdir(parents=True, exist_ok=True)
@@ -1700,13 +1770,15 @@ def run(root):
                     target,
                     spec,
                     budget,
-                    seed + 500 + start * 10,
+                    seed + 500 + initialization * 10,
                     manifest["evaluation_draws"],
                     generated,
                 )
                 evaluated["checkpoint_sha256"] = sha256_file(
                     local_folder / "parameters.eqx"
                 )
+                evaluated["regime"] = regime["name"]
+                evaluated["initialization"] = initialization
                 fitted.append(evaluated)
             if (
                 _array_tree_sha256(
@@ -1864,6 +1936,7 @@ def main():
     parser.add_argument("--precision-night-reference", type=Path)
     parser.add_argument("--qualified-night-root", type=Path)
     parser.add_argument("--local-arm", choices=("B", "C"), default="C")
+    parser.add_argument("--controlled-optimization", action="store_true")
     args = parser.parse_args()
     if args.action == "prepare":
         if args.source_root is None:
@@ -1884,6 +1957,7 @@ def main():
             args.precision_night_reference,
             args.qualified_night_root,
             args.local_arm,
+            args.controlled_optimization,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

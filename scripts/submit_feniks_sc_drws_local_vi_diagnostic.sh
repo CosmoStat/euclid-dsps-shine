@@ -53,6 +53,9 @@ if [[ -n "${LOCAL_VI_PRECISION_NIGHT_REFERENCE:-}" ]]; then
   WALLTIME="10:00:00"
 fi
 if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
+  if [[ "${LOCAL_VI_CONTROLLED_OPTIMIZATION:-0}" == 1 ]]; then
+    EXTRA+=(--controlled-optimization)
+  fi
   EXTRA+=(--qualified-night-root "$LOCAL_VI_QUALIFIED_NIGHT_ROOT" --local-arm "${LOCAL_VI_ARM:-C}")
   WALLTIME="03:00:00"
   export JAX_ENABLE_X64=true

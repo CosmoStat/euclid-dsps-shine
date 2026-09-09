@@ -91,7 +91,16 @@ def verify_night(root: Path, arm: str = "C") -> dict:
     )
 
 
-def prepare(root, source_root, night_root, objects=8, steps=64, draws=128, arm="C"):
+def prepare(
+    root,
+    source_root,
+    night_root,
+    objects=8,
+    steps=64,
+    draws=128,
+    arm="C",
+    controlled=False,
+):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
     from euclid_dsps.model import photometry_numerics
@@ -195,5 +204,17 @@ def prepare(root, source_root, night_root, objects=8, steps=64, draws=128, arm="
         population_training_started=False,
         interpretation="Prespecified final iterates, no best-start selection. Reused development cohort, not an independent test. Local reverse KL can miss modes; no teacher or population authorization.",
     )
+    if controlled:
+        manifest.update(
+            method="qualified_controlled_local_vi_v1",
+            optimization_regimes=[
+                dict(name="original", learning_rate=0.001, gradient_draws=4),
+                dict(name="slow", learning_rate=0.0001, gradient_draws=4),
+                dict(name="slow_mc16", learning_rate=0.0001, gradient_draws=16),
+            ],
+            trajectory_steps=[s for s in (8, 16, 32) if s < steps],
+            maximum_decoder_evaluations=180000,
+            interpretation="Paired development experiment, not checkpoint selection. Three regimes, two identical initializations each; fresh evaluation draws shared across regimes and steps, never used by the optimizer. No scientific promotion.",
+        )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest
