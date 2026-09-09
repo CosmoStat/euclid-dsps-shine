@@ -338,3 +338,10 @@ Next implemented stage: saved-draw CPU concentration audit, then four fixed
 dispersion/mixture proposals from both final slow_mc16 starts. New draws,
 exact mixture densities, no optimizer or teacher. See
 `feniks_support_probe_runbook.md` and HTML `feniks_current_status.html`.
+
+### Submission interruption: standalone audit import
+
+The operator's first CPU audit failed at import of population_vem; the shell
+chain therefore did not submit a support-probe job. Monitor still showed old
+job 1948458. The utility now uses standard-library hashlib without importing
+euclid_dsps. An isolated subprocess test verifies execution outside the repo.

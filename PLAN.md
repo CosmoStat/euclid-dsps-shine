@@ -1,5 +1,17 @@
 # Plan
 
+## 2026-09-09 Standalone CPU audit import repair
+
+- Operator audit failed before execution with ModuleNotFoundError for
+  euclid_dsps.amortized.population_vem. The chained GPU submission never ran;
+  latest monitor environment still points to completed job 1948458.
+- Remove the package import from this CPU-only utility. Use Python 3.11+
+  hashlib.file_digest, and test direct script execution outside the checkout
+  with isolated import paths. No changes to diagnostics or scientific gates.
+- Implemented and verified: standalone subprocess (-I, external working
+  directory) audits a real NPZ and writes receipts successfully; pytest,
+  Ruff and compileall pass. GPU probe remains not submitted by this agent.
+
 ## 2026-09-09 Support probe and illustrated status (implemented, cluster pending)
 
 - User reports job 1948458 complete: smaller steps reduce instability, but

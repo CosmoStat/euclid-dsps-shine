@@ -1,13 +1,17 @@
 """CPU-only concentration audit of recorded direct draws; never reweight a teacher."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from euclid_dsps.amortized.population_vem import sha256_file
+
+def sha256_file(path: Path) -> str:
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def audit(root, out):
