@@ -79,7 +79,11 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   export JAX_ENABLE_X64=true
 fi
 DEPENDENCY=()
-if [[ -n "${LOCAL_VI_NIGHT_PILOT_ROOT:-}" ]]; then
+if [[ -n "${LOCAL_VI_WAKE_FORENSIC_ROOT:-}" ]]; then
+  WALLTIME="10:00:00"
+  JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
+    python -m scripts.feniks_wake_forensics "$LOCAL_VI_WAKE_FORENSIC_ROOT" "$DIAGNOSTIC_ROOT"
+elif [[ -n "${LOCAL_VI_NIGHT_PILOT_ROOT:-}" ]]; then
   [[ "${LOCAL_VI_NIGHT_DEPENDENCY:-}" =~ ^[0-9]+$ ]] || { echo 'Night extension needs a numeric pilot job ID'; exit 2; }
   WALLTIME="10:00:00"
   DEPENDENCY=(--dependency="afterany:$LOCAL_VI_NIGHT_DEPENDENCY" --kill-on-invalid-dep=yes)

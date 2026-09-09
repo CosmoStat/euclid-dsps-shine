@@ -11,6 +11,9 @@ import pandas as pd
 
 def summarize(root):
     manifest = json.loads((root / "RUN_MANIFEST.json").read_text())
+    if "wake_forensic_reference" in manifest:
+        print("Use python scripts/summarize_feniks_wake_forensics.py", root)
+        return
     if manifest["method"] not in (
         "qualified_objective_pilot_v1",
         "qualified_transport_precision_audit_v1",

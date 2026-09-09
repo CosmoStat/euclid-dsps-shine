@@ -1,5 +1,18 @@
 # Plan
 
+## 2026-09-10 Wake update forensics
+
+- Implemented: replay all original wake trajectories, record fixed-batch loss,
+  directional AD/FD and scaled first-update counterfactuals, with common-noise
+  direct evaluations. No best-step selection or population training.
+- Final parameter/acceptance mismatch produces WAKE_REPLAY_MISMATCH. Pinned
+  pilot, fresh blocking transport64 audits, first accepted update only; one H100,
+  maximum 10h. The longer training extension remains separately resource-gated.
+- Verified: 36 focused tests plus two preparation/integrity tests; Ruff,
+  compileall, Bash syntax, and Sphinx -W pass. No H100 replay run locally;
+  legacy fit/posterior smoke configs are absent. Operator must submit and
+  inspect FINAL.json and the hashed forensic readback before interpretation.
+
 ## 2026-09-10 Gated overnight objective extension
 
 - Implemented: dependent 10-hour, single-H100 fixed-parent extension,

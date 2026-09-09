@@ -30,6 +30,8 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
     )
 
     source = manifest["objective_pilot"]
+    if "wake_forensic_reference" in manifest:
+        verify_source(manifest["wake_forensic_reference"])
     recipe = manifest.get("objective_execution_recipe", manifest["objective_recipe"])
     transport64 = (
         manifest.get("transport_contract") == "conditional_transport_float64_v1"
@@ -68,6 +70,8 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             verify_source(manifest["transport_precision_reference"])
         if "night_gate_reference" in manifest:
             verify_source(manifest["night_gate_reference"])
+        if "wake_forensic_reference" in manifest:
+            verify_source(manifest["wake_forensic_reference"])
         if fingerprint != _array_tree_sha256(model):
             raise ValueError("frozen parent changed during objective pilot")
         for audit in audits:
@@ -273,6 +277,13 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             "OBJECTIVE_AUDIT_NOT_PASSED", cases_complete=0, optimization_started=False
         )
     unchanged()
+    if "wake_forensic_reference" in manifest:
+        from scripts.feniks_wake_forensics import run as run_forensics
+
+        result = run_forensics(root, manifest, encoder, prepared, target, spec, budget)
+        unchanged()
+        write(root / "FINAL.json", finite_json(result))
+        return result
     reverse_optimizer, reverse_step = make_step(
         encoder,
         target,

@@ -1,7 +1,22 @@
 FENIKS : ou en est-on ?
 ============================================================
 
-Etat au 10 septembre 2026, apres le diagnostic 1961888
+Etat au 10 septembre 2026, apres le pilote 1962310
+------------------------------------------------------------
+
+**32/32 audits PASS, mais adaptation wake non convaincante.** Les tableaux
+transmis montrent 9/32 trajectoires wake modifiees, toutes avec une ESS finale
+inferieure a leur source appariee. Les 64 trajectoires reverse/wake finales
+ont ``bad_k=1``. Plusieurs degradations suivent une seule mise a jour.
+Ce constat ne prouve pas encore une erreur de gradient.
+
+Suite implementee : rejeu des graines d'origine, verification des decisions et
+parametres finaux, perte et AD/FD a lot fixe, amplitudes prescrites 0/0.01/0.1/1
+sur la premiere mise a jour acceptee. Evaluations independantes K4096 avec
+bruit de base commun. Un H100, plafond 10 heures; aucune selection ni promotion.
+:download:`Diagnostic wake : protocole et lancement <../feniks_wake_forensics_runbook.md>`.
+
+Historique : diagnostic 1961888
 ------------------------------------------------------------
 
 **Transport64 : 32/32 audits PASS. Le replay natif reproduit 31 PASS et un
