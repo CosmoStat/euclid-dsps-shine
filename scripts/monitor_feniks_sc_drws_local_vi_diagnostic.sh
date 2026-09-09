@@ -79,7 +79,8 @@ elif mode == 'local_vi':
         print('Qualified source arm:', manifest['qualified_night']['arm'])
         controlled = json.loads((root/'RUN_MANIFEST.json').read_text()).get('optimization_regimes')
         probe = json.loads((root/'RUN_MANIFEST.json').read_text()).get('support_probe')
-        print('Fixed dispersion/mixture probe; no optimization or promotion' if probe else
+        print('Final checkpoint replay K4096; no optimization or promotion' if manifest.get('method') == 'qualified_long_replay_v1' else
+              'Fixed dispersion/mixture probe; no optimization or promotion' if probe else
               'Fixed regimes, two starts, saved trajectories; no promotion' if controlled else
               'Two nearby starts; final direct draws only; no global NPE or population training')
 PY

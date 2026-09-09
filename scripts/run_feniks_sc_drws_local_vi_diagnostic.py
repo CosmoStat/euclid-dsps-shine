@@ -280,6 +280,7 @@ def prepare(
     controlled_optimization=False,
     support_probe_root=None,
     long_optimization=False,
+    long_replay_root=None,
 ):
     root, source_root = root.resolve(), source_root.resolve()
     if (
@@ -313,8 +314,14 @@ def prepare(
             controlled=controlled_optimization,
             support_probe_root=support_probe_root,
             long_optimization=long_optimization,
+            long_replay_root=long_replay_root,
         )
-    if controlled_optimization or support_probe_root is not None or long_optimization:
+    if (
+        controlled_optimization
+        or support_probe_root is not None
+        or long_optimization
+        or long_replay_root is not None
+    ):
         raise ValueError("controlled optimization requires a qualified night")
     if root.exists():
         raise FileExistsError(f"preserve existing diagnostic: {root}")
@@ -1652,6 +1659,8 @@ def run(root):
                 seed = manifest["seed"] + 3000000 + case_number * 100000
             if "support_probe" in manifest:
                 seed += 2000000
+            if manifest["method"] == "qualified_long_replay_v1":
+                seed = manifest["seed"] + 30000000 + case_number * 100000
             write(
                 root / "PROGRESS.json",
                 dict(
@@ -1696,7 +1705,7 @@ def run(root):
                         Path(manifest["support_probe"]["path"])
                         / "cases"
                         / f"{group}_{index:03d}"
-                        / f"start_{4 + initialization}"
+                        / f"start_{manifest['support_probe'].get('source_starts', [4, 5])[initialization]}"
                         / "parameters.eqx"
                     )
                     local = eqx.tree_deserialise_leaves(source_path, initial)
@@ -1991,6 +2000,7 @@ def main():
     parser.add_argument("--local-arm", choices=("B", "C"), default="C")
     parser.add_argument("--controlled-optimization", action="store_true")
     parser.add_argument("--long-optimization", action="store_true")
+    parser.add_argument("--long-replay-root", type=Path)
     parser.add_argument("--support-probe-root", type=Path)
     args = parser.parse_args()
     if args.action == "prepare":
@@ -2015,6 +2025,7 @@ def main():
             args.controlled_optimization,
             args.support_probe_root,
             args.long_optimization,
+            args.long_replay_root,
         )
     else:
         with (args.root / ".run.lock").open("a") as lock:

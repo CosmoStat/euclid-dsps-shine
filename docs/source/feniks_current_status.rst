@@ -1,7 +1,7 @@
 FENIKS : ou en est-on ?
 ============================================================
 
-Etat au 9 septembre 2026, apres le job 1952467
+Etat au 9 septembre 2026, apres le job 1957394
 ------------------------------------------------------------
 
 **Le calcul numerique a ete qualifie sur les points testes. L'inference
@@ -19,11 +19,17 @@ Pareto-k defavorable. L'elargissement uniforme et le melange teste ne suffisent
 pas. Sur trois cas inspectes de l'audit precedent, l'ESS vaut environ 1 : les
 deplacements ponderes ne sont donc pas des cibles d'entrainement fiables.
 
-**Suite preparee, pas encore executee :** deux departs depuis C, 512 etapes,
-learning rate 1e-4, MC32, evaluations K1024 aux etapes 64/128/256/512.
-On teste progression contre plateau, sans choisir de checkpoint. Les graines
-d'evaluation sont separees de celles de l'optimisation. Le prior reste gele.
-Le runbook est ``docs/feniks_long_local_vi_runbook.md``.
+**Run long termine :** 512 etapes MC32, deux departs, 16 cas, contrat PASS.
+Les residus progressent mais 13/16 propositions observees et 15/16 simulees
+ont encore un mauvais Pareto-k final. L'audit CPU a lu 144 distributions.
+Simulated_003 illustre le probleme : RMS final environ 0.86/0.88 mais ESS
+environ 5/7 sur 1024, contre 115 pour l'ancre amortie.
+
+**Suite preparee, pas encore executee :** reevaluation des deux checkpoints
+finaux de tous les cas et de leurs ancres, avec de nouvelles graines et deux
+repetitions K2048 (K4096 total). Aucune optimisation ni selection. Ce controle
+mesure la stabilite des poids; il ne peut pas prouver l'absence de modes rates.
+Le runbook est ``docs/feniks_long_replay_runbook.md``.
 
 Ce que fait le systeme
 ------------------------------------------------------------

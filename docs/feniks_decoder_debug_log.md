@@ -357,3 +357,14 @@ from frozen C, MC32 / learning rate 1e-4 / 512 updates. Save steps 64, 128, 256,
 512 with two independent K512 replicates, optimizer-disjoint evaluation streams,
 and no best-checkpoint selection. This is prepared code, not a completed H100
 experiment. See `feniks_long_local_vi_runbook.md` for launch and limitations.
+# 2026-09-09: long-run outcome and frozen replay
+
+Operator job 1957394 completed in 35m43s. Contract PASS, all 16 cases; final
+bad-k counts 13/16 observed and 15/16 simulated. CPU concentration audit read
+144 distributions. Improved ELBO/residuals did not give general reliable support.
+
+Prepared final-only K4096 replay, all cases and both starts plus frozen anchors,
+independent seeds, source hashes and identical simulated context checks. No
+optimizer or checkpoint selection. See `feniks_long_replay_runbook.md`.
+This is a stability diagnostic before deciding on an objective/family change,
+not a posterior repair or authorization to train the population.

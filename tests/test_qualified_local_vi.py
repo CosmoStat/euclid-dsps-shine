@@ -241,6 +241,61 @@ def test_followup_prepare_and_real_local_optimizer_mock_decoder(
         assert metadata["name"] == "long_mc32"
         assert metadata["gradient_draws"] == 32
         assert (out / "cases/observed_000/start_0/step_0001/SUMMARY.json").exists()
+        import shutil
+
+        from scripts.feniks_support_probe import pin_source, verify_source
+
+        with pytest.raises(ValueError, match="step 512"):
+            pin_source(out, manifest, long_replay=True)
+        # Supply production-length metadata around this two-step test fixture.
+        manifest["steps"] = 512
+        follow.write(out / "RUN_MANIFEST.json", manifest)
+        reference = pin_source(out, manifest, long_replay=True)
+        assert reference["source_starts"] == [0, 1]
+        replay = root.parent / "replay"
+        replay.mkdir()
+        for name in ("config.yaml", "observed_rows.npy"):
+            shutil.copyfile(out / name, replay / name)
+        follow.write(
+            replay / "RUN_MANIFEST.json",
+            dict(
+                manifest,
+                method="qualified_long_replay_v1",
+                support_probe=reference,
+                steps=0,
+                trajectory_steps=[],
+                optimization_regimes=[
+                    dict(name="final_replay", factor=1.0, mixture=False)
+                ],
+            ),
+        )
+        monkeypatch.setattr(
+            runner, "make_step", lambda *a, **k: pytest.fail("replay must not optimize")
+        )
+        replay_result = runner.run(replay)
+        assert replay_result["cases_complete"] == 4
+        assert replay_result["budget"]["gradient_evaluations"] <= 5
+        verify_source(reference)
+        import subprocess
+        import sys
+
+        readback = subprocess.run(
+            [
+                sys.executable,
+                "scripts/summarize_feniks_sc_drws_long_replay.py",
+                str(replay),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "Final checkpoints only" in readback.stdout
+        assert "both" in readback.stdout
+        fresh = np.load(replay / "cases/observed_000/start_0/direct_draws.npz")
+        assert not np.array_equal(fresh["x"], bank["x"])
+        (out / "cases/observed_000/start_0/parameters.eqx").write_bytes(b"changed")
+        with pytest.raises(ValueError, match="source changed"):
+            verify_source(reference)
     if controlled is True:
         from scripts.summarize_feniks_sc_drws_controlled_local_vi import collect
 

@@ -64,6 +64,9 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   if [[ "${LOCAL_VI_LONG_OPTIMIZATION:-0}" == "1" ]]; then
     EXTRA+=(--long-optimization)
   fi
+  if [[ -n "${LOCAL_VI_LONG_REPLAY_ROOT:-}" ]]; then
+    EXTRA+=(--long-replay-root "$LOCAL_VI_LONG_REPLAY_ROOT")
+  fi
   export JAX_ENABLE_X64=true
 fi
 JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \

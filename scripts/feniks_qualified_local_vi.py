@@ -124,6 +124,7 @@ def prepare(
     controlled=False,
     support_probe_root=None,
     long_optimization=False,
+    long_replay_root=None,
 ):
     # Import the existing observed-only loader, not a new catalogue read path.
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
@@ -136,6 +137,13 @@ def prepare(
     )
 
     root, night_root = Path(root).resolve(), Path(night_root).resolve()
+    if long_replay_root is not None and (
+        controlled
+        or long_optimization
+        or support_probe_root is not None
+        or (objects, steps, draws, arm) != (8, 64, 128, "C")
+    ):
+        raise ValueError("long replay requires the fixed exclusive C recipe")
     if long_optimization and (controlled or support_probe_root is not None):
         raise ValueError("long optimization cannot be combined with other probes")
     if long_optimization and ((objects, steps, draws) != (8, 64, 128) or arm != "C"):
@@ -267,5 +275,19 @@ def prepare(
         )
     if long_optimization:
         manifest.update(long_optimization_recipe())
+    if long_replay_root is not None:
+        from scripts.feniks_support_probe import pin_source
+
+        manifest.update(
+            method="qualified_long_replay_v1",
+            support_probe=pin_source(long_replay_root, manifest, long_replay=True),
+            steps=0,
+            source_checkpoint_step=512,
+            evaluation_draws=2048,
+            optimization_started=False,
+            optimization_regimes=[dict(name="final_replay", factor=1.0, mixture=False)],
+            maximum_decoder_evaluations=250000,
+            interpretation="All final step-512 checkpoints and frozen C anchors, two independent K2048 replicates each, new evaluation seeds. No optimization, selection or promotion. Development cohort only.",
+        )
     write(root / "RUN_MANIFEST.json", manifest)
     return manifest

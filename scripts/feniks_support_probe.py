@@ -8,12 +8,17 @@ from euclid_dsps.amortized.population_vem import sha256_file
 from scripts.run_feniks_sc_drws_balanced_npe import read
 
 
-def pin_source(root, manifest):
+def pin_source(root, manifest, *, long_replay=False):
     root = Path(root).resolve()
     old = read(root / "RUN_MANIFEST.json")
     final = read(root / "FINAL.json")
     if (
-        old.get("method") != "qualified_controlled_local_vi_v1"
+        old.get("method")
+        != (
+            "qualified_long_local_vi_v1"
+            if long_replay
+            else "qualified_controlled_local_vi_v1"
+        )
         or final.get("status") != "DIAGNOSTIC_COMPLETE"
         or final.get("prior_bitwise_unchanged") is not True
         or final.get("truth_used") is not False
@@ -21,6 +26,8 @@ def pin_source(root, manifest):
         or final.get("cases_complete") != 2 * old["objects_per_group"]
     ):
         raise ValueError("completed frozen controlled source required")
+    if long_replay and old.get("steps") != 512:
+        raise ValueError("replay requires prespecified final step 512")
     for key in (
         "qualified_night",
         "config_sha256",
@@ -54,7 +61,7 @@ def pin_source(root, manifest):
             if record.get("prior_bitwise_unchanged") is not True:
                 raise ValueError("source case not frozen")
             names.append(folder + "/COMPLETE.json")
-            for start in (4, 5):
+            for start in (0, 1) if long_replay else (4, 5):
                 name = f"{folder}/start_{start}/parameters.eqx"
                 if (
                     sha256_file(root / name)
@@ -64,15 +71,16 @@ def pin_source(root, manifest):
                 names.extend([name, f"{folder}/start_{start}/REGIME.json"])
                 regime = read(root / folder / f"start_{start}/REGIME.json")
                 if regime != dict(
-                    name="slow_mc16",
+                    name="long_mc32" if long_replay else "slow_mc16",
                     learning_rate=0.0001,
-                    gradient_draws=16,
-                    initialization=start - 4,
+                    gradient_draws=32 if long_replay else 16,
+                    initialization=start if long_replay else start - 4,
                     scientific_promotion=False,
                 ):
                     raise ValueError("expected prespecified slow_mc16 source")
     return dict(
         path=str(root),
+        source_starts=[0, 1] if long_replay else [4, 5],
         hashes={name: sha256_file(root / name) for name in names},
         contract="Hashes pinned at preparation; checkpoints checked against case receipts. No original complete-run inventory available.",
     )

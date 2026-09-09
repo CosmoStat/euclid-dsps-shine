@@ -8711,3 +8711,15 @@ Remote recovery:
   absent; no local full DSPS/H100 run or scientific qualification is claimed.
 - Runbook: docs/feniks_long_local_vi_runbook.md; current HTML rebuilt under
   outputs/docs_support_probe/feniks_current_status.html.
+# Frozen long-run replay (2026-09-09)
+
+- Implemented: independent K4096 replay of all final long-run checkpoints and
+  amortized anchors. No optimization, checkpoint selection or promotion.
+- Operator job 1957394 completed; 28/32 final local proposals still have bad k.
+  CPU audit completed for 144 distributions. Concentrated weighted coordinates
+  are descriptive only, never fitting targets.
+- Verification: 17 targeted tests passed, including real local optimizer and
+  frozen replay on mock physics, source tamper detection and fresh draw checks.
+  Compileall, Ruff, Bash syntax and Sphinx -W pass. No H100 run here; legacy
+  fit/posterior smoke configs remain absent. Paired readback CLI also tested.
+- Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
