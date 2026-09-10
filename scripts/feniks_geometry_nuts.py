@@ -41,6 +41,16 @@ from scripts.run_feniks_sc_drws_local_vi_diagnostic import check_config
 
 CASES = ("observed_000", "observed_005", "simulated_003", "simulated_004")
 GROUPS = ("A", "B", "C")
+NUTS_RECOVERY_PROFILE = {
+    "name": "float64_depth4_parallel_v1",
+    "chains": 8,
+    "warmup": 1000,
+    "chunks": [512] * 8,
+    "max_num_doublings": 4,
+    "target_accept": 0.9,
+    "array_tasks": len(CASES) * len(GROUPS),
+    "recommended_array_concurrency": len(CASES) * len(GROUPS),
+}
 
 
 def prepare_nuts(reference, root):
@@ -76,6 +86,19 @@ def prepare_nuts(reference, root):
     m["code_commit"] = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], text=True
     ).strip()
+    m["geometry_proposed_nuts_settings"] = {
+        key: m[key]
+        for key in ("chains", "warmup", "chunks", "max_num_doublings")
+        if key in m
+    }
+    m.update(
+        chains=NUTS_RECOVERY_PROFILE["chains"],
+        warmup=NUTS_RECOVERY_PROFILE["warmup"],
+        chunks=NUTS_RECOVERY_PROFILE["chunks"],
+        max_num_doublings=NUTS_RECOVERY_PROFILE["max_num_doublings"],
+        target_accept=NUTS_RECOVERY_PROFILE["target_accept"],
+        nuts_execution_profile=NUTS_RECOVERY_PROFILE,
+    )
     m["nuts_target_dtype"] = "float64"
     write(root / "MANIFEST.json", m)
     done["manifest_sha256"] = sha256_file(root / "MANIFEST.json")
@@ -451,6 +474,8 @@ def nuts(root, task):
     m = load(root)
     if m.get("nuts_target_dtype") != "float64":
         raise ValueError("prepare a new float64 NUTS root from the completed geometry")
+    if m.get("nuts_execution_profile") != NUTS_RECOVERY_PROFILE:
+        raise ValueError("prepare a new bounded-depth NUTS recovery root")
     done = json.loads((root / "GEOMETRY_COMPLETE.json").read_text())
     if done["manifest_sha256"] != sha256_file(root / "MANIFEST.json"):
         raise ValueError("manifest changed")
@@ -494,7 +519,7 @@ def nuts(root, task):
         settings=NUTSSettings(
             warmup_steps=m["warmup"],
             sample_chunks=tuple(m["chunks"]),
-            target_accept=0.9,
+            target_accept=m["target_accept"],
             max_num_doublings=m["max_num_doublings"],
         ),
         out_dirs=tuple(out / f"chain_{i}" for i in range(m["chains"])),

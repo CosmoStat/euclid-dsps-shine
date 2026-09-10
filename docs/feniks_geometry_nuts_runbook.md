@@ -60,11 +60,19 @@ photometry, coordinate transform and chosen prior.
 
 Each group has eight BlackJAX NUTS chains, vectorized on one H100. Each chain
 uses 1000 warmup steps, then eight saved blocks of 512 draws (4096 retained).
-Target acceptance is 0.9 and maximum doubling depth is 10. There are 12 array
-tasks, at most four simultaneous: one node/one H100 per task, four H100 peak,
-96 chains total. This is bounded, not an infinite run until convergence.
-Each task has a 20-hour ceiling; three waves can exceed one night. No measured
-H100 duration is available yet. Warmup and block timing appear in task logs.
+Target acceptance is 0.9. The cancelled v2 attempt used maximum doubling depth
+10: four tasks remained in the opaque warmup for more than three hours and
+produced no restart state. The recovery profile therefore uses the previously
+tractable depth cap 4. Saturation counts in the final receipt explicitly tell
+us if that cap is too short; increasing it requires evidence from those counts.
+
+There are 12 array tasks and the recovery launcher defaults to all 12
+simultaneous: one node/one H100 per task, 12 H100 and 96 chains at peak. Set
+`NUTS_ARRAY_CONCURRENCY` lower only for an explicit allocation constraint.
+Each task has an eight-hour ceiling. The five-minute heartbeat proves only that
+the process is alive; BlackJAX adaptation remains one opaque compiled block and
+does not expose an iteration count. Warmup and saved-block timings appear in
+task logs.
 
 The existing batched sampler saves restart state after blocks. Re-submitting
 `nuts` resumes the same bounded calculation; do not edit the manifest, targets,
@@ -96,7 +104,7 @@ in a worktree and hashes the inputs. After inspecting its outputs, separately:
 
 ```bash
 GEOMETRY_ROOT="$ROOT"
-ROOT="$BASE/frozen_geometry_nuts_float64_v2"
+ROOT="$BASE/frozen_geometry_nuts_float64_depth4_v3"
 bash scripts/submit_feniks_geometry_nuts.sh nuts-new "$ROOT" "$GEOMETRY_ROOT"
 sacct -j "$(cat "$ROOT/nuts_job.txt")" \
   --format=JobID%24,State,Elapsed,Timelimit,ExitCode

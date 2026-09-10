@@ -40,8 +40,14 @@ if json.load(open(sys.argv[1])).get('nuts_target_dtype') != 'float64':
     raise SystemExit('Old NUTS code contract: use nuts-new NEW_ROOT COMPLETED_GEOMETRY_ROOT.')
 PY
   export EXPERIMENT_MODE=nuts
+  NUTS_ARRAY_CONCURRENCY="${NUTS_ARRAY_CONCURRENCY:-12}"
+  if [[ ! "$NUTS_ARRAY_CONCURRENCY" =~ ^[0-9]+$ ]] || \
+    (( NUTS_ARRAY_CONCURRENCY < 1 || NUTS_ARRAY_CONCURRENCY > 12 )); then
+    echo 'NUTS_ARRAY_CONCURRENCY must be an integer from 1 through 12.' >&2
+    exit 2
+  fi
   # Explicit second command is the user's review/approval; no afterok auto-launch.
-  JOB=$(sbatch --parsable --job-name=feniks_nuts --array=0-11%4 --time=20:00:00 --export=ALL \
+  JOB=$(sbatch --parsable --job-name=feniks_nuts --array="0-11%${NUTS_ARRAY_CONCURRENCY}" --time=08:00:00 --export=ALL \
     --output="$EXPERIMENT_ROOT/logs/nuts-%A_%a.out" --error="$EXPERIMENT_ROOT/logs/nuts-%A_%a.err" \
     "$REPO_DIR/scripts/feniks_geometry_nuts.slurm")
   MODE=nuts
@@ -51,3 +57,6 @@ else
 fi
 printf '%s\n' "$JOB" > "$EXPERIMENT_ROOT/${MODE}_job.txt"
 printf 'job=%s\nroot=%s\n' "$JOB" "$EXPERIMENT_ROOT"
+if [[ "$MODE" == nuts ]]; then
+  printf 'array_concurrency=%s\n' "$NUTS_ARRAY_CONCURRENCY"
+fi

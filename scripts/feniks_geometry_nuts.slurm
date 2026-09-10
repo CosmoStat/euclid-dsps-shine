@@ -28,4 +28,17 @@ ARGS=("$EXPERIMENT_MODE" --root "$EXPERIMENT_ROOT")
 if [[ "$EXPERIMENT_MODE" == nuts ]]; then
   ARGS+=(--task "${SLURM_ARRAY_TASK_ID:?}")
 fi
+if [[ "$EXPERIMENT_MODE" == nuts ]]; then
+  PARENT_PID=$$
+  (
+    while kill -0 "$PARENT_PID" 2>/dev/null; do
+      sleep 300
+      kill -0 "$PARENT_PID" 2>/dev/null || exit 0
+      printf '[nuts-heartbeat] %s task=%s elapsed_s=%s state=alive warmup_progress=opaque\n' \
+        "$(date --iso-8601=seconds)" "${SLURM_ARRAY_TASK_ID:?}" "$SECONDS"
+    done
+  ) &
+  HEARTBEAT_PID=$!
+  trap 'kill "$HEARTBEAT_PID" 2>/dev/null || true' EXIT
+fi
 python -m scripts.feniks_geometry_nuts "${ARGS[@]}"

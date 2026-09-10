@@ -8903,6 +8903,20 @@ Remote recovery:
 - Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
 # Frozen geometry and NUTS comparison
 
+- 2026-09-11 recovery implemented: the first float64 NUTS array was cancelled
+  after four tasks spent more than three hours inside an opaque 1000-step
+  warmup with `max_num_doublings=10` and produced no warmup checkpoint. Prepare
+  a new immutable root from the completed geometry with the previously measured
+  tractable depth cap (`max_num_doublings=4`), all 12 target groups concurrent,
+  and a low-frequency liveness heartbeat. Preserve eight vectorized chains,
+  1000 warmup steps and 4096 retained draws; do not reuse partial cancelled
+  artifacts or interpret liveness as sampler progress.
+  The new launcher requests all 12 one-H100 tasks concurrently (96 vectorized
+  chains at peak), uses an eight-hour task ceiling, and records both old and new
+  settings in the immutable imported manifest. Focused geometry/exact-sampler
+  tests pass (22), along with Ruff, compileall, Bash syntax and diff checks.
+  Real H100 duration and convergence remain unmeasured until the v3 run.
+
 - Completed follow-up: verified 28 downloaded geometry artifacts and documented anisotropic photometric/proposal mismatch. Added opt-in float64 NUTS target coordinates, reusable compiled block executors, corrected per-chain chunk paths, and a hash-checked geometry import into a new versioned NUTS root. 21 focused CPU tests pass, including sub-float32 displacement preservation, one compiled cache entry across two blocks, mixed-precision resume rejection, immutable import and plot output. H100 performance/convergence still requires measurement; no remote jobs submitted here.
 
 - Implemented: one controlled geometry/weight diagnostic, then a separately submitted NUTS array on the same four galaxies. See `docs/feniks_geometry_nuts_runbook.md`.

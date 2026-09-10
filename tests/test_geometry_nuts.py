@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -200,7 +201,16 @@ def test_geometry_import_is_immutable_and_hash_checked(tmp_path, monkeypatch):
     source = tmp_path / "geometry"
     source.mkdir()
     (source / "starts.npy").write_bytes(b"frozen starts")
-    write(source / "MANIFEST.json", dict(code_commit="old", inputs={}))
+    old_settings = dict(
+        chains=8,
+        warmup=1000,
+        chunks=[512] * 8,
+        max_num_doublings=10,
+    )
+    write(
+        source / "MANIFEST.json",
+        dict(code_commit="old", inputs={}, **old_settings),
+    )
     write(
         source / "GEOMETRY_COMPLETE.json",
         dict(
@@ -218,7 +228,23 @@ def test_geometry_import_is_immutable_and_hash_checked(tmp_path, monkeypatch):
     assert (source / "MANIFEST.json").read_bytes() == before
     m = json.loads((dest / "MANIFEST.json").read_text())
     assert m["nuts_target_dtype"] == "float64" and m["code_commit"] == "new"
+    assert m["nuts_execution_profile"]["name"] == "float64_depth4_parallel_v1"
+    assert m["chains"] == 8
+    assert m["warmup"] == 1000
+    assert m["chunks"] == [512] * 8
+    assert m["max_num_doublings"] == 4
+    assert m["target_accept"] == 0.9
+    assert m["geometry_proposed_nuts_settings"] == old_settings
     assert (dest / "starts.npy").read_bytes() == b"frozen starts"
     (source / "starts.npy").write_bytes(b"changed")
     with pytest.raises(ValueError, match="artifact changed"):
         prepare_nuts(source, tmp_path / "bad")
+
+
+def test_recovery_launcher_uses_all_targets_and_bounded_depth():
+    launcher = Path("scripts/submit_feniks_geometry_nuts.sh").read_text()
+    wrapper = Path("scripts/feniks_geometry_nuts.slurm").read_text()
+    assert 'NUTS_ARRAY_CONCURRENCY="${NUTS_ARRAY_CONCURRENCY:-12}"' in launcher
+    assert '--array="0-11%${NUTS_ARRAY_CONCURRENCY}"' in launcher
+    assert "--time=08:00:00" in launcher
+    assert "warmup_progress=opaque" in wrapper
