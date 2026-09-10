@@ -1,5 +1,15 @@
 # Plan
 
+## 2026-09-10 Shared AVI continuation
+
+- Implement a two-seed shared stochastic-ELBO training array from certified
+  precision-night arm C. No posterior teacher and no catalogue truth inputs.
+- Keep the population prior frozen. Population updates and independent posterior
+  evaluation remain separate follow-up work; do not claim end-to-end completion.
+- Added bounded two-seed array launcher and immutable code snapshot. Verified
+  configuration test and shell syntax; no H100 execution locally. Global native
+  transport is explicitly not certified by the local transport64 diagnostic.
+
 ## 2026-09-10 Independent wake-batch diagnostic
 
 - Completed: opt-in independent before/after loss measurements on two fresh
