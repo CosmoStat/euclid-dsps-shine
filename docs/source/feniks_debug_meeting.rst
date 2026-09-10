@@ -3,6 +3,15 @@ FENIKS: From Numerical Debugging to Reliable Adaptation
 
 Meeting dossier | 10 September 2026
 
+.. important::
+
+   **Latest result:** the guarded pilot has completed. All accepted updates
+   reduced their training loss, but only 3/9 changed trajectories improved ESS;
+   23/32 trajectories did not change. Step safety is verified on this run,
+   not reliable posterior recovery. Test 23 adds independent before/after
+   batches without using them to choose updates. See :doc:`feniks_debug_experiments`
+   and :download:`new run instructions <../feniks_wake_holdout_runbook.md>`.
+
 .. note::
 
    **New to this project? Start with** :doc:`feniks_debug_experiments`.
@@ -47,10 +56,10 @@ The Story in Two Minutes
 4. **We isolated a concrete problem in wake adaptation.** The update pointed
    downhill locally, but the full step often went too far: seven of nine
    inspected first updates increased the very loss they were meant to reduce.
-5. **The current pilot tests a guarded update.** It reduces the step until
-   the fixed-batch loss decreases, or rejects the update entirely. We still
-   need its independent evaluation to show whether the resulting distributions
-   improve, rather than merely becoming safer to optimize.
+5. **The guarded update passed its step-safety check.** All accepted steps
+   reduced their batch loss, but the distributions did not consistently improve.
+   The next test checks each change on two new sets of examples that cannot
+   influence training.
 
 How the Pieces Fit Together
 ---------------------------
@@ -92,8 +101,8 @@ tolerance. The checking code needed scrutiny as well as the model code.
 **4. An eligible wake batch could still produce a harmful full update.**
 The old checks screened weight quality but did not guarantee that the proposed
 step decreased its own batch loss. Exact replay confirmed the behavior.
-Backtracking with rollback is now implemented; its effect on independent
-posterior quality is being tested in the current pilot.
+Backtracking with rollback passed the completed pilot's descent checks.
+Independent posterior quality did not improve consistently.
 
 **5. Concentrated weights and unreliable joint uncertainties remain open.**
 These are measured inference failures, not yet resolved by the fixes above.
@@ -124,9 +133,10 @@ Where We Stand
 qualification at the tested transport64 starting points, and exact replay of
 the problematic wake trajectories.
 
-**Implemented, awaiting the current pilot's outcome:** guarded wake descent.
-It protects the update's fixed-batch objective; it does not promise better
-importance weights or calibrated uncertainties.
+**Verified on the completed pilot:** guarded wake descent protects the update's
+fixed-batch objective. It did not establish reliable importance weights or
+calibrated uncertainties. Independent per-step batch measurements are now
+implemented as the next diagnostic.
 
 **Still to demonstrate:** stable improvement on fresh samples across objects
 and starts, then generalization on an independent cohort. Only then would a
@@ -281,8 +291,7 @@ Which Run Is Current?
 ---------------------
 
 "Latest" is a mutable monitor pointer, not a scientific model identifier.
-This ledger uses supplied cluster readbacks. The current pilot is reported
-running by the operator, not independently polled here.
+This ledger uses supplied cluster readbacks, not a live scheduler query.
 
 .. list-table:: Ancestry, completed evidence and active work
    :header-rows: 1
@@ -308,10 +317,13 @@ running by the operator, not independently polled here.
      - 1965476: 32 exact replays, nine first updates inspected
    * - Current corrected adaptation
      - ``frozen_parent_wake_descent_v1``
-     - Reported running; final metrics and job ID not received
+     - Complete: 16 cases; descent passes, support remains unreliable
+   * - Prepared independent-batch test
+     - ``frozen_parent_wake_holdout_v1``
+     - Implemented; not submitted here
 
 **No current-pilot corner or MIRA has been imported.** Relabeling historical
-plots as current would misrepresent the evidence. The running pilot saves
+plots as current would misrepresent the evidence. The completed pilot saves
 joint draws and receipts; it does not itself run truth-based MIRA calibration.
 The next readback must establish descent and independent support before any
 larger training claim.

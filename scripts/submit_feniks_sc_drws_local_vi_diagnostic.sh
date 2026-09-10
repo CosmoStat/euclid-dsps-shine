@@ -81,8 +81,12 @@ fi
 DEPENDENCY=()
 if [[ -n "${LOCAL_VI_WAKE_DESCENT_ROOT:-}" ]]; then
   WALLTIME="10:00:00"
+  HOLDOUT_ARGS=()
+  if [[ "${LOCAL_VI_WAKE_HOLDOUT:-0}" == "1" ]]; then
+    HOLDOUT_ARGS=(--holdout)
+  fi
   JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
-    python -m scripts.feniks_wake_descent "$LOCAL_VI_WAKE_DESCENT_ROOT" "$DIAGNOSTIC_ROOT"
+    python -m scripts.feniks_wake_descent "$LOCAL_VI_WAKE_DESCENT_ROOT" "$DIAGNOSTIC_ROOT" "${HOLDOUT_ARGS[@]}"
 elif [[ -n "${LOCAL_VI_WAKE_FORENSIC_ROOT:-}" ]]; then
   WALLTIME="10:00:00"
   JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \

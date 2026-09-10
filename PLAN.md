@@ -1,5 +1,15 @@
 # Plan
 
+## 2026-09-10 Independent wake-batch diagnostic
+
+- Completed: opt-in independent before/after loss measurements on two fresh
+  mixture batches per attempt, without changing update acceptance or RNG keys.
+- Preserve guarded wake, source/parent contracts, all attempts and decoder cost
+  accounting. Independent batches are diagnostic only, never selection data.
+- Verified 46 focused tests, Python compilation and shell syntax. Updated the
+  meeting explanation and launch runbook. H100 execution remains unrun locally;
+  this is a diagnostic, not qualification for global training.
+
 ## 2026-09-10 Plain-language experiment rewrite
 
 - Completed: replaced technical experiment descriptions with short sentences

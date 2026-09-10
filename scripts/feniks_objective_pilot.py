@@ -105,6 +105,12 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                 str(path.relative_to(root)): sha256_file(path)
                 for path in root.glob("cases/*/wake_*/optimization.csv")
             }
+        if "wake_holdout" in manifest:
+            final["holdout_contract"] = manifest["wake_holdout"]
+            final["holdout_hashes"] = {
+                str(path.relative_to(root)): sha256_file(path)
+                for path in root.glob("cases/*/wake_*/holdout_*.npz")
+            }
         write(root / "FINAL.json", finite_json(final))
         return final
 
@@ -386,9 +392,51 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                             key,
                             draws=draws,
                         )
+                        before = parameters
                         parameters, state, metrics = step(
                             parameters, state, context, x, logweights
                         )
+                        if "wake_holdout" in manifest:
+                            from euclid_dsps.amortized.local_wake_holdout import (
+                                compare_batch,
+                            )
+
+                            config = manifest["wake_holdout"]
+                            for replica in range(config["replicates"]):
+                                # Separate key namespace; never consume the training stream.
+                                validation_key = jax.random.fold_in(
+                                    jax.random.fold_in(key, config["seed_tag"]), replica
+                                )
+                                vx, vw, _ = wake_batch(
+                                    encoder,
+                                    before,
+                                    anchor,
+                                    context,
+                                    observation,
+                                    target,
+                                    budget,
+                                    validation_key,
+                                    draws=config["draws"],
+                                )
+                                detail = compare_batch(
+                                    encoder, before, parameters, context, vx, vw
+                                )
+                                metrics.update(
+                                    {
+                                        f"holdout_{replica}_{name}": value
+                                        for name, value in detail.items()
+                                    }
+                                )
+                                np.savez_compressed(
+                                    local
+                                    / f"holdout_{iteration + 1:03d}_{replica}.npz",
+                                    x=np.asarray(vx),
+                                    logweights=np.asarray(vw),
+                                    **{
+                                        name: np.asarray(value)
+                                        for name, value in detail.items()
+                                    },
+                                )
                         metrics = dict(
                             metrics, **{f"batch_{k}": v for k, v in batch_info.items()}
                         )

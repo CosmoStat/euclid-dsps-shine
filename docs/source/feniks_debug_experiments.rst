@@ -2,8 +2,8 @@ What We Tested, in Plain English
 ======================================================================
 
 Start here. No knowledge of machine learning is needed for this page.
-The numbers come from the completed runs reported by the operator. The last
-test was reported running; its result has not yet been added here.
+The numbers come from completed runs reported by the operator. Test 22 is
+now complete; test 23 is implemented and awaiting submission/results.
 
 The Problem We Are Trying to Solve
 ----------------------------------------------------------------------
@@ -506,16 +506,40 @@ it keeps the old parameters and the old training state.
 **We are testing:** the same galaxies, starting states and sample budgets
 as before. We keep the other training method unchanged for comparison.
 
-**Result so far:** the operator reported this test running. No completed
-result has been added to this page.
+**We saw:** all accepted changes reduced their own training loss. But 23 of
+32 trajectories did not change. Of the nine that changed, three improved the
+effective weighted sample count and six worsened it. None improved both that
+count and the match to the light in this evaluation. The run took about 90 minutes.
 
-**What would count as progress:** accepted steps should no longer worsen
-their own training score. In addition, fresh samples should show more reliable
-weights without unacceptable deterioration in the light predictions. If only
-the first condition improves, we have fixed step safety, not the whole problem.
+**What it means:** the step-safety correction worked on this run. It did not
+solve the reliability of the answers. We now need to check whether an update
+helps only the examples used to calculate it, rather than other examples too.
 
 Record: ``frozen_parent_wake_descent_v1``. Code name: ``wake_armijo_v1``.
 Commands: :download:`run instructions <../feniks_wake_descent_runbook.md>`.
+
+23. Does the Change Help on Different Examples Too?
+----------------------------------------------------------------------
+
+**We want to know:** does a change that helps its training examples also help
+on another set of examples that did not choose the change?
+
+**We will do:** repeat the guarded run and add two fresh sets of 256 suggestions
+after each attempted change. For each set, compare the score before and after
+the change using the same suggestions and weights. These scores cannot accept,
+reject or resize a change. They only measure what happened.
+
+**We will also check:** whether a few suggestions dominate each new set. If
+they do, that set cannot give a reliable answer to our question. We keep these
+cases in the report rather than discarding them.
+
+**What it can tell us:** better training scores but worse scores on informative
+new sets would show that the changes do not reliably help beyond their training
+examples. If almost no new set has useful weights, we still cannot answer that
+question: we first need better examples to learn and evaluate from.
+
+Status: implemented, not submitted here. One H100; no shared-network training.
+:download:`Launch and readback instructions <../feniks_wake_holdout_runbook.md>`.
 
 What We Know Now
 ----------------------------------------------------------------------
@@ -532,7 +556,8 @@ What We Know Now
 
 * Some accepted wake changes were too large and worsened their own training
   score. The current code checks and reduces the change before keeping it.
-  We are still waiting for the completed test of this correction.
+  The completed test confirms descent on the training examples, but not a
+  consistent improvement in the independent results.
 
 **Problem we have not yet shown to be solved:**
 
