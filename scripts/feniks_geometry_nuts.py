@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,6 +41,46 @@ from scripts.run_feniks_sc_drws_local_vi_diagnostic import check_config
 
 CASES = ("observed_000", "observed_005", "simulated_003", "simulated_004")
 GROUPS = ("A", "B", "C")
+
+
+def prepare_nuts(reference, root):
+    """Import verified geometry without mutating its original code/receipt."""
+    reference = reference.resolve()
+    m = json.loads((reference / "MANIFEST.json").read_text())
+    done = json.loads((reference / "GEOMETRY_COMPLETE.json").read_text())
+    if done["status"] != "GEOMETRY_COMPLETE" or done["manifest_sha256"] != sha256_file(
+        reference / "MANIFEST.json"
+    ):
+        raise ValueError("geometry receipt does not match manifest")
+    for name, expected in done["artifacts"].items():
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("unsafe artifact path")
+        if sha256_file(reference / name) != expected:
+            raise ValueError(f"geometry artifact changed: {name}")
+    for path, expected in m["inputs"].items():
+        if sha256_file(Path(path)) != expected:
+            raise ValueError(f"source input changed: {path}")
+    root.mkdir(parents=True, exist_ok=False)
+    for name, expected in done["artifacts"].items():
+        dest = root / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(reference / name, dest)
+        if sha256_file(dest) != expected:
+            raise ValueError("copied artifact mismatch")
+    m["geometry_import"] = dict(
+        path=str(reference),
+        code_commit=m["code_commit"],
+        receipt_sha256=sha256_file(reference / "GEOMETRY_COMPLETE.json"),
+    )
+    m["code_commit"] = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True
+    ).strip()
+    m["nuts_target_dtype"] = "float64"
+    write(root / "MANIFEST.json", m)
+    done["manifest_sha256"] = sha256_file(root / "MANIFEST.json")
+    done["imported_from"] = m["geometry_import"]
+    write(root / "GEOMETRY_COMPLETE.json", done)
 
 
 def write(path, payload):
@@ -408,6 +449,8 @@ def geometry(root):
 
 def nuts(root, task):
     m = load(root)
+    if m.get("nuts_target_dtype") != "float64":
+        raise ValueError("prepare a new float64 NUTS root from the completed geometry")
     done = json.loads((root / "GEOMETRY_COMPLETE.json").read_text())
     if done["manifest_sha256"] != sha256_file(root / "MANIFEST.json"):
         raise ValueError("manifest changed")
@@ -456,6 +499,7 @@ def nuts(root, task):
         ),
         out_dirs=tuple(out / f"chain_{i}" for i in range(m["chains"])),
         resume=True,
+        target_dtype="float64",
     )
     receipt = summarize_chains(out, r.latent_spec, root / case, m)
     # Fixed evenly spaced retained draws, never chosen for goodness of fit.
@@ -599,15 +643,18 @@ def summarize_chains(out, spec, case_root, m):
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument("mode", choices=["prepare", "geometry", "nuts"])
+    parser.add_argument("mode", choices=["prepare", "prepare-nuts", "geometry", "nuts"])
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--task", type=int)
     args = parser.parse_args()
-    if args.mode == "prepare":
+    if args.mode in {"prepare", "prepare-nuts"}:
         if args.reference is None:
             parser.error("--reference required")
-        prepare(args.reference, args.root.resolve())
+        if args.mode == "prepare-nuts":
+            prepare_nuts(args.reference, args.root.resolve())
+        else:
+            prepare(args.reference, args.root.resolve())
     else:
         if not jax.config.x64_enabled:
             raise ValueError("JAX_ENABLE_X64=true required")

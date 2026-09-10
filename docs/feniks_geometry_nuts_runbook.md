@@ -95,8 +95,10 @@ Job 1 reserves one H100 for at most three hours. The launcher freezes the code
 in a worktree and hashes the inputs. After inspecting its outputs, separately:
 
 ```bash
-bash scripts/submit_feniks_geometry_nuts.sh nuts "$ROOT"
-sacct -j "$(cat "$ROOT/geometry_job.txt"),$(cat "$ROOT/nuts_job.txt")" \
+GEOMETRY_ROOT="$ROOT"
+ROOT="$BASE/frozen_geometry_nuts_float64_v2"
+bash scripts/submit_feniks_geometry_nuts.sh nuts-new "$ROOT" "$GEOMETRY_ROOT"
+sacct -j "$(cat "$ROOT/nuts_job.txt")" \
   --format=JobID%24,State,Elapsed,Timelimit,ExitCode
 tail -n 40 -F "$ROOT"/logs/*.out "$ROOT"/logs/*.err
 ```
@@ -104,6 +106,20 @@ tail -n 40 -F "$ROOT"/logs/*.out "$ROOT"/logs/*.err
 Ctrl-C stops only the log display. NUTS completion receipts live under
 `nuts/<case>/<A|B|C>/FINAL.json`. Missing receipts or failed diagnostics mean
 incomplete evidence; never discard problematic chains to obtain a pass.
+
+The `nuts-new` command imports and verifies all completed geometry artifacts
+on Jean-Zay, retaining the original directory unchanged. It records the new
+sampler commit and explicit float64 target-coordinate contract. The old NUTS
+wrapper cast coordinates to float32; do not use the old frozen checkout.
+No geometry computation is repeated. Use `nuts "$ROOT"` only to resume the new
+root after its previous tasks have stopped, not for concurrent submissions.
+The block executor is now built once per draw count and reused across blocks;
+adapted step sizes and mass matrices are dynamic arguments. First-block timing
+can include compilation. Logs remain per block, not per decoder evaluation.
+
+See [the geometry v1 analysis](feniks_geometry_v1_results.md) for the measured
+contrasts motivating this comparison. CPU tests validate precision and block
+reuse, not H100 throughput or convergence on these galaxies.
 
 ## Limits
 

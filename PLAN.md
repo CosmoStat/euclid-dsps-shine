@@ -8903,6 +8903,8 @@ Remote recovery:
 - Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
 # Frozen geometry and NUTS comparison
 
+- Completed follow-up: verified 28 downloaded geometry artifacts and documented anisotropic photometric/proposal mismatch. Added opt-in float64 NUTS target coordinates, reusable compiled block executors, corrected per-chain chunk paths, and a hash-checked geometry import into a new versioned NUTS root. 21 focused CPU tests pass, including sub-float32 displacement preservation, one compiled cache entry across two blocks, mixed-precision resume rejection, immutable import and plot output. H100 performance/convergence still requires measurement; no remote jobs submitted here.
+
 - Implemented: one controlled geometry/weight diagnostic, then a separately submitted NUTS array on the same four galaxies. See `docs/feniks_geometry_nuts_runbook.md`.
 - Freeze the learned target. Compare A (dispersed / learned prior), B (encoder / learned prior), C (dispersed / initial identity prior). Never label these references as a known true posterior.
 - Preserve all chains and require explicit diagnostic review before scientific interpretation. No training, automatic promotion, or automatic NUTS submission.

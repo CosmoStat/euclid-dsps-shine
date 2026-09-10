@@ -321,10 +321,14 @@ def run_batched_nuts_chains(
     settings: NUTSSettings,
     out_dirs: tuple[str | Path, ...],
     resume: bool = True,
+    target_dtype: str = "float32",
 ) -> list[dict[str, Any]]:
     """Adapt and sample resumable independent NUTS chains with ``vmap``."""
     _enforce_float64_sampling()
     import blackjax
+
+    if target_dtype not in {"float32", "float64"}:
+        raise ValueError("target_dtype must be float32 or float64")
 
     positions = jnp.asarray(initial_positions, dtype=jnp.float64)
     n_chains = int(positions.shape[0])
@@ -354,6 +358,8 @@ def run_batched_nuts_chains(
         "max_num_doublings": int(settings.max_num_doublings),
         "sample_chunks": list(settings.sample_chunks),
     }
+    if target_dtype != "float32":
+        contract.update(version=2, target_dtype=target_dtype)
     if contract_path.exists():
         existing_contract = json.loads(contract_path.read_text(encoding="utf-8"))
         if existing_contract != contract:
@@ -364,7 +370,9 @@ def run_batched_nuts_chains(
     else:
         _write_json_atomic(contract_path, contract)
 
-    sampling_logdensity = jax.jit(_float64_logdensity(logdensity_fn), inline=False)
+    sampling_logdensity = jax.jit(
+        _float64_logdensity(logdensity_fn, target_dtype=target_dtype), inline=False
+    )
     target_started = time.perf_counter()
     print(
         f"[exact-sampler:nuts-batched] validating {n_chains} targets and gradients",
@@ -581,6 +589,12 @@ def run_batched_nuts_chains(
         ]
         for output in outputs
     ]
+    block_runners = {
+        size: _make_batched_nuts_runner(
+            sampling_logdensity, size, settings.max_num_doublings
+        )
+        for size in set(settings.sample_chunks)
+    }
     for chunk_id, n_samples in enumerate(settings.sample_chunks):
         if chunk_id < completed_chunks:
             continue
@@ -593,14 +607,11 @@ def run_batched_nuts_chains(
             f"chunk={chunk_id} start chains={n_chains} draws={n_samples}",
             flush=True,
         )
-        states, (chunk_positions, infos) = _run_batched_nuts_steps(
-            sampling_logdensity,
+        states, (chunk_positions, infos) = block_runners[n_samples](
             states,
             chunk_keys,
             parameters["step_size"],
             parameters["inverse_mass_matrix"],
-            n_samples=int(n_samples),
-            max_num_doublings=int(settings.max_num_doublings),
         )
         jax.block_until_ready(states.position)
         elapsed = time.perf_counter() - chunk_started
@@ -651,8 +662,8 @@ def run_batched_nuts_chains(
                 _chunk_record(
                     chunk_id,
                     n_samples,
-                    chunk_path,
-                    info_path,
+                    output / "chunks" / f"part_{chunk_id:06d}.parquet",
+                    output / "chunks" / f"part_{chunk_id:06d}_info.parquet",
                 )
             )
 
@@ -664,7 +675,7 @@ def run_batched_nuts_chains(
             "execution": "vmap_batched_chains",
             "batched_chain_count": n_chains,
             "sampling_dtype": "float64",
-            "target_dtype": "float32",
+            "target_dtype": target_dtype,
             "seed": int(seeds[chain_index]),
             "warmup_steps": int(settings.warmup_steps),
             "target_accept": float(settings.target_accept),
@@ -1470,6 +1481,13 @@ def _run_batched_nuts_steps(
     n_samples: int,
     max_num_doublings: int,
 ):
+    return _make_batched_nuts_runner(logdensity_fn, n_samples, max_num_doublings)(
+        states, keys, step_sizes, inverse_mass_matrices
+    )
+
+
+def _make_batched_nuts_runner(logdensity_fn, n_samples, max_num_doublings):
+    """Build once per block shape; keep states and adaptation parameters dynamic."""
     import blackjax
 
     def one_step(key, state, step_size, inverse_mass_matrix):
@@ -1482,25 +1500,21 @@ def _run_batched_nuts_steps(
         return algorithm.step(key, state)
 
     batched_step = jax.vmap(one_step)
-    draw_keys = jax.vmap(lambda key: jax.random.split(key, int(n_samples)))(keys)
-    draw_keys = jnp.swapaxes(draw_keys, 0, 1)
 
-    def stored_step(current_states, current_keys):
-        next_states, infos = batched_step(
-            current_keys,
-            current_states,
-            step_sizes,
-            inverse_mass_matrices,
-        )
-        return next_states, (next_states.position, infos)
+    @jax.jit
+    def run(states, keys, step_sizes, inverse_mass_matrices):
+        draw_keys = jax.vmap(lambda key: jax.random.split(key, int(n_samples)))(keys)
+        draw_keys = jnp.swapaxes(draw_keys, 0, 1)
 
-    return jax.jit(
-        lambda initial_states, all_keys: jax.lax.scan(
-            stored_step,
-            initial_states,
-            all_keys,
-        )
-    )(states, draw_keys)
+        def stored_step(current_states, current_keys):
+            next_states, infos = batched_step(
+                current_keys, current_states, step_sizes, inverse_mass_matrices
+            )
+            return next_states, (next_states.position, infos)
+
+        return jax.lax.scan(stored_step, states, draw_keys)
+
+    return run
 
 
 def _run_batched_nuts_target_steps(
@@ -1604,11 +1618,15 @@ def _info_columns(infos, n_rows: int) -> dict[str, np.ndarray]:
 
 def _float64_logdensity(
     logdensity_fn: Callable[[jnp.ndarray], jnp.ndarray],
+    *,
+    target_dtype: str = "float32",
 ) -> Callable[[jnp.ndarray], jnp.ndarray]:
-    """Use a float64 sampler around the native float32 DSPS target."""
+    """Keep historical float32 targets by default; qualified targets opt into x64."""
+    if target_dtype not in {"float32", "float64"}:
+        raise ValueError("unsupported target dtype")
 
     def wrapped(position):
-        value = logdensity_fn(jnp.asarray(position, dtype=jnp.float32))
+        value = logdensity_fn(jnp.asarray(position, dtype=getattr(jnp, target_dtype)))
         return jnp.asarray(value, dtype=jnp.float64)
 
     return wrapped
