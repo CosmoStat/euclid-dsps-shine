@@ -1,5 +1,15 @@
 # Plan
 
+## 2026-09-10 Plain-language experiment rewrite
+
+- Completed: replaced technical experiment descriptions with short sentences
+  explaining the question, action, observation and meaning for a newcomer.
+- Kept evidence, plots and uncertainty; moved technical identifiers after the
+  explanation and retained formulas on the separate reference page.
+- Added plain-language plot reading instructions and a final fixed/open recap.
+  Main dossier now directs newcomers to this page first. Sphinx -W verified;
+  no changes to inference code or the cluster run.
+
 ## 2026-09-10 Meeting narrative simplification
 
 - Completed: added a plain-English executive recap separating observed

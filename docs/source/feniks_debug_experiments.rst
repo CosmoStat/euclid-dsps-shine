@@ -1,384 +1,549 @@
-Experiment-by-Experiment Debugging Record
-=========================================
+What We Tested, in Plain English
+======================================================================
 
-Return to :doc:`feniks_debug_meeting`; definitions: :doc:`feniks_debug_metrics`.
-Results below are historical operator readbacks and the repository's
-:download:`debug log <../feniks_decoder_debug_log.md>`. They are not new cluster
-measurements. Each experiment changes a specific part of the inference chain;
-improvements across different targets, cohorts or K are not a single learning
-curve. Numerical PASS applies to the tested points and directions only.
+Start here. No knowledge of machine learning is needed for this page.
+The numbers come from the completed runs reported by the operator. The last
+test was reported running; its result has not yet been added here.
 
-The Four Chapters
--------------------
+The Problem We Are Trying to Solve
+----------------------------------------------------------------------
 
-**Experiments 01-03: improve the shared proposal.** We tested simulation-based
-training and network structure. Some fits improved, but importance support
-remained poor.
+We measure a galaxy's light. We want to learn its properties: for example,
+how much stellar mass it contains and how much dust hides its light.
 
-**Experiments 04-12: make the numerical calculation trustworthy.** We isolated
-and corrected specific decoder and precision issues before continuing to
-interpret optimizer behavior.
+Different galaxies can produce very similar measurements. So the program
+must return **many possible answers and how much we should trust each one**.
+Returning one answer that reproduces the light is not enough.
 
-**Experiments 13-18: ask whether local adaptation solves the remaining problem.**
-Longer runs, wider proposals and larger evaluation batches did not reliably
-recover support. The complete conditional transport was then qualified.
+There are two main parts to the program:
 
-**Experiments 19-22: reproduce and control harmful updates.** The reverse/wake
-comparison exposed an adaptation failure; exact replay isolated overshoot.
-The current guarded pilot tests the resulting correction.
+* A neural network quickly suggests possible galaxies.
+* A physics calculation predicts the light from each suggestion. We compare
+  that light with the measurements to assess the suggestion.
 
-For a short problem/fix/open-question recap, start at
-:doc:`feniks_debug_meeting`. Below, each numbered section provides the evidence
-behind one step of that story.
+The difficulty was this: the program could suggest thousands of galaxies,
+but after this comparison almost all the weight could fall on just one or a
+few of them. We then had too little useful information to trust the reported
+uncertainties.
 
-.. contents:: Experiments
+Why There Were So Many Tests
+----------------------------------------------------------------------
+
+We did not know which part was responsible. We therefore asked four questions,
+in order:
+
+1. Is the neural network able to suggest the right kinds of galaxies?
+2. Are the calculations used to improve those suggestions working correctly?
+3. Does spending more time on each galaxy solve the problem?
+4. When the program changes its answers, does that change actually help?
+
+Below, **what it means** says what each result allows us to conclude. It does
+not claim that the whole problem is solved. Run numbers are only included so
+that we can find the original records.
+
+.. contents:: Find a test
    :local:
    :depth: 1
 
-01. Frozen-Parent Sleep NPE
----------------------------
+01. Can the Network Learn From More Simulated Examples?
+----------------------------------------------------------------------
 
-**Question:** can simulation-based conditional training improve the proposal
-without changing the parent prior? **Protocol:** simulate from the frozen
-parent, optimize conditional log-density, retain a fixed evaluation protocol.
-The September 5-6 reference retained ``warm_start`` with validation sleep NLL
-19.433409. Historical redshift PIT KS improved from 0.2502 to 0.1330; K1024
-median ESS improved from 5.98 to 13.28, but bad-k fraction remained 0.6875.
+**We wanted to know:** could better training make the network suggest more
+useful answers?
 
-**Learning:** sleep training can improve marginal calibration and proposal
-quality without solving joint importance support. **Next:** inspect structural
-coverage of the conditional flow rather than equating lower NLL with success.
-These numbers are from this sleep experiment, not the epoch-160 MIRA cohort.
+**We did:** create simulated galaxies and their light, then train the network
+to infer the galaxies from that light. We kept the rules used to generate
+the galaxies unchanged.
 
-02. Conditional-Flow Topology
------------------------------
+**We saw:** some results improved. Out of 1,024 suggestions, the effective
+number contributing after weighting rose from about 6 to about 13. This is
+a measure of how spread out the weights are, not a count of correct answers.
+Thirteen was still very small compared with 1,024.
 
-**Question:** do all coordinates actually receive conditional transformations?
-**Protocol:** count how often coupling blocks transform each coordinate;
-repair topology while preserving the parent prior. Commit ``ecf3fb2``;
-training jobs 1829245/1829247, recovery/closure 1890513/1890514.
+**What it means:** this training helped, but did not solve the main problem.
+We next checked whether the network's construction was limiting what it
+could learn.
 
-Old transformation counts contained zeros for seven of fifteen coordinates:
-``[0,6,0,6,0,6,0,6,0,6,0,6,0,6,3]``. Rebuilt counts were
-``[3,3,3,3,3,2,4,2,4,3,3,3,2,4,3]``.
+Record: September 5-6 frozen-parent sleep experiment, ``warm_start`` reference.
 
-**Learning:** this was a concrete expressivity defect, not merely an optimizer
-setting. Covering all coordinates removes that defect but does not prove
-adequate conditional density or tails. **Next:** test sleep/ELBO trade-offs.
+02. Could Every Part of the Network Change?
+----------------------------------------------------------------------
 
-03. Balanced Sleep and ELBO Training
------------------------------------------------------------
+**We wanted to know:** were some parts of the suggested answer left unchanged
+by the network blocks that were supposed to adjust them?
 
-**Question:** does adding a physical target objective recover useful support?
-**Protocol:** frozen prior, balanced sleep/ELBO variants; jobs 1893047-1893049,
-implementation ``1f5462f``. Compare direct predictive fit and importance
-diagnostics, not just training curves.
+**We did:** count how often those blocks transformed each of the 15 numbers
+used to describe a galaxy.
 
-All four K256 support gates failed. Candidate D's normalized residual RMS was
-8.64 versus A's 17.50, yet ESS/K was about 0.016 and bad-k fraction about 0.918.
-**Learning:** improving flux fit can leave the proposal unusable for importance
-inference. **Next:** audit gradients before interpreting further optimization.
+**We saw:** seven numbers were never transformed by those blocks. We changed
+the network's construction so that every number was transformed.
 
-04. Local-VI Gradient Preflight
--------------------------------
+**What it means:** we found and fixed a real limitation in the network.
+This does not mean all its answers became correct. It means the network
+no longer has that particular restriction.
 
-**Question:** are target gradients numerically trustworthy at the starting
-points? **Protocol:** finite differences before optimization; initial job
-1913341, multiscale audit 1913854 (``09bb8c7``, ``8a04db4``).
+Records: jobs 1829245, 1829247, 1890513 and 1890514; code change ``ecf3fb2``.
 
-The audits could not establish the required convergence. Optimization was
-blocked. **Learning:** a failed numerical qualification cannot be repaired by
-more epochs. INCONCLUSIVE is distinct from a demonstrated wrong derivative.
-**Next:** isolate analytic likelihood from flux computation.
+03. Does Asking for a Better Match to the Light Help?
+----------------------------------------------------------------------
 
-05. Flux Versus Likelihood Isolation
--------------------------------------
+**We wanted to know:** could we improve the answers by explicitly asking the
+network to reproduce the measured light during training?
 
-Job 1914143 (``9660681``, 4m13) tested the analytic likelihood control
-separately from redshift propagated through DSPS. The analytic control passed;
-the problematic behavior remained on the flux/redshift path.
+**We did:** compare several combinations of learning from simulated examples
+and learning to match the light.
 
-**Learning:** this localized the investigation upstream of the elementary
-Gaussian likelihood. It did not validate every decoder coordinate.
-**Next:** separate redshift's projection, age and other physical branches.
+**We saw:** some predictions matched the light much better. But after weighting
+the suggestions, too few still contributed. None of the four tested versions
+passed the checks for reliable weights.
 
-06. Redshift Branch Decomposition
-----------------------------------
+**What it means:** matching the light and getting trustworthy uncertainties
+are not the same thing. Before trying longer training, we checked the
+calculations that tell the program how to improve.
 
-Job 1915987 (``7f48a0e``, 11m19) held the spectrum fixed for a projection
-control and compared redshift contributions. The fixed-spectrum projection
-discrepancy persisted in the tested 64-bit setting; the stellar branch behaved
-better. **Learning:** a blanket dtype change was not a complete explanation.
-**Next:** compare photometric integration against an independent reference.
+Records: jobs 1893047-1893049.
 
-07. Photometry Quadrature Reference
-------------------------------------
+04. Is the Program Told to Change Its Answers in the Right Direction?
+----------------------------------------------------------------------
 
-Job 1918919 (about 7m) compared merged-grid Gauss4 and Gauss8 integration
-against a piecewise reference. Both agreed with that reference; 54 band-gradient
-checks at three points passed.
+**We wanted to know:** can we trust the calculation that tells training which
+way to change a galaxy's properties?
 
-**Learning:** the replacement integration was locally supported by an
-independent numerical construction, not by AD agreeing with itself.
-**Limit:** three tested points and photometry alone are not full target
-qualification. **Next:** rerun the complete decoder/target.
+**We did:** compare two ways of finding that direction. One uses the program's
+automatic calculation. The other makes a small change to the input and
+directly measures what happens to the result.
 
-08. Full-Decoder Qualification
--------------------------------
+**We saw:** the two methods did not agree clearly enough for us to approve
+the next training step. We stopped before that training began.
 
-Job 1920226 (``ca92735``, 33m55) exercised the integrated target and density
-identities. Identities passed, but nine metallicity checks failed and other
-checks remained inconclusive. A pointwise forward timing near 0.012 s versus
-roughly 1 s for the legacy path was recorded; it is not a training-throughput
-or multi-GPU scaling benchmark.
+**What it means:** we did not yet know whether the calculation or the check
+was at fault. We needed to test smaller parts separately.
 
-**Learning:** fixing projection exposed another numerical issue instead of
-qualifying the complete model. **Next:** isolate metallicity-distribution
-function (MDF) precision.
+Records: jobs 1913341 and 1913854. This kind of check is called a gradient audit.
 
-09. MDF Precision
-------------------
+05. Is the Problem in Predicting the Light or in Comparing It?
+----------------------------------------------------------------------
 
-Job 1921589 (``293d5a9``, 4m04) tested MDF64 and an analytic control.
-The analytic control and all metallicity checks passed. Points 0, 2, 3 and 5
-passed; points 1 and 4 remained inconclusive.
+**We wanted to know:** which of these two operations caused the disagreement?
 
-**Learning:** targeted precision changes solved a specific branch, not every
-remaining stencil. **Next:** inspect the audit's resolution screen itself.
+**We did:** test the formula that compares predicted and measured light on its
+own. Then we tested it together with the calculation that predicts the light.
 
-10. Residual Audit Resolution
-------------------------------
+**We saw:** the comparison formula passed. The difficulty remained when we
+included the prediction of light and changed the galaxy's redshift. Redshift
+describes how the expansion of the Universe shifts the light's wavelengths.
 
-Job 1922142 (``7824dc9``) corrected a float32 output-ULP resolution screen
-being applied when the loss output was float64. Four density checks then
-passed; point-4 redshift remained unresolved.
+**What it means:** we had narrowed the search. We needed to inspect how the
+predicted light changes with redshift, rather than rewrite the comparison
+formula.
 
-**Learning:** the test harness has its own numerical assumptions. A corrected
-screen is not permission to widen tolerances until everything passes.
-**Next:** trace the remaining redshift path with matched perturbations.
+Record: job 1914143.
 
-11. Point-4 Redshift Precision
--------------------------------
+06. Which Part of the Redshift Calculation Causes Trouble?
+----------------------------------------------------------------------
 
-Job 1922455 tested the redshift path in float64. All-band center likelihood
-passed; maximum flux shift was 2.1533e-5 photometric sigma, lsst_z AD/FD
-difference 1.62e-6 and branch-sum residual approximately 1e-13.
+**We wanted to know:** where does the disagreement arise when redshift changes?
 
-**Learning:** this supported a small forward perturbation and a coherent
-physical-redshift tangent. **Limit:** non-redshift physical coordinates were
-held fixed; this is not the actual nonlinear 15D latent trajectory.
-**Next:** integrate and version the precision contract.
+**We did:** separate the different effects of redshift. In one test we kept
+the emitted light unchanged and tested only how it would be measured through
+the telescope's filters.
 
-12. Integrated Precision Night
--------------------------------
+**We saw:** a disagreement remained in this simpler test. Using more numerical
+precision in the tested setup was not enough to remove it.
 
-Job 1923347 (``43c2886``) enabled opt-in ``spline_precision: float64_v1``.
-All six full-target inputs passed the numerical audit. Smoke, sleep and
-sleep+ELBO A/B/C runs completed; all posterior-support gates failed. C had
-better tails among the tested arms but was not qualified for reliable IS.
+**What it means:** the way we added up light through the filters needed a
+separate check. The problem was not simply "use more precise numbers everywhere".
 
-**Learning:** a numerically qualified target and a useful posterior proposal
-are separate milestones. **Next:** freeze C and the parent to isolate local
-adaptation. New numerical contracts require new receipts/banks, not silent
-reuse under an old density interpretation.
+Record: job 1915987.
 
-13. Qualified and Controlled Local VI
---------------------------------------
+07. Can We Check the Filter Calculation Another Way?
+----------------------------------------------------------------------
 
-Job 1938818 completed qualified local VI without support recovery. Job 1948458
-(21m33) then compared three prescribed regimes, two starts, 64 steps, including
-slower updates and MC16. All 48 observed final regime/start evaluations had
-bad-k flags despite improved residuals.
+**We wanted to know:** can we calculate the light passing through each filter
+in a way that agrees with an independent reference calculation?
+
+**We did:** compare two new ways of adding up the light with that reference.
+We also checked how their answers changed when the inputs changed slightly.
+
+**We saw:** both methods agreed with the reference. All 54 tested checks of
+these changes passed, across three example points.
+
+**What it means:** this supported the replacement calculation at those points.
+We still had to check the rest of the physical model.
+
+Record: job 1918919. Technical name: photometry quadrature reference.
+
+08. Does the Complete Calculation Now Pass?
+----------------------------------------------------------------------
+
+**We wanted to know:** after fixing the filter calculation, does the whole
+calculation behave as expected?
+
+**We did:** reconnect the parts and repeat the checks on the complete model.
+
+**We saw:** some checks passed, but nine checks involving stellar metallicity
+failed. Metallicity describes the abundance of elements heavier than helium
+in the stars. Other checks still had no clear answer.
+
+**What it means:** fixing one part exposed another problem. We could not yet
+treat the entire calculation as checked.
+
+Record: job 1920226.
+
+09. Does More Precision Fix the Metallicity Calculation?
+----------------------------------------------------------------------
+
+**We wanted to know:** were rounding effects causing the metallicity problem?
+
+**We did:** use more numerical precision in the part that describes the
+distribution of stellar metallicities. We compared it with a simple reference.
+
+**We saw:** all the metallicity checks passed. Four of the six complete test
+points passed, while two still had no clear answer.
+
+**What it means:** the targeted change resolved the metallicity checks.
+It did not resolve everything, so we examined the remaining failures separately.
+
+Record: job 1921589.
+
+10. Was One of Our Checks Making the Wrong Assumption?
+----------------------------------------------------------------------
+
+**We wanted to know:** could the checking code itself be rejecting useful
+measurements?
+
+**We did:** inspect how it decided whether a small numerical change was large
+enough to measure reliably.
+
+**We saw:** it assumed a lower precision than the result actually used. We
+corrected that assumption. Four remaining checks then passed, but one
+redshift-related problem remained.
+
+**What it means:** we fixed a problem in the test, not in the physics. Checking
+the model is only useful if the checks are implemented correctly too.
+
+Record: job 1922142.
+
+11. Can We Resolve the Last Redshift Example?
+----------------------------------------------------------------------
+
+**We wanted to know:** why did that particular redshift check still have no
+clear answer?
+
+**We did:** repeat the redshift calculation with more precision while keeping
+the other physical properties fixed.
+
+**We saw:** the check passed. The change in predicted light was tiny compared
+with the measurement uncertainty: at most about 0.000022 times that uncertainty.
+
+**What it means:** this was encouraging for this specific calculation. But
+training changes several linked quantities, not just redshift alone. We still
+needed to test the combined calculation used by training.
+
+Record: job 1922455.
+
+12. Does the Revised Physics Calculation Make Training Work?
+----------------------------------------------------------------------
+
+**We wanted to know:** once the numerical changes are combined, do we also
+get more reliable galaxy distributions?
+
+**We did:** combine the changes, check the complete calculation, and run
+several training versions using it.
+
+**We saw:** the six tested numerical examples passed. The training versions
+finished, but their weights were still too concentrated. Version C behaved
+better than the other tested versions in some checks, so it became a fixed
+starting point for the next experiments.
+
+**What it means:** we made progress on the correctness of the calculation.
+That did not automatically make the network's uncertainty estimates reliable.
+
+Record: job 1923347; ``frozen_parent_precision_night_v1``.
+
+13. Can We Improve the Answer for One Galaxy at a Time?
+----------------------------------------------------------------------
+
+**We wanted to know:** perhaps the shared network is only a rough starting
+point. Would extra work on each individual galaxy improve its answers?
+
+**We did:** start from the network's suggestions and adjust them separately
+for each galaxy. We compared different step sizes and numbers of samples
+used to calculate a step. We repeated this from two starting states.
+
+**We saw:** the predicted light often improved. The weights did not improve
+reliably. All 48 final checks for the observed galaxies raised a warning
+about a few samples dominating the answer.
+
+**What it means:** extra work per galaxy helped the fit, but the tested short
+runs did not solve the uncertainty problem.
 
 .. figure:: _static/feniks_debug/trajectories.png
    :width: 100%
 
-   Selected terminal-transcribed trajectories, job 1948458. Residuals improve
-   while ESS is nonmonotonic; these are examples, not cohort averages.
+   How to read this plot: lower residuals mean a closer match to the light.
+   Higher ESS means the weights are spread over more samples. In these
+   examples, the first improves without a steady improvement in the second.
 
 .. figure:: _static/feniks_debug/final_support.png
    :width: 100%
 
-   Final observed support across the prescribed regimes and starts. The
-   underlying values are in ``docs/controlled_vi_evidence.json``.
+   Different settings and starting states still leave few samples carrying
+   much of the weight. This is why we did not call the better fits a solution.
 
-**Learning:** a simple short-run learning-rate/MC adjustment did not restore
-support. **Next:** test whether the learned local distributions are merely
-too narrow, without further optimization.
+Records: jobs 1938818 and 1948458. Technical name: local variational inference.
 
-14. Fixed Dispersion and Mixture Probe
----------------------------------------
+14. Are the Suggested Answers Too Similar to Each Other?
+----------------------------------------------------------------------
 
-Job 1952467 (6m06), ``frozen_parent_support_probe_v1``, evaluated local scales
-1, 1.5 and 2 and a mixture with the amortized anchor; no optimization.
-Most importance diagnostics remained poor. For observed_005/start0, increasing
-scale from 1 to 2 raised RMS from 7.13 to 20.24 while ESS fraction remained
-near the one-particle floor. Occasional mixture improvements were not universal.
+**We wanted to know:** perhaps the network was looking in too small a range
+of possible galaxy properties.
 
-**Learning:** uniformly widening every direction can add poor-fit draws without
-repairing the missing geometry. **Next:** separate insufficient optimization
-time from structural/objective limitations.
+**We did:** spread the suggestions over a wider range. We also mixed in
+suggestions from the original network. We did not train anything in this test.
 
-15. Long Local VI
-------------------
+**We saw:** wider ranges sometimes helped, but often added galaxies that
+matched the light poorly. The weights remained unreliable in most cases.
 
-Job 1957394 (35m43), ``frozen_parent_long_local_vi_v1``, used MC32 and 512
-steps with checkpoints 64/128/256/512 and K1024 evaluations. Multiple objects
-showed much better flux fits. Starts and support remained unstable; difficult
-observed_005 and simulated_004 did not become reliable proposals.
+**What it means:** simply making every uncertainty wider is not enough.
+The important answers may lie in particular combinations of properties,
+not in every direction around the original suggestions.
 
-**Learning:** more local optimization improves some fits but does not resolve
-importance reliability. Checkpoints were saved descriptively, not selected
-by their best ESS. **Next:** reevaluate fixed final checkpoints independently.
+Record: job 1952467; ``frozen_parent_support_probe_v1``.
 
-16. Final Checkpoint Replay at K4096
-------------------------------------
+15. Would a Much Longer Run Per Galaxy Solve It?
+----------------------------------------------------------------------
 
-Job 1959175 (12m59), ``frozen_parent_long_replay_v1``, changed only evaluation
-draws and K, not optimization. At K4096, 31/32 local proposals had bad-k flags.
-Four local proposals that passed that flag at K1024 no longer passed; another
-one passed instead. Final flux-fit estimates were comparatively stable.
+**We wanted to know:** had the previous runs simply stopped too early?
+
+**We did:** increase the number of adjustment steps from 64 to 512. We saved
+results along the way and kept both starting states.
+
+**We saw:** several galaxies had much better light predictions. But the
+reliability of the weights still varied strongly. Some difficult galaxies
+remained difficult.
+
+**What it means:** more time helped some fits, but did not consistently solve
+the main problem. We next checked whether the apparent successes depended
+on which random samples happened to be drawn.
+
+Record: job 1957394; ``frozen_parent_long_local_vi_v1``.
+
+16. Do the Good Results Survive a New Set of Samples?
+----------------------------------------------------------------------
+
+**We wanted to know:** could an apparently good result be due to a lucky
+set of random suggestions?
+
+**We did:** keep the trained models unchanged. Draw 4,096 new samples instead
+of 1,024 and repeat the evaluation.
+
+**We saw:** some models that previously passed a weight check no longer
+passed. At the larger sample count, 31 of the 32 locally adjusted models
+raised that warning. Their light predictions were more stable than their weights.
+
+**What it means:** the earlier occasional successes were not strong enough
+evidence. Drawing more samples exposed the weakness; it did not repair the model.
 
 .. figure:: _static/feniks_debug/replay_examples.png
    :width: 100%
 
-   Fixed final checkpoints, different K and fresh draws. Apparent support
-   success can be driven by whether a rare dominant weight is sampled.
+   Same models, new random samples. The match to the light can stay similar
+   while the effective number of weighted samples changes substantially.
 
-**Learning:** occasional good K1024 flags were insufficient evidence for
-scaling. **Next:** audit the complete variational objective, including logq
-through the conditional transport.
+Record: job 1959175; ``frozen_parent_long_replay_v1``.
 
-17. Complete VI Objective Audit
---------------------------------
+17. Have We Checked the Entire Calculation Used to Adjust the Network?
+----------------------------------------------------------------------
 
-Job 1960443 (5m07) checked likelihood, prior, logq, inverse density and their
-value/derivative decomposition at all 32 starts. Native transport gave 31 PASS
-and one INCONCLUSIVE: simulated_004/start1, log_std direction0, likelihood
-and total. No optimizer ran.
+**We wanted to know:** the physics had been checked, but was the complete
+calculation used for each network adjustment also behaving correctly?
 
-At intermediate h, FD approached AD; smaller h became noisy. Log-std bounds
-were inactive, and density identities passed. **Learning:** this was not
-evidence for a universal sign error or clipping bug. **Next:** isolate precision
-inside the conditional transport, not just at its output.
+**We did:** check how the network assigns probabilities, how those probabilities
+combine with the physics, and how the full result changes with small inputs.
 
-18. Transport64 Qualification
-------------------------------
+**We saw:** 31 of 32 starting states passed. One still gave no clear answer.
+The program therefore did not begin the planned comparison of training methods.
 
-Job 1961888 (10m07), ``frozen_parent_transport_precision_v1``, repeated the
-native reference and evaluated a promoted conditional transport at matched
-points/noise. Native reproduced 31/32 PASS; transport64 passed 32/32.
-Output arrays in both were float64, illustrating why output dtype alone was
-insufficient. Forward differences remained small at tested centers.
+**What it means:** a remaining numerical uncertainty stopped us from confidently
+interpreting that comparison. We investigated how precisely the network did
+its internal calculations.
+
+Record: job 1960443. Technical name: complete VI objective audit.
+
+18. Does More Precision Inside the Network Resolve That Check?
+----------------------------------------------------------------------
+
+**We wanted to know:** could rounding inside the network explain the last
+unclear result?
+
+**We did:** keep the same starting states and random inputs, but perform the
+relevant internal network calculation with more precision. We also repeated
+the old calculation for comparison.
+
+**We saw:** the new version passed all 32 checks. The old version reproduced
+its one unclear result. Both had already returned high-precision outputs;
+the important change was inside the calculation.
+
+**What it means:** we could now run the planned comparison with better numerical
+evidence. This checked the starting states, not every state the network might
+reach later.
 
 .. figure:: _static/feniks_debug/transport_resolution.png
    :width: 100%
 
-   The earlier unresolved native stencil: inspect convergence across h,
-   rather than selecting a single favorable finite-difference step.
+   A closer look at the earlier unclear check. The horizontal axis changes
+   the size of the small test perturbation. The point is to look for agreement
+   over several sizes, not to choose one size that happens to look good.
 
-**Learning:** versioned ``conditional_transport_float64_v1`` supports the next
-objective comparison. It does not retroactively turn the native audit into
-PASS or validate arbitrary later iterates.
+Record: job 1961888. The new calculation is called ``transport64`` in the logs.
 
-19. Reverse Versus Wake Pilot
-------------------------------
+19. Which of Two Ways of Improving the Answers Works Better?
+----------------------------------------------------------------------
 
-Job 1962310 (58m02), ``frozen_parent_objective_transport64_pilot_v1``:
-32/32 fresh audits passed, then 16 cases and two starts completed. Frozen
-parent/source; reverse: 128 updates x MC32; wake: 16 attempts x 256 exact
-mixture draws. Both use 4096 adaptation decoder draws, but not equal total
-compute: reverse requires decoder backward work; evaluations also cost time.
+**We wanted to know:** should we improve the current suggestions directly,
+or learn from a set of weighted suggestions?
 
-Wake used detached weights, a 50/50 local/amortized mixture and eligibility
-ESS>=16 with maximum weight<=0.20. Only 9/32 trajectories changed; 23 did not.
-The changed trajectories had lower final ESS than their paired sources.
-All final reverse/wake rows had bad-k flags in this readback.
+**We did:** compare two methods on the same 16 galaxies and two starting states:
 
-**Learning:** the audit now permits studying an actual adaptation failure.
-Rejecting many batches prevents unreliable updates but does not ensure that
-an eligible batch's proposed Adam step is safe. **Next:** reproduce the exact
-updates and test their direction and amplitude.
+* The first method changes the current suggestions using the physics-based
+  training score. It is called **reverse** in the plots.
+* The second method draws suggestions, weights them using the observations,
+  and trains the network to give more probability to the highly weighted ones.
+  It is called **wake** in the plots.
 
-20. Overnight Resource Gate
-----------------------------
+Both were allowed the same number of new galaxy-light calculations for
+their adjustment steps. This does not mean their total computing costs were equal.
 
-Job 1962505 completed in 2m11 despite a 10-hour allocation because its gate
-declined the extension: ``NIGHT_EXTENSION_NOT_STARTED``.
-Median ESS ratios were 1 in both groups. Eligible-trajectory fractions were
-0 observed and 0.125 simulated, below 0.5; the required median ratio was 1.1
-and a trajectory needed at least four applied updates. No optimization began.
+**We saw:** wake rejected most changes because too few samples carried useful
+weight. Only 9 of 32 runs changed their parameters. Those nine ended with a
+lower effective weighted sample count than their starting models. Neither
+method consistently resolved the weight warnings.
 
-**Learning:** dependency completion is not scientific success. This run saved
-resources by refusing to scale an unconvincing wake method. Its short duration
-was not a hidden 10-hour training success or a scheduler crash.
+**What it means:** we now had a specific change to investigate. When wake
+did accept an adjustment, why could the result get worse?
 
-21. Exact Wake Forensics
--------------------------
+Record: job 1962310; ``frozen_parent_objective_transport64_pilot_v1``.
 
-Job 1965476 (29m28), ``frozen_parent_wake_forensics_v1``, replayed all 32
-trajectories with original seeds and decisions. All final parameter differences
-were zero. The nine first accepted updates were inspected on fixed batches;
-AD/FD agreed locally and every directional derivative was negative.
+20. Why Did the Overnight Run Stop After Two Minutes?
+----------------------------------------------------------------------
+
+**We wanted to know:** were the short-run results good enough to justify a
+much longer run?
+
+**We did:** make the overnight job check the completed short run before
+starting more training. We required enough actual updates and an improvement
+in the effective weighted sample count.
+
+**We saw:** those requirements were not met. The job ended without starting
+the long training.
+
+**What it means:** this was an intentional stop, not a crash and not a completed
+night of learning. It prevented us from spending hours repeating a method
+that had not shown convincing improvement.
+
+Record: job 1962505; result ``NIGHT_EXTENSION_NOT_STARTED``.
+
+21. Was the Accepted Change Simply Too Large?
+----------------------------------------------------------------------
+
+**We wanted to know:** did wake choose the wrong direction, or take too large
+a step in a useful direction?
+
+**We did:** replay the previous runs with exactly the same random choices.
+We inspected the first accepted change in each of the nine runs that changed.
+We tried the full change, one tenth of it, one hundredth of it and no change.
+
+**We saw:** all 32 replays reproduced the original final parameters exactly.
+For the nine inspected changes, a very small movement in the chosen direction
+would improve the training score. Yet seven of the nine full changes made
+that same score worse.
+
+**What it means:** in these cases, the step went too far. The direction was
+locally useful, but that did not make the complete step safe.
 
 .. figure:: _static/feniks_debug/wake_derivatives.png
    :width: 100%
 
-   Two examples of FD convergence along the actual proposed displacement.
-   Agreement supports the local direction, not the full finite update.
-
-Seven of nine full updates nevertheless increased their own batch loss.
-For observed_006/start0 it rose from 16.57 to 46.04. The two simulated_003
-updates lowered batch loss but worsened independent fit metrics.
+   The two calculations of the local direction agree when the test change
+   becomes small. This helps rule out a wrong local direction in these examples.
 
 .. figure:: _static/feniks_debug/wake_loss.png
    :width: 100%
 
-   All nine inspected first updates, not a best/worst-case selection.
-   Positive change means a supposedly accepted step increased its own loss.
+   Bars to the right of zero mean the training score became worse after
+   the accepted step. This happened in seven of the nine inspected changes.
 
-Prescribed scales 0, 0.01, 0.1 and 1 were evaluated with common-noise draws,
-two independent replicates pooled to K4096. Full steps worsened RMS and
-negative ELBO in all nine examples. Scale 0.1 improved ESS in five and RMS
-in six: **a smaller universal learning rate is not a demonstrated solution**.
+There was a second lesson. Two full changes improved the training score but
+still worsened the match to the light on fresh evaluation samples. Smaller
+changes sometimes helped, but no tested size improved everything for every galaxy.
 
 .. figure:: _static/feniks_debug/wake_scales.png
    :width: 100%
 
-   Ratios to the no-update reference. Read fit and support together; a
-   favorable training direction need not generalize beyond its weighted batch.
+   Compare each smaller change with doing nothing. On the left, below one
+   means a better match to the light. On the right, above one means more
+   effective weighted samples. A change can help one measure and hurt the other.
 
-**Learning:** step overshoot is a concrete, reproducible defect. There is also
-an objective/weight-generalization question that step control alone cannot
-settle. Evidence: :download:`nine-update transcription <../wake_forensic_evidence.csv>`.
-The 23 unchanged trajectories remain in the complete replay report.
+**What it means for the next test:** we need to prevent steps that worsen
+their own training score. Then we must separately check whether the answers
+improve on samples that were not used to choose the step.
 
-22. Corrected Wake Descent: Currently Running
----------------------------------------------
+Record: job 1965476; :download:`recorded first-step values
+<../wake_forensic_evidence.csv>`. The other 23 runs had no accepted change.
 
-``frozen_parent_wake_descent_v1``, contract ``wake_armijo_v1``, introduced in
-``dcdd6d6``. Same source, seeds, cases and budget as the completed pilot;
-reverse remains a control. Fresh numerical audits still block optimization
-unless all required checks pass.
+22. Does Checking the Step Before Keeping It Help?
+----------------------------------------------------------------------
 
-Adam proposes a displacement; the implementation tests scales 1 through
-1/2048, accepts the first finite strict descent satisfying Armijo and otherwise
-retains both parameters and optimizer state. Extra trials evaluate the network
-density, not the decoder, but their runtime/count is recorded.
+**We want to know:** can we prevent the harmful large changes without stopping
+all useful learning?
 
-**What this tests:** whether enforcing actual batch descent prevents the
-reproduced overshoot while allowing useful independent support improvements.
-It does not train the shared amortized network or learn a population prior.
-The operator reports it running; no final result is available in this dossier.
+**We changed the code:** before keeping an adjustment, the program checks
+whether it reduces the training score on the same samples. If it does not,
+the program tries a smaller adjustment. If none of the allowed sizes works,
+it keeps the old parameters and the old training state.
 
-**Decision after completion:** first check every accepted loss change, then
-paired independent ESS, k, maximum weights, residuals and acceptance counts
-across both starts and both groups. More accepted updates alone is not success.
-If descent passes but support does not, the next question is proposal/weight
-quality and generalization, not another unconstrained increase in runtime.
-Scaling to global AVI/RWS needs a separately frozen independent-cohort test;
-historical calibration scores cannot stand in for that result.
+**We are testing:** the same galaxies, starting states and sample budgets
+as before. We keep the other training method unchanged for comparison.
 
-Launch/readback protocol: :download:`wake descent runbook
-<../feniks_wake_descent_runbook.md>`. This correction addresses a specific
-optimizer failure; it does not yet establish a generally reliable RWS method.
+**Result so far:** the operator reported this test running. No completed
+result has been added to this page.
+
+**What would count as progress:** accepted steps should no longer worsen
+their own training score. In addition, fresh samples should show more reliable
+weights without unacceptable deterioration in the light predictions. If only
+the first condition improves, we have fixed step safety, not the whole problem.
+
+Record: ``frozen_parent_wake_descent_v1``. Code name: ``wake_armijo_v1``.
+Commands: :download:`run instructions <../feniks_wake_descent_runbook.md>`.
+
+What We Know Now
+----------------------------------------------------------------------
+
+**Problems we found and corrected:**
+
+* The network blocks did not transform all 15 numbers used to describe a galaxy.
+  They now do.
+* Several parts of the numerical calculation needed changes or more precision.
+  The revised versions passed the checks described above.
+* One numerical check used an incorrect precision assumption. We corrected it.
+
+**Problem we reproduced and wrote a correction for:**
+
+* Some accepted wake changes were too large and worsened their own training
+  score. The current code checks and reduces the change before keeping it.
+  We are still waiting for the completed test of this correction.
+
+**Problem we have not yet shown to be solved:**
+
+* Too few proposed galaxies can still carry almost all the weight. Until this
+  improves reliably, we cannot claim that the reported uncertainties are correct.
+
+**The main lesson:** better light predictions, correct numerical calculations,
+safe training steps and trustworthy uncertainties are different achievements.
+We need all of them. Completing one does not automatically complete the others.
+
+More detail: :doc:`feniks_debug_meeting` contains the starting-point plots and
+run paths. :doc:`feniks_debug_metrics` contains the equations. The
+:download:`technical log <../feniks_decoder_debug_log.md>` retains the earlier
+implementation details and numerical results.

@@ -3,6 +3,13 @@ FENIKS: From Numerical Debugging to Reliable Adaptation
 
 Meeting dossier | 10 September 2026
 
+.. note::
+
+   **New to this project? Start with** :doc:`feniks_debug_experiments`.
+   It explains each test in everyday language: what we wanted to know, what
+   we did, what happened and what it means. This page keeps the figures,
+   numbers and file locations for reference.
+
 **The goal is to infer which galaxies could have produced the measured light,
 and how uncertain we are about their properties.** Several combinations of
 distance, mass, dust and star-formation history can explain similar observations.
