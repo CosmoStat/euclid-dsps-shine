@@ -8901,3 +8901,9 @@ Remote recovery:
   Compileall, Ruff, Bash syntax and Sphinx -W pass. No H100 run here; legacy
   fit/posterior smoke configs remain absent. Paired readback CLI also tested.
 - Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
+# Frozen geometry and NUTS comparison
+
+- Implemented: one controlled geometry/weight diagnostic, then a separately submitted NUTS array on the same four galaxies. See `docs/feniks_geometry_nuts_runbook.md`.
+- Freeze the learned target. Compare A (dispersed / learned prior), B (encoder / learned prior), C (dispersed / initial identity prior). Never label these references as a known true posterior.
+- Preserve all chains and require explicit diagnostic review before scientific interpretation. No training, automatic promotion, or automatic NUTS submission.
+- Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
