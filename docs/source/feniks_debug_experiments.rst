@@ -8,6 +8,29 @@ measurements. Each experiment changes a specific part of the inference chain;
 improvements across different targets, cohorts or K are not a single learning
 curve. Numerical PASS applies to the tested points and directions only.
 
+The Four Chapters
+-------------------
+
+**Experiments 01-03: improve the shared proposal.** We tested simulation-based
+training and network structure. Some fits improved, but importance support
+remained poor.
+
+**Experiments 04-12: make the numerical calculation trustworthy.** We isolated
+and corrected specific decoder and precision issues before continuing to
+interpret optimizer behavior.
+
+**Experiments 13-18: ask whether local adaptation solves the remaining problem.**
+Longer runs, wider proposals and larger evaluation batches did not reliably
+recover support. The complete conditional transport was then qualified.
+
+**Experiments 19-22: reproduce and control harmful updates.** The reverse/wake
+comparison exposed an adaptation failure; exact replay isolated overshoot.
+The current guarded pilot tests the resulting correction.
+
+For a short problem/fix/open-question recap, start at
+:doc:`feniks_debug_meeting`. Below, each numbered section provides the evidence
+behind one step of that story.
+
 .. contents:: Experiments
    :local:
    :depth: 1

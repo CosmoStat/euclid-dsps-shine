@@ -1,5 +1,14 @@
 # Plan
 
+## 2026-09-10 Meeting narrative simplification
+
+- Completed: added a plain-English executive recap separating observed
+  problems, verified fixes, experimental lessons and unresolved questions.
+- Preserved detailed evidence and equations; added a short reading path,
+  a four-chapter experiment guide and accessible metric explanations.
+- Verified Sphinx HTML with warnings treated as errors and diff whitespace.
+  Documentation only; no change to the running pilot or inference code.
+
 ## 2026-09-10 Expanded English meeting dossier
 
 - Implemented: three English pages covering the historical baseline, current

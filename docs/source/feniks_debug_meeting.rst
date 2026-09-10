@@ -3,21 +3,137 @@ FENIKS: From Numerical Debugging to Reliable Adaptation
 
 Meeting dossier | 10 September 2026
 
-**We want a joint conditional distribution, not a best-fit galaxy.** Redshift,
-mass, metallicity, dust and SFH uncertainties must remain meaningful after
-conditioning on photometry. The network proposes samples; the prior and
-decoder define the target. A completed job, a decreasing loss, a good flux fit
-and a calibrated posterior are four different claims.
+**The goal is to infer which galaxies could have produced the measured light,
+and how uncertain we are about their properties.** Several combinations of
+distance, mass, dust and star-formation history can explain similar observations.
+We therefore need a distribution of plausible answers, not just one good fit.
+
+**Main conclusion:** we found and corrected specific numerical and structural
+problems. We then reproduced an optimizer step-size problem and implemented
+a safeguard. Reliable posterior uncertainties are still a result to demonstrate,
+not something guaranteed by those corrections.
 
 .. contents:: On this page
    :local:
    :depth: 2
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
    feniks_debug_metrics
    feniks_debug_experiments
+
+The Story in Two Minutes
+------------------------
+
+1. **The network could produce plausible fits, but its uncertainty estimates
+   were not reliable enough.** Among 1,024 proposed solutions, importance
+   weights often left only about six effective samples at the historical
+   epoch-160 checkpoint. Good-looking flux predictions hid this weakness.
+2. **We checked the machinery before asking it to learn more.** We found
+   uneven coverage of the parameters in the network, numerical issues in
+   parts of the physical calculation, and a precision assumption in an audit.
+   Correcting these made the relevant numerical checks pass at tested points.
+3. **We tried several ways to improve each galaxy's distribution.** Longer
+   optimization, smaller steps, more samples and wider distributions sometimes
+   improved the fit, but did not consistently make the weighted samples reliable.
+4. **We isolated a concrete problem in wake adaptation.** The update pointed
+   downhill locally, but the full step often went too far: seven of nine
+   inspected first updates increased the very loss they were meant to reduce.
+5. **The current pilot tests a guarded update.** It reduces the step until
+   the fixed-batch loss decreases, or rejects the update entirely. We still
+   need its independent evaluation to show whether the resulting distributions
+   improve, rather than merely becoming safer to optimize.
+
+How the Pieces Fit Together
+---------------------------
+
+* **Physical model / decoder:** turns a proposed galaxy into predicted light.
+* **Prior:** describes the population before considering this object's data.
+* **Amortized network:** quickly proposes many possible galaxies from measured
+  light. The same trained network is used across objects.
+* **Local adaptation:** adjusts the proposal for one object; it does not
+  retrain the shared network or update the population prior.
+* **Importance weights:** compare the proposals with the prior and physical
+  likelihood. If one proposal receives almost all the weight, thousands of
+  generated samples can still contain very little useful information.
+
+The **posterior** is the distribution implied by the data and model. The
+network's **proposal** is our approximation to it. They should not be treated
+as identical simply because the network returns samples.
+
+What Were the Problems, and What Did We Fix?
+------------------------------------------------------------
+
+**1. Some parameters were not being transformed by the conditional flow.**
+The topology audit found seven coordinates with zero transformation counts.
+The rebuilt topology transforms every coordinate. This fixes a structural
+limitation; it does not establish that the learned distribution is accurate.
+
+**2. Parts of the numerical calculation were not sufficiently qualified.**
+We isolated photometric integration, metallicity-related calculations and
+redshift/transport precision. Reference quadrature and targeted precision
+changes progressively resolved the tested discrepancies. The versioned
+transport64 objective passed all 32 starting-point audits. This is evidence
+for those tests, not a proof of accuracy everywhere in parameter space.
+
+**3. One numerical test used an inappropriate precision assumption.**
+The resolution screen assumed float32 output where the loss was float64.
+Correcting that screen removed false obstacles without simply loosening every
+tolerance. The checking code needed scrutiny as well as the model code.
+
+**4. An eligible wake batch could still produce a harmful full update.**
+The old checks screened weight quality but did not guarantee that the proposed
+step decreased its own batch loss. Exact replay confirmed the behavior.
+Backtracking with rollback is now implemented; its effect on independent
+posterior quality is being tested in the current pilot.
+
+**5. Concentrated weights and unreliable joint uncertainties remain open.**
+These are measured inference failures, not yet resolved by the fixes above.
+They explain why successful numerical audits have not automatically led to
+a validated large-scale AVI/RWS run.
+
+What We Learned From the Experiments
+-------------------------------------
+
+* **A better fit is not necessarily a better distribution.** Several VI runs
+  reduced flux residuals while importance weights remained concentrated.
+* **More samples reveal problems; they do not necessarily fix them.** Replaying
+  unchanged checkpoints at K4096 exposed fragile apparent successes at K1024.
+* **Wider is not automatically safer.** Broadening all directions can add many
+  implausible galaxies without recovering the important missing regions.
+* **A correct gradient is not a safe finite step.** Local derivative checks
+  passed while full wake updates overshot. This directly motivated backtracking.
+* **A decreasing training loss is still not enough.** Two inspected updates
+  reduced batch loss but worsened independent fit diagnostics. Validation must
+  use fresh draws, not only the samples used to construct the update.
+* **A good redshift or physical-subset score can hide joint problems.** At
+  epoch 160, physical-5D MIRA was near its reference while full-15D MIRA was not.
+
+Where We Stand
+---------------
+
+**Verified in completed tests:** corrected topology coverage, numerical
+qualification at the tested transport64 starting points, and exact replay of
+the problematic wake trajectories.
+
+**Implemented, awaiting the current pilot's outcome:** guarded wake descent.
+It protects the update's fixed-batch objective; it does not promise better
+importance weights or calibrated uncertainties.
+
+**Still to demonstrate:** stable improvement on fresh samples across objects
+and starts, then generalization on an independent cohort. Only then would a
+larger training run test scaling of a convincing method rather than repeat
+the same unresolved failure at greater cost.
+
+Reading Guide for the Meeting
+------------------------------
+
+Start with the recap above. Use the baseline plots below to show why debugging
+was necessary. Then use :doc:`feniks_debug_experiments` for the sequence of
+tests, and :doc:`feniks_debug_metrics` when an equation or diagnostic needs
+explaining. The figures and tables below retain their original evidence and
+limitations; historical results are not relabeled as current results.
 
 Where We Started
 ----------------

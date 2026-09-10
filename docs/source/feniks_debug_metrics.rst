@@ -4,6 +4,23 @@ Metrics: Definitions and Interpretation
 Return to :doc:`feniks_debug_meeting` or :doc:`feniks_debug_experiments`.
 These definitions follow the repository's diagnostics.
 
+First Read: What Each Diagnostic Asks
+-------------------------------------
+
+* **Residual RMS:** do proposed galaxies reproduce the measured light?
+* **ESS:** after weighting, how many samples meaningfully contribute?
+* **Maximum weight / Pareto k:** is the answer dominated by a few rare samples?
+* **Evidence delta:** do two independent sample batches give similar estimates?
+* **PIT / coverage / MIRA:** when truth is available, do the inferred
+  distributions behave as expected across independent examples?
+* **Gradient audit:** does the calculated local direction agree with direct
+  perturbations of the objective?
+* **Descent check:** did the actual update reduce its fixed-batch loss?
+
+No one diagnostic answers all these questions. In particular, low residuals
+do not imply high ESS, and a safe optimizer step does not imply calibration.
+The equations below specify precisely what the reported numbers mean.
+
 Target and Training Objectives
 -------------------------------
 
