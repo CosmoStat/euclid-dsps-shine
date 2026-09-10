@@ -106,6 +106,7 @@ parameters physically.
    forward_model
    feniks_decoder_debug
    feniks_current_status
+   feniks_debug_meeting
    prior_learning
    spline15d_realnvp
    amortized_inference

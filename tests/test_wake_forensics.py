@@ -26,10 +26,29 @@ def test_prepare_rejects_changed_checkpoint(night, tmp_path):  # noqa: F811
     from scripts.feniks_wake_forensics import prepare
 
     pilot, _ = night
-    (pilot / "cases/observed_000/wake_0/draws_04096/parameters.eqx").write_bytes(b"changed")
+    (pilot / "cases/observed_000/wake_0/draws_04096/parameters.eqx").write_bytes(
+        b"changed"
+    )
     with pytest.raises(ValueError, match="checkpoint contract"):
         prepare(pilot, tmp_path / "forensics")
     assert not (tmp_path / "forensics").exists()
+
+
+def test_prepare_descent_keeps_original_budgets_and_pins_reference(night, tmp_path):  # noqa: F811
+    from scripts.feniks_objective_night import prepare as prepare_night
+    from scripts.feniks_wake_descent import prepare, read
+
+    pilot, _ = night
+    root = tmp_path / "descent"
+    prepare(pilot, root)
+    manifest = read(root / "RUN_MANIFEST.json")
+    assert manifest["adaptation_contract"] == "wake_armijo_v1"
+    assert manifest["objective_recipe"]["decoder_draw_budgets"] == [1024, 4096]
+    assert "wake_forensic_reference" not in manifest
+    assert "experiment_seed_offset" not in manifest
+    assert manifest["wake_descent_reference"]["hashes"]
+    with pytest.raises(ValueError, match="original transport64"):
+        prepare_night(root, tmp_path / "invalid_extension")
 
 
 def test_replay_preserves_original_path_and_detects_mismatch(tmp_path, monkeypatch):

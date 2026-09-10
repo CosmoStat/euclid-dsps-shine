@@ -1,6 +1,14 @@
 FENIKS : ou en est-on ?
 ============================================================
 
+**Reunion :** :doc:`feniks_debug_meeting` rassemble la chronologie, les
+hypotheses, les implications et les nouvelles figures du job 1965476.
+Le rejeu retrouve exactement les 32 trajectoires. Sept des neuf premiers pas
+acceptes augmentent la perte du lot malgre une direction localement descendante.
+Le pilote ``wake_armijo_v1`` ajoute un controle de descente avec retour arriere
+complet en cas de refus. Il est implemente et reste a executer sur Jean-Zay.
+Le job nocturne 1962505 a ete refuse : ``NIGHT_EXTENSION_NOT_STARTED``.
+
 Etat au 10 septembre 2026, apres le pilote 1962310
 ------------------------------------------------------------
 

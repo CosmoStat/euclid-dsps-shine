@@ -1,5 +1,18 @@
 # Plan
 
+## 2026-09-10 Wake descent correction
+
+- Implemented: versioned Armijo backtracking with full Adam rollback on rejection,
+  fixed-parent pilot and meeting figures spanning the numerical/debug sequence.
+- Evidence: exact 32/32 forensic replay; seven of nine inspected full updates
+  increase their own wake loss. Independent support still requires validation.
+- Verified: 41 targeted tests across guarded updates, original wake/pilot,
+  transport64 integration and preparation/night gates. Ruff, compileall, Bash
+  syntax and Sphinx -W pass. PNG/PDF meeting figures visually inspected.
+- Handoff: one H100, max 10h; original seeds and budgets, fresh blocking audits;
+  wake_armijo_v1 with per-attempt descent readback. No cluster result yet.
+  Legacy fit/posterior smoke configs are absent; those runs were not performed.
+
 ## 2026-09-10 Wake update forensics
 
 - Implemented: replay all original wake trajectories, record fixed-batch loss,

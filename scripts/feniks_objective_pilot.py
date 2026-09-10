@@ -30,6 +30,8 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
     )
 
     source = manifest["objective_pilot"]
+    if "wake_descent_reference" in manifest:
+        verify_source(manifest["wake_descent_reference"])
     if "wake_forensic_reference" in manifest:
         verify_source(manifest["wake_forensic_reference"])
     recipe = manifest.get("objective_execution_recipe", manifest["objective_recipe"])
@@ -65,6 +67,8 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         )
 
     def unchanged():
+        if "wake_descent_reference" in manifest:
+            verify_source(manifest["wake_descent_reference"])
         verify_source(source)
         if "transport_precision_reference" in manifest:
             verify_source(manifest["transport_precision_reference"])
@@ -90,11 +94,17 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
             population_training_started=False,
             prior_bitwise_unchanged=True,
             transport_contract=manifest.get("transport_contract", "historical_native"),
+            adaptation_contract=manifest.get("adaptation_contract", "historical_wake"),
             artifacts={
                 name: dict(sha256=sha256_file(root / name))
                 for name in ("OBJECTIVE_AUDIT.json", "SIMULATED_INPUTS.npz")
             },
         )
+        if "wake_backtracking" in manifest:
+            final["wake_history_hashes"] = {
+                str(path.relative_to(root)): sha256_file(path)
+                for path in root.glob("cases/*/wake_*/optimization.csv")
+            }
         write(root / "FINAL.json", finite_json(final))
         return final
 
@@ -290,11 +300,17 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
         draws=recipe["reverse_draws"],
         learning_rate=recipe["learning_rate"],
     )
-    wake_optimizer, wake_step = make_wake_step(
+    wake_factory = make_wake_step
+    if "wake_backtracking" in manifest:
+        from euclid_dsps.amortized.local_wake_backtracking import make_guarded_wake_step
+
+        wake_factory = make_guarded_wake_step
+    wake_optimizer, wake_step = wake_factory(
         encoder,
         learning_rate=recipe["learning_rate"],
         minimum_ess=recipe["minimum_ess"],
         maximum_weight=recipe["maximum_weight"],
+        **manifest.get("wake_backtracking", {}),
     )
     completed, began = [], time.monotonic()
     for number, (case, observation, generated, anchor, context, starts) in enumerate(

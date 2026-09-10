@@ -79,7 +79,11 @@ if [[ -n "${LOCAL_VI_QUALIFIED_NIGHT_ROOT:-}" ]]; then
   export JAX_ENABLE_X64=true
 fi
 DEPENDENCY=()
-if [[ -n "${LOCAL_VI_WAKE_FORENSIC_ROOT:-}" ]]; then
+if [[ -n "${LOCAL_VI_WAKE_DESCENT_ROOT:-}" ]]; then
+  WALLTIME="10:00:00"
+  JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
+    python -m scripts.feniks_wake_descent "$LOCAL_VI_WAKE_DESCENT_ROOT" "$DIAGNOSTIC_ROOT"
+elif [[ -n "${LOCAL_VI_WAKE_FORENSIC_ROOT:-}" ]]; then
   WALLTIME="10:00:00"
   JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu EUCLID_DSPS_REQUIRE_GPU=0 \
     python -m scripts.feniks_wake_forensics "$LOCAL_VI_WAKE_FORENSIC_ROOT" "$DIAGNOSTIC_ROOT"

@@ -36,6 +36,7 @@ def prepare(pilot, root, dependency=None):
     if (
         manifest["method"] != "qualified_objective_transport64_pilot_v1"
         or "night_extension" in manifest
+        or "adaptation_contract" in manifest
     ):
         raise ValueError("expected original transport64 pilot")
     if manifest["objects_per_group"] != 8 or manifest["objective_recipe"][

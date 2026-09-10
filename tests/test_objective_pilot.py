@@ -66,9 +66,14 @@ def test_pilot_rejects_changed_protocol_before_preparation(tmp_path, extra):
         ("PASS", True),
         ("PASS", "transport64"),
         ("FAIL", "transport64"),
+        ("PASS", "guarded"),
+        ("FAIL", "guarded"),
     ],
 )
 def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precision):
+    guarded_wake = precision == "guarded"
+    if guarded_wake:
+        precision = "transport64"
     import euclid_dsps.amortized.local_vi_objective_audit as audit
     import euclid_dsps.amortized.local_wake_diagnostic as wake
 
@@ -122,6 +127,9 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
         objective_pilot=dict(path=str(source), hashes=hashes),
         objective_recipe=recipe,
     )
+    if guarded_wake:
+        manifest["wake_backtracking"] = dict(armijo=1e-4, trials=12)
+        manifest["adaptation_contract"] = "wake_armijo_v1"
     if precision:
         import euclid_dsps.amortized.local_transport_precision as transport
 
@@ -196,6 +204,12 @@ def test_pilot_gate_and_real_updates(tmp_path, monkeypatch, audit_status, precis
 
     monkeypatch.setattr(pilot, "make_step", guarded(old_reverse))
     monkeypatch.setattr(wake, "make_wake_step", guarded(old_wake))
+    if guarded_wake:
+        import euclid_dsps.amortized.local_wake_backtracking as descent
+
+        monkeypatch.setattr(
+            descent, "make_guarded_wake_step", guarded(descent.make_guarded_wake_step)
+        )
     if precision == "transport64":
         from scripts import run_feniks_sc_drws_local_vi_diagnostic as runner
 

@@ -84,7 +84,8 @@ elif mode == 'local_vi':
         probe = json.loads((root/'RUN_MANIFEST.json').read_text()).get('support_probe')
         if (root/'NIGHT_GATE.json').is_file():
             print('Night resource gate:', json.loads((root/'NIGHT_GATE.json').read_text())['status'])
-        print('Wake forensic replay: first accepted update, fixed scales; no selection or promotion' if 'wake_forensic_reference' in manifest else
+        print('Wake Armijo descent pilot; fixed parent and independent evaluations' if 'wake_backtracking' in manifest else
+              'Wake forensic replay: first accepted update, fixed scales; no selection or promotion' if 'wake_forensic_reference' in manifest else
               'Gated overnight local reverse/wake extension; not global NN or population training' if 'night_extension' in manifest else
               'Versioned transport64 reverse/wake pilot; frozen parent; no promotion' if 'transport_contract' in manifest else
               'Transport precision audit only; no optimization or promotion' if 'transport_precision_reference' in manifest else
