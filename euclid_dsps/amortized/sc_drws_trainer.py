@@ -93,6 +93,20 @@ def _raw_sc_drws(config: dict[str, Any]) -> dict[str, Any]:
     return dict((config.get("amortized", {}) or {}).get("sc_drws", {}) or {})
 
 
+def smoke_schedule(schedule):
+    """Exercise warmup wake, joint wake and trainable flow within eight epochs."""
+    return replace(
+        schedule,
+        warmup_epochs=4,
+        joint_epochs=4,
+        sleep_only_bootstrap_epochs=1,
+        sleep_epochs_per_cycle=2,
+        wake_epochs_per_cycle=1,
+        flow_freeze_epochs=0,
+        flow_thaw_end_epoch=1,
+    )
+
+
 def validate_sc_drws_config(config: dict[str, Any]) -> dict[str, Any]:
     cfg = amortized_config(config)
     raw = _raw_sc_drws(config)
@@ -326,7 +340,7 @@ def train_feniks_sc_drws(
         raise RuntimeError("SC-DRWS runtime loaded truth")
     schedule = schedule_from_config(config)
     if smoke:
-        schedule = replace(schedule, warmup_epochs=4, joint_epochs=4)
+        schedule = smoke_schedule(schedule)
     cfg = amortized_config(config)
     raw = _raw_sc_drws(config)
     optimizer_cfg = raw["optimizer"]
@@ -670,6 +684,8 @@ def train_feniks_sc_drws(
                     "q_grad_clipped": bool(_scalar(metrics.grad_clipped)),
                     "q_grads_finite": bool(_scalar(metrics.grads_finite)),
                     "q_update_applied": bool(_scalar(metrics.update_applied)),
+                    "q_objective_after": np.nan,
+                    "q_update_scale": np.nan,
                     "q_learning_rate": q_learning_rate,
                     "flow_gradient_multiplier": flow_grad_scale,
                     "log_std_floor": floor,
@@ -785,9 +801,7 @@ def train_feniks_sc_drws(
                 maximum_logweight = np.max(
                     np.where(finite_logweight, scaled_logweights, -np.inf), axis=0
                 )
-                maximum_logweight = np.where(
-                    finite_object, maximum_logweight, 0.0
-                )
+                maximum_logweight = np.where(finite_object, maximum_logweight, 0.0)
                 centered = np.where(
                     finite_logweight,
                     scaled_logweights - maximum_logweight[None, :],
@@ -872,6 +886,8 @@ def train_feniks_sc_drws(
                     "q_grad_clipped": bool(_scalar(metrics.grad_clipped)),
                     "q_grads_finite": bool(_scalar(metrics.grads_finite)),
                     "q_update_applied": bool(_scalar(metrics.update_applied)),
+                    "q_objective_after": _metric(details, "q_objective_after"),
+                    "q_update_scale": _metric(details, "q_update_scale"),
                     "q_learning_rate": q_learning_rate,
                     "flow_gradient_multiplier": flow_grad_scale,
                     "log_std_floor": floor,
@@ -1096,9 +1112,7 @@ def train_feniks_sc_drws(
                     "epoch": epoch,
                     "entropy_eligible": bool(entropy_eligible),
                     "finite_eligible": finite_eligible,
-                    "role": support_cfg.get(
-                        "role", "truth_free_training_safety_only"
-                    ),
+                    "role": support_cfg.get("role", "truth_free_training_safety_only"),
                 }
             )
             improved = bool(

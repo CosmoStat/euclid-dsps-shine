@@ -1,5 +1,16 @@
 # Plan
 
+## 2026-09-10 Fix global smoke coverage
+
+- Remote smoke ran sleep only: bootstrap=16 and flow freeze=12 exceeded its
+  eight epochs. Corrected smoke to exercise warmup wake at epoch 4 and joint
+  wake at epoch 7, with trainable flow. Full schedule now uses 2 sleep / 1 wake
+  after its unchanged bootstrap. No change to the 60+120 phase lengths.
+- Added fail-closed applied-update/descent gate, checked after smoke and before
+  full training. New roots required; cancelled v1 is not a qualified reference.
+- Verified 38 focused CPU tests, Ruff, Python compilation and shell syntax.
+  Corrected H100 smoke has not yet run; no convergence claim.
+
 ## 2026-09-10 Global guarded RWS
 
 - Added opt-in float64 coupling transport to the global encoder and opt-in

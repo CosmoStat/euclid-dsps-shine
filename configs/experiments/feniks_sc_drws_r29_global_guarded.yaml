@@ -5,5 +5,8 @@ amortized:
   encoder:
     transport_float64: true
   sc_drws:
+    schedule:
+      sleep_epochs_per_cycle: 2
+      wake_epochs_per_cycle: 1
     optimizer:
       wake_backtracking: true

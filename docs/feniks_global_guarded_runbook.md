@@ -1,5 +1,22 @@
 # Global guarded RWS
 
+## Corrected smoke and cadence (v2)
+
+The first remote smoke completed eight sleep-only epochs: it did not exercise
+wake or prior updates because the inherited bootstrap lasted sixteen epochs.
+It must not authorize training. Use a fresh `global_guarded_rws_v2` output root.
+The corrected smoke uses one bootstrap epoch and a 2-sleep/1-wake cycle, reaching
+warmup wake at epoch 4 and joint wake at epoch 7. Its flow is trainable from the
+first epoch. Actual wake descent in both phases and at least one actual prior
+update are required; otherwise the job fails and the dependent array stays blocked.
+Full training rechecks this gate before starting.
+
+Full training now uses 2 sleep / 1 wake after its unchanged sixteen-epoch
+bootstrap. Its flow thaw and 60+120 phase lengths remain unchanged. This raises
+the frequency of observed-data updates from one quarter to one third after
+bootstrap, not a guaranteed runtime or convergence improvement. The trainer
+does not currently support a 3-sleep/2-wake cycle.
+
 This launches actual shared RWS training, not ELBO-only local adaptation.
 New opt-in contracts: float64 conditional coupling layers in both transport
 directions, and first acceptable decreasing wake objective step among twelve

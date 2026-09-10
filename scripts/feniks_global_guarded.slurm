@@ -36,6 +36,9 @@ if [[ "${GUARDED_SMOKE:-0}" == 1 ]]; then
 elif [[ -s "$OUT/states/latest.eqx" ]]; then
   ARGS+=(--resume-state "$OUT/states/latest.eqx")
 fi
+if [[ "${GUARDED_SMOKE:-0}" != 1 ]]; then
+  python -m scripts.check_feniks_global_smoke "$GUARDED_ROOT/smoke"
+fi
 python scripts/train_feniks_sc_drws.py \
   --config configs/experiments/feniks_sc_drws_r29_global_guarded.yaml \
   --out "$OUT" --seed "$((260826 + TASK))" \
@@ -43,3 +46,6 @@ python scripts/train_feniks_sc_drws.py \
   --validation-indices-file "$VALIDATION_ROWS" \
   --validation-catalog "$CATALOG_DIR/test.parquet" \
   --manifest-file "$SELECTION_MANIFEST" "${ARGS[@]}"
+if [[ "${GUARDED_SMOKE:-0}" == 1 ]]; then
+  python -m scripts.check_feniks_global_smoke "$OUT"
+fi
