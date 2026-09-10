@@ -1,5 +1,18 @@
 # Plan
 
+## 2026-09-10 Global guarded RWS
+
+- Added opt-in float64 coupling transport to the global encoder and opt-in
+  distributed wake backtracking with optimizer-state rollback on rejection.
+- Added fresh-training launcher with same-program smoke dependency, two seeds
+  serialized on four H100s, original full-cohort RWS/population schedule.
+- This starts from scratch, NOT arm C or a legacy optimizer. Warm-start migration
+  and independent posterior qualification are not delivered by this launcher.
+- CPU distributed and transport tests passed; GPU/physical-decoder execution is
+  not verified locally. Preserve historical defaults and label this experimental.
+- Verification: 37 focused tests, config validation, Ruff, compileall and shell
+  syntax passed. Full launch keeps the historical 60+120 epoch schedule.
+
 ## 2026-09-10 Shared AVI continuation
 
 - Implement a two-seed shared stochastic-ELBO training array from certified

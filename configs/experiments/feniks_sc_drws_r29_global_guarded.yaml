@@ -1,0 +1,9 @@
+extends: feniks_sc_drws_r29_current_production.yaml
+
+# New numerical contract: start fresh, never load a legacy optimizer state.
+amortized:
+  encoder:
+    transport_float64: true
+  sc_drws:
+    optimizer:
+      wake_backtracking: true

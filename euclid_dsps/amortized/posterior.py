@@ -289,6 +289,7 @@ class ConditionalFlowEncoder(eqx.Module):
     context_encoder_type: str = eqx.field(static=True)
     output_space: str = eqx.field(static=True)
     base_components: int = eqx.field(static=True)
+    transport_float64: bool = eqx.field(static=True, default=False)
 
     def __init__(
         self,
@@ -326,7 +327,11 @@ class ConditionalFlowEncoder(eqx.Module):
         residual_context_dim: int = 128,
         mean_init_scale: float = 1.0e-3,
         permutation: str = "indexed_roll",
+        transport_float64: bool = False,
     ) -> None:
+        if transport_float64 and not jax.config.x64_enabled:
+            raise ValueError("float64 transport requires JAX_ENABLE_X64=true")
+        self.transport_float64 = bool(transport_float64)
         keys = jax.random.split(key, int(n_layers) + 1)
         self.base_components = int(base_components)
         context_encoder_type = _normalize_context_encoder(context_encoder_type)
@@ -428,6 +433,17 @@ class ConditionalFlowEncoder(eqx.Module):
                 )
                 for index in range(int(n_layers))
             )
+        if self.transport_float64:
+            if not all(
+                isinstance(layer, _ConditionalCoupling) for layer in self.layers
+            ):
+                raise ValueError(
+                    "float64 transport requires conditional coupling layers"
+                )
+            self.layers = jax.tree_util.tree_map(
+                lambda x: x.astype(jnp.float64) if eqx.is_inexact_array(x) else x,
+                self.layers,
+            )
         permutation_mode = str(permutation).strip().lower()
         if permutation_mode in {"roll", "indexed_roll"}:
             shifts = tuple(index + 1 for index in range(int(n_layers)))
@@ -467,10 +483,18 @@ class ConditionalFlowEncoder(eqx.Module):
         return jnp.concatenate((mean, log_std), axis=-1)
 
     def forward(self, value, context, *, scale_clamp=None):
+        if self.transport_float64:
+            value = jnp.asarray(value, jnp.float64)
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
         for layer, permutation in zip(self.layers, self.permutations, strict=True):
             value, delta = (
-                layer.forward(value, context, scale_clamp=scale_clamp)
+                layer._transform(
+                    value,
+                    context,
+                    inverse=False,
+                    scale_clamp=scale_clamp,
+                    preserve_dtype=self.transport_float64,
+                )
                 if isinstance(layer, _ConditionalCoupling)
                 else layer.forward(value, context)
             )
@@ -479,6 +503,8 @@ class ConditionalFlowEncoder(eqx.Module):
         return value, logdet
 
     def inverse(self, value, context, *, scale_clamp=None):
+        if self.transport_float64:
+            value = jnp.asarray(value, jnp.float64)
         logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
         items = zip(
             reversed(self.layers),
@@ -488,7 +514,13 @@ class ConditionalFlowEncoder(eqx.Module):
         for layer, inverse_permutation in items:
             value = jnp.take(value, inverse_permutation, axis=-1)
             value, delta = (
-                layer.inverse(value, context, scale_clamp=scale_clamp)
+                layer._transform(
+                    value,
+                    context,
+                    inverse=True,
+                    scale_clamp=scale_clamp,
+                    preserve_dtype=self.transport_float64,
+                )
                 if isinstance(layer, _ConditionalCoupling)
                 else layer.inverse(value, context)
             )

@@ -538,10 +538,12 @@ def train_feniks_sc_drws(
     q_a_step = make_pmap_sc_drws_q_step(
         optimizer=q_warmup_optimizer,
         gradient_clip_norm=float(optimizer_cfg["q_gradient_clip_norm"]),
+        backtracking=bool(optimizer_cfg.get("wake_backtracking", False)),
     )
     q_b_step = make_pmap_sc_drws_q_step(
         optimizer=q_joint_optimizer,
         gradient_clip_norm=float(optimizer_cfg["q_gradient_clip_norm"]),
+        backtracking=bool(optimizer_cfg.get("wake_backtracking", False)),
     )
     selection_fn = _make_selection_log_alpha_fn(runtime)
     selection_preflight = _selection_preflight(model, selection_fn, key)

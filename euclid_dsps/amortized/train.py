@@ -253,6 +253,7 @@ def build_amortized_model(
             ),
             residual_context_dim=int(encoder_cfg.get("residual_context_dim", 128)),
             mean_init_scale=float(encoder_cfg.get("mean_init_scale", 1.0e-3)),
+            transport_float64=bool(encoder_cfg.get("transport_float64", False)),
         )
     else:
         raise ValueError(f"Unsupported amortized encoder type: {encoder_type}")

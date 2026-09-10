@@ -437,9 +437,7 @@ def test_population_stability_uses_dense_weighted_draws() -> None:
         ]
     )
     weights = np.full((2, 4), 0.5)
-    metrics = population_posterior_stability(
-        particles, weights, np.asarray([True] * 4)
-    )
+    metrics = population_posterior_stability(particles, weights, np.asarray([True] * 4))
     assert metrics["population_finite_objects"] == 4
     assert metrics["population_split_mean_standardized_rms"] == pytest.approx(0.0)
     assert np.isfinite(metrics["population_split_std_log_ratio_rms"])
@@ -554,7 +552,8 @@ def test_sc_drws_full_profile_adds_anti_collapse_without_changing_architecture(
     assert source["checkpoint_safety"]["restore_best_at_end"] is False
 
 
-def test_four_device_pmap_q_update_regression() -> None:
+@pytest.mark.parametrize("guarded", [False, True, "reject"])
+def test_four_device_pmap_q_update_regression(guarded) -> None:
     code = textwrap.dedent(
         """
         import equinox as eqx
@@ -606,6 +605,40 @@ def test_four_device_pmap_q_update_regression() -> None:
         print('SC_DRWS_PMAP_PASS')
         """
     )
+    if guarded:
+        code = code.replace(
+            "gradient_clip_norm=10.0)", "gradient_clip_norm=10.0, backtracking=True)"
+        )
+        if guarded == "reject":
+            code = code.replace("mask = jnp.ones", "mask = jnp.zeros")
+            code = code.replace(
+                "assert bool(jnp.all(metrics.update_applied))",
+                "assert not bool(jnp.any(metrics.update_applied))",
+            )
+            code = code.replace(
+                "_details['q_objective_after'] < metrics.loss",
+                "_details['q_objective_after'] == metrics.loss",
+            )
+            code = code.replace(
+                "_details['q_update_scale'] > 0", "_details['q_update_scale'] == 0"
+            )
+            code += "\nassert all(bool(jnp.array_equal(a, b)) for a, b in zip(jax.tree_util.tree_leaves(_state), jax.tree_util.tree_leaves(replicate(state))))\n"
+        code = code.replace(
+            "print('SC_DRWS_PMAP_PASS')",
+            """
+assert bool(jnp.all(_details['q_objective_after'] < metrics.loss))
+assert bool(jnp.all(_details['q_update_scale'] > 0))
+print('SC_DRWS_PMAP_PASS')
+""",
+        )
+    if guarded == "reject":
+        code = code.replace(
+            "_details['q_objective_after'] < metrics.loss",
+            "_details['q_objective_after'] == metrics.loss",
+        )
+        code = code.replace(
+            "_details['q_update_scale'] > 0", "_details['q_update_scale'] == 0"
+        )
     env = dict(os.environ)
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
     env["JAX_PLATFORMS"] = "cpu"
@@ -630,21 +663,15 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     full = (root / "scripts/feniks_sc_drws_full_h100.slurm").read_text()
     full_monitor = (root / "scripts/monitor_feniks_sc_drws_full.sh").read_text()
     inference = (root / "scripts/feniks_sc_drws_inference_h100.slurm").read_text()
-    inference_submit = (
-        root / "scripts/submit_feniks_sc_drws_inference.sh"
-    ).read_text()
-    postfreeze = (
-        root / "scripts/feniks_sc_drws_postfreeze_h100.slurm"
-    ).read_text()
+    inference_submit = (root / "scripts/submit_feniks_sc_drws_inference.sh").read_text()
+    postfreeze = (root / "scripts/feniks_sc_drws_postfreeze_h100.slurm").read_text()
     postfreeze_submit = (
         root / "scripts/submit_feniks_sc_drws_postfreeze.sh"
     ).read_text()
     postfreeze_monitor = (
         root / "scripts/monitor_feniks_sc_drws_postfreeze.sh"
     ).read_text()
-    full_tail_submit = (
-        root / "scripts/submit_feniks_sc_drws_full_tail.sh"
-    ).read_text()
+    full_tail_submit = (root / "scripts/submit_feniks_sc_drws_full_tail.sh").read_text()
     entrypoint = (root / "scripts/train_feniks_sc_drws.py").read_text()
     assert "--array=0-3%4" in submit
     assert "#SBATCH --gres=gpu:4" in pilot
@@ -667,9 +694,10 @@ def test_launchers_encode_sixteen_h100_pilot_and_resumable_training() -> None:
     assert "--require-full-dataset" in full
     assert 'VALIDATION_INDICES="$MANIFEST_ROOT/confirmation_indices.npy"' in full
     assert '--validation-catalog "$TEST_CATALOG"' in full
-    assert "explicit_cross_catalog_train_validation_no_truth" in (
-        root / "euclid_dsps/amortized/train.py"
-    ).read_text()
+    assert (
+        "explicit_cross_catalog_train_validation_no_truth"
+        in (root / "euclid_dsps/amortized/train.py").read_text()
+    )
     assert 'parser.add_argument("--validation-catalog", type=Path)' in entrypoint
     assert "feniks_sc_drws_r29_historical_production.yaml" in full
     assert "feniks_sc_drws_r29_current_production.yaml" in full
@@ -823,20 +851,14 @@ def test_training_resume_state_round_trip_and_provenance_gate(
 def test_resume_truncates_logs_after_last_durable_epoch(tmp_path: Path) -> None:
     path = tmp_path / "training.csv"
     path.write_text(
-        "epoch,batch,loss\n"
-        "62,1,2.0\n"
-        "63,1,1.5\n"
-        "64,1,1.4\n"
-        "64,2,1.3\n",
+        "epoch,batch,loss\n62,1,2.0\n63,1,1.5\n64,1,1.4\n64,2,1.3\n",
         encoding="utf-8",
     )
 
     _truncate_csv_after_epoch(path, 63)
 
     assert path.read_text(encoding="utf-8") == (
-        "epoch,batch,loss\n"
-        "62,1,2.0\n"
-        "63,1,1.5\n"
+        "epoch,batch,loss\n62,1,2.0\n63,1,1.5\n"
     )
     _truncate_csv_after_epoch(tmp_path / "missing.csv", 63)
 

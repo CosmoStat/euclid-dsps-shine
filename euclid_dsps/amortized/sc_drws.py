@@ -937,6 +937,7 @@ def make_pmap_sc_drws_q_step(
     *,
     optimizer,
     gradient_clip_norm: float,
+    backtracking: bool = False,
 ):
     """Build an encoder-only stopped RWS update with an entropy floor."""
     from .config import require_equinox
@@ -1014,6 +1015,7 @@ def make_pmap_sc_drws_q_step(
             model.encoder
         )
         grads = _pmean_tree(grads, "devices")
+        objective_grads = grads
         loss = jax.lax.pmean(loss, "devices")
         raw_norm = _tree_l2_norm(grads)
         scaled_layers = jax.tree_util.tree_map(
@@ -1052,8 +1054,49 @@ def make_pmap_sc_drws_q_step(
         )
         updates = eqx.tree_at(lambda tree: tree.layers, updates, scaled_update_layers)
         proposed = eqx.apply_updates(model.encoder, updates)
-        encoder = _select_tree(proposed, model.encoder, finite)
-        optimizer_state = _select_tree(proposed_state, optimizer_state, finite)
+        accepted = finite
+        accepted_scale = jnp.asarray(1.0)
+        after_loss = loss
+        if backtracking:
+            products = jax.tree_util.tree_map(
+                lambda g, u: (
+                    jnp.sum(g * u) if g is not None and u is not None else None
+                ),
+                objective_grads,
+                updates,
+            )
+            slope = sum(jax.tree_util.tree_leaves(products))
+            accepted = jnp.asarray(False)
+            accepted_scale = jnp.asarray(0.0)
+            chosen = model.encoder
+            for trial in range(12):
+                scale = 0.5**trial
+                delta = jax.tree_util.tree_map(
+                    lambda u, scale=scale: u * scale if u is not None else None, updates
+                )
+                candidate = eqx.apply_updates(model.encoder, delta)
+                trial_loss, _ = objective(candidate)
+                trial_loss = jax.lax.pmean(trial_loss, "devices")
+                candidate_finite = jax.lax.pmin(
+                    _tree_all_finite(candidate).astype(jnp.int32), "devices"
+                ).astype(bool)
+                take = (
+                    ~accepted
+                    & finite
+                    & candidate_finite
+                    & jnp.isfinite(trial_loss)
+                    & jnp.isfinite(slope)
+                    & (slope < 0)
+                    & (trial_loss < loss)
+                    & (trial_loss <= loss + 1e-4 * scale * slope)
+                )
+                chosen = _select_tree(candidate, chosen, take)
+                after_loss = jnp.where(take, trial_loss, after_loss)
+                accepted_scale = jnp.where(take, scale, accepted_scale)
+                accepted = accepted | take
+            proposed = chosen
+        encoder = _select_tree(proposed, model.encoder, accepted)
+        optimizer_state = _select_tree(proposed_state, optimizer_state, accepted)
         model = eqx.tree_at(lambda tree: tree.encoder, model, encoder)
         metrics = SCDrwsStepMetrics(
             loss=loss,
@@ -1061,10 +1104,12 @@ def make_pmap_sc_drws_q_step(
             clipped_grad_norm=jnp.minimum(raw_norm, float(gradient_clip_norm)),
             grad_clipped=raw_norm > float(gradient_clip_norm),
             grads_finite=finite,
-            update_applied=finite,
+            update_applied=accepted,
         )
         wake, penalty, entropy = auxiliary
         details = {
+            "q_objective_after": after_loss,
+            "q_update_scale": accepted_scale,
             "wake_loss": jax.lax.pmean(wake, "devices"),
             "entropy_floor_penalty": jax.lax.pmean(penalty, "devices"),
             **jax.tree_util.tree_map(
