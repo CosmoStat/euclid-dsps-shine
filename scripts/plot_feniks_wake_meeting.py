@@ -27,8 +27,8 @@ def main():
     ax.set(
         yticks=y,
         yticklabels=labels,
-        xlabel="Perte wake apres - avant (lot fige)",
-        title="7/9 premiers pas acceptes augmentent leur propre perte",
+        xlabel="Wake loss after - before (fixed batch)",
+        title="7/9 first accepted updates increase their own loss",
     )
     ax.axvline(0, color="black", lw=1)
     ax.invert_yaxis()
@@ -41,8 +41,8 @@ def main():
         axes,
         ("rms", "ess"),
         (
-            "RMS / RMS sans mise a jour (bas = mieux)",
-            "Fraction ESS / reference (haut = mieux)",
+            "RMS / no-update RMS (lower is better)",
+            "ESS fraction / reference (higher is better)",
         ),
         strict=True,
     ):
@@ -61,7 +61,7 @@ def main():
             yticklabels=labels,
             xticks=[0, 1, 2],
             xticklabels=["0.01", "0.1", "1"],
-            xlabel="Amplitude du pas",
+            xlabel="Update scale",
             title=title,
         )
         for i in range(len(df)):
@@ -74,9 +74,9 @@ def main():
                     va="center",
                     color="white" if abs(np.log2(ratios[i, j])) > 1.8 else "black",
                 )
-        fig.colorbar(im, ax=ax, label="log2 du ratio", shrink=0.7)
+        fig.colorbar(im, ax=ax, label="log2 ratio", shrink=0.7)
     fig.suptitle(
-        "Evaluations K4096 : amplitudes prescrites, bruit commun; 9 premiers pas"
+        "K4096 evaluation: fixed scales, common noise; nine first updates"
     )
     fig.savefig(out / "wake_scales.png", dpi=180)
     fig.savefig(out / "wake_scales.pdf")
@@ -97,19 +97,19 @@ def main():
             [-3.041251, -3.127305, -3.148782, -3.154149, -3.155490, -3.155826],
         ),
     ):
-        ax.plot(h, fd, "o-", color="#168575", label="Difference finie centree")
-        ax.axhline(ad, color="#bd3654", ls="--", label="AD : gradient . deplacement")
+        ax.plot(h, fd, "o-", color="#168575", label="Centered finite difference")
+        ax.axhline(ad, color="#bd3654", ls="--", label="AD: gradient . displacement")
         ax.set(
             xscale="log",
-            xlabel="h autour du point initial",
-            ylabel="Derivee directionnelle",
+            xlabel="h around the initial point",
+            ylabel="Directional derivative",
             title=name,
         )
         ax.invert_xaxis()
         ax.grid(alpha=0.2)
         ax.legend(fontsize=9)
     fig.suptitle(
-        "Le gradient local concorde; cela ne garantit pas la descente au pas complet"
+        "Local derivatives agree; this does not guarantee full-step descent"
     )
     fig.savefig(out / "wake_derivatives.png", dpi=180)
     fig.savefig(out / "wake_derivatives.pdf")

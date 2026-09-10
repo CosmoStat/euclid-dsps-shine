@@ -1,157 +1,232 @@
-FENIKS : du debug numerique a une adaptation controlee
-==========================================================================
+FENIKS: From Numerical Debugging to Reliable Adaptation
+=======================================================================
 
-Support de reunion, 10 septembre 2026
--------------------------------------
+Meeting dossier | 10 September 2026
 
-Question scientifique : obtenir une distribution jointe fiable des parametres
-d'une galaxie a partir de ses flux. Le reseau amorti propose cette distribution;
-le prior et le decodeur definissent la cible. La VI locale et wake adaptent la
-proposition pour un objet. Un bon ajustement des flux ne suffit pas a valider
-les incertitudes ou les poids d'importance.
+**We want a joint conditional distribution, not a best-fit galaxy.** Redshift,
+mass, metallicity, dust and SFH uncertainties must remain meaningful after
+conditioning on photometry. The network proposes samples; the prior and
+decoder define the target. A completed job, a decreasing loss, a good flux fit
+and a calibrated posterior are four different claims.
 
-Les resultats historiques sont transcrits des journaux Jean-Zay fournis par
-l'operateur. Les nouveaux plots utilisent :download:`les neuf premiers pas
-acceptes <../wake_forensic_evidence.csv>` du job 1965476. Ils ne sont ni des
-mesures independantes ni une selection des meilleurs objets. Les 23 trajectoires
-sans mise a jour sont conservees dans les rapports de rejeu.
+.. contents:: On this page
+   :local:
+   :depth: 2
 
-Le fil des experiences
------------------------
+.. toctree::
+   :maxdepth: 2
 
-.. list-table:: Hypothese, controle, implication
+   feniks_debug_metrics
+   feniks_debug_experiments
+
+Where We Started
+----------------
+
+The historical large-run reference is **SC-DRWS r29, epoch 160**, with raw and
+exponential-moving-average (EMA) network checkpoints and a learned parent prior.
+It is frozen, not the model currently optimized in the local pilot. Its receipt
+excludes truth from training and checkpoint selection; synthetic truth below
+is used only for post-freeze evaluation.
+
+Recent cluster roots share this prefix::
+
+   /lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
+
+The historical checkpoint directory relative to that prefix is::
+
+   full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160
+
+The raw-model SHA256 starts ``c6b190b28ba292d2``; the EMA hash starts
+``be7a80e473c526db``. The :download:`frozen-checkpoint receipt
+<_static/feniks_debug/epoch160_checkpoint.json>` records full hashes, feature
+statistics and latent-transform identity.
+
+Three evaluation populations must not be conflated:
+
+* **512 held-out synthetic objects:** support at K=1024; MIRA below uses
+  128 samples/object, 100 regions and 1,000 bootstrap draws.
+* **4,706 independent observed-selected test objects:** population figures
+  use an object-equal mixture of 32 joint draws/object.
+* **16 development cases, two starts:** later debugging uses eight observed
+  and eight simulated cases. This is not catalogue-wide calibration; simulated
+  truth does not drive these local updates.
+
+.. list-table:: Historical epoch-160 importance support
    :header-rows: 1
-   :widths: 22 38 40
 
-   * - Etape
-     - Ce que nous avons teste
-     - Ce que nous avons appris
-   * - NPE sleep et topologie du flow
-     - Distribution amortie puis couverture des coordonnees par les couplages.
-     - Defaut structurel corrige; les poids restent concentres. Perte sleep et support sont distincts.
-   * - Sleep/ELBO equilibres
-     - Ajustement des flux et support, prior fixe.
-     - Des residus meilleurs ne suffisent pas : les quatre gates de support echouent.
-   * - Preflight VI et decodeur
-     - Differences finies, vraisemblance analytique, branches redshift/projection/age/IGM.
-     - Le controle de vraisemblance passe; la projection historique et la precision necessitent une investigation.
-   * - Quadrature et precision
-     - Grille fusionnee Gauss4/8, reference independante; MDF64 puis chemin redshift et precision integree.
-     - Les controles locaux se debloquent progressivement. Chaque changement impose un contrat versionne et une requalification.
-   * - VI locale controlee (1948458)
-     - Trois regimes, deux departs, 64 pas; pas plus lent et MC16.
-     - Ameliorations des residus, mais poids encore concentres et variabilite des departs.
-   * - Dispersion et melange (1952467)
-     - Echelles locales 1/1.5/2 et ancre amortie, sans optimisation.
-     - L'elargissement global ne restaure pas systematiquement le support.
-   * - VI longue (1957394)
-     - MC32, 512 pas et evaluations K1024.
-     - Meilleur ajustement sur plusieurs objets; diagnostics d'importance encore fragiles.
-   * - Rejeu K4096 (1959175)
-     - Memes checkpoints, nouveaux tirages et taille accrue.
-     - 31/32 propositions locales ont bad_k=1. Augmenter K ne change pas la proposition.
-   * - Objectif VI entier (1960443)
-     - Derivees de logq, prior, vraisemblance et identites de densite.
-     - 31/32 PASS, un INCONCLUSIVE : aucun optimiseur ne demarre.
-   * - Transport64 (1961888)
-     - Meme point et bruit, transport conditionnel promu en precision.
-     - 32/32 PASS; le chemin natif reproduit son cas non concluant.
-   * - Reverse/wake (1962310)
-     - Meme source, budget de tirages decodeur prescrit; wake avec poids detaches.
-     - Wake modifie 9/32 trajectoires, toutes avec ESS finale inferieure a leur source. Budget decodeur egal ne signifie pas cout total egal.
-   * - Rejeu forensic (1965476)
-     - Memes graines; premier pas accepte, AD/FD et amplitudes fixes.
-     - 32/32 rejeux exacts; 7/9 pas augmentent la perte du lot. Le controle du pas manque.
-   * - Extension nocturne (1962505)
-     - Gate d'acceptation et gain ESS avant entrainement.
-     - Refusee : NIGHT_EXTENSION_NOT_STARTED. Aucune optimisation longue effectuee.
+   * - Model
+     - Median ESS / 1024
+     - Fraction k > 0.7
+     - 90th percentile maximum weight
+   * - Raw
+     - 5.95 (0.58%)
+     - 82.4%
+     - 0.983
+   * - EMA
+     - 5.88 (0.57%)
+     - 83.6%
+     - 0.988
 
-Les details des premieres corrections, les jobs et les limitations sont dans
-:download:`le journal chronologique complet <../feniks_decoder_debug_log.md>`.
-Les pages :doc:`feniks_decoder_debug` et :doc:`feniks_current_status` conservent
-les controles numeriques et les resultats intermediaires.
+**Implication:** 32 resampled particles do not provide 32 effective posterior
+samples when the underlying bank has ESS near six. Finite weights are not
+necessarily useful weights. The debug sequence therefore separates the
+learned proposal from the physical target.
 
-Pourquoi les pertes et les poids racontent des choses differentes
------------------------------------------------------------------
-
-.. math::
-
-   L_{VI}=E_q[\log q-\log p(x)-\log p(y|x)],\qquad
-   w_i=\frac{p(x_i)p(y|x_i)}{m(x_i)},\qquad
-   L_{wake}=-\sum_i\bar w_i\log q(x_i).
-
-Pour wake, m est le melange exact 50/50 entre proposition locale et ancre
-amortie; les tirages et poids sont figes pendant la differentiation. L'ESS
-empirique vaut 1/somme des poids normalises au carre. Elle mesure leur
-concentration, pas directement la couverture de tous les modes. Le diagnostic
-Pareto-k renseigne sur les queues de poids; un PASS ponctuel ne certifie pas
-le posterior. Les residus mesurent l'ajustement des flux sous les tirages.
-
-.. image:: _static/feniks_debug/trajectories.png
-   :alt: Trajectoires controlees : residus et ESS evoluent differemment
+.. figure:: _static/feniks_debug/epoch160_heldout_importance_support.png
    :width: 100%
 
-.. image:: _static/feniks_debug/replay_examples.png
-   :alt: Reevaluer les memes checkpoints change la perception du support
+   Historical support distribution. Inspect the low-ESS tail and near-unit
+   maximum weights, not only the median. This is not the running pilot.
+
+Corner and Distribution Views
+-----------------------------
+
+.. figure:: _static/feniks_debug/epoch160_corner.png
    :width: 100%
 
-Ce que le dernier diagnostic isole
------------------------------------
+   Genuine single-object corner: epoch-160 raw proposal, smallest archived
+   row ID, 256 direct joint draws. Diagonals show marginal densities;
+   off-diagonals retain paired coordinates. No medians replace distributions.
+   Five physical coordinates are displayed, not the remaining ten SFH
+   coordinates. The object was not selected by truth, fit or ESS. This is q,
+   not an importance-corrected or independently qualified posterior.
 
-Le gradient directionnel est negatif et les differences finies convergent vers
-AD aux neuf premiers pas inspectes. Cela soutient la coherence locale du
-gradient. Pourtant, sept pas complets augmentent leur propre perte.
-La pente au depart ne garantit pas que le point final soit meilleur.
-
-.. image:: _static/feniks_debug/wake_derivatives.png
-   :alt: Differences finies convergeant vers AD dans deux exemples
+.. figure:: _static/feniks_debug/epoch160_individual_posteriors_physical5d.png
    :width: 100%
 
-.. image:: _static/feniks_debug/wake_loss.png
-   :alt: Sept hausses de perte sur neuf premiers pas acceptes
+   Six historical examples spanning archived observed r-band flux ranks.
+   Direct q: 256 draws/object; IW: 32 diagnostic resamples/object. Spiky IW
+   curves may represent particle collapse, not precise physical inference.
+
+.. figure:: _static/feniks_debug/epoch160_population_selected_marginals.png
    :width: 100%
 
-Le pas complet degrade les RMS et negative ELBO independantes dans les neuf
-cas. L'amplitude 0.1 ameliore l'ESS dans cinq cas et la RMS dans six. Cela
-justifie un controle du pas, pas un choix universel de learning rate.
-Les deux departs de simulated_003 diminuent leur perte du lot et degradent
-quand meme l'evaluation : le bruit des poids et l'objectif restent a evaluer.
+   Historical selected-catalogue marginals: 4,706 objects, 32 joint draws/object.
+   This is an object-equal distribution mixture, not a histogram of medians.
+   Compare matching selection predicates: selected population and parent prior
+   are different. Marginal agreement does not validate individual conditionals.
 
-.. image:: _static/feniks_debug/wake_scales.png
-   :alt: Ratios des RMS et fractions ESS aux amplitudes prescrites
+Exports: :download:`corner PDF <_static/feniks_debug/epoch160_corner.pdf>`,
+:download:`individual distributions PDF <_static/feniks_debug/epoch160_individual_posteriors_physical5d.pdf>`,
+:download:`population PDF <_static/feniks_debug/epoch160_population_selected_marginals.pdf>`.
+The :download:`figure manifest <_static/feniks_debug/epoch160_figure_manifest.json>`
+documents cohorts, selection, draw counts, robust axis ranges and weights.
+
+MIRA: The Joint Distribution Was Not Validated
+----------------------------------------------
+
+.. figure:: _static/feniks_debug/epoch160_mira.png
    :width: 100%
 
-Figures exportables : :download:`pertes (PDF) <_static/feniks_debug/wake_loss.pdf>`,
-:download:`derivees (PDF) <_static/feniks_debug/wake_derivatives.pdf>`,
-:download:`amplitudes (PDF) <_static/feniks_debug/wake_scales.pdf>`.
-Reproduction : ``python scripts/plot_feniks_wake_meeting.py``.
+   Historical epoch-160 MIRA on 512 synthetic held-out objects. Dashed line:
+   reference 2/3. Intervals: object + random-region bootstrap. Raw/EMA and
+   direct-q/IW banks are distinct evaluations.
 
-La correction et le prochain test
-----------------------------------
+.. list-table:: Full-15D historical MIRA
+   :header-rows: 1
 
-Le nouveau contrat ``wake_armijo_v1`` propose un pas Adam delta, puis essaye
-alpha=1, 1/2, ..., 1/2048, sur le meme lot. Il accepte le premier pas fini
-strictement descendant satisfaisant
+   * - Bank
+     - Score
+     - Bootstrap 95% interval
+   * - Raw q
+     - 0.5080
+     - [0.4853, 0.5326]
+   * - Raw IW
+     - 0.4451
+     - [0.4204, 0.4696]
+   * - EMA q
+     - 0.5029
+     - [0.4790, 0.5287]
+   * - EMA IW
+     - 0.4446
+     - [0.4197, 0.4715]
 
-.. math::
+Raw-q physical-5D MIRA is 0.6606, close to 2/3, while full-15D MIRA is 0.5080.
+**A reassuring physical subset can hide a joint/SFH problem.** IW does not fix
+this evaluation; resampling concentrated weights cannot manufacture support.
 
-   L(\phi+\alpha\delta)\le L(\phi)+10^{-4}\alpha\nabla L(\phi)^T\delta.
+These scores do not measure the later anchor C or transport64 pilots. MIRA
+requires truth paired with dense conditional draws; it cannot evaluate every
+physical coordinate of real observed galaxies without corresponding truth.
+See :doc:`feniks_debug_metrics` for the statistic and its limitations.
 
-Une direction non descendante ou douze essais refuses conservent les parametres
-et les moments Adam. Un pas accepte garde les nouveaux moments Adam, avec un
-deplacement reduit. Les essais supplementaires evaluent logq sans appel au
-decodeur; ils augmentent cependant le cout reseau. Le changement RMS de logq
-sur le lot est journalise, sans etre interprete comme une KL de population.
+Download :download:`all MIRA groups (CSV) <_static/feniks_debug/epoch160_mira_scores.csv>`,
+:download:`MIRA manifest <_static/feniks_debug/epoch160_mira_manifest.json>` and
+:download:`MIRA PDF <_static/feniks_debug/epoch160_mira.pdf>`.
 
-Le pilote reprend les 16 objets, deux departs, memes graines et budgets que
-1962310; reverse reste un controle. Les checkpoints d'evaluation sont prescrits.
-On verifie d'abord la descente de chaque pas accepte, puis le support et les
-residus independants par rapport aux sources. Il ne suffit pas d'accepter plus
-de pas : il faut des gains stables avant une extension et une cohorte nouvelle
-avant une conclusion de generalisation.
+Which Run Is Current?
+---------------------
 
-Cette correction porte sur wake local. Elle ne modifie pas l'AVI amortie ni
-l'apprentissage du prior. La validation numerique transport64 reste disponible;
-un RWS global fiable reste une etape a demontrer experimentalement.
+"Latest" is a mutable monitor pointer, not a scientific model identifier.
+This ledger uses supplied cluster readbacks. The current pilot is reported
+running by the operator, not independently polled here.
 
-:download:`Commandes du pilote corrige <../feniks_wake_descent_runbook.md>`.
+.. list-table:: Ancestry, completed evidence and active work
+   :header-rows: 1
+   :widths: 24 46 30
+
+   * - Role
+     - Root relative to the shared prefix
+     - Evidence/status
+   * - Frozen numerical NPE anchor C
+     - ``frozen_parent_precision_night_v1``
+     - 1923347: target qualification passed, support failed
+   * - Local initial checkpoints
+     - ``frozen_parent_long_local_vi_v1``
+     - 1957394: final 512-step checkpoints, two starts
+   * - Completed adaptation comparison
+     - ``frozen_parent_objective_transport64_pilot_v1``
+     - 1962310: 16 cases complete, wake unstable
+   * - Rejected long extension
+     - ``frozen_parent_objective_transport64_night_v1``
+     - 1962505: no optimization started
+   * - Completed causal diagnostic
+     - ``frozen_parent_wake_forensics_v1``
+     - 1965476: 32 exact replays, nine first updates inspected
+   * - Current corrected adaptation
+     - ``frozen_parent_wake_descent_v1``
+     - Reported running; final metrics and job ID not received
+
+**No current-pilot corner or MIRA has been imported.** Relabeling historical
+plots as current would misrepresent the evidence. The running pilot saves
+joint draws and receipts; it does not itself run truth-based MIRA calibration.
+The next readback must establish descent and independent support before any
+larger training claim.
+
+Read :doc:`feniks_debug_experiments` for every experiment's hypothesis,
+controlled change, result, implication and remaining limitation.
+
+Updating the Evidence
+----------------------
+
+On Jean-Zay, inspect an explicit root instead of whichever job last overwrote
+the monitor environment:
+
+.. code-block:: bash
+
+   cd "$WORK/dsps-popcosmos"
+   source "$WORK/miniconda3/etc/profile.d/conda.sh"
+   conda activate shine
+   BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"
+   ROOT="$BASE/frozen_parent_wake_descent_v1"
+   python scripts/summarize_feniks_sc_drws_objective_pilot.py "$ROOT"
+   python scripts/summarize_feniks_wake_descent.py "$ROOT"
+
+For current distribution plots, retain ``RUN_MANIFEST.json``, ``FINAL.json``,
+``OBJECTIVE_AUDIT.json``, per-case ``SUMMARY.json``, ``TRANSPORT_CONTRACT.json``,
+``optimization.csv`` and ``direct_draws.npz``. Compare a declared list of
+cases/starts/checkpoints; do not choose attractive plots after reading ESS.
+A new MIRA assessment needs a frozen, truth-paired cohort and its own manifest.
+
+Reproduce documentation figures locally:
+
+.. code-block:: bash
+
+   .venv/bin/python scripts/build_feniks_meeting_assets.py
+   .venv/bin/python scripts/plot_feniks_wake_meeting.py
+   .venv/bin/sphinx-build -W -b html docs/source docs/_build/html
+
+This uses archived inputs, not cluster access. Copied figures are checked
+against existing hashes. New figures retain :download:`source provenance
+<_static/feniks_debug/meeting_asset_provenance.json>`. Later diagnostic figures
+are labeled terminal transcriptions, not independently downloaded measurements.

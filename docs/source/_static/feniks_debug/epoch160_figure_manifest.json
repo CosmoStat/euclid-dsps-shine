@@ -1,0 +1,235 @@
+{
+  "artifacts": {
+    "heldout_importance_support.pdf": {
+      "sha256": "9e7c81b14f0a6a66864a4ea6d656d75ced5613294d283034eae94d0cc7d4fc1b",
+      "size_bytes": 43992
+    },
+    "heldout_importance_support.png": {
+      "sha256": "d75f76b7b36a263c698bd566ecea95eddc39b4d2fb51d566e4ef8b010317e260",
+      "size_bytes": 178565
+    },
+    "individual_posteriors_full15d.pdf": {
+      "sha256": "6b4179b1723648d28a961b098f18a044f3a1d9eb6cc740e7a4f99a891ee997fd",
+      "size_bytes": 379537
+    },
+    "individual_posteriors_physical5d.pdf": {
+      "sha256": "600e7324c5bbf248ca66107c4d7b5ce73a81397e67388529a722d75c7b1b4f3a",
+      "size_bytes": 131038
+    },
+    "individual_posteriors_physical5d.png": {
+      "sha256": "a90a91fe1bf4518d86d0c2989a6cc8317c84677cae4b0c5ae07df4abf92772c3",
+      "size_bytes": 1088568
+    },
+    "individual_selection.csv": {
+      "sha256": "68f144608cc573096c154b5a58e15e7affa75719322e0bc0d65075347308bd52",
+      "size_bytes": 2250
+    },
+    "population_correlation_residuals.pdf": {
+      "sha256": "129046d190f992782a00c3cfdc76e0abe35364e648ce37e55e727fb1e393dff1",
+      "size_bytes": 35066
+    },
+    "population_correlation_residuals.png": {
+      "sha256": "c3c2b00c4193d8aa9729b94e04da486fa56c079339bd46565b15dfb2c4cecda9",
+      "size_bytes": 154694
+    },
+    "population_prior_recovery.pdf": {
+      "sha256": "306cebeb99dc0c4f508cf55e025a6544bac26672307b60a1288a6ef709db84fe",
+      "size_bytes": 82538
+    },
+    "population_prior_recovery.png": {
+      "sha256": "bd75c87083e06754f29bb43f26da6c6d026b28b7eb79f780ddb73d1fdfb4b620",
+      "size_bytes": 519774
+    },
+    "population_recovery_metrics.pdf": {
+      "sha256": "c4b9b086c1c8b97d9e644255d30aedaf46ece96a8af2658b2734d011dff62513",
+      "size_bytes": 37594
+    },
+    "population_recovery_metrics.png": {
+      "sha256": "04569c0c29545449a6322f08c949f3f43a15817831c5133e5229b89b14e29261",
+      "size_bytes": 200283
+    },
+    "population_selected_marginals.pdf": {
+      "sha256": "a6bd3f7eb88ea74b809b7f458a32db5c45f8d4c43d4354aef5b54ba5617c93e5",
+      "size_bytes": 95494
+    },
+    "population_selected_marginals.png": {
+      "sha256": "119b7254a9fb2e272eeec545ccc42870c7498602c85cde87562b48c439c46f96",
+      "size_bytes": 489855
+    }
+  },
+  "catalogue_cohort": "all observed-selected rows in the independent test catalogue",
+  "catalogue_objects": 4706,
+  "contracts": {
+    "axis_range": "pooled robust 0.2%-99.8% range (0.5%-99.5% for individuals)",
+    "individual_prior": "learned parent prior p_eta(theta | C0)",
+    "iw_warning": "IW curves and rugs are diagnostic resamples; the held-out K=1024 median ESS is approximately six effective samples per object",
+    "parent_prior": "p_eta(theta | C0)",
+    "population_aggregation": "object-equal mixture of dense joint draws; no posterior is replaced by a point estimate",
+    "selected_prior": "beta(theta) p_eta(theta | C0) / alpha_eta",
+    "truth_role": "post-freeze visualization only"
+  },
+  "epoch": 160,
+  "git_sha": "7d61ef56835f9a0fad7875f99e0f4a248fa2d05c",
+  "heldout_importance_draws_per_object": 1024,
+  "heldout_objects": 512,
+  "individual_iw_resamples_per_object": 32,
+  "individual_objects": 6,
+  "individual_q_draws_per_object": 256,
+  "individual_row_indices": [
+    2769,
+    1442,
+    4309,
+    161,
+    3465,
+    741
+  ],
+  "output_root": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/aggregated_figures_v2",
+  "parameters": [
+    "z_obs",
+    "log10_stellar_mass",
+    "log10_stellar_metallicity",
+    "dust_av",
+    "dust_delta",
+    "sfh_dlog_sfr_01",
+    "sfh_dlog_sfr_02",
+    "sfh_dlog_sfr_03",
+    "sfh_dlog_sfr_04",
+    "sfh_dlog_sfr_05",
+    "sfh_dlog_sfr_06",
+    "sfh_dlog_sfr_07",
+    "sfh_dlog_sfr_08",
+    "sfh_dlog_sfr_09",
+    "sfh_dlog_sfr_10"
+  ],
+  "population_draws_per_object": 32,
+  "population_joint_draws_per_model": 150592,
+  "source_root": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete",
+  "sources": {
+    "aggregate_ema_iw": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/posterior_aggregate/ema_iw.parquet",
+      "sha256": "8c78c3d88885952595dcece819f2de335cec9d24bc1a4da71cd139b0e2683349",
+      "size_bytes": 10791877
+    },
+    "aggregate_ema_q": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/posterior_aggregate/ema_q.parquet",
+      "sha256": "07e7e1ba9174c76df08727f98041b710e82e20ee2416ee961fb7ec27fa8861d4",
+      "size_bytes": 23932185
+    },
+    "aggregate_raw_iw": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/posterior_aggregate/raw_iw.parquet",
+      "sha256": "4574583cb3704e4b4da207eed23b722f617183ac6ae4ef2641a46824d0bc5342",
+      "size_bytes": 10801336
+    },
+    "aggregate_raw_q": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/posterior_aggregate/raw_q.parquet",
+      "sha256": "a0f526ab45b18479b85001d744f0ae274c76c14711dcf7715c4e97f01b6ea45f",
+      "size_bytes": 23915488
+    },
+    "c0_truth": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/test_population_truth_C0.parquet",
+      "sha256": "3e8cc54bb4bd6f5de85fb92ed8184028aa1fa9b45528574327b9143bf82d7cec",
+      "size_bytes": 838987
+    },
+    "completion": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/EPOCH160_EVALUATION_COMPLETE.json",
+      "sha256": "01f5cfd96ebf91638cfbc0677aa4aa48998fe4e283fb884f51a66ced63031cad",
+      "size_bytes": 9683
+    },
+    "individual_ema_iw": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/individual_panels/ema_iw.parquet",
+      "sha256": "295f2d2061d8ef5fcd6ffd56361913966a4013e6558238757239598533a3937b",
+      "size_bytes": 48753
+    },
+    "individual_ema_q": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/individual_panels/ema_q.parquet",
+      "sha256": "7cefd8b55beacd4cc15e392b55eef1449fc03c1273c0d1f8c3016e76a000b722",
+      "size_bytes": 639050
+    },
+    "individual_manifest": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/individual_panels/manifest.json",
+      "sha256": "c42f0aff42ebc34dc879967e5780986a07c61ab4276c1f7bd2e73094bb358f37",
+      "size_bytes": 313
+    },
+    "individual_raw_iw": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/individual_panels/raw_iw.parquet",
+      "sha256": "810346dfdddb0f740d6623add46eca39df4e7bb1466e2aa6320a2a5b830752bf",
+      "size_bytes": 47797
+    },
+    "individual_raw_q": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/individual_panels/raw_q.parquet",
+      "sha256": "559961089156d44854b7da5d4004db5284bed10321182789ffe272c796ad415e",
+      "size_bytes": 638669
+    },
+    "population_recovery": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/population_recovery.csv",
+      "sha256": "9e7089e198fdef90fd8c5f867a5852af6b42a67626e488537432ad562522b9dc",
+      "size_bytes": 20050
+    },
+    "posterior_correlations": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/posterior_aggregate_correlations.npz",
+      "sha256": "78081dc79621407c0d9f4efdeb06297ccd6024d96e6ed973bda42abeaa2de62a",
+      "size_bytes": 5370
+    },
+    "prior": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/prior/parent_and_selected_prior.npz",
+      "sha256": "5d5edbe866a2829d10758272b83971777f1207ca9078e181463bbabe8c841295",
+      "size_bytes": 3927299
+    },
+    "selected_truth": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/population/catalogue_selected_truth.parquet",
+      "sha256": "f75ce2c3b401d25ac0aa4b6f142c37e15b642aef367015aeaa688e1a9c2c75c1",
+      "size_bytes": 792845
+    },
+    "support_ema": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/heldout/ema_importance_diagnostics.parquet",
+      "sha256": "e8551fc7183d1af22d1714a4965865c447242950a06a7ea7783972447a79634f",
+      "size_bytes": 50042
+    },
+    "support_raw": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/heldout/raw_importance_diagnostics.parquet",
+      "sha256": "dffc6aa5f8970a903e3620ddcf2f4402b20e081135fbf03be3c39dbeb0b837a3",
+      "size_bytes": 50193
+    },
+    "support_summary_ema": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/heldout/ema_support_summary.json",
+      "sha256": "13f12e5f9781330846937fac653b2b90790e4ca7b95b78e9cc7ce78987ec0e53",
+      "size_bytes": 475
+    },
+    "support_summary_raw": {
+      "path": "/home/maxime/src/DSPS/outputs/feniks_epoch160_complete/heldout/raw_support_summary.json",
+      "sha256": "0df6553b995c6f78915f1a6478f51b3a8898f6af949cde7a5a585de3306ce255",
+      "size_bytes": 479
+    }
+  },
+  "status": "COMPLETE",
+  "support": {
+    "ema": {
+      "draws_per_object": 1024,
+      "fraction_pareto_k_gt_0p7": 0.8359375,
+      "fraction_pareto_k_gt_1": 0.73828125,
+      "fraction_raw_ess_below_0p01": 0.63671875,
+      "median_raw_ess": 5.876513232139862,
+      "median_raw_ess_fraction": 0.005738782453261584,
+      "minimum_finite_logweight_fraction": 1.0,
+      "objects": 512,
+      "p10_raw_ess_fraction": 0.0009996701214265167,
+      "p90_max_raw_weight": 0.9883590109534571,
+      "role": "diagnostic_only_no_checkpoint_selection",
+      "status": "FAIL"
+    },
+    "raw": {
+      "draws_per_object": 1024,
+      "fraction_pareto_k_gt_0p7": 0.82421875,
+      "fraction_pareto_k_gt_1": 0.728515625,
+      "fraction_raw_ess_below_0p01": 0.650390625,
+      "median_raw_ess": 5.954790699772681,
+      "median_raw_ess_fraction": 0.0058152252927467585,
+      "minimum_finite_logweight_fraction": 1.0,
+      "objects": 512,
+      "p10_raw_ess_fraction": 0.0010112594645424891,
+      "p90_max_raw_weight": 0.9826151791945813,
+      "role": "diagnostic_only_no_checkpoint_selection",
+      "status": "FAIL"
+    }
+  }
+}

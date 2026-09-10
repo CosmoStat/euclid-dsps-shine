@@ -1,5 +1,16 @@
 # Plan
 
+## 2026-09-10 Expanded English meeting dossier
+
+- Implemented: three English pages covering the historical baseline, current
+  run ledger, exact metric equations and 22 experiment-by-experiment accounts.
+- Added genuine joint-draw corner, individual/population distributions, support
+  and MIRA plots with downloadable receipts, scores, PDFs and source hashes.
+- Historical epoch-160 data are explicitly separated from the running corrected
+  pilot; current pilot draws/MIRA are not available locally and are not invented.
+- Verified asset regeneration, copied figure hashes, new plot visual checks,
+  Ruff, compileall and Sphinx HTML; no inference or training code changed.
+
 ## 2026-09-10 Wake descent correction
 
 - Implemented: versioned Armijo backtracking with full Adam rollback on rejection,
