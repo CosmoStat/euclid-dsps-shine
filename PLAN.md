@@ -8951,3 +8951,24 @@ Remote recovery:
 - Freeze the learned target. Compare A (dispersed / learned prior), B (encoder / learned prior), C (dispersed / initial identity prior). Never label these references as a known true posterior.
 - Preserve all chains and require explicit diagnostic review before scientific interpretation. No training, automatic promotion, or automatic NUTS submission.
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
+# Full-catalogue AVI experiment array (2026-09-11)
+
+- Implemented locally: seven controlled encoder experiments, four H100 per task with
+  actual data-parallel gradients and accumulation. Freeze the qualified learned
+  prior and decoder; this stage does not yet retrain the population density.
+- Compare repaired/scratch single/expert flows, pathwise ELBO, and optional
+  existing joint NUTS teacher banks with likelihood-reweighted neighbours.
+- Require real per-arm preflight, immutable inputs, full-state resume, independent
+  validation, progress receipts and plots. Preserve unrelated workspace edits.
+- Verification: 79 distinct targeted CPU tests passed across the experiment,
+  transport, proposal, RWS, balanced-NPE, adaptive-runtime and feature suites.
+  Re-ran the seven-arm integration after decoder blocking changes: four virtual
+  CPU devices, mock physical decoder, real flow/mixture gradients, optimizer
+  accumulation, pause/resume, evaluation and nonblank plots all pass. Compileall,
+  Ruff, CLI help and Bash syntax pass. The legacy fit/posterior smoke configs
+  listed in AGENTS.md are absent; no real-asset fit or H100 benchmark was run.
+- Deployment: Git-based Jean-Zay handoff and immutable per-run snapshot; no remote
+  submission performed. The learned population prior remains frozen in this
+  first wave, and empirical NUTS teacher diagnostics are explicitly unqualified.
+- Runbook: docs/feniks_avi_experiments_runbook.md. Check measured preflight timings
+  before interpreting the twenty-hour allocation as an expected runtime.

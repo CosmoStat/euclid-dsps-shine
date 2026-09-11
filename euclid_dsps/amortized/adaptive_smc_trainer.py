@@ -43,6 +43,7 @@ from .data import (
 )
 from .features import (
     compute_feature_stats,
+    read_feature_stats,
     write_feature_stats,
 )
 from .latent import (
@@ -331,6 +332,7 @@ def prepare_adaptive_training_runtime(
     train_indices_file: str | Path,
     validation_indices_file: str | Path,
     validation_catalog_path: str | Path | None = None,
+    fixed_feature_stats_path: str | Path | None = None,
 ) -> RuntimeBundle:
     """Load only observed photometry and fixed physical-model assets."""
     runtime_config = _config_without_truth(config)
@@ -369,6 +371,10 @@ def prepare_adaptive_training_runtime(
         append_mask=bool(cfg["features"].get("append_mask", False)),
         error_epsilon=float(cfg["features"].get("error_epsilon", 1.0e-6)),
     )
+    if fixed_feature_stats_path is not None:
+        feature_stats = read_feature_stats(fixed_feature_stats_path)
+        if feature_stats.band_names != tuple(train_arrays.band_names):
+            raise ValueError("fixed feature statistics have different bands/order")
     write_feature_stats(out / "feature_stats.json", feature_stats)
     filters = load_filters(runtime_config["bands"])
     context = load_context(
