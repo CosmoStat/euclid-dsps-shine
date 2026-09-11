@@ -109,6 +109,11 @@ by hand. A passed preflight establishes executability, not posterior quality.
 
 ## Monitor And Resume
 
+For recovery after v2 preflight 2047211, use a new
+`avi_encoder_experiments_v3` root. The fix preserves YAML free-parameter order
+and checks the latent coordinate hash against the source checkpoint during
+preparation. Do not disable checkpoint hash checks or edit old run snapshots.
+
 The GPU launcher explicitly enables JAX plugin discovery with
 `EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0`, matching the NUTS launcher.
 Without it, the repository's conservative default hides installed CUDA plugins.

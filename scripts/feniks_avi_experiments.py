@@ -45,6 +45,27 @@ def validate_rows(train, validation, same_catalog, expected):
         raise ValueError("training and validation identities overlap")
 
 
+def source_config_text(config, checkpoint):
+    from euclid_dsps.amortized.latent import latent_spec_hash
+    from euclid_dsps.amortized.train import _latent_spec_for_amortized_config
+
+    # Free-parameter insertion order defines encoder coordinates, not just display.
+    serialized = yaml.safe_dump(config, sort_keys=False)
+    original = latent_spec_hash(_latent_spec_for_amortized_config(config))
+    restored = latent_spec_hash(
+        _latent_spec_for_amortized_config(yaml.safe_load(serialized))
+    )
+    if original != restored:
+        raise ValueError("source config serialization changed latent coordinates")
+    sidecar = read(Path(str(checkpoint) + ".json"))
+    recorded = sidecar.get("latent_spec_hash", sidecar.get("latent_transform_hash"))
+    if recorded != restored:
+        raise ValueError(
+            f"source checkpoint/config latent hash mismatch: {recorded} != {restored}"
+        )
+    return serialized
+
+
 def prepare(args):
     from euclid_dsps.amortized.avi_experiments import ARMS
     from euclid_dsps.config import load_config
@@ -59,6 +80,8 @@ def prepare(args):
     from scripts.run_feniks_sc_drws_local_vi_diagnostic import check_config
 
     check_config(config)
+    # Fail on source incompatibility before hashing catalogues or submitting GPUs.
+    source_config_text(config, source["checkpoint"])
     train_path = manifest_root / "full_train_indices.npy"
     val_path = manifest_root / "confirmation_indices.npy"
     train = np.load(train_path, allow_pickle=False)
@@ -102,7 +125,9 @@ def prepare(args):
     config["amortized"].setdefault("data", {}).update(
         use_redshift_for_split=False, stratify_column=None, redshift_bins=[]
     )
-    (root / "source_config.yaml").write_text(yaml.safe_dump(config))
+    (root / "source_config.yaml").write_text(
+        source_config_text(config, source["checkpoint"])
+    )
     write(root / "teachers.json", teacher_meta)
     hashes.update(
         {

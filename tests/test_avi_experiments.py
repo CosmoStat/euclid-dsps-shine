@@ -28,8 +28,38 @@ from scripts.feniks_avi_experiments import (
     read,
     save_state,
     sha,
+    source_config_text,
     validate_rows,
 )
+
+
+def test_source_config_preserves_checkpoint_coordinates(tmp_path):
+    import json
+
+    import yaml
+
+    from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
+
+    config = {
+        "fit": {"free_parameters": {
+            "z_obs": {"bounds": [0.01, 5.0], "init": 1.0},
+            "dust_av": {"bounds": [0.0, 6.0], "init": 0.2},
+        }},
+        "amortized": {
+            "latent": {"schema": "config_free_parameters", "normalization": "identity"},
+            "prior": {"source": "standard_normal"},
+        },
+    }
+    expected = latent_spec_hash(latent_spec_from_config(config))
+    checkpoint = tmp_path / "source.eqx"
+    checkpoint.with_suffix(".eqx.json").write_text(json.dumps({"latent_spec_hash": expected}))
+    restored = yaml.safe_load(source_config_text(config, checkpoint))
+    assert list(restored["fit"]["free_parameters"]) == ["z_obs", "dust_av"]
+    assert latent_spec_hash(latent_spec_from_config(restored)) == expected
+    # The old default sorted dump corrupts the coordinate contract and must fail.
+    reordered = yaml.safe_load(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="checkpoint/config latent hash mismatch"):
+        source_config_text(reordered, checkpoint)
 
 
 def test_slurm_enables_cuda_plugin_discovery(tmp_path):

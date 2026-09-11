@@ -8953,6 +8953,14 @@ Remote recovery:
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
 # Full-catalogue AVI experiment array (2026-09-11)
 
+- v2 recovery: default YAML sorting reordered fit.free_parameters, changing the
+  latent coordinate hash before loading the source. Preserve insertion order,
+  assert roundtrip coordinate hashes and compare against source sidecar during
+  CPU preparation, before GPU submission. Keep checkpoint validation strict.
+  Add regression proving sorted serialization is rejected. New v3 root required.
+  Verified ten AVI tests (excluding the unchanged full mock-physics integration),
+  Ruff and Python compilation. Remote source loading awaits the corrected run.
+
 - GPU startup recovery: preflight 2046734 failed before training because the AVI
   launcher omitted EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0, unlike NUTS.
   Enable discovery explicitly; preserve numerical methods and the shared shine
