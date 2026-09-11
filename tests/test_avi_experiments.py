@@ -1,6 +1,7 @@
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import equinox as eqx
 import jax
@@ -29,6 +30,33 @@ from scripts.feniks_avi_experiments import (
     sha,
     validate_rows,
 )
+
+
+def test_slurm_enables_cuda_plugin_discovery(tmp_path):
+    script = Path("scripts/feniks_avi_experiments.slurm").read_text()
+    # Execute actual environment setup with only site-specific commands stubbed.
+    setup = script.split("python -m scripts.feniks_avi_experiments", 1)[0]
+    conda = tmp_path / "miniconda3/etc/profile.d/conda.sh"
+    conda.parent.mkdir(parents=True)
+    conda.write_text("conda() { :; }\n")
+    env = dict(os.environ, WORK=str(tmp_path), SCRATCH=str(tmp_path),
+               AVI_CODE=str(Path.cwd()), SLURM_JOB_ID="test",
+               EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD="1")
+    probe = """
+import os
+import jax._src.xla_bridge as bridge
+discover = bridge.discover_pjrt_plugins
+from euclid_dsps.jax_runtime import configure_jax_runtime
+configure_jax_runtime()
+assert os.environ['JAX_PLATFORMS'] == 'cuda'
+assert bridge.discover_pjrt_plugins is discover
+"""
+    result = subprocess.run(
+        ["bash", "-c", "module() { :; }\n" + setup +
+         '\n"' + sys.executable + '" - <<\'PY\'\n' + probe + "\nPY\n"],
+        env=env, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.fixture(autouse=True)

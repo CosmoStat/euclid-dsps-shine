@@ -109,6 +109,13 @@ by hand. A passed preflight establishes executability, not posterior quality.
 
 ## Monitor And Resume
 
+The GPU launcher explicitly enables JAX plugin discovery with
+`EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0`, matching the NUTS launcher.
+Without it, the repository's conservative default hides installed CUDA plugins.
+The first AVI preflights (2046734) failed before training for this reason.
+After pulling this fix, submit to a new root (for example
+`avi_encoder_experiments_v2`); do not resume the old frozen source snapshot.
+
 ```bash
 bash scripts/watch_feniks_avi_experiments.sh "$ROOT"
 ```

@@ -8953,6 +8953,14 @@ Remote recovery:
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
 # Full-catalogue AVI experiment array (2026-09-11)
 
+- GPU startup recovery: preflight 2046734 failed before training because the AVI
+  launcher omitted EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0, unlike NUTS.
+  Enable discovery explicitly; preserve numerical methods and the shared shine
+  installation. Add a subprocess regression exercising actual shell setup and
+  asserting the JAX discovery function is not replaced. New run root required.
+  Verified three targeted runtime/startup tests, Ruff and Bash syntax; actual
+  H100 plugin initialization still requires the remote preflight.
+
 - Implemented locally: seven controlled encoder experiments, four H100 per task with
   actual data-parallel gradients and accumulation. Freeze the qualified learned
   prior and decoder; this stage does not yet retrain the population density.

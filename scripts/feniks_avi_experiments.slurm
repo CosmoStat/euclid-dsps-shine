@@ -18,6 +18,7 @@ source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
 cd "${AVI_CODE:?}"
 export JAX_PLATFORMS=cuda JAX_ENABLE_X64=true
+export EUCLID_DSPS_JAX_PLATFORMS=cuda EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0
 export XLA_PYTHON_CLIENT_PREALLOCATE=false PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS=12
 export MPLCONFIGDIR="$SCRATCH/feniks_sc_drws_runtime/mpl-${SLURM_JOB_ID}"
