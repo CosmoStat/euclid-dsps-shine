@@ -20,6 +20,7 @@ CONCURRENCY="${3:-7}"
 [[ "$CONCURRENCY" =~ ^[1-7]$ ]] || { echo 'concurrency must be 1..7'; exit 1; }
 test ! -e "$AVI_ROOT"
 REPO="$(pwd -P)"
+test -d "$REPO/filters"
 ARCHIVE="$AVI_ROOT.code.tar"
 test ! -e "$ARCHIVE"
 mkdir -p "$(dirname "$AVI_ROOT")"
@@ -27,6 +28,8 @@ mkdir -p "$(dirname "$AVI_ROOT")"
 # Generated artifacts, user documentation and unrelated notebooks are excluded.
 tar --exclude='__pycache__' --exclude='*.pyc' -cf "$ARCHIVE" \
   euclid_dsps scripts configs pyproject.toml
+# Copy curve contents even when filters/ is a site-local symlink.
+tar --dereference -rf "$ARCHIVE" filters
 DIGEST=$(sha256sum "$ARCHIVE" | cut -d' ' -f1)
 export AVI_CODE="$SCRATCH/feniks_sc_drws_runtime/code/avi-$DIGEST"
 mkdir -p "$AVI_CODE"

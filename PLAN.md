@@ -8953,6 +8953,15 @@ Remote recovery:
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
 # Full-catalogue AVI experiment array (2026-09-11)
 
+- v3 startup recovery: the source archive omitted filters/, although configuration
+  uses relative curve paths. Include dereferenced filter contents in the hashed
+  snapshot, keep the existing Data link, and validate filter parsing plus SSP and
+  configured model asset file existence during CPU preparation. Hash these assets
+  in the input manifest so changed physics inputs cannot silently resume.
+  Add actual-shell snapshot and real-filter-loader regressions. New v4 root.
+  Verified 12 AVI tests (excluding unchanged mock-physics integration), Ruff,
+  shell syntax and Python compilation. No remote GPU job submitted locally.
+
 - v2 recovery: default YAML sorting reordered fit.free_parameters, changing the
   latent coordinate hash before loading the source. Preserve insertion order,
   assert roundtrip coordinate hashes and compare against source sidecar during

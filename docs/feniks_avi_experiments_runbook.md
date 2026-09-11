@@ -109,6 +109,12 @@ by hand. A passed preflight establishes executability, not posterior quality.
 
 ## Monitor And Resume
 
+After v3 preflight 2047358, use `avi_encoder_experiments_v4`. The snapshot now
+includes the contents of `filters/`, including site-local symlink targets.
+Preparation parses the filters and checks SSP/configured model asset files
+before GPU submission. Their hashes join the immutable input manifest.
+Existing physical assets stay on Jean-Zay; no transfer or substitute filters.
+
 For recovery after v2 preflight 2047211, use a new
 `avi_encoder_experiments_v3` root. The fix preserves YAML free-parameter order
 and checks the latent coordinate hash against the source checkpoint during

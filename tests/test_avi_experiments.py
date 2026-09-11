@@ -26,11 +26,65 @@ from euclid_dsps.calibration import GlobalSedScaleState
 from scripts.feniks_avi_experiments import (
     phase_at,
     read,
+    runtime_asset_paths,
     save_state,
     sha,
     source_config_text,
     validate_rows,
 )
+
+
+def test_snapshot_contains_filter_contents_and_data_link(tmp_path):
+    script = Path("scripts/submit_feniks_avi_experiments.sh").read_text()
+    setup = script.split("JAX_PLATFORMS=cpu JAX_ENABLE_X64=true python", 1)[0]
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for name in ("euclid_dsps", "scripts", "configs", "Data"):
+        (repo / name).mkdir()
+    (repo / "pyproject.toml").write_text("[project]\nname='fixture'\n")
+    curves = tmp_path / "site_filters"
+    curves.mkdir()
+    curve = curves / "Euclid_VIS.vis.dat"
+    curve.write_text("4000 0\n5000 1\n6000 0\n")
+    (repo / "filters").symlink_to(curves, target_is_directory=True)
+    base = tmp_path / "base"
+    base.mkdir()
+    result = subprocess.run(
+        ["bash", "-c", setup + '\nprintf "%s" "$AVI_CODE"', "snapshot",
+         str(base), str(base / "new_run"), "7"],
+        cwd=repo, env=dict(os.environ, SCRATCH=str(tmp_path / "scratch")),
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    snapshot = Path(result.stdout)
+    assert (snapshot / "Data").resolve() == repo / "Data"
+    assert not (snapshot / "filters").is_symlink()
+    copied = snapshot / "filters" / curve.name
+    assert copied.read_text() == curve.read_text()
+    curve.write_text("changed source\n")
+    assert copied.read_text() == "4000 0\n5000 1\n6000 0\n"
+
+
+def test_runtime_assets_checked_and_parsed_before_submission(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "filters").mkdir()
+    curve = tmp_path / "filters/vis.dat"
+    curve.write_text("4000 0\n5000 1\n6000 0\n")
+    ssp = tmp_path / "ssp.h5"
+    ssp.write_bytes(b"SSP fixture: existence only; no decoder load")
+    config = {"ssp_path": "ssp.h5", "bands": [{
+        "name": "euclid_vis", "filter": {"kind": "ascii", "path": "filters/vis.dat"},
+    }]}
+    assert set(runtime_asset_paths(config)) == {ssp, curve}
+    curve.unlink()
+    with pytest.raises(FileNotFoundError, match="filter:euclid_vis"):
+        runtime_asset_paths(config)
+    curve.write_text("not a filter\n")
+    with pytest.raises(ValueError):
+        runtime_asset_paths(config)
+    ssp.unlink()
+    with pytest.raises(FileNotFoundError, match="ssp_path"):
+        runtime_asset_paths(config)
 
 
 def test_source_config_preserves_checkpoint_coordinates(tmp_path):

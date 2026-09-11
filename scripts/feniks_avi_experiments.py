@@ -66,6 +66,28 @@ def source_config_text(config, checkpoint):
     return serialized
 
 
+def runtime_asset_paths(config):
+    from euclid_dsps.filters import load_filters
+
+    assets = {"ssp_path": config["ssp_path"]}
+    for band in config["bands"]:
+        path = band.get("filter", {}).get("path")
+        if path:
+            assets[f"filter:{band['name']}"] = path
+    for key, value in config.get("model", {}).items():
+        if key.endswith("_path") and value:
+            assets[f"model:{key}"] = value
+    paths = []
+    for label, value in assets.items():
+        path = Path(value).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"AVI runtime asset {label} not found: {path}")
+        paths.append(path.resolve())
+    # Parse the exact curves on the CPU before allocating any GPUs.
+    load_filters(config["bands"])
+    return list(dict.fromkeys(paths))
+
+
 def prepare(args):
     from euclid_dsps.amortized.avi_experiments import ARMS
     from euclid_dsps.config import load_config
@@ -80,6 +102,7 @@ def prepare(args):
     from scripts.run_feniks_sc_drws_local_vi_diagnostic import check_config
 
     check_config(config)
+    assets = runtime_asset_paths(config)
     # Fail on source incompatibility before hashing catalogues or submitting GPUs.
     source_config_text(config, source["checkpoint"])
     train_path = manifest_root / "full_train_indices.npy"
@@ -106,7 +129,7 @@ def prepare(args):
         Path(source["feature_stats"]),
         Path(config["catalog_path"]),
         val_catalog,
-    ]
+    ] + assets
     if Path(source["checkpoint"] + ".json").exists():
         inputs.append(Path(source["checkpoint"] + ".json"))
     hashes = {str(p.resolve()): sha(p) for p in inputs}
