@@ -1,5 +1,16 @@
 # Plan
 
+## AVI residual expert startup recovery
+
+- Preflight A/C passed; B/D/E/F/G failed because mixture construction assumed
+  a Gaussian MLP trunk. Read residual input_dim and retain legacy MLP support.
+- Exercise residual experts in density/sample tests and the seven-arm, four-CPU
+  integration. Preserve selection correction and frozen prior.
+- Verified 21 targeted tests plus the seven-arm residual integration (408s),
+  including four-device updates, resume and plots. Raised only the local test
+  timeout after its former 300s ceiling interrupted compilation. Ruff and
+  compileall pass; real-asset H100 preflight remains required in a fresh v6 root.
+
 ## 2026-09-10 Fix global smoke coverage
 
 - Remote smoke ran sleep only: bootstrap=16 and flow freeze=12 exceeded its

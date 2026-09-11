@@ -433,6 +433,6 @@ def test_seven_arm_preflight_and_resume_on_mock_physics(tmp_path):
         env=env,
         text=True,
         capture_output=True,
-        timeout=300,
+        timeout=900,
     )
     assert result.returncode == 0, result.stdout + result.stderr

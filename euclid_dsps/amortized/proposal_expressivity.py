@@ -60,7 +60,14 @@ class IndependentFlowMixture(eqx.Module):
             )
             for offset in offsets
         )
-        input_dim = int(source_encoder.base.trunk[0].weight.shape[1])
+        base = source_encoder.base
+        if hasattr(base, "input_dim"):
+            input_dim = int(base.input_dim)
+        elif hasattr(base, "trunk"):
+            first_layer = base.trunk[0] if base.trunk else base.mean_head
+            input_dim = int(first_layer.weight.shape[1])
+        else:
+            raise TypeError("source Gaussian base does not expose its input dimension")
         gate_key, _ = jax.random.split(key)
         gate = eqx.nn.MLP(
             in_size=input_dim,

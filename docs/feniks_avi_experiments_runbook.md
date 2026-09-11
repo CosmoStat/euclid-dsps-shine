@@ -219,6 +219,12 @@ The current launcher intentionally does not submit that second stage.
 
 ## Local Verification
 
+The v5 expert preflights failed during construction: the residual encoder has
+`input_dim`, not an MLP `trunk`. The corrected mixture supports both bases,
+and the seven-arm integration now uses a residual photometry encoder. Submit
+a fresh v6 root after pulling the fix; do not resume the old code snapshot.
+Selection normalization, the frozen prior and all experiment losses are unchanged.
+
 Targeted CPU tests cover MIS densities, mixture gate gradients against finite
 differences, invalid weights, teacher provenance, real four-device gradient
 accumulation, rollback, all seven preflights on mock physics, resume and plots.

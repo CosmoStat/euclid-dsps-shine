@@ -30,12 +30,17 @@ if HAS_EQUINOX:
     from euclid_dsps.calibration import GlobalSedScaleState
 
 
-def _model():
+def _model(context_encoder_type="base_moments", hidden_sizes=(8,)):
     encoder = ConditionalFlowEncoder(
         jax.random.PRNGKey(1),
         input_dim=3,
         latent_dim=2,
-        hidden_sizes=(8,),
+        hidden_sizes=hidden_sizes,
+        context_encoder_type=context_encoder_type,
+        residual_trunk_width=8,
+        residual_blocks=1,
+        residual_representation_width=8,
+        residual_context_dim=4,
         activation="gelu",
         log_std_min=-6.0,
         log_std_max=2.0,
@@ -53,8 +58,14 @@ def _model():
     )
 
 
-def test_identical_independent_experts_reproduce_single_flow_density() -> None:
-    model = _model()
+@pytest.mark.parametrize(
+    "context,hidden",
+    [("base_moments", (8,)), ("base_moments", ()), ("residual_photometry", (8,))],
+)
+def test_identical_independent_experts_reproduce_single_flow_density(
+    context, hidden
+) -> None:
+    model = _model(context, hidden)
     mixture = IndependentFlowMixture(
         jax.random.PRNGKey(2), model.encoder, n_components=2, mean_offset=0.05
     )
@@ -72,8 +83,9 @@ def test_identical_independent_experts_reproduce_single_flow_density() -> None:
     np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1.0e-5)
 
 
-def test_independent_mixture_samples_report_exact_density() -> None:
-    model = _model()
+@pytest.mark.parametrize("context", ["base_moments", "residual_photometry"])
+def test_independent_mixture_samples_report_exact_density(context) -> None:
+    model = _model(context)
     mixture = IndependentFlowMixture(
         jax.random.PRNGKey(4), model.encoder, n_components=2, mean_offset=0.1
     )
