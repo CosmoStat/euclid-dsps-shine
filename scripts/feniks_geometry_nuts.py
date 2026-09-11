@@ -50,11 +50,71 @@ NUTS_RECOVERY_PROFILE = {
     "target_accept": 0.9,
     "array_tasks": len(CASES) * len(GROUPS),
     "recommended_array_concurrency": len(CASES) * len(GROUPS),
+    "groups": list(GROUPS),
+    "mass_matrix": "diagonal",
+}
+NUTS_PROFILES = {
+    NUTS_RECOVERY_PROFILE["name"]: NUTS_RECOVERY_PROFILE,
+    "float64_dense_depth56_probe_v1": {
+        "name": "float64_dense_depth56_probe_v1",
+        "chains": 8,
+        "warmup": 500,
+        "chunks": [256, 256],
+        "max_num_doublings": [5, 6],
+        "target_accept": 0.9,
+        "array_tasks": len(CASES) * 2,
+        "recommended_array_concurrency": len(CASES) * 2,
+        "groups": ["B"],
+        "mass_matrix": "dense",
+        "slurm_time": "04:00:00",
+        "role": "configuration_probe_not_reference_posterior",
+    },
+    "float64_dense_depth6_long_v1": {
+        "name": "float64_dense_depth6_long_v1",
+        "chains": 8,
+        "warmup": 1500,
+        "chunks": [512] * 8,
+        "max_num_doublings": 6,
+        "target_accept": 0.9,
+        "array_tasks": len(CASES),
+        "recommended_array_concurrency": len(CASES),
+        "groups": ["B"],
+        "mass_matrix": "dense",
+        "slurm_time": "12:00:00",
+        "role": "conditional_reference_candidate_requires_diagnostics",
+    },
 }
 
 
-def prepare_nuts(reference, root):
+def _profile_tasks(profile):
+    depths = profile["max_num_doublings"]
+    depths = depths if isinstance(depths, list) else [depths]
+    tasks = []
+    for case in CASES:
+        for group in profile["groups"]:
+            for depth in depths:
+                tasks.append(
+                    {
+                        "case": case,
+                        "group": group,
+                        "variant": (
+                            group
+                            if profile["name"] == NUTS_RECOVERY_PROFILE["name"]
+                            else f"{group}_{profile['mass_matrix']}_depth{depth}"
+                        ),
+                        "max_num_doublings": depth,
+                    }
+                )
+    if len(tasks) != profile["array_tasks"]:
+        raise ValueError("NUTS profile task count is inconsistent")
+    return tasks
+
+
+def prepare_nuts(reference, root, profile_name=NUTS_RECOVERY_PROFILE["name"]):
     """Import verified geometry without mutating its original code/receipt."""
+    if profile_name not in NUTS_PROFILES:
+        raise ValueError(f"unknown NUTS profile: {profile_name}")
+    profile = NUTS_PROFILES[profile_name]
     reference = reference.resolve()
     m = json.loads((reference / "MANIFEST.json").read_text())
     done = json.loads((reference / "GEOMETRY_COMPLETE.json").read_text())
@@ -92,14 +152,18 @@ def prepare_nuts(reference, root):
         if key in m
     }
     m.update(
-        chains=NUTS_RECOVERY_PROFILE["chains"],
-        warmup=NUTS_RECOVERY_PROFILE["warmup"],
-        chunks=NUTS_RECOVERY_PROFILE["chunks"],
-        max_num_doublings=NUTS_RECOVERY_PROFILE["max_num_doublings"],
-        target_accept=NUTS_RECOVERY_PROFILE["target_accept"],
-        nuts_execution_profile=NUTS_RECOVERY_PROFILE,
+        chains=profile["chains"],
+        warmup=profile["warmup"],
+        chunks=profile["chunks"],
+        max_num_doublings=profile["max_num_doublings"],
+        target_accept=profile["target_accept"],
+        nuts_execution_profile=profile,
+        nuts_tasks=_profile_tasks(profile),
     )
     m["nuts_target_dtype"] = "float64"
+    m["truth_display_contract"] = (
+        "simulation truth is read only after sampling for plot overlays"
+    )
     write(root / "MANIFEST.json", m)
     done["manifest_sha256"] = sha256_file(root / "MANIFEST.json")
     done["imported_from"] = m["geometry_import"]
@@ -474,17 +538,25 @@ def nuts(root, task):
     m = load(root)
     if m.get("nuts_target_dtype") != "float64":
         raise ValueError("prepare a new float64 NUTS root from the completed geometry")
-    if m.get("nuts_execution_profile") != NUTS_RECOVERY_PROFILE:
-        raise ValueError("prepare a new bounded-depth NUTS recovery root")
+    profile = m.get("nuts_execution_profile", {})
+    expected_profile = NUTS_PROFILES.get(profile.get("name"))
+    if expected_profile is None or profile != expected_profile:
+        raise ValueError("unknown or changed NUTS execution profile")
     done = json.loads((root / "GEOMETRY_COMPLETE.json").read_text())
     if done["manifest_sha256"] != sha256_file(root / "MANIFEST.json"):
         raise ValueError("manifest changed")
     for name, expected in done["artifacts"].items():
         if sha256_file(root / name) != expected:
             raise ValueError(f"geometry artifact changed: {name}")
-    if not 0 <= task < len(m["cases"]) * 3:
+    tasks = m.get("nuts_tasks", _profile_tasks(profile))
+    if not 0 <= task < len(tasks):
         raise ValueError("invalid array task")
-    case, group = m["cases"][task // 3], GROUPS[task % 3]
+    task_spec = tasks[task]
+    case, group = task_spec["case"], task_spec["group"]
+    task_settings = {
+        **m,
+        "max_num_doublings": task_spec["max_num_doublings"],
+    }
     r, obs, _, _, _, learned, initial, initial_prior = runtime(m, case)
     audit = json.loads((root / case / "AUDIT.json").read_text())
     if (
@@ -498,7 +570,8 @@ def nuts(root, task):
             np.testing.assert_array_equal(saved[name], np.asarray(getattr(obs, name)))
     target = initial if group == "C" else learned
     starts = np.load(root / case / f"starts_{group}.npy", allow_pickle=False)
-    out = root / "nuts" / case / group
+    variant = task_spec.get("variant", group)
+    out = root / "nuts" / case / variant
     out.mkdir(parents=True, exist_ok=True)
     if (out / "FINAL.json").exists():
         print(f"{case}/{group}: already complete; preserved", flush=True)
@@ -508,7 +581,11 @@ def nuts(root, task):
         dict(
             case=case,
             group=group,
+            variant=variant,
             description=m["groups_description"][group],
+            execution_profile=profile["name"],
+            mass_matrix=profile["mass_matrix"],
+            max_num_doublings=task_settings["max_num_doublings"],
             geometry_sha256=sha256_file(root / "GEOMETRY_COMPLETE.json"),
         ),
     )
@@ -520,13 +597,21 @@ def nuts(root, task):
             warmup_steps=m["warmup"],
             sample_chunks=tuple(m["chunks"]),
             target_accept=m["target_accept"],
-            max_num_doublings=m["max_num_doublings"],
+            max_num_doublings=task_settings["max_num_doublings"],
+            is_mass_matrix_diagonal=profile["mass_matrix"] == "diagonal",
         ),
         out_dirs=tuple(out / f"chain_{i}" for i in range(m["chains"])),
         resume=True,
         target_dtype="float64",
     )
-    receipt = summarize_chains(out, r.latent_spec, root / case, m)
+    truth_theta = simulation_truth_theta(m, case, r.latent_spec)
+    receipt = summarize_chains(
+        out,
+        r.latent_spec,
+        root / case,
+        task_settings,
+        truth_theta=truth_theta,
+    )
     # Fixed evenly spaced retained draws, never chosen for goodness of fit.
     frames = [
         pd.read_parquet(p)
@@ -556,7 +641,21 @@ def nuts(root, task):
     write(out / "FINAL.json", receipt)
 
 
-def summarize_chains(out, spec, case_root, m):
+def simulation_truth_theta(m, case, spec):
+    """Load simulated truth for display only, after sampling has completed."""
+    if not case.startswith("simulated"):
+        return None
+    index = int(case.rsplit("_", 1)[1])
+    path = Path(m["reference"]) / "SIMULATED_INPUTS.npz"
+    with np.load(path, allow_pickle=False) as data:
+        truth_x = np.asarray(data["generated_x"][index])
+    truth_theta = np.asarray(x_to_theta(jnp.asarray(truth_x), spec))
+    if truth_theta.shape != (len(spec.names),) or not np.isfinite(truth_theta).all():
+        raise ValueError(f"invalid display-only simulation truth for {case}")
+    return truth_theta
+
+
+def summarize_chains(out, spec, case_root, m, *, truth_theta=None):
     import matplotlib.pyplot as plt
 
     chains, infos = [], []
@@ -625,6 +724,8 @@ def summarize_chains(out, spec, case_root, m):
             histtype="step",
             label="NUTS (check diagnostics)",
         )
+        if truth_theta is not None:
+            ax.axvline(truth_theta[i], color="black", linestyle="--", label="truth")
         ax.set_title(spec.names[i], fontsize=9)
     axes.flat[0].legend(fontsize=6)
     fig.tight_layout()
@@ -640,8 +741,19 @@ def summarize_chains(out, spec, case_root, m):
                 ax.set_visible(False)
             elif i == j:
                 ax.hist(joint[:, i], bins=40, density=True)
+                if truth_theta is not None:
+                    ax.axvline(truth_theta[i], color="black", linestyle="--")
             else:
                 ax.scatter(joint[:, j], joint[:, i], s=1, alpha=0.15)
+                if truth_theta is not None:
+                    ax.scatter(
+                        truth_theta[j],
+                        truth_theta[i],
+                        marker="*",
+                        s=70,
+                        color="black",
+                        zorder=5,
+                    )
             if i == 4:
                 ax.set_xlabel(spec.names[j], fontsize=8)
             if j == 0:
@@ -661,6 +773,13 @@ def summarize_chains(out, spec, case_root, m):
         diagnostics_pass=passed,
         divergences=divergent,
         integration_limit_hits=saturated,
+        mass_matrix=m.get("nuts_execution_profile", {}).get(
+            "mass_matrix", "unspecified"
+        ),
+        max_num_doublings=m["max_num_doublings"],
+        truth_used_for_sampling=False,
+        truth_used_for_convergence_diagnostics=False,
+        truth_used_for_plotting=truth_theta is not None,
         scientific_promotion=False,
         interpretation="conditional reference, not a known true posterior; compare A and B across initializations",
     )
@@ -672,12 +791,17 @@ def main():
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--task", type=int)
+    parser.add_argument(
+        "--profile",
+        choices=sorted(NUTS_PROFILES),
+        default=NUTS_RECOVERY_PROFILE["name"],
+    )
     args = parser.parse_args()
     if args.mode in {"prepare", "prepare-nuts"}:
         if args.reference is None:
             parser.error("--reference required")
         if args.mode == "prepare-nuts":
-            prepare_nuts(args.reference, args.root.resolve())
+            prepare_nuts(args.reference, args.root.resolve(), args.profile)
         else:
             prepare(args.reference, args.root.resolve())
     else:

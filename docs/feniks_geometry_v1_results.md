@@ -69,3 +69,28 @@ Require diagnostics and A/B agreement before interpreting posterior shapes.
 Failure to mix is itself a result; do not discard inconvenient chains.
 
 See [launch and restart instructions](feniks_geometry_nuts_runbook.md).
+
+## Depth-4 NUTS result and importance-weight interpretation
+
+The completed 12-task depth-4 run is computationally complete but not a
+posterior reference: 384,337 of 393,216 retained transitions (97.74%) reached
+the maximum 15 integration steps. Every group failed the complete convergence
+gate. This directly motivates a dense-mass depth-5/6 comparison and a longer
+depth-6 run; it does not justify discarding chains or trusting the smoothest
+corner.
+
+The weight formula and stable normalization passed the frozen geometry audits.
+That is different from saying the finite importance estimate is usable. In
+`simulated_003`, where the proposal overlaps the target reasonably well,
+weighting moves the AVI marginals toward the provisional NUTS marginals. In
+`observed_005` and `simulated_004`, one to three effective draws create narrow
+orange spikes and destroy distributional information. Operationally, weighting
+fails in those cases because the proposal supplies too little target support,
+even though the arithmetic can be correct.
+
+The initial prior used by group C is the configured identity-initialized
+15-dimensional RealNVP. Its density is checked to be exactly a standard normal
+in normalized latent `x`: `x ~ N(0, I)`. It is not uniform in physical galaxy
+parameters because the bounded mixed coordinate transform and its Jacobian are
+retained. The learned prior has the same flow architecture after population
+training; neither prior is certified as the true population distribution here.

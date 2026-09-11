@@ -33,6 +33,7 @@ class NUTSSettings:
     sample_chunks: tuple[int, ...] = (100, 500, 1000)
     target_accept: float = 0.65
     max_num_doublings: int = 10
+    is_mass_matrix_diagonal: bool = True
 
 
 @dataclass(frozen=True)
@@ -205,7 +206,7 @@ def run_nuts_chain(
         adaptation = blackjax.window_adaptation(
             blackjax.nuts,
             sampling_logdensity,
-            is_mass_matrix_diagonal=True,
+            is_mass_matrix_diagonal=settings.is_mass_matrix_diagonal,
             target_acceptance_rate=float(settings.target_accept),
             max_num_doublings=int(settings.max_num_doublings),
             initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
@@ -302,6 +303,9 @@ def run_nuts_chain(
         "warmup_steps": int(settings.warmup_steps),
         "target_accept": float(settings.target_accept),
         "max_num_doublings": int(settings.max_num_doublings),
+        "mass_matrix": (
+            "diagonal" if settings.is_mass_matrix_diagonal else "dense"
+        ),
         "sample_chunks": list(settings.sample_chunks),
         "stored_samples": int(sum(settings.sample_chunks)),
         "kernel_transitions": int(sum(settings.sample_chunks)),
@@ -360,6 +364,8 @@ def run_batched_nuts_chains(
     }
     if target_dtype != "float32":
         contract.update(version=2, target_dtype=target_dtype)
+    if not settings.is_mass_matrix_diagonal:
+        contract.update(version=3, mass_matrix="dense")
     if contract_path.exists():
         existing_contract = json.loads(contract_path.read_text(encoding="utf-8"))
         if existing_contract != contract:
@@ -476,7 +482,7 @@ def run_batched_nuts_chains(
             adaptation = blackjax.window_adaptation(
                 blackjax.nuts,
                 sampling_logdensity,
-                is_mass_matrix_diagonal=True,
+                is_mass_matrix_diagonal=settings.is_mass_matrix_diagonal,
                 target_acceptance_rate=float(settings.target_accept),
                 max_num_doublings=int(settings.max_num_doublings),
                 initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
@@ -680,6 +686,9 @@ def run_batched_nuts_chains(
             "warmup_steps": int(settings.warmup_steps),
             "target_accept": float(settings.target_accept),
             "max_num_doublings": int(settings.max_num_doublings),
+            "mass_matrix": (
+                "diagonal" if settings.is_mass_matrix_diagonal else "dense"
+            ),
             "sample_chunks": list(settings.sample_chunks),
             "stored_samples": int(sum(settings.sample_chunks)),
             "kernel_transitions": int(sum(settings.sample_chunks)),
@@ -786,7 +795,7 @@ def run_batched_nuts_targets(
         adaptation = blackjax.window_adaptation(
             blackjax.nuts,
             conditional_logdensity,
-            is_mass_matrix_diagonal=True,
+            is_mass_matrix_diagonal=settings.is_mass_matrix_diagonal,
             target_acceptance_rate=float(settings.target_accept),
             max_num_doublings=int(settings.max_num_doublings),
             initial_step_size=jnp.asarray(1.0, dtype=jnp.float64),
@@ -853,7 +862,7 @@ def run_batched_nuts_targets(
         ),
         step_size=parameters["step_size"].reshape((n_targets, n_chains)),
         inverse_mass_matrix=parameters["inverse_mass_matrix"].reshape(
-            (n_targets, n_chains, n_parameters)
+            (n_targets, n_chains, *parameters["inverse_mass_matrix"].shape[1:])
         ),
         target_validation_elapsed_s=target_elapsed,
         warmup_elapsed_s=warmup_elapsed,

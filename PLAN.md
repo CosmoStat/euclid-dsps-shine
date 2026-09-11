@@ -8903,6 +8903,21 @@ Remote recovery:
 - Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
 # Frozen geometry and NUTS comparison
 
+- 2026-09-11 follow-up implemented: depth-4 recovery completed all 12 tasks,
+  but 97.74% of retained transitions reached the 15-step integration ceiling.
+  Add an explicit dense-mass NUTS contract, a B-only depth-5/6 bounded probe,
+  and a separate longer B-only depth-6 run. Keep all targets, starts and frozen
+  learned prior unchanged. Add simulation truth to plots only, never to target,
+  initialization, convergence checks or selection. Do not expand the observed
+  cohort until the sampler configuration is shown not to saturate.
+  The short profile is eight one-H100 tasks (four cases by depths 5/6; 500
+  warmup and 512 retained draws per chain). The independent long profile is
+  four one-H100 tasks (depth 6; 1500 warmup and 4096 retained draws per chain).
+  Both use eight vectorized chains per task and write explicit dense-mass,
+  float64 and truth-display contracts plus an aggregate comparison table/plot.
+  Verification: 51 focused tests passed, Ruff, compileall, CLI help, Bash syntax
+  and diff checks pass. No H100 follow-up has been run from this checkout.
+
 - 2026-09-11 recovery implemented: the first float64 NUTS array was cancelled
   after four tasks spent more than three hours inside an opaque 1000-step
   warmup with `max_num_doublings=10` and produced no warmup checkpoint. Prepare

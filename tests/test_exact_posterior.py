@@ -152,6 +152,42 @@ def test_batched_nuts_writes_independent_standard_chain_artifacts(
     ] == digests
 
 
+def test_batched_nuts_dense_mass_is_recorded_and_resume_guarded(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("blackjax")
+    directories = tuple(tmp_path / f"chain_{index:02d}" for index in range(2))
+    dense = NUTSSettings(
+        warmup_steps=20,
+        sample_chunks=(4,),
+        max_num_doublings=3,
+        is_mass_matrix_diagonal=False,
+    )
+    manifests = run_batched_nuts_chains(
+        _normal_logdensity,
+        jnp.asarray([[0.2, -0.1], [-0.3, 0.4]]),
+        seeds=(31, 32),
+        settings=dense,
+        out_dirs=directories,
+    )
+    assert all(row["mass_matrix"] == "dense" for row in manifests)
+    assert np.load(directories[0] / "tuned_parameters.npz")[
+        "inverse_mass_matrix"
+    ].shape == (2, 2)
+    with pytest.raises(ValueError, match="Incompatible"):
+        run_batched_nuts_chains(
+            _normal_logdensity,
+            jnp.asarray([[0.2, -0.1], [-0.3, 0.4]]),
+            seeds=(31, 32),
+            settings=NUTSSettings(
+                warmup_steps=20,
+                sample_chunks=(4,),
+                max_num_doublings=3,
+            ),
+            out_dirs=directories,
+        )
+
+
 def test_batched_nuts_targets_runs_distinct_targets_and_chains() -> None:
     pytest.importorskip("blackjax")
 

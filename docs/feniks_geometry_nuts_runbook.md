@@ -136,3 +136,62 @@ network misses photometrically plausible regions, whether starting points
 matter, and whether the learned prior strongly changes the inferred answer.
 We then use that evidence to choose an AVI training change. Weight arithmetic
 checks here concern direct network draws, not every historical MIS code path.
+
+## Dense-mass depth follow-up
+
+The completed depth-4 run reached its 15-integration-step ceiling for 97.74%
+of retained transitions. High acceptance therefore did not establish useful
+travel: the configured trajectory was almost always cut short. The next stage
+keeps the learned target and encoder starts (group B) fixed while changing only
+the NUTS geometry.
+
+The short probe compares dense adapted mass matrices at depths 5 and 6 on the
+same four cases. Each task has eight vectorized chains, 500 warmup transitions
+and 512 retained draws per chain. Its purpose is configuration selection, not
+a reference posterior. The separate long profile uses dense depth 6, eight
+chains, 1500 warmup transitions and 4096 retained draws per chain. It is a
+reference candidate only if R-hat, bulk/tail ESS, divergences, trajectory-limit
+hits, traces and agreement across initial regions are acceptable.
+
+Simulation truth is loaded only after sampling and drawn as a dashed line/star
+in `marginals.png` and `corner_first5.png`. It cannot alter starts, targets,
+adaptation, convergence diagnostics or selection. Observed galaxies have no
+truth overlay.
+
+Prepare two new immutable roots from the completed geometry root:
+
+```bash
+cd "$WORK/dsps-popcosmos"
+source "$WORK/miniconda3/etc/profile.d/conda.sh"
+conda activate shine
+git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+
+BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"
+GEOMETRY_ROOT="$BASE/frozen_geometry_nuts_v1"
+PROBE_ROOT="$BASE/frozen_geometry_nuts_dense_depth56_probe_v1"
+LONG_ROOT="$BASE/frozen_geometry_nuts_dense_depth6_long_v1"
+
+bash scripts/submit_feniks_geometry_nuts.sh \
+  nuts-probe-new "$PROBE_ROOT" "$GEOMETRY_ROOT"
+bash scripts/submit_feniks_geometry_nuts.sh \
+  nuts-long-new "$LONG_ROOT" "$GEOMETRY_ROOT"
+```
+
+This requests eight H100s for the probe and four H100s for the long run, with
+eight chains vectorized per GPU: 12 H100s and 96 chains at peak if both arrays
+run simultaneously. The time limits are four and twelve hours respectively.
+To reduce peak allocation, set `NUTS_ARRAY_CONCURRENCY` separately before each
+submission.
+
+After completion:
+
+```bash
+python scripts/summarize_feniks_nuts_followup.py "$PROBE_ROOT" | \
+  tee "$PROBE_ROOT/summary.txt"
+python scripts/summarize_feniks_nuts_followup.py "$LONG_ROOT" | \
+  tee "$LONG_ROOT/summary.txt"
+```
+
+The probe writes `depth_comparison.png`. Do not accept depth 6 merely because
+it has fewer limit hits than depth 5: the absolute limit-hit rate should become
+rare, divergences should remain rare, and all chain diagnostics still apply.

@@ -4,7 +4,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from scripts.feniks_geometry_nuts import GROUPS, load, weights, write
+from scripts.feniks_geometry_nuts import (
+    GROUPS,
+    NUTS_PROFILES,
+    _profile_tasks,
+    load,
+    weights,
+    write,
+)
 
 
 def test_weights_stable_and_shift_invariant():
@@ -244,7 +251,44 @@ def test_geometry_import_is_immutable_and_hash_checked(tmp_path, monkeypatch):
 def test_recovery_launcher_uses_all_targets_and_bounded_depth():
     launcher = Path("scripts/submit_feniks_geometry_nuts.sh").read_text()
     wrapper = Path("scripts/feniks_geometry_nuts.slurm").read_text()
-    assert 'NUTS_ARRAY_CONCURRENCY="${NUTS_ARRAY_CONCURRENCY:-12}"' in launcher
-    assert '--array="0-11%${NUTS_ARRAY_CONCURRENCY}"' in launcher
-    assert "--time=08:00:00" in launcher
+    assert "nuts-probe-new" in launcher
+    assert "nuts-long-new" in launcher
+    assert '--array="0-${ARRAY_LAST}%${NUTS_ARRAY_CONCURRENCY}"' in launcher
+    assert '--time="$NUTS_TIME"' in launcher
     assert "warmup_progress=opaque" in wrapper
+
+
+def test_dense_followup_profiles_are_b_only_and_bounded():
+    probe = NUTS_PROFILES["float64_dense_depth56_probe_v1"]
+    long = NUTS_PROFILES["float64_dense_depth6_long_v1"]
+    probe_tasks = _profile_tasks(probe)
+    long_tasks = _profile_tasks(long)
+    assert len(probe_tasks) == 8
+    assert {row["group"] for row in probe_tasks} == {"B"}
+    assert {row["max_num_doublings"] for row in probe_tasks} == {5, 6}
+    assert len({row["variant"] for row in probe_tasks}) == 2
+    assert probe["mass_matrix"] == "dense"
+    assert len(long_tasks) == 4
+    assert {row["max_num_doublings"] for row in long_tasks} == {6}
+    assert long["warmup"] == 1500
+    assert sum(long["chunks"]) == 4096
+
+
+def test_simulation_truth_is_display_only(tmp_path, monkeypatch):
+    import jax.numpy as jnp
+
+    from scripts.feniks_geometry_nuts import simulation_truth_theta
+
+    truth = np.arange(30, dtype=float).reshape(2, 15)
+    np.savez(tmp_path / "SIMULATED_INPUTS.npz", generated_x=truth)
+    monkeypatch.setattr(
+        "scripts.feniks_geometry_nuts.x_to_theta", lambda x, spec: jnp.asarray(x)
+    )
+    spec = type("Spec", (), {"names": tuple(f"p{i}" for i in range(15))})()
+    np.testing.assert_array_equal(
+        simulation_truth_theta({"reference": str(tmp_path)}, "simulated_001", spec),
+        truth[1],
+    )
+    assert simulation_truth_theta(
+        {"reference": str(tmp_path)}, "observed_001", spec
+    ) is None
