@@ -40,6 +40,7 @@ from scripts.run_feniks_exact_posterior_benchmark import _load_runtime_rows
 from scripts.run_feniks_sc_drws_local_vi_diagnostic import check_config
 
 CASES = ("observed_000", "observed_005", "simulated_003", "simulated_004")
+OBSERVED_CASES = tuple(f"observed_{index:03d}" for index in range(8))
 GROUPS = ("A", "B", "C")
 NUTS_RECOVERY_PROFILE = {
     "name": "float64_depth4_parallel_v1",
@@ -83,14 +84,28 @@ NUTS_PROFILES = {
         "slurm_time": "12:00:00",
         "role": "conditional_reference_candidate_requires_diagnostics",
     },
+    "float64_dense_depth6_observed8_v1": {
+        "name": "float64_dense_depth6_observed8_v1",
+        "chains": 8,
+        "warmup": 1500,
+        "chunks": [512] * 8,
+        "max_num_doublings": 6,
+        "target_accept": 0.9,
+        "array_tasks": len(OBSERVED_CASES),
+        "recommended_array_concurrency": len(OBSERVED_CASES),
+        "groups": ["B"],
+        "mass_matrix": "dense",
+        "slurm_time": "12:00:00",
+        "role": "observed_stratified_conditional_reference_candidates",
+    },
 }
 
 
-def _profile_tasks(profile):
+def _profile_tasks(profile, cases=CASES):
     depths = profile["max_num_doublings"]
     depths = depths if isinstance(depths, list) else [depths]
     tasks = []
-    for case in CASES:
+    for case in cases:
         for group in profile["groups"]:
             for depth in depths:
                 tasks.append(
@@ -158,7 +173,7 @@ def prepare_nuts(reference, root, profile_name=NUTS_RECOVERY_PROFILE["name"]):
         max_num_doublings=profile["max_num_doublings"],
         target_accept=profile["target_accept"],
         nuts_execution_profile=profile,
-        nuts_tasks=_profile_tasks(profile),
+        nuts_tasks=_profile_tasks(profile, m.get("cases", CASES)),
     )
     m["nuts_target_dtype"] = "float64"
     m["truth_display_contract"] = (
@@ -182,7 +197,7 @@ def weights(logtarget, logq):
     return w / w.sum()
 
 
-def prepare(reference, root):
+def prepare(reference, root, *, cases=CASES):
     reference = reference.resolve()
     manifest = json.loads((reference / "RUN_MANIFEST.json").read_text())
     final = json.loads((reference / "FINAL.json").read_text())
@@ -228,7 +243,7 @@ def prepare(reference, root):
         root / "MANIFEST.json",
         dict(
             reference=str(reference),
-            cases=list(CASES),
+            cases=list(cases),
             groups=list(GROUPS),
             inputs={str(p): sha256_file(p) for p in files},
             code_commit=subprocess.check_output(
@@ -252,6 +267,33 @@ def prepare(reference, root):
             },
         ),
     )
+
+
+def prepare_observed(reference, root):
+    """Prepare all eight frozen truth-free observed identities and dense NUTS."""
+    prepare(reference, root, cases=OBSERVED_CASES)
+    manifest_path = root / "MANIFEST.json"
+    m = json.loads(manifest_path.read_text())
+    profile = NUTS_PROFILES["float64_dense_depth6_observed8_v1"]
+    m.update(
+        chains=profile["chains"],
+        warmup=profile["warmup"],
+        chunks=profile["chunks"],
+        max_num_doublings=profile["max_num_doublings"],
+        target_accept=profile["target_accept"],
+        nuts_execution_profile=profile,
+        nuts_tasks=_profile_tasks(profile, m["cases"]),
+        nuts_target_dtype="float64",
+        case_selection=(
+            "all eight pre-existing observed identities selected upstream by "
+            "truth-free r-flux x SNR x valid-band-count stratification"
+        ),
+        truth_display_contract="observed cases have no truth overlay",
+    )
+    source_manifest = json.loads((Path(m["reference"]) / "RUN_MANIFEST.json").read_text())
+    if "cohort" in source_manifest:
+        m["source_observed_cohort"] = source_manifest["cohort"]
+    write(manifest_path, m)
 
 
 def load(root):
@@ -523,6 +565,9 @@ def geometry(root):
             inventory[str(p.relative_to(root))] = sha256_file(p)
         write(root / "PROGRESS.json", dict(case=case, cases_complete=ci + 1))
         print(f"[geometry] {case} complete: {reports}", flush=True)
+    if tuple(m["cases"]) == OBSERVED_CASES:
+        cohort_path = write_observed_cohort_summary(root, m, r.latent_spec)
+        inventory[str(cohort_path.relative_to(root))] = sha256_file(cohort_path)
     write(
         root / "GEOMETRY_COMPLETE.json",
         dict(
@@ -548,7 +593,7 @@ def nuts(root, task):
     for name, expected in done["artifacts"].items():
         if sha256_file(root / name) != expected:
             raise ValueError(f"geometry artifact changed: {name}")
-    tasks = m.get("nuts_tasks", _profile_tasks(profile))
+    tasks = m.get("nuts_tasks", _profile_tasks(profile, m["cases"]))
     if not 0 <= task < len(tasks):
         raise ValueError("invalid array task")
     task_spec = tasks[task]
@@ -653,6 +698,69 @@ def simulation_truth_theta(m, case, spec):
     if truth_theta.shape != (len(spec.names),) or not np.isfinite(truth_theta).all():
         raise ValueError(f"invalid display-only simulation truth for {case}")
     return truth_theta
+
+
+def write_observed_cohort_summary(root, m, spec):
+    """Describe the frozen observed cohort using photometry and raw encoder draws."""
+    rows = []
+    for case in m["cases"]:
+        if not case.startswith("observed"):
+            continue
+        with np.load(root / case / "bank_0.npz", allow_pickle=False) as bank:
+            theta = np.asarray(bank["x"])
+        with np.load(root / case / "observation.npz", allow_pickle=False) as obs:
+            valid = np.asarray(obs["mask"], dtype=bool)[0]
+            snr = np.abs(np.asarray(obs["flux"])[0]) / np.asarray(obs["flux_err"])[0]
+        physical = np.asarray(x_to_theta(jnp.asarray(theta), spec))
+        rows.append(
+            {
+                "case": case,
+                "source_row": int(
+                    np.load(Path(m["reference"]) / "observed_rows.npy")[
+                        int(case.rsplit("_", 1)[1])
+                    ]
+                ),
+                "encoder_median_z": float(np.median(physical[:, 0])),
+                "median_valid_band_snr": float(np.median(snr[valid])),
+                "encoder_median_late_early_log_sfr_ratio": float(
+                    np.median(np.sum(physical[:, 5:], axis=1))
+                ),
+            }
+        )
+    if len(rows) != len(m["cases"]):
+        return None
+    frame = pd.DataFrame(rows)
+    tags = {case: [] for case in frame["case"]}
+    definitions = {
+        "low_z": ("encoder_median_z", "min"),
+        "high_z": ("encoder_median_z", "max"),
+        "low_snr": ("median_valid_band_snr", "min"),
+        "high_snr": ("median_valid_band_snr", "max"),
+        "quenched_like": ("encoder_median_late_early_log_sfr_ratio", "min"),
+        "star_forming_like": (
+            "encoder_median_late_early_log_sfr_ratio",
+            "max",
+        ),
+    }
+    for label, (column, direction) in definitions.items():
+        index = frame[column].idxmin() if direction == "min" else frame[column].idxmax()
+        tags[frame.loc[index, "case"]].append(label)
+    values = frame[
+        [
+            "encoder_median_z",
+            "median_valid_band_snr",
+            "encoder_median_late_early_log_sfr_ratio",
+        ]
+    ].to_numpy()
+    scale = np.maximum(np.std(values, axis=0), 1.0e-12)
+    typical = int(np.argmin(np.sum(((values - np.median(values, axis=0)) / scale) ** 2, axis=1)))
+    tags[frame.loc[typical, "case"]].append("typical")
+    frame["descriptive_tags"] = [";".join(tags[case]) for case in frame["case"]]
+    frame["truth_used"] = False
+    frame["label_scope"] = "encoder_and_observed_photometry_proxy_within_eight_cases"
+    path = root / "OBSERVED_COHORT.csv"
+    frame.to_csv(path, index=False)
+    return path
 
 
 def summarize_chains(out, spec, case_root, m, *, truth_theta=None):
@@ -787,7 +895,10 @@ def summarize_chains(out, spec, case_root, m, *, truth_theta=None):
 
 def main():
     parser = argparse.ArgumentParser(__doc__)
-    parser.add_argument("mode", choices=["prepare", "prepare-nuts", "geometry", "nuts"])
+    parser.add_argument(
+        "mode",
+        choices=["prepare", "prepare-observed", "prepare-nuts", "geometry", "nuts"],
+    )
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--reference", type=Path)
     parser.add_argument("--task", type=int)
@@ -797,11 +908,13 @@ def main():
         default=NUTS_RECOVERY_PROFILE["name"],
     )
     args = parser.parse_args()
-    if args.mode in {"prepare", "prepare-nuts"}:
+    if args.mode in {"prepare", "prepare-observed", "prepare-nuts"}:
         if args.reference is None:
             parser.error("--reference required")
         if args.mode == "prepare-nuts":
             prepare_nuts(args.reference, args.root.resolve(), args.profile)
+        elif args.mode == "prepare-observed":
+            prepare_observed(args.reference, args.root.resolve())
         else:
             prepare(args.reference, args.root.resolve())
     else:

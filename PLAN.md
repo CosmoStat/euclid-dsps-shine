@@ -8903,6 +8903,19 @@ Remote recovery:
 - Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
 # Frozen geometry and NUTS comparison
 
+- 2026-09-11 observed-cohort extension implemented: run the eight already
+  frozen, truth-free observed identities while the four-case depth jobs run.
+  Preserve their upstream r-flux/SNR/mask-count stratification. Add only
+  encoder-derived descriptive tags (redshift, SNR and late/early SFH trend),
+  explicitly not catalog truth or physical class labels. Prepare geometry on
+  one H100, then launch eight independent dense-depth-6 group-B tasks through
+  an afterok dependency so incomplete geometry can never feed NUTS. This adds
+  six observed identities beyond the two in the four-case comparison and tests
+  individual-posterior generality, not population-prior quality. The workflow
+  peaks at eight H100s and 64 vectorized chains; concurrency remains operator
+  configurable. Verification: 53 focused tests passed; Ruff, compileall, Bash
+  syntax and diff checks pass. No remote observed-cohort run has been submitted.
+
 - 2026-09-11 follow-up implemented: depth-4 recovery completed all 12 tasks,
   but 97.74% of retained transitions reached the 15-step integration ceiling.
   Add an explicit dense-mass NUTS contract, a B-only depth-5/6 bounded probe,

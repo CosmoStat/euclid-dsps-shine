@@ -195,3 +195,38 @@ python scripts/summarize_feniks_nuts_followup.py "$LONG_ROOT" | \
 The probe writes `depth_comparison.png`. Do not accept depth 6 merely because
 it has fewer limit hits than depth 5: the absolute limit-hit rate should become
 rare, divergences should remain rare, and all chain diagnostics still apply.
+
+## Eight observed cases in parallel
+
+The upstream diagnostic already froze eight observed identities using
+round-robin strata in measured r-band flux, median observed S/N and valid-band
+count. The observed extension uses all eight, including the two already present
+in the four-case comparison. It does not inspect catalog truth columns.
+
+After geometry, `OBSERVED_COHORT.csv` records the source row, observed S/N and
+raw-encoder medians. `low_z`/`high_z` refer to encoder median redshift within
+these eight objects. `quenched_like`/`star_forming_like` refer to the minimum
+and maximum encoder median late-to-early log-SFR contrast within these eight.
+They are descriptive proxies, not known physical labels. Every selected object
+is sampled regardless of its tag.
+
+The launcher submits one geometry job and an eight-task dense-depth-6 NUTS
+array with an `afterok` dependency. Thus NUTS can wait concurrently with the
+other arrays, but cannot start from partial geometry:
+
+```bash
+OBS_ROOT="$BASE/frozen_geometry_nuts_observed8_dense_depth6_v1"
+NUTS_ARRAY_CONCURRENCY=8 \
+bash scripts/submit_feniks_observed_nuts.sh \
+  "$OBS_ROOT" "$BASE/frozen_parent_wake_holdout_v1"
+```
+
+The reference argument is the completed transport64 objective pilot, not a
+previous geometry root. Peak allocation is one H100 during geometry and eight
+H100s during NUTS, with eight vectorized chains per H100. Inspect the cohort:
+
+```bash
+column -s, -t < "$OBS_ROOT/OBSERVED_COHORT.csv"
+python scripts/summarize_feniks_nuts_followup.py "$OBS_ROOT" | \
+  tee "$OBS_ROOT/summary.txt"
+```

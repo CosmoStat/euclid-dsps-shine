@@ -272,6 +272,8 @@ def test_dense_followup_profiles_are_b_only_and_bounded():
     assert {row["max_num_doublings"] for row in long_tasks} == {6}
     assert long["warmup"] == 1500
     assert sum(long["chunks"]) == 4096
+    observed = NUTS_PROFILES["float64_dense_depth6_observed8_v1"]
+    assert len(_profile_tasks(observed, tuple(f"observed_{i:03d}" for i in range(8)))) == 8
 
 
 def test_simulation_truth_is_display_only(tmp_path, monkeypatch):
@@ -292,3 +294,48 @@ def test_simulation_truth_is_display_only(tmp_path, monkeypatch):
     assert simulation_truth_theta(
         {"reference": str(tmp_path)}, "observed_001", spec
     ) is None
+
+
+def test_observed_launcher_chains_geometry_before_eight_nuts_tasks():
+    launcher = Path("scripts/submit_feniks_observed_nuts.sh").read_text()
+    assert "prepare-observed" in launcher
+    assert '--dependency="afterok:${GEOMETRY_JOB}"' in launcher
+    assert '--array="0-7%${NUTS_ARRAY_CONCURRENCY}"' in launcher
+    assert "--kill-on-invalid-dep=yes" in launcher
+
+
+def test_observed_cohort_summary_uses_no_truth(tmp_path, monkeypatch):
+    import jax.numpy as jnp
+
+    from scripts.feniks_geometry_nuts import write_observed_cohort_summary
+
+    reference = tmp_path / "reference"
+    reference.mkdir()
+    np.save(reference / "observed_rows.npy", np.array([10, 20]))
+    for index in range(2):
+        case = tmp_path / f"observed_{index:03d}"
+        case.mkdir()
+        x = np.tile(np.arange(15, dtype=float), (16, 1)) + index
+        np.savez(case / "bank_0.npz", x=x)
+        np.savez(
+            case / "observation.npz",
+            flux=np.ones((1, 3)) * (index + 1),
+            flux_err=np.ones((1, 3)),
+            mask=np.ones((1, 3), dtype=bool),
+        )
+    monkeypatch.setattr(
+        "scripts.feniks_geometry_nuts.x_to_theta", lambda x, spec: jnp.asarray(x)
+    )
+    spec = type("Spec", (), {"names": tuple(f"p{i}" for i in range(15))})()
+    path = write_observed_cohort_summary(
+        tmp_path,
+        {
+            "reference": str(reference),
+            "cases": ["observed_000", "observed_001"],
+        },
+        spec,
+    )
+    frame = __import__("pandas").read_csv(path)
+    assert len(frame) == 2
+    assert not frame["truth_used"].any()
+    assert set(frame["source_row"]) == {10, 20}
