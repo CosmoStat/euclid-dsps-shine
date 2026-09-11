@@ -42,6 +42,103 @@ def _production_config():
     )
 
 
+def test_real_runtime_distinguishes_frozen_encoder_from_population(tmp_path):
+    import h5py
+    import pandas as pd
+
+    from euclid_dsps.amortized.adaptive_smc_trainer import (
+        prepare_adaptive_training_runtime,
+    )
+    from euclid_dsps.amortized.features import (
+        compute_feature_stats,
+        write_feature_stats,
+    )
+    from euclid_dsps.config import normalize_config
+
+    # Real file loaders and runtime assembly, with a small synthetic physical grid.
+    ssp = tmp_path / "ssp.h5"
+    with h5py.File(ssp, "w") as handle:
+        handle["ssp_wave"] = np.linspace(1000, 12000, 48).astype(np.float32)
+        handle["ssp_lg_age_gyr"] = np.linspace(-3, 0.9, 16).astype(np.float32)
+        handle["ssp_lgmet"] = np.array([-3, -2, -1, 0], dtype=np.float32)
+        handle["ssp_flux"] = np.full((4, 16, 48), 1e-3, dtype=np.float32)
+    curve = tmp_path / "vis.dat"
+    curve.write_text("4000 0\n5000 1\n6000 0\n")
+    config = normalize_config({
+        "catalog_path": str(tmp_path / "train.parquet"),
+        "ssp_path": str(ssp),
+        "bands": [{"name": "euclid_vis", "column": "flux", "error_column": "error",
+                   "units": "fnu_cgs", "filter": {"kind": "ascii", "path": str(curve)}}],
+        "fit": {"free_parameters": {
+            "z_obs": {"bounds": [0.01, 5.0], "initial": 1.0},
+            "dust_av": {"bounds": [0.001, 6.0], "initial": 0.2},
+        }},
+        "amortized": {
+            "latent": {"schema": "config_free_parameters", "normalization": "standardized_logit",
+                       "center_source": "fit_initial", "geometry_samples": 32},
+            "prior": {"source": "joint_realnvp", "checkpoint": None},
+            "objective": {"sleep": {"enabled": True, "error_model": "observed_catalog"},
+                          "selection_correction": {"enabled": False}},
+        },
+    })
+    frame = pd.DataFrame({"flux": [1e-28, 2e-28, 3e-28], "error": [1e-29] * 3})
+    frame.to_parquet(config["catalog_path"])
+    frame.to_parquet(tmp_path / "test.parquet")
+    np.save(tmp_path / "train.npy", np.array([0, 2]))
+    np.save(tmp_path / "validation.npy", np.array([1]))
+    stats = compute_feature_stats(
+        np.array([[1e-28], [3e-28]]), np.full((2, 1), 1e-29), np.ones((2, 1), bool),
+        band_names=("euclid_vis",),
+    )
+    write_feature_stats(tmp_path / "source_stats.json", stats)
+    args = dict(train_indices_file=tmp_path / "train.npy",
+                validation_indices_file=tmp_path / "validation.npy",
+                validation_catalog_path=tmp_path / "test.parquet",
+                fixed_feature_stats_path=tmp_path / "source_stats.json")
+    frozen = tmp_path / "frozen"
+    frozen.mkdir()
+    rt = prepare_adaptive_training_runtime(config, frozen, train_population_prior=False, **args)
+    assert not rt.sleep_objective_config["prior_train_jointly"]
+    assert not rt.selection_objective_config["prior_train_jointly"]
+    assert rt.selection_objective_config["selection_correction"] == {"enabled": False}
+    assert rt.train_arrays.row_index.tolist() == [0, 2]
+    assert rt.validation_arrays.row_index.tolist() == [1]
+    assert not rt.train_arrays.truth and not rt.validation_arrays.truth
+    assert "euclid_vis" in rt.context.filters
+    assert np.asarray(rt.context.ssp.ssp_flux).shape == (4, 16, 48)
+    assert not json.loads((frozen / "effective_latent_spec.json").read_text())["train_population_prior"]
+    production = tmp_path / "production"
+    production.mkdir()
+    with pytest.raises(ValueError, match="requires selection correction"):
+        prepare_adaptive_training_runtime(config, production, **args)
+    config["amortized"]["objective"]["selection_correction"].update(
+        enabled=True, band="euclid_vis", max_mag_ab=29.0,
+    )
+    config["synthetic_diffsky"] = {"flux_error_model": {
+        "type": "m5_depth", "m5": {"euclid_vis": 25.0},
+    }}
+    selected = tmp_path / "selected_frozen"
+    selected.mkdir()
+    selected_rt = prepare_adaptive_training_runtime(
+        config, selected, train_population_prior=False, **args
+    )
+    assert selected_rt.selection_objective_config["selection_correction"]["enabled"]
+    assert not selected_rt.selection_objective_config["prior_train_jointly"]
+    assert selected_rt.selection_objective_config["selection_correction"]["max_mag_ab"] == 29.0
+    config["amortized"]["latent"]["arithmetic_precision"] = "float64_v1"
+    precise = tmp_path / "precise"
+    precise.mkdir()
+    previous = jax.config.jax_enable_x64
+    jax.config.update("jax_enable_x64", True)
+    try:
+        precise_rt = prepare_adaptive_training_runtime(
+            config, precise, train_population_prior=False, **args
+        )
+    finally:
+        jax.config.update("jax_enable_x64", previous)
+    assert precise_rt.jit_latent_spec.arithmetic_precision == "float64_v1"
+
+
 def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> None:
     config = _production_config()
     runtime = _config_without_truth(config)

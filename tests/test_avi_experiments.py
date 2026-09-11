@@ -24,6 +24,8 @@ from euclid_dsps.amortized.posterior import ConditionalFlowEncoder, posterior_lo
 from euclid_dsps.amortized.proposal_expressivity import IndependentFlowMixture
 from euclid_dsps.calibration import GlobalSedScaleState
 from scripts.feniks_avi_experiments import (
+    enable_avi_selection,
+    frozen_selection_normalization,
     phase_at,
     read,
     runtime_asset_paths,
@@ -32,6 +34,45 @@ from scripts.feniks_avi_experiments import (
     source_config_text,
     validate_rows,
 )
+
+
+def test_avi_restores_inherited_selection_without_changing_target():
+    from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
+    from euclid_dsps.config import load_config
+
+    config = load_config("configs/experiments/feniks_sc_drws_r29_frozen_parent_sleep_npe.yaml")
+    objective = config["amortized"]["objective"]
+    original = dict(objective["selection_correction"])
+    latent = latent_spec_hash(latent_spec_from_config(config))
+    assert original["enabled"] is False
+    enable_avi_selection(config)
+    assert objective["selection_correction"] == {**original, "enabled": True}
+    assert objective["sleep"]["selection"]["enabled"]
+    assert latent_spec_hash(latent_spec_from_config(config)) == latent
+    objective["selection_correction"]["max_mag_ab"] = 25.0
+    with pytest.raises(ValueError, match="inherited observed"):
+        enable_avi_selection(config)
+
+
+def test_frozen_selection_receipt_requires_enabled_correction(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from euclid_dsps.amortized import adaptive_smc_trainer
+
+    runtime = SimpleNamespace(selection_objective_config={
+        "selection_correction": {"enabled": True}, "prior_train_jointly": False,
+    })
+    monkeypatch.setattr(adaptive_smc_trainer, "_make_selection_log_alpha_fn",
+                        lambda rt: lambda model, key: (
+                            jnp.log(0.5), {"selection/alpha": jnp.array(0.5)}))
+    value = frozen_selection_normalization(model(), runtime, {"seed": 3}, tmp_path)
+    assert value == pytest.approx(np.log(0.5))
+    receipt = read(tmp_path / "SELECTION.json")
+    assert receipt["enabled"] and receipt["constant_wrt_encoder"]
+    assert receipt["selection_in_object_weights"] is False
+    runtime.selection_objective_config["selection_correction"]["enabled"] = False
+    with pytest.raises(ValueError, match="must remain enabled"):
+        frozen_selection_normalization(model(), runtime, {"seed": 3}, tmp_path)
 
 
 def test_snapshot_contains_filter_contents_and_data_link(tmp_path):

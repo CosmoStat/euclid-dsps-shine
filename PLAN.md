@@ -8953,6 +8953,21 @@ Remote recovery:
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
 # Full-catalogue AVI experiment array (2026-09-11)
 
+- v4 runtime recovery: AVI reused a population-training loader whose selection
+  correction requirement is inappropriate for its frozen-prior encoder-only
+  objective. Add explicit train_population_prior=False for AVI only, propagate
+  the role into objective metadata, keep the production default and selection
+  guard unchanged. Per user clarification, restore the inherited r<29 selection
+  normalization and record frozen log(alpha) with fixed shared randomness.
+  Include +log(alpha) in E's selected ELBO and all validation ELBOs, preserving
+  unselected values too. Keep beta/alpha out of individual normalized weights.
+  Test real runtime preparation with small parquet/filter/SSP fixtures, not a
+  mocked runtime return. Recheck frozen-prior integration before handoff.
+  Verified 27 tests across AVI and adaptive runtime, including seven-arm/four-CPU
+  integration and selected/unselected ELBO offsets. Preserve float64 in the JIT
+  latent spec for selection; reran real runtime regression after this change.
+  Ruff and compilation pass. H100 execution remains a required remote preflight.
+
 - v3 startup recovery: the source archive omitted filters/, although configuration
   uses relative curve paths. Include dereferenced filter contents in the hashed
   snapshot, keep the existing Data link, and validate filter parsing plus SSP and

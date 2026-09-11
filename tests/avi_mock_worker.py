@@ -120,6 +120,7 @@ def main(root):
         sleep_objective_config={},
     )
     with ExitStack() as stack:
+        stack.enter_context(patch.object(runner, "frozen_selection_normalization", lambda *a: -0.2))
         stack.enter_context(patch.object(runner, "check_inputs", lambda root: m))
         stack.enter_context(
             patch(
@@ -165,6 +166,13 @@ def main(root):
         args.max_hours = 1.0
         runner.run(args, required_platform="cpu")
         assert runner.read(root / "arms" / ARMS[0].name / "FINAL.json")["steps"] == 9
+        import pandas as pd
+
+        validation = pd.read_csv(root / "arms" / ARMS[0].name / "validation_final.csv")
+        np.testing.assert_allclose(validation.selection_log_alpha, -0.2)
+        np.testing.assert_allclose(
+            validation.negative_elbo - validation.negative_elbo_unselected, -0.2,
+        )
         runner.summarize(root)
         assert (root / "avi_comparison.png").is_file()
         from PIL import Image

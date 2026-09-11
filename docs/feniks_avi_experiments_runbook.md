@@ -109,6 +109,22 @@ by hand. A passed preflight establishes executability, not posterior quality.
 
 ## Monitor And Resume
 
+After v4 preflight 2047507, use `avi_encoder_experiments_v5`. AVI now explicitly
+requests encoder-only runtime preparation (`train_population_prior=False`).
+The inherited observed r<29 selection correction is re-enabled, without changing
+its band, threshold or survey noise. Production prior training still requires
+selection correction by default. The optimizer updates only the encoder;
+frozen arrays are audited.
+
+`SELECTION.json` records log(alpha), estimated once per task with shared fixed
+randomness from the frozen prior and decoder. The selected negative ELBO is
+`mean(log q - log p(y,x)) + log(alpha)`. E retains this term in its ELBO loss;
+all validation tables report both selected and unselected negative ELBO. The
+constant has zero encoder gradient; it must become differentiable again when
+the population prior is trained. Wake cross-entropy still fits normalized
+individual posterior weights: neither beta nor alpha is inserted into them.
+Sleep retains its observed-flux selection. No population training is started.
+
 After v3 preflight 2047358, use `avi_encoder_experiments_v4`. The snapshot now
 includes the contents of `filters/`, including site-local symlink targets.
 Preparation parses the filters and checks SSP/configured model asset files
@@ -180,8 +196,10 @@ For normalized importance weights `w_i`, `ESS = 1 / sum(w_i**2)` and
 These diagnose the draw distribution, not a proof of complete mode coverage.
 Raw predictive RMS is computed before importance weighting: a weighted fit
 improving while raw draws remain poor is not successful amortization.
-Negative ELBO is `mean(log q(x|y) - log p(y,x))`; lower is better for the same
-galaxy and frozen target. Monte Carlo noise and missed modes still matter.
+Unselected negative ELBO is `mean(log q(x|y) - log p(y,x))`; the reported
+`negative_elbo` adds the frozen `log(alpha)` selection term. Lower is better
+for the same galaxy and frozen target. Monte Carlo noise and missed modes
+still matter.
 
 The saved encoder may be a mixture of full flows. It is **not** a drop-in
 single-encoder `best.eqx` for legacy inference. Reconstruct its architecture from

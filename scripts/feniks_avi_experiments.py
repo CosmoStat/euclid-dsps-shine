@@ -88,6 +88,44 @@ def runtime_asset_paths(config):
     return list(dict.fromkeys(paths))
 
 
+def enable_avi_selection(config):
+    """Restore the inherited r<29 correction disabled by local-only diagnostics."""
+    objective = config["amortized"]["objective"]
+    selection = objective["selection_correction"]
+    sleep_selection = objective["sleep"]["selection"]
+    for settings in (selection, sleep_selection):
+        if settings.get("band") != "lsst_r" or settings.get("max_mag_ab") != 29.0:
+            raise ValueError("AVI requires the inherited observed lsst_r<29 selection")
+    if not sleep_selection.get("enabled"):
+        raise ValueError("AVI sleep must retain observed catalogue selection")
+    selection["enabled"] = True
+
+
+def frozen_selection_normalization(model, runtime, manifest, out):
+    import equinox as eqx
+    import jax
+
+    from euclid_dsps.amortized.adaptive_smc_trainer import _make_selection_log_alpha_fn
+
+    if not runtime.selection_objective_config["selection_correction"].get("enabled"):
+        raise ValueError("AVI selection correction must remain enabled")
+    print("[avi] frozen selection normalization start", flush=True)
+    fn = eqx.filter_jit(_make_selection_log_alpha_fn(runtime))
+    value, metrics = fn(model, jax.random.PRNGKey(manifest["seed"] + 71000000))
+    value = float(np.asarray(value))
+    if not math.isfinite(value) or value > 1e-6:
+        raise ValueError("invalid frozen log selection probability")
+    write(out / "SELECTION.json", {
+        "enabled": True, "log_alpha": value,
+        "metrics": {key: float(np.asarray(v)) for key, v in metrics.items()},
+        "loss_term": "+log_alpha per observed object in selected negative ELBO",
+        "prior_frozen": True, "constant_wrt_encoder": True,
+        "selection_in_object_weights": False,
+    })
+    print(f"[avi] frozen selection normalization done log_alpha={value}", flush=True)
+    return value
+
+
 def prepare(args):
     from euclid_dsps.amortized.avi_experiments import ARMS
     from euclid_dsps.config import load_config
@@ -102,6 +140,11 @@ def prepare(args):
     from scripts.run_feniks_sc_drws_local_vi_diagnostic import check_config
 
     check_config(config)
+    enable_avi_selection(config)
+    from euclid_dsps.amortized.features import read_feature_stats
+    from euclid_dsps.amortized.train import _selection_correction_runtime_config
+
+    _selection_correction_runtime_config(config, read_feature_stats(source["feature_stats"]))
     assets = runtime_asset_paths(config)
     # Fail on source incompatibility before hashing catalogues or submitting GPUs.
     source_config_text(config, source["checkpoint"])
@@ -431,9 +474,12 @@ def run(args, *, required_platform="gpu"):
         validation_indices_file=root / "validation.npy",
         validation_catalog_path=m["validation_catalog"],
         fixed_feature_stats_path=m["source"]["feature_stats"],
+        train_population_prior=False,
     )
     if str(rt.likelihood_config.get("type", "gaussian")) != "gaussian":
         raise ValueError("frozen comparison requires the qualified Gaussian target")
+    log_alpha = frozen_selection_normalization(model, rt, m, out)
+    m = {**m, "selection_log_alpha": log_alpha}
     candidate = initialize_candidate(model, config, rt.latent_spec, arm, m["seed"])
     frozen_digest = tree_digest((model.prior, model.sed_scale, model.band_calibration))
     write(
@@ -590,13 +636,13 @@ def run(args, *, required_platform="gpu"):
                     jnp.mean(usable),
                 )
                 if arm.elbo_weight:
-                    value += arm.elbo_weight * enumerated_elbo(
+                    value += arm.elbo_weight * (enumerated_elbo(
                         model,
                         c,
                         b.features,
                         ek,
                         lambda x: target_values(x, b).logtarget,
-                    )
+                    ) + log_alpha)
             if arm.teacher_weight:
                 # tx arrives [object, draw, latent]; particle-major density convention.
                 tx = jnp.swapaxes(tx, 0, 1)
@@ -889,7 +935,8 @@ def make_evaluator(model, target_values, m, devices):
             )
         )
         return jnp.stack(
-            [ess, jnp.max(w, axis=0), rms, jnp.mean(q - tv.logtarget, axis=0), valid],
+            [ess, jnp.max(w, axis=0), rms,
+             jnp.mean(q - tv.logtarget, axis=0) + m.get("selection_log_alpha", 0.0), valid],
             axis=-1,
         )
 
@@ -928,6 +975,8 @@ def evaluate(out, label, candidate, validation, evaluator, m):
                         max_weight=row[1],
                         raw_predictive_rms=row[2],
                         negative_elbo=row[3],
+                        negative_elbo_unselected=row[3] - m.get("selection_log_alpha", 0.0),
+                        selection_log_alpha=m.get("selection_log_alpha", 0.0),
                         finite=bool(row[4]),
                     )
                 )

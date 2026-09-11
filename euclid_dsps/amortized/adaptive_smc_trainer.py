@@ -333,8 +333,12 @@ def prepare_adaptive_training_runtime(
     validation_indices_file: str | Path,
     validation_catalog_path: str | Path | None = None,
     fixed_feature_stats_path: str | Path | None = None,
+    train_population_prior: bool = True,
 ) -> RuntimeBundle:
-    """Load only observed photometry and fixed physical-model assets."""
+    """Load observed photometry; population training requires selection correction.
+
+    Encoder-only callers must explicitly opt out and keep their prior frozen.
+    """
     runtime_config = _config_without_truth(config)
     cfg = amortized_config(runtime_config)
     split = build_training_split(
@@ -408,7 +412,11 @@ def prepare_adaptive_training_runtime(
         {
             "normalization_hash": latent_spec_hash(latent_spec),
             "coordinate_information_source": "fit_bounds_and_fit_initials_only",
-            "population_density_initialization": "identity_realnvp_standard_normal",
+            "population_density_initialization": (
+                "identity_realnvp_standard_normal" if train_population_prior
+                else "external_frozen_checkpoint"
+            ),
+            "train_population_prior": train_population_prior,
             "truth_used": False,
         }
     )
@@ -434,6 +442,7 @@ def prepare_adaptive_training_runtime(
         transform_family=latent_spec.transform_family,
         transform_location=latent_spec.transform_location,
         transform_lambda=latent_spec.transform_lambda,
+        arithmetic_precision=latent_spec.arithmetic_precision,
     )
     sleep_runtime = _sleep_runtime_config(runtime_config, feature_stats)
     if str(sleep_runtime.get("error_model")) != "observed_catalog":
@@ -442,16 +451,16 @@ def prepare_adaptive_training_runtime(
         runtime_config,
         feature_stats,
     )
-    if not selection_runtime.get("enabled"):
+    if train_population_prior and not selection_runtime.get("enabled"):
         raise ValueError("production parent prior requires selection correction")
     sleep_objective = {
         "sleep": sleep_runtime,
         "selection_correction": selection_runtime,
-        "prior_train_jointly": True,
+        "prior_train_jointly": train_population_prior,
     }
     selection_objective = {
         "selection_correction": selection_runtime,
-        "prior_train_jointly": True,
+        "prior_train_jointly": train_population_prior,
     }
     return RuntimeBundle(
         config=runtime_config,
