@@ -157,9 +157,11 @@ def infer(out: Path, task: int, *, platform: str = "gpu") -> None:
     config = copy.deepcopy(config)
     config["amortized"]["encoder"]["transport_float64"] = True
     model = eqx.tree_at(lambda a: a.encoder, model, initialize_transport(model.encoder))
+    runtime_dir = dest / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
     rt = prepare_adaptive_training_runtime(
         config,
-        dest / "runtime",
+        runtime_dir,
         train_indices_file=training / "train.npy",
         validation_indices_file=training / "validation.npy",
         validation_catalog_path=m["validation_catalog"],

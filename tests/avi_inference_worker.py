@@ -56,15 +56,18 @@ def main(root):
         calibration_config={},
         selection_objective_config={"selection_correction": {"enabled": True}},
     )
+
+    def prepare_runtime(config, output, **kwargs):
+        assert output.is_dir()
+        return rt
+
     with ExitStack() as stack:
         for name, value in {
             "scripts.feniks_avi_experiments.check_inputs": lambda p: m,
             "euclid_dsps.config.load_config": lambda p: {"amortized": {"encoder": {}}},
             "euclid_dsps.amortized.train.load_checkpoint": lambda *a: model,
             "euclid_dsps.amortized.train.build_amortized_model": build,
-            "euclid_dsps.amortized.adaptive_smc_trainer.prepare_adaptive_training_runtime": lambda *a, **kw: (
-                rt
-            ),
+            "euclid_dsps.amortized.adaptive_smc_trainer.prepare_adaptive_training_runtime": prepare_runtime,
             "euclid_dsps.amortized.posterior_target.posterior_log_target": target,
             "euclid_dsps.amortized.latent.x_to_theta": lambda x, spec: x,
         }.items():

@@ -2,6 +2,14 @@
 
 ## AVI post-training inference comparison
 
+- v1 inference tasks failed before sampling because the per-arm runtime output
+  directory did not exist when the real runtime wrote its split artifacts.
+  Create it explicitly and assert this contract in the four-device integration;
+  use a fresh immutable v2 root. Five inference tests pass, including the
+  four-device residual source/expert path with an assertion that the runtime
+  directory exists before preparation. Ruff, compileall and shell syntax pass;
+  the real H100/physical runtime remains the remote check.
+
 - Prepare source plus seven final encoders on the same development validation
   identities, two fresh K4096 banks, exact q weights, raw and IS joint draws.
 - Reuse the frozen decoder/prior, float64 transport and existing MIRA evaluator.
