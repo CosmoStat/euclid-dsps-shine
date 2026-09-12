@@ -96,8 +96,8 @@ def test_real_runtime_distinguishes_frozen_encoder_from_population(tmp_path):
                 validation_catalog_path=tmp_path / "test.parquet",
                 fixed_feature_stats_path=tmp_path / "source_stats.json")
     frozen = tmp_path / "frozen"
-    frozen.mkdir()
     rt = prepare_adaptive_training_runtime(config, frozen, train_population_prior=False, **args)
+    assert frozen.is_dir()
     assert not rt.sleep_objective_config["prior_train_jointly"]
     assert not rt.selection_objective_config["prior_train_jointly"]
     assert rt.selection_objective_config["selection_correction"] == {"enabled": False}

@@ -8986,6 +8986,13 @@ Remote recovery:
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
 # Full-catalogue AVI experiment array (2026-09-11)
 
+- 2026-09-12 prior preflight recovery: prior tasks 2/3 failed before loading
+  photometry because the shared adaptive runtime attempted to write split
+  artifacts into a missing output directory. Make runtime preparation own the
+  creation of that directory and regress the caller-independent contract. This
+  changes no posterior weight, selection correction, prior objective or model
+  initialization. Relaunch in a new immutable root after local verification.
+
 - 2026-09-12 next-stage implementation: keep the completed four-expert B arm as
   the control and add a four-task array: matched two/eight-expert encoder
   capacity, plus selection-corrected prior-only learning from the learned source

@@ -339,6 +339,8 @@ def prepare_adaptive_training_runtime(
 
     Encoder-only callers must explicitly opt out and keep their prior frozen.
     """
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
     runtime_config = _config_without_truth(config)
     cfg = amortized_config(runtime_config)
     split = build_training_split(
