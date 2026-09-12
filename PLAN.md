@@ -8986,6 +8986,16 @@ Remote recovery:
 - Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
 # Full-catalogue AVI experiment array (2026-09-11)
 
+- 2026-09-12 next-stage implementation: keep the completed four-expert B arm as
+  the control and add a four-task array: matched two/eight-expert encoder
+  capacity, plus selection-corrected prior-only learning from the learned source
+  and from an identity RealNVP. Both prior arms freeze B, use full-catalogue
+  K256 defensive balance MIS in five sweeps, retain exact full-15D weights and
+  differentiate `+log_alpha_eta`; no SFH coordinate or low-ESS galaxy is
+  silently discarded. Add a dependent expert audit with gate utilization,
+  exact responsibilities, physical/SFH separation, K512 support and raw 5D
+  MIRA. This is a causal prior test, not yet the final joint alternation.
+
 - v4 runtime recovery: AVI reused a population-training loader whose selection
   correction requirement is inappropriate for its frozen-prior encoder-only
   objective. Add explicit train_population_prior=False for AVI only, propagate

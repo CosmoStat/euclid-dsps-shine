@@ -27,6 +27,8 @@ class Arm:
     elbo_weight: float = 0.0
     teacher_weight: float = 0.0
     neighbour_sigma: float = 0.0
+    kind: str = "encoder"
+    prior_initialization: str = "frozen"
 
 
 ARMS = (
@@ -85,6 +87,28 @@ def stratified_proposal(model, candidate, features, key, particles=128):
     terms.append(model.prior.log_prob(x) + jnp.log(n_prior / particles))
     logr = jax.scipy.special.logsumexp(jnp.stack(terms), axis=0)
     return jax.lax.stop_gradient(x), jax.lax.stop_gradient(logr)
+
+
+def mixture_component_log_probs(model, candidate, features, x):
+    """Return ``log pi_j(y) + log q_j(x|y)`` for every full-flow expert."""
+    es = experts(candidate)
+    component = jnp.stack(
+        [posterior_log_prob(with_encoder(model, expert), features, x) for expert in es],
+        axis=0,
+    )
+    if len(es) == 1:
+        return component
+    log_gate = jax.nn.log_softmax(candidate.logits(features), axis=-1)
+    log_gate = jnp.moveaxis(log_gate, -1, 0)
+    while log_gate.ndim < component.ndim:
+        log_gate = jnp.expand_dims(log_gate, axis=1)
+    return component + log_gate
+
+
+def expert_responsibilities(model, candidate, features, x):
+    """Exact categorical responsibilities for complete joint 15D draws."""
+    terms = mixture_component_log_probs(model, candidate, features, x)
+    return jax.nn.softmax(terms, axis=0)
 
 
 def normalized_weights(logw):

@@ -115,13 +115,18 @@ def frozen_selection_normalization(model, runtime, manifest, out):
     value = float(np.asarray(value))
     if not math.isfinite(value) or value > 1e-6:
         raise ValueError("invalid frozen log selection probability")
-    write(out / "SELECTION.json", {
-        "enabled": True, "log_alpha": value,
-        "metrics": {key: float(np.asarray(v)) for key, v in metrics.items()},
-        "loss_term": "+log_alpha per observed object in selected negative ELBO",
-        "prior_frozen": True, "constant_wrt_encoder": True,
-        "selection_in_object_weights": False,
-    })
+    write(
+        out / "SELECTION.json",
+        {
+            "enabled": True,
+            "log_alpha": value,
+            "metrics": {key: float(np.asarray(v)) for key, v in metrics.items()},
+            "loss_term": "+log_alpha per observed object in selected negative ELBO",
+            "prior_frozen": True,
+            "constant_wrt_encoder": True,
+            "selection_in_object_weights": False,
+        },
+    )
     print(f"[avi] frozen selection normalization done log_alpha={value}", flush=True)
     return value
 
@@ -144,7 +149,9 @@ def prepare(args):
     from euclid_dsps.amortized.features import read_feature_stats
     from euclid_dsps.amortized.train import _selection_correction_runtime_config
 
-    _selection_correction_runtime_config(config, read_feature_stats(source["feature_stats"]))
+    _selection_correction_runtime_config(
+        config, read_feature_stats(source["feature_stats"])
+    )
     assets = runtime_asset_paths(config)
     # Fail on source incompatibility before hashing catalogues or submitting GPUs.
     source_config_text(config, source["checkpoint"])
@@ -346,7 +353,8 @@ def initialize_candidate(model, config, latent_spec, arm, seed):
     from euclid_dsps.amortized.proposal_expressivity import IndependentFlowMixture
     from euclid_dsps.amortized.train import build_amortized_model
 
-    keys = jax.random.split(jax.random.PRNGKey(seed), 6)
+    key_count = max(arm.experts, 1) + 2
+    keys = jax.random.split(jax.random.PRNGKey(seed), key_count)
     first = (
         build_amortized_model(config, keys[0], latent_spec=latent_spec).encoder
         if arm.scratch
@@ -354,11 +362,11 @@ def initialize_candidate(model, config, latent_spec, arm, seed):
     )
     if arm.experts == 1:
         return first
-    candidate = IndependentFlowMixture(keys[4], first, n_components=4)
+    candidate = IndependentFlowMixture(keys[-1], first, n_components=int(arm.experts))
     if arm.scratch:
         es = tuple(
             build_amortized_model(config, k, latent_spec=latent_spec).encoder
-            for k in keys[:4]
+            for k in keys[: arm.experts]
         )
     else:
         # Independent small head perturbations break symmetry without discarding the source.
@@ -369,7 +377,7 @@ def initialize_candidate(model, config, latent_spec, arm, seed):
                 first.base.mean_head.bias
                 + 0.05 * jax.random.normal(k, first.base.mean_head.bias.shape),
             )
-            for k in keys[:4]
+            for k in keys[: arm.experts]
         )
     return eqx.tree_at(lambda c: c.experts, candidate, es)
 
@@ -416,6 +424,7 @@ def run(args, *, required_platform="gpu"):
     )
     from euclid_dsps.amortized.avi_experiments import (
         ARMS,
+        Arm,
         enumerated_elbo,
         log_prob,
         make_parallel_steps,
@@ -434,7 +443,7 @@ def run(args, *, required_platform="gpu"):
 
     root = args.root
     m = check_inputs(root)
-    arm = ARMS[args.task]
+    arm = Arm(**m["arms"][args.task]) if "arms" in m else ARMS[args.task]
     preflight = args.mode == "preflight"
     out = root / ("preflight" if preflight else "arms") / arm.name
     out.mkdir(parents=True, exist_ok=True)
@@ -636,13 +645,16 @@ def run(args, *, required_platform="gpu"):
                     jnp.mean(usable),
                 )
                 if arm.elbo_weight:
-                    value += arm.elbo_weight * (enumerated_elbo(
-                        model,
-                        c,
-                        b.features,
-                        ek,
-                        lambda x: target_values(x, b).logtarget,
-                    ) + log_alpha)
+                    value += arm.elbo_weight * (
+                        enumerated_elbo(
+                            model,
+                            c,
+                            b.features,
+                            ek,
+                            lambda x: target_values(x, b).logtarget,
+                        )
+                        + log_alpha
+                    )
             if arm.teacher_weight:
                 # tx arrives [object, draw, latent]; particle-major density convention.
                 tx = jnp.swapaxes(tx, 0, 1)
@@ -935,8 +947,13 @@ def make_evaluator(model, target_values, m, devices):
             )
         )
         return jnp.stack(
-            [ess, jnp.max(w, axis=0), rms,
-             jnp.mean(q - tv.logtarget, axis=0) + m.get("selection_log_alpha", 0.0), valid],
+            [
+                ess,
+                jnp.max(w, axis=0),
+                rms,
+                jnp.mean(q - tv.logtarget, axis=0) + m.get("selection_log_alpha", 0.0),
+                valid,
+            ],
             axis=-1,
         )
 
@@ -975,7 +992,8 @@ def evaluate(out, label, candidate, validation, evaluator, m):
                         max_weight=row[1],
                         raw_predictive_rms=row[2],
                         negative_elbo=row[3],
-                        negative_elbo_unselected=row[3] - m.get("selection_log_alpha", 0.0),
+                        negative_elbo_unselected=row[3]
+                        - m.get("selection_log_alpha", 0.0),
                         selection_log_alpha=m.get("selection_log_alpha", 0.0),
                         finite=bool(row[4]),
                     )
