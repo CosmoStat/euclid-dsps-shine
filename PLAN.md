@@ -1,5 +1,19 @@
 # Plan
 
+## AVI post-training inference comparison
+
+- Prepare source plus seven final encoders on the same development validation
+  identities, two fresh K4096 banks, exact q weights, raw and IS joint draws.
+- Reuse the frozen decoder/prior, float64 transport and existing MIRA evaluator.
+  Truth is diagnostic only; no ESS filtering, no training or model selection.
+- Add four-GPU inference array, dependent MIRA job, hashes and progress receipts.
+  Verified 12 tests: residual single/expert checkpoint readback and sampling on
+  four CPU devices, exact joint resampling, fixed identities and padded tail,
+  truth preparation, nonblank plots and existing MIRA regressions. Ruff,
+  compileall and shell syntax pass. Physical runtime is mocked in the new CPU
+  integration; no H100 execution performed locally. Legacy fit smoke configs
+  are absent. Remote inference and scientific comparison remain pending.
+
 ## AVI residual expert startup recovery
 
 - Preflight A/C passed; B/D/E/F/G failed because mixture construction assumed
