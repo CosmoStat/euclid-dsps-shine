@@ -476,6 +476,13 @@ def run(args, *, required_platform="gpu"):
     config = copy.deepcopy(config)
     config["amortized"]["encoder"]["transport_float64"] = True
     model = eqx.tree_at(lambda x: x.encoder, model, initialize_transport(model.encoder))
+    initial_prior_path = (m.get("initial_prior_checkpoint_by_arm") or {}).get(arm.name)
+    if initial_prior_path:
+        model = eqx.tree_at(
+            lambda x: x.prior,
+            model,
+            load_optional_component(initial_prior_path, model.prior),
+        )
     rt = prepare_adaptive_training_runtime(
         config,
         out,
@@ -490,13 +497,27 @@ def run(args, *, required_platform="gpu"):
     log_alpha = frozen_selection_normalization(model, rt, m, out)
     m = {**m, "selection_log_alpha": log_alpha}
     candidate = initialize_candidate(model, config, rt.latent_spec, arm, m["seed"])
+    initial_encoder_path = (m.get("initial_encoder_checkpoint_by_arm") or {}).get(
+        arm.name
+    )
+    if initial_encoder_path:
+        candidate = load_optional_component(initial_encoder_path, candidate)
     frozen_digest = tree_digest((model.prior, model.sed_scale, model.band_calibration))
     write(
         out / "FROZEN_MODEL.json",
         {
             "source": m["source"],
             "prior_and_calibration_sha256": frozen_digest,
-            "prior_initialization": "loaded learned source, unchanged in all arms",
+            "prior_initialization": (
+                str(Path(initial_prior_path).resolve())
+                if initial_prior_path
+                else "loaded learned source"
+            ),
+            "encoder_initialization": (
+                str(Path(initial_encoder_path).resolve())
+                if initial_encoder_path
+                else "arm default"
+            ),
             "coordinate_geometry_plots": "configured identity reference, not the active learned prior",
             "decoder_frozen": True,
             "population_training_started": False,
@@ -505,7 +526,11 @@ def run(args, *, required_platform="gpu"):
     geometry_path = out / "effective_latent_spec.json"
     if geometry_path.exists():
         geometry = read(geometry_path)
-        geometry["population_density_initialization"] = "loaded_learned_source_frozen"
+        geometry["population_density_initialization"] = (
+            str(Path(initial_prior_path).resolve())
+            if initial_prior_path
+            else "loaded_learned_source_frozen"
+        )
         geometry["source_checkpoint"] = m["source"]["checkpoint"]
         write(geometry_path, geometry)
     nb = math.ceil(m["train_rows"] / m["global_batch"])
@@ -740,7 +765,7 @@ def run(args, *, required_platform="gpu"):
 
     if not preflight and first_step == 0:
         save_state(out, candidate, state, 0, contract)
-        evaluate(out, "source", model.encoder, validation, evaluator, m)
+        evaluate(out, "source", candidate, validation, evaluator, m)
     planned = range(4) if preflight else range(first_step, total)
     last_step = first_step
     history_path = out / "training.csv"
@@ -866,6 +891,7 @@ def run(args, *, required_platform="gpu"):
             "prior_frozen_sha256": frozen_digest,
             "scientific_promotion": False,
             "population_training_started": False,
+            "encoder_sha256": sha(out / "encoder.eqx") if not preflight else None,
             "last_step_seconds_by_phase": steady,
             "rough_seconds_excluding_validation_io_and_compilation": estimate,
             "timing_caveat": "preflight estimate only; later states may cost differently",
@@ -891,6 +917,15 @@ def tree_digest(tree):
         h.update(str((a.shape, a.dtype)).encode())
         h.update(a.tobytes())
     return h.hexdigest()
+
+
+def load_optional_component(path, template):
+    """Load an exact Equinox component only when a manifest names one."""
+    if path in (None, ""):
+        return template
+    import equinox as eqx
+
+    return eqx.tree_deserialise_leaves(Path(path), template)
 
 
 def unreplicate(tree):

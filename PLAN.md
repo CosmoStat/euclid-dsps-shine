@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-13 AVI overnight coadaptation and closure
+
+- Continue the qualified four-expert encoder for 12 epochs under either the
+  frozen source prior or the selection-corrected `P_latest` prior. Keep the
+  decoder and prior fixed during each q refresh; use the source-prior arm as a
+  duration-matched control. Do not promote `P_scratch` to training.
+- Run a dependent K4096, two-replica inference over five explicit encoder/prior
+  pairs. Retain full joint 15D proposal banks and ordinary importance weights,
+  plus beta for an auditable inverse-selection population projection.
+- Produce truth-only-after-inference diagnostics: individual 5D corners with
+  truth, 15D marginals, selected posterior mixtures, inverse-beta parent
+  mixtures, parent/selected prior closure, posterior MIRA and explicitly
+  labelled population-prior MIRA. Hash all final artifacts and fail closed on
+  incomplete dependencies or invalid weights.
+- Implemented immutable, dependency-gated Jean-Zay launch and reconnectable
+  watcher. The report consolidates raw/IS posterior MIRA and parent/selected
+  prior MIRA, writes 5D corners with truth, 15D marginals, distribution/support
+  tables and hashed completion receipts. Its full K4096 banks remain joint.
+- Verified 30 focused tests (two existing full-device integrations excluded),
+  Ruff, compileall, CLI help and Bash syntax. H100 execution and scientific
+  conclusions remain remote work; every stage requires a fresh output root.
+
 ## AVI post-training inference comparison
 
 - v1 inference tasks failed before sampling because the per-arm runtime output
