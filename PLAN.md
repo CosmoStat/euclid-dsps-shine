@@ -1,5 +1,103 @@
 # Plan
 
+## 2026-09-13 AVI next validation suite
+
+- Completed: implement one immutable Jean-Zay workflow that (1) regenerates
+  a genuinely distinct noisy selected-truth cohort with alpha and identity
+  receipts, (2) evaluates `Q_latest_refresh` on the exact eight historical NUTS
+  observations without launching new NUTS, and (3) audits the 15D decoder
+  Jacobian/SFH null directions with posterior-predictive interventions.
+- Keep truth display-only, preserve exact joint 15D draws and ordinary
+  likelihood-prior-proposal weights, and fail closed on mismatched model,
+  photometry, selector, latent normalization or incomplete dependencies.
+- Produce a dependent report with simple Encoder/NUTS/Truth comparisons,
+  selection parent-versus-selected closure, Jacobian spectra and machine-
+  readable completion receipts. Add reconnectable submission and watcher
+  commands for Jean-Zay.
+- Implemented in `scripts/feniks_avi_next_validation.py` with a four-stage
+  preflight, inference, J-lens and report dependency chain. The selection
+  closure joins the immutable 50,000-object pre-selection photometry to exact
+  spline truth by `object_id`, retains `galaxy_weight`, and applies the active
+  noisy `lsst_r < 29` contract. The local readback gives 47,076 selected rows,
+  empirical alpha 0.94152 and population-weighted alpha 0.94713.
+- The eight-object inference evaluates one dense joint Q_latest bank against
+  both the historical source-prior target (the only target-compatible NUTS
+  comparison) and the current latest-prior target. The dependent SFH audit uses
+  an actual joint draw near the weighted latent centre, local decoder singular
+  directions and nonlinear plus/minus one-posterior-SD flux interventions.
+- Added immutable snapshot submission, reconnectable monitoring and completion
+  receipts. The report now recomputes joint 15D MIRA independently against the
+  population-weighted true parent and genuinely selected cohorts, and reports
+  the physical 5D scores without reusing object identities across cohorts.
+  Ruff, Bash syntax, real 50k selection closure and 15 focused tests pass
+  locally; GPU numerical execution remains intentionally delegated to the
+  Jean-Zay preflight. A broad test run reached 84 passing tests with no failure
+  before being stopped because the full repository suite is long-running.
+
+## 2026-09-13 AVI comprehensive wrap-up and NUTS comparison
+
+- Correction completed: recover display-only truth for the eight observed
+  NUTS identities by exact 18-band photometry/error/mask matching against the
+  local pre-grouping catalogue, audit every match, and replace the sparse
+  triangular corner with compact truth-aware Encoder/NUTS comparisons plus an
+  eight-case overview. All eight joins are unique with maximum relative flux
+  and uncertainty residuals below `5.1e-8`; truth remains post-hoc and never
+  enters either sampler. The regenerated folder has nine PNGs, 82 hashed
+  artifacts pass readback, and 22 overnight/NUTS tests pass.
+- Consolidate the existing overnight analysis into one self-contained wrap-up
+  with readable population, calibration, run-evolution, individual-posterior
+  and NUTS comparison sections. Preserve dense joint draws throughout.
+- Audit whether selection and the parent population are actually identified.
+  Reconstruct an explicitly labelled beta-weighted truth reference only when
+  the exact-selector emulator passes held-out validation; retain the hard
+  failure caused by identical parent/selected truth receipts.
+- Quantify paired improvement over `B_source` using ESS and proper empirical
+  CRPS, regenerate grouped PIT/coverage and truth-versus-posterior summaries,
+  and stratify individual examples by physical galaxy type.
+- Compare the eight earlier observed NUTS targets only to their exactly matched
+  AVI banks. Report NUTS convergence defects on every figure and never present
+  these chains as a qualified ground truth.
+- Completed in `scripts/build_feniks_avi_wrapup.py`; the self-contained
+  `wrap_up/` contains 58 plots, machine-readable tables, the previous analysis,
+  a Markdown report and a SHA-256 receipt. The current model improves ordinary-
+  IS physical 5D CRPS for 77.7% of 512 galaxies and ESS for 81.6%, but improves
+  SFH CRPS for only 3.7%.
+- The latest prior has calibrated-looking physical 5D MIRA for both parent
+  (0.681) and selected (0.676) populations, and marginally covers at least
+  94.5% of parent physical truths in its central 95% support. It is not an exact
+  population fit: metallicity and dust remain smoothed, while SFH closure fails
+  severely.
+- The exact selected-truth receipt is unusable because it duplicates the parent
+  identities and physical values. A held-out-qualified beta emulator provides
+  only a labelled diagnostic selected reference; exact noisy-cohort closure is
+  still required. All eight NUTS comparisons remain diagnostic because every
+  chain group fails the saved convergence gate through integration-limit
+  saturation and/or R-hat/divergences.
+- Verified Ruff, compileall, full report regeneration and 32 focused AVI tests.
+
+## 2026-09-13 AVI overnight scientific analysis and readable figures
+
+- Recompute the completed five-variant overnight comparison from joint K4096
+  banks and frozen truth cohorts. Do not aggregate posterior medians.
+- Replace crowded overlays with one-run-at-a-time population closure panels:
+  true parent population, inferred selected population and true selected
+  population, plus explicit support and selection diagnostics.
+- Produce publication-readable individual posterior corners with truth and
+  focused genetic comparisons between source/latest/scratch prior and before/
+  after q refresh. Diagnose the SFH failure separately from the physical 5D.
+- Completed in `scripts/analyze_feniks_avi_overnight.py` and validated against
+  the full local K4096 result. The analysis writes one-lineage population
+  overlays, four truth-aware individual corners, run genealogy/scorecards,
+  paired ESS changes, posterior/prior MIRA and dedicated SFH diagnostics.
+- `Q_latest_refresh` is the strongest proposal (median ESS 143/4096, physical
+  5D raw/IS MIRA 0.666/0.653), but SFH 10D remains globally miscalibrated and
+  per-object SFH IQRs are still 12x the truth-population IQR. The parent and
+  selected truth receipts reuse the same latent rows, so selection-population
+  closure is explicitly failed rather than inferred from overlapping curves.
+- Verified end-to-end artifact generation and visual rendering, Ruff,
+  compileall, and 11 overnight/inference tests. The synced training root still
+  lacks training curves, so loss convergence remains outside this phase.
+
 ## 2026-09-13 AVI overnight coadaptation and closure
 
 - Continue the qualified four-expert encoder for 12 epochs under either the
