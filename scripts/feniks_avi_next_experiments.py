@@ -210,6 +210,7 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
     from scripts.feniks_avi_experiments import (
         initialize_candidate,
         initialize_transport,
+        load_optional_component,
     )
 
     manifest = _check(root)
@@ -255,7 +256,16 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
         model, config, runtime.latent_spec, b_arm, manifest["seed"]
     )
     candidate = eqx.tree_deserialise_leaves(manifest["upstream_b_encoder"], template)
-    if arm.prior_initialization == "identity_standard_normal":
+    initial_prior_path = (manifest.get("initial_prior_checkpoint_by_arm") or {}).get(
+        arm.name
+    )
+    if initial_prior_path:
+        model = eqx.tree_at(
+            lambda item: item.prior,
+            model,
+            load_optional_component(initial_prior_path, model.prior),
+        )
+    elif arm.prior_initialization == "identity_standard_normal":
         fresh = build_prior_from_config(
             config,
             jax.random.PRNGKey(manifest["seed"] + 91000000),
@@ -456,9 +466,13 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
             "status": "PREFLIGHT_PASS" if preflight else "PRIOR_TRAINING_COMPLETE",
             "arm": asdict(arm),
             "manifest_sha256": sha(root / "MANIFEST.json"),
-            "prior_initialization": arm.prior_initialization,
+            "prior_initialization": (
+                str(Path(initial_prior_path).resolve())
+                if initial_prior_path
+                else arm.prior_initialization
+            ),
             "prior_updates": total,
-            "encoder": "frozen B_experts",
+            "encoder": str(Path(manifest["upstream_b_encoder"]).resolve()),
             "selection_correction": "+log_alpha_eta differentiated at every update",
             "selection_in_object_weights": False,
             "full_15d_target": True,

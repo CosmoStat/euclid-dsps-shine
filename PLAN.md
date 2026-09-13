@@ -1,5 +1,23 @@
 # Plan
 
+## 2026-09-13 Selection-corrected AVI generalized EM
+
+- Completed: add a restartable Jean-Zay generalized-EM workflow seeded from
+  `Q_latest_refresh` and `P_latest_prior`, retaining ordinary full-15D
+  likelihood-prior-proposal weights in every E-step.
+- Alternate one conservative, selection-corrected parent-prior M-step with a
+  three-epoch prior-frozen encoder refresh. Keep `beta` out of object-level
+  posterior weights and retain `+log(alpha_eta)` only in the prior objective.
+- Evaluate every completed cycle on one immutable validation cohort. Report the
+  actual fixed-point comparisons `posterior aggregate vs selected prior` and
+  `inverse-beta aggregate vs parent prior`, alongside post-hoc selected/parent
+  truth closure, ESS, alpha and per-parameter physical/SFH distances.
+- Added immutable code snapshots, sequential Slurm dependencies, reconnectable
+  monitoring, completion receipts, focused tests and paste-ready launch
+  commands. Truth remains unavailable to training and checkpoint selection.
+- Validation: Ruff and Bash syntax checks pass; `python -m compileall` passes;
+  the complete AVI test selection passes with `41 passed`.
+
 ## 2026-09-13 AVI next validation suite
 
 - Completed: implement one immutable Jean-Zay workflow that (1) regenerates
