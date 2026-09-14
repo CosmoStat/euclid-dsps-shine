@@ -213,4 +213,7 @@ def test_factorial_summary_writes_cells_effects_and_plots(tmp_path):
         "P effect at Q4",
         "QxP interaction",
     }
+    cohort = pd.read_csv(output / "report/factorial_cohort_baseline.csv")
+    assert len(cohort) == 15
+    assert cohort.cohort_truth_wasserstein_over_selected_truth_iqr.ge(0).all()
     assert (output / "report/factorial_population.png").stat().st_size > 10_000

@@ -334,6 +334,32 @@ def _population_closure(output: Path, manifest: dict[str, Any]) -> pd.DataFrame:
     return result
 
 
+def _cohort_baseline(output: Path) -> pd.DataFrame:
+    names = list(FENIKS_SPLINE15D_PARAMETERS)
+    cohort = pd.read_parquet(output / "inference_truth.parquet")
+    selected = pd.read_parquet(output / "selected_population_truth.parquet")
+    rows = []
+    for index, name in enumerate(names):
+        reference = selected[name].to_numpy(np.float64)
+        scale = max(
+            float(np.quantile(reference, 0.75) - np.quantile(reference, 0.25)),
+            1.0e-6,
+        )
+        rows.append(
+            {
+                "parameter": name,
+                "group": "physical" if index < 5 else "sfh",
+                "cohort_truth_wasserstein_over_selected_truth_iqr": float(
+                    wasserstein_distance(cohort[name].to_numpy(np.float64), reference)
+                    / scale
+                ),
+            }
+        )
+    result = pd.DataFrame(rows)
+    result.to_csv(output / "report/factorial_cohort_baseline.csv", index=False)
+    return result
+
+
 def _factorial_effects(cells: pd.DataFrame) -> pd.DataFrame:
     values = cells.set_index("variant")
     effects = (
@@ -400,6 +426,7 @@ def _summary(output: Path, manifest: dict[str, Any]) -> None:
     metrics = pd.DataFrame(metric_rows)
     metrics.to_csv(output / "report/factorial_support.csv", index=False)
     population = _population_closure(output, manifest)
+    cohort = _cohort_baseline(output)
     _posterior_calibration(output, manifest)
 
     mira = pd.read_csv(output / "report/posterior_mira_scores.csv")
@@ -511,11 +538,16 @@ def _summary(output: Path, manifest: dict[str, Any]) -> None:
         .groupby("variant")
         .median_wasserstein_over_iqr.mean()
     )
+    cohort_physical = cohort.loc[
+        cohort.group.eq("physical"),
+        "cohort_truth_wasserstein_over_selected_truth_iqr",
+    ].median()
     lines = [
         "# AVI EM factorial diagnosis",
         "",
         "The four cells use the same objects, likelihood, K=4096 and two replicas.",
         "Truth is read only by this dependent report.",
+        f"The empirical 512-object truth cohort is {cohort_physical:.4f} W1/true-IQR from the selected-population truth in physical 5D.",
         "",
         "## Mean over replicas",
         "",

@@ -13,6 +13,8 @@
 - Added explicit conditional Q/P effects and the Q-by-P interaction for every
   scalar diagnostic. The report keeps fixed-target proposal effects distinct
   from changes to the posterior target induced by the prior.
+- Added a same-cohort truth baseline against the population-weighted selected
+  truth, so sampling/measure mismatch is not mistaken for posterior error.
 - Validation: Ruff, Bash syntax and compileall pass; the focused report tests
   pass with `5 passed`; the complete AVI test family passes with `45 passed`.
 
