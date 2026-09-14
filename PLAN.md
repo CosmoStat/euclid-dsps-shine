@@ -1,5 +1,21 @@
 # Plan
 
+## 2026-09-14 AVI EM factorial diagnosis
+
+- Completed: freeze the completed EM cycle-0 and cycle-4 components into a
+  four-cell `Q0/P0`, `Q4/P0`, `Q0/P4`, `Q4/P4` inference design on the same
+  512 validation galaxies, with K=4096 and two independent replicas.
+- Reuse the qualified ordinary full-15D IS inference. Keep selection out of
+  object weights and use truth only in the dependent post-inference report.
+- Report proposal support, predictive fit, raw/IS MIRA, physical/SFH PIT and
+  coverage, selected and inverse-beta parent population closure, and replica
+  stability. Add immutable Jean-Zay submission and reconnectable monitoring.
+- Added explicit conditional Q/P effects and the Q-by-P interaction for every
+  scalar diagnostic. The report keeps fixed-target proposal effects distinct
+  from changes to the posterior target induced by the prior.
+- Validation: Ruff, Bash syntax and compileall pass; the focused report tests
+  pass with `5 passed`; the complete AVI test family passes with `45 passed`.
+
 ## 2026-09-13 Selection-corrected AVI generalized EM
 
 - Completed: add a restartable Jean-Zay generalized-EM workflow seeded from
