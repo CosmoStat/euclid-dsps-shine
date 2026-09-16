@@ -145,23 +145,34 @@ def analyze(snapshot):
             )
     complete = len(reports) == snapshot["expected_checks"]
     passed = complete and bool(reports) and all(c["status"] == "PASS" for c in reports)
-    return dict(
-        status="TARGET_RESOLUTION_COMPLETE" if complete else "TARGET_RESOLUTION_RUNNING",
-        completed_checks=len(reports),
-        expected_checks=snapshot["expected_checks"],
-        checks=reports,
-        unresolved_checks_resolved=passed,
-        next_stage="AUDIT_IN_PROGRESS"
-        if not complete
-        else "FULL_REQUALIFICATION_AND_SIMULATOR_REVIEW_REQUIRED"
-        if passed
-        else "INVESTIGATE_REMAINING_STENCILS",
-        interpretation="output roundoff screen plus empirical stencil convergence; not a bound on upstream rounding or a proof of all derivatives",
-        scientific_promotion=False,
-        truth_used=False,
-        npe_training_started=False,
-        population_training_started=False,
-    ), rows
+    return (
+        dict(
+            status=(
+                "TARGET_RESOLUTION_COMPLETE"
+                if complete
+                else "TARGET_RESOLUTION_RUNNING"
+            ),
+            completed_checks=len(reports),
+            expected_checks=snapshot["expected_checks"],
+            checks=reports,
+            unresolved_checks_resolved=passed,
+            next_stage=(
+                "AUDIT_IN_PROGRESS"
+                if not complete
+                else (
+                    "FULL_REQUALIFICATION_AND_SIMULATOR_REVIEW_REQUIRED"
+                    if passed
+                    else "INVESTIGATE_REMAINING_STENCILS"
+                )
+            ),
+            interpretation="output roundoff screen plus empirical stencil convergence; not a bound on upstream rounding or a proof of all derivatives",
+            scientific_promotion=False,
+            truth_used=False,
+            npe_training_started=False,
+            population_training_started=False,
+        ),
+        rows,
+    )
 
 
 def collect(

@@ -318,7 +318,8 @@ def test_population_vem_submission_uses_bounded_parallel_h100_stages() -> None:
         ROOT / "scripts/feniks_sc_drws_population_vem_bank_finalize.slurm"
     ).read_text()
     recovery = (
-        ROOT / "scripts/submit_feniks_sc_drws_population_vem_recovery.sh"
+        ROOT
+        / "legacy/scripts/recovery/submit_feniks_sc_drws_population_vem_recovery.sh"
     ).read_text()
     assert "VEM_RUNTIME_PYTHONPATH" in gate
     assert 'import jax; print("[population-vem-gate] jax:"' in gate

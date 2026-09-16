@@ -392,7 +392,9 @@ def train(root: Path, manifest: dict, arm: str) -> dict:
     return certify_training(root, arm)
 
 
-def validate(root: Path, manifest: dict, arm: str, *, confirmation: bool = False) -> dict:
+def validate(
+    root: Path, manifest: dict, arm: str, *, confirmation: bool = False
+) -> dict:
     verify_cache(root)
     artifact = verified_artifacts(
         manifest["historical"]

@@ -43,23 +43,17 @@ def main() -> None:
         for manifest in manifests[1:]
     )
     batched_execution = all(
-        manifest.get("execution") == "vmap_batched_chains"
-        for manifest in manifests[1:]
+        manifest.get("execution") == "vmap_batched_chains" for manifest in manifests[1:]
     )
     scalar_elapsed = float(manifests[0]["total_elapsed_s"])
     batched_elapsed = float(
         max(manifest["total_elapsed_s"] for manifest in manifests[1:])
     )
     scalar_draws = int(manifests[0]["stored_samples"])
-    batched_draws = sum(
-        int(manifest["stored_samples"]) for manifest in manifests[1:]
-    )
+    batched_draws = sum(int(manifest["stored_samples"]) for manifest in manifests[1:])
     scalar_info = _read_info(galaxy / "nuts" / "chain_00")
     batched_info = pd.concat(
-        [
-            _read_info(galaxy / "nuts" / f"chain_{index:02d}")
-            for index in range(1, 4)
-        ],
+        [_read_info(galaxy / "nuts" / f"chain_{index:02d}") for index in range(1, 4)],
         ignore_index=True,
     )
     finite_samples = all(
@@ -68,9 +62,9 @@ def main() -> None:
                 [
                     pd.read_parquet(path)
                     for path in sorted(
-                        (
-                            galaxy / "nuts" / f"chain_{index:02d}" / "chunks"
-                        ).glob("part_*.parquet")
+                        (galaxy / "nuts" / f"chain_{index:02d}" / "chunks").glob(
+                            "part_*.parquet"
+                        )
                     )
                     if not path.name.endswith("_info.parquet")
                 ],
@@ -97,8 +91,7 @@ def main() -> None:
         "scalar_draws_per_second": scalar_draws / scalar_elapsed,
         "batched_draws_per_second": batched_draws / batched_elapsed,
         "throughput_speedup": (
-            (batched_draws / batched_elapsed)
-            / (scalar_draws / scalar_elapsed)
+            (batched_draws / batched_elapsed) / (scalar_draws / scalar_elapsed)
         ),
         "scalar_mean_acceptance": _mean_column(
             scalar_info,

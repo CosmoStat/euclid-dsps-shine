@@ -39,7 +39,12 @@ def make_guarded_wake_step(encoder, *, armijo=1e-4, trials=12, **kwargs):
 
             def evaluate(_):
                 alpha = jnp.asarray(0.5, dtype=before.dtype) ** i
-                candidate = jax.tree.map(lambda p, d: p + alpha * d, arrays, delta)
+                candidate = jax.tree.map(
+                    lambda p, d: p
+                    + jnp.asarray(alpha, dtype=p.dtype) * jnp.asarray(d, dtype=p.dtype),
+                    arrays,
+                    delta,
+                )
                 value = objective(candidate)
                 valid = (
                     jnp.isfinite(value)

@@ -130,9 +130,7 @@ def _resolve_source(
     source_variant: str,
 ) -> dict[str, Any]:
     if (freeze_receipt is None) == (source_vem_root is None):
-        raise ValueError(
-            "supply exactly one of --freeze-receipt or --source-vem-root"
-        )
+        raise ValueError("supply exactly one of --freeze-receipt or --source-vem-root")
     if source_vem_root is None:
         receipt_path = _require_file(freeze_receipt)
         freeze = _read_json(receipt_path)
@@ -167,9 +165,7 @@ def _resolve_source(
     parent_root = source_vem_root.resolve()
     parent_manifest_path = _require_file(parent_root / "RUN_MANIFEST.json")
     parent_complete_path = _require_file(parent_root / "POPULATION_VEM_COMPLETE.json")
-    refresh_path = _require_file(
-        parent_root / "q_refresh" / "Q_REFRESH_COMPLETE.json"
-    )
+    refresh_path = _require_file(parent_root / "q_refresh" / "Q_REFRESH_COMPLETE.json")
     parent_manifest = _read_json(parent_manifest_path)
     parent_complete = _read_json(parent_complete_path)
     refresh = _read_json(refresh_path)
@@ -266,7 +262,9 @@ def main() -> None:
         if parent_manifest.get("config", {}).get(
             "resolved_sha256"
         ) != canonical_json_sha256(config):
-            raise ValueError("active config does not match the source population-VEM run")
+            raise ValueError(
+                "active config does not match the source population-VEM run"
+            )
     truth_config = load_config(truth_config_path)
     truth_names = tuple(
         (truth_config.get("truth", {}) or {}).get("parameter_columns", {})
@@ -303,7 +301,10 @@ def main() -> None:
     if source_info["parent_vem_root"] is not None:
         parent_manifest = _read_json(source_info["parent_manifest"])
         for name, digest in (("train", train_sha), ("test", test_sha)):
-            if parent_manifest.get("datasets", {}).get(name, {}).get("sha256") != digest:
+            if (
+                parent_manifest.get("datasets", {}).get(name, {}).get("sha256")
+                != digest
+            ):
                 raise ValueError(
                     f"{name} catalogue does not match the source population-VEM run"
                 )

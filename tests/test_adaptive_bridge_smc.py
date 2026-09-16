@@ -315,8 +315,7 @@ def test_defensive_bridge_retains_both_modes() -> None:
     )
     left_mass = jnp.mean(
         jnp.sum(
-            result.final_normalized_weights
-            * (result.final_particles[..., 0] < 0.0),
+            result.final_normalized_weights * (result.final_particles[..., 0] < 0.0),
             axis=0,
         )
     )
@@ -528,7 +527,9 @@ def _fake_smc_result(*, n_particles: int, n_objects: int, hard):
 
 
 def test_hard_fallback_only_replaces_successful_queued_objects() -> None:
-    primary_result = _fake_smc_result(n_particles=4, n_objects=3, hard=[False, True, True])
+    primary_result = _fake_smc_result(
+        n_particles=4, n_objects=3, hard=[False, True, True]
+    )
     primary = primary_posterior_batch(primary_result)
     fallback = _fake_smc_result(n_particles=8, n_objects=2, hard=[False, True])
     merged = merge_hard_fallback(
@@ -661,9 +662,7 @@ def test_smc_losses_stop_particles_and_separate_q_from_prior() -> None:
         fallback_succeeded=jnp.zeros((3,), dtype=jnp.bool_),
     )
     q_loss, model_grads = eqx.filter_value_and_grad(
-        lambda candidate: smc_q_distillation_loss(
-            candidate, features, posterior
-        )[0]
+        lambda candidate: smc_q_distillation_loss(candidate, features, posterior)[0]
     )(model)
     particle_grads = jax.grad(
         lambda values: smc_q_distillation_loss(
@@ -878,9 +877,7 @@ def test_prior_rejection_attributes_nonfinite_selection_gradient() -> None:
         )
         centered = leaf.reshape(-1)[0] - jax.lax.stop_gradient(leaf.reshape(-1)[0])
         log_alpha = -0.5 + jnp.sqrt(jnp.square(centered))
-        return log_alpha, {
-            "selection/alpha_mc_relative_error": jnp.asarray(0.0)
-        }
+        return log_alpha, {"selection/alpha_mc_relative_error": jnp.asarray(0.0)}
 
     _model, _state, metrics = apply_prior_macro_update(
         model=model,

@@ -619,9 +619,7 @@ def _epsilon_random_walk_mh_active(
     )
     proposal_x, proposal_logdet = epsilon_to_x_fn(proposal_epsilon)
     proposal_x = jnp.asarray(proposal_x, dtype=particles.dtype)
-    proposal_log_r0 = jnp.asarray(
-        log_r0_fn(proposal_x), dtype=current_log_r0.dtype
-    )
+    proposal_log_r0 = jnp.asarray(log_r0_fn(proposal_x), dtype=current_log_r0.dtype)
     proposal_log_target = jnp.asarray(
         log_target_fn(proposal_x), dtype=current_log_target.dtype
     )

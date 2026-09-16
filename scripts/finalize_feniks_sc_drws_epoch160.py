@@ -127,12 +127,8 @@ def _heldout_support_summary(root: Path, variant: str) -> dict[str, Any]:
             np.mean(diagnostics["raw_ess_fraction"] < 0.01)
         ),
         "p90_max_raw_weight": float(diagnostics["max_raw_weight"].quantile(0.9)),
-        "fraction_pareto_k_gt_0p7": float(
-            np.nanmean(diagnostics["pareto_k"] > 0.7)
-        ),
-        "fraction_pareto_k_gt_1": float(
-            np.nanmean(diagnostics["pareto_k"] > 1.0)
-        ),
+        "fraction_pareto_k_gt_0p7": float(np.nanmean(diagnostics["pareto_k"] > 0.7)),
+        "fraction_pareto_k_gt_1": float(np.nanmean(diagnostics["pareto_k"] > 1.0)),
         "minimum_finite_logweight_fraction": float(finite_fraction.min()),
     }
     passed = (
@@ -155,11 +151,7 @@ def _heldout_predictive_summary(root: Path, variant: str) -> dict[str, Any]:
     predictive_parts = []
     for shard in range(HELDOUT_SHARDS):
         source = (
-            root
-            / "heldout"
-            / variant
-            / f"shard_{shard}"
-            / "exact_gaussian_predictive"
+            root / "heldout" / variant / f"shard_{shard}" / "exact_gaussian_predictive"
         )
         compact_parts.append(
             pd.read_parquet(source / "posterior_predictive_residual_summary.parquet")
@@ -273,8 +265,7 @@ def _population_rows(
                     / max(float(truth_std[index]), 1.0e-12)
                 ),
                 "std_ratio": float(
-                    np.std(model[:, index])
-                    / max(float(truth_std[index]), 1.0e-12)
+                    np.std(model[:, index]) / max(float(truth_std[index]), 1.0e-12)
                 ),
                 "q05_difference": float(
                     model_quantiles[50, index] - truth_quantiles[50, index]
@@ -309,9 +300,9 @@ def deterministic_panel_rows(
     catalog: Path, row_indices: np.ndarray, *, count: int = 16
 ) -> np.ndarray:
     """Choose an observed-r quantile panel without reading latent truth."""
-    flux = pd.read_parquet(catalog, columns=["flux_lsst_r"])[
-        "flux_lsst_r"
-    ].to_numpy(dtype=np.float64)
+    flux = pd.read_parquet(catalog, columns=["flux_lsst_r"])["flux_lsst_r"].to_numpy(
+        dtype=np.float64
+    )
     rows = np.asarray(row_indices, dtype=np.int64)
     values = flux[rows]
     finite = np.isfinite(values) & (values > 0.0)
@@ -333,7 +324,9 @@ def _catalogue_source_files(root: Path, variant: str, kind: str) -> list[Path]:
         if kind == "q":
             files.extend(_posterior_files(base / "exact_gaussian_k256"))
         else:
-            files.append(base / "ordinary_iw" / "resampled_samples/batch_000000.parquet")
+            files.append(
+                base / "ordinary_iw" / "resampled_samples/batch_000000.parquet"
+            )
     return files
 
 
@@ -358,15 +351,19 @@ def _write_population_bank(
             counts.to_numpy() == int(samples_per_object)
         ):
             raise ValueError(f"existing population bank is incomplete: {output}")
-        return aggregate, panel, {
-            "objects": int(len(counts)),
-            "joint_draws": int(len(aggregate)),
-            "samples_per_object": int(samples_per_object),
-            "source_samples_per_object": int(original_samples_per_object),
-            "object_equal_weighting": True,
-            "distribution_replaced_by_point_estimates": False,
-            "artifact": _file_record(output),
-        }
+        return (
+            aggregate,
+            panel,
+            {
+                "objects": int(len(counts)),
+                "joint_draws": int(len(aggregate)),
+                "samples_per_object": int(samples_per_object),
+                "source_samples_per_object": int(original_samples_per_object),
+                "object_equal_weighting": True,
+                "distribution_replaced_by_point_estimates": False,
+                "artifact": _file_record(output),
+            },
+        )
     aggregate_parts = []
     panel_parts = []
     panel_set = set(np.asarray(panel_rows, dtype=np.int64).tolist())
@@ -378,7 +375,9 @@ def _write_population_bank(
         if missing:
             raise ValueError(f"posterior bank is missing parameters {missing}: {path}")
         panel_parts.append(frame.loc[frame["row_index"].isin(panel_set)].copy())
-        aggregate_parts.append(frame.loc[frame["sample_id"] < samples_per_object].copy())
+        aggregate_parts.append(
+            frame.loc[frame["sample_id"] < samples_per_object].copy()
+        )
     aggregate = pd.concat(aggregate_parts, ignore_index=True)
     panel = pd.concat(panel_parts, ignore_index=True)
     expected = set(np.asarray(expected_rows, dtype=np.int64).tolist())
@@ -436,7 +435,9 @@ def finalize(
         raise ValueError("training config passed to finalizer contains truth mappings")
     truth_config = load_config(truth_config_path)
     parameters = tuple(FENIKS_SPLINE15D_PARAMETERS)
-    mappings = dict((truth_config.get("truth", {}) or {}).get("parameter_columns") or {})
+    mappings = dict(
+        (truth_config.get("truth", {}) or {}).get("parameter_columns") or {}
+    )
     if set(mappings) != set(parameters):
         raise ValueError("truth config must map all and only spline15d parameters")
 
@@ -577,7 +578,9 @@ def finalize(
         filename="catalogue_selected_truth.parquet",
     )
     if set(catalogue_truth["row_index"].astype(int)) != set(full_rows.astype(int)):
-        raise ValueError("full catalogue truth closure differs from frozen row manifest")
+        raise ValueError(
+            "full catalogue truth closure differs from frozen row manifest"
+        )
     catalogue_truth_matrix = _truth_matrix(catalogue_truth, mappings, parameters)
     finite_catalogue = np.all(np.isfinite(catalogue_truth_matrix), axis=1)
     finite_catalogue_rows = set(
@@ -629,7 +632,9 @@ def finalize(
         "flux_lsst_r"
     ].to_numpy(dtype=np.float64)
     selected = test_flux[test_rows] > float(np.asarray(abmag_to_fnu_cgs(29.0)))
-    with np.load(prior_dir / "parent_and_selected_prior.npz", allow_pickle=False) as arrays:
+    with np.load(
+        prior_dir / "parent_and_selected_prior.npz", allow_pickle=False
+    ) as arrays:
         prior_distributions = {
             "learned_parent_prior": (
                 test_matrix,
@@ -703,9 +708,7 @@ def finalize(
             "population_recovery": _file_record(recovery_path),
             "population_correlation_recovery": _file_record(correlation_path),
             "posterior_aggregate_marginals": _file_record(aggregate_marginals),
-            "posterior_aggregate_correlations": _file_record(
-                aggregate_correlations
-            ),
+            "posterior_aggregate_correlations": _file_record(aggregate_correlations),
             "individual_panel_manifest": _file_record(panel_dir / "manifest.json"),
         },
     }

@@ -43,9 +43,7 @@ def collect_scaling_rows(root: Path) -> list[dict[str, float | int | str]]:
             "n_inference": int(payload["n_inference"]),
             **payload["metrics"],
         }
-        intervals = payload.get("bootstrap", {}).get(
-            "confidence_intervals_95", {}
-        )
+        intervals = payload.get("bootstrap", {}).get("confidence_intervals_95", {})
         for name, interval in intervals.items():
             row[f"{name}_ci95_low"] = float(interval["low"])
             row[f"{name}_ci95_high"] = float(interval["high"])

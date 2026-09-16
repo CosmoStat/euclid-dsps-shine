@@ -58,7 +58,7 @@ trap restore_archive EXIT
 
 resume_raw=$(sbatch --parsable \
   --export="ALL,ROOT_DIR=$ROOT_DIR,SOURCE_TRAIN=$ARCHIVE_TRAIN,START_EPOCH=$start_epoch,END_EPOCH=40" \
-  scripts/feniks_selfsup_production_smc_resume_h100.slurm)
+  legacy/scripts/recovery/feniks_selfsup_production_smc_resume_h100.slurm)
 resume_job="${resume_raw%%;*}"
 submitted=1
 

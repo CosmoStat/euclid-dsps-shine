@@ -37,10 +37,14 @@ def summarize(root: Path) -> pd.DataFrame:
                 "draws": draws,
                 "limit_hit_fraction": final["integration_limit_hits"] / draws,
                 "divergence_fraction": final["divergences"] / draws,
-                "max_rhat": diagnostics["rhat"].replace([np.inf, -np.inf], np.nan).max(),
+                "max_rhat": diagnostics["rhat"]
+                .replace([np.inf, -np.inf], np.nan)
+                .max(),
                 "min_bulk_ess": diagnostics["bulk_ess"].min(),
                 "min_tail_ess": diagnostics["tail_ess"].min(),
-                "warmup_seconds": max(row["warmup_elapsed_s"] for row in chain_manifests),
+                "warmup_seconds": max(
+                    row["warmup_elapsed_s"] for row in chain_manifests
+                ),
                 "total_seconds": max(row["total_elapsed_s"] for row in chain_manifests),
                 "diagnostics_pass": final["diagnostics_pass"],
             }

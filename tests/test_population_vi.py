@@ -133,7 +133,9 @@ def test_population_bank_provenance_is_bound_to_exact_posterior(
         ),
         encoding="utf-8",
     )
-    assert _validate_bank_provenance(bank, digest)["posterior_checkpoint_sha256"] == digest
+    assert (
+        _validate_bank_provenance(bank, digest)["posterior_checkpoint_sha256"] == digest
+    )
     with pytest.raises(ValueError, match="different posterior"):
         _validate_bank_provenance(bank, "0" * 64)
 
@@ -153,9 +155,7 @@ def test_population_bank_provenance_rejects_truth_and_bare_table(
         "truth_used_for_inference_or_checkpoint_selection": True,
         "checkpoint": str(checkpoint),
     }
-    (bank / "inference_summary.json").write_text(
-        json.dumps(summary), encoding="utf-8"
-    )
+    (bank / "inference_summary.json").write_text(json.dumps(summary), encoding="utf-8")
     with pytest.raises(ValueError, match="not truth-free"):
         _validate_bank_provenance(bank, digest)
     bare = tmp_path / "posterior_samples.parquet"

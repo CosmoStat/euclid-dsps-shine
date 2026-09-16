@@ -247,7 +247,7 @@ def test_training_validator_rejects_nan_or_missing_prior_updates(
 def test_recovery_launcher_preserves_epoch24_state_contract() -> None:
     root = Path(__file__).resolve().parents[1]
     launcher = (
-        root / "scripts/submit_feniks_parentprior_sleepnpe_recovery.sh"
+        root / "legacy/scripts/recovery/submit_feniks_parentprior_sleepnpe_recovery.sh"
     ).read_text()
     slurm = (root / "scripts/feniks_parentprior_sleepnpe_h100.slurm").read_text()
     assert "checkpoints/epoch_0024.eqx" in launcher

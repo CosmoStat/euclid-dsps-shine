@@ -95,9 +95,8 @@ def _photoz_metrics(
     dz = (median[valid] - zspec[valid]) / (1.0 + zspec[valid])
     center = float(np.median(dz))
     interval = np.isfinite(q16[valid]) & np.isfinite(q84[valid])
-    covered = (
-        (zspec[valid][interval] >= q16[valid][interval])
-        & (zspec[valid][interval] <= q84[valid][interval])
+    covered = (zspec[valid][interval] >= q16[valid][interval]) & (
+        zspec[valid][interval] <= q84[valid][interval]
     )
     return {
         "n_spec": int(valid.sum()),
@@ -136,9 +135,7 @@ def main() -> None:
     reference = reference.loc[
         (reference["MAGCUT_r"] == "Y") & (reference["XRAY"] == "N")
     ].copy()
-    matched = match_catalogs(
-        ours, reference, radius_arcsec=args.match_radius_arcsec
-    )
+    matched = match_catalogs(ours, reference, radius_arcsec=args.match_radius_arcsec)
     if matched.empty:
         raise RuntimeError("No RWS objects matched the public A24 summary table")
 
@@ -167,15 +164,9 @@ def main() -> None:
     matched["rws_z_median"] = matched["rws_z_obs_median"]
     matched["rws_z_q16"] = matched["rws_z_obs_q16"]
     matched["rws_z_q84"] = matched["rws_z_obs_q84"]
-    matched["a24_z_median"] = pd.to_numeric(
-        matched["a24_z_pc_500"], errors="coerce"
-    )
-    matched["a24_z_q16"] = pd.to_numeric(
-        matched["a24_z_pc_160"], errors="coerce"
-    )
-    matched["a24_z_q84"] = pd.to_numeric(
-        matched["a24_z_pc_840"], errors="coerce"
-    )
+    matched["a24_z_median"] = pd.to_numeric(matched["a24_z_pc_500"], errors="coerce")
+    matched["a24_z_q16"] = pd.to_numeric(matched["a24_z_pc_160"], errors="coerce")
+    matched["a24_z_q84"] = pd.to_numeric(matched["a24_z_pc_840"], errors="coerce")
     photoz = {
         "rws": _photoz_metrics(matched, "rws_z"),
         "a24": _photoz_metrics(matched, "a24_z"),
@@ -186,8 +177,7 @@ def main() -> None:
         else matched.iloc[0:0]
     )
     photoz_t24_flagged = {
-        method: _photoz_metrics(t24_flagged, f"{method}_z")
-        for method in ("rws", "a24")
+        method: _photoz_metrics(t24_flagged, f"{method}_z") for method in ("rws", "a24")
     }
     args.out.mkdir(parents=True, exist_ok=True)
     matched.to_parquet(args.out / "matched_posteriors.parquet", index=False)
@@ -233,8 +223,7 @@ def main() -> None:
         json.dumps(summary, indent=2, allow_nan=False) + "\n"
     )
     print(
-        f"[popcosmos-comparison] matched={len(matched)}/{len(ours)} "
-        f"-> {args.out}"
+        f"[popcosmos-comparison] matched={len(matched)}/{len(ours)} " f"-> {args.out}"
     )
 
 

@@ -419,23 +419,39 @@ def prepare(
     (root / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
     manifest = dict(
         method="fixed_parent_same_family_local_vi_diagnostic_v1",
-        mode="precision_night"
-        if precision_night_reference is not None
-        else "redshift_precision_audit"
-        if redshift_precision_reference is not None
-        else "target_resolution_audit"
-        if target_resolution_reference is not None
-        else "mdf_precision_qualification"
-        if mdf_precision_reference is not None
-        else "full_decoder_qualification"
-        if full_decoder_reference is not None
-        else "photometry_reference"
-        if photometry_reference
-        else "redshift_decomposition"
-        if redshift_decomposition
-        else "gradient_isolation"
-        if gradient_isolation
-        else "local_vi",
+        mode=(
+            "precision_night"
+            if precision_night_reference is not None
+            else (
+                "redshift_precision_audit"
+                if redshift_precision_reference is not None
+                else (
+                    "target_resolution_audit"
+                    if target_resolution_reference is not None
+                    else (
+                        "mdf_precision_qualification"
+                        if mdf_precision_reference is not None
+                        else (
+                            "full_decoder_qualification"
+                            if full_decoder_reference is not None
+                            else (
+                                "photometry_reference"
+                                if photometry_reference
+                                else (
+                                    "redshift_decomposition"
+                                    if redshift_decomposition
+                                    else (
+                                        "gradient_isolation"
+                                        if gradient_isolation
+                                        else "local_vi"
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        ),
         status="PREPARED",
         code_commit=subprocess.check_output(
             ["git", "rev-parse", "HEAD"], text=True
@@ -463,26 +479,26 @@ def prepare(
         gradient_draws=4,
         learning_rate=0.001,
         seed=260908,
-        seconds=2400
-        if (redshift_decomposition or photometry_reference)
-        else 1080
-        if gradient_isolation
-        else 9900,
-        maximum_decoder_evaluations=1000
-        if (redshift_decomposition or photometry_reference)
-        else 500
-        if gradient_isolation
-        else 45000,
+        seconds=(
+            2400
+            if (redshift_decomposition or photometry_reference)
+            else 1080 if gradient_isolation else 9900
+        ),
+        maximum_decoder_evaluations=(
+            1000
+            if (redshift_decomposition or photometry_reference)
+            else 500 if gradient_isolation else 45000
+        ),
         maximum_gpus=1,
         maximum_nodes=1,
-        allocation_gpu_hours=0.75
-        if (redshift_decomposition or photometry_reference)
-        else 1 / 3
-        if gradient_isolation
-        else 3,
-        decomposition_cache_indices=[0, 1, 2]
-        if (redshift_decomposition or photometry_reference)
-        else [],
+        allocation_gpu_hours=(
+            0.75
+            if (redshift_decomposition or photometry_reference)
+            else 1 / 3 if gradient_isolation else 3
+        ),
+        decomposition_cache_indices=(
+            [0, 1, 2] if (redshift_decomposition or photometry_reference) else []
+        ),
         truth_used=False,
         scientific_promotion=False,
         population_training_started=False,
@@ -866,7 +882,9 @@ def run(root):
         if (root / "FINAL.json").exists():
             raise FileExistsError("final receipt exists")
         if (root / "PROGRESS.json").exists():
-            raise FileExistsError("partial attempt preserved; choose a new diagnostic root")
+            raise FileExistsError(
+                "partial attempt preserved; choose a new diagnostic root"
+            )
         from scripts.feniks_objective_night import gate
 
         try:
@@ -1100,9 +1118,11 @@ def run(root):
                 verify_reference = (
                     verify_resolution_reference
                     if resolution_mode
-                    else verify_decoder_reference
-                    if mdf_mode
-                    else verify_photometry_reference
+                    else (
+                        verify_decoder_reference
+                        if mdf_mode
+                        else verify_photometry_reference
+                    )
                 )
                 if (
                     verify_reference(reference["path"], manifest["source_root"])

@@ -96,8 +96,7 @@ def forward_audit_tables(
             "median_abs_residual_sigma": np.nanmedian(
                 np.where(valid, np.abs(residual), np.nan), axis=1
             ),
-            "frac_abs_gt_5": np.sum(valid & (np.abs(residual) > 5.0), axis=1)
-            / n_valid,
+            "frac_abs_gt_5": np.sum(valid & (np.abs(residual) > 5.0), axis=1) / n_valid,
         }
     )
     band_rows = []
@@ -155,8 +154,10 @@ def main() -> None:
         raise KeyError(f"Matched table is missing {identity}")
     object_ids = pd.to_numeric(matched[identity], errors="raise").astype(np.int64)
     dataset = pd.read_parquet(args.dataset)
-    dataset = dataset.set_index("object_id", drop=False).loc[object_ids].reset_index(
-        drop=True
+    dataset = (
+        dataset.set_index("object_id", drop=False)
+        .loc[object_ids]
+        .reset_index(drop=True)
     )
     arrays = photometry_arrays_from_dataframe(
         dataset,

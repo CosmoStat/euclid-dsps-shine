@@ -616,9 +616,9 @@ def _shard_particle_objects(value: jnp.ndarray, n_devices: int) -> np.ndarray:
     local = objects // int(n_devices)
     axes = (1, 0, 2, *range(3, array.ndim + 1))
     return np.ascontiguousarray(
-        array.reshape(
-            particles, int(n_devices), local, *array.shape[2:]
-        ).transpose(axes)
+        array.reshape(particles, int(n_devices), local, *array.shape[2:]).transpose(
+            axes
+        )
     )
 
 
@@ -769,9 +769,11 @@ def _slice_smc_result(
     }
     return AdaptiveBridgeSMCResult(
         *(
-            value[:, : int(count)]
-            if name in particle_fields | path_fields
-            else value[: int(count)]
+            (
+                value[:, : int(count)]
+                if name in particle_fields | path_fields
+                else value[: int(count)]
+            )
             for name, value in zip(result._fields, result, strict=True)
         )
     )

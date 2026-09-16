@@ -41,9 +41,8 @@ def redshift_metrics(frame: pd.DataFrame) -> dict[str, float | int | None]:
     dz = (median[valid] - truth[valid]) / (1.0 + truth[valid])
     center = float(np.median(dz))
     interval = np.isfinite(q16[valid]) & np.isfinite(q84[valid])
-    covered = (
-        (truth[valid][interval] >= q16[valid][interval])
-        & (truth[valid][interval] <= q84[valid][interval])
+    covered = (truth[valid][interval] >= q16[valid][interval]) & (
+        truth[valid][interval] <= q84[valid][interval]
     )
     widths = q84[valid][interval] - q16[valid][interval]
     return {
@@ -53,9 +52,7 @@ def redshift_metrics(frame: pd.DataFrame) -> dict[str, float | int | None]:
         "rmse": float(np.sqrt(np.mean(dz**2))),
         "outlier_fraction_0p15": float(np.mean(np.abs(dz) > 0.15)),
         "coverage_68": float(np.mean(covered)) if covered.size else None,
-        "median_interval_width_68": (
-            float(np.median(widths)) if widths.size else None
-        ),
+        "median_interval_width_68": (float(np.median(widths)) if widths.size else None),
     }
 
 
@@ -184,13 +181,10 @@ def main() -> None:
     merged = posterior.merge(truth, on="object_id", how="left", validate="one_to_one")
     if len(merged) != len(posterior):
         raise RuntimeError("Redshift evaluation changed the inference row count")
-    merged["redshift_true"] = pd.to_numeric(
-        merged["redshift_true"], errors="coerce"
-    )
-    merged["has_public_specz"] = (
-        np.isfinite(merged["redshift_true"].to_numpy(float))
-        & (merged["redshift_true"].to_numpy(float) >= 0.0)
-    )
+    merged["redshift_true"] = pd.to_numeric(merged["redshift_true"], errors="coerce")
+    merged["has_public_specz"] = np.isfinite(
+        merged["redshift_true"].to_numpy(float)
+    ) & (merged["redshift_true"].to_numpy(float) >= 0.0)
     merged["normalized_redshift_error"] = (
         merged["z_obs_median"] - merged["redshift_true"]
     ) / (1.0 + merged["redshift_true"])

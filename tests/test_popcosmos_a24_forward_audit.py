@@ -9,11 +9,7 @@ import pytest
 
 
 def _module():
-    path = (
-        Path(__file__).parents[1]
-        / "scripts"
-        / "audit_popcosmos_a24_dsps_forward.py"
-    )
+    path = Path(__file__).parents[1] / "scripts" / "audit_popcosmos_a24_dsps_forward.py"
     spec = importlib.util.spec_from_file_location("a24_dsps_forward", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -24,9 +20,7 @@ def _module():
 def test_a24_parameter_matrix_uses_public_median_columns() -> None:
     module = _module()
     frame = pd.DataFrame({"a24_z_pc_500": [0.5], "a24_log10M_pc_500": [10.0]})
-    matrix = module.a24_parameter_matrix(
-        frame, ("z_obs", "log10_stellar_mass")
-    )
+    matrix = module.a24_parameter_matrix(frame, ("z_obs", "log10_stellar_mass"))
     np.testing.assert_allclose(matrix, [[0.5, 10.0]])
 
 

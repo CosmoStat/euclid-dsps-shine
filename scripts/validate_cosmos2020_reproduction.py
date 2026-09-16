@@ -112,9 +112,7 @@ def main() -> None:
     config = load_config(args.config)
     config["catalog_path"] = str(full)
     for band in config["bands"]:
-        band["filter"]["path"] = str(
-            args.asset_dir / "filters" / f"{band['name']}.dat"
-        )
+        band["filter"]["path"] = str(args.asset_dir / "filters" / f"{band['name']}.dat")
     expected_names = tuple(band.name for band in COSMOS_BANDS)
     names = tuple(band["name"] for band in config["bands"])
     if names != expected_names:

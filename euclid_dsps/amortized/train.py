@@ -2131,7 +2131,9 @@ def load_checkpoint(
                 config.get("model")
             ) or sidecar["likelihood_arithmetic_precision"] != config["amortized"][
                 "likelihood"
-            ].get("arithmetic_precision"):
+            ].get(
+                "arithmetic_precision"
+            ):
                 raise ValueError(
                     "checkpoint numerical contract differs from active config"
                 )
@@ -4259,7 +4261,10 @@ def _model_generated_sleep_loss(
         log_prob_fn(features, samples)
         if log_prob_fn is not None
         else posterior_log_prob(
-            model, features, samples, log_std_floor=log_std_floor,
+            model,
+            features,
+            samples,
+            log_std_floor=log_std_floor,
             flow_scale_clamp=flow_scale_clamp,
         )
     )

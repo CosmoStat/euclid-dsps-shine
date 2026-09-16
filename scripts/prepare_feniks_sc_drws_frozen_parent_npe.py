@@ -83,9 +83,7 @@ def prepare(
     feature_stats = _require_file(benchmark["source"]["feature_stats"])
     train_catalog = _require_file(benchmark["datasets"]["train"]["path"])
     fit_rows = _require_file(benchmark["q_banks"]["fit"]["cohort_path"])
-    validation_rows = _require_file(
-        benchmark["q_banks"]["validation"]["cohort_path"]
-    )
+    validation_rows = _require_file(benchmark["q_banks"]["validation"]["cohort_path"])
     for path, expected, label in (
         (parent_checkpoint, parent["checkpoint_sha256"], "parent checkpoint"),
         (parent_sidecar, parent["checkpoint_sidecar_sha256"], "parent sidecar"),
@@ -189,13 +187,9 @@ def prepare(
                 "checkpoint": str(parent_checkpoint),
                 "checkpoint_sha256": parent["checkpoint_sha256"],
                 "checkpoint_sidecar": str(parent_sidecar),
-                "checkpoint_sidecar_sha256": parent[
-                    "checkpoint_sidecar_sha256"
-                ],
+                "checkpoint_sidecar_sha256": parent["checkpoint_sidecar_sha256"],
                 "feature_stats": str((out / "manifests/feature_stats.json").resolve()),
-                "feature_stats_sha256": sha256_file(
-                    manifests / "feature_stats.json"
-                ),
+                "feature_stats_sha256": sha256_file(manifests / "feature_stats.json"),
             },
             "dataset": {
                 "train": str(train_catalog),
@@ -208,9 +202,7 @@ def prepare(
                     "objects": train_count,
                 },
                 "validation": {
-                    "path": str(
-                        (out / "manifests/validation_indices.npy").resolve()
-                    ),
+                    "path": str((out / "manifests/validation_indices.npy").resolve()),
                     "sha256": sha256_file(manifests / "validation_indices.npy"),
                     "objects": validation_count,
                 },

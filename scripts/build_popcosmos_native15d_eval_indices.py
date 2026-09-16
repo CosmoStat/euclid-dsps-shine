@@ -37,9 +37,7 @@ def build_indices(
         raise ValueError("Training pool contains duplicate object_id values")
     eligible = np.flatnonzero(~np.isin(full_ids, excluded_ids)).astype(np.int64)
     if size <= 0 or size > len(eligible):
-        raise ValueError(
-            f"Evaluation size must be in [1, {len(eligible)}], got {size}"
-        )
+        raise ValueError(f"Evaluation size must be in [1, {len(eligible)}], got {size}")
     rng = np.random.default_rng(int(seed))
     return rng.choice(eligible, size=int(size), replace=False).astype(np.int64)
 
@@ -58,9 +56,7 @@ def _ids_sha256(values: np.ndarray) -> str:
 
 def main() -> None:
     args = parse_args()
-    full_ids = pd.read_parquet(args.full, columns=["object_id"])[
-        "object_id"
-    ].to_numpy()
+    full_ids = pd.read_parquet(args.full, columns=["object_id"])["object_id"].to_numpy()
     excluded_ids = pd.read_parquet(args.exclude, columns=["object_id"])[
         "object_id"
     ].to_numpy()

@@ -120,14 +120,16 @@ def main() -> None:
         raise ValueError("lp_zbest must not enter the native redshift-only workflow")
     if amortized["objective"]["sleep"].get("error_model") != "observed_catalog":
         raise ValueError("Sleep must reuse Farmer-reported uncertainty vectors")
-    if Path(amortized["features"]["stats_catalog_path"]).resolve() != (
-        args.data_dir / "farmer_a24_n40000.parquet"
-    ).resolve():
+    if (
+        Path(amortized["features"]["stats_catalog_path"]).resolve()
+        != (args.data_dir / "farmer_a24_n40000.parquet").resolve()
+    ):
         raise ValueError("Feature statistics must use only the fixed 40k train pool")
     likelihood = amortized["likelihood"]
-    if likelihood.get("type") != "student_t" or float(
-        likelihood.get("student_t_dof", np.nan)
-    ) != 2.0:
+    if (
+        likelihood.get("type") != "student_t"
+        or float(likelihood.get("student_t_dof", np.nan)) != 2.0
+    ):
         raise ValueError("Native transfer requires a Student-t2 likelihood")
     if amortized["objective"].get("mode") != "reweighted_wake_sleep":
         raise ValueError("Native transfer requires the RWS objective")
@@ -145,9 +147,7 @@ def main() -> None:
     if any(str(band.get("units", "")).lower() != "microjy" for band in config["bands"]):
         raise ValueError("All Farmer input bands must explicitly declare microjy")
     for band in config["bands"]:
-        band["filter"]["path"] = str(
-            args.asset_dir / "filters" / f"{band['name']}.dat"
-        )
+        band["filter"]["path"] = str(args.asset_dir / "filters" / f"{band['name']}.dat")
     filters = load_filters(config["bands"])
     if any(len(curve.wave) < 2 for curve in filters.values()):
         raise ValueError("At least one COSMOS passband is empty")
@@ -199,7 +199,9 @@ def main() -> None:
         if redshift.get("science_target") != "z_obs_only":
             raise ValueError("Run does not declare the redshift-only science target")
         if int((redshift.get("metrics") or {}).get("n_spec", 0)) <= 0:
-            raise ValueError("Held-out inference cohort contains no public spectroscopy")
+            raise ValueError(
+                "Held-out inference cohort contains no public spectroscopy"
+            )
         stage_contract = json.loads(
             (args.run_dir / "stage_contract.json").read_text(encoding="utf-8")
         )
@@ -213,9 +215,7 @@ def main() -> None:
         indices = np.asarray(np.load(evaluation_indices), dtype=np.int64)
         if len(indices) < int(cohort.get("selected_rows", 0)):
             raise ValueError("Evaluation index file is shorter than the stage cohort")
-        full_ids = pq.read_table(full, columns=["object_id"])[
-            "object_id"
-        ].to_numpy()
+        full_ids = pq.read_table(full, columns=["object_id"])["object_id"].to_numpy()
         train_ids = pq.read_table(
             args.data_dir / "farmer_a24_n40000.parquet",
             columns=["object_id"],
@@ -232,8 +232,7 @@ def main() -> None:
         if stage_contract.get("stage") == "n40k":
             for path in (
                 args.run_dir.parent / "redshift_scaling/redshift_scaling_metrics.csv",
-                args.run_dir.parent
-                / "redshift_scaling/redshift_scaling_summary.json",
+                args.run_dir.parent / "redshift_scaling/redshift_scaling_summary.json",
             ):
                 _require_file(path)
 

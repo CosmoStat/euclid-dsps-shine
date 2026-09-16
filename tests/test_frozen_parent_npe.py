@@ -204,14 +204,14 @@ def test_topology_pilot_cli_maps_config_paths(
 def test_topology_validation_timeout_recovery_reuses_training() -> None:
     recovery = (
         ROOT
-        / "scripts/submit_feniks_sc_drws_topology_npe_validation_recovery.sh"
+        / "legacy/scripts/recovery/submit_feniks_sc_drws_topology_npe_validation_recovery.sh"
     ).read_text(encoding="utf-8")
     validation = (
         ROOT / "scripts/feniks_sc_drws_topology_npe_validate_h100.slurm"
     ).read_text(encoding="utf-8")
 
     assert "RECOVER_VALIDATION_TIMEOUTS" in recovery
-    assert 'TOPOLOGY_VALIDATION_RECOVERY_TIME:-08:00:00' in recovery
+    assert "TOPOLOGY_VALIDATION_RECOVERY_TIME:-08:00:00" in recovery
     assert 'scope": "validation_timeouts_only"' in recovery
     assert '"training_reused": True' in recovery
     assert '"new_training_submitted": False' in recovery
@@ -366,7 +366,8 @@ def test_five_stage_submission_contract_is_parallel_and_distributional() -> None
 
 def test_scratch_only_recovery_reuses_warm_and_replaces_dependencies() -> None:
     recovery = (
-        ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_recovery.sh"
+        ROOT
+        / "legacy/scripts/recovery/submit_feniks_sc_drws_frozen_parent_npe_recovery.sh"
     ).read_text(encoding="utf-8")
 
     assert "RECOVER_SCRATCH_ARM" in recovery
@@ -453,7 +454,8 @@ def test_gate_runtime_recovery_uses_git_metadata_without_executable(
 
 def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
     recovery = (
-        ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_gate_recovery.sh"
+        ROOT
+        / "legacy/scripts/recovery/submit_feniks_sc_drws_frozen_parent_npe_gate_recovery.sh"
     ).read_text(encoding="utf-8")
     monitor = (ROOT / "scripts/monitor_feniks_sc_drws_frozen_parent_npe.sh").read_text(
         encoding="utf-8"
@@ -473,7 +475,8 @@ def test_gate_only_recovery_reuses_both_arms_and_baseline() -> None:
 
 def test_stage4_only_recovery_reuses_frozen_winner_and_submits_no_training() -> None:
     recovery = (
-        ROOT / "scripts/submit_feniks_sc_drws_frozen_parent_npe_stage4_recovery.sh"
+        ROOT
+        / "legacy/scripts/recovery/submit_feniks_sc_drws_frozen_parent_npe_stage4_recovery.sh"
     ).read_text(encoding="utf-8")
     submitter = (
         ROOT / "scripts/feniks_sc_drws_frozen_parent_npe_submit_evaluation.slurm"

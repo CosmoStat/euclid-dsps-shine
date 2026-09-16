@@ -198,7 +198,9 @@ def test_training_command_matches_single_gpu_allocation(tmp_path, monkeypatch, a
     command = calls[0]
     mode = command[command.index("--data-parallel") + 1]
     assert mode == "single"
-    actual = _resolve_data_parallel_training({"data_parallel": mode}, jax_batch_size=256)
+    actual = _resolve_data_parallel_training(
+        {"data_parallel": mode}, jax_batch_size=256
+    )
     assert actual["enabled"] is False
     assert actual["per_device_batch_size"] == 256
     assert "--freeze-prior" in command

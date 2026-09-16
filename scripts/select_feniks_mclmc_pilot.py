@@ -56,10 +56,7 @@ def main() -> None:
             (validate / "prepare_manifest.json").read_text(encoding="utf-8")
         )
         validate_names = tuple(validate_prepare["latent_spec"]["names"])
-        directories = [
-            validate / "mclmc" / f"chain_{chain:02d}"
-            for chain in range(2)
-        ]
+        directories = [validate / "mclmc" / f"chain_{chain:02d}" for chain in range(2)]
         diagnostics, summary = combine_chain_diagnostics(
             directories, parameter_names=validate_names
         )
@@ -71,9 +68,7 @@ def main() -> None:
         selection["validation_galaxy"] = args.validate_galaxy_dir
         selection["validation_max_rhat"] = summary["max_rhat"]
         selection["validation_min_bulk_ess"] = summary["min_bulk_ess"]
-        selection["validation_passes_rhat_1_10"] = bool(
-            summary["max_rhat"] <= 1.10
-        )
+        selection["validation_passes_rhat_1_10"] = bool(summary["max_rhat"] <= 1.10)
         args.out.write_text(
             json.dumps(selection, indent=2, sort_keys=True), encoding="utf-8"
         )
@@ -83,9 +78,7 @@ def main() -> None:
             )
         print(json.dumps(selection, indent=2))
         return
-    nuts_directories = [
-        galaxy / "nuts" / f"chain_{chain:02d}" for chain in range(4)
-    ]
+    nuts_directories = [galaxy / "nuts" / f"chain_{chain:02d}" for chain in range(4)]
     if not all((directory / "DONE").exists() for directory in nuts_directories):
         raise FileNotFoundError("The four-chain NUTS pilot reference is incomplete")
     nuts_x = _load_x(nuts_directories)
@@ -116,9 +109,7 @@ def main() -> None:
         candidate_x = _load_x(directories)
         standardized_mean_distance = float(
             np.sqrt(
-                np.mean(
-                    ((np.mean(candidate_x, axis=0) - nuts_mean) / nuts_scale) ** 2
-                )
+                np.mean(((np.mean(candidate_x, axis=0) - nuts_mean) / nuts_scale) ** 2)
             )
         )
         rows.append(
@@ -169,9 +160,7 @@ def main() -> None:
         ),
         "unadjusted_configs_are_diagnostics_only": True,
     }
-    args.out.write_text(
-        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    args.out.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     print(json.dumps(payload, indent=2))
 
 

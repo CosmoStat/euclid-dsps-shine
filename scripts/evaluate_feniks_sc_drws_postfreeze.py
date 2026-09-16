@@ -73,9 +73,7 @@ def _population_rows(
     rows = []
     for index, name in enumerate(parameters):
         wasserstein = float(
-            np.mean(
-                np.abs(model_quantiles[:, index] - truth_quantiles[:, index])
-            )
+            np.mean(np.abs(model_quantiles[:, index] - truth_quantiles[:, index]))
         )
         rows.append(
             {
@@ -93,8 +91,7 @@ def _population_rows(
                     / max(float(truth_std[index]), 1.0e-12)
                 ),
                 "std_ratio": float(
-                    np.std(model[:, index])
-                    / max(float(truth_std[index]), 1.0e-12)
+                    np.std(model[:, index]) / max(float(truth_std[index]), 1.0e-12)
                 ),
                 "q05_difference": float(
                     model_quantiles[50, index] - truth_quantiles[50, index]
@@ -186,7 +183,9 @@ def run(
     row_lookup = population_truth.set_index("row_index", drop=False)
     missing_rows = sorted(set(final_rows.tolist()) - set(row_lookup.index))
     if missing_rows:
-        raise ValueError(f"final truth rows are absent from test catalogue: {missing_rows[:5]}")
+        raise ValueError(
+            f"final truth rows are absent from test catalogue: {missing_rows[:5]}"
+        )
     inference_truth = row_lookup.loc[final_rows].reset_index(drop=True)
     inference_truth_path = out_dir / "inference_truth.parquet"
     inference_truth.to_parquet(inference_truth_path, index=False)
@@ -232,9 +231,7 @@ def run(
     population_matrix = _truth_matrix(population_truth, mappings, parameters)
     finite = np.all(np.isfinite(population_matrix), axis=1)
     population_matrix = population_matrix[finite]
-    population_rows = population_truth.loc[finite, "row_index"].to_numpy(
-        dtype=np.int64
-    )
+    population_rows = population_truth.loc[finite, "row_index"].to_numpy(dtype=np.int64)
     flux = pd.read_parquet(test_catalog, columns=["flux_lsst_r"])[
         "flux_lsst_r"
     ].to_numpy(dtype=np.float64)
@@ -249,7 +246,9 @@ def run(
         if prior_receipt.get("truth_used") is not False:
             raise ValueError(f"{variant} prior report used truth")
         prior_receipts[variant] = prior_receipt
-        with np.load(prior_dir / "parent_and_selected_prior.npz", allow_pickle=False) as arrays:
+        with np.load(
+            prior_dir / "parent_and_selected_prior.npz", allow_pickle=False
+        ) as arrays:
             distributions = {
                 "parent_C0": (population_matrix, np.asarray(arrays["theta"])),
                 "observed_selected": (
@@ -293,8 +292,7 @@ def run(
         "population_truth_C0_objects": int(len(population_matrix)),
         "population_truth_selected_objects": int(len(selected_truth)),
         "prior_selection_alpha": {
-            name: value["selection"]["alpha"]
-            for name, value in prior_receipts.items()
+            name: value["selection"]["alpha"] for name, value in prior_receipts.items()
         },
         "contracts": {
             "posterior": "dense joint draws only; no pointwise distribution replacement",

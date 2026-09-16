@@ -522,8 +522,8 @@ def _run_adaptive_smc_benchmark(
     mode: str = "config",
 ) -> dict[str, object]:
     """Run the production bridge and persist a weighted exact-target posterior."""
-    primary_config, fallback_config, proposal_config = (
-        _adaptive_smc_benchmark_configs(runtime.config, mode=mode)
+    primary_config, fallback_config, proposal_config = _adaptive_smc_benchmark_configs(
+        runtime.config, mode=mode
     )
     model_snapshot = snapshot_model(runtime.model)
     primary_key, fallback_key, resample_key = jax.random.split(key, 3)
@@ -581,9 +581,7 @@ def _run_adaptive_smc_benchmark(
         target=target,
     )
     frame["smc_weight"] = np.asarray(jax.device_get(weights))
-    frame["smc_eligible"] = bool(
-        np.asarray(jax.device_get(posterior.eligible[0]))
-    )
+    frame["smc_eligible"] = bool(np.asarray(jax.device_get(posterior.eligible[0])))
     _write_parquet(frame, galaxy_dir / "adaptive_smc_weighted_samples.parquet")
     n_resampled = max(128, min(8192, int(len(frame)) * 128))
     positions = systematic_resample(
@@ -624,9 +622,7 @@ def _run_adaptive_smc_benchmark(
             "unique_ancestor_fraction": float(
                 np.asarray(jax.device_get(result.unique_ancestor_fraction[0]))
             ),
-            "ancestor_ess": float(
-                np.asarray(jax.device_get(result.ancestor_ess[0]))
-            ),
+            "ancestor_ess": float(np.asarray(jax.device_get(result.ancestor_ess[0]))),
             "ancestor_ess_fraction": float(
                 np.asarray(jax.device_get(result.ancestor_ess_fraction[0]))
             ),
@@ -634,39 +630,27 @@ def _run_adaptive_smc_benchmark(
                 np.asarray(jax.device_get(result.epsilon_squared_jump[0]))
             ),
             "median_epsilon_squared_jump": float(
-                np.asarray(
-                    jax.device_get(result.median_epsilon_squared_jump[0])
-                )
+                np.asarray(jax.device_get(result.median_epsilon_squared_jump[0]))
             ),
             "moved_particle_fraction": float(
                 np.asarray(jax.device_get(result.moved_particle_fraction[0]))
             ),
             "unchanged_from_ancestor_fraction": float(
-                np.asarray(
-                    jax.device_get(result.unchanged_from_ancestor_fraction[0])
-                )
+                np.asarray(jax.device_get(result.unchanged_from_ancestor_fraction[0]))
             ),
             "poor_acceptance": bool(
                 np.asarray(jax.device_get(result.poor_acceptance[0]))
             ),
-            "poor_ancestry": bool(
-                np.asarray(jax.device_get(result.poor_ancestry[0]))
-            ),
-            "poor_movement": bool(
-                np.asarray(jax.device_get(result.poor_movement[0]))
-            ),
+            "poor_ancestry": bool(np.asarray(jax.device_get(result.poor_ancestry[0]))),
+            "poor_movement": bool(np.asarray(jax.device_get(result.poor_movement[0]))),
             "mixing_failure": bool(
                 np.asarray(jax.device_get(result.mixing_failure[0]))
             ),
-            "hard": bool(
-                np.asarray(jax.device_get(result.hard_object_flag[0]))
-            ),
+            "hard": bool(np.asarray(jax.device_get(result.hard_object_flag[0]))),
             "finite_target_fraction": float(
                 np.asarray(jax.device_get(result.finite_target_fraction[0]))
             ),
-            "logZ_estimate": float(
-                np.asarray(jax.device_get(result.logZ_estimate[0]))
-            ),
+            "logZ_estimate": float(np.asarray(jax.device_get(result.logZ_estimate[0]))),
         }
 
     payload = {
@@ -702,7 +686,7 @@ def _adaptive_smc_benchmark_configs(
 
 
 def _adaptive_smc_enabled(config: dict[str, Any]) -> bool:
-    objective = ((config.get("amortized", {}) or {}).get("objective", {}) or {})
+    objective = (config.get("amortized", {}) or {}).get("objective", {}) or {}
     adaptive = dict(objective.get("adaptive_smc", {}) or {})
     return adaptive.get("sampler") == "adaptive_bridge_smc"
 
@@ -984,9 +968,7 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             adaptive = json.loads(adaptive_path.read_text())
             selected_smc = adaptive["fallback"] or adaptive["primary"]
             row["adaptive_smc_beta_final"] = selected_smc["beta_final"]
-            row["adaptive_smc_final_ess_fraction"] = selected_smc[
-                "final_ess_fraction"
-            ]
+            row["adaptive_smc_final_ess_fraction"] = selected_smc["final_ess_fraction"]
             row["adaptive_smc_mutation_acceptance"] = selected_smc[
                 "mutation_acceptance"
             ]
@@ -1010,18 +992,12 @@ def finalize_run(args: argparse.Namespace, config: dict[str, Any]) -> None:
             row["adaptive_smc_unchanged_from_ancestor_fraction"] = selected_smc[
                 "unchanged_from_ancestor_fraction"
             ]
-            row["adaptive_smc_poor_acceptance"] = selected_smc[
-                "poor_acceptance"
-            ]
+            row["adaptive_smc_poor_acceptance"] = selected_smc["poor_acceptance"]
             row["adaptive_smc_poor_ancestry"] = selected_smc["poor_ancestry"]
             row["adaptive_smc_poor_movement"] = selected_smc["poor_movement"]
-            row["adaptive_smc_mixing_failure"] = selected_smc[
-                "mixing_failure"
-            ]
+            row["adaptive_smc_mixing_failure"] = selected_smc["mixing_failure"]
             row["adaptive_smc_logZ"] = selected_smc["logZ_estimate"]
-            row["adaptive_smc_fallback_attempted"] = adaptive[
-                "fallback_attempted"
-            ]
+            row["adaptive_smc_fallback_attempted"] = adaptive["fallback_attempted"]
             row["adaptive_smc_eligible"] = adaptive["eligible_after_fallback"]
         rows.append(row)
     scoreboard = pd.DataFrame(rows)

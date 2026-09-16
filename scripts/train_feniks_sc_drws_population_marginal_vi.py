@@ -310,9 +310,7 @@ def train(
         )
         alpha_logweight = np.asarray(
             jax.device_get(
-                reference_logbeta
-                + proposed.log_prob(reference_x)
-                - reference_logprior
+                reference_logbeta + proposed.log_prob(reference_x) - reference_logprior
             ),
             dtype=float,
         )

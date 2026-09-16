@@ -83,9 +83,7 @@ def estimate(config_path: Path, manifest_path: Path) -> dict[str, object]:
     total_micro_batches = sweeps * math.ceil(n_train / micro_batch)
     replay_updates = total_micro_batches // max(replay_every, 1)
     replay = replay_updates * micro_batch * candidate_factor
-    prior_updates = sweeps * math.ceil(
-        n_train / int(training["prior_macro_objects"])
-    )
+    prior_updates = sweeps * math.ceil(n_train / int(training["prior_macro_objects"]))
     alpha = prior_updates * int(selection["n_prior_samples"])
     validation_objects = min(
         int(training["validation_objects"]),
@@ -102,9 +100,7 @@ def estimate(config_path: Path, manifest_path: Path) -> dict[str, object]:
         observed = round(sweeps * n_train * observed_per_object)
         return int(observed + bootstrap + replay + alpha + validation)
 
-    hard_conservative = 0.8 * typical + 0.2 * (
-        primary_worst + fallback_typical
-    )
+    hard_conservative = 0.8 * typical + 0.2 * (primary_worst + fallback_typical)
     return {
         "status": "estimate",
         "unit": "latent-object DSPS forward evaluations; evaluations are vectorized in large GPU batches",

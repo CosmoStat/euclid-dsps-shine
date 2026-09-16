@@ -98,8 +98,7 @@ def _catalog(path: Path, *, rows: int) -> None:
     threshold = float(np.asarray(abmag_to_fnu_cgs(25.0)))
     pd.DataFrame(
         {
-            "flux_lsst_r": threshold
-            * np.where(np.arange(rows) % 5 == 0, 0.5, 2.0),
+            "flux_lsst_r": threshold * np.where(np.arange(rows) % 5 == 0, 0.5, 2.0),
             # These columns deliberately exist but must never be read by build().
             "redshift_true": np.linspace(0.0, 3.0, rows),
             "truth_parameter": np.arange(rows, dtype=float),
@@ -152,7 +151,13 @@ def test_manifest_builder_uses_selected_observations_and_disjoint_test_cohorts(
     assert receipt["truth_used_for_training_or_checkpoint_selection"] is False
     assert receipt["selection"]["max_mag_ab"] == 29.0
     assert set(receipt["selection"]["retention_grid"]["train"]) == {
-        "25", "26", "27", "27.5", "28", "28.5", "29"
+        "25",
+        "26",
+        "27",
+        "27.5",
+        "28",
+        "28.5",
+        "29",
     }
     assert receipt["c0_scope_statement"].endswith(
         "additional observed r<29.0 selection."
@@ -472,9 +477,7 @@ def test_undertrained_smoke_is_technical_only_but_pilot_stays_fail_closed(
     assert smoke["training"]["status"] == "FAIL"
     assert smoke["training"]["technical_smoke_status"] == "PASS"
     assert all(variant["status"] == "FAIL" for variant in smoke["variants"])
-    assert all(
-        variant["technical_status"] == "PASS" for variant in smoke["variants"]
-    )
+    assert all(variant["technical_status"] == "PASS" for variant in smoke["variants"])
     assert pilot["status"] == "FAIL"
 
 
@@ -526,11 +529,7 @@ def test_promotion_requires_both_seeds_then_independent_confirmation(
     for seed in SEEDS:
         run = tmp_path / "historical_4x128" / f"seed_{seed}"
         (run / "confirmation_summary.json").write_text(
-            json.dumps(
-                _run_summary(
-                    "historical_4x128", seed, status="PASS", ess=0.18
-                )
-            )
+            json.dumps(_run_summary("historical_4x128", seed, status="PASS", ess=0.18))
         )
     final = finalize_confirmation(tmp_path)
 
@@ -608,8 +607,7 @@ def test_full_finalizer_accepts_explicit_unconfirmed_authorization(
 
     assert receipt["status"] == "PASS"
     assert (
-        receipt["launch_authorization_status"]
-        == "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE"
+        receipt["launch_authorization_status"] == "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE"
     )
 
 
@@ -648,12 +646,8 @@ def test_full_finalizer_records_nonpromotional_diagnostic_checkpoint(
                         "status": "FAIL",
                         "technical_status": "PASS",
                         "selection_corrected_exact_gaussian_iw_score": float("nan"),
-                        "exact_gaussian_ordinary_iw": {
-                            "median_raw_ess_fraction": 0.01
-                        },
-                        "exact_gaussian_posterior_predictive": {
-                            "median_band_rms": 3.0
-                        },
+                        "exact_gaussian_ordinary_iw": {"median_raw_ess_fraction": 0.01},
+                        "exact_gaussian_posterior_predictive": {"median_band_rms": 3.0},
                         "truth_free_inference_contract": {
                             "support": {"status": "PASS"},
                             "predictive": {"status": "PASS"},
@@ -664,12 +658,8 @@ def test_full_finalizer_records_nonpromotional_diagnostic_checkpoint(
                         "status": "FAIL",
                         "technical_status": "PASS",
                         "selection_corrected_exact_gaussian_iw_score": float("nan"),
-                        "exact_gaussian_ordinary_iw": {
-                            "median_raw_ess_fraction": 0.02
-                        },
-                        "exact_gaussian_posterior_predictive": {
-                            "median_band_rms": 2.0
-                        },
+                        "exact_gaussian_ordinary_iw": {"median_raw_ess_fraction": 0.02},
+                        "exact_gaussian_posterior_predictive": {"median_band_rms": 2.0},
                         "truth_free_inference_contract": {
                             "support": {"status": "PASS"},
                             "predictive": {"status": "PASS"},
@@ -726,9 +716,7 @@ def test_postfreeze_finalizer_preserves_diagnostic_status(tmp_path: Path) -> Non
 
 
 def test_sc_drws_truth_closure_config_is_separate_from_training() -> None:
-    training = load_config(
-        CONFIG_DIR / "feniks_sc_drws_r29_current_production.yaml"
-    )
+    training = load_config(CONFIG_DIR / "feniks_sc_drws_r29_current_production.yaml")
     closure = load_config(CONFIG_DIR / "feniks_sc_drws_r29_truth_closure.yaml")
 
     assert training["truth"]["parameter_columns"] == {}
@@ -816,28 +804,24 @@ def test_epoch160_submitter_shards_real_gpu_work_and_freezes_exact_checkpoint() 
         ROOT / "scripts/submit_feniks_sc_drws_epoch160_evaluation.sh"
     ).read_text()
     wait = (ROOT / "scripts/feniks_sc_drws_epoch160_wait.slurm").read_text()
-    heldout = (
-        ROOT / "scripts/feniks_sc_drws_epoch160_heldout_h100.slurm"
-    ).read_text()
+    heldout = (ROOT / "scripts/feniks_sc_drws_epoch160_heldout_h100.slurm").read_text()
     catalogue = (
         ROOT / "scripts/feniks_sc_drws_epoch160_catalogue_h100.slurm"
     ).read_text()
-    finalizer = (
-        ROOT / "scripts/finalize_feniks_sc_drws_epoch160.py"
-    ).read_text()
+    finalizer = (ROOT / "scripts/finalize_feniks_sc_drws_epoch160.py").read_text()
     finalize_worker = (
         ROOT / "scripts/feniks_sc_drws_epoch160_finalize_h100.slurm"
     ).read_text()
     retry = (
-        ROOT / "scripts/resubmit_feniks_sc_drws_epoch160_finalize.sh"
+        ROOT / "legacy/scripts/recovery/resubmit_feniks_sc_drws_epoch160_finalize.sh"
     ).read_text()
 
     assert "checkpoints/epoch_$(printf '%04d' \"$EPOCH\")" in wait
     assert '[[ -s "$CHECKPOINT/raw_model.eqx"' in wait
     assert "--array=0-7%8" in submitter
     assert "--array=0-15%16" in submitter
-    assert '#SBATCH --gres=gpu:1' in heldout
-    assert '#SBATCH --gres=gpu:1' in catalogue
+    assert "#SBATCH --gres=gpu:1" in heldout
+    assert "#SBATCH --gres=gpu:1" in catalogue
     assert "--posterior-samples 1024" in heldout
     assert "--posterior-samples 256" in catalogue
     assert "--no-posterior-predictive" in catalogue
@@ -860,22 +844,22 @@ def test_submitter_encodes_smoke_pilot_confirmation_and_safe_cache() -> None:
     monitor = (ROOT / "scripts" / "monitor_feniks_rws_recovery.sh").read_text()
 
     assert "--array=0-3%4" in submitter
-    assert 'afterok:$SMOKE_JOB' in submitter
-    assert 'afterok:$PILOT_JOB' in submitter
-    assert 'afterok:$PILOT_GATE_JOB' in submitter
-    assert 'afterok:$CONFIRM_JOB' in submitter
+    assert "afterok:$SMOKE_JOB" in submitter
+    assert "afterok:$PILOT_JOB" in submitter
+    assert "afterok:$PILOT_GATE_JOB" in submitter
+    assert "afterok:$CONFIRM_JOB" in submitter
     assert "--confirmation-objects 2000" in submitter
     assert 'EUCLID_DSPS_JAX_COMPILATION_CACHE_DIR="$CACHE_ROOT/jax"' in worker
     assert 'JAX_COMPILATION_CACHE_DIR="$CACHE_ROOT/jax"' in worker
     assert "export JAX_ENABLE_X64=true" in worker
     assert "train_feniks_sc_drws.py" in worker
-    assert 'export SMOKE_ROOT=%q' in submitter
+    assert "export SMOKE_ROOT=%q" in submitter
     assert "sc_drws_training_log.csv" in monitor
     assert "full catalogue autorisé mais non soumis" in monitor
     assert "pilot_train_indices.npy" in worker
     assert "for VARIANT in raw ema" in worker
-    assert '${VARIANT}_model.eqx' in worker
-    assert "--posterior-samples \"$SUPPORT_SAMPLES\"" in worker
+    assert "${VARIANT}_model.eqx" in worker
+    assert '--posterior-samples "$SUPPORT_SAMPLES"' in worker
     assert "--min-median-ess-fraction 0.05" in worker
     assert "--max-fraction-pareto-k-gt-0p7 0.20" in worker
     assert 'RESUME_EXISTING="${RESUME_EXISTING:-0}"' in submitter

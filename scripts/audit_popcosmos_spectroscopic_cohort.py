@@ -150,7 +150,9 @@ def audit_cohort(
 def _truth_ids_from_frame(frame: pd.DataFrame) -> np.ndarray:
     required = {"object_id", "redshift_true"}
     if not required.issubset(frame.columns):
-        raise ValueError(f"Evaluation table lacks {sorted(required - set(frame.columns))}")
+        raise ValueError(
+            f"Evaluation table lacks {sorted(required - set(frame.columns))}"
+        )
     truth = pd.to_numeric(frame["redshift_true"], errors="coerce").to_numpy(float)
     valid = np.isfinite(truth) & (truth >= 0.0)
     ids = frame.loc[valid, "object_id"].to_numpy(np.int64)
@@ -194,7 +196,10 @@ def main() -> None:
     )
     payload["inputs"] = {
         "popcosmos": {"path": str(args.popcosmos), "sha256": _sha256(args.popcosmos)},
-        "evaluation": {"path": str(args.evaluation), "sha256": _sha256(args.evaluation)},
+        "evaluation": {
+            "path": str(args.evaluation),
+            "sha256": _sha256(args.evaluation),
+        },
     }
     if args.prepared_full is not None:
         payload["inputs"]["prepared_full"] = {
@@ -214,9 +219,10 @@ def main() -> None:
         "[cosmos-specz-audit] "
         f"published_ids={len(cohort)} decision={payload['decision']} -> {out}"
     )
-    if args.require_exact_numeric and not payload["numeric_truth"][
-        "exact_12014_numeric_truth_ready"
-    ]:
+    if (
+        args.require_exact_numeric
+        and not payload["numeric_truth"]["exact_12014_numeric_truth_ready"]
+    ):
         raise SystemExit(2)
 
 

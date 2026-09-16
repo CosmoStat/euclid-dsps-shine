@@ -357,23 +357,26 @@ def decompose_redshift(
                 branch_ad_sigma_per_z={n: v.tolist() for n, v in derivatives.items()},
                 chain_minus_full_ad_sigma=(chain - derivatives["full_native"]).tolist(),
                 age_mass_centers=weight_centers,
-                canonical_center_delta_sigma=None
-                if canonical_delta is None
-                else canonical_delta.tolist(),
+                canonical_center_delta_sigma=(
+                    None if canonical_delta is None else canonical_delta.tolist()
+                ),
             )
         )
         progress(index, "point_complete", rows, results)
         jax.clear_caches()
-    return dict(
-        status="REDSHIFT_DECOMPOSITION_COMPLETE",
-        points=results,
-        coordinate_names=list(spec.names),
-        band_names=list(band_names),
-        truth_used=False,
-        scientific_promotion=False,
-        local_optimization_started=False,
-        population_training_started=False,
-        interpretation="forensic only; no FD value or branch is a certified gradient reference",
-        precision_scope="float64 observer projection and age/mass weights only; stored assets unchanged; full production decoder remains mixed precision",
-        age_normalization="formed mass in each SSP age bin divided by fixed central target surviving stellar mass; not photometric sigma",
-    ), rows
+    return (
+        dict(
+            status="REDSHIFT_DECOMPOSITION_COMPLETE",
+            points=results,
+            coordinate_names=list(spec.names),
+            band_names=list(band_names),
+            truth_used=False,
+            scientific_promotion=False,
+            local_optimization_started=False,
+            population_training_started=False,
+            interpretation="forensic only; no FD value or branch is a certified gradient reference",
+            precision_scope="float64 observer projection and age/mass weights only; stored assets unchanged; full production decoder remains mixed precision",
+            age_normalization="formed mass in each SSP age bin divided by fixed central target surviving stellar mass; not photometric sigma",
+        ),
+        rows,
+    )

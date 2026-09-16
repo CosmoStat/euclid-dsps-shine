@@ -125,11 +125,9 @@ def reference_plateau(fd, ad, *, atol=1e-3, rtol=1e-3):
                 reference_step_index=selected,
                 reference_fd=value,
                 candidate_ad=float(ad[band]),
-                status="PASS"
-                if passed
-                else "INCONCLUSIVE"
-                if selected is None
-                else "FAIL",
+                status=(
+                    "PASS" if passed else "INCONCLUSIVE" if selected is None else "FAIL"
+                ),
             )
         )
     return reports
@@ -337,27 +335,32 @@ def analyze_snapshot(arrays, budget, *, progress):
         progress(index, "point_complete", records, reports)
         jax.clear_caches()
     all_pass = all(r["numerical_reference_checks"] == "PASS" for r in reports)
-    return dict(
-        status="PHOTOMETRY_REFERENCE_COMPLETE",
-        points=reports,
-        numerical_reference_checks="PASS" if all_pass else "NOT_PASSED",
-        next_stage="FULL_DECODER_QUALIFICATION_REQUIRED"
-        if all_pass
-        else "INVESTIGATE_INTEGRATION",
-        reference_contract="analytic integral of supplied piecewise-linear SED and filter, with same DSPS cosmology/AB constant; not independent astrophysical truth",
-        tolerances=dict(
-            flux_absolute_in_sigma=1e-3,
-            flux_relative=1e-10,
-            gradient_absolute_sigma_per_z=1e-3,
-            gradient_relative=1e-3,
+    return (
+        dict(
+            status="PHOTOMETRY_REFERENCE_COMPLETE",
+            points=reports,
+            numerical_reference_checks="PASS" if all_pass else "NOT_PASSED",
+            next_stage=(
+                "FULL_DECODER_QUALIFICATION_REQUIRED"
+                if all_pass
+                else "INVESTIGATE_INTEGRATION"
+            ),
+            reference_contract="analytic integral of supplied piecewise-linear SED and filter, with same DSPS cosmology/AB constant; not independent astrophysical truth",
+            tolerances=dict(
+                flux_absolute_in_sigma=1e-3,
+                flux_relative=1e-10,
+                gradient_absolute_sigma_per_z=1e-3,
+                gradient_relative=1e-3,
+            ),
+            production_decoder_changed=False,
+            local_optimization_started=False,
+            population_training_started=False,
+            npe_training_started=False,
+            truth_used=False,
+            scientific_promotion=False,
         ),
-        production_decoder_changed=False,
-        local_optimization_started=False,
-        population_training_started=False,
-        npe_training_started=False,
-        truth_used=False,
-        scientific_promotion=False,
-    ), records
+        records,
+    )
 
 
 def write_progress(root, index, stage, rows, points, budget):

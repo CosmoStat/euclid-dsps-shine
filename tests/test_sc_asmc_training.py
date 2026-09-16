@@ -143,9 +143,7 @@ def test_final_sleep_runtime_preserves_mask_feature_contract() -> None:
         runtime,
     )
     compiled = jax.jit(
-        lambda flux, error, mask: _sleep_encoder_features(
-            flux, error, mask, runtime
-        )
+        lambda flux, error, mask: _sleep_encoder_features(flux, error, mask, runtime)
     )(
         jnp.ones((2, 18), dtype=jnp.float32),
         jnp.ones((2, 18), dtype=jnp.float32),

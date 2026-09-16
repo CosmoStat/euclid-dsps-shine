@@ -413,6 +413,7 @@ def test_rq_spline_train_supervised_prior_checkpoint_roundtrip(tmp_path: Path) -
                 "hidden_size": 8,
                 "n_bins": 4,
                 "tail_bound": 4.0,
+                "permutation": "none",
                 "init": "identity",
                 "init_scale": 0.0,
             },
@@ -478,7 +479,12 @@ def test_train_supervised_prior_writes_expected_outputs(tmp_path: Path) -> None:
                 "log10_sfr_at_obs": [-2.0, 1.0],
                 "dust_av": [0.0, 1.0],
             },
-            "flow": {"n_layers": 2, "hidden_size": 8, "scale_clamp": 0.1},
+            "flow": {
+                "n_layers": 2,
+                "hidden_size": 8,
+                "scale_clamp": 0.1,
+                "permutation": "none",
+            },
             "training": {
                 "epochs": 2,
                 "batch_size": 16,

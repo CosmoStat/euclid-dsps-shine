@@ -213,9 +213,7 @@ def _run_probe(args: argparse.Namespace, batch_dir: Path) -> None:
             "checkpoint": str(args.checkpoint.resolve()),
             "feature_stats": str(args.feature_stats.resolve()),
             "row_indices": actual_rows.astype(int).tolist(),
-            "object_ids": [
-                str(value) for value in np.asarray(runtime.batch.object_id)
-            ],
+            "object_ids": [str(value) for value in np.asarray(runtime.batch.object_id)],
             "code_commit": _git_commit(),
         },
     )
@@ -249,9 +247,7 @@ def _run_probe(args: argparse.Namespace, batch_dir: Path) -> None:
     np.savez_compressed(
         batch_dir / "tuned_parameters.npz",
         step_size=np.asarray(jax.device_get(result.step_size)),
-        inverse_mass_matrix=np.asarray(
-            jax.device_get(result.inverse_mass_matrix)
-        ),
+        inverse_mass_matrix=np.asarray(jax.device_get(result.inverse_mass_matrix)),
     )
     selected["object_id"] = [
         str(value) for value in np.asarray(runtime.batch.object_id)
@@ -259,9 +255,7 @@ def _run_probe(args: argparse.Namespace, batch_dir: Path) -> None:
     selected.to_csv(batch_dir / "cohort_used.csv", index=False)
     selected.to_parquet(batch_dir / "cohort_used.parquet", index=False)
 
-    sampling_transitions = (
-        int(args.batch_size) * int(args.chains) * int(args.draws)
-    )
+    sampling_transitions = int(args.batch_size) * int(args.chains) * int(args.draws)
     galaxy_sweeps = int(args.batch_size) * int(args.draws)
     summary = {
         "status": "completed",
@@ -285,18 +279,14 @@ def _run_probe(args: argparse.Namespace, batch_dir: Path) -> None:
             sampling_transitions / result.sampling_elapsed_s
         ),
         "galaxy_sweeps_per_s": galaxy_sweeps / result.sampling_elapsed_s,
-        "mean_acceptance_rate": _finite_mean(
-            info_frame.get("acceptance_rate")
-        ),
+        "mean_acceptance_rate": _finite_mean(info_frame.get("acceptance_rate")),
         "divergences": int(
             info_frame.get(
                 "is_divergent",
                 pd.Series(dtype=bool),
             ).sum()
         ),
-        "mean_integration_steps": _finite_mean(
-            info_frame.get("num_integration_steps")
-        ),
+        "mean_integration_steps": _finite_mean(info_frame.get("num_integration_steps")),
         "gpu": _gpu_summary(args.gpu_metrics),
         "artifacts": {
             "samples": "samples.parquet",
@@ -325,12 +315,8 @@ def summarize_probe(args: argparse.Namespace) -> None:
                     "batch_size_galaxies": batch_size,
                     "status": "completed",
                     "total_chains": payload["total_chains"],
-                    "total_sampler_elapsed_s": payload[
-                        "total_sampler_elapsed_s"
-                    ],
-                    "sampling_transitions_per_s": payload[
-                        "sampling_transitions_per_s"
-                    ],
+                    "total_sampler_elapsed_s": payload["total_sampler_elapsed_s"],
+                    "sampling_transitions_per_s": payload["sampling_transitions_per_s"],
                     "galaxy_sweeps_per_s": payload["galaxy_sweeps_per_s"],
                     "peak_hbm_mib": gpu.get("peak_memory_used_mib"),
                     "hbm_total_mib": gpu.get("memory_total_mib"),
@@ -372,9 +358,7 @@ def summarize_probe(args: argparse.Namespace) -> None:
     else:
         memory_safe = completed.iloc[:0]
     largest_memory_safe = (
-        int(memory_safe["batch_size_galaxies"].max())
-        if len(memory_safe)
-        else None
+        int(memory_safe["batch_size_galaxies"].max()) if len(memory_safe) else None
     )
     if len(completed):
         throughput = pd.to_numeric(
@@ -390,17 +374,13 @@ def summarize_probe(args: argparse.Namespace) -> None:
         throughput_optimal = None
     largest_tested = max(batch_sizes)
     largest_completed = (
-        int(completed["batch_size_galaxies"].max())
-        if len(completed)
-        else None
+        int(completed["batch_size_galaxies"].max()) if len(completed) else None
     )
     summary = {
         "status": "complete",
         "purpose": "performance_only_not_convergence",
         "tested_batch_sizes": batch_sizes,
-        "completed_batch_sizes": completed["batch_size_galaxies"]
-        .astype(int)
-        .tolist(),
+        "completed_batch_sizes": completed["batch_size_galaxies"].astype(int).tolist(),
         "failed_batch_sizes": frame.loc[
             frame["status"] == "failed", "batch_size_galaxies"
         ]
@@ -410,8 +390,7 @@ def summarize_probe(args: argparse.Namespace) -> None:
         "largest_tested_batch_at_most_80pct_hbm": largest_memory_safe,
         "throughput_optimal_tested_batch_size": throughput_optimal,
         "capacity_limit_observed": bool(
-            largest_completed != largest_tested
-            or largest_memory_safe != largest_tested
+            largest_completed != largest_tested or largest_memory_safe != largest_tested
         ),
         "larger_followup_needed": bool(
             largest_completed == largest_tested
@@ -435,9 +414,7 @@ def _write_samples(
     object_ids: np.ndarray,
 ) -> None:
     n_draws, n_galaxies, n_chains, n_parameters = positions.shape
-    draw, galaxy, chain = np.indices(
-        (n_draws, n_galaxies, n_chains)
-    )
+    draw, galaxy, chain = np.indices((n_draws, n_galaxies, n_chains))
     frame = pd.DataFrame(
         {
             "draw": draw.reshape(-1),
@@ -464,9 +441,7 @@ def _write_infos(
 ) -> pd.DataFrame:
     first = np.asarray(infos.acceptance_rate)
     n_draws, n_galaxies, n_chains = first.shape
-    draw, galaxy, chain = np.indices(
-        (n_draws, n_galaxies, n_chains)
-    )
+    draw, galaxy, chain = np.indices((n_draws, n_galaxies, n_chains))
     frame = pd.DataFrame(
         {
             "draw": draw.reshape(-1),
@@ -507,9 +482,7 @@ def _gpu_summary(path: Path | None) -> dict[str, Any]:
             frame[name] = pd.to_numeric(frame[name], errors="coerce")
     memory_used = frame.get("memory_used_mib", pd.Series(dtype=float))
     memory_total = frame.get("memory_total_mib", pd.Series(dtype=float))
-    utilization = frame.get(
-        "utilization_gpu_percent", pd.Series(dtype=float)
-    )
+    utilization = frame.get("utilization_gpu_percent", pd.Series(dtype=float))
     power = frame.get("power_draw_w", pd.Series(dtype=float))
     peak_memory = _finite_max(memory_used)
     total_memory = _finite_max(memory_total)
@@ -519,9 +492,7 @@ def _gpu_summary(path: Path | None) -> dict[str, Any]:
         "memory_total_mib": total_memory,
         "peak_memory_fraction": (
             peak_memory / total_memory
-            if peak_memory is not None
-            and total_memory is not None
-            and total_memory > 0
+            if peak_memory is not None and total_memory is not None and total_memory > 0
             else None
         ),
         "median_utilization_gpu_percent": _finite_median(utilization),
@@ -563,11 +534,7 @@ def _write_capacity_plot(frame: pd.DataFrame, path: Path) -> None:
 
 
 def _parse_batch_sizes(value: str) -> list[int]:
-    parsed = [
-        int(item)
-        for item in value.replace(",", ":").split(":")
-        if item
-    ]
+    parsed = [int(item) for item in value.replace(",", ":").split(":") if item]
     if not parsed or any(item < 1 for item in parsed):
         raise ValueError("batch sizes must be positive")
     if len(set(parsed)) != len(parsed):

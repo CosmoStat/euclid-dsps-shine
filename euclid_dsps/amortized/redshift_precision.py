@@ -43,28 +43,33 @@ def analyze(snapshot):
             chain[label] = (
                 sum(derivatives[n] for n in names[:3]) - derivatives[names[3]]
             ).tolist()
-    return dict(
-        status="REDSHIFT_PRECISION_COMPLETE"
-        if complete
-        else "REDSHIFT_PRECISION_RUNNING",
-        branches=branches,
-        chain_minus_full_ad_sigma_per_x=chain,
-        completed_branches=len(branches),
-        expected_branches=snapshot["expected_branches"],
-        point_index=4,
-        physical_z=snapshot["physical_z"],
-        dz_dx=snapshot["dz_dx"],
-        source_ad_delta=snapshot["source_ad_delta"],
-        next_stage="REVIEW_BRANCH_PRECISION_EVIDENCE"
-        if complete
-        else "AUDIT_IN_PROGRESS",
-        precision_scope="z-dependent arithmetic only; fixed MDF/SSP and dust transmission retain stored/native precision; no production replacement",
-        scientific_promotion=False,
-        truth_used=False,
-        npe_training_started=False,
-        local_optimization_started=False,
-        population_training_started=False,
-    ), rows
+    return (
+        dict(
+            status=(
+                "REDSHIFT_PRECISION_COMPLETE"
+                if complete
+                else "REDSHIFT_PRECISION_RUNNING"
+            ),
+            branches=branches,
+            chain_minus_full_ad_sigma_per_x=chain,
+            completed_branches=len(branches),
+            expected_branches=snapshot["expected_branches"],
+            point_index=4,
+            physical_z=snapshot["physical_z"],
+            dz_dx=snapshot["dz_dx"],
+            source_ad_delta=snapshot["source_ad_delta"],
+            next_stage=(
+                "REVIEW_BRANCH_PRECISION_EVIDENCE" if complete else "AUDIT_IN_PROGRESS"
+            ),
+            precision_scope="z-dependent arithmetic only; fixed MDF/SSP and dust transmission retain stored/native precision; no production replacement",
+            scientific_promotion=False,
+            truth_used=False,
+            npe_training_started=False,
+            local_optimization_started=False,
+            population_training_started=False,
+        ),
+        rows,
+    )
 
 
 def collect(

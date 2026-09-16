@@ -64,8 +64,7 @@ def _runtime_provenance(
     }
     checks = {
         "status": authorization.get("status") == "AUTHORIZED",
-        "scope": authorization.get("scope")
-        == "gate_finalizer_only_no_git_binary",
+        "scope": authorization.get("scope") == "gate_finalizer_only_no_git_binary",
         "root": Path(authorization.get("npe_root", "")).resolve() == root,
         "manifest_sha256": authorization.get("manifest_sha256")
         == sha256_file(root / "RUN_MANIFEST.json"),
@@ -75,13 +74,9 @@ def _runtime_provenance(
         == sha256_file(arm_receipts["warm_start"]),
         "scratch_receipt_sha256": authorization.get("scratch_receipt_sha256")
         == sha256_file(arm_receipts["scratch_encoder"]),
-        "warm_runtime_code_commit": authorization.get(
-            "warm_runtime_code_commit"
-        )
+        "warm_runtime_code_commit": authorization.get("warm_runtime_code_commit")
         == arm_commits["warm_start"],
-        "scratch_runtime_code_commit": authorization.get(
-            "scratch_runtime_code_commit"
-        )
+        "scratch_runtime_code_commit": authorization.get("scratch_runtime_code_commit")
         == arm_commits["scratch_encoder"],
         "failed_gate_job": str(authorization.get("failed_gate_job"))
         == str(os.environ.get("NPE_FAILED_GATE_JOB")),
@@ -199,9 +194,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args()
-    payload = freeze(
-        root=args.root, repo=Path(__file__).resolve().parents[1]
-    )
+    payload = freeze(root=args.root, repo=Path(__file__).resolve().parents[1])
     print(json.dumps(payload, indent=2, sort_keys=True), flush=True)
 
 

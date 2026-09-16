@@ -40,7 +40,9 @@ def test_avi_restores_inherited_selection_without_changing_target():
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
     from euclid_dsps.config import load_config
 
-    config = load_config("configs/experiments/feniks_sc_drws_r29_frozen_parent_sleep_npe.yaml")
+    config = load_config(
+        "configs/experiments/feniks_sc_drws_r29_frozen_parent_sleep_npe.yaml"
+    )
     objective = config["amortized"]["objective"]
     original = dict(objective["selection_correction"])
     latent = latent_spec_hash(latent_spec_from_config(config))
@@ -59,12 +61,20 @@ def test_frozen_selection_receipt_requires_enabled_correction(tmp_path, monkeypa
 
     from euclid_dsps.amortized import adaptive_smc_trainer
 
-    runtime = SimpleNamespace(selection_objective_config={
-        "selection_correction": {"enabled": True}, "prior_train_jointly": False,
-    })
-    monkeypatch.setattr(adaptive_smc_trainer, "_make_selection_log_alpha_fn",
-                        lambda rt: lambda model, key: (
-                            jnp.log(0.5), {"selection/alpha": jnp.array(0.5)}))
+    runtime = SimpleNamespace(
+        selection_objective_config={
+            "selection_correction": {"enabled": True},
+            "prior_train_jointly": False,
+        }
+    )
+    monkeypatch.setattr(
+        adaptive_smc_trainer,
+        "_make_selection_log_alpha_fn",
+        lambda rt: lambda model, key: (
+            jnp.log(0.5),
+            {"selection/alpha": jnp.array(0.5)},
+        ),
+    )
     value = frozen_selection_normalization(model(), runtime, {"seed": 3}, tmp_path)
     assert value == pytest.approx(np.log(0.5))
     receipt = read(tmp_path / "SELECTION.json")
@@ -91,10 +101,19 @@ def test_snapshot_contains_filter_contents_and_data_link(tmp_path):
     base = tmp_path / "base"
     base.mkdir()
     result = subprocess.run(
-        ["bash", "-c", setup + '\nprintf "%s" "$AVI_CODE"', "snapshot",
-         str(base), str(base / "new_run"), "7"],
-        cwd=repo, env=dict(os.environ, SCRATCH=str(tmp_path / "scratch")),
-        capture_output=True, text=True,
+        [
+            "bash",
+            "-c",
+            setup + '\nprintf "%s" "$AVI_CODE"',
+            "snapshot",
+            str(base),
+            str(base / "new_run"),
+            "7",
+        ],
+        cwd=repo,
+        env=dict(os.environ, SCRATCH=str(tmp_path / "scratch")),
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stderr
     snapshot = Path(result.stdout)
@@ -113,9 +132,15 @@ def test_runtime_assets_checked_and_parsed_before_submission(tmp_path, monkeypat
     curve.write_text("4000 0\n5000 1\n6000 0\n")
     ssp = tmp_path / "ssp.h5"
     ssp.write_bytes(b"SSP fixture: existence only; no decoder load")
-    config = {"ssp_path": "ssp.h5", "bands": [{
-        "name": "euclid_vis", "filter": {"kind": "ascii", "path": "filters/vis.dat"},
-    }]}
+    config = {
+        "ssp_path": "ssp.h5",
+        "bands": [
+            {
+                "name": "euclid_vis",
+                "filter": {"kind": "ascii", "path": "filters/vis.dat"},
+            }
+        ],
+    }
     assert set(runtime_asset_paths(config)) == {ssp, curve}
     curve.unlink()
     with pytest.raises(FileNotFoundError, match="filter:euclid_vis"):
@@ -136,10 +161,12 @@ def test_source_config_preserves_checkpoint_coordinates(tmp_path):
     from euclid_dsps.amortized.latent import latent_spec_from_config, latent_spec_hash
 
     config = {
-        "fit": {"free_parameters": {
-            "z_obs": {"bounds": [0.01, 5.0], "init": 1.0},
-            "dust_av": {"bounds": [0.0, 6.0], "init": 0.2},
-        }},
+        "fit": {
+            "free_parameters": {
+                "z_obs": {"bounds": [0.01, 5.0], "init": 1.0},
+                "dust_av": {"bounds": [0.0, 6.0], "init": 0.2},
+            }
+        },
         "amortized": {
             "latent": {"schema": "config_free_parameters", "normalization": "identity"},
             "prior": {"source": "standard_normal"},
@@ -147,7 +174,9 @@ def test_source_config_preserves_checkpoint_coordinates(tmp_path):
     }
     expected = latent_spec_hash(latent_spec_from_config(config))
     checkpoint = tmp_path / "source.eqx"
-    checkpoint.with_suffix(".eqx.json").write_text(json.dumps({"latent_spec_hash": expected}))
+    checkpoint.with_suffix(".eqx.json").write_text(
+        json.dumps({"latent_spec_hash": expected})
+    )
     restored = yaml.safe_load(source_config_text(config, checkpoint))
     assert list(restored["fit"]["free_parameters"]) == ["z_obs", "dust_av"]
     assert latent_spec_hash(latent_spec_from_config(restored)) == expected
@@ -164,9 +193,14 @@ def test_slurm_enables_cuda_plugin_discovery(tmp_path):
     conda = tmp_path / "miniconda3/etc/profile.d/conda.sh"
     conda.parent.mkdir(parents=True)
     conda.write_text("conda() { :; }\n")
-    env = dict(os.environ, WORK=str(tmp_path), SCRATCH=str(tmp_path),
-               AVI_CODE=str(Path.cwd()), SLURM_JOB_ID="test",
-               EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD="1")
+    env = dict(
+        os.environ,
+        WORK=str(tmp_path),
+        SCRATCH=str(tmp_path),
+        AVI_CODE=str(Path.cwd()),
+        SLURM_JOB_ID="test",
+        EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD="1",
+    )
     probe = """
 import os
 import jax._src.xla_bridge as bridge
@@ -177,9 +211,20 @@ assert os.environ['JAX_PLATFORMS'] == 'cuda'
 assert bridge.discover_pjrt_plugins is discover
 """
     result = subprocess.run(
-        ["bash", "-c", "module() { :; }\n" + setup +
-         '\n"' + sys.executable + '" - <<\'PY\'\n' + probe + "\nPY\n"],
-        env=env, capture_output=True, text=True,
+        [
+            "bash",
+            "-c",
+            "module() { :; }\n"
+            + setup
+            + '\n"'
+            + sys.executable
+            + "\" - <<'PY'\n"
+            + probe
+            + "\nPY\n",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

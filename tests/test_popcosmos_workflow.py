@@ -7,9 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_cosmos_config_preserves_farmer_object_ids() -> None:
-    config = load_config(
-        ROOT / "configs/experiments/popcosmos_a24_rws_joint.yaml"
-    )
+    config = load_config(ROOT / "configs/experiments/popcosmos_a24_rws_joint.yaml")
     assert object_id_column_from_config(config) == "object_id"
     assert config["truth"]["redshift_column"] == "redshift_true"
     wake = config["amortized"]["objective"]["wake"]
@@ -19,9 +17,7 @@ def test_cosmos_config_preserves_farmer_object_ids() -> None:
 
 
 def test_cosmos_smc_pilot_has_stable_features_and_tempered_wake() -> None:
-    config = load_config(
-        ROOT / "configs/experiments/popcosmos_a24_rws_smc_v3.yaml"
-    )
+    config = load_config(ROOT / "configs/experiments/popcosmos_a24_rws_smc_v3.yaml")
     amortized = config["amortized"]
     wake = amortized["objective"]["wake"]
     assert (
@@ -36,9 +32,7 @@ def test_cosmos_smc_pilot_has_stable_features_and_tempered_wake() -> None:
 
 
 def test_native_15d_band_ablation_and_h100_array_contract() -> None:
-    native26 = load_config(
-        ROOT / "configs/experiments/popcosmos_native15d_rws.yaml"
-    )
+    native26 = load_config(ROOT / "configs/experiments/popcosmos_native15d_rws.yaml")
     native24 = load_config(
         ROOT / "configs/experiments/popcosmos_native15d_rws_24band.yaml"
     )
@@ -49,14 +43,10 @@ def test_native_15d_band_ablation_and_h100_array_contract() -> None:
     assert native24["amortized"]["features"]["n_flux_bands"] == 24
     assert native24["amortized"]["encoder"]["input_dim"] == 48
 
-    array_submit = (
-        ROOT / "scripts/submit_popcosmos_native15d_array.sh"
-    ).read_text()
-    array_job = (
-        ROOT / "scripts/popcosmos_native15d_array_h100.slurm"
-    ).read_text()
+    array_submit = (ROOT / "scripts/submit_popcosmos_native15d_array.sh").read_text()
+    array_job = (ROOT / "scripts/popcosmos_native15d_array_h100.slurm").read_text()
     native_job = (ROOT / "scripts/popcosmos_native15d_rws_h100.slurm").read_text()
-    assert 'STAGE must be n5k,n20k,n40k,full' in native_job
+    assert "STAGE must be n5k,n20k,n40k,full" in native_job
     assert "submit_stage full" in array_submit
     assert '--array="0-1%' in array_submit
     assert "afterok:" in array_submit
@@ -69,12 +59,8 @@ def test_native_15d_band_ablation_and_h100_array_contract() -> None:
 
 
 def test_native_15d_full_continuation_uses_four_h100s_and_fixed_cohorts() -> None:
-    worker = (
-        ROOT / "scripts/popcosmos_native15d_continue_full_h100.slurm"
-    ).read_text()
-    submit = (
-        ROOT / "scripts/submit_popcosmos_native15d_continuation.sh"
-    ).read_text()
+    worker = (ROOT / "scripts/popcosmos_native15d_continue_full_h100.slurm").read_text()
+    submit = (ROOT / "scripts/submit_popcosmos_native15d_continuation.sh").read_text()
 
     assert "#SBATCH --gres=gpu:4" in worker
     assert 'EXPECTED_GPUS="${EXPECTED_GPUS:-4}"' in worker
@@ -104,9 +90,7 @@ def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
     rws = (ROOT / "scripts/cosmos2020_rws_h100.slurm").read_text()
     submit = (ROOT / "scripts/submit_cosmos2020_reproduction.sh").read_text()
     mclmc = (ROOT / "scripts/submit_cosmos2020_mclmc.sh").read_text()
-    a24_forward = (
-        ROOT / "scripts/popcosmos_a24_forward_audit_h100.slurm"
-    ).read_text()
+    a24_forward = (ROOT / "scripts/popcosmos_a24_forward_audit_h100.slurm").read_text()
     assert "DATA_PARALLEL=pmap" in rws
     assert "popcosmos_a24_rws_v2" in rws
     assert "smoke) SIZE=512; EPOCHS=4" in rws
@@ -115,7 +99,7 @@ def test_jean_zay_wrappers_scale_gpu_and_smoke_arrays() -> None:
     assert '--data-parallel "$DATA_PARALLEL"' in rws
     assert "--selection-mode sequential" in rws
     assert "--selection-mode random" not in rws
-    assert 'TRAIN_PER_DEVICE_BATCH_SIZE * N_GPUS' in rws
+    assert "TRAIN_PER_DEVICE_BATCH_SIZE * N_GPUS" in rws
     assert 'TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"' in rws
     assert "GRES=(gpu:1 gpu:1 gpu:1 gpu:4 gpu:4)" in submit
     assert "TIMES=(00:30:00 01:00:00 04:00:00 08:00:00 20:00:00)" in submit

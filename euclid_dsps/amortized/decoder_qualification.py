@@ -275,25 +275,30 @@ def qualify(
     numerical = all(
         c["numerical_checks"] == "PASS" for c in cases if c["variant"] == labels[1]
     )
-    return dict(
-        status="FULL_DECODER_QUALIFICATION_COMPLETE",
-        variant_labels=list(labels),
-        cases=cases,
-        candidate_numerical_checks="PASS" if numerical else "NOT_PASSED",
-        next_stage="SIMULATOR_COMPATIBILITY_REVIEW_REQUIRED"
-        if numerical
-        else "INVESTIGATE_FULL_TARGET",
-        coordinates="latent_x, not physical theta; fixed observations and errors",
-        resolution_contract=(
-            "float64 candidate output ULP with FD plateau; not an internal rounding bound"
-            if candidate_float64
-            else "conservative float32 output ULP screen, not an internal rounding-error bound"
+    return (
+        dict(
+            status="FULL_DECODER_QUALIFICATION_COMPLETE",
+            variant_labels=list(labels),
+            cases=cases,
+            candidate_numerical_checks="PASS" if numerical else "NOT_PASSED",
+            next_stage=(
+                "SIMULATOR_COMPATIBILITY_REVIEW_REQUIRED"
+                if numerical
+                else "INVESTIGATE_FULL_TARGET"
+            ),
+            coordinates="latent_x, not physical theta; fixed observations and errors",
+            resolution_contract=(
+                "float64 candidate output ULP with FD plateau; not an internal rounding bound"
+                if candidate_float64
+                else "conservative float32 output ULP screen, not an internal rounding-error bound"
+            ),
+            catalogue_simulator_compatibility="NOT_VERIFIED",
+            old_flux_bank_reuse_authorized=False,
+            local_optimization_started=False,
+            npe_training_started=False,
+            population_training_started=False,
+            scientific_promotion=False,
+            truth_used=False,
         ),
-        catalogue_simulator_compatibility="NOT_VERIFIED",
-        old_flux_bank_reuse_authorized=False,
-        local_optimization_started=False,
-        npe_training_started=False,
-        population_training_started=False,
-        scientific_promotion=False,
-        truth_used=False,
-    ), rows
+        rows,
+    )

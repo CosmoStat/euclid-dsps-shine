@@ -192,8 +192,10 @@ def test_target_wrapper_preserves_sub_float32_displacements():
     from euclid_dsps.amortized.exact_posterior import _float64_logdensity
 
     jax.config.update("jax_enable_x64", True)
+
     def target(x):
         return jnp.sum(x)
+
     full = jax.jit(_float64_logdensity(target, target_dtype="float64"))
     old = jax.jit(_float64_logdensity(target))
     x = jnp.array([1.0], dtype=jnp.float64)
@@ -273,7 +275,9 @@ def test_dense_followup_profiles_are_b_only_and_bounded():
     assert long["warmup"] == 1500
     assert sum(long["chunks"]) == 4096
     observed = NUTS_PROFILES["float64_dense_depth6_observed8_v1"]
-    assert len(_profile_tasks(observed, tuple(f"observed_{i:03d}" for i in range(8)))) == 8
+    assert (
+        len(_profile_tasks(observed, tuple(f"observed_{i:03d}" for i in range(8)))) == 8
+    )
 
 
 def test_simulation_truth_is_display_only(tmp_path, monkeypatch):
@@ -291,9 +295,10 @@ def test_simulation_truth_is_display_only(tmp_path, monkeypatch):
         simulation_truth_theta({"reference": str(tmp_path)}, "simulated_001", spec),
         truth[1],
     )
-    assert simulation_truth_theta(
-        {"reference": str(tmp_path)}, "observed_001", spec
-    ) is None
+    assert (
+        simulation_truth_theta({"reference": str(tmp_path)}, "observed_001", spec)
+        is None
+    )
 
 
 def test_observed_launcher_chains_geometry_before_eight_nuts_tasks():

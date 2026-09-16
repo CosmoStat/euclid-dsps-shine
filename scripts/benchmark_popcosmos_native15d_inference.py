@@ -160,9 +160,7 @@ def main() -> None:
         )
     )
     chunk_size = int(args.decoder_sample_chunk_size)
-    _flux, predictive_compile_seconds = _timed(
-        decode_chunk, posterior.x[:chunk_size]
-    )
+    _flux, predictive_compile_seconds = _timed(decode_chunk, posterior.x[:chunk_size])
 
     records: list[dict[str, float | int | str]] = []
     for repeat in range(args.repeats):
@@ -180,9 +178,7 @@ def main() -> None:
             checksum = flux.sum() if checksum is None else checksum + flux.sum()
         jax.block_until_ready(checksum)
         seconds = time.perf_counter() - start
-        records.append(
-            _record("posterior_predictive", repeat, seconds, args.limit)
-        )
+        records.append(_record("posterior_predictive", repeat, seconds, args.limit))
         print(
             "[cosmos-timing] "
             f"repeat={repeat + 1}/{args.repeats} encoder={records[-3]['seconds']:.6f}s "
@@ -195,12 +191,8 @@ def main() -> None:
     compilation = {
         "encoder_only_seconds": float(encoder_compile_seconds),
         "posterior_draws_seconds": float(sampling_compile_seconds),
-        "posterior_predictive_first_chunk_seconds": float(
-            predictive_compile_seconds
-        ),
-        "posterior_predictive_compile_shape": list(
-            posterior.x[:chunk_size].shape
-        ),
+        "posterior_predictive_first_chunk_seconds": float(predictive_compile_seconds),
+        "posterior_predictive_compile_shape": list(posterior.x[:chunk_size].shape),
     }
     device = jax.devices()[0]
     payload = {

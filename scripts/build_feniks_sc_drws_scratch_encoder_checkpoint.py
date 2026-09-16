@@ -73,9 +73,7 @@ def build(
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": sha256_file(checkpoint),
         "checkpoint_sidecar": str(checkpoint.with_suffix(".eqx.json")),
-        "checkpoint_sidecar_sha256": sha256_file(
-            checkpoint.with_suffix(".eqx.json")
-        ),
+        "checkpoint_sidecar_sha256": sha256_file(checkpoint.with_suffix(".eqx.json")),
         "source_parent_checkpoint": str(parent_checkpoint),
         "source_parent_checkpoint_sha256": sha256_file(parent_checkpoint),
         "truth_used": False,

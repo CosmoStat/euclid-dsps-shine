@@ -202,7 +202,9 @@ def finalize_existing_predictive_audit(
     summary_path = output / "predictive_residuals_by_band.csv"
     object_path = output / "predictive_diagnostics_by_object.parquet"
     if not summary_path.is_file() or not object_path.is_file():
-        raise FileNotFoundError("predictive summary and object diagnostics are required")
+        raise FileNotFoundError(
+            "predictive summary and object diagnostics are required"
+        )
     closure_path = closure / "truth_closure_receipt.json"
     closure_receipt = _read_json(closure_path)
     if closure_receipt.get("status") != "PASS":
@@ -210,7 +212,10 @@ def finalize_existing_predictive_audit(
     expected_final_hash = str(closure_receipt.get("final_receipt_sha256", ""))
     if not expected_final_hash:
         raise ValueError("truth closure receipt lacks final-receipt provenance")
-    if final_receipt_sha256 is not None and str(final_receipt_sha256) != expected_final_hash:
+    if (
+        final_receipt_sha256 is not None
+        and str(final_receipt_sha256) != expected_final_hash
+    ):
         raise ValueError("predictive finalization final-receipt hash mismatch")
 
     summary = pd.read_csv(summary_path)
@@ -401,9 +406,7 @@ def _make_parallel_theta_decoder(runtime, *, pairs_per_batch: int):
     return decode
 
 
-def _validate_finalization_tables(
-    summary: pd.DataFrame, objects: pd.DataFrame
-) -> None:
+def _validate_finalization_tables(summary: pd.DataFrame, objects: pd.DataFrame) -> None:
     summary_columns = {
         "method",
         "band",
@@ -455,12 +458,8 @@ def predictive_method_summary(
                 ),
                 "median_band_rms": float(np.median(band["rms_normalized_residual"])),
                 "max_band_rms": float(np.max(band["rms_normalized_residual"])),
-                "median_fraction_abs_lt_1": float(
-                    np.median(band["fraction_abs_lt_1"])
-                ),
-                "median_fraction_abs_lt_3": float(
-                    np.median(band["fraction_abs_lt_3"])
-                ),
+                "median_fraction_abs_lt_1": float(np.median(band["fraction_abs_lt_1"])),
+                "median_fraction_abs_lt_3": float(np.median(band["fraction_abs_lt_3"])),
                 "median_object_posterior_median_reduced_chi2": float(
                     np.median(per_object["posterior_median_reduced_chi2"])
                 ),
@@ -495,9 +494,7 @@ def _posterior_predictive_checks(
     for method in ("q1", "smc_em2"):
         band = summary[summary["method"] == method]
         per_object = objects[objects["method"] == method]
-        checks[f"{method}_all_finite"] = bool(
-            np.all(band["finite_fraction"] == 1.0)
-        )
+        checks[f"{method}_all_finite"] = bool(np.all(band["finite_fraction"] == 1.0))
         checks[f"{method}_max_band_rms_at_most_2"] = bool(
             np.max(band["rms_normalized_residual"]) <= 2.0
         )
@@ -600,9 +597,7 @@ def _write_method_band_plot(
     return {f"{prefix}_png": png, f"{prefix}_pdf": pdf}
 
 
-def _write_truth_forward_plot(
-    summary: pd.DataFrame, output: Path
-) -> dict[str, Path]:
+def _write_truth_forward_plot(summary: pd.DataFrame, output: Path) -> dict[str, Path]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -639,9 +634,7 @@ def _write_truth_forward_plot(
     return {"truth_forward_png": png, "truth_forward_pdf": pdf}
 
 
-def _write_reduced_chi2_ecdf(
-    objects: pd.DataFrame, output: Path
-) -> dict[str, Path]:
+def _write_reduced_chi2_ecdf(objects: pd.DataFrame, output: Path) -> dict[str, Path]:
     import matplotlib
 
     matplotlib.use("Agg")

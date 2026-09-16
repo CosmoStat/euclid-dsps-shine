@@ -14,8 +14,10 @@ from scipy.linalg import eigvalsh
 
 
 def _galaxy_dir(root: Path, item) -> Path:
-    return root / "galaxies" / (
-        f"{int(item.order):02d}_{item.example_key}_row{int(item.row_index)}"
+    return (
+        root
+        / "galaxies"
+        / (f"{int(item.order):02d}_{item.example_key}_row{int(item.row_index)}")
     )
 
 
@@ -89,7 +91,9 @@ def summarize(
     ):
         raise ValueError("bootstrap and distilled cohorts differ")
     if len(bootstrap_cohort) != 8:
-        raise ValueError(f"teacher audit requires exactly 8 objects, got {len(bootstrap_cohort)}")
+        raise ValueError(
+            f"teacher audit requires exactly 8 objects, got {len(bootstrap_cohort)}"
+        )
 
     posterior_rows: list[dict[str, Any]] = []
     covariance_rows: list[dict[str, Any]] = []
@@ -199,14 +203,14 @@ def summarize(
         geometry = covariance.loc[covariance["method"].eq(method)]
         return {
             "median_abs_mean_z_vs_nuts": _finite_median(rows["mean_abs_z_vs_nuts"]),
-            "q90_abs_mean_z_vs_nuts": _finite_quantile(rows["mean_abs_z_vs_nuts"], 0.90),
+            "q90_abs_mean_z_vs_nuts": _finite_quantile(
+                rows["mean_abs_z_vs_nuts"], 0.90
+            ),
             "median_width_ratio_vs_nuts": _finite_median(
                 rows["central68_width_ratio_vs_nuts"]
             ),
             "fraction_width_ratio_between_0p5_and_2": float(
-                np.mean(
-                    rows["central68_width_ratio_vs_nuts"].between(0.5, 2.0)
-                )
+                np.mean(rows["central68_width_ratio_vs_nuts"].between(0.5, 2.0))
             ),
             "median_covariance_eigen_ratio_vs_nuts": _finite_median(
                 geometry["eigen_ratio_median"]
@@ -270,8 +274,7 @@ def summarize(
         )
     )
     q_ready = bool(
-        checks["distilled_q_is_supported"]
-        and checks["distilled_q_geometry_improved"]
+        checks["distilled_q_is_supported"] and checks["distilled_q_geometry_improved"]
     )
     if not checks["nuts_converged"]:
         next_action = "EXTEND_OR_REPAIR_NUTS_REFERENCE"

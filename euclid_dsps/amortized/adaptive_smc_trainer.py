@@ -415,7 +415,8 @@ def prepare_adaptive_training_runtime(
             "normalization_hash": latent_spec_hash(latent_spec),
             "coordinate_information_source": "fit_bounds_and_fit_initials_only",
             "population_density_initialization": (
-                "identity_realnvp_standard_normal" if train_population_prior
+                "identity_realnvp_standard_normal"
+                if train_population_prior
                 else "external_frozen_checkpoint"
             ),
             "train_population_prior": train_population_prior,

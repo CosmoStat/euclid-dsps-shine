@@ -73,9 +73,9 @@ def audit(root, out):
                     mean=mean[j],
                     std=std[j],
                     weighted_mean=weighted[j],
-                    weighted_shift_in_q_std=(weighted[j] - mean[j]) / std[j]
-                    if std[j] > 0
-                    else None,
+                    weighted_shift_in_q_std=(
+                        (weighted[j] - mean[j]) / std[j] if std[j] > 0 else None
+                    ),
                     top10_mean=x[order[:10], j].mean(),
                 )
             )

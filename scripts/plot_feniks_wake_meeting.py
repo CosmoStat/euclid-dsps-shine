@@ -75,9 +75,7 @@ def main():
                     color="white" if abs(np.log2(ratios[i, j])) > 1.8 else "black",
                 )
         fig.colorbar(im, ax=ax, label="log2 ratio", shrink=0.7)
-    fig.suptitle(
-        "K4096 evaluation: fixed scales, common noise; nine first updates"
-    )
+    fig.suptitle("K4096 evaluation: fixed scales, common noise; nine first updates")
     fig.savefig(out / "wake_scales.png", dpi=180)
     fig.savefig(out / "wake_scales.pdf")
     plt.close(fig)
@@ -108,9 +106,7 @@ def main():
         ax.invert_xaxis()
         ax.grid(alpha=0.2)
         ax.legend(fontsize=9)
-    fig.suptitle(
-        "Local derivatives agree; this does not guarantee full-step descent"
-    )
+    fig.suptitle("Local derivatives agree; this does not guarantee full-step descent")
     fig.savefig(out / "wake_derivatives.png", dpi=180)
     fig.savefig(out / "wake_derivatives.pdf")
     plt.close(fig)

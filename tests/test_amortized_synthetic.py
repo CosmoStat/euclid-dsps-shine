@@ -22,7 +22,12 @@ def test_synthetic_smoke_writes_outputs(tmp_path) -> None:
     config = {
         "amortized": {
             "encoder": {"hidden_sizes": [8]},
-            "prior": {"n_layers": 2, "hidden_size": 8},
+            "prior": {
+                "source": "supervised_checkpoint",
+                "checkpoint": str(tmp_path / "missing.eqx"),
+                "n_layers": 2,
+                "hidden_size": 8,
+            },
             "training": {
                 "epochs": 1,
                 "batch_size": 8,

@@ -497,9 +497,11 @@ def run_pilot(root, manifest, model, stats, spec, cases, target, budget):
                             spec,
                             budget,
                             eval_seed + 100 + start * 10,
-                            recipe["final_evaluation_draws"]
-                            if final
-                            else recipe["intermediate_evaluation_draws"],
+                            (
+                                recipe["final_evaluation_draws"]
+                                if final
+                                else recipe["intermediate_evaluation_draws"]
+                            ),
                             generated,
                         )
                         outcomes.append(

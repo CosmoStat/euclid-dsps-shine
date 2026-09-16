@@ -328,9 +328,9 @@ def continue_night(
             validation_every=1,
             validation_sleep_seed=recipe["seed"],
             best_checkpoint_min_epoch=1,
-            best_checkpoint_metric="validation_loss"
-            if observed
-            else "validation_sleep_nll",
+            best_checkpoint_metric=(
+                "validation_loss" if observed else "validation_sleep_nll"
+            ),
         )
         a.setdefault("truth_free_validation", {})["projection_scale_bank"] = str(bank)
         path = root / "configs" / f"{arm}.yaml"

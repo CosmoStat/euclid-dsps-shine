@@ -753,11 +753,11 @@ def audit(root: Path, *, platform: str = "gpu") -> None:
                 "case": case,
                 "condition_number": float(singular[0] / max(singular[-1], 1e-300)),
                 "effective_rank_1e_2": int(np.sum(relative >= 1e-2)),
-                "weak_direction_sfh_loading": float(
-                    np.mean(np.sum(vt[relative < 1e-2, 5:] ** 2, axis=1))
-                )
-                if np.any(relative < 1e-2)
-                else np.nan,
+                "weak_direction_sfh_loading": (
+                    float(np.mean(np.sum(vt[relative < 1e-2, 5:] ** 2, axis=1)))
+                    if np.any(relative < 1e-2)
+                    else np.nan
+                ),
             }
         )
         write(

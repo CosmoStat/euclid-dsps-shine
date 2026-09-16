@@ -8,11 +8,11 @@ import pytest
 
 from euclid_dsps.cosmos2020 import (
     COSMOS_BANDS,
-    cosmos_band_names_for_subset,
     ESO_FARMER_V21_URL,
     R_LIMIT_UJY,
-    deterministic_nested_order,
     attach_spectroscopic_redshifts,
+    cosmos_band_names_for_subset,
+    deterministic_nested_order,
     farmer_adql,
     farmer_columns,
     prepare_farmer_catalog,
@@ -162,9 +162,7 @@ class _FakeResponse:
         return block
 
 
-def test_direct_farmer_download_resumes_partial_file(
-    tmp_path, monkeypatch
-) -> None:
+def test_direct_farmer_download_resumes_partial_file(tmp_path, monkeypatch) -> None:
     target = tmp_path / "farmer.fits"
     partial = tmp_path / "farmer.fits.part"
     partial.write_bytes(b"abc")
@@ -187,9 +185,7 @@ def test_prepare_farmer_applies_selection_and_extinction() -> None:
     assert selected["object_id"].tolist() == [10]
     assert manifest["selected_rows"] == 1
     assert manifest["selection_modelled_in_rws"] is False
-    assert selected.loc[0, "flux_hsc_g"] == pytest.approx(
-        10.0 ** (-0.4 * 0.073)
-    )
+    assert selected.loc[0, "flux_hsc_g"] == pytest.approx(10.0 ** (-0.4 * 0.073))
     assert np.isnan(selected.loc[0, "fluxerr_hsc_g"])
 
 
@@ -209,9 +205,7 @@ def test_public_summary_selects_exact_non_xray_catalog_indices(tmp_path) -> None
     summary.to_csv(path, sep=" ", index=False)
     rows = _public_r25_non_xray_rows(fixture, path)
     np.testing.assert_array_equal(rows, [0])
-    selected, manifest = prepare_farmer_catalog(
-        fixture, public_catalog_rows=rows
-    )
+    selected, manifest = prepare_farmer_catalog(fixture, public_catalog_rows=rows)
     assert selected["catalog_index"].tolist() == [0]
     assert manifest["public_catalog_ids"] is True
     assert manifest["catalog_valid_flags_applied"] is False
@@ -296,9 +290,7 @@ def test_filter_download_retries_invalid_payload_and_writes_atomically(
     monkeypatch.setattr(
         "scripts.download_cosmos2020_assets.COSMOS_BANDS", COSMOS_BANDS[:1]
     )
-    monkeypatch.setattr(
-        "scripts.download_cosmos2020_assets._request", fake_request
-    )
+    monkeypatch.setattr("scripts.download_cosmos2020_assets._request", fake_request)
     monkeypatch.setattr("scripts.download_cosmos2020_assets.time.sleep", lambda _: None)
     rows = _download_filters(tmp_path)
     assert calls == 2
@@ -341,9 +333,7 @@ def test_spectral_asset_validation_checks_content(tmp_path) -> None:
     asset = tmp_path / "asset.h5"
     asset.write_bytes(b"known spectral asset")
     expected = {
-        str(asset): (
-            "6e06de7b8d1822462b6eb14534f51b6b73a78358f2957075760ab3e6e93ba526"
-        )
+        str(asset): ("6e06de7b8d1822462b6eb14534f51b6b73a78358f2957075760ab3e6e93ba526")
     }
     validate_spectral_assets(expected)
     asset.write_bytes(b"corrupted")

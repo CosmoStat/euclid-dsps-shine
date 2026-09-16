@@ -72,7 +72,9 @@ def _read_feniks_metric(
     source = _resolve(path, "photoz_metrics.csv")
     frame = pd.read_csv(source)
     if len(frame) != 1:
-        raise ValueError(f"Expected one FENIKS metric row in {source}, found {len(frame)}")
+        raise ValueError(
+            f"Expected one FENIKS metric row in {source}, found {len(frame)}"
+        )
     row = frame.iloc[0]
     return {
         "method": method,
@@ -116,7 +118,9 @@ def _read_accuracy_metrics(
     matched = pd.read_csv(matched_file)
     expected = {"rws26", "rws24", "popcosmos"}
     if set(matched["method"]) != expected or matched["method"].duplicated().any():
-        raise ValueError("Matched COSMOS table must contain exactly rws26/rws24/popcosmos")
+        raise ValueError(
+            "Matched COSMOS table must contain exactly rws26/rws24/popcosmos"
+        )
     labels = {
         "rws26": "COSMOS RWS 26 bands",
         "rws24": "COSMOS RWS 24 bands",
@@ -167,9 +171,7 @@ def _read_accuracy_metrics(
 def _read_calibration(path: Path) -> pd.DataFrame:
     source = _resolve(path, "redshift_calibration_comparison.csv")
     frame = pd.read_csv(source)
-    frame = frame.loc[
-        frame["mira_score"].notna() & frame["tarp_atc"].notna()
-    ].copy()
+    frame = frame.loc[frame["mira_score"].notna() & frame["tarp_atc"].notna()].copy()
     observed = set(frame[["context", "model"]].itertuples(index=False, name=None))
     if observed != EXPECTED_CALIBRATION_RUNS:
         raise ValueError(
@@ -206,9 +208,7 @@ def _speed_summary(
         steady = timing["steady_state"]
         encoder = float(steady["encoder_only"]["median_seconds_per_object"])
         draws = float(steady["posterior_draws"]["median_seconds_per_object"])
-        predictive = float(
-            steady["posterior_predictive"]["median_seconds_per_object"]
-        )
+        predictive = float(steady["posterior_predictive"]["median_seconds_per_object"])
         features = float(timing["feature_construction_seconds"]) / int(
             timing["n_objects"]
         )
@@ -389,8 +389,10 @@ def _write_dashboard(
             x[index],
             row.mira_score,
             yerr=np.asarray(
-                [[row.mira_score - row.mira_bootstrap_q025],
-                 [row.mira_bootstrap_q975 - row.mira_score]]
+                [
+                    [row.mira_score - row.mira_bootstrap_q025],
+                    [row.mira_bootstrap_q975 - row.mira_score],
+                ]
             ),
             fmt=style["marker"],
             color=style["color"],
@@ -417,8 +419,10 @@ def _write_dashboard(
             x[index],
             row.tarp_atc,
             yerr=np.asarray(
-                [[row.tarp_atc - row.tarp_bootstrap_atc_q025],
-                 [row.tarp_bootstrap_atc_q975 - row.tarp_atc]]
+                [
+                    [row.tarp_atc - row.tarp_bootstrap_atc_q025],
+                    [row.tarp_bootstrap_atc_q975 - row.tarp_atc],
+                ]
             ),
             fmt=style["marker"],
             color=style["color"],
@@ -443,7 +447,8 @@ def _write_dashboard(
     curve_labels = dict(zip(calibration_order, labels, strict=True))
     for model in calibration_order:
         context = (
-            "cosmos_public_specz" if model in {"rws26", "rws24", "popcosmos"}
+            "cosmos_public_specz"
+            if model in {"rws26", "rws24", "popcosmos"}
             else "feniks_synthetic"
         )
         curve = tarp_coverage.loc[
@@ -481,7 +486,9 @@ def _write_dashboard(
     predictive_ms = 1.0e3 * rws26["posterior_predictive_seconds_per_object"]
     pipeline_ms = 1.0e3 * rws26["catalog_pipeline_seconds_per_object"]
     ratio = rws26["popcosmos_throughput_ratio"]
-    speed_axis.text(0.0, 0.98, "Inference throughput", fontsize=13, weight="bold", va="top")
+    speed_axis.text(
+        0.0, 0.98, "Inference throughput", fontsize=13, weight="bold", va="top"
+    )
     speed_axis.text(
         0.0,
         0.84,
@@ -544,7 +551,9 @@ def main() -> None:
         "feniks_rws": _resolve(args.feniks_rws, "photoz_metrics.csv"),
         "feniks_rws_mixture": _resolve(args.feniks_rws_mixture, "photoz_metrics.csv"),
         "feniks_smcwake": _resolve(args.feniks_smcwake, "photoz_metrics.csv"),
-        "matched_metrics": _resolve(args.matched_metrics, "redshift_method_metrics.csv"),
+        "matched_metrics": _resolve(
+            args.matched_metrics, "redshift_method_metrics.csv"
+        ),
         "calibration_table": _resolve(
             args.calibration_table, "redshift_calibration_comparison.csv"
         ),

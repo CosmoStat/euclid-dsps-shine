@@ -290,7 +290,9 @@ def prepare_observed(reference, root):
         ),
         truth_display_contract="observed cases have no truth overlay",
     )
-    source_manifest = json.loads((Path(m["reference"]) / "RUN_MANIFEST.json").read_text())
+    source_manifest = json.loads(
+        (Path(m["reference"]) / "RUN_MANIFEST.json").read_text()
+    )
     if "cohort" in source_manifest:
         m["source_observed_cohort"] = source_manifest["cohort"]
     write(manifest_path, m)
@@ -495,9 +497,11 @@ def geometry(root):
                     ax.plot(distances, val - val[len(positive_distances)], label=name)
                 ax.set_xscale("symlog", linthresh=0.0001)
                 ax.set_title(
-                    r.latent_spec.names[di]
-                    if di < x.shape[-1]
-                    else f"oblique {di - x.shape[-1]}",
+                    (
+                        r.latent_spec.names[di]
+                        if di < x.shape[-1]
+                        else f"oblique {di - x.shape[-1]}"
+                    ),
                     fontsize=9,
                 )
                 ax.set_ylim(-50, 20)
@@ -753,7 +757,9 @@ def write_observed_cohort_summary(root, m, spec):
         ]
     ].to_numpy()
     scale = np.maximum(np.std(values, axis=0), 1.0e-12)
-    typical = int(np.argmin(np.sum(((values - np.median(values, axis=0)) / scale) ** 2, axis=1)))
+    typical = int(
+        np.argmin(np.sum(((values - np.median(values, axis=0)) / scale) ** 2, axis=1))
+    )
     tags[frame.loc[typical, "case"]].append("typical")
     frame["descriptive_tags"] = [";".join(tags[case]) for case in frame["case"]]
     frame["truth_used"] = False

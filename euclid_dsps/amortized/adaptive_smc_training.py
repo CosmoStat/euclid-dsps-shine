@@ -895,7 +895,9 @@ def batched_prior_data_mstep_terms(
     particle_count, object_count, latent_dim = particles.shape
     batch_size = min(int(object_batch_size), int(object_count))
     if batch_size <= 0:
-        raise ValueError("object_batch_size and posterior object count must be positive")
+        raise ValueError(
+            "object_batch_size and posterior object count must be positive"
+        )
     batch_count = (int(object_count) + batch_size - 1) // batch_size
     padded_count = batch_count * batch_size
     padding = padded_count - int(object_count)
@@ -931,9 +933,7 @@ def batched_prior_data_mstep_terms(
         )
         data_sum += jnp.sum(jnp.where(usable, per_object, 0.0))
         usable_count += jnp.sum(usable.astype(value_dtype))
-        finite_count += jnp.sum(
-            (finite & valid_batch[None, :]).astype(value_dtype)
-        )
+        finite_count += jnp.sum((finite & valid_batch[None, :]).astype(value_dtype))
         evaluated_count += jnp.asarray(particle_count, dtype=value_dtype) * jnp.sum(
             valid_batch.astype(value_dtype)
         )

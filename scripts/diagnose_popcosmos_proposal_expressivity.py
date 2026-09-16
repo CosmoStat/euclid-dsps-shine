@@ -482,10 +482,12 @@ def _logq_on_target(name, model, single_model, mixture, features, particles):
 
         def evaluate_logq(x):
             return posterior_log_prob(model, features, x)
+
     elif name == "single_flow_refit":
 
         def evaluate_logq(x):
             return posterior_log_prob(single_model, features, x)
+
     else:
 
         def evaluate_logq(x):

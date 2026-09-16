@@ -52,7 +52,7 @@ done
 
 job_raw=$(sbatch --parsable \
   --export="ALL,SOURCE_ROOT=$SOURCE_ROOT,ROOT_DIR=$ROOT_DIR" \
-  scripts/feniks_conditional_posterior_avi_resume_h100.slurm)
+  legacy/scripts/recovery/feniks_conditional_posterior_avi_resume_h100.slurm)
 job_id="${job_raw%%;*}"
 submitted=1
 

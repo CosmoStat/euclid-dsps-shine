@@ -51,8 +51,10 @@ def test_teacher_budget_is_extended_fallback_without_second_fallback(
 
 
 def _write_galaxy(root: Path, item, *, distilled: bool, rng) -> None:
-    directory = root / "galaxies" / (
-        f"{int(item.order):02d}_{item.example_key}_row{int(item.row_index)}"
+    directory = (
+        root
+        / "galaxies"
+        / (f"{int(item.order):02d}_{item.example_key}_row{int(item.row_index)}")
     )
     directory.mkdir(parents=True)
     (directory / "prepare_manifest.json").write_text(
@@ -84,9 +86,7 @@ def _write_galaxy(root: Path, item, *, distilled: bool, rng) -> None:
     )
     teacher = pd.DataFrame(nuts, columns=["x_a", "x_b"])
     teacher["smc_weight"] = 1.0 / len(teacher)
-    teacher.to_parquet(
-        directory / "adaptive_smc_weighted_samples.parquet", index=False
-    )
+    teacher.to_parquet(directory / "adaptive_smc_weighted_samples.parquet", index=False)
     (directory / "adaptive_smc_diagnostics.json").write_text(
         json.dumps(
             {
@@ -136,6 +136,4 @@ def test_teacher_audit_separates_teacher_and_q_gates(tmp_path: Path) -> None:
     assert receipt["q_ready"]
     assert receipt["checks"]["nuts_converged"]
     assert receipt["checks"]["teacher_mean_agreement"]
-    assert receipt["q_only_importance"]["distilled"][
-        "median_ess_fraction"
-    ] == 0.20
+    assert receipt["q_only_importance"]["distilled"]["median_ess_fraction"] == 0.20

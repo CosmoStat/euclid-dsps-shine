@@ -32,9 +32,7 @@ def main() -> None:
     info_paths = sorted((probe / "chunks").glob("part_*_info.parquet"))
     if not info_paths:
         raise FileNotFoundError(f"No MCLMC transition diagnostics in {probe}")
-    info = pd.concat(
-        [pd.read_parquet(path) for path in info_paths], ignore_index=True
-    )
+    info = pd.concat([pd.read_parquet(path) for path in info_paths], ignore_index=True)
     acceptance = info["acceptance_rate"].to_numpy(dtype=np.float64)
     energy = info["energy"].to_numpy(dtype=np.float64)
     divergent = info["is_divergent"].astype(bool).to_numpy()

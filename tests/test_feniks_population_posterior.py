@@ -257,9 +257,7 @@ def test_prepare_freezes_truth_free_inference_and_observed_cohort(
     )
     assert [item["objects"] for item in learned["cohort"]["shards"]] == [5, 4]
     assert learned["model"]["checkpoint"] == str(learned_checkpoint.resolve())
-    assert learned["model"]["freeze_receipt"]["sha256"] == prepare.sha256_file(
-        receipt
-    )
+    assert learned["model"]["freeze_receipt"]["sha256"] == prepare.sha256_file(receipt)
 
 
 def test_support_gate_uses_ess_pareto_and_maximum_weight() -> None:
@@ -381,7 +379,7 @@ def test_population_posterior_slurm_contract_is_truth_free_and_parallel() -> Non
     ).read_text(encoding="utf-8")
     recovery = (
         ROOT
-        / "scripts/submit_feniks_sc_drws_population_posterior_finalizer_recovery.sh"
+        / "legacy/scripts/recovery/submit_feniks_sc_drws_population_posterior_finalizer_recovery.sh"
     ).read_text(encoding="utf-8")
 
     assert '--posterior-samples "$POSTERIOR_DRAWS"' in worker

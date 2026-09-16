@@ -125,9 +125,8 @@ def test_architecture_matrix_changes_one_axis_at_a_time() -> None:
     assert current["encoder"]["flow_family"] == "realnvp"
     assert set_coupling["encoder"]["context_encoder"] == ("passband_set_transformer")
     assert set_coupling["encoder"]["flow_family"] == "realnvp"
-    assert (
-        set_autoregressive["encoder"]["context_encoder"]
-        == (set_coupling["encoder"]["context_encoder"])
+    assert set_autoregressive["encoder"]["context_encoder"] == (
+        set_coupling["encoder"]["context_encoder"]
     )
     assert set_autoregressive["encoder"]["flow_family"] == ("autoregressive_rq_spline")
 

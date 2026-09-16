@@ -63,9 +63,7 @@ def validate(*, root: Path, arm: str, initial_checkpoint: Path) -> dict:
         ),
         "validation_is_sleep": bool(
             not validation.empty
-            and pd.to_numeric(
-                validation["sleep_active"], errors="coerce"
-            ).eq(1).all()
+            and pd.to_numeric(validation["sleep_active"], errors="coerce").eq(1).all()
             and np.isfinite(
                 pd.to_numeric(validation["sleep_nll"], errors="coerce")
             ).all()
@@ -95,8 +93,7 @@ def validate(*, root: Path, arm: str, initial_checkpoint: Path) -> dict:
         ),
         "four_gpu_pmap": bool(
             summary.get("data_parallel", {}).get("effective") == "pmap"
-            and int(summary.get("data_parallel", {}).get("local_device_count", -1))
-            == 4
+            and int(summary.get("data_parallel", {}).get("local_device_count", -1)) == 4
         ),
     }
     payload = {
@@ -108,9 +105,7 @@ def validate(*, root: Path, arm: str, initial_checkpoint: Path) -> dict:
         "checkpoint": str(checkpoint),
         "checkpoint_sha256": sha256_file(checkpoint),
         "checkpoint_sidecar": str(checkpoint.with_suffix(".eqx.json")),
-        "checkpoint_sidecar_sha256": sha256_file(
-            checkpoint.with_suffix(".eqx.json")
-        ),
+        "checkpoint_sidecar_sha256": sha256_file(checkpoint.with_suffix(".eqx.json")),
         "initial_checkpoint": str(initial_checkpoint.resolve()),
         "runtime_code_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
@@ -133,7 +128,9 @@ def validate(*, root: Path, arm: str, initial_checkpoint: Path) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--arm", choices=("warm_start", "scratch_encoder"), required=True)
+    parser.add_argument(
+        "--arm", choices=("warm_start", "scratch_encoder"), required=True
+    )
     parser.add_argument("--initial-checkpoint", type=Path, required=True)
     args = parser.parse_args()
     print(json.dumps(validate(**vars(args)), indent=2, sort_keys=True), flush=True)

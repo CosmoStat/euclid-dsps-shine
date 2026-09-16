@@ -16,9 +16,7 @@ from astropy.table import Table
 ESO_TAP_URL = "https://archive.eso.org/tap_cat"
 ESO_TABLE = "COSMOS2020_FARMER_V1"
 ESO_FARMER_V21_ID = "ADP.2022-06-21T19:13:38.112"
-ESO_FARMER_V21_URL = (
-    f"https://dataportal.eso.org/dataPortal/file/{ESO_FARMER_V21_ID}"
-)
+ESO_FARMER_V21_URL = f"https://dataportal.eso.org/dataPortal/file/{ESO_FARMER_V21_ID}"
 ESO_FARMER_V21_SIZE = 2_923_603_200
 POPCOSMOS_COMMIT = "28690aab5ae1aeca01db1ceaf7bc7fe2a58378a7"
 POPCOSMOS_URL = "https://github.com/Cosmo-Pop/pop-cosmos.git"
@@ -112,6 +110,7 @@ def cosmos_band_names_for_subset(subset: str | None) -> tuple[str, ...]:
             f"Unsupported COSMOS band subset {subset!r}; expected one of {supported}"
         ) from exc
 
+
 FARMER_METADATA_COLUMNS = (
     "ID",
     "ALPHA_J2000",
@@ -179,23 +178,15 @@ def prepare_farmer_catalog(
             "dec_deg": pd.to_numeric(frame["DELTA_J2000"], errors="coerce"),
             "ebv_mw": ebv,
             "lp_zbest": pd.to_numeric(frame["lp_zBEST"], errors="coerce"),
-            "flag_combined": pd.to_numeric(
-                frame["FLAG_COMBINED"], errors="coerce"
-            ),
+            "flag_combined": pd.to_numeric(frame["FLAG_COMBINED"], errors="coerce"),
             "lp_type": pd.to_numeric(frame["lp_type"], errors="coerce"),
         }
     )
     for band in COSMOS_BANDS:
-        mw_correction = np.power(
-            10.0, 0.4 * band.extinction_coefficient * ebv
-        )
-        zero_point_correction = np.power(
-            10.0, -0.4 * band.farmer_lephare_offset_mag
-        )
+        mw_correction = np.power(10.0, 0.4 * band.extinction_coefficient * ebv)
+        zero_point_correction = np.power(10.0, -0.4 * band.farmer_lephare_offset_mag)
         flux = pd.to_numeric(frame[band.flux_column], errors="coerce").to_numpy(float)
-        error = pd.to_numeric(
-            frame[band.error_column], errors="coerce"
-        ).to_numpy(float)
+        error = pd.to_numeric(frame[band.error_column], errors="coerce").to_numpy(float)
         catalog_valid = (
             pd.to_numeric(frame[band.valid_column], errors="coerce")
             .fillna(0)
@@ -228,10 +219,7 @@ def prepare_farmer_catalog(
             (output["flag_combined"].to_numpy() == 0)
             & (output["lp_type"].to_numpy() == 0)
             & np.isfinite(output["ebv_mw"].to_numpy())
-            & (
-                output["flux_hsc_r"].to_numpy()
-                > R_LIMIT_UJY
-            )
+            & (output["flux_hsc_r"].to_numpy() > R_LIMIT_UJY)
         )
         selection = (
             "FLAG_COMBINED == 0 and lp_type == 0 and official-readcat HSC r < 25"
@@ -272,17 +260,13 @@ def prepare_farmer_catalog(
             "excluded_rows": requested_count - selected_count,
             "retention_fraction": retention,
             "excluded_flag_combined": int(
-                np.count_nonzero(
-                    requested & (output["flag_combined"].to_numpy() != 0)
-                )
+                np.count_nonzero(requested & (output["flag_combined"].to_numpy() != 0))
             ),
             "excluded_lp_type": int(
                 np.count_nonzero(requested & (output["lp_type"].to_numpy() != 0))
             ),
             "excluded_nonfinite_ebv": int(
-                np.count_nonzero(
-                    requested & ~np.isfinite(output["ebv_mw"].to_numpy())
-                )
+                np.count_nonzero(requested & ~np.isfinite(output["ebv_mw"].to_numpy()))
             ),
             "invalid_photometry_by_band": invalid_photometry_by_band,
             "flag_combined_counts": {
@@ -315,7 +299,9 @@ def prepare_farmer_catalog(
         selected_frame["flux_hsc_r"].to_numpy(float)
     )
     selected_frame = selected_frame.sort_values("object_id").reset_index(drop=True)
-    selected_frame.insert(0, "row_index", np.arange(len(selected_frame), dtype=np.int64))
+    selected_frame.insert(
+        0, "row_index", np.arange(len(selected_frame), dtype=np.int64)
+    )
     manifest = {
         "input_rows": int(len(frame)),
         "selected_rows": int(len(selected_frame)),
@@ -353,8 +339,7 @@ def read_spectroscopic_catalog(path: str | Path) -> pd.DataFrame:
         missing = sorted(set(columns) - set(data.names))
         if missing:
             raise ValueError(
-                "Spectroscopic compilation is missing columns: "
-                + ", ".join(missing)
+                "Spectroscopic compilation is missing columns: " + ", ".join(missing)
             )
         table = Table({name: data[name] for name in columns})
     frame = table.to_pandas()
@@ -379,9 +364,7 @@ def attach_spectroscopic_redshifts(
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Attach reliable public spec-z values by exact COSMOS2020 Farmer ID."""
     spec = spectroscopy.copy()
-    spec["object_id"] = pd.to_numeric(
-        spec["Id_COS20_Farmer"], errors="coerce"
-    )
+    spec["object_id"] = pd.to_numeric(spec["Id_COS20_Farmer"], errors="coerce")
     spec["redshift_spec"] = pd.to_numeric(spec["specz"], errors="coerce")
     spec["specz_confidence_level"] = pd.to_numeric(
         spec["Confidence_level"], errors="coerce"
@@ -416,7 +399,9 @@ def attach_spectroscopic_redshifts(
         "specz_compilation_year",
         "specz_id",
     ]
-    result = selected.merge(spec[columns], on="object_id", how="left", validate="one_to_one")
+    result = selected.merge(
+        spec[columns], on="object_id", how="left", validate="one_to_one"
+    )
     result["redshift_true"] = result["redshift_spec"]
 
     flagged_ids: set[int] = set()

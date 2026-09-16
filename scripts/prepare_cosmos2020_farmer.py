@@ -67,9 +67,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _public_r25_non_xray_rows(
-    frame: pd.DataFrame, summary_path: Path
-) -> np.ndarray:
+def _public_r25_non_xray_rows(frame: pd.DataFrame, summary_path: Path) -> np.ndarray:
     reference = pd.read_csv(
         summary_path,
         sep=r"\s+",
@@ -78,9 +76,9 @@ def _public_r25_non_xray_rows(
     reference = reference.loc[
         (reference["MAGCUT_r"] == "Y") & (reference["XRAY"] == "N")
     ].copy()
-    public_ids = pd.to_numeric(
-        reference["INDEX_COSMOS"], errors="raise"
-    ).to_numpy(np.int64)
+    public_ids = pd.to_numeric(reference["INDEX_COSMOS"], errors="raise").to_numpy(
+        np.int64
+    )
     if len(np.unique(public_ids)) != len(public_ids):
         raise ValueError("T24 r<25 non-X-ray cohort has duplicate Farmer IDs")
 
@@ -104,10 +102,13 @@ def _public_r25_non_xray_rows(
     ).to_numpy(float)
     reference_ra = pd.to_numeric(reference["RA"], errors="coerce").to_numpy(float)
     reference_dec = pd.to_numeric(reference["DEC"], errors="coerce").to_numpy(float)
-    separation_arcsec = np.hypot(
-        (catalog_ra - reference_ra) * np.cos(np.deg2rad(reference_dec)),
-        catalog_dec - reference_dec,
-    ) * 3600.0
+    separation_arcsec = (
+        np.hypot(
+            (catalog_ra - reference_ra) * np.cos(np.deg2rad(reference_dec)),
+            catalog_dec - reference_dec,
+        )
+        * 3600.0
+    )
     if not np.all(np.isfinite(separation_arcsec)):
         raise ValueError("Non-finite coordinate match in the public T24 cohort")
     if float(separation_arcsec.max(initial=0.0)) > 0.01:
@@ -158,10 +159,7 @@ def main() -> None:
             "path": str(args.specz_catalog),
             "sha256": sha256_file(args.specz_catalog),
         }
-    if (
-        args.expected_selected is not None
-        and len(selected) != args.expected_selected
-    ):
+    if args.expected_selected is not None and len(selected) != args.expected_selected:
         raise SystemExit(
             f"Expected {args.expected_selected} selected rows, got {len(selected)}"
         )

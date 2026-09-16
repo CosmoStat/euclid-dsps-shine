@@ -9,10 +9,15 @@ from test_objective_night import night  # noqa: F401
 from scripts.feniks_wake_forensics import inspect_update, interpolate
 
 
-def test_prepare_pins_complete_pilot_without_night_gate(night, tmp_path):  # noqa: F811
+@pytest.fixture
+def night_case(request):
+    return request.getfixturevalue("night")
+
+
+def test_prepare_pins_complete_pilot_without_night_gate(night_case, tmp_path):
     from scripts.feniks_wake_forensics import prepare, read
 
-    pilot, _ = night
+    pilot, _ = night_case
     root = tmp_path / "forensics"
     prepare(pilot, root)
     manifest = read(root / "RUN_MANIFEST.json")
@@ -22,10 +27,10 @@ def test_prepare_pins_complete_pilot_without_night_gate(night, tmp_path):  # noq
     assert manifest["wake_forensic_reference"]["hashes"]
 
 
-def test_prepare_rejects_changed_checkpoint(night, tmp_path):  # noqa: F811
+def test_prepare_rejects_changed_checkpoint(night_case, tmp_path):
     from scripts.feniks_wake_forensics import prepare
 
-    pilot, _ = night
+    pilot, _ = night_case
     (pilot / "cases/observed_000/wake_0/draws_04096/parameters.eqx").write_bytes(
         b"changed"
     )
@@ -34,11 +39,13 @@ def test_prepare_rejects_changed_checkpoint(night, tmp_path):  # noqa: F811
     assert not (tmp_path / "forensics").exists()
 
 
-def test_prepare_descent_keeps_original_budgets_and_pins_reference(night, tmp_path):  # noqa: F811
+def test_prepare_descent_keeps_original_budgets_and_pins_reference(
+    night_case, tmp_path
+):
     from scripts.feniks_objective_night import prepare as prepare_night
     from scripts.feniks_wake_descent import prepare, read
 
-    pilot, _ = night
+    pilot, _ = night_case
     root = tmp_path / "descent"
     prepare(pilot, root)
     manifest = read(root / "RUN_MANIFEST.json")

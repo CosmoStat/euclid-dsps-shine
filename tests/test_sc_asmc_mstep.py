@@ -27,8 +27,7 @@ def test_bank_to_mstep_batch_preserves_dense_weights_and_resolution() -> None:
 
 
 def test_prior_mstep_uses_four_device_global_centered_score() -> None:
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         import equinox as eqx
         import jax
         import jax.numpy as jnp
@@ -116,8 +115,7 @@ def test_prior_mstep_uses_four_device_global_centered_score() -> None:
         leaves = [leaf for leaf in jax.tree_util.tree_leaves(updated.prior) if eqx.is_array(leaf)]
         assert all(jnp.allclose(leaf[0], leaf[1:]) for leaf in leaves)
         print("PASS")
-        """
-    )
+        """)
     env = dict(os.environ)
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=4"
     env["JAX_PLATFORMS"] = "cpu"
@@ -134,8 +132,7 @@ def test_prior_mstep_uses_four_device_global_centered_score() -> None:
 
 
 def test_prior_mstep_global_gradient_is_device_count_invariant() -> None:
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         import equinox as eqx
         import jax
         import jax.numpy as jnp
@@ -216,8 +213,7 @@ def test_prior_mstep_global_gradient_is_device_count_invariant() -> None:
         )
         metric = _unreplicate_tree(metrics)
         print(float(metric.data_grad_norm))
-        """
-    )
+        """)
 
     norms = []
     for device_count in (1, 4):

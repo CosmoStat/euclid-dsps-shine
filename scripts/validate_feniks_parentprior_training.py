@@ -27,7 +27,9 @@ def validate(
 ) -> dict[str, object]:
     summary = json.loads((train / "training_summary.json").read_text())
     preflight_path = train / "selection_gradient_preflight.json"
-    preflight = json.loads(preflight_path.read_text()) if preflight_path.is_file() else {}
+    preflight = (
+        json.loads(preflight_path.read_text()) if preflight_path.is_file() else {}
+    )
     contract = json.loads(manifest.read_text())
     history = pd.read_csv(train / "training_log.csv")
     fit = history.loc[history["split"] == "train"].copy()
@@ -80,8 +82,7 @@ def validate(
             "grads_finite" in fit
             and not fit.empty
             and np.all(
-                pd.to_numeric(fit["grads_finite"], errors="coerce").to_numpy()
-                > 0.5
+                pd.to_numeric(fit["grads_finite"], errors="coerce").to_numpy() > 0.5
             )
         ),
     }
@@ -144,8 +145,7 @@ def validate(
     if not smoke:
         checks["wake_prior_update_applied"] = wake_updates > 0
         checks["selection_alpha_mc_relative_error_adequate"] = bool(
-            len(alpha_relative_errors) > 0
-            and np.all(alpha_relative_errors <= 0.15)
+            len(alpha_relative_errors) > 0 and np.all(alpha_relative_errors <= 0.15)
         )
     entropy_first = (
         _finite_mean(

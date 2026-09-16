@@ -64,39 +64,62 @@ def test_real_runtime_distinguishes_frozen_encoder_from_population(tmp_path):
         handle["ssp_flux"] = np.full((4, 16, 48), 1e-3, dtype=np.float32)
     curve = tmp_path / "vis.dat"
     curve.write_text("4000 0\n5000 1\n6000 0\n")
-    config = normalize_config({
-        "catalog_path": str(tmp_path / "train.parquet"),
-        "ssp_path": str(ssp),
-        "bands": [{"name": "euclid_vis", "column": "flux", "error_column": "error",
-                   "units": "fnu_cgs", "filter": {"kind": "ascii", "path": str(curve)}}],
-        "fit": {"free_parameters": {
-            "z_obs": {"bounds": [0.01, 5.0], "initial": 1.0},
-            "dust_av": {"bounds": [0.001, 6.0], "initial": 0.2},
-        }},
-        "amortized": {
-            "latent": {"schema": "config_free_parameters", "normalization": "standardized_logit",
-                       "center_source": "fit_initial", "geometry_samples": 32},
-            "prior": {"source": "joint_realnvp", "checkpoint": None},
-            "objective": {"sleep": {"enabled": True, "error_model": "observed_catalog"},
-                          "selection_correction": {"enabled": False}},
-        },
-    })
+    config = normalize_config(
+        {
+            "catalog_path": str(tmp_path / "train.parquet"),
+            "ssp_path": str(ssp),
+            "bands": [
+                {
+                    "name": "euclid_vis",
+                    "column": "flux",
+                    "error_column": "error",
+                    "units": "fnu_cgs",
+                    "filter": {"kind": "ascii", "path": str(curve)},
+                }
+            ],
+            "fit": {
+                "free_parameters": {
+                    "z_obs": {"bounds": [0.01, 5.0], "initial": 1.0},
+                    "dust_av": {"bounds": [0.001, 6.0], "initial": 0.2},
+                }
+            },
+            "amortized": {
+                "latent": {
+                    "schema": "config_free_parameters",
+                    "normalization": "standardized_logit",
+                    "center_source": "fit_initial",
+                    "geometry_samples": 32,
+                },
+                "prior": {"source": "joint_realnvp", "checkpoint": None},
+                "objective": {
+                    "sleep": {"enabled": True, "error_model": "observed_catalog"},
+                    "selection_correction": {"enabled": False},
+                },
+            },
+        }
+    )
     frame = pd.DataFrame({"flux": [1e-28, 2e-28, 3e-28], "error": [1e-29] * 3})
     frame.to_parquet(config["catalog_path"])
     frame.to_parquet(tmp_path / "test.parquet")
     np.save(tmp_path / "train.npy", np.array([0, 2]))
     np.save(tmp_path / "validation.npy", np.array([1]))
     stats = compute_feature_stats(
-        np.array([[1e-28], [3e-28]]), np.full((2, 1), 1e-29), np.ones((2, 1), bool),
+        np.array([[1e-28], [3e-28]]),
+        np.full((2, 1), 1e-29),
+        np.ones((2, 1), bool),
         band_names=("euclid_vis",),
     )
     write_feature_stats(tmp_path / "source_stats.json", stats)
-    args = dict(train_indices_file=tmp_path / "train.npy",
-                validation_indices_file=tmp_path / "validation.npy",
-                validation_catalog_path=tmp_path / "test.parquet",
-                fixed_feature_stats_path=tmp_path / "source_stats.json")
+    args = dict(
+        train_indices_file=tmp_path / "train.npy",
+        validation_indices_file=tmp_path / "validation.npy",
+        validation_catalog_path=tmp_path / "test.parquet",
+        fixed_feature_stats_path=tmp_path / "source_stats.json",
+    )
     frozen = tmp_path / "frozen"
-    rt = prepare_adaptive_training_runtime(config, frozen, train_population_prior=False, **args)
+    rt = prepare_adaptive_training_runtime(
+        config, frozen, train_population_prior=False, **args
+    )
     assert frozen.is_dir()
     assert not rt.sleep_objective_config["prior_train_jointly"]
     assert not rt.selection_objective_config["prior_train_jointly"]
@@ -106,17 +129,24 @@ def test_real_runtime_distinguishes_frozen_encoder_from_population(tmp_path):
     assert not rt.train_arrays.truth and not rt.validation_arrays.truth
     assert "euclid_vis" in rt.context.filters
     assert np.asarray(rt.context.ssp.ssp_flux).shape == (4, 16, 48)
-    assert not json.loads((frozen / "effective_latent_spec.json").read_text())["train_population_prior"]
+    assert not json.loads((frozen / "effective_latent_spec.json").read_text())[
+        "train_population_prior"
+    ]
     production = tmp_path / "production"
     production.mkdir()
     with pytest.raises(ValueError, match="requires selection correction"):
         prepare_adaptive_training_runtime(config, production, **args)
     config["amortized"]["objective"]["selection_correction"].update(
-        enabled=True, band="euclid_vis", max_mag_ab=29.0,
+        enabled=True,
+        band="euclid_vis",
+        max_mag_ab=29.0,
     )
-    config["synthetic_diffsky"] = {"flux_error_model": {
-        "type": "m5_depth", "m5": {"euclid_vis": 25.0},
-    }}
+    config["synthetic_diffsky"] = {
+        "flux_error_model": {
+            "type": "m5_depth",
+            "m5": {"euclid_vis": 25.0},
+        }
+    }
     selected = tmp_path / "selected_frozen"
     selected.mkdir()
     selected_rt = prepare_adaptive_training_runtime(
@@ -124,7 +154,10 @@ def test_real_runtime_distinguishes_frozen_encoder_from_population(tmp_path):
     )
     assert selected_rt.selection_objective_config["selection_correction"]["enabled"]
     assert not selected_rt.selection_objective_config["prior_train_jointly"]
-    assert selected_rt.selection_objective_config["selection_correction"]["max_mag_ab"] == 29.0
+    assert (
+        selected_rt.selection_objective_config["selection_correction"]["max_mag_ab"]
+        == 29.0
+    )
     config["amortized"]["latent"]["arithmetic_precision"] = "float64_v1"
     precise = tmp_path / "precise"
     precise.mkdir()
@@ -170,9 +203,7 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert fallback.max_stages == 12
     assert fallback.steps_after_resample == 4
     assert fallback.final_steps_at_beta1 == 2
-    assert proposal.normalized_fractions().tolist() == pytest.approx(
-        [0.70, 0.20, 0.10]
-    )
+    assert proposal.normalized_fractions().tolist() == pytest.approx([0.70, 0.20, 0.10])
     assert proposal.posterior_temperature == 1.5
     assert training.bootstrap_sleep_epochs == 12
     assert training.observed_sweeps == 3
@@ -183,9 +214,7 @@ def test_final_config_is_single_architecture_broad_prior_no_truth_contract() -> 
     assert training.smoke_min_bootstrap_updates == 128
     assert training.min_validation_q_is_ess_fraction == pytest.approx(0.05)
     assert training.max_validation_q_is_max_weight == pytest.approx(0.80)
-    assert cfg["training"]["best_checkpoint_metric"] == (
-        "validation_smc_cross_entropy"
-    )
+    assert cfg["training"]["best_checkpoint_metric"] == ("validation_smc_cross_entropy")
 
 
 def test_adaptive_smc_mode_is_checkpoint_and_inference_metadata_compatible() -> None:
@@ -200,9 +229,7 @@ def test_adaptive_smc_mode_is_checkpoint_and_inference_metadata_compatible() -> 
         "adaptive_bridge_smc_inclusive_distillation"
     )
     assert summary["objective"]["adaptive_smc"]["n_particles"] == 64
-    assert summary["objective"]["adaptive_smc"]["hard_fallback"][
-        "n_particles"
-    ] == 128
+    assert summary["objective"]["adaptive_smc"]["hard_fallback"]["n_particles"] == 128
 
 
 def test_smoke_runs_a_minimum_number_of_fresh_sleep_updates() -> None:
@@ -230,8 +257,7 @@ def test_mixed_dtype_adaptive_checkpoint_loads_with_matched_template(
     tmp_path: Path,
 ) -> None:
     checkpoint = tmp_path / "model.eqx"
-    code = textwrap.dedent(
-        f"""
+    code = textwrap.dedent(f"""
         import equinox as eqx
         import jax
         import jax.numpy as jnp
@@ -264,8 +290,7 @@ def test_mixed_dtype_adaptive_checkpoint_loads_with_matched_template(
         assert restored.encoder.base.mean_head.bias.dtype == jnp.float64
         assert restored.sed_scale.log_alpha_sed.dtype == jnp.float32
         print('PASS')
-        """
-    )
+        """)
     env = dict(os.environ)
     env["JAX_ENABLE_X64"] = "true"
     env["JAX_PLATFORMS"] = "cpu"
@@ -329,10 +354,7 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
         }
     ]
     log_rows = [
-        *(
-            {"phase": "bootstrap_sleep", "grad_clipped": True}
-            for _ in range(10)
-        ),
+        *({"phase": "bootstrap_sleep", "grad_clipped": True} for _ in range(10)),
         {
             "phase": "q_smc_macro",
             "q_grad_clipped": False,
@@ -354,9 +376,7 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
         alpha_preflight={"finite": True, "nonzero": True},
     )
 
-    passing = _final_training_receipt(
-        validation_rows=[bootstrap, final], **common
-    )
+    passing = _final_training_receipt(validation_rows=[bootstrap, final], **common)
     collapsed = _final_training_receipt(
         validation_rows=[
             bootstrap,
@@ -364,7 +384,7 @@ def test_final_receipt_requires_q_only_importance_support() -> None:
                 **final,
                 "validation_q_is_ess_fraction": 1.0 / 64.0,
                 "validation_q_is_max_weight": 0.99,
-            }
+            },
         ],
         **common,
     )
@@ -452,11 +472,7 @@ def test_selection_corrected_toy_recovers_parent_mean() -> None:
         for _ in range(400):
             gradient = jax.grad(
                 lambda value: 0.5 * jnp.mean(jnp.square(selected - value))
-                + (
-                    log_ndtr(value / survey_scale)
-                    if corrected
-                    else jnp.asarray(0.0)
-                )
+                + (log_ndtr(value / survey_scale) if corrected else jnp.asarray(0.0))
             )(mean)
             mean = mean - 0.05 * gradient
         return float(mean)
@@ -469,8 +485,7 @@ def test_selection_corrected_toy_recovers_parent_mean() -> None:
 
 
 def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> None:
-    code = textwrap.dedent(
-        f"""
+    code = textwrap.dedent(f"""
         import pathlib
         import equinox as eqx
         import jax
@@ -606,8 +621,7 @@ def test_two_cpu_device_smc_updates_and_checkpoint_roundtrip(tmp_path: Path) -> 
         leaves_b = [x for x in jax.tree_util.tree_leaves(restored) if eqx.is_array(x)]
         assert all(jnp.array_equal(a, b) for a, b in zip(leaves_a, leaves_b, strict=True))
         print('PASS')
-        """
-    )
+        """)
     env = dict(os.environ)
     env["XLA_FLAGS"] = "--xla_force_host_platform_device_count=2"
     env["JAX_PLATFORMS"] = "cpu"

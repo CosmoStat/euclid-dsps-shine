@@ -114,9 +114,7 @@ def test_batched_nuts_writes_independent_standard_chain_artifacts(
         assert (directory / "tuned_parameters.npz").is_file()
         assert (directory / "sampling_state.pkl").is_file()
         assert (directory / "chain_manifest.json").is_file()
-        frame = pd.read_parquet(
-            directory / "chunks" / "part_000000.parquet"
-        )
+        frame = pd.read_parquet(directory / "chunks" / "part_000000.parquet")
         assert len(frame) == 6
         frames.append(frame)
     assert not np.array_equal(
@@ -277,9 +275,7 @@ def test_adjusted_mclmc_adapter_supports_both_blackjax_signatures() -> None:
     )
     assert api == "explicit_logdensity"
     assert extra == {"logdensity_fn": _normal_logdensity}
-    explicit_result = kernel(
-        "key", "state", _normal_logdensity, 0.1, "mass", (2.0,)
-    )
+    explicit_result = kernel("key", "state", _normal_logdensity, 0.1, "mass", (2.0,))
     assert explicit_result["logdensity_fn"] is _normal_logdensity
     assert explicit_result["integration_steps_params"] == (2.0,)
 

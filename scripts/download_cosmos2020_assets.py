@@ -89,9 +89,7 @@ def _download_direct(
     for attempt in range(1, attempts + 1):
         offset = partial.stat().st_size if partial.exists() else 0
         if offset > expected_size:
-            raise ValueError(
-                f"Partial archive file exceeds expected size: {partial}"
-            )
+            raise ValueError(f"Partial archive file exceeds expected size: {partial}")
         request = urllib.request.Request(url)
         if offset:
             request.add_header("Range", f"bytes={offset}-")
@@ -364,9 +362,7 @@ def _download_spectroscopy(output: Path) -> dict[str, object]:
     )
     digest = sha256_file(target)
     if digest != SPECZ_COMPILATION_SHA256:
-        raise ValueError(
-            f"Spectroscopic compilation SHA256 mismatch: {digest}"
-        )
+        raise ValueError(f"Spectroscopic compilation SHA256 mismatch: {digest}")
     return {
         "path": str(target),
         "url": SPECZ_COMPILATION_URL,

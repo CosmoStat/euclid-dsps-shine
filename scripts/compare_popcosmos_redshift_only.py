@@ -131,7 +131,9 @@ def build_paired_table(
             f"Pop-COSMOS summaries are missing for {int(missing.sum())} RWS objects"
         )
     if not ((paired["MAGCUT_r"] == "Y") & (paired["XRAY"] == "N")).all():
-        raise RuntimeError("Evaluation contains objects outside the A24 r<25 non-X-ray cut")
+        raise RuntimeError(
+            "Evaluation contains objects outside the A24 r<25 non-X-ray cut"
+        )
 
     paired["row_index"] = paired.pop("row_index_rws26")
     paired = paired.drop(columns=["row_index_rws24"])
@@ -225,9 +227,10 @@ def paired_bootstrap(
         for metric in METRIC_NAMES:
             delta = method_draws[left][metric] - method_draws[right][metric]
             low, high = np.quantile(delta, [0.025, 0.975])
-            point = redshift_metrics(frame, left)[metric] - redshift_metrics(
-                frame, right
-            )[metric]
+            point = (
+                redshift_metrics(frame, left)[metric]
+                - redshift_metrics(frame, right)[metric]
+            )
             values = {
                 "estimate": float(point),
                 "ci95_low": float(low),
@@ -403,9 +406,7 @@ def main() -> None:
             f"Expected {args.expected_specz} public-specz objects, got {len(spec)}"
         )
 
-    metrics = {
-        method: redshift_metrics(spec, method) for method in METHOD_COLUMNS
-    }
+    metrics = {method: redshift_metrics(spec, method) for method in METHOD_COLUMNS}
     differences, intervals, method_intervals = paired_bootstrap(
         spec,
         n_resamples=args.bootstrap,

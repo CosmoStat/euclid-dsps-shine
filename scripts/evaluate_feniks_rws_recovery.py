@@ -138,15 +138,15 @@ def _training_metrics(
             and np.isfinite(reference)
             and final_entropy >= reference - float(maximum_entropy_drop)
         )
-        wake = frame.loc[frame.get("update_kind") == "wake"] if not frame.empty else frame
+        wake = (
+            frame.loc[frame.get("update_kind") == "wake"] if not frame.empty else frame
+        )
         final_unresolved = float("nan")
         if not wake.empty:
             last_wake_epoch = wake["epoch"].max()
             final_unresolved = float(
                 pd.to_numeric(
-                    wake.loc[
-                        wake["epoch"] == last_wake_epoch, "unresolved_fraction"
-                    ],
+                    wake.loc[wake["epoch"] == last_wake_epoch, "unresolved_fraction"],
                     errors="coerce",
                 ).mean()
             )
@@ -160,13 +160,10 @@ def _training_metrics(
             and frame["q_grads_finite"].astype(bool).all()
         )
         receipt_complete = bool(
-            receipt.get("status")
-            == "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION"
+            receipt.get("status") == "TRAINING_COMPLETE_PENDING_SUPPORT_SELECTION"
         )
         truth_free_training = bool(
-            receipt.get(
-                "truth_used_for_training_validation_or_checkpoint_selection"
-            )
+            receipt.get("truth_used_for_training_validation_or_checkpoint_selection")
             is False
         )
         wake_path_exercised = bool(
@@ -175,12 +172,12 @@ def _training_metrics(
         hard_mis_path_exercised = bool(
             not wake.empty
             and "expansion_fraction" in wake
-            and (
-                pd.to_numeric(wake["expansion_fraction"], errors="coerce") > 0.0
-            ).any()
+            and (pd.to_numeric(wake["expansion_fraction"], errors="coerce") > 0.0).any()
         )
         prior_path = train / "sc_drws_prior_log.csv"
-        prior_frame = pd.read_csv(prior_path) if prior_path.is_file() else pd.DataFrame()
+        prior_frame = (
+            pd.read_csv(prior_path) if prior_path.is_file() else pd.DataFrame()
+        )
         prior_gate_evaluated = bool(
             not prior_frame.empty
             and "gate_accepted" in prior_frame
@@ -229,26 +226,30 @@ def _training_metrics(
         )
         return {
             "status": "PASS" if training_pass else "FAIL",
-            "technical_smoke_status": (
-                "PASS" if technical_smoke_pass else "FAIL"
-            ),
+            "technical_smoke_status": ("PASS" if technical_smoke_pass else "FAIL"),
             "train_rows": int(receipt["selected_training_rows"]),
             "validation_rows": None,
-            "epochs": int(receipt["phase_schedule"]["total_epochs"])
-            if "total_epochs" in receipt["phase_schedule"]
-            else int(receipt["phase_schedule"]["warmup_epochs"])
-            + int(receipt["phase_schedule"]["joint_epochs"]),
+            "epochs": (
+                int(receipt["phase_schedule"]["total_epochs"])
+                if "total_epochs" in receipt["phase_schedule"]
+                else int(receipt["phase_schedule"]["warmup_epochs"])
+                + int(receipt["phase_schedule"]["joint_epochs"])
+            ),
             "updates_applied": int(receipt.get("wake_updates", 0)),
             "updates_skipped": 0,
-            "sleep_updates": int((frame["update_kind"] == "sleep").sum())
-            if not frame.empty
-            else 0,
+            "sleep_updates": (
+                int((frame["update_kind"] == "sleep").sum()) if not frame.empty else 0
+            ),
             "wake_updates": int(receipt.get("wake_updates", 0)),
-            "wake_ess_fraction_mean": float(
-                pd.to_numeric(frame.get("expanded_ess_fraction"), errors="coerce").mean()
-            )
-            if not frame.empty
-            else float("nan"),
+            "wake_ess_fraction_mean": (
+                float(
+                    pd.to_numeric(
+                        frame.get("expanded_ess_fraction"), errors="coerce"
+                    ).mean()
+                )
+                if not frame.empty
+                else float("nan")
+            ),
             "best_checkpoint_epoch": int(
                 receipt["phase_schedule"]["warmup_epochs"]
                 + receipt["phase_schedule"]["joint_epochs"]
@@ -266,11 +267,11 @@ def _training_metrics(
             "hard_mis_path_exercised": hard_mis_path_exercised,
             "prior_gate_evaluated": prior_gate_evaluated,
             "selection_finite": selection_finite,
-            "q_gradient_clipped_fraction": float(
-                frame["q_grad_clipped"].astype(bool).mean()
-            )
-            if not frame.empty and "q_grad_clipped" in frame
-            else float("nan"),
+            "q_gradient_clipped_fraction": (
+                float(frame["q_grad_clipped"].astype(bool).mean())
+                if not frame.empty and "q_grad_clipped" in frame
+                else float("nan")
+            ),
             "all_applied_prior_component_gradients_finite": prior_gradients_finite,
             "raw_model_checkpoint": receipt["raw_model_checkpoint"]["path"],
             "ema_model_checkpoint": receipt["ema_model_checkpoint"]["path"],
@@ -369,9 +370,7 @@ def _variant_metrics(
         "label": label,
         "status": "PASS" if passed else "FAIL",
         "technical_status": "PASS" if technical_pass else "FAIL",
-        "selection_corrected_exact_gaussian_iw_score": float(
-            mean_log_evidence_is
-        )
+        "selection_corrected_exact_gaussian_iw_score": float(mean_log_evidence_is)
         - float(log_alpha),
         "exact_gaussian_ordinary_iw": {
             "status": support_gate.get("status"),
@@ -426,9 +425,7 @@ def predictive_metrics(root: Path, *, out: Path) -> dict[str, object]:
         merged["normalized_residual"] = (
             merged["obs_flux_fnu_cgs"] - merged["model_flux_fnu_cgs"]
         ) / merged["obs_err_fnu_cgs"]
-        rows.append(
-            merged[["row_index", "sample_id", "band", "normalized_residual"]]
-        )
+        rows.append(merged[["row_index", "sample_id", "band", "normalized_residual"]])
     residuals = pd.concat(rows, ignore_index=True)
     residuals = residuals.loc[np.isfinite(residuals["normalized_residual"])]
     if residuals.empty:
@@ -496,9 +493,7 @@ def summarize_candidate(
     )
     training = _training_metrics(
         train,
-        maximum_entropy_drop=float(
-            checkpoint_config.get("maximum_entropy_drop", 3.0)
-        ),
+        maximum_entropy_drop=float(checkpoint_config.get("maximum_entropy_drop", 3.0)),
         maximum_unresolved_fraction=float(
             ((loaded_config.get("amortized", {}) or {}).get("sc_drws", {}) or {})
             .get("hard_mis", {})
@@ -562,10 +557,14 @@ def summarize_candidate(
             "scientific_thresholds_are_diagnostic_only": bool(smoke),
         },
         "exact_gaussian_ordinary_iw": (
-            selected["exact_gaussian_ordinary_iw"] if selected else variants[0]["exact_gaussian_ordinary_iw"]
+            selected["exact_gaussian_ordinary_iw"]
+            if selected
+            else variants[0]["exact_gaussian_ordinary_iw"]
         ),
         "exact_gaussian_posterior_predictive": (
-            selected["exact_gaussian_posterior_predictive"] if selected else variants[0]["exact_gaussian_posterior_predictive"]
+            selected["exact_gaussian_posterior_predictive"]
+            if selected
+            else variants[0]["exact_gaussian_posterior_predictive"]
         ),
         "truth_used_for_training_or_checkpoint_selection": False,
         "promotion_contract": (
@@ -599,9 +598,7 @@ def select_pilot(root: Path) -> dict[str, object]:
                 "median_seed_ess_fraction": float(
                     np.median(
                         [
-                            run["exact_gaussian_ordinary_iw"][
-                                "median_raw_ess_fraction"
-                            ]
+                            run["exact_gaussian_ordinary_iw"]["median_raw_ess_fraction"]
                             for run in runs
                         ]
                     )
@@ -687,9 +684,7 @@ def finalize_confirmation(root: Path) -> dict[str, object]:
 def finalize_full(root: Path) -> dict[str, object]:
     pass_receipt = root / "RWS_RECOVERY_PASS.json"
     override_receipt = root / "FULL_LAUNCH_AUTHORIZATION.json"
-    promotion = _read_json(
-        pass_receipt if pass_receipt.is_file() else override_receipt
-    )
+    promotion = _read_json(pass_receipt if pass_receipt.is_file() else override_receipt)
     if promotion.get("status") not in {
         "PASS",
         "EXPLICIT_UNCONFIRMED_FULL_OVERRIDE",
@@ -747,9 +742,11 @@ def finalize_full(root: Path) -> dict[str, object]:
     diagnostic_candidates.sort(
         key=lambda item: (
             not np.isfinite(item["selection_corrected_exact_gaussian_iw_score"]),
-            -item["selection_corrected_exact_gaussian_iw_score"]
-            if np.isfinite(item["selection_corrected_exact_gaussian_iw_score"])
-            else 0.0,
+            (
+                -item["selection_corrected_exact_gaussian_iw_score"]
+                if np.isfinite(item["selection_corrected_exact_gaussian_iw_score"])
+                else 0.0
+            ),
             -item["median_raw_ess_fraction"],
             item["median_band_rms"],
         )

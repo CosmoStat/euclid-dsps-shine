@@ -178,7 +178,9 @@ def prepare(
             is not False
             or frozen_model.get("prior_bitwise_unchanged") is not True
         ):
-            raise ValueError("posterior model receipt is not a certified frozen-q receipt")
+            raise ValueError(
+                "posterior model receipt is not a certified frozen-q receipt"
+            )
         parent_checkpoint = _require_file(frozen_model["checkpoint"])
         parent_sidecar = _require_file(frozen_model["checkpoint_sidecar"])
         candidate_config_path = _require_file(frozen_model["config"])
@@ -193,9 +195,7 @@ def prepare(
                 raise ValueError(f"{label} SHA256 mismatch")
         parent = {
             "checkpoint_sha256": frozen_model["checkpoint_sha256"],
-            "checkpoint_sidecar_sha256": frozen_model[
-                "checkpoint_sidecar_sha256"
-            ],
+            "checkpoint_sidecar_sha256": frozen_model["checkpoint_sidecar_sha256"],
             "config_sha256": frozen_model["config_sha256"],
         }
         model_receipt_record = {

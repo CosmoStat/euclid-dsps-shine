@@ -254,9 +254,7 @@ def _write_plot(
     figure, axes = plt.subplots(
         1, 3, figsize=(18, 6.2), gridspec_kw={"width_ratios": [1.05, 1.25, 1.05]}
     )
-    figure.subplots_adjust(
-        left=0.055, right=0.985, top=0.83, bottom=0.25, wspace=0.28
-    )
+    figure.subplots_adjust(left=0.055, right=0.985, top=0.83, bottom=0.25, wspace=0.28)
 
     theoretical_sigma = np.sqrt(
         (1.0 / 18.0) / calibrated["num_objects"].to_numpy(float)
@@ -327,8 +325,7 @@ def _write_plot(
         for model in models:
             context = calibrated.loc[calibrated["model"].eq(model), "context"].iloc[0]
             curve = tarp_coverage.loc[
-                tarp_coverage["model"].eq(model)
-                & tarp_coverage["context"].eq(context)
+                tarp_coverage["model"].eq(model) & tarp_coverage["context"].eq(context)
             ].sort_values("alpha")
             if curve.empty:
                 raise ValueError(f"Missing TARP coverage curve for {context}/{model}")
@@ -386,9 +383,7 @@ def _write_plot(
             fontsize=8,
             color=style["color"],
         )
-    axes[2].axhline(
-        0.0, color="#202020", linestyle=(0, (5, 3)), linewidth=1.2
-    )
+    axes[2].axhline(0.0, color="#202020", linestyle=(0, (5, 3)), linewidth=1.2)
     axes[2].set_title("TARP area to curve")
     axes[2].set_ylabel("ATC (ideal = 0)")
 

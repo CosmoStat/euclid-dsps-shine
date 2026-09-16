@@ -141,13 +141,14 @@ def finalize(
     ):
         if left["cohort"]["sha256"] != right["cohort"]["sha256"]:
             raise ValueError(f"{label} baseline and NPE cohorts differ")
-        if left["inference"]["posterior_draws_per_object"] != right["inference"][
-            "posterior_draws_per_object"
-        ]:
+        if (
+            left["inference"]["posterior_draws_per_object"]
+            != right["inference"]["posterior_draws_per_object"]
+        ):
             raise ValueError(f"{label} baseline and NPE draw counts differ")
-    if npe_full_manifest["model"].get("freeze_receipt", {}).get("sha256") != sha256_file(
-        winner_path
-    ):
+    if npe_full_manifest["model"].get("freeze_receipt", {}).get(
+        "sha256"
+    ) != sha256_file(winner_path):
         raise ValueError("stage-4 inference did not use the frozen NPE winner")
 
     baseline_cal = _calibration(baseline_full)
@@ -155,17 +156,14 @@ def finalize(
     baseline_support = _support(baseline_support_receipt)
     npe_support = _support(npe_support_receipt)
     calibration_pass = (
-        npe_cal["pit_ks_uniform"] <= 0.05
-        and npe_cal["coverage_ece"] <= 0.05
+        npe_cal["pit_ks_uniform"] <= 0.05 and npe_cal["coverage_ece"] <= 0.05
     )
     support_pass = npe_support["status"] == "PASS"
     improvement = {
         "pit_ks_uniform": _delta(
             npe_cal["pit_ks_uniform"], baseline_cal["pit_ks_uniform"]
         ),
-        "coverage_ece": _delta(
-            npe_cal["coverage_ece"], baseline_cal["coverage_ece"]
-        ),
+        "coverage_ece": _delta(npe_cal["coverage_ece"], baseline_cal["coverage_ece"]),
         "coverage_68_absolute_error": _delta(
             abs(npe_cal["coverage_68"] - 0.68),
             abs(baseline_cal["coverage_68"] - 0.68),

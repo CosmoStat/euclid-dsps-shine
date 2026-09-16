@@ -290,27 +290,19 @@ def _add_training_log_checks(log: pd.DataFrame, checks: list[dict[str, Any]]) ->
             )
     wake_rows = log
     if "split" in wake_rows:
-        wake_rows = wake_rows.loc[
-            wake_rows["split"].astype(str).str.lower() == "train"
-        ]
+        wake_rows = wake_rows.loc[wake_rows["split"].astype(str).str.lower() == "train"]
     if "wake_active" in wake_rows:
-        active = pd.to_numeric(
-            wake_rows["wake_active"], errors="coerce"
-        ).fillna(0.0)
+        active = pd.to_numeric(wake_rows["wake_active"], errors="coerce").fillna(0.0)
         wake_rows = wake_rows.loc[active > 0.5]
     elif "update_phase" in wake_rows:
         wake_rows = wake_rows.loc[
-            wake_rows["update_phase"].astype(str).isin(
-                {"encoder_wake", "joint_wake"}
-            )
+            wake_rows["update_phase"].astype(str).isin({"encoder_wake", "joint_wake"})
         ]
     else:
         wake_rows = wake_rows.iloc[0:0]
     if not wake_rows.empty:
         if "wake_ess_fraction_mean" in wake_rows:
-            ess = pd.to_numeric(
-                wake_rows["wake_ess_fraction_mean"], errors="coerce"
-            )
+            ess = pd.to_numeric(wake_rows["wake_ess_fraction_mean"], errors="coerce")
             finite_ess = ess[np.isfinite(ess)]
         else:
             finite_ess = pd.Series(dtype=float)
@@ -360,9 +352,7 @@ def _add_training_log_checks(log: pd.DataFrame, checks: list[dict[str, Any]]) ->
             )
 
 
-def _add_real_photometry_checks(
-    out: Path, checks: list[dict[str, Any]]
-) -> None:
+def _add_real_photometry_checks(out: Path, checks: list[dict[str, Any]]) -> None:
     summary_path = out / "posterior_diagnostics_summary.json"
     if summary_path.exists():
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -383,9 +373,7 @@ def _add_real_photometry_checks(
         tails = pd.read_csv(tails_path)
         all_bands = tails.loc[tails.get("band") == "__all__"]
         if not all_bands.empty:
-            frac = _first_number(
-                all_bands.iloc[0].to_dict(), "frac_abs_gt_5"
-            )
+            frac = _first_number(all_bands.iloc[0].to_dict(), "frac_abs_gt_5")
             if frac is not None:
                 checks.append(
                     _threshold(
@@ -401,9 +389,7 @@ def _add_real_photometry_checks(
         bounds = pd.read_csv(bounds_path)
         if "frac_within_5pct_boundary" not in bounds:
             return
-        values = pd.to_numeric(
-            bounds["frac_within_5pct_boundary"], errors="coerce"
-        )
+        values = pd.to_numeric(bounds["frac_within_5pct_boundary"], errors="coerce")
         finite = values[np.isfinite(values)]
         if not finite.empty:
             checks.append(

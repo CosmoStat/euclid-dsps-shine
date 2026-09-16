@@ -59,7 +59,7 @@ def test_full_qualification_analytic_gradient_control(monkeypatch, broken):
         lambda x, o: target(x, o, broken),
         jnp.array([[0.5]]),
         [obs],
-        Budget(60, 100),
+        Budget(300, 100),
         names=["x"],
         bands=["flux"],
         progress=lambda *args: None,

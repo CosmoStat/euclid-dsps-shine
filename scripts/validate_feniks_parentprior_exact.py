@@ -70,11 +70,9 @@ def _calibration(root: Path, *, include_adaptive_smc: bool) -> dict[str, object]
             continue
         checks[f"{model}_tarp_close_to_nuts"] = bool(
             tarp_rmse
-            <= nuts_tarp_rmse
-            + thresholds["tarp_coverage_rmse_margin_over_nuts"]
+            <= nuts_tarp_rmse + thresholds["tarp_coverage_rmse_margin_over_nuts"]
             and tarp_max
-            <= nuts_tarp_max
-            + thresholds["tarp_max_abs_error_margin_over_nuts"]
+            <= nuts_tarp_max + thresholds["tarp_max_abs_error_margin_over_nuts"]
         )
         checks[f"{model}_mira_close_to_nuts"] = bool(
             abs(mira_delta) <= nuts_mira_delta + mira_margin
@@ -162,7 +160,9 @@ def validate(*, root: Path) -> dict[str, object]:
             adaptive_agreement["std_ratio_to_nuts"], errors="coerce"
         ).to_numpy(dtype=float)
         central = pd.read_csv(root / "calibration/central_coverage.csv")
-        central_summary = central.groupby("method")[["coverage_68", "coverage_95"]].mean()
+        central_summary = central.groupby("method")[
+            ["coverage_68", "coverage_95"]
+        ].mean()
         central_required = {"encoder", "adaptive_smc", "nuts"}
         if not central_required <= set(central_summary.index):
             raise ValueError("central coverage is missing q, adaptive SMC, or NUTS")
@@ -192,9 +192,7 @@ def validate(*, root: Path) -> dict[str, object]:
                 np.median(adaptive_max_ratio) < 2.0
                 and np.mean(adaptive_max_ratio >= 2.0) <= 0.20
             ),
-            "q_central_coverage_close_to_nuts": bool(
-                np.max(q_coverage_delta) <= 0.20
-            ),
+            "q_central_coverage_close_to_nuts": bool(np.max(q_coverage_delta) <= 0.20),
             "adaptive_smc_central_coverage_close_to_nuts": bool(
                 np.max(adaptive_coverage_delta) <= 0.20
             ),
@@ -267,9 +265,7 @@ def validate(*, root: Path) -> dict[str, object]:
             population_summary["selection"]["prior_physical_valid_fraction"] >= 0.99
         ),
         "parent_prior_identifiable_mass": bool(
-            population_summary["selection"].get(
-                "fraction_prior_mass_beta_lt_1e-3", 0.0
-            )
+            population_summary["selection"].get("fraction_prior_mass_beta_lt_1e-3", 0.0)
             <= 0.50
         ),
     }
@@ -299,12 +295,12 @@ def validate(*, root: Path) -> dict[str, object]:
         },
         "population": {
             "selection_alpha_mc": population_summary["selection"]["alpha_mc"],
-            "fraction_prior_mass_beta_lt_1e-3": population_summary[
-                "selection"
-            ].get("fraction_prior_mass_beta_lt_1e-3"),
-            "fraction_prior_mass_beta_lt_1e-2": population_summary[
-                "selection"
-            ].get("fraction_prior_mass_beta_lt_1e-2"),
+            "fraction_prior_mass_beta_lt_1e-3": population_summary["selection"].get(
+                "fraction_prior_mass_beta_lt_1e-3"
+            ),
+            "fraction_prior_mass_beta_lt_1e-2": population_summary["selection"].get(
+                "fraction_prior_mass_beta_lt_1e-2"
+            ),
             "parent_prior_vs_parent_truth": parent_comparison.to_dict(),
             "forward_selected_prior_vs_selected_truth": selected_comparison.to_dict(),
             "catalog_inferred_vs_selected_truth": population_comparisons.loc[

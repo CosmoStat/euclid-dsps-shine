@@ -125,7 +125,9 @@ def main(root):
         sleep_objective_config={},
     )
     with ExitStack() as stack:
-        stack.enter_context(patch.object(runner, "frozen_selection_normalization", lambda *a: -0.2))
+        stack.enter_context(
+            patch.object(runner, "frozen_selection_normalization", lambda *a: -0.2)
+        )
         stack.enter_context(patch.object(runner, "check_inputs", lambda root: m))
         stack.enter_context(
             patch(
@@ -176,7 +178,8 @@ def main(root):
         validation = pd.read_csv(root / "arms" / ARMS[0].name / "validation_final.csv")
         np.testing.assert_allclose(validation.selection_log_alpha, -0.2)
         np.testing.assert_allclose(
-            validation.negative_elbo - validation.negative_elbo_unselected, -0.2,
+            validation.negative_elbo - validation.negative_elbo_unselected,
+            -0.2,
         )
         runner.summarize(root)
         assert (root / "avi_comparison.png").is_file()

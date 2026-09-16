@@ -192,9 +192,7 @@ def test_native_redshift_metrics_ignore_nuisance_latents() -> None:
         }
     )
     metrics = evaluator.redshift_metrics(frame)
-    intervals = evaluator.bootstrap_redshift_metrics(
-        frame, n_bootstrap=20, seed=7
-    )
+    intervals = evaluator.bootstrap_redshift_metrics(frame, n_bootstrap=20, seed=7)
     assert metrics["n_spec"] == 2
     assert metrics["coverage_68"] == 0.5
     assert metrics["outlier_fraction_0p15"] == 0.0
@@ -337,13 +335,13 @@ def test_native_timing_wrapper_requests_one_h100_per_variant() -> None:
     wrapper = (ROOT / "scripts/popcosmos_native15d_timing_h100.slurm").read_text()
     submit = (ROOT / "scripts/submit_popcosmos_native15d_timing.sh").read_text()
     assert "#SBATCH --gres=gpu:1" in wrapper
-    assert "--posterior-samples \"$POSTERIOR_SAMPLES\"" in wrapper
+    assert '--posterior-samples "$POSTERIOR_SAMPLES"' in wrapper
     assert "--require-gpu" in wrapper
     assert 'json.load(stream)["evaluation_cohort"]["row_indices"]' in wrapper
     assert "missing or empty file" in wrapper
     assert "Data/cosmos2020/prepared/evaluation_indices_n5000.npy" not in wrapper
     assert "--array=0-1%2" in submit
-    assert "LIMIT=\"${LIMIT:-128}\"" in submit
+    assert 'LIMIT="${LIMIT:-128}"' in submit
 
 
 def test_publication_checks_chain_comparison_audit_and_timing() -> None:
@@ -395,10 +393,10 @@ def test_native_rws_stages_have_no_a24_parameter_comparison() -> None:
     assert "summarize_popcosmos_native15d_scaling.py" in wrapper
     assert '--row-indices-file "$EVAL_INDICES"' in wrapper
     assert '--dataset "$FULL_DATASET"' in wrapper
-    assert 'STAGE must be n5k,n20k,n40k,full' in wrapper
-    assert 'n5k) WALLTIME=04:00:00' in submit
-    assert 'n20k) WALLTIME=08:00:00' in submit
-    assert 'n40k|full) WALLTIME=15:00:00' in submit
-    assert 'MAP_DIR' not in wrapper
-    assert 'MAP_DIR' not in submit
-    assert 'SKIP_TRAINING' in wrapper
+    assert "STAGE must be n5k,n20k,n40k,full" in wrapper
+    assert "n5k) WALLTIME=04:00:00" in submit
+    assert "n20k) WALLTIME=08:00:00" in submit
+    assert "n40k|full) WALLTIME=15:00:00" in submit
+    assert "MAP_DIR" not in wrapper
+    assert "MAP_DIR" not in submit
+    assert "SKIP_TRAINING" in wrapper

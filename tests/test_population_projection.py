@@ -462,10 +462,11 @@ def test_projection_submission_reuses_banks_and_separates_pit() -> None:
         ROOT / "scripts/monitor_feniks_sc_drws_population_projection.sh"
     ).read_text()
     recovery = (
-        ROOT / "scripts/recover_feniks_sc_drws_population_projection.sh"
+        ROOT / "legacy/scripts/recovery/recover_feniks_sc_drws_population_projection.sh"
     ).read_text()
     evaluation_recovery = (
-        ROOT / "scripts/recover_feniks_sc_drws_population_projection_evaluation.sh"
+        ROOT
+        / "legacy/scripts/recovery/recover_feniks_sc_drws_population_projection_evaluation.sh"
     ).read_text()
     continuation = (
         ROOT / "scripts/submit_feniks_sc_drws_population_projection_continuation.sh"

@@ -137,9 +137,7 @@ def build(
             f"observed {band}<{max_mag_ab:g} retains {retained_fraction:.3%}, "
             f"below required {float(minimum_retained_fraction):.1%}{suffix}"
         )
-    selected_train = _selected_rows(
-        train_catalog, band=band, max_mag_ab=max_mag_ab
-    )
+    selected_train = _selected_rows(train_catalog, band=band, max_mag_ab=max_mag_ab)
     selected_test = _selected_rows(test_catalog, band=band, max_mag_ab=max_mag_ab)
     requested_train = (
         int(validation_objects) + int(pilot_objects) + int(confirmation_objects)
@@ -150,9 +148,7 @@ def build(
             f"{requested_train} for disjoint validation/pilot/confirmation cohorts"
         )
     requested_test = (
-        int(pilot_objects)
-        + int(confirmation_objects)
-        + int(final_validation_objects)
+        int(pilot_objects) + int(confirmation_objects) + int(final_validation_objects)
     )
     if len(selected_test) < requested_test:
         raise ValueError(
@@ -212,17 +208,13 @@ def build(
             "full_train": _write(out / "full_train_indices.npy", selected_train),
             "full_test": _write(out / "full_test_indices.npy", selected_test),
             "train": _write(out / "train_indices.npy", training),
-            "pilot_train": _write(
-                out / "pilot_train_indices.npy", pilot_train
-            ),
+            "pilot_train": _write(out / "pilot_train_indices.npy", pilot_train),
             "confirmation_train": _write(
                 out / "confirmation_train_indices.npy", confirmation_train
             ),
             "validation": _write(out / "validation_indices.npy", validation),
             "pilot": _write(out / "pilot_indices.npy", pilot),
-            "confirmation": _write(
-                out / "confirmation_indices.npy", confirmation
-            ),
+            "confirmation": _write(out / "confirmation_indices.npy", confirmation),
             "final_validation": _write(
                 out / "final_validation_indices.npy", final_validation
             ),

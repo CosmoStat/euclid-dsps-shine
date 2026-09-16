@@ -155,9 +155,11 @@ def summarize(root):
                     negative_elbo=summary["negative_elbo"],
                     residual_rms=summary["residual_rms"],
                     attempts=len(attempts),
-                    applied_updates=int(attempts.update_applied.sum())
-                    if "update_applied" in attempts
-                    else len(attempts),
+                    applied_updates=(
+                        int(attempts.update_applied.sum())
+                        if "update_applied" in attempts
+                        else len(attempts)
+                    ),
                 )
             )
     if rows:

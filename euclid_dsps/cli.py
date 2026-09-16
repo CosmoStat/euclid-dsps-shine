@@ -19,29 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="configs/fs2_gpu.yaml",
         help="YAML configuration file.",
     )
-    sub = parser.add_subparsers(
-        dest="command",
-        required=True,
-        metavar=(
-            "{download-assets,check,fit,posterior,"
-            "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
-            "amortized-train-diffsky,amortized-infer-diffsky,"
-            "amortized-finalize-inference,amortized-jacobian-lens-diffsky,"
-            "amortized-finalize-jacobian-lens,diffsky-map-adam-prior,"
-            "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
-            "diffsky-train-inferred-prior,"
-            "diffsky-plan-prior-workflow,"
-            "diffsky-supervised-prior-report,"
-            "diffsky-generate-dsps-closure,diffsky-validate-dsps-closure,"
-            "diffsky-evaluate-dsps-closure-inference,"
-            "diffsky-compare-dsps-closure-reference,"
-            "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
-            "diffsky-inventory-local,diffsky-prepare-dataset,"
-            "diffsky-dataset-diagnostics,diffsky-redshift-subset,"
-            "diffsky-validate-dataset,"
-            "diffsky-fit-report}"
-        ),
-    )
+    sub = parser.add_subparsers(dest="command", required=True)
 
     assets = sub.add_parser(
         "download-assets", help="Download native DSPS smoke-test assets."

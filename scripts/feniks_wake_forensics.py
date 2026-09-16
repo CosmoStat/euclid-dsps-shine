@@ -289,9 +289,11 @@ def run(root, manifest, encoder, prepared, target, spec, budget):
     }
     hashes["WAKE_FORENSICS.json"] = digest(root / "WAKE_FORENSICS.json")
     return dict(
-        status="WAKE_FORENSICS_COMPLETE"
-        if all(c["replay_matches"] for c in cases)
-        else "WAKE_REPLAY_MISMATCH",
+        status=(
+            "WAKE_FORENSICS_COMPLETE"
+            if all(c["replay_matches"] for c in cases)
+            else "WAKE_REPLAY_MISMATCH"
+        ),
         replays_complete=len(cases),
         cases_complete=0,
         artifacts=hashes,

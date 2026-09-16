@@ -456,7 +456,9 @@ def _plot_population_distributions(
     parent_truth: np.ndarray,
 ) -> None:
     dimensions = min(5, len(parameter_names))
-    figure, axes = plt.subplots(2, dimensions, figsize=(16, 6.4), constrained_layout=True)
+    figure, axes = plt.subplots(
+        2, dimensions, figsize=(16, 6.4), constrained_layout=True
+    )
     axes = np.asarray(axes).reshape(2, dimensions)
     for index in range(dimensions):
         combined = np.concatenate(
@@ -947,26 +949,22 @@ def main() -> None:
     parent_x = _sample_parent(model, samples=65536, seed=293700)
     parent_theta = _x_to_theta_chunks(parent_x, latent_spec)
     selection_config_path = Path(manifest["population_selection"]["config"])
-    if sha256_file(selection_config_path) != manifest["population_selection"][
-        "config_sha256"
-    ]:
+    if (
+        sha256_file(selection_config_path)
+        != manifest["population_selection"]["config_sha256"]
+    ):
         raise ValueError("population selection config SHA256 mismatch")
-    selection_feature_stats = Path(
-        manifest["population_selection"]["feature_stats"]
-    )
-    if sha256_file(selection_feature_stats) != manifest["population_selection"][
-        "feature_stats_sha256"
-    ]:
+    selection_feature_stats = Path(manifest["population_selection"]["feature_stats"])
+    if (
+        sha256_file(selection_feature_stats)
+        != manifest["population_selection"]["feature_stats_sha256"]
+    ):
         raise ValueError("population selection feature-stat SHA256 mismatch")
     beta_runtime = selection_runtime(
         load_config(selection_config_path), selection_feature_stats
     )
-    parent_log_beta = evaluate_log_beta(
-        model, parent_x, beta_runtime, chunk_size=512
-    )
-    parent_beta = np.where(
-        np.isfinite(parent_log_beta), np.exp(parent_log_beta), 0.0
-    )
+    parent_log_beta = evaluate_log_beta(model, parent_x, beta_runtime, chunk_size=512)
+    parent_beta = np.where(np.isfinite(parent_log_beta), np.exp(parent_log_beta), 0.0)
     if not np.isfinite(parent_beta.sum()) or parent_beta.sum() <= 0.0:
         raise ValueError("projected parent has no finite selected mass")
     selected_prior_weights = parent_beta / parent_beta.sum()
@@ -1147,8 +1145,7 @@ def main() -> None:
             ),
             "redshift_q_full_calibration_plot": str(
                 (
-                    evaluation
-                    / "redshift_calibration_q_full/redshift_pit_coverage.png"
+                    evaluation / "redshift_calibration_q_full/redshift_pit_coverage.png"
                 ).resolve()
             ),
             "ppc_plot": str(

@@ -81,9 +81,7 @@ def test_pilot_grid_contains_nuts_agreement_and_unadjusted_energy_controls() -> 
 
 
 def test_smoke_and_full_submission_topology_is_dependency_gated() -> None:
-    smoke = (
-        ROOT / "scripts" / "submit_feniks_exact_posterior_smoke.sh"
-    ).read_text()
+    smoke = (ROOT / "scripts" / "submit_feniks_exact_posterior_smoke.sh").read_text()
     full = (ROOT / "scripts" / "submit_feniks_exact_posterior_full.sh").read_text()
 
     assert "--array=0-1%2" in smoke
@@ -99,7 +97,9 @@ def test_smoke_and_full_submission_topology_is_dependency_gated() -> None:
     assert "requested_upper_bound_h100_hours=825.00" in full
     assert "SMOKE_ROOT" in full
     recovery = (
-        ROOT / "scripts" / "submit_feniks_exact_posterior_smoke_recovery.sh"
+        ROOT
+        / "legacy/scripts/recovery"
+        / "submit_feniks_exact_posterior_smoke_recovery.sh"
     ).read_text()
     assert "PREP_DONE" in recovery
     assert "feniks_exact_prepare_h100.slurm" not in recovery
@@ -145,9 +145,7 @@ def test_two_galaxy_nuts_submission_has_no_mclmc_dependency() -> None:
 def test_multigalaxy_nuts_capacity_probe_is_short_and_measures_hbm(
     tmp_path: Path,
 ) -> None:
-    wrapper = (
-        ROOT / "scripts/feniks_nuts_multigalaxy_capacity_h100.slurm"
-    ).read_text()
+    wrapper = (ROOT / "scripts/feniks_nuts_multigalaxy_capacity_h100.slurm").read_text()
     submission = (
         ROOT / "scripts/submit_feniks_nuts_multigalaxy_capacity.sh"
     ).read_text()
@@ -216,7 +214,7 @@ def test_multigalaxy_capacity_summary_handles_all_failed_sizes(
 def test_two_galaxy_nuts_recovery_reuses_preparation_and_caps_tree_depth() -> None:
     recovery = (
         ROOT
-        / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts_recovery.sh"
+        / "legacy/scripts/recovery/submit_feniks_exact_posterior_two_galaxy_nuts_recovery.sh"
     ).read_text()
 
     assert "PREP_DONE" in recovery
@@ -243,14 +241,13 @@ def test_two_galaxy_nuts_probe_gates_the_parallel_recovery() -> None:
 
 
 def test_batched_nuts_probe_and_finish_preserve_chain_artifact_contract() -> None:
-    wrapper = (
-        ROOT / "scripts/feniks_exact_nuts_batched_h100.slurm"
-    ).read_text()
+    wrapper = (ROOT / "scripts/feniks_exact_nuts_batched_h100.slurm").read_text()
     probe = (
         ROOT / "scripts/submit_feniks_exact_posterior_nuts_batched_probe.sh"
     ).read_text()
     finish = (
-        ROOT / "scripts/submit_feniks_exact_posterior_nuts_batched_finish.sh"
+        ROOT
+        / "legacy/scripts/recovery/submit_feniks_exact_posterior_nuts_batched_finish.sh"
     ).read_text()
 
     assert "--gres=gpu:1" in wrapper
@@ -269,8 +266,7 @@ def test_batched_nuts_probe_and_finish_preserve_chain_artifact_contract() -> Non
 
 def test_two_galaxy_big_nuts_is_probe_gated_resumable_and_provenanced() -> None:
     submission = (
-        ROOT
-        / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts_big.sh"
+        ROOT / "scripts/submit_feniks_exact_posterior_two_galaxy_nuts_big.sh"
     ).read_text()
 
     assert "batched_probe_summary.json" in submission
@@ -280,11 +276,10 @@ def test_two_galaxy_big_nuts_is_probe_gated_resumable_and_provenanced() -> None:
     assert 'NUTS_WARMUP="${NUTS_WARMUP:-200}"' in submission
     assert 'NUTS_MAX_DOUBLINGS="${NUTS_MAX_DOUBLINGS:-4}"' in submission
     assert (
-        'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-'
-        "100:100:100:100:100:100:100:100:100:100}\""
+        'SAMPLE_CHUNKS="${SAMPLE_CHUNKS:-' '100:100:100:100:100:100:100:100:100:100}"'
     ) in submission
     assert 'NUTS_TIME="${NUTS_TIME:-20:00:00}"' in submission
-    assert 'os.link(src, dst)' in submission
+    assert "os.link(src, dst)" in submission
     assert '"row_index": int(row.row_index)' in submission
     assert '"object_id": str(row.object_id)' in submission
     assert '"draws_per_galaxy": 4 * sum(chunks)' in submission
@@ -302,9 +297,7 @@ def test_two_galaxy_big_can_be_submitted_after_a_running_or_completed_probe() ->
     submission = (
         ROOT / "scripts/submit_feniks_exact_posterior_big_after_probe.sh"
     ).read_text()
-    gate = (
-        ROOT / "scripts/feniks_exact_two_galaxy_big_gate.slurm"
-    ).read_text()
+    gate = (ROOT / "scripts/feniks_exact_two_galaxy_big_gate.slurm").read_text()
 
     assert 'PROBE_JOB_ID="${PROBE_JOB_ID:?' in submission
     assert 'squeue -h -j "$PROBE_JOB_ID"' in submission
@@ -427,9 +420,7 @@ def test_full_benchmark_keeps_the_shared_rws_checkpoint_contract() -> None:
 
 
 def test_run_comparison_preserves_restyleable_tables(tmp_path: Path) -> None:
-    cohort = pd.DataFrame(
-        [{"order": 0, "example_key": "example", "row_index": 12}]
-    )
+    cohort = pd.DataFrame([{"order": 0, "example_key": "example", "row_index": 12}])
     galaxy = tmp_path / "galaxies" / "00_example_row12"
     (galaxy / "nuts").mkdir(parents=True)
     (galaxy / "mclmc").mkdir()
@@ -492,9 +483,7 @@ def test_run_comparison_preserves_restyleable_tables(tmp_path: Path) -> None:
 
 
 def test_run_comparison_supports_nuts_only(tmp_path: Path) -> None:
-    cohort = pd.DataFrame(
-        [{"order": 0, "example_key": "example", "row_index": 12}]
-    )
+    cohort = pd.DataFrame([{"order": 0, "example_key": "example", "row_index": 12}])
     galaxy = tmp_path / "galaxies" / "00_example_row12"
     (galaxy / "nuts").mkdir(parents=True)
     (galaxy / "prepare_manifest.json").write_text(
@@ -504,9 +493,9 @@ def test_run_comparison_supports_nuts_only(tmp_path: Path) -> None:
     pd.DataFrame([{"z_obs": 0.4, "mass": 10.0}]).to_parquet(
         galaxy / "truth.parquet", index=False
     )
-    pd.DataFrame(
-        [{"objective": 1.0, "z_obs": 0.45, "mass": 10.05}]
-    ).to_parquet(galaxy / "map_solutions.parquet", index=False)
+    pd.DataFrame([{"objective": 1.0, "z_obs": 0.45, "mass": 10.05}]).to_parquet(
+        galaxy / "map_solutions.parquet", index=False
+    )
     rng = np.random.default_rng(4)
     for relative in (
         "encoder_samples.parquet",

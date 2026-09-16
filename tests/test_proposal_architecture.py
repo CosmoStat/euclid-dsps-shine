@@ -268,9 +268,9 @@ def test_adapter_selector_distinguishes_free_and_observed_context_gain() -> None
             },
             "ordinary_is": {
                 "validation": {
-                    "support_status": "PASS"
-                    if ess >= 0.05 and bad_k <= 0.2
-                    else "FAIL",
+                    "support_status": (
+                        "PASS" if ess >= 0.05 and bad_k <= 0.2 else "FAIL"
+                    ),
                     "median_raw_ess_fraction": ess,
                     "fraction_pareto_k_gt_0p7": bad_k,
                 }

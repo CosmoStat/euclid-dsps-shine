@@ -66,7 +66,11 @@ def test_complete_dashboard_writes_all_artifacts(tmp_path: Path) -> None:
                 "outlier_fraction_0p15": 0.07 + value,
                 "coverage_68": 0.48 - value,
             }
-            for method, value in (("rws26", 0.001), ("rws24", 0.002), ("popcosmos", 0.0))
+            for method, value in (
+                ("rws26", 0.001),
+                ("rws24", 0.002),
+                ("popcosmos", 0.0),
+            )
         ]
     ).to_csv(matched / "redshift_method_metrics.csv", index=False)
     accuracy = dashboard._read_accuracy_metrics(

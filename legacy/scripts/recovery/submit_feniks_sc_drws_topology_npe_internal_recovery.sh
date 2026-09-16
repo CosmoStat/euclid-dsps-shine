@@ -115,7 +115,7 @@ VALIDATION_RAW=$(sbatch --parsable --array="$ARRAY_SPEC%3" \
   --output="$PILOT_LOG_ROOT/internal-recovery-%A_%a.out" \
   --error="$PILOT_LOG_ROOT/internal-recovery-%A_%a.err" \
   --export="$COMMON" \
-  "$JOB_REPO_DIR/scripts/feniks_sc_drws_topology_npe_internal_recovery_h100.slurm")
+  "$JOB_REPO_DIR/legacy/scripts/recovery/feniks_sc_drws_topology_npe_internal_recovery_h100.slurm")
 VALIDATION_JOB="${VALIDATION_RAW%%;*}"
 FINAL_RAW=$(sbatch --parsable --dependency="afterok:$VALIDATION_JOB" \
   --output="$PILOT_LOG_ROOT/finalize-internal-recovery-%j.out" \

@@ -10,9 +10,11 @@ from scripts.run_feniks_sc_drws_balanced_npe import write
 @pytest.mark.parametrize("qualified", [False, True])
 def test_reference_receipts_and_inputs_are_pinned(tmp_path, qualified):
     manifest = dict(
-        method="qualified_transport_precision_audit_v1"
-        if qualified
-        else "qualified_objective_pilot_v1",
+        method=(
+            "qualified_transport_precision_audit_v1"
+            if qualified
+            else "qualified_objective_pilot_v1"
+        ),
         objective_pilot={},
         qualified_night={},
         config_sha256="config",
@@ -44,9 +46,11 @@ def test_reference_receipts_and_inputs_are_pinned(tmp_path, qualified):
     write(
         tmp_path / "FINAL.json",
         dict(
-            status="TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE"
-            if qualified
-            else "OBJECTIVE_AUDIT_NOT_PASSED",
+            status=(
+                "TRANSPORT_PRECISION_DIAGNOSTIC_COMPLETE"
+                if qualified
+                else "OBJECTIVE_AUDIT_NOT_PASSED"
+            ),
             optimization_started=False,
             scientific_promotion=False,
             artifacts={

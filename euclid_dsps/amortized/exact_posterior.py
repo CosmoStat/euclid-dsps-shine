@@ -303,9 +303,7 @@ def run_nuts_chain(
         "warmup_steps": int(settings.warmup_steps),
         "target_accept": float(settings.target_accept),
         "max_num_doublings": int(settings.max_num_doublings),
-        "mass_matrix": (
-            "diagonal" if settings.is_mass_matrix_diagonal else "dense"
-        ),
+        "mass_matrix": ("diagonal" if settings.is_mass_matrix_diagonal else "dense"),
         "sample_chunks": list(settings.sample_chunks),
         "stored_samples": int(sum(settings.sample_chunks)),
         "kernel_transitions": int(sum(settings.sample_chunks)),

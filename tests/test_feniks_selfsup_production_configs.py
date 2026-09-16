@@ -109,10 +109,14 @@ def test_production_wrapper_uses_compute_bounded_smc_epochs() -> None:
 
 def test_smc_recovery_is_warm_restart_without_online_validation() -> None:
     wrapper = (
-        ROOT / "scripts" / "feniks_selfsup_production_smc_resume_h100.slurm"
+        ROOT
+        / "legacy/scripts/recovery"
+        / "feniks_selfsup_production_smc_resume_h100.slurm"
     ).read_text()
     submitter = (
-        ROOT / "scripts" / "submit_feniks_selfsup_production_recovery.sh"
+        ROOT
+        / "legacy/scripts/recovery"
+        / "submit_feniks_selfsup_production_recovery.sh"
     ).read_text()
 
     assert 'START_EPOCH="${START_EPOCH:-40}"' in wrapper
@@ -129,18 +133,18 @@ def test_smc_recovery_is_warm_restart_without_online_validation() -> None:
 
 
 @pytest.mark.parametrize(
-    "wrapper_name",
+    "wrapper_path",
     (
-        "feniks_selfsup_production_h100.slurm",
-        "feniks_selfsup_production_smc_resume_h100.slurm",
-        "feniks_selfsup_production_jlens_h100.slurm",
-        "feniks_selfsup_production_finalize_h100.slurm",
+        "scripts/feniks_selfsup_production_h100.slurm",
+        "legacy/scripts/recovery/feniks_selfsup_production_smc_resume_h100.slurm",
+        "scripts/feniks_selfsup_production_jlens_h100.slurm",
+        "scripts/feniks_selfsup_production_finalize_h100.slurm",
     ),
 )
 def test_production_wrappers_use_node_local_matplotlib_cache(
-    wrapper_name: str,
+    wrapper_path: str,
 ) -> None:
-    wrapper = (ROOT / "scripts" / wrapper_name).read_text()
+    wrapper = (ROOT / wrapper_path).read_text()
 
     assert "JOBSCRATCH" not in wrapper
     assert 'export MPLCONFIGDIR="/tmp/mpl-' in wrapper

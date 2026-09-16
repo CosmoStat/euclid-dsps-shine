@@ -111,16 +111,19 @@ def probe(grid, centers, scatter, budget):
         c["max_abs_weight_error"] <= 1e-12 and c["max_abs_derivative_error"] <= 1e-10
         for c in candidate_cases
     ) and bool(candidate_cases)
-    return dict(
-        candidate_reference_checks="PASS" if reference_pass else "NOT_PASSED",
-        reference_absolute_tolerances=dict(weights=1e-12, derivative=1e-10),
-        cases=cases,
-        grid=grid.tolist(),
-        scatter=float(scatter),
-        coordinate="physical log10(Z); not latent x",
-        reference="DSPS triweight polynomial, independent NumPy analytic derivative; same exported bin edges",
-        numpy_reference_mantissa_bits=int(np.finfo(np.longdouble).nmant),
-        interpretation="weight probes alone do not qualify the full decoder",
-        scientific_promotion=False,
-        truth_used=False,
-    ), rows
+    return (
+        dict(
+            candidate_reference_checks="PASS" if reference_pass else "NOT_PASSED",
+            reference_absolute_tolerances=dict(weights=1e-12, derivative=1e-10),
+            cases=cases,
+            grid=grid.tolist(),
+            scatter=float(scatter),
+            coordinate="physical log10(Z); not latent x",
+            reference="DSPS triweight polynomial, independent NumPy analytic derivative; same exported bin edges",
+            numpy_reference_mantissa_bits=int(np.finfo(np.longdouble).nmant),
+            interpretation="weight probes alone do not qualify the full decoder",
+            scientific_promotion=False,
+            truth_used=False,
+        ),
+        rows,
+    )

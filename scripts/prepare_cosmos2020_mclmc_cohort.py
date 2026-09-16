@@ -39,9 +39,7 @@ def main() -> None:
     frame = pd.read_parquet(args.dataset, columns=columns)
     rmag = frame["r_abmag_mw_corrected"].to_numpy(float)
     z = frame["lp_zbest"].to_numpy(float)
-    snr = frame["flux_hsc_r"].to_numpy(float) / frame["fluxerr_hsc_r"].to_numpy(
-        float
-    )
+    snr = frame["flux_hsc_r"].to_numpy(float) / frame["fluxerr_hsc_r"].to_numpy(float)
     used: set[int] = set()
     targets = (
         ("typical", rmag, np.nanmedian(rmag)),

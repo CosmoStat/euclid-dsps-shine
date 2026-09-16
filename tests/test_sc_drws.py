@@ -554,8 +554,7 @@ def test_sc_drws_full_profile_adds_anti_collapse_without_changing_architecture(
 
 @pytest.mark.parametrize("guarded", [False, True, "reject"])
 def test_four_device_pmap_q_update_regression(guarded) -> None:
-    code = textwrap.dedent(
-        """
+    code = textwrap.dedent("""
         import equinox as eqx
         import jax
         import jax.numpy as jnp
@@ -603,8 +602,7 @@ def test_four_device_pmap_q_update_regression(guarded) -> None:
         ]
         assert all(bool(jnp.array_equal(left, right)) for left, right in zip(updated, original))
         print('SC_DRWS_PMAP_PASS')
-        """
-    )
+        """)
     if guarded:
         code = code.replace(
             "gradient_clip_norm=10.0)", "gradient_clip_norm=10.0, backtracking=True)"

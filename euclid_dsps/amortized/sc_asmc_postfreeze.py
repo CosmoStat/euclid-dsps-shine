@@ -626,9 +626,11 @@ def run_sc_asmc_truth_closure(
             "mira_manifest": _file_record(out / "mira" / "mira_manifest.json"),
             "tarp_manifest": _file_record(out / "tarp" / "tarp_manifest.json"),
             "closure_analysis": {
-                name: _file_record(path)
-                if path.is_file()
-                else {"path": str(path.resolve()), "kind": "directory"}
+                name: (
+                    _file_record(path)
+                    if path.is_file()
+                    else {"path": str(path.resolve()), "kind": "directory"}
+                )
                 for name, path in closure_analysis.items()
             },
         },

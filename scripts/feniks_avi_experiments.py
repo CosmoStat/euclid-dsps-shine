@@ -247,9 +247,11 @@ def prepare(args):
             "scientific_promotion": False,
             "new_nuts": False,
             "target_role": "frozen learned-prior encoder comparison; NOT population training",
-            "code_snapshot_sha256": sha(root.parent / (root.name + ".code.tar"))
-            if (root.parent / (root.name + ".code.tar")).exists()
-            else None,
+            "code_snapshot_sha256": (
+                sha(root.parent / (root.name + ".code.tar"))
+                if (root.parent / (root.name + ".code.tar")).exists()
+                else None
+            ),
         },
     )
     print(

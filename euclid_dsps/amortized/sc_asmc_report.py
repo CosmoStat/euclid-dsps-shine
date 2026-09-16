@@ -588,14 +588,14 @@ def _predictive_model_flux_batched(
     """Decode posterior draws while bounding total sample-object pairs."""
     values = np.asarray(x)
     if values.ndim != 3:
-        raise ValueError("predictive latent draws must have shape [samples,objects,dim]")
+        raise ValueError(
+            "predictive latent draws must have shape [samples,objects,dim]"
+        )
     if int(decoder_batch_size) <= 0:
         raise ValueError("decoder_batch_size must be positive")
     sample_chunks = []
     for sample_start in range(0, values.shape[0], int(decoder_batch_size)):
-        sample_stop = min(
-            sample_start + int(decoder_batch_size), values.shape[0]
-        )
+        sample_stop = min(sample_start + int(decoder_batch_size), values.shape[0])
         sample_count = sample_stop - sample_start
         object_chunk_size = max(1, int(decoder_batch_size) // sample_count)
         object_chunks = []
@@ -761,9 +761,9 @@ def _write_population_marginals(
                 rows.append(
                     {
                         "prior": label,
-                        "population": "beta_weighted_selected"
-                        if selected
-                        else "parent_C0",
+                        "population": (
+                            "beta_weighted_selected" if selected else "parent_C0"
+                        ),
                         "parameter": name,
                         "mean": float(np.mean(column)),
                         "std": float(np.std(column)),

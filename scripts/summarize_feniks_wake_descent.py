@@ -44,9 +44,9 @@ def summarize(root):
                 start=start,
                 accepted=len(accepted),
                 attempts=len(history),
-                median_scale=accepted.accepted_scale.median()
-                if len(accepted)
-                else np.nan,
+                median_scale=(
+                    accepted.accepted_scale.median() if len(accepted) else np.nan
+                ),
                 ess_ratio=after["raw_ess"]["fraction_median"]
                 / source["raw_ess"]["fraction_median"],
                 rms_before=source["residual_rms"],

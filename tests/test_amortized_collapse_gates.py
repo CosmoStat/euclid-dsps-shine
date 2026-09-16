@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import pandas as pd
-
 import json
+
+import pandas as pd
 
 from euclid_dsps.amortized.collapse_gates import (
     write_inference_collapse_gate,
@@ -45,9 +45,7 @@ def test_training_gate_rejects_collapsed_wake_importance_weights(tmp_path) -> No
     ).to_csv(tmp_path / "training_log.csv", index=False)
     payload = write_training_collapse_gate(tmp_path)
     assert payload["status"] == "FAIL"
-    failed = {
-        row["name"] for row in payload["checks"] if row["status"] == "FAIL"
-    }
+    failed = {row["name"] for row in payload["checks"] if row["status"] == "FAIL"}
     assert "wake_ess_fraction_mean" in failed
     assert "wake_weight_max_mean" in failed
 
@@ -87,14 +85,12 @@ def test_inference_gate_rejects_bad_real_photometry(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
-    pd.DataFrame(
-        {"band": ["__all__"], "frac_abs_gt_5": [0.7]}
-    ).to_csv(
+    pd.DataFrame({"band": ["__all__"], "frac_abs_gt_5": [0.7]}).to_csv(
         tmp_path / "posterior_predictive_normalized_residual_tails.csv",
         index=False,
     )
-    pd.DataFrame(
-        {"parameter": ["x"], "frac_within_5pct_boundary": [0.95]}
-    ).to_csv(tmp_path / "parameter_bound_diagnostics.csv", index=False)
+    pd.DataFrame({"parameter": ["x"], "frac_within_5pct_boundary": [0.95]}).to_csv(
+        tmp_path / "parameter_bound_diagnostics.csv", index=False
+    )
     payload = write_inference_collapse_gate(tmp_path)
     assert payload["status"] == "FAIL"
