@@ -19,6 +19,9 @@
   archived YAML configs load; Sphinx passes with warnings as errors; the
   asset-free smoke writes readable checkpoints/receipts; full pytest passes
   with `1090 passed, 8 skipped`.
+- The first remote matrix run exposed that exact-posterior tests imported
+  BlackJAX while CI omitted the `samplers` extra. CI now installs that extra,
+  runs Black once over the full tree, and compiles every active script.
 - Keep this file as the chronological record of completed work. The maintained
   workflow surface lives in `docs/source/active_workflows.rst`.
 
