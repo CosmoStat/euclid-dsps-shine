@@ -1,0 +1,28 @@
+{
+  "role": "historical_epoch160_not_current_pilot",
+  "corner": {
+    "row_index": 17,
+    "draws": 256,
+    "columns": [
+      "z_obs",
+      "log10_stellar_mass",
+      "log10_stellar_metallicity",
+      "dust_av",
+      "dust_delta"
+    ],
+    "weights": "uniform direct q draws"
+  },
+  "source_sha256": {
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/population_selected_marginals.png": "119b7254a9fb2e272eeec545ccc42870c7498602c85cde87562b48c439c46f96",
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/population_selected_marginals.pdf": "a6bd3f7eb88ea74b809b7f458a32db5c45f8d4c43d4354aef5b54ba5617c93e5",
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/individual_posteriors_physical5d.png": "a90a91fe1bf4518d86d0c2989a6cc8317c84677cae4b0c5ae07df4abf92772c3",
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/individual_posteriors_physical5d.pdf": "600e7324c5bbf248ca66107c4d7b5ce73a81397e67388529a722d75c7b1b4f3a",
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/heldout_importance_support.png": "d75f76b7b36a263c698bd566ecea95eddc39b4d2fb51d566e4ef8b010317e260",
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/heldout_importance_support.pdf": "9e7c81b14f0a6a66864a4ea6d656d75ced5613294d283034eae94d0cc7d4fc1b",
+    "outputs/feniks_epoch160_complete/aggregated_figures_v2/figure_manifest.json": "3d9024309d599ded87dca8a4b32e341563c1be05f0f7421c92e5c143974d189b",
+    "outputs/feniks_epoch160_complete/CHECKPOINT_FROZEN.json": "98312743968484d695f11ea8326a519dc788d5810b35fa9e8d63247b767fd587",
+    "outputs/feniks_epoch160_complete/heldout/mira/mira_manifest.json": "10cb20d80845e970be26763ad83c6e4fe4ddb704ab4aee85dede256623d4ffde",
+    "outputs/feniks_epoch160_complete/heldout/mira/mira_scores.csv": "770f5756352e41d72ad0ca8d886bceabf32a27c127a0e06ea65934d25da64b18",
+    "outputs/feniks_epoch160_complete/population/individual_panels/raw_q.parquet": "559961089156d44854b7da5d4004db5284bed10321182789ffe272c796ad415e"
+  }
+}

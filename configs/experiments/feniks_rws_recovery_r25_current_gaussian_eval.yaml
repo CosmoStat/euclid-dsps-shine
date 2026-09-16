@@ -1,0 +1,8 @@
+extends: feniks_rws_recovery_r25_current_t2.yaml
+
+amortized:
+  likelihood:
+    type: gaussian
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+

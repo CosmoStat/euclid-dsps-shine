@@ -1,0 +1,42 @@
+extends: popcosmos_native15d_rws.yaml
+
+# Controlled ablation: remove only the two IRAC bands while keeping the
+# native 15D latent, filters, errors, likelihood and RWS schedule unchanged.
+dataset:
+  name: cosmos2020_farmer_native15d_24band_no_irac
+  band_subset: cosmos24_no_irac
+
+bands:
+  - {name: u_megaprime_sagem, column: flux_u_megaprime_sagem, error_column: fluxerr_u_megaprime_sagem, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/u_megaprime_sagem.dat}}
+  - {name: hsc_g, column: flux_hsc_g, error_column: fluxerr_hsc_g, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_g.dat}}
+  - {name: hsc_r, column: flux_hsc_r, error_column: fluxerr_hsc_r, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_r.dat}}
+  - {name: hsc_i, column: flux_hsc_i, error_column: fluxerr_hsc_i, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_i.dat}}
+  - {name: hsc_z, column: flux_hsc_z, error_column: fluxerr_hsc_z, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_z.dat}}
+  - {name: hsc_y, column: flux_hsc_y, error_column: fluxerr_hsc_y, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/hsc_y.dat}}
+  - {name: uvista_y_cosmos, column: flux_uvista_y_cosmos, error_column: fluxerr_uvista_y_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_y_cosmos.dat}}
+  - {name: uvista_j_cosmos, column: flux_uvista_j_cosmos, error_column: fluxerr_uvista_j_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_j_cosmos.dat}}
+  - {name: uvista_h_cosmos, column: flux_uvista_h_cosmos, error_column: fluxerr_uvista_h_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_h_cosmos.dat}}
+  - {name: uvista_ks_cosmos, column: flux_uvista_ks_cosmos, error_column: fluxerr_uvista_ks_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/uvista_ks_cosmos.dat}}
+  - {name: ia427_cosmos, column: flux_ia427_cosmos, error_column: fluxerr_ia427_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia427_cosmos.dat}}
+  - {name: ia464_cosmos, column: flux_ia464_cosmos, error_column: fluxerr_ia464_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia464_cosmos.dat}}
+  - {name: ia484_cosmos, column: flux_ia484_cosmos, error_column: fluxerr_ia484_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia484_cosmos.dat}}
+  - {name: ia505_cosmos, column: flux_ia505_cosmos, error_column: fluxerr_ia505_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia505_cosmos.dat}}
+  - {name: ia527_cosmos, column: flux_ia527_cosmos, error_column: fluxerr_ia527_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia527_cosmos.dat}}
+  - {name: ia574_cosmos, column: flux_ia574_cosmos, error_column: fluxerr_ia574_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia574_cosmos.dat}}
+  - {name: ia624_cosmos, column: flux_ia624_cosmos, error_column: fluxerr_ia624_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia624_cosmos.dat}}
+  - {name: ia679_cosmos, column: flux_ia679_cosmos, error_column: fluxerr_ia679_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia679_cosmos.dat}}
+  - {name: ia709_cosmos, column: flux_ia709_cosmos, error_column: fluxerr_ia709_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia709_cosmos.dat}}
+  - {name: ia738_cosmos, column: flux_ia738_cosmos, error_column: fluxerr_ia738_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia738_cosmos.dat}}
+  - {name: ia767_cosmos, column: flux_ia767_cosmos, error_column: fluxerr_ia767_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia767_cosmos.dat}}
+  - {name: ia827_cosmos, column: flux_ia827_cosmos, error_column: fluxerr_ia827_cosmos, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/ia827_cosmos.dat}}
+  - {name: NB711.SuprimeCam, column: flux_NB711.SuprimeCam, error_column: fluxerr_NB711.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB711.SuprimeCam.dat}}
+  - {name: NB816.SuprimeCam, column: flux_NB816.SuprimeCam, error_column: fluxerr_NB816.SuprimeCam, units: microjy, filter: {kind: ascii, path: Data/cosmos2020/assets/filters/NB816.SuprimeCam.dat}}
+
+amortized:
+  data:
+    expected_n_bands: 24
+  features:
+    n_flux_bands: 24
+    n_error_bands: 24
+  encoder:
+    input_dim: 48

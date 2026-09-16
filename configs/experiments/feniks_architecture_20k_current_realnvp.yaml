@@ -1,0 +1,11 @@
+extends: feniks_architecture_20k_common.yaml
+
+amortized:
+  encoder:
+    type: conditional_flow
+    context_encoder: base_moments
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 4
+    flow_hidden_size: 128
+    flow_init_scale: 0.0

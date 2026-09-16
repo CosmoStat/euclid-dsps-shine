@@ -1,0 +1,10 @@
+extends: feniks_rws_recovery_r25_historical_t2.yaml
+
+# Post-training evaluation target. This changes no checkpoint structure; it
+# recomputes log likelihoods under the physical Gaussian PhotoErr contract.
+amortized:
+  likelihood:
+    type: gaussian
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+

@@ -10,12 +10,12 @@ full_validation:
     amortized_modes:
         - standard_normal
         - joint_realnvp
-    supervised_prior_basic_config: configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml
-    supervised_prior_extended_config: configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml
-    forward_closure_config: configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml
-    amortized_standard_normal_config: configs/amortized_diffsky_hltds_standard_normal_gpu.yaml
-    amortized_supervised_prior_config: configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml
-    amortized_joint_realnvp_config: configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
+    supervised_prior_basic_config: legacy/configs/prior_diffsky_hltds_supervised_basic_realnvp.yaml
+    supervised_prior_extended_config: legacy/configs/prior_diffsky_hltds_supervised_extended_realnvp.yaml
+    forward_closure_config: legacy/configs/diffsky_hltds_04_14_trueparam_closure_gpu.yaml
+    amortized_standard_normal_config: legacy/configs/amortized_diffsky_hltds_standard_normal_gpu.yaml
+    amortized_supervised_prior_config: legacy/configs/amortized_diffsky_hltds_supervised_prior_gpu.yaml
+    amortized_joint_realnvp_config: legacy/configs/amortized_diffsky_hltds_joint_realnvp_gpu.yaml
     report_sections:
         - Dataset integrity
         - Same-parameter forward closure

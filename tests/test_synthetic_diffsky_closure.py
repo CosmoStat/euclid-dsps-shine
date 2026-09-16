@@ -257,6 +257,31 @@ def test_photometric_selection_supports_magnitude_limits() -> None:
     assert summary["cuts"]["min_magnitude_limit_bands"]["kept"] == 1
 
 
+def test_photometric_selection_observed_limit_uses_flux_not_true_magnitude() -> None:
+    flux_limit = float(np.asarray(abmag_to_fnu_cgs(25.0)))
+    frame = pd.DataFrame(
+        {
+            "mag_true_lsst_r": [30.0, 20.0, 20.0],
+            "flux_true_lsst_r": [flux_limit, flux_limit, flux_limit],
+            "flux_lsst_r": [1.1 * flux_limit, 0.9 * flux_limit, -flux_limit],
+            "fluxerr_lsst_r": [0.1 * flux_limit] * 3,
+        }
+    )
+    selection = {"observed_magnitude_limits": {"lsst_r": 25.0}}
+    assert photometric_selection_enabled(selection)
+    selected, summary = apply_photometric_selection(
+        frame,
+        ["lsst_r"],
+        selection,
+    )
+    assert selected["mag_true_lsst_r"].tolist() == [30.0]
+    assert selected["n_bands_mag_observed_lt_limit"].tolist() == [1]
+    cut = summary["cuts"]["observed_magnitude_limit_lsst_r"]
+    assert cut["source_column"] == "flux_lsst_r"
+    assert np.isclose(cut["flux_min_fnu_cgs"], flux_limit)
+    assert cut["kept"] == 1
+
+
 def test_lsst_euclid_roman_18_band_preset_resolves() -> None:
     cfg = normalize_config(
         {

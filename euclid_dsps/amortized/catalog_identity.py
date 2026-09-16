@@ -31,6 +31,8 @@ def object_id_column_from_config(config: dict[str, Any]) -> str | None:
 def configured_redshift_column(config: dict[str, Any]) -> str | None:
     """Return the configured truth redshift column, if available."""
     data_cfg = (config.get("amortized", {}) or {}).get("data", {}) or {}
+    if data_cfg.get("use_redshift_for_split") is False:
+        return None
     explicit = data_cfg.get("stratify_column")
     if explicit:
         return str(explicit)

@@ -1,4 +1,4 @@
-extends: diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml
+extends: ../../configs/diffsky_synthetic_feniks_260617_50k_survey_like_18band.yaml
 
 catalog_path: Data/diffsky/synthetic/feniks_260617_dsps_closure_18band/test.parquet
 

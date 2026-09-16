@@ -40,16 +40,18 @@ def photometric_loglike(
     student_t_dof: float = 2.0,
     error_floor_frac: float = 0.02,
     error_jitter: float = 0.0,
+    arithmetic_precision: str = "float32_legacy",
 ) -> jnp.ndarray:
     """Return per-sample, per-object photometric log-likelihoods.
 
     ``model_flux`` is expected to be shaped ``[K,N,B]``. Observed arrays may be
     shaped ``[N,B]`` or ``[1,N,B]`` and broadcast over Monte Carlo samples.
     """
-    obs_flux = _with_sample_axis(jnp.asarray(obs_flux, dtype=jnp.float32))
-    obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=jnp.float32))
+    dtype = likelihood_dtype(arithmetic_precision)
+    obs_flux = _with_sample_axis(jnp.asarray(obs_flux, dtype=dtype))
+    obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=dtype))
     mask = _with_sample_axis(jnp.asarray(mask, dtype=bool))
-    model_flux = jnp.asarray(model_flux, dtype=jnp.float32)
+    model_flux = jnp.asarray(model_flux, dtype=dtype)
     unit = _likelihood_unit(obs_flux, obs_err)
     obs_flux_scaled = obs_flux / unit
     model_flux_scaled = model_flux / unit
@@ -61,6 +63,7 @@ def photometric_loglike(
             mask,
             error_floor_frac=error_floor_frac,
             error_jitter=error_jitter,
+            arithmetic_precision=arithmetic_precision,
         )
         / unit
     )
@@ -126,6 +129,7 @@ def photometric_sigma_eff(
     *,
     error_floor_frac: float = 0.02,
     error_jitter: float = 0.0,
+    arithmetic_precision: str = "float32_legacy",
 ) -> jnp.ndarray:
     """Return the effective photometric scale in native flux units.
 
@@ -134,9 +138,10 @@ def photometric_sigma_eff(
     and converts the result back to native flux units so Jacobian diagnostics
     and likelihood residuals use one shared sigma definition.
     """
-    obs_flux = _with_sample_axis(jnp.asarray(obs_flux, dtype=jnp.float32))
-    obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=jnp.float32))
-    model_flux = jnp.asarray(model_flux, dtype=jnp.float32)
+    dtype = likelihood_dtype(arithmetic_precision)
+    obs_flux = _with_sample_axis(jnp.asarray(obs_flux, dtype=dtype))
+    obs_err = _with_sample_axis(jnp.asarray(obs_err, dtype=dtype))
+    model_flux = jnp.asarray(model_flux, dtype=dtype)
     if mask is not None:
         mask = _with_sample_axis(jnp.asarray(mask, dtype=bool))
     unit = _likelihood_unit(obs_flux, obs_err)
@@ -157,6 +162,16 @@ def photometric_sigma_eff(
     finite = mask & jnp.isfinite(obs_flux) & model_flux_finite
     finite &= jnp.isfinite(sigma) & (sigma > 0.0)
     return jnp.where(finite, sigma, jnp.asarray(jnp.inf, dtype=sigma.dtype))
+
+
+def likelihood_dtype(precision):
+    if precision == "float32_legacy":
+        return jnp.float32
+    if precision != "float64_v1" or not jax.config.x64_enabled:
+        raise ValueError(
+            "float64 likelihood requires valid precision and JAX_ENABLE_X64"
+        )
+    return jnp.float64
 
 
 def _with_sample_axis(value: jnp.ndarray) -> jnp.ndarray:

@@ -52,8 +52,11 @@ from .diagnostics import (
 from .elbo import is_deterministic_reconstruction, objective_mode
 from .features import read_feature_stats
 from .latent import latent_spec_hash, x_to_theta
-from .likelihood import photometric_loglike
 from .posterior import sample_posterior
+from .posterior_target import (
+    posterior_log_target_from_model_flux,
+    safe_decoder_inputs,
+)
 from .redshift_metrics import write_redshift_metrics_for_run
 from .train import (
     _effective_jax_batch_size,
@@ -64,6 +67,94 @@ from .train import (
 )
 from .truth_diagnostics import write_extended_truth_diagnostics
 
+_TRUTH_ONLY_INFERENCE_ARTIFACTS = (
+    "inference_truth.parquet",
+    "redshift_comparison.parquet",
+    "redshift_pit.parquet",
+    "photoz_object_metrics.csv",
+    "photoz_metrics.csv",
+    "photoz_metrics_by_redshift_bin.csv",
+    "posterior_vs_truth_metrics.csv",
+    "photoz_truth_vs_pred.png",
+    "photoz_delta_vs_ztrue.png",
+    "photoz_pit_hist.png",
+    "photoz_width_vs_abs_error.png",
+    "prior_vs_truth_population.csv",
+    "prior_vs_truth_correlations.csv",
+    "prior_vs_truth_correlation_error.png",
+    "extended_truth_diagnostics_summary.json",
+    "corner_full_latent_truth_prior_posterior.png",
+)
+
+
+def _clear_truth_only_inference_artifacts(out: Path) -> None:
+    """Remove stale truth products before a truth-free inference resume."""
+    for name in _TRUTH_ONLY_INFERENCE_ARTIFACTS:
+        (out / name).unlink(missing_ok=True)
+    for pattern in (
+        "*_vs_truth_extended.csv",
+        "*_vs_truth_extended_objects.parquet",
+        "truth_vs_*.png",
+        "*_bias_vs_truth_*.png",
+        "population_overlay_*.png",
+    ):
+        for path in out.glob(pattern):
+            path.unlink()
+
+
+def _maybe_write_inference_truth_snapshot(
+    out: Path,
+    config: dict[str, Any],
+    *,
+    enabled: bool,
+    row_indices: np.ndarray | None,
+    limit: int | None,
+    batch_size: int,
+) -> pd.DataFrame:
+    if not enabled:
+        (out / "inference_truth.parquet").unlink(missing_ok=True)
+        return pd.DataFrame()
+    return write_truth_snapshot(
+        out,
+        config,
+        row_indices=row_indices,
+        limit=limit,
+        batch_size=batch_size,
+    )
+
+
+def _write_inference_truth_metrics(
+    config: dict[str, Any],
+    out: Path,
+    *,
+    dataset_label: str,
+    enabled: bool,
+) -> dict[str, str]:
+    if not enabled:
+        return {"truth_diagnostics": "disabled_by_config"}
+    try:
+        outputs = {
+            key: str(value)
+            for key, value in write_redshift_metrics_for_run(
+                dataset_path=config["catalog_path"],
+                run_dir=out,
+                out_dir=out,
+                label=dataset_label,
+            ).items()
+        }
+    except Exception as exc:
+        outputs = {"warning": str(exc)}
+    try:
+        outputs.update(
+            {
+                f"extended_{key}": str(value)
+                for key, value in write_extended_truth_diagnostics(out).items()
+            }
+        )
+    except Exception as exc:
+        outputs["extended_truth_warning"] = str(exc)
+    return outputs
+
 
 def infer_amortized_fs2(
     config: dict[str, Any],
@@ -73,6 +164,7 @@ def infer_amortized_fs2(
     limit: int | None,
     batch_size: int,
     posterior_samples: int,
+    posterior_base_temperature: float = 1.0,
     prior_samples: int = 8192,
     seed: int,
     feature_stats_path: Path | None = None,
@@ -96,6 +188,8 @@ def infer_amortized_fs2(
         raise ValueError("batch_size must be positive")
     if int(posterior_samples) <= 0:
         raise ValueError("posterior_samples must be positive")
+    if float(posterior_base_temperature) <= 0.0:
+        raise ValueError("posterior_base_temperature must be positive")
     if int(prior_samples) <= 0:
         raise ValueError("prior_samples must be positive")
     if int(decoder_sample_chunk_size) <= 0:
@@ -107,6 +201,12 @@ def infer_amortized_fs2(
         cfg.get("objective", {})
     )
     inference_cfg = cfg.get("inference", {})
+    write_truth_snapshot_enabled = bool(inference_cfg.get("write_truth_snapshot", True))
+    write_truth_diagnostics_enabled = bool(
+        inference_cfg.get("write_truth_diagnostics", True)
+    )
+    if not write_truth_snapshot_enabled and not write_truth_diagnostics_enabled:
+        _clear_truth_only_inference_artifacts(out)
     selection_mode = str(
         selection_mode
         if selection_mode is not None
@@ -147,9 +247,10 @@ def infer_amortized_fs2(
         np.save(out / "inference_indices.npy", row_indices)
         selection_summary["row_indices_path"] = "inference_indices.npy"
     write_json(out / "inference_selection.json", selection_summary)
-    truth_snapshot = write_truth_snapshot(
+    truth_snapshot = _maybe_write_inference_truth_snapshot(
         out,
         config,
+        enabled=write_truth_snapshot_enabled,
         row_indices=row_indices,
         limit=limit,
         batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
@@ -206,6 +307,7 @@ def infer_amortized_fs2(
             "[amortized] run config: "
             f"limit={limit} batch_size={int(batch_size)} "
             f"posterior_samples={int(posterior_samples)} "
+            f"posterior_base_temperature={float(posterior_base_temperature):.6g} "
             f"prior_samples={int(prior_samples)} "
             f"decoder_sample_chunk_size={int(decoder_sample_chunk_size)} "
             f"prior_predictive_batch_size={int(prior_predictive_batch_size)} "
@@ -219,7 +321,8 @@ def infer_amortized_fs2(
         print(
             "[amortized] inference selection: "
             f"rows={selection_summary.get('selected_rows')} "
-            f"truth_rows={len(truth_snapshot)} "
+            f"truth_snapshot={'enabled' if write_truth_snapshot_enabled else 'disabled'} "
+            f"truth_diagnostics={'enabled' if write_truth_diagnostics_enabled else 'disabled'} "
             f"row_indices={selection_summary.get('row_indices_path')}"
         )
         if jax_batch_size != int(batch_size):
@@ -319,6 +422,7 @@ def infer_amortized_fs2(
         "selection_seed": int(selection_seed),
         "row_indices_file": str(row_indices_file) if row_indices_file else None,
         "posterior_samples": int(posterior_samples),
+        "posterior_base_temperature": float(posterior_base_temperature),
         "effective_posterior_samples": (
             1 if deterministic_reconstruction else int(posterior_samples)
         ),
@@ -408,7 +512,11 @@ def infer_amortized_fs2(
             logq = jnp.zeros(mean.shape[:-1], dtype=mean.dtype)[None, ...]
         else:
             posterior = sample_posterior(
-                model, sample_key, batch.features, int(posterior_samples)
+                model,
+                sample_key,
+                batch.features,
+                int(posterior_samples),
+                base_temperature=float(posterior_base_temperature),
             )
             x_samples, logq = posterior.x, posterior.logq
         theta = x_to_theta(x_samples, latent_spec)
@@ -436,19 +544,19 @@ def infer_amortized_fs2(
             if band_calibration_cfg.enabled
             else model_flux
         )
+        target = posterior_log_target_from_model_flux(
+            model,
+            x_samples,
+            batch,
+            latent_spec,
+            model_flux,
+            likelihood_cfg,
+            model_flux_raw=model_flux_raw,
+        )
         logprior = (
-            jnp.zeros_like(logq) if deterministic_reconstruction else posterior.logprior
+            jnp.zeros_like(logq) if deterministic_reconstruction else target.logprior
         )
-        loglike = photometric_loglike(
-            obs_flux=batch.flux,
-            model_flux=model_flux,
-            obs_err=batch.flux_err,
-            mask=batch.mask,
-            likelihood_type=str(likelihood_cfg.get("type", "student_t")),
-            student_t_dof=float(likelihood_cfg.get("student_t_dof", 2.0)),
-            error_floor_frac=float(likelihood_cfg.get("error_floor_frac", 0.02)),
-            error_jitter=float(likelihood_cfg.get("error_jitter", 0.0)),
-        )
+        loglike = target.loglike
         chi2 = _posterior_predictive_chi2(batch, model_flux, likelihood_cfg)
         object_id = np.asarray(batch.object_id)
         theta_np = jax.device_get(theta)
@@ -771,6 +879,7 @@ def infer_amortized_fs2(
             "objective_mode": objective_mode_name,
             "deterministic_reconstruction": bool(deterministic_reconstruction),
             "requested_posterior_samples": int(posterior_samples),
+            "posterior_base_temperature": float(posterior_base_temperature),
             "effective_posterior_samples": (
                 1 if deterministic_reconstruction else int(posterior_samples)
             ),
@@ -783,27 +892,12 @@ def infer_amortized_fs2(
             "per_band_flux_calibration": per_band_payload,
         },
     )
-    try:
-        metric_outputs = {
-            key: str(value)
-            for key, value in write_redshift_metrics_for_run(
-                dataset_path=config["catalog_path"],
-                run_dir=out,
-                out_dir=out,
-                label=dataset_label,
-            ).items()
-        }
-    except Exception as exc:
-        metric_outputs = {"warning": str(exc)}
-    try:
-        metric_outputs.update(
-            {
-                f"extended_{key}": str(value)
-                for key, value in write_extended_truth_diagnostics(out).items()
-            }
-        )
-    except Exception as exc:
-        metric_outputs["extended_truth_warning"] = str(exc)
+    metric_outputs = _write_inference_truth_metrics(
+        config,
+        out,
+        dataset_label=dataset_label,
+        enabled=write_truth_diagnostics_enabled,
+    )
     try:
         gate = write_inference_collapse_gate(out)
         metric_outputs["collapse_gate"] = str(out / "collapse_gate.json")
@@ -819,9 +913,15 @@ def infer_amortized_fs2(
             "selection": selection_summary,
             "catalog_fingerprint": catalog_identity,
             "truth_snapshot_rows": int(len(truth_snapshot)),
+            "truth_snapshot_enabled": bool(write_truth_snapshot_enabled),
+            "truth_diagnostics_enabled": bool(write_truth_diagnostics_enabled),
+            "truth_used_for_inference_or_checkpoint_selection": bool(
+                write_truth_snapshot_enabled or write_truth_diagnostics_enabled
+            ),
             "batch_size": int(batch_size),
             "jax_batch_size": int(jax_batch_size),
             "posterior_samples": int(posterior_samples),
+            "posterior_base_temperature": float(posterior_base_temperature),
             "prior_samples": int(prior_samples),
             "decoder_sample_chunk_size": int(decoder_sample_chunk_size),
             "prior_predictive_batch_size": int(prior_predictive_batch_size),
@@ -858,6 +958,7 @@ def infer_amortized_fs2(
         config=config,
         limit=limit,
         row_indices=row_indices,
+        include_truth=write_truth_diagnostics_enabled,
     )
     if verbose:
         print("[amortized] inference complete")
@@ -913,6 +1014,14 @@ def finalize_amortized_inference(
     out = Path(out_dir)
     if not out.exists():
         raise FileNotFoundError(f"Missing inference output directory: {out}")
+    cfg = amortized_config(config)
+    inference_cfg = cfg.get("inference", {})
+    write_truth_snapshot_enabled = bool(inference_cfg.get("write_truth_snapshot", True))
+    write_truth_diagnostics_enabled = bool(
+        inference_cfg.get("write_truth_diagnostics", True)
+    )
+    if not write_truth_snapshot_enabled and not write_truth_diagnostics_enabled:
+        _clear_truth_only_inference_artifacts(out)
     shard_records = _discover_shard_records(out)
     complete_records = [record for record in shard_records if record["complete"]]
     if verbose:
@@ -928,10 +1037,13 @@ def finalize_amortized_inference(
         verbose=verbose,
     )
     selection = _read_json_if_exists(out / "inference_selection.json")
+    initial_summary = _read_json_if_exists(out / "inference_summary.json")
+    initial_manifest = _read_json_if_exists(out / "posterior_shards_manifest.json")
     expected = selection.get("selected_rows")
     processed = int(len(frames.get("summary", pd.DataFrame())))
     row_indices = _load_inference_indices(out)
     manifest_payload = {
+        **initial_manifest,
         "shard_outputs": True,
         "finalized": True,
         "n_shards": int(len(complete_records)),
@@ -952,28 +1064,12 @@ def finalize_amortized_inference(
         "shards_skipped": [],
     }
     _write_shard_manifest(out, manifest_payload)
-    metric_outputs: dict[str, str] = {}
-    try:
-        metric_outputs = {
-            key: str(value)
-            for key, value in write_redshift_metrics_for_run(
-                dataset_path=config["catalog_path"],
-                run_dir=out,
-                out_dir=out,
-                label=dataset_label,
-            ).items()
-        }
-    except Exception as exc:
-        metric_outputs = {"warning": str(exc)}
-    try:
-        metric_outputs.update(
-            {
-                f"extended_{key}": str(value)
-                for key, value in write_extended_truth_diagnostics(out).items()
-            }
-        )
-    except Exception as exc:
-        metric_outputs["extended_truth_warning"] = str(exc)
+    metric_outputs = _write_inference_truth_metrics(
+        config,
+        out,
+        dataset_label=dataset_label,
+        enabled=write_truth_diagnostics_enabled,
+    )
     try:
         gate = write_inference_collapse_gate(out)
         metric_outputs["collapse_gate"] = str(out / "collapse_gate.json")
@@ -986,8 +1082,10 @@ def finalize_amortized_inference(
         config=config,
         limit=limit,
         row_indices=row_indices,
+        include_truth=write_truth_diagnostics_enabled,
     )
     payload = {
+        **initial_summary,
         "run_dir": str(out),
         "n_processed": processed,
         "expected_selected_rows": int(expected) if expected is not None else None,
@@ -995,6 +1093,16 @@ def finalize_amortized_inference(
         "n_complete_shards": int(len(complete_records)),
         "n_discovered_shards": int(len(shard_records)),
         "combine_sample_shards": bool(combine_sample_shards),
+        "truth_snapshot_enabled": bool(write_truth_snapshot_enabled),
+        "truth_diagnostics_enabled": bool(write_truth_diagnostics_enabled),
+        "truth_snapshot_rows": (
+            int(initial_summary.get("truth_snapshot_rows", 0))
+            if write_truth_snapshot_enabled
+            else 0
+        ),
+        "truth_used_for_inference_or_checkpoint_selection": bool(
+            write_truth_snapshot_enabled or write_truth_diagnostics_enabled
+        ),
         "metric_outputs": metric_outputs,
         "posterior_summary": str(out / "posterior_summary.parquet"),
         "posterior_diagnostics_summary": str(
@@ -1487,8 +1595,9 @@ def _model_flux_from_x_sample_chunks(
     if int(sample_chunk_size) <= 0:
         raise ValueError("sample_chunk_size must be positive")
     if x_samples.ndim != 3:
+        safe_x, _physical_valid = safe_decoder_inputs(x_samples, latent_spec)
         return model_flux_from_x(
-            x_samples,
+            safe_x,
             latent_spec,
             context,
             model_args,
@@ -1497,8 +1606,9 @@ def _model_flux_from_x_sample_chunks(
     chunks = []
     for start in range(0, int(x_samples.shape[0]), int(sample_chunk_size)):
         x_chunk = x_samples[start : start + int(sample_chunk_size)]
+        safe_x_chunk, _physical_valid = safe_decoder_inputs(x_chunk, latent_spec)
         flux_chunk = model_flux_from_x(
-            x_chunk,
+            safe_x_chunk,
             latent_spec,
             context,
             model_args,
@@ -1526,8 +1636,9 @@ def _model_flux_from_x_2d_chunks(
     chunks = []
     for start in range(0, int(x.shape[0]), int(batch_size)):
         x_chunk = x[start : start + int(batch_size)]
+        safe_x_chunk, _physical_valid = safe_decoder_inputs(x_chunk, latent_spec)
         flux_chunk = model_flux_from_x(
-            x_chunk,
+            safe_x_chunk,
             latent_spec,
             context,
             model_args,

@@ -13,6 +13,10 @@ docs/build/
 docs/_build/
 outputs/
 
+# Local presentations and exploratory notebooks are not project source.
+/docs/slides/
+/notebooks/demo_blackjax_nuts_3_parametres.ipynb
+
 # Local data and generated asset manifests.
 Data/*
 !Data/.gitkeep

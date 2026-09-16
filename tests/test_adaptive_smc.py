@@ -1,0 +1,788 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import pandas as pd
+import pytest
+
+from euclid_dsps.amortized.adaptive_smc import (
+    build_adaptive_smc_kernels,
+    run_adaptive_smc,
+)
+from euclid_dsps.amortized.config import amortized_config
+from euclid_dsps.config import load_config
+
+
+def _normal_logpdf(value, mean, sigma=1.0):
+    return -0.5 * jnp.sum(((value - mean) / sigma) ** 2, axis=-1)
+
+
+def test_adaptive_smc_transports_proposal_and_preserves_normalization() -> None:
+    key = jax.random.PRNGKey(12)
+    particles = jax.random.normal(key, (512, 2, 1))
+    target_mean = jnp.asarray([[[1.0], [-1.0]]])
+
+    result = run_adaptive_smc(
+        key=jax.random.PRNGKey(13),
+        initial_particles=particles,
+        proposal_logdensity_fn=lambda value: _normal_logpdf(value, 0.0),
+        target_logdensity_fn=lambda value: _normal_logpdf(
+            value, target_mean, sigma=0.5
+        ),
+        target_ess_fraction=0.6,
+        max_stages=32,
+        mala_steps=2,
+        mala_step_size=0.15,
+        mala_particle_chunk_size=64,
+    )
+
+    means = jnp.sum(result.weights[..., None] * result.particles, axis=0)[:, 0]
+    np.testing.assert_allclose(np.asarray(means), [1.0, -1.0], atol=0.15)
+    np.testing.assert_allclose(np.asarray(result.weights.sum(axis=0)), 1.0, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(result.final_beta), 1.0, atol=1e-6)
+    assert result.beta_to.shape[0] >= 2
+    assert np.all(result.pre_resample_ess > 0.0)
+    assert np.all((result.mala_acceptance >= 0.0) & (result.mala_acceptance <= 1.0))
+
+
+def test_adaptive_smc_rejects_invalid_mala_particle_chunk_size() -> None:
+    particles = jnp.zeros((8, 1, 1))
+    with pytest.raises(ValueError, match="chunk size must be positive"):
+        run_adaptive_smc(
+            key=jax.random.PRNGKey(1),
+            initial_particles=particles,
+            proposal_logdensity_fn=lambda value: _normal_logpdf(value, 0.0),
+            target_logdensity_fn=lambda value: _normal_logpdf(value, 1.0),
+            mala_particle_chunk_size=0,
+        )
+
+
+def test_adaptive_smc_reuses_kernels_with_dynamic_density_arguments() -> None:
+    def logq(value, _mean):
+        return _normal_logpdf(value, 0.0)
+
+    def target(value, mean):
+        return _normal_logpdf(value, mean, sigma=0.7)
+
+    kernels = build_adaptive_smc_kernels(
+        proposal_logdensity_fn=logq,
+        target_logdensity_fn=target,
+        mala_step_size=0.1,
+    )
+    means = []
+    for seed, target_mean in ((20, 0.8), (21, -0.8)):
+        result = run_adaptive_smc(
+            key=jax.random.PRNGKey(seed),
+            initial_particles=jax.random.normal(
+                jax.random.PRNGKey(seed + 100), (256, 1, 1)
+            ),
+            proposal_logdensity_fn=logq,
+            target_logdensity_fn=target,
+            density_args=(jnp.asarray([[[target_mean]]]),),
+            kernels=kernels,
+            target_ess_fraction=0.5,
+            max_stages=32,
+            mala_steps=1,
+            mala_step_size=0.1,
+        )
+        means.append(float(jnp.sum(result.weights[..., None] * result.particles)))
+    np.testing.assert_allclose(means, [0.8, -0.8], atol=0.2)
+
+
+def test_popcosmos_error_floor_variants_change_only_declared_likelihood() -> None:
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        root / "configs/experiments/popcosmos_native15d_rws.yaml",
+        root / "configs/experiments/popcosmos_native15d_rws_floor02.yaml",
+        root / "configs/experiments/popcosmos_native15d_rws_floor05.yaml",
+    ]
+    floors = []
+    for path in paths:
+        config = load_config(path)
+        floors.append(amortized_config(config)["likelihood"]["error_floor_frac"])
+        assert config["fit"]["flux_error_floor_frac"] == floors[-1]
+        assert len(config["bands"]) == 26
+        assert amortized_config(config)["encoder"]["latent_dim"] == 15
+    assert floors == [0.0, 0.02, 0.05]
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("equinox") is None, reason="equinox is not installed"
+)
+def test_weighted_refresh_updates_encoder_but_not_prior() -> None:
+    from euclid_dsps.amortized.elbo import AmortizedModel
+    from euclid_dsps.amortized.encoder import GaussianEncoder
+    from euclid_dsps.amortized.flows import StandardNormalPrior
+    from euclid_dsps.amortized.proposal_refresh import (
+        refresh_encoder_from_weighted_particles,
+    )
+    from euclid_dsps.calibration import GlobalSedScaleState
+
+    encoder = GaussianEncoder(
+        jax.random.PRNGKey(1),
+        input_dim=2,
+        latent_dim=1,
+        hidden_sizes=(8,),
+        activation="gelu",
+        log_std_min=-6.0,
+        log_std_max=2.0,
+        initial_log_std=-1.0,
+    )
+    model = AmortizedModel(
+        encoder=encoder,
+        prior=StandardNormalPrior(latent_dim=1),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.0)),
+    )
+    features = jnp.asarray(
+        [[-1.0, 1.0], [-0.5, 1.0], [0.5, 1.0], [1.0, 1.0]],
+        dtype=jnp.float32,
+    )
+    centers = features[:, :1]
+    particles = jnp.broadcast_to(centers[None, :, :], (16, 4, 1))
+    particles = particles + 0.05 * jax.random.normal(
+        jax.random.PRNGKey(2), particles.shape
+    )
+    weights = jnp.full((16, 4), 1.0 / 16.0)
+    prior_before = [
+        np.asarray(value).copy() for value in jax.tree_util.tree_leaves(model.prior)
+    ]
+
+    result = refresh_encoder_from_weighted_particles(
+        model,
+        features=features,
+        particles=particles,
+        weights=weights,
+        epochs=8,
+        object_batch_size=2,
+        learning_rate=2.0e-3,
+        validation_fraction=0.25,
+        seed=3,
+    )
+
+    prior_after = [
+        np.asarray(value) for value in jax.tree_util.tree_leaves(result.model.prior)
+    ]
+    assert all(
+        np.array_equal(before, after)
+        for before, after in zip(prior_before, prior_after, strict=True)
+    )
+    assert result.best_validation_nll <= result.initial_validation_nll
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("equinox") is None, reason="equinox is not installed"
+)
+def test_unimodal_checkpoint_expands_to_exact_symmetry_broken_mixture(
+    tmp_path: Path,
+) -> None:
+    import equinox as eqx
+
+    from euclid_dsps.amortized.elbo import AmortizedModel
+    from euclid_dsps.amortized.flows import StandardNormalPrior
+    from euclid_dsps.amortized.posterior import (
+        ConditionalFlowEncoder,
+        posterior_log_prob,
+        sample_posterior,
+    )
+    from euclid_dsps.amortized.proposal_refresh import (
+        expand_conditional_flow_base,
+    )
+    from euclid_dsps.calibration import GlobalSedScaleState
+
+    def encoder(key, components):
+        return ConditionalFlowEncoder(
+            key,
+            input_dim=3,
+            latent_dim=2,
+            hidden_sizes=(6,),
+            activation="gelu",
+            log_std_min=-6.0,
+            log_std_max=2.0,
+            initial_log_std=-1.0,
+            family="realnvp",
+            n_layers=2,
+            hidden_size=6,
+            output_space="latent_x",
+            base_components=components,
+        )
+
+    source = AmortizedModel(
+        encoder=encoder(jax.random.PRNGKey(1), 1),
+        prior=StandardNormalPrior(latent_dim=2),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(0.2)),
+    )
+    target = AmortizedModel(
+        encoder=encoder(jax.random.PRNGKey(2), 2),
+        prior=StandardNormalPrior(latent_dim=2),
+        sed_scale=GlobalSedScaleState(log_alpha_sed=jnp.asarray(-0.4)),
+    )
+    expanded = expand_conditional_flow_base(source, target, mean_offset=0.05)
+    features = jnp.ones((4, 3), dtype=jnp.float32)
+    source_mean, source_log_std = source.encoder.base(features)
+    logits, means, log_stds = expanded.encoder.base.mixture_parameters(features)
+
+    np.testing.assert_allclose(np.asarray(logits), 0.0)
+    np.testing.assert_allclose(
+        np.asarray(means.mean(axis=-2)), np.asarray(source_mean), atol=1.0e-6
+    )
+    np.testing.assert_allclose(
+        np.asarray(log_stds[:, 0]), np.asarray(source_log_std), atol=1.0e-6
+    )
+    assert not np.allclose(np.asarray(means[:, 0]), np.asarray(means[:, 1]))
+    np.testing.assert_array_equal(
+        np.asarray(expanded.sed_scale.log_alpha_sed),
+        np.asarray(source.sed_scale.log_alpha_sed),
+    )
+
+    draws = sample_posterior(expanded, jax.random.PRNGKey(3), features, 8)
+    evaluated = jax.vmap(lambda values: posterior_log_prob(expanded, features, values))(
+        draws.x
+    )
+    np.testing.assert_allclose(np.asarray(evaluated), np.asarray(draws.logq), atol=3e-4)
+
+    checkpoint = tmp_path / "mix2.eqx"
+    eqx.tree_serialise_leaves(checkpoint, expanded)
+    restored = eqx.tree_deserialise_leaves(checkpoint, target)
+    restored_density = posterior_log_prob(restored, features, draws.x[0])
+    np.testing.assert_allclose(
+        np.asarray(restored_density), np.asarray(draws.logq[0]), atol=3e-4
+    )
+
+
+def test_smc_slurm_contract_separates_pilot_refresh_and_em() -> None:
+    root = Path(__file__).resolve().parents[1]
+    pilot = (root / "scripts/popcosmos_posthoc_smc_h100.slurm").read_text()
+    refresh = (root / "scripts/popcosmos_posthoc_smc_refresh_h100.slurm").read_text()
+    submit = (root / "scripts/submit_popcosmos_posthoc_smc_pilot.sh").read_text()
+    assert (
+        "array_tasks=$((${#SMC_VARIANTS[@]} * ${#SMC_SEEDS[@]} * N_SHARDS))" in submit
+    )
+    assert 'ARRAY_CONCURRENCY="${ARRAY_CONCURRENCY:-12}"' in submit
+    assert 'CALIBRATION_INDICES="$SOURCE_ROOT/train/validation_indices.npy"' in submit
+    assert "proposal_probe_indices.npy" in submit
+    assert "floor_0p00" in pilot and "floor_0p02" in pilot and "floor_0p05" in pilot
+    assert 'SMC_VARIANTS_CSV="${SMC_VARIANTS_CSV:-' in pilot
+    assert (
+        '--variants "$SMC_VARIANTS_CSV"'
+        in (root / "scripts/popcosmos_posthoc_smc_finalize.slurm").read_text()
+    )
+    assert "--constraint=h100" in pilot
+    assert "--gres=gpu:1" in pilot
+    assert "selection_status" in refresh
+    assert "moderate_k${PROBE_SAMPLES}_importance" in refresh
+    assert "posthoc_empirical_bayes" not in pilot
+    assert "ALLOW_LOW_ESS" not in pilot
+
+    temperature = (
+        root / "scripts/popcosmos_posthoc_temperature_scan_h100.slurm"
+    ).read_text()
+    temperature_submit = (
+        root / "scripts/submit_popcosmos_posthoc_temperature_scan.sh"
+    ).read_text()
+    temperature_finalize = (
+        root / "scripts/popcosmos_posthoc_temperature_finalize.slurm"
+    ).read_text()
+    assert "--posterior-base-temperature" in temperature
+    assert "PROPOSAL_TEMPERATURES_CSV" in temperature_submit
+    assert "--partition=cpu_p1" in temperature_finalize
+    assert '"ready_for_empirical_bayes": False' in temperature
+    assert "posthoc_empirical_bayes" not in temperature
+
+    mix2_config = root / "configs/experiments/popcosmos_native15d_rws_floor05_mix2.yaml"
+    assert amortized_config(load_config(mix2_config))["encoder"]["base_components"] == 2
+    assert 'BASE_COMPONENTS="${BASE_COMPONENTS:-1}"' in refresh
+    assert '--source-config "$SOURCE_CONFIG"' in refresh
+    assert "BASELINE_REFRESH_OUT" in refresh
+    assert "np.sort(expected), np.sort(baseline)" in refresh
+    assert "popcosmos_native15d_rws_floor05_mix2.yaml" in refresh
+    assert '"ready_for_empirical_bayes": False' in refresh
+
+    scale = (root / "scripts/submit_popcosmos_posthoc_smc_scale.sh").read_text()
+    refresh_submit = (
+        root / "scripts/submit_popcosmos_posthoc_smc_refresh.sh"
+    ).read_text()
+    assert "SCALE_OBJECTS must be 512 or 1024" in scale
+    assert "PARENT_SMC_ROOT" in scale
+    assert "MALA_STEP_SIZE=0.005" in scale
+    assert "SMC_VARIANTS_CSV=floor_0p05" in scale
+    assert "BASE_COMPONENTS=1" in scale
+    assert 'REFRESH_DEPENDENCY="$scale_finalizer_job"' in scale
+    assert "Parent ordinary-IS support did not pass; stop before 1024" in scale
+    assert '--dependency="afterok:${REFRESH_DEPENDENCY}"' in refresh_submit
+    assert "SMC_CHECKPOINT" in submit
+    assert "EXCLUDE_INDICES_CSV" in submit
+    assert "REFRESH_SOURCE_CHECKPOINT" in refresh
+    assert "PRIOR_CONFIRMATION_SUMMARY" in refresh
+    assert '"ready_for_fast_amortized_inference"' in refresh
+
+    followup = (
+        root / "scripts/submit_popcosmos_smc_empirical_bayes_followup.sh"
+    ).read_text()
+    assert 'SMC_CHECKPOINT="$CANDIDATE_CHECKPOINT"' in followup
+    assert 'EXCLUDE_INDICES_CSV="$PARENT_SMC_INDICES,$PARENT_PROBE_INDICES"' in followup
+    assert '--dependency="afterok:${confirmation_finalizer_job}"' in followup
+    assert 'REFRESH_DEPENDENCY="$prior_confirmation_job"' in followup
+    assert "popcosmos_smc_empirical_bayes_confirm.slurm" in followup
+
+
+def test_progressive_smc_cohorts_consume_parent_probe_and_reserve_new_probe(
+    tmp_path: Path,
+) -> None:
+    calibration = tmp_path / "calibration.npy"
+    evaluation = tmp_path / "evaluation.npy"
+    np.save(calibration, np.arange(40, dtype=np.int64))
+    np.save(evaluation, np.arange(100, 110, dtype=np.int64))
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/build_popcosmos_posthoc_smc_cohorts.py"
+    )
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    common = [
+        sys.executable,
+        str(script),
+        "--calibration-indices",
+        str(calibration),
+        "--evaluation-indices",
+        str(evaluation),
+    ]
+    subprocess.run(
+        [
+            *common,
+            "--out",
+            str(parent / "cohorts"),
+            "--smc-objects",
+            "4",
+            "--probe-objects",
+            "4",
+            "--n-shards",
+            "2",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            *common,
+            "--out",
+            str(child / "cohorts"),
+            "--smc-objects",
+            "8",
+            "--probe-objects",
+            "8",
+            "--n-shards",
+            "4",
+            "--parent-smc-root",
+            str(parent),
+        ],
+        check=True,
+    )
+
+    parent_smc = np.load(parent / "cohorts/smc_calibration_indices.npy")
+    parent_probe = np.load(parent / "cohorts/proposal_probe_indices.npy")
+    child_smc = np.load(child / "cohorts/smc_calibration_indices.npy")
+    child_probe = np.load(child / "cohorts/proposal_probe_indices.npy")
+    np.testing.assert_array_equal(child_smc, np.concatenate((parent_smc, parent_probe)))
+    assert np.intersect1d(child_probe, child_smc).size == 0
+    manifest = json.loads((child / "cohorts/cohort_manifest.json").read_text())
+    assert manifest["progressive_parent"]["smc_objects"] == 4
+    assert manifest["progressive_parent"]["proposal_probe_objects"] == 4
+
+
+def test_smc_cohorts_exclude_multiple_previous_cohorts(tmp_path: Path) -> None:
+    calibration = tmp_path / "calibration.npy"
+    evaluation = tmp_path / "evaluation.npy"
+    first_exclusion = tmp_path / "teacher.npy"
+    second_exclusion = tmp_path / "probe.npy"
+    np.save(calibration, np.arange(40, dtype=np.int64))
+    np.save(evaluation, np.arange(100, 110, dtype=np.int64))
+    np.save(first_exclusion, np.arange(0, 4, dtype=np.int64))
+    np.save(second_exclusion, np.arange(4, 8, dtype=np.int64))
+    out = tmp_path / "fresh"
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/build_popcosmos_posthoc_smc_cohorts.py"
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--calibration-indices",
+            str(calibration),
+            "--evaluation-indices",
+            str(evaluation),
+            "--out",
+            str(out),
+            "--smc-objects",
+            "8",
+            "--probe-objects",
+            "8",
+            "--n-shards",
+            "4",
+            "--exclude-indices",
+            str(first_exclusion),
+            "--exclude-indices",
+            str(second_exclusion),
+        ],
+        check=True,
+    )
+
+    smc = np.load(out / "smc_calibration_indices.npy")
+    probe = np.load(out / "proposal_probe_indices.npy")
+    excluded = np.concatenate((np.load(first_exclusion), np.load(second_exclusion)))
+    assert np.intersect1d(smc, excluded).size == 0
+    assert np.intersect1d(probe, excluded).size == 0
+    assert np.intersect1d(smc, probe).size == 0
+    manifest = json.loads((out / "cohort_manifest.json").read_text())
+    assert manifest["excluded_unique_rows"] == 8
+    assert len(manifest["excluded_indices"]) == 2
+
+
+def test_smc_shards_are_combined_with_exact_cohort(tmp_path: Path) -> None:
+    root = tmp_path / "seed_260817"
+    common = {
+        "algorithm": "adaptive q-to-target SMC",
+        "density_space": "latent_x",
+        "particles_per_object": 16,
+        "seed": 260817,
+        "likelihood": {"type": "student_t"},
+        "target_contract": "target",
+        "proposal_contract": "proposal",
+        "selection_contract": "photometry-only",
+        "target_ess_fraction": 0.5,
+        "mala_steps": 2,
+        "mala_step_size": 0.02,
+        "bands": ["a"],
+        "git_commit": "abc",
+        "wall_seconds": 2.0,
+        "inputs": {"config": {}, "row_indices": {}},
+    }
+    for shard_index, row_index in enumerate((10, 20)):
+        shard = root / f"shard_{shard_index:03d}"
+        shard.mkdir(parents=True)
+        (shard / "DONE").touch()
+        (shard / "smc_summary.json").write_text(json.dumps(common))
+        pd.DataFrame(
+            {
+                "row_index": [row_index],
+                "log_evidence": [1.0],
+                "final_ess_fraction": [0.5],
+                "unique_ancestor_fraction": [0.5],
+                "max_final_weight": [0.08],
+                "mean_mala_acceptance": [0.5],
+                "weighted_chi2_per_valid_band": [1.0],
+                "weighted_reduced_chi2": [1.0],
+                "weighted_fraction_abs_gt_5": [0.0],
+            }
+        ).to_parquet(shard / "smc_object_diagnostics.parquet", index=False)
+        pd.DataFrame(
+            {
+                "row_index": [row_index],
+                "stage": [1],
+                "beta_to": [1.0],
+            }
+        ).to_parquet(shard / "smc_stage_diagnostics.parquet", index=False)
+        pd.DataFrame(
+            {
+                "row_index": [row_index],
+                "band": ["a"],
+                "weighted_abs_chi": [1.0],
+                "weighted_frac_abs_gt_5": [0.0],
+            }
+        ).to_parquet(shard / "posterior_predictive_band_objects.parquet", index=False)
+        np.save(shard / "row_indices.npy", np.asarray([row_index], dtype=np.int64))
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/combine_popcosmos_posthoc_smc_shards.py"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--root",
+            str(root),
+            "--expected-shards",
+            "2",
+            "--expected-objects",
+            "2",
+        ],
+        check=True,
+    )
+    assert (root / "DONE").is_file()
+    np.testing.assert_array_equal(np.load(root / "row_indices.npy"), [10, 20])
+    summary = json.loads((root / "smc_summary.json").read_text())
+    assert summary["support_gate"]["status"] == "PASS"
+    assert summary["sharding"]["n_shards"] == 2
+
+
+def test_smc_summary_selects_only_stable_adequate_variant(tmp_path: Path) -> None:
+    root = tmp_path / "pilot"
+    evidence = {"floor_0p00": 1.0, "floor_0p02": 3.0, "floor_0p05": 2.0}
+    for variant, center in evidence.items():
+        for seed, offset in ((260817, -0.05), (260818, 0.05)):
+            run = root / variant / f"seed_{seed}"
+            run.mkdir(parents=True)
+            (run / "DONE").touch()
+            pd.DataFrame(
+                {
+                    "row_index": [10, 20],
+                    "log_evidence": [center + offset, center + 0.2 + offset],
+                }
+            ).to_parquet(run / "smc_object_diagnostics.parquet", index=False)
+            (run / "smc_summary.json").write_text(
+                json.dumps(
+                    {
+                        "seed": seed,
+                        "support_gate": {"status": "PASS"},
+                        "metrics": {
+                            "mean_log_evidence": center + offset,
+                            "median_log_evidence": center + offset,
+                            "median_final_ess_fraction": 0.5,
+                            "median_unique_ancestor_fraction": 0.4,
+                            "median_max_final_weight": 0.01,
+                            "median_mala_acceptance": 0.5,
+                            "median_chi2_per_valid_band": 2.0,
+                            "median_reduced_chi2": 3.0,
+                            "median_fraction_abs_gt_5": 0.02,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/summarize_popcosmos_posthoc_smc.py"
+    )
+    subprocess.run(
+        [sys.executable, str(script), "--root", str(root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    summary = json.loads((root / "pilot_selection/selection_summary.json").read_text())
+    assert summary["selection_status"] == "PASS"
+    assert summary["selected_variant"] == "floor_0p02"
+    assert summary["spectroscopy_used"] is False
+
+
+def test_smc_summary_accepts_preselected_variant(tmp_path: Path) -> None:
+    root = tmp_path / "pilot"
+    variant = "floor_0p05"
+    for seed, offset in ((260817, -0.05), (260818, 0.05)):
+        run = root / variant / f"seed_{seed}"
+        run.mkdir(parents=True)
+        (run / "DONE").touch()
+        pd.DataFrame(
+            {"row_index": [10, 20], "log_evidence": [2.0 + offset, 2.2 + offset]}
+        ).to_parquet(run / "smc_object_diagnostics.parquet", index=False)
+        (run / "smc_summary.json").write_text(
+            json.dumps(
+                {
+                    "seed": seed,
+                    "support_gate": {"status": "PASS"},
+                    "metrics": {
+                        "mean_log_evidence": 2.0 + offset,
+                        "median_log_evidence": 2.0 + offset,
+                        "median_chi2_per_valid_band": 2.0,
+                        "median_fraction_abs_gt_5": 0.02,
+                    },
+                }
+            )
+        )
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/summarize_popcosmos_posthoc_smc.py"
+    )
+    subprocess.run(
+        [sys.executable, str(script), "--root", str(root), "--variants", variant],
+        check=True,
+    )
+    summary = json.loads((root / "pilot_selection/selection_summary.json").read_text())
+    assert summary["selection_status"] == "PASS"
+    assert summary["selected_variant"] == variant
+    assert summary["evaluated_variants"] == [variant]
+
+
+def test_proposal_temperature_scan_selects_supported_candidate_but_blocks_em(
+    tmp_path: Path,
+) -> None:
+    refresh = tmp_path / "refresh"
+    scan = tmp_path / "scan"
+    probe_samples = 16
+
+    def write_candidate(root: Path, *, raw_ess: float, bad_k: float) -> None:
+        root.mkdir(parents=True)
+        support = {"status": "PASS" if raw_ess >= 0.05 and bad_k <= 0.2 else "FAIL"}
+        (root / "importance_summary.json").write_text(
+            json.dumps(
+                {
+                    "n_objects": 2,
+                    "n_joint_draws": 2 * probe_samples,
+                    "median_raw_ess_fraction": raw_ess,
+                    "median_psis_ess_fraction": raw_ess * 0.9,
+                    "fraction_pareto_k_gt_0p7": bad_k,
+                    "fraction_pareto_k_gt_1": bad_k / 2.0,
+                    "inputs": {"truth": None},
+                }
+            )
+        )
+        (root / "support_gate.json").write_text(json.dumps(support))
+        (root / "DONE").touch()
+
+    write_candidate(
+        refresh / f"moderate_k{probe_samples}_importance",
+        raw_ess=0.02,
+        bad_k=0.6,
+    )
+    for temperature, raw_ess, bad_k in (
+        (1.25, 0.07, 0.15),
+        (1.5, 0.09, 0.10),
+    ):
+        slug = str(temperature).replace(".", "p")
+        candidate = scan / f"temperature_{slug}"
+        write_candidate(
+            candidate / f"importance_k{probe_samples}",
+            raw_ess=raw_ess,
+            bad_k=bad_k,
+        )
+        proposal = candidate / f"proposal_k{probe_samples}"
+        proposal.mkdir()
+        (proposal / "inference_summary.json").write_text(
+            json.dumps({"posterior_base_temperature": temperature})
+        )
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/select_popcosmos_proposal_temperature.py"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--refresh-root",
+            str(refresh),
+            "--scan-root",
+            str(scan),
+            "--temperatures",
+            "1.25,1.5",
+            "--probe-samples",
+            str(probe_samples),
+        ],
+        check=True,
+    )
+    selection = json.loads((scan / "temperature_selection.json").read_text())
+    assert selection["selection_status"] == "PASS"
+    assert selection["selected_posterior_base_temperature"] == 1.5
+    assert selection["confirmation_required"] is True
+    assert selection["ready_for_empirical_bayes"] is False
+
+
+def test_defensive_scan_selects_supported_candidate_but_blocks_em(
+    tmp_path: Path,
+) -> None:
+    scan = tmp_path / "scan"
+    baseline = tmp_path / "baseline_importance.json"
+    probe_samples = 16
+    baseline.write_text(
+        json.dumps(
+            {
+                "n_objects": 2,
+                "n_joint_draws": 2 * probe_samples,
+                "median_raw_ess_fraction": 0.02,
+                "median_psis_ess_fraction": 0.018,
+                "fraction_pareto_k_gt_0p7": 0.6,
+                "fraction_pareto_k_gt_1": 0.3,
+                "support_gate": {
+                    "status": "FAIL",
+                    "min_median_raw_ess_fraction": 0.05,
+                    "max_fraction_pareto_k_gt_0p7": 0.2,
+                },
+                "inputs": {"truth": None},
+            }
+        )
+    )
+    for temperature in (1.25, 1.5):
+        for fraction in (0.05, 0.1):
+            root = (
+                scan
+                / f"tail_temperature_{str(temperature).replace('.', 'p')}"
+                / f"epsilon_{str(fraction).replace('.', 'p')}"
+            )
+            root.mkdir(parents=True)
+            passing = temperature == 1.25 and fraction == 0.1
+            raw_ess = 0.08 if passing else 0.03
+            bad_k = 0.1 if passing else 0.4
+            summary = {
+                "tail_temperature": temperature,
+                "allocation": {
+                    "requested_tail_fraction": fraction,
+                    "realized_tail_fraction": fraction,
+                },
+                "n_objects": 2,
+                "n_joint_draws": 2 * probe_samples,
+                "median_raw_ess_fraction": raw_ess,
+                "median_psis_ess_fraction": raw_ess * 0.9,
+                "fraction_pareto_k_gt_0p7": bad_k,
+                "fraction_pareto_k_gt_1": bad_k / 2,
+                "spectroscopy_used": False,
+            }
+            (root / "importance_summary.json").write_text(json.dumps(summary))
+            (root / "support_gate.json").write_text(
+                json.dumps(
+                    {
+                        "status": "PASS" if passing else "FAIL",
+                        "min_median_raw_ess_fraction": 0.05,
+                        "max_fraction_pareto_k_gt_0p7": 0.2,
+                    }
+                )
+            )
+            (root / "DONE").touch()
+
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/select_popcosmos_defensive_proposal.py"
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--baseline-importance",
+            str(baseline),
+            "--scan-root",
+            str(scan),
+            "--tail-temperatures",
+            "1.25,1.5",
+            "--tail-fractions",
+            "0.05,0.1",
+            "--probe-samples",
+            str(probe_samples),
+        ],
+        check=True,
+    )
+    selection = json.loads((scan / "defensive_selection.json").read_text())
+    assert selection["selection_status"] == "PASS"
+    assert selection["selected_tail_temperature"] == 1.25
+    assert selection["selected_requested_tail_fraction"] == 0.1
+    assert selection["confirmation_required"] is True
+    assert selection["ready_for_empirical_bayes"] is False
+
+
+def test_defensive_scan_jean_zay_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    task = (root / "scripts/popcosmos_posthoc_defensive_scan_h100.slurm").read_text()
+    submit = (root / "scripts/submit_popcosmos_posthoc_defensive_scan.sh").read_text()
+    finalize = (root / "scripts/popcosmos_posthoc_defensive_finalize.slurm").read_text()
+
+    assert "#SBATCH --constraint=h100" in task
+    assert "#SBATCH --gres=gpu:1" in task
+    assert "evaluate_popcosmos_defensive_proposal.py" in task
+    assert '--dependency="afterok:${DEFENSIVE_SCAN_JOB}"' in submit
+    assert "#SBATCH --partition=cpu_p1" in finalize
+    assert "select_popcosmos_defensive_proposal.py" in finalize

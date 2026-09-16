@@ -88,6 +88,37 @@ def test_posterior_predictive_chi2_is_finite_for_tiny_fluxes() -> None:
     assert np.isfinite(chi2).all()
 
 
+def test_truth_free_inference_helpers_do_not_call_truth_writers(
+    tmp_path, monkeypatch
+) -> None:
+    truth_path = tmp_path / "inference_truth.parquet"
+    truth_path.write_bytes(b"stale")
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("truth writer must not be called")
+
+    monkeypatch.setattr(infer_mod, "write_truth_snapshot", forbidden)
+    monkeypatch.setattr(infer_mod, "write_redshift_metrics_for_run", forbidden)
+    monkeypatch.setattr(infer_mod, "write_extended_truth_diagnostics", forbidden)
+
+    snapshot = infer_mod._maybe_write_inference_truth_snapshot(
+        tmp_path,
+        {},
+        enabled=False,
+        row_indices=np.asarray([1, 2]),
+        limit=2,
+        batch_size=8,
+    )
+    metrics = infer_mod._write_inference_truth_metrics(
+        {}, tmp_path, dataset_label="Diffsky", enabled=False
+    )
+
+    assert snapshot.empty
+    assert not truth_path.exists()
+    assert metrics == {"truth_diagnostics": "disabled_by_config"}
+
+
 def test_derived_columns_from_theta_are_chunked(monkeypatch) -> None:
     calls = []
 

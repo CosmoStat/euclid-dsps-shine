@@ -1,0 +1,5 @@
+extends: feniks_rws_recovery_r25_common.yaml
+
+# Capacity ablation: retain the current residual encoder and 6x256 flow while
+# changing only the training objective/exposure back to RWS.
+

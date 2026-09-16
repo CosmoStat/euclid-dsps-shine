@@ -12,6 +12,7 @@ from .model import (
     _jax_result_derived_array,
     model_mags_jax_dynamic,
     run_dsps_model_jax_dynamic,
+    spline_numerical_dtype,
 )
 
 
@@ -170,7 +171,9 @@ def model_mags_from_theta_matrix_jax(
     magnitudes preserve the leading dimensions and append the configured band
     dimension.
     """
-    theta = jnp.asarray(theta, dtype=jnp.float32)
+    theta = jnp.asarray(
+        theta, dtype=spline_numerical_dtype(getattr(context, "model_config", None))
+    )
     if theta.shape[-1] != len(parameter_names):
         raise ValueError(
             "theta last dimension mismatch: "
@@ -201,7 +204,9 @@ def derived_from_theta_matrix_jax(
     parameter_names: tuple[str, ...],
 ) -> jnp.ndarray:
     """Evaluate DSPS derived quantities for compact free-parameter vectors."""
-    theta = jnp.asarray(theta, dtype=jnp.float32)
+    theta = jnp.asarray(
+        theta, dtype=spline_numerical_dtype(getattr(context, "model_config", None))
+    )
     if theta.shape[-1] != len(parameter_names):
         raise ValueError(
             "theta last dimension mismatch: "

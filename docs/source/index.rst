@@ -24,7 +24,7 @@ Where to Start
      - :doc:`installation`
      - ``python -m pip install -e .``
    * - Run the production workflow
-     - :doc:`production`, :doc:`diffsky_synthetic_closure`
+     - :doc:`active_workflows`, :doc:`production`, :doc:`diffsky_synthetic_closure`
      - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
    * - Validate closure data
      - :doc:`production`, :doc:`diffsky_synthetic_closure`
@@ -33,7 +33,8 @@ Where to Start
      - :doc:`spline15d_realnvp`, :doc:`prior_learning`
      - ``configs/prior_feniks_spline15d_realnvp.yaml``
    * - Run amortized inference
-     - :doc:`amortized_inference`, :doc:`conditional_posterior_matrix`
+     - :doc:`amortized_inference`, :doc:`conditional_posterior_matrix`,
+       :doc:`sc_asmc_em`
      - ``configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml``
    * - Use HLTDS/FS2 debug references
      - :doc:`data_download`, :doc:`diffsky_dataset`
@@ -70,7 +71,8 @@ Workflow Map
 Project Boundaries
 ------------------
 
-* ``euclid_dsps.model`` is the only module that calls native DSPS.
+* ``euclid_dsps.model`` owns the production DSPS forward model. Filter,
+  synthetic-data, and numerical audit modules may use narrow DSPS utilities.
 * ``euclid_dsps.io`` owns parquet row contracts and photometry unit
   conversions.
 * ``euclid_dsps.fit`` and ``euclid_dsps.mcmc`` own point estimates and
@@ -91,6 +93,7 @@ parameters physically.
    :caption: Getting Started
 
    installation
+   active_workflows
    production
    data_download
    run_setup
@@ -103,6 +106,9 @@ parameters physically.
    diffsky_dataset
    diffsky_synthetic_closure
    forward_model
+   feniks_decoder_debug
+   feniks_current_status
+   feniks_debug_meeting
    prior_learning
    spline15d_realnvp
    amortized_inference
@@ -110,6 +116,7 @@ parameters physically.
    joint_prior_realnvp_matrix
    mode_covering_posterior_matrix
    selfsupervised_rws_matrix
+   sc_asmc_em
    feniks_prior_ladder_jlens
    science_assessment
    ssp_compression

@@ -18,8 +18,10 @@ if HAS_EQUINOX:
         RealNVPPrior,
         RQSplineCouplingPrior,
         StandardNormalPrior,
+        StructuredRQSplinePrior,
         assert_flow_integrity,
         assert_realnvp_integrity,
+        flow_coordinate_transform_counts,
         flow_integrity_diagnostics,
         realnvp_integrity_diagnostics,
     )
@@ -285,3 +287,58 @@ def test_rq_spline_masks_and_permutations_are_not_trainable() -> None:
     assert diagnostics["status"] == "PASS"
     assert diagnostics["prior_type"] == "RQSplineCoupling"
     assert_flow_integrity(prior, context="test", sample_count=16)
+
+
+def test_structured_rq_spline_roundtrip_joint_density_and_identity() -> None:
+    prior = StructuredRQSplinePrior(
+        jax.random.PRNGKey(12),
+        latent_dim=7,
+        core_dim=3,
+        core_layers=4,
+        conditional_layers=4,
+        hidden_size=12,
+        n_bins=8,
+        tail_bound=5.0,
+        init="identity",
+        init_scale=0.0,
+    )
+    standard = StandardNormalPrior(latent_dim=7)
+    u = jnp.linspace(-0.8, 0.8, 35, dtype=jnp.float32).reshape(5, 7)
+
+    x, forward_logdet = prior.forward(u)
+    recovered, inverse_logdet = prior.inverse(x)
+
+    assert jnp.allclose(recovered, u, atol=1.0e-5)
+    assert jnp.allclose(forward_logdet + inverse_logdet, 0.0, atol=1.0e-5)
+    assert jnp.allclose(prior.log_prob(x), standard.log_prob(x), atol=1.0e-5)
+    assert prior.sample(jax.random.PRNGKey(13), (2, 3)).shape == (2, 3, 7)
+    diagnostics = flow_integrity_diagnostics(prior, sample_count=16)
+    assert diagnostics["status"] == "PASS"
+    assert diagnostics["prior_type"] == "StructuredRQSpline"
+
+
+def test_coordinate_coverage_detects_alternating_mask_roll_lockout() -> None:
+    legacy = RealNVPPrior(
+        jax.random.PRNGKey(14),
+        latent_dim=5,
+        n_layers=10,
+        hidden_size=8,
+        permutation="alternating_roll",
+    )
+    covered = RealNVPPrior(
+        jax.random.PRNGKey(15),
+        latent_dim=5,
+        n_layers=10,
+        hidden_size=8,
+        permutation="roll",
+    )
+
+    legacy_counts = flow_coordinate_transform_counts(legacy)
+    covered_counts = flow_coordinate_transform_counts(covered)
+    legacy_diagnostics = flow_integrity_diagnostics(legacy, sample_count=16)
+
+    assert legacy_counts[1] == 0
+    assert legacy_counts[3] == 0
+    assert min(covered_counts) > 0
+    assert legacy_diagnostics["status"] == "WARN"
+    assert legacy_diagnostics["untransformed_coordinate_indices"] == [1, 3]

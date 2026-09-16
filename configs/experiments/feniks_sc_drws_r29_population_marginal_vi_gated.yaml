@@ -1,0 +1,27 @@
+extends: feniks_sc_drws_r29_frozen_parent_topology_sleep_elbo_npe.yaml
+
+# Prepared population phase.  The runner must first produce
+# POPULATION_VI_READY.json from the independent truth-free validation receipt.
+amortized:
+  population_vi:
+    enabled: false
+    activation_receipt: null
+    objective: selected_catalog_marginal_log_likelihood
+    prior_steps_per_round: 1
+    posterior_adaptation_epochs_per_round: 1
+    maximum_rounds: 3
+    direct_draws_per_object: 32
+    proposal_frozen_within_prior_step: true
+    unresolved_object_policy: block_global_prior_update
+    selection:
+      event: noisy_lsst_r_ab_lt_29
+      estimator: fixed_reference_direct_importance
+      common_random_numbers: true
+      maximum_relative_mc_error: 0.02
+    technical_gates:
+      minimum_median_ess_fraction: 0.05
+      maximum_pareto_k_gt_0p7_or_nonfinite_fraction: 0.20
+      maximum_p90_raw_weight: 0.80
+
+truth:
+  parameter_columns: {}

@@ -1,0 +1,36 @@
+extends: feniks_sc_drws_r29_current_production.yaml
+
+# Stage 3 of the targeted population-VEM follow-up. The parent prior comes from
+# the fixed-bank selection-corrected M-step and remains frozen. This is a short
+# approximate AVI refresh, not an importance-corrected posterior product.
+amortized:
+  prior:
+    train_jointly: false
+
+  objective:
+    mode: stochastic_elbo
+    selection_correction:
+      enabled: false
+    sleep:
+      enabled: false
+
+  training:
+    epochs: 2
+    batch_size: 1024
+    jax_batch_size: 256
+    n_samples: 2
+    learning_rate: 3.0e-6
+    weight_decay: 1.0e-6
+    gradient_clip_norm: 5.0
+    kl_annealing_epochs: 0
+    kl_weight_max: 1.0
+    validation_every: 1
+    best_checkpoint_metric: validation_loss
+    best_checkpoint_min_epoch: 1
+    data_parallel: pmap
+
+  output:
+    checkpoint_every: 1
+    diagnostics_every: 1
+    save_training_curves: true
+    save_posterior_preview: false

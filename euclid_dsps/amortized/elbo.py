@@ -133,6 +133,9 @@ def negative_elbo(
         student_t_dof=float(likelihood_config.get("student_t_dof", 2.0)),
         error_floor_frac=float(likelihood_config.get("error_floor_frac", 0.02)),
         error_jitter=float(likelihood_config.get("error_jitter", 0.0)),
+        arithmetic_precision=str(
+            likelihood_config.get("arithmetic_precision", "float32_legacy")
+        ),
     )
     logp = jnp.zeros_like(logq) if deterministic else posterior.logprior
     kl_mc = logq - logp
@@ -226,6 +229,8 @@ def objective_mode(objective_config: dict | None) -> str:
         "wake": "periodic_wake",
         "reweighted_wake_sleep": "reweighted_wake_sleep",
         "rws": "reweighted_wake_sleep",
+        "adaptive_smc_wake": "adaptive_smc_wake",
+        "adaptive_bridge_smc": "adaptive_smc_wake",
         "deterministic": "deterministic_reconstruction",
         "autoencoder": "deterministic_reconstruction",
         "deterministic_autoencoder": "deterministic_reconstruction",
@@ -237,7 +242,7 @@ def objective_mode(objective_config: dict | None) -> str:
         raise ValueError(
             "amortized.objective.mode must be stochastic_elbo, "
             "hybrid_elbo, periodic_wake, reweighted_wake_sleep, "
-            "neural_posterior_estimation, or "
+            "adaptive_smc_wake, neural_posterior_estimation, or "
             "deterministic_reconstruction"
         )
     return aliases[mode]

@@ -1,0 +1,30 @@
+{
+  "checkpoint_directory": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160",
+  "components": {
+    "ema_model": {
+      "path": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160/ema_model.eqx",
+      "sha256": "be7a80e473c526dbd419e28a4a145b4266115e7fe7eff4887305a45ecd402e52",
+      "sidecar": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160/ema_model.eqx.json"
+    },
+    "prior": {
+      "path": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160/prior.eqx",
+      "sha256": "8f6ec0b89c68a172b126d76605869c2b23064c1d4d082cb30b99605c633a11e3",
+      "sidecar": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160/prior.eqx.json"
+    },
+    "raw_model": {
+      "path": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160/raw_model.eqx",
+      "sha256": "c6b190b28ba292d2d8e6eacf3082c6c90da4665d6cecb49835d87780e06b07b0",
+      "sidecar": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/checkpoints/epoch_0160/raw_model.eqx.json"
+    }
+  },
+  "config_hash": "81a9a31cd92bd246a93a4d6bf9b243901748c141ffce1a41373f5d6480c746aa",
+  "epoch": 160,
+  "feature_stats": {
+    "path": "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/full/current_residual_6x256/seed_260826/train/feature_stats.json",
+    "sha256": "9c3599b8d2bdfb6a895a5af2bd2ff3d7b3b7a61eb84351e479391dd62d8a9613"
+  },
+  "feature_stats_hash": "57dfe340a3e239a190b01e1dd7ee6ee230010fc44d7831aaf43b4956f2eecc28",
+  "latent_transform_hash": "9d08fcbe5694ee55174f853ad61ffcd118a4a1f6ac42fd0193be63b2aee546e3",
+  "status": "FROZEN",
+  "truth_used_for_training_or_checkpoint_selection": false
+}

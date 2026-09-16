@@ -425,6 +425,250 @@ class RQSplineCouplingPrior(eqx.Module):
         return base + logdet
 
 
+class _ConditionalRQSplineCouplingLayer(eqx.Module):
+    mask: jnp.ndarray
+    net: object
+    core_dim: int = eqx.field(static=True)
+    sfh_dim: int = eqx.field(static=True)
+    n_bins: int = eqx.field(static=True)
+    tail_bound: float = eqx.field(static=True)
+    min_bin_width: float = eqx.field(static=True)
+    min_bin_height: float = eqx.field(static=True)
+    min_derivative: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key,
+        *,
+        core_dim: int,
+        sfh_dim: int,
+        hidden_size: int,
+        mask,
+        n_bins: int,
+        tail_bound: float,
+        min_bin_width: float,
+        min_bin_height: float,
+        min_derivative: float,
+        init: str = "default",
+        init_scale: float = 1.0,
+    ) -> None:
+        self.mask = jnp.asarray(mask, dtype=jnp.bool_)
+        self.net = eqx.nn.MLP(
+            in_size=int(core_dim) + int(sfh_dim),
+            out_size=int(sfh_dim) * (3 * int(n_bins) + 1),
+            width_size=int(hidden_size),
+            depth=2,
+            activation=jax.nn.gelu,
+            key=key,
+        )
+        init = str(init).lower()
+        if init not in {"default", "identity"}:
+            raise ValueError(
+                "StructuredRQSplinePrior init must be 'default' or 'identity'"
+            )
+        if init == "identity":
+            self.net = _scale_last_linear(self.net, float(init_scale))
+        self.core_dim = int(core_dim)
+        self.sfh_dim = int(sfh_dim)
+        self.n_bins = int(n_bins)
+        self.tail_bound = float(tail_bound)
+        self.min_bin_width = float(min_bin_width)
+        self.min_bin_height = float(min_bin_height)
+        self.min_derivative = float(min_derivative)
+
+    def forward(self, sfh, core):
+        mask = _mask_as_float(self.mask, sfh)
+        active = 1.0 - mask
+        params = self._params(sfh * mask, core)
+        transformed, logdet = _rational_quadratic_spline(
+            sfh,
+            params,
+            inverse=False,
+            n_bins=self.n_bins,
+            tail_bound=self.tail_bound,
+            min_bin_width=self.min_bin_width,
+            min_bin_height=self.min_bin_height,
+            min_derivative=self.min_derivative,
+        )
+        return sfh * mask + active * transformed, jnp.sum(active * logdet, axis=-1)
+
+    def inverse(self, sfh, core):
+        mask = _mask_as_float(self.mask, sfh)
+        active = 1.0 - mask
+        params = self._params(sfh * mask, core)
+        transformed, logdet = _rational_quadratic_spline(
+            sfh,
+            params,
+            inverse=True,
+            n_bins=self.n_bins,
+            tail_bound=self.tail_bound,
+            min_bin_width=self.min_bin_width,
+            min_bin_height=self.min_bin_height,
+            min_derivative=self.min_derivative,
+        )
+        return sfh * mask + active * transformed, jnp.sum(active * logdet, axis=-1)
+
+    def _params(self, masked_sfh, core):
+        inputs = jnp.concatenate((core, masked_sfh), axis=-1)
+        raw = _apply_net(self.net, inputs)
+        return raw.reshape(raw.shape[:-1] + (self.sfh_dim, 3 * self.n_bins + 1))
+
+
+class StructuredRQSplinePrior(eqx.Module):
+    """Block-triangular ``p(core) p(SFH | core)`` exact-density flow.
+
+    The first ``core_dim`` latent coordinates are transformed by their own
+    spline flow. The remaining coordinates are transformed conditionally on
+    the resulting core value, preserving the complete joint density while
+    preventing the higher-dimensional SFH block from consuming all capacity.
+    """
+
+    core_prior: RQSplineCouplingPrior
+    conditional_layers: tuple
+    conditional_permutations: tuple
+    conditional_inverse_permutations: tuple
+    latent_dim: int = eqx.field(static=True)
+    core_dim: int = eqx.field(static=True)
+    sfh_dim: int = eqx.field(static=True)
+    n_bins: int = eqx.field(static=True)
+    tail_bound: float = eqx.field(static=True)
+
+    def __init__(
+        self,
+        key,
+        *,
+        latent_dim: int = 15,
+        core_dim: int = 5,
+        core_layers: int = 10,
+        conditional_layers: int = 10,
+        hidden_size: int = 256,
+        n_bins: int = 16,
+        tail_bound: float = 12.0,
+        min_bin_width: float = 1.0e-3,
+        min_bin_height: float = 1.0e-3,
+        min_derivative: float = 1.0e-3,
+        permutation: str = "roll",
+        init: str = "identity",
+        init_scale: float = 0.0,
+    ) -> None:
+        latent_dim = int(latent_dim)
+        core_dim = int(core_dim)
+        if not 1 < core_dim < latent_dim:
+            raise ValueError(
+                "StructuredRQSplinePrior requires 1 < core_dim < latent_dim"
+            )
+        sfh_dim = latent_dim - core_dim
+        k_core, k_conditional = jax.random.split(key)
+        self.core_prior = RQSplineCouplingPrior(
+            k_core,
+            latent_dim=core_dim,
+            n_layers=int(core_layers),
+            hidden_size=int(hidden_size),
+            n_bins=int(n_bins),
+            tail_bound=float(tail_bound),
+            min_bin_width=float(min_bin_width),
+            min_bin_height=float(min_bin_height),
+            min_derivative=float(min_derivative),
+            permutation=str(permutation),
+            init=str(init),
+            init_scale=float(init_scale),
+        )
+        keys = jax.random.split(k_conditional, int(conditional_layers))
+        masks = _alternating_masks(sfh_dim, int(conditional_layers))
+        self.conditional_layers = tuple(
+            _ConditionalRQSplineCouplingLayer(
+                keys[index],
+                core_dim=core_dim,
+                sfh_dim=sfh_dim,
+                hidden_size=int(hidden_size),
+                mask=masks[index],
+                n_bins=int(n_bins),
+                tail_bound=float(tail_bound),
+                min_bin_width=float(min_bin_width),
+                min_bin_height=float(min_bin_height),
+                min_derivative=float(min_derivative),
+                init=str(init),
+                init_scale=float(init_scale),
+            )
+            for index in range(int(conditional_layers))
+        )
+        self.conditional_permutations = tuple(
+            _flow_permutation(sfh_dim, index, str(permutation))
+            for index in range(int(conditional_layers))
+        )
+        self.conditional_inverse_permutations = tuple(
+            jnp.argsort(value) for value in self.conditional_permutations
+        )
+        self.latent_dim = latent_dim
+        self.core_dim = core_dim
+        self.sfh_dim = sfh_dim
+        self.n_bins = int(n_bins)
+        self.tail_bound = float(tail_bound)
+
+    def forward(self, u):
+        value = jnp.asarray(u, dtype=jnp.float32)
+        core, sfh = value[..., : self.core_dim], value[..., self.core_dim :]
+        core, logdet = self.core_prior.forward(core)
+        for layer, permutation in zip(
+            self.conditional_layers, self.conditional_permutations, strict=True
+        ):
+            sfh, layer_logdet = layer.forward(sfh, core)
+            sfh = jnp.take(sfh, permutation, axis=-1)
+            logdet = logdet + layer_logdet
+        return jnp.concatenate((core, sfh), axis=-1), logdet
+
+    def inverse(self, x):
+        value = jnp.asarray(x, dtype=jnp.float32)
+        core, sfh = value[..., : self.core_dim], value[..., self.core_dim :]
+        logdet = jnp.zeros(value.shape[:-1], dtype=value.dtype)
+        for layer, inverse_permutation in zip(
+            reversed(self.conditional_layers),
+            reversed(self.conditional_inverse_permutations),
+            strict=True,
+        ):
+            sfh = jnp.take(sfh, inverse_permutation, axis=-1)
+            sfh, layer_logdet = layer.inverse(sfh, core)
+            logdet = logdet + layer_logdet
+        core_u, core_logdet = self.core_prior.inverse(core)
+        return jnp.concatenate((core_u, sfh), axis=-1), logdet + core_logdet
+
+    def log_prob(self, x):
+        u, logdet = self.inverse(x)
+        base = -0.5 * jnp.sum(u**2 + jnp.log(2.0 * jnp.pi), axis=-1)
+        return base + logdet
+
+    def sample(self, key, shape=()):
+        if isinstance(shape, int):
+            shape = (shape,)
+        u = jax.random.normal(key, tuple(shape) + (self.latent_dim,), dtype=jnp.float32)
+        x, _logdet = self.forward(u)
+        return x
+
+    def sample_with_temperature(self, key, shape=(), *, temperature: float = 1.0):
+        if float(temperature) <= 0.0:
+            raise ValueError("Base temperature must be positive")
+        if isinstance(shape, int):
+            shape = (shape,)
+        u = float(temperature) * jax.random.normal(
+            key, tuple(shape) + (self.latent_dim,), dtype=jnp.float32
+        )
+        x, _logdet = self.forward(u)
+        return x
+
+    def log_prob_with_temperature(self, x, *, temperature: float = 1.0):
+        if float(temperature) <= 0.0:
+            raise ValueError("Base temperature must be positive")
+        u, logdet = self.inverse(x)
+        temperature_array = jnp.asarray(temperature, dtype=u.dtype)
+        base = -0.5 * jnp.sum(
+            (u / temperature_array) ** 2
+            + jnp.log(2.0 * jnp.pi)
+            + 2.0 * jnp.log(temperature_array),
+            axis=-1,
+        )
+        return base + logdet
+
+
 class StandardNormalPrior(eqx.Module):
     """Non-trainable standard normal prior over unconstrained latent ``x``."""
 
@@ -483,21 +727,42 @@ def flow_integrity_diagnostics(
     key = jax.random.PRNGKey(0) if key is None else key
     sample_count = max(int(sample_count), 4)
     layers = tuple(getattr(prior, "layers", ()))
+    if isinstance(prior, StructuredRQSplinePrior):
+        layers = tuple(prior.core_prior.layers) + tuple(prior.conditional_layers)
     masks = tuple(jnp.asarray(layer.mask) for layer in layers if hasattr(layer, "mask"))
     mask_dtypes = [str(mask.dtype) for mask in masks]
     masks_bool = all(mask.dtype == jnp.bool_ for mask in masks)
     masks_binary = all(bool(jnp.all((mask == 0) | (mask == 1))) for mask in masks)
     masks_static = all(not eqx.is_inexact_array(layer.mask) for layer in layers)
 
-    permutations = tuple(
-        jnp.asarray(perm) for perm in getattr(prior, "permutations", ())
-    )
+    if isinstance(prior, RealNVPPrior):
+        permutations = tuple(
+            _flow_permutation(prior.latent_dim, index, prior.permutation)
+            for index in range(len(prior.layers))
+        )
+    else:
+        permutations = tuple(
+            jnp.asarray(perm) for perm in getattr(prior, "permutations", ())
+        )
+    permutation_dimensions = [int(prior.latent_dim)] * len(permutations)
+    if isinstance(prior, StructuredRQSplinePrior):
+        permutations = tuple(prior.core_prior.permutations) + tuple(
+            prior.conditional_permutations
+        )
+        permutation_dimensions = [prior.core_dim] * len(
+            prior.core_prior.permutations
+        ) + [prior.sfh_dim] * len(prior.conditional_permutations)
     permutation_dtypes = [str(perm.dtype) for perm in permutations]
-    expected_perm = jnp.arange(int(prior.latent_dim))
     permutations_valid = all(
-        bool(jnp.array_equal(jnp.sort(perm), expected_perm)) for perm in permutations
+        bool(jnp.array_equal(jnp.sort(perm), jnp.arange(dimension)))
+        for perm, dimension in zip(permutations, permutation_dimensions, strict=True)
     )
     permutations_static = all(not eqx.is_inexact_array(perm) for perm in permutations)
+    transform_counts = flow_coordinate_transform_counts(prior)
+    minimum_transform_count = min(transform_counts)
+    untransformed_coordinate_indices = [
+        index for index, count in enumerate(transform_counts) if count == 0
+    ]
 
     k_u, k_sample = jax.random.split(key)
     u = jax.random.normal(
@@ -523,6 +788,13 @@ def flow_integrity_diagnostics(
         _integrity_check("masks_static_not_trainable", masks_static),
         _integrity_check("permutations_valid", permutations_valid),
         _integrity_check("permutations_static_not_trainable", permutations_static),
+        _integrity_check(
+            "all_coordinates_receive_active_transform",
+            True,
+            value=minimum_transform_count,
+            warn=1,
+            warn_when=minimum_transform_count == 0,
+        ),
         _integrity_check(
             "forward_inverse_roundtrip_max_abs",
             roundtrip_max_abs <= float(roundtrip_fail_atol),
@@ -555,6 +827,9 @@ def flow_integrity_diagnostics(
         "n_layers": int(len(layers)),
         "mask_dtypes": mask_dtypes,
         "permutation_dtypes": permutation_dtypes,
+        "coordinate_transform_counts": list(transform_counts),
+        "minimum_coordinate_transform_count": minimum_transform_count,
+        "untransformed_coordinate_indices": untransformed_coordinate_indices,
         "roundtrip_max_abs": roundtrip_max_abs,
         "roundtrip_median_abs": roundtrip_median_abs,
         "sample_abs_q99": sample_abs_q99,
@@ -657,6 +932,8 @@ def _prior_type_name(prior) -> str:
         return "RealNVP"
     if isinstance(prior, RQSplineCouplingPrior):
         return "RQSplineCoupling"
+    if isinstance(prior, StructuredRQSplinePrior):
+        return "StructuredRQSpline"
     return type(prior).__name__
 
 
@@ -693,15 +970,71 @@ def _flow_permutation(latent_dim: int, index: int, mode: str) -> jnp.ndarray:
         return indices[::-1]
     if normalized == "roll":
         return jnp.roll(indices, shift=(int(index) + 1) % int(latent_dim))
+    if normalized == "alternating_roll":
+        return jnp.roll(indices, shift=1 if int(index) % 2 == 0 else -1)
     raise AssertionError(f"Unhandled flow permutation: {normalized}")
+
+
+def flow_coordinate_transform_counts(prior) -> tuple[int, ...]:
+    """Count active coupling transforms applied to each original coordinate."""
+    if isinstance(prior, StructuredRQSplinePrior):
+        core = _coupling_coordinate_transform_counts(
+            prior.core_prior.layers,
+            prior.core_prior.permutations,
+            prior.core_dim,
+        )
+        conditional = _coupling_coordinate_transform_counts(
+            prior.conditional_layers,
+            prior.conditional_permutations,
+            prior.sfh_dim,
+        )
+        return core + conditional
+    if isinstance(prior, RealNVPPrior):
+        permutations = tuple(
+            _flow_permutation(prior.latent_dim, index, prior.permutation)
+            for index in range(len(prior.layers))
+        )
+        return _coupling_coordinate_transform_counts(
+            prior.layers, permutations, prior.latent_dim
+        )
+    if isinstance(prior, RQSplineCouplingPrior):
+        return _coupling_coordinate_transform_counts(
+            prior.layers, prior.permutations, prior.latent_dim
+        )
+    raise TypeError("coordinate coverage requires a coupling-flow prior")
+
+
+def _coupling_coordinate_transform_counts(
+    layers: tuple,
+    permutations: tuple,
+    latent_dim: int,
+) -> tuple[int, ...]:
+    if len(layers) != len(permutations):
+        raise ValueError("coupling layers and permutations have different lengths")
+    labels = list(range(int(latent_dim)))
+    counts = [0] * int(latent_dim)
+    for layer, permutation in zip(layers, permutations, strict=True):
+        mask = jax.device_get(jnp.asarray(layer.mask, dtype=jnp.bool_)).tolist()
+        for position, masked in enumerate(mask):
+            if not bool(masked):
+                counts[labels[position]] += 1
+        order = jax.device_get(jnp.asarray(permutation, dtype=jnp.int32)).tolist()
+        labels = [labels[int(position)] for position in order]
+    return tuple(counts)
 
 
 def _validate_flow_permutation(mode: str) -> str:
     normalized = str(mode).strip().lower()
-    aliases = {"identity": "none", "false": "none"}
+    aliases = {
+        "identity": "none",
+        "false": "none",
+        "balanced_roll": "alternating_roll",
+    }
     normalized = aliases.get(normalized, normalized)
-    if normalized not in {"roll", "reverse", "none"}:
-        raise ValueError("Flow permutation must be 'roll', 'reverse', or 'none'")
+    if normalized not in {"roll", "alternating_roll", "reverse", "none"}:
+        raise ValueError(
+            "Flow permutation must be 'roll', 'alternating_roll', 'reverse', or 'none'"
+        )
     return normalized
 
 
@@ -715,8 +1048,9 @@ def _rational_quadratic_spline(
     min_bin_width: float,
     min_bin_height: float,
     min_derivative: float,
+    preserve_dtype: bool = False,
 ):
-    inputs = jnp.asarray(inputs, dtype=jnp.float32)
+    inputs = jnp.asarray(inputs, dtype=None if preserve_dtype else jnp.float32)
     raw_params = jnp.asarray(raw_params, dtype=inputs.dtype)
     widths, heights, derivatives = _spline_parameters(
         raw_params,

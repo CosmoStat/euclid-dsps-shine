@@ -19,29 +19,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="configs/fs2_gpu.yaml",
         help="YAML configuration file.",
     )
-    sub = parser.add_subparsers(
-        dest="command",
-        required=True,
-        metavar=(
-            "{download-assets,check,fit,posterior,"
-            "amortized-synthetic-smoke,amortized-train-fs2,amortized-infer-fs2,"
-            "amortized-train-diffsky,amortized-infer-diffsky,"
-            "amortized-finalize-inference,amortized-jacobian-lens-diffsky,"
-            "amortized-finalize-jacobian-lens,diffsky-map-adam-prior,"
-            "diffsky-train-supervised-prior,diffsky-sample-supervised-prior,"
-            "diffsky-train-inferred-prior,"
-            "diffsky-plan-prior-workflow,"
-            "diffsky-supervised-prior-report,"
-            "diffsky-generate-dsps-closure,diffsky-validate-dsps-closure,"
-            "diffsky-evaluate-dsps-closure-inference,"
-            "diffsky-compare-dsps-closure-reference,"
-            "diffsky-list-remote,diffsky-inventory-remote,diffsky-download-subset,"
-            "diffsky-inventory-local,diffsky-prepare-dataset,"
-            "diffsky-dataset-diagnostics,diffsky-redshift-subset,"
-            "diffsky-validate-dataset,"
-            "diffsky-fit-report}"
-        ),
-    )
+    sub = parser.add_subparsers(dest="command", required=True)
 
     assets = sub.add_parser(
         "download-assets", help="Download native DSPS smoke-test assets."
@@ -233,6 +211,14 @@ def build_parser() -> argparse.ArgumentParser:
         train_diffsky,
         default_out="outputs/runs/dev_amortized_diffsky",
     )
+    train_cosmos = sub.add_parser(
+        "amortized-train-cosmos",
+        help="Train the joint RWS encoder/prior on prepared COSMOS photometry.",
+    )
+    _add_amortized_train_arguments(
+        train_cosmos,
+        default_out="outputs/runs/dev_amortized_cosmos",
+    )
 
     infer = sub.add_parser(
         "amortized-infer-fs2",
@@ -244,6 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
     infer.add_argument("--batch-size", type=int)
     infer.add_argument("--jax-batch-size", type=int)
     infer.add_argument("--posterior-samples", type=int)
+    infer.add_argument("--posterior-base-temperature", type=float)
     infer.add_argument("--row-indices-file")
     infer.add_argument(
         "--prior-samples",
@@ -275,10 +262,24 @@ def build_parser() -> argparse.ArgumentParser:
         infer_diffsky,
         default_out="outputs/runs/dev_amortized_diffsky_infer",
     )
+    infer_cosmos = sub.add_parser(
+        "amortized-infer-cosmos",
+        help="Run COSMOS amortized posterior inference from a checkpoint.",
+    )
+    _add_amortized_infer_arguments(
+        infer_cosmos,
+        default_out="outputs/runs/dev_amortized_cosmos_infer",
+    )
 
     finalize = sub.add_parser(
         "amortized-finalize-inference",
         help="Combine sharded amortized inference outputs and write diagnostics.",
+    )
+    finalize.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime while loading inference utilities.",
     )
     finalize.add_argument("--out", required=True, help="Inference output directory.")
     finalize.add_argument("--limit", type=int)
@@ -304,11 +305,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     map_prior = sub.add_parser(
         "diffsky-map-adam-prior",
-        help="Fit free-redshift MAP DSPS estimates under a learned RealNVP prior.",
+        help=(
+            "Fit free-redshift MAP DSPS estimates, optionally under a learned "
+            "RealNVP prior."
+        ),
     )
     map_prior.add_argument("--out", default="outputs/runs/dev_diffsky_map_prior")
     map_prior.add_argument("--dataset", help="Override config catalog_path.")
-    map_prior.add_argument("--checkpoint", required=True)
+    map_prior.add_argument(
+        "--checkpoint",
+        help=(
+            "Amortized checkpoint for encoder/prior initialization. Omit only "
+            "for likelihood-only MAP with prior_weight=0 and independent starts."
+        ),
+    )
     map_prior.add_argument("--feature-stats")
     map_prior.add_argument("--limit", type=int)
     map_prior.add_argument("--row-indices-file")
@@ -333,6 +343,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--start-chunk-size",
         type=int,
         help="Number of MAP starts optimized together on device.",
+    )
+    map_prior.add_argument(
+        "--progress-interval",
+        type=int,
+        help=(
+            "Print JAX MAP optimization progress every N steps; zero disables "
+            "per-step logs."
+        ),
     )
     map_prior.add_argument("--seed", type=int)
     map_prior.add_argument(
@@ -601,6 +619,20 @@ def _add_amortized_train_arguments(
         ),
     )
     parser.add_argument(
+        "--fixed-feature-stats",
+        help=(
+            "Reuse an existing feature-stat JSON during warm-start training instead "
+            "of recomputing normalization from the selected rows."
+        ),
+    )
+    parser.add_argument(
+        "--sleep-noiseless-cache",
+        help=(
+            "Reuse or create a frozen-parent latent/noiseless-flux bank for "
+            "model-generated sleep training. Noise and masks are still renewed."
+        ),
+    )
+    parser.add_argument(
         "--start-epoch",
         type=int,
         default=1,
@@ -655,6 +687,11 @@ def _add_amortized_train_arguments(
         "--prior-freeze-epochs",
         type=int,
         help="Freeze RealNVP prior gradients for this many initial epochs.",
+    )
+    parser.add_argument(
+        "--freeze-prior",
+        action="store_true",
+        help="Freeze all learned-prior parameters for the complete training call.",
     )
     parser.add_argument(
         "--prior-update-schedule",
@@ -738,6 +775,12 @@ def _add_amortized_infer_arguments(
     *,
     default_out: str,
 ) -> None:
+    parser.add_argument(
+        "--runtime",
+        choices=("config", "cpu", "auto", "gpu"),
+        default="config",
+        help="Override the JAX runtime for inference or local smoke tests.",
+    )
     parser.add_argument("--out", default=default_out)
     parser.add_argument("--dataset", help="Override config catalog_path.")
     parser.add_argument("--checkpoint", required=True)
@@ -749,6 +792,14 @@ def _add_amortized_infer_arguments(
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--jax-batch-size", type=int)
     parser.add_argument("--posterior-samples", type=int)
+    parser.add_argument(
+        "--posterior-base-temperature",
+        type=float,
+        help=(
+            "Scale the encoder base standard deviation while retaining the exact "
+            "tempered proposal density in posterior logq (default: config or 1)."
+        ),
+    )
     parser.add_argument("--prior-samples", type=int)
     parser.add_argument("--decoder-sample-chunk-size", type=int)
     parser.add_argument("--prior-predictive-batch-size", type=int)
@@ -935,6 +986,22 @@ def main(argv: list[str] | None = None) -> None:
             **runtime_config,
             **RUNTIME_PRESETS[str(args.runtime)],
         }
+    if (
+        args.command.startswith("amortized-infer-")
+        and getattr(args, "runtime", "config") != "config"
+    ):
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
+        }
+    if (
+        args.command == "amortized-finalize-inference"
+        and getattr(args, "runtime", "config") != "config"
+    ):
+        runtime_config = {
+            **runtime_config,
+            **RUNTIME_PRESETS[str(args.runtime)],
+        }
     apply_jax_runtime_env(runtime_config)
 
     if args.command == "amortized-synthetic-smoke":
@@ -949,8 +1016,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "amortized-train-diffsky":
         _run_amortized_train(config, args, dataset_label="Diffsky")
         return
+    if args.command == "amortized-train-cosmos":
+        _run_amortized_train(config, args, dataset_label="COSMOS2020 Farmer")
+        return
     if args.command == "amortized-infer-diffsky":
         _run_amortized_infer(config, args, dataset_label="Diffsky")
+        return
+    if args.command == "amortized-infer-cosmos":
+        _run_amortized_infer(config, args, dataset_label="COSMOS2020 Farmer")
         return
     if args.command == "amortized-finalize-inference":
         _run_amortized_finalize_inference(config, args)
@@ -1130,6 +1203,7 @@ def _run_amortized_train(
         validation_indices_file=getattr(args, "validation_indices_file", None),
         initial_checkpoint=getattr(args, "initial_checkpoint", None),
         start_epoch=int(getattr(args, "start_epoch", 1)),
+        fixed_feature_stats=getattr(args, "fixed_feature_stats", None),
     )
 
 
@@ -1331,6 +1405,7 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     prior = dict(amortized.get("prior", {}) or {})
     objective = dict(amortized.get("objective", {}) or {})
     wake = dict(objective.get("wake", {}) or {})
+    sleep = dict(objective.get("sleep", {}) or {})
     posterior_regularization = dict(amortized.get("posterior_regularization", {}) or {})
     input_noise = dict(amortized.get("input_noise", {}) or {})
     if args.selection_mode is not None:
@@ -1353,6 +1428,8 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         training["data_parallel"] = str(args.data_parallel)
     if getattr(args, "prior_freeze_epochs", None) is not None:
         prior["freeze_epochs"] = int(args.prior_freeze_epochs)
+    if bool(getattr(args, "freeze_prior", False)):
+        prior["train_jointly"] = False
     if getattr(args, "prior_update_schedule", None) is not None:
         prior["update_schedule"] = str(args.prior_update_schedule)
     if getattr(args, "prior_update_every_epochs", None) is not None:
@@ -1369,6 +1446,11 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
         if int(args.wake_every_encoder_epochs) < 1:
             raise ValueError("--wake-every-encoder-epochs must be >= 1")
         wake["every_encoder_epochs"] = int(args.wake_every_encoder_epochs)
+    if getattr(args, "sleep_noiseless_cache", None) is not None:
+        cache = dict(sleep.get("noiseless_flux_cache", {}) or {})
+        cache["enabled"] = True
+        cache["path"] = str(args.sleep_noiseless_cache)
+        sleep["noiseless_flux_cache"] = cache
     if getattr(args, "likelihood_temperature_initial", None) is not None:
         training["likelihood_temperature_initial"] = float(
             args.likelihood_temperature_initial
@@ -1401,6 +1483,7 @@ def _apply_amortized_train_overrides(config: dict, args) -> dict:
     amortized["training"] = training
     amortized["prior"] = prior
     objective["wake"] = wake
+    objective["sleep"] = sleep
     amortized["objective"] = objective
     if posterior_regularization:
         amortized["posterior_regularization"] = posterior_regularization
@@ -1452,6 +1535,11 @@ def _run_amortized_infer(
             args.posterior_samples
             if args.posterior_samples is not None
             else inference.get("posterior_samples", 32)
+        ),
+        posterior_base_temperature=float(
+            args.posterior_base_temperature
+            if getattr(args, "posterior_base_temperature", None) is not None
+            else inference.get("posterior_base_temperature", 1.0)
         ),
         prior_samples=int(
             args.prior_samples
@@ -1574,7 +1662,7 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
     summary = run_map_adam_under_prior(
         config,
         Path(args.out),
-        checkpoint=Path(args.checkpoint),
+        checkpoint=Path(args.checkpoint) if args.checkpoint else None,
         feature_stats_path=Path(args.feature_stats) if args.feature_stats else None,
         limit=args.limit,
         batch_size=int(args.batch_size or map_cfg.get("batch_size", 128)),
@@ -1602,6 +1690,11 @@ def _run_diffsky_map_adam_prior(config: dict, args) -> None:
             int(args.start_chunk_size)
             if getattr(args, "start_chunk_size", None) is not None
             else int(map_cfg.get("start_chunk_size", 1))
+        ),
+        progress_interval=(
+            int(args.progress_interval)
+            if getattr(args, "progress_interval", None) is not None
+            else int(map_cfg.get("progress_interval", 0))
         ),
         selection_mode=getattr(args, "selection_mode", None),
         stratified_strategy=getattr(args, "stratified_strategy", None),

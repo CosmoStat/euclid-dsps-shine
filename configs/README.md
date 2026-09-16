@@ -1,11 +1,15 @@
-# Active Configs
+# Configuration Inventory
 
-The public config surface is intentionally small. FENIKS is the controlled
-science dataset; HLTDS and FS2 are reference/debug paths.
+FENIKS is the controlled science dataset; HLTDS and FS2 are reference/debug
+paths. This directory contains both maintained production configs and frozen
+experiment recipes needed to reproduce earlier comparisons. The current launch
+surface is documented in `docs/source/active_workflows.rst`; the presence of a
+recipe here does not by itself make it an active campaign.
 
 ## FENIKS closure and prior learning
 
-The conditional-posterior matrix is defined by
+The following matrices are retained reproducible experiment recipes rather than
+the current default launch chain. The conditional-posterior matrix is defined by
 `configs/experiments/feniks_{avi,npe}_{gaussian_x,gaussian_u,realnvp,rqspline}.yaml`.
 Use `scripts/submit_feniks_conditional_posterior_matrix.sh`; each full array task
 trains and runs the same held-out photometry/corner diagnostics.
@@ -66,5 +70,7 @@ wake control, and physical sleep/wake schedules with four or eight particles.
 - `amortized_fs2_realnvp.yaml`: FS2 amortized encoder plus learned RealNVP
   comparison path.
 
-Historical HLTDS MAP/amortized experiments, exact forward-closure configs,
-prior experiments, and broad experiment matrices were moved to `legacy/configs/`.
+Superseded HLTDS MAP/amortized experiments, exact forward-closure configs, and
+deprecated prior recipes live under `legacy/configs/`. Current AVI/EM launchers
+often encode their controlled variants as script arguments instead of one YAML
+file per arm; see the active workflow map before adding another matrix.

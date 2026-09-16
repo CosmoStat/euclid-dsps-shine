@@ -264,8 +264,13 @@ def iter_catalog_batches(
 
 
 def load_row_indices(path: str | Path) -> list[int]:
-    """Load row indices from a one-column text or CSV file."""
-    rows = pd.read_csv(path, comment="#", header=None)
+    """Load row indices from a one-column text, CSV, or NumPy file."""
+    path = Path(path)
+    if path.suffix.lower() == ".npy":
+        values = np.asarray(np.load(path, allow_pickle=False)).reshape(-1)
+        rows = pd.DataFrame({"row_index": values})
+    else:
+        rows = pd.read_csv(path, comment="#", header=None)
     if rows.empty:
         return []
     values = pd.to_numeric(rows.iloc[:, 0], errors="coerce").dropna()
@@ -282,9 +287,10 @@ def abmag_to_flux_fnu_cgs(mag: float) -> float:
     return float(abmag_to_fnu_cgs(mag))
 
 
-def microjy_to_flux_fnu_cgs(flux_microjy: float) -> float:
-    """Convert microJansky to F_nu in erg/s/cm^2/Hz."""
-    return float(microjy_to_fnu_cgs(flux_microjy))
+def microjy_to_flux_fnu_cgs(flux_microjy):
+    """Convert scalar or array microJansky to F_nu in erg/s/cm^2/Hz."""
+    converted = np.asarray(microjy_to_fnu_cgs(flux_microjy), dtype=float)
+    return float(converted) if converted.ndim == 0 else converted
 
 
 def microjy_to_abmag(flux_microjy: float) -> float:

@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --job-name=feniks_rws_gate
+#SBATCH --account=jrx@cpu
+#SBATCH --partition=cpu_p1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --time=00:20:00
+#SBATCH --hint=nomultithread
+
+set -Eeuo pipefail
+REPO_DIR="${REPO_DIR:-${SLURM_SUBMIT_DIR:-$PWD}}"
+MINICONDA_PATH="${MINICONDA_PATH:-${WORK:?Set WORK or MINICONDA_PATH}/miniconda3}"
+CONDA_ENV="${CONDA_ENV:-shine}"
+RECOVERY_ROOT="${RECOVERY_ROOT:?RECOVERY_ROOT is required}"
+export PYTHONPATH="$REPO_DIR:${PYTHONPATH:-}"
+export JAX_PLATFORMS=cpu
+cd "$REPO_DIR"
+source "$MINICONDA_PATH/etc/profile.d/conda.sh"
+conda activate "$CONDA_ENV"
+python scripts/evaluate_feniks_rws_recovery.py select-pilot --root "$RECOVERY_ROOT"
+

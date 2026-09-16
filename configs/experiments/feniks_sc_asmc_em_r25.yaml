@@ -1,0 +1,300 @@
+extends: feniks_selfsup_adaptive_smcwake_parentprior_selection_r25.yaml
+
+# The existing parquet defines the upstream refinement/catalogue-support domain C0.
+# This workflow audits its provenance but never regenerates it.
+catalog_path: Data/diffsky/synthetic/feniks_260617_spline15d_grouped_jaxcosmo_v1/amortized/train.parquet
+
+truth:
+  parameter_columns:
+    __replace__: true
+
+amortized:
+  data:
+    expected_n_bands: 18
+    validation_fraction: 0.10
+    catalog_batch_size: 10000
+
+  latent:
+    schema: feniks_spline15d
+    include_redshift: true
+    use_fit_bounds: true
+    normalization: bounded_mixed_warp
+    normalization_checkpoint: null
+    raw_scale_rule: unit_raw_logit_scale_from_fit_bounds_and_initials
+    raw_scales:
+      z_obs: 1.0
+      log10_stellar_mass: 1.0
+      log10_stellar_metallicity: 1.0
+      dust_av: 1.0
+      dust_delta: 1.0
+      sfh_dlog_sfr_01: 1.0
+      sfh_dlog_sfr_02: 1.0
+      sfh_dlog_sfr_03: 1.0
+      sfh_dlog_sfr_04: 1.0
+      sfh_dlog_sfr_05: 1.0
+      sfh_dlog_sfr_06: 1.0
+      sfh_dlog_sfr_07: 1.0
+      sfh_dlog_sfr_08: 1.0
+      sfh_dlog_sfr_09: 1.0
+      sfh_dlog_sfr_10: 1.0
+    warps:
+      z_obs: {family: asinh, center: fit_initial, lambda: 0.5}
+      log10_stellar_mass: {family: asinh, center: fit_initial, lambda: 1.0}
+      log10_stellar_metallicity: {family: asinh, center: fit_initial, lambda: 0.5}
+      dust_av: {family: log1p, lambda: 0.2}
+      dust_delta: {family: asinh, center: fit_initial, lambda: 0.5}
+      sfh_dlog_sfr_01: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_02: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_03: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_04: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_05: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_06: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_07: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_08: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_09: {family: asinh, center: fit_initial, lambda: 1.0}
+      sfh_dlog_sfr_10: {family: asinh, center: fit_initial, lambda: 1.0}
+    geometry_samples: 20000
+
+  features:
+    type: flux_and_errors
+    n_flux_bands: 18
+    n_error_bands: 18
+    normalize_per_band: true
+    flux_transform: asinh
+    error_transform: log
+    error_epsilon: 1.0e-6
+    # The run is robust to any false passband mask and therefore uses 54 inputs.
+    append_mask: true
+
+  encoder:
+    type: conditional_flow
+    input_dim: 54
+    latent_dim: 15
+    context_encoder: residual_photometry
+    residual_trunk_width: 512
+    residual_blocks: 3
+    residual_representation_width: 256
+    residual_context_dim: 128
+    mean_init_scale: 1.0e-3
+    base_components: 1
+    log_std_min: -4.0
+    log_std_max: 2.5
+    initial_log_std: 0.0
+    flow_family: realnvp
+    flow_output_space: latent_x
+    flow_layers: 6
+    flow_hidden_size: 256
+    flow_scale_clamp: 0.45
+    flow_shift_clamp: 3.0
+    flow_init_scale: 0.0
+    flow_permutation: alternating_roll
+
+  prior:
+    type: realnvp
+    source: joint_realnvp
+    checkpoint: null
+    train_jointly: true
+    n_layers: 8
+    hidden_size: 256
+    permutation: alternating_roll
+    scale_clamp: 0.25
+    shift_clamp: 3.0
+    init: identity
+    init_scale: 0.0
+
+  likelihood:
+    type: gaussian
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+
+  objective:
+    mode: adaptive_smc_wake
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sleep:
+      enabled: true
+      error_model: observed_catalog
+      noise_family: match_likelihood
+      entropy_samples: 4
+      selection:
+        enabled: true
+        band: lsst_r
+        max_mag_ab: 25.0
+        candidate_factor: 8
+    selection_correction:
+      enabled: true
+      kind: observed_magnitude_limit
+      band: lsst_r
+      max_mag_ab: 25.0
+      survey_noise: gaussian_m5
+      gradient_estimator: score_function
+      score_control_variate: centered
+      n_prior_samples: 4096
+      prior_sample_batch_size: 256
+      gradient_preflight_samples: 512
+      common_random_numbers: true
+      seed: 260824
+
+  sc_asmc_em:
+    name: Selection-Corrected Amortized SMC-EM
+    acronym: SC-ASMC-EM
+    c0_scope_statement: We infer the parent distribution within the predefined FENIKS refinement and catalogue-support domain, while explicitly correcting the additional observed r<25 selection.
+    target_population: p_eta(theta | C0)
+    observed_selection: A = 1[m_r_observed < 25]
+    upstream_selection_provenance:
+      status: audit_required_before_preflight
+      dataset_regeneration: forbidden
+      interpretation: predefined FENIKS refinement and catalogue-support domain C0
+    outer_iterations: 2
+    ema_decay: 0.999
+    from_scratch:
+      q_checkpoint: null
+      prior_checkpoint: null
+      previous_checkpoints_are_evaluation_only: true
+    sleep:
+      epochs: 12
+      batch_size: 128
+      optimizer: adamw
+      peak_learning_rate: 2.0e-4
+      final_learning_rate: 2.0e-5
+      warmup_fraction: 0.05
+      weight_decay: 1.0e-6
+      gradient_clip_norm: 10.0
+      checkpoint_metric: held_out_sleep_nll
+      require_noncollapsed_full_entropy: true
+      minimum_full_entropy: -20.0
+      maximum_entropy_drop: 30.0
+    e_step:
+      minimum_is_ess_fraction: 0.10
+      maximum_is_weight: 0.80
+      proposal:
+        q_t1_fraction: 0.70
+        q_t1p5_fraction: 0.20
+        temperature: 1.50
+        prior_fraction: 0.10
+      primary:
+        n_particles: 64
+        max_stages: 16
+        target_conditional_ess: 0.75
+        resample_ess_fraction: 0.50
+        steps_after_resample: 3
+        final_steps_at_beta1: 2
+        rw_scale: 0.30
+        rw_adapt_target_acceptance: 0.30
+        rw_adapt_rate: 1.0
+        rw_scale_min: 0.05
+        rw_scale_max: 1.0
+        hard_final_ess_fraction: 0.30
+        hard_min_mutation_acceptance: 0.10
+        hard_min_ancestor_ess_fraction: 0.05
+        hard_min_epsilon_squared_jump: 1.0e-4
+        bisection_steps: 32
+      fallback:
+        n_particles: 128
+        max_stages: 32
+        target_conditional_ess: 0.75
+        resample_ess_fraction: 0.50
+        steps_after_resample: 4
+        final_steps_at_beta1: 2
+        rw_scale: 0.15
+        rw_adapt_target_acceptance: 0.30
+        rw_adapt_rate: 1.0
+        rw_scale_min: 0.05
+        rw_scale_max: 0.75
+        hard_final_ess_fraction: 0.30
+        hard_min_mutation_acceptance: 0.10
+        hard_min_ancestor_ess_fraction: 0.05
+        hard_min_epsilon_squared_jump: 1.0e-4
+        bisection_steps: 32
+      extended:
+        n_particles: 128
+        max_stages: 48
+        target_conditional_ess: 0.75
+        resample_ess_fraction: 0.50
+        steps_after_resample: 4
+        final_steps_at_beta1: 2
+        rw_scale: 0.15
+        rw_adapt_target_acceptance: 0.30
+        rw_adapt_rate: 1.0
+        rw_scale_min: 0.05
+        rw_scale_max: 0.75
+        hard_final_ess_fraction: 0.30
+        hard_min_mutation_acceptance: 0.10
+        hard_min_ancestor_ess_fraction: 0.05
+        hard_min_epsilon_squared_jump: 1.0e-4
+        bisection_steps: 32
+    preflight:
+      objects: 512
+      minimum_resolved_fraction: 0.95
+      maximum_unresolved_fraction: 0.05
+      maximum_extended_fraction: 0.15
+      job_budget_seconds: 72000
+      projected_non_estep_overhead_fraction: 0.20
+      maximum_attempts: 2
+    active_bootstrap:
+      hard_objects: 192
+      posterior_updates_per_sleep: 3
+      maximum_preflight_retries: 1
+    posterior_bank:
+      objects_per_shard: 128
+      particle_capacity: 128
+      atomic_completion_markers: true
+      resume: true
+      asynchronous_writes: true
+    prior_mstep:
+      learning_rate: 1.0e-5
+      min_steps: 50
+      max_steps: 100
+      evaluation_every: 5
+      early_stopping_patience_steps: 20
+      macro_objects: 512
+      gradient_clip_norm: 5.0
+      trust_strength: 0.2
+      trust_samples: 1024
+      max_kl_per_dimension: 0.05
+      max_alpha_mc_relative_error: 0.15
+      held_out_fraction: 0.10
+    bank_reweight:
+      minimum_ess_fraction: 0.30
+      refresh_low_ess_only: true
+    q_distillation:
+      epochs: 3
+      learning_rate: 2.0e-5
+      warmup_fraction: 0.05
+      final_learning_rate: 2.0e-6
+      posterior_updates_per_sleep: 3
+      gradient_clip_norm: 20.0
+      ema_decay: 0.999
+      distinct_objects_per_batch: 128
+    performance:
+      local_gpus_per_estep_shard: 4
+      production_estep_shards: 4
+      fixed_particle_shapes: [64, 128]
+      target_device_memory_fraction: 0.88
+      maximum_compiled_memory_fraction: 0.90
+      autotune_object_micro_batch: true
+      persistent_compilation_cache: true
+      prefetch_host_batches: 2
+      mixed_precision: false
+      distributed_collectives_required: false
+    report:
+      selected_prior_versions: [p0, p1, p2]
+      truth_allowed: false
+      prior_samples: 16384
+      selected_resamples: 16384
+      individual_objects: 32
+      q_samples_per_object: 256
+      predictive_samples_per_object: 64
+      decoder_batch_size: 128
+
+  training:
+    seed: 260824
+    data_parallel: pmap
+
+calibration:
+  global_sed_scale:
+    enabled: false
+    trainable: false
+  per_band_zero_points:
+    enabled: false
+    trainable: false

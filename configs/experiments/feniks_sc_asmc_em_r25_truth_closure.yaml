@@ -1,0 +1,23 @@
+# TRUTH-ONLY post-freeze closure config. Never pass this file to the trainer.
+extends: feniks_sc_asmc_em_r25.yaml
+
+truth:
+  schema: feniks_spline15d
+  redshift_column: z_obs
+  parameter_columns:
+    __replace__: true
+    z_obs: {column: z_obs, kind: exact_spline_truth}
+    log10_stellar_mass: {column: log10_stellar_mass, kind: exact_spline_truth}
+    log10_stellar_metallicity: {column: log10_stellar_metallicity, kind: exact_spline_truth}
+    dust_av: {column: dust_av, kind: exact_spline_truth}
+    dust_delta: {column: dust_delta, kind: exact_spline_truth}
+    sfh_dlog_sfr_01: {column: sfh_dlog_sfr_01, kind: exact_spline_truth}
+    sfh_dlog_sfr_02: {column: sfh_dlog_sfr_02, kind: exact_spline_truth}
+    sfh_dlog_sfr_03: {column: sfh_dlog_sfr_03, kind: exact_spline_truth}
+    sfh_dlog_sfr_04: {column: sfh_dlog_sfr_04, kind: exact_spline_truth}
+    sfh_dlog_sfr_05: {column: sfh_dlog_sfr_05, kind: exact_spline_truth}
+    sfh_dlog_sfr_06: {column: sfh_dlog_sfr_06, kind: exact_spline_truth}
+    sfh_dlog_sfr_07: {column: sfh_dlog_sfr_07, kind: exact_spline_truth}
+    sfh_dlog_sfr_08: {column: sfh_dlog_sfr_08, kind: exact_spline_truth}
+    sfh_dlog_sfr_09: {column: sfh_dlog_sfr_09, kind: exact_spline_truth}
+    sfh_dlog_sfr_10: {column: sfh_dlog_sfr_10, kind: exact_spline_truth}

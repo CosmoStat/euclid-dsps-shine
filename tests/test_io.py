@@ -28,6 +28,10 @@ def test_ab_magnitude_flux_roundtrip() -> None:
 
 def test_microjy_conversions() -> None:
     assert math.isclose(microjy_to_flux_fnu_cgs(1.0), 1.0e-29)
+    np.testing.assert_allclose(
+        microjy_to_flux_fnu_cgs(np.array([1.0, 2.0])),
+        np.array([1.0e-29, 2.0e-29]),
+    )
     assert microjy_to_abmag(1.0) == pytest.approx(23.90006562228223)
     assert np.isnan(microjy_to_abmag(-1.0))
 
@@ -59,6 +63,13 @@ def test_truth_value_converts_log_stellar_mass_h2_to_msun() -> None:
 def test_load_row_indices_deduplicates_and_sorts(tmp_path) -> None:
     path = tmp_path / "rows.csv"
     path.write_text("# comment\n7\n3\n7\n", encoding="utf-8")
+
+    assert load_row_indices(path) == [3, 7]
+
+
+def test_load_row_indices_accepts_numpy_arrays(tmp_path) -> None:
+    path = tmp_path / "rows.npy"
+    np.save(path, np.asarray([7, 3, 7], dtype=np.int64))
 
     assert load_row_indices(path) == [3, 7]
 

@@ -1,0 +1,23 @@
+# A development experiment, never an automatic population-production launch.
+method: balanced_frozen_parent_npe_v1
+seed: 260908
+anchor_epochs: 24
+candidate_epochs: 8
+learning_rate: 1.0e-5
+observed_weights: {B: 0.0, C: 0.0001, D: 0.001}
+observed_draws: 4
+conditioning_mask:
+  probability: 0.25
+  bands: [lsst_u, lsst_i, euclid_nisp_h]
+validation_objects: 256
+support_objects: 128
+confirmation_objects: 256
+inference_batch_size: 8
+maximum_simulation_nll_increase: 0.5
+truth_free_validation:
+  held_out_bands: [lsst_u, lsst_i, euclid_nisp_h]
+  preserve_selection_band: true
+  joint_projections: 32
+  projection_seed: 260908
+  maximum_model_generated_pit_ks: 0.12
+  maximum_model_generated_coverage_ece: 0.12

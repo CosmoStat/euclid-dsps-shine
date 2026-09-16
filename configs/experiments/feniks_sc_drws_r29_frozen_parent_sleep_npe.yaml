@@ -1,0 +1,62 @@
+extends: feniks_sc_drws_r29_current_production.yaml
+
+# Pure simulation-based NPE against the frozen projected parent population.
+# The launcher supplies the projected-parent checkpoint and immutable observed
+# error/mask rows. Catalogue truth is absent from this resolved configuration.
+amortized:
+  prior:
+    type: realnvp
+    source: joint_realnvp
+    checkpoint: null
+    train_jointly: false
+    n_layers: 16
+    hidden_size: 384
+    permutation: roll
+    scale_clamp: 0.35
+    shift_clamp: 4.0
+    init: identity
+    init_scale: 0.0
+
+  objective:
+    mode: reweighted_wake_sleep
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sleep:
+      enabled: true
+      error_model: observed_catalog
+      noise_family: match_likelihood
+      entropy_samples: 2
+      selection:
+        enabled: true
+        band: lsst_r
+        max_mag_ab: 29.0
+        candidate_factor: 2
+    wake:
+      start_encoder_epoch: 1000000
+      every_encoder_epochs: 1000000
+      train_encoder: false
+      train_prior: false
+    selection_correction:
+      enabled: false
+
+  training:
+    epochs: 16
+    batch_size: 1024
+    jax_batch_size: 256
+    n_samples: 1
+    learning_rate: 3.0e-5
+    weight_decay: 1.0e-6
+    gradient_clip_norm: 5.0
+    kl_annealing_epochs: 0
+    kl_weight_max: 0.0
+    validation_every: 2
+    validation_sleep_seed: 260904
+    best_checkpoint_metric: validation_sleep_nll
+    best_checkpoint_min_epoch: 2
+    data_parallel: pmap
+
+  output:
+    checkpoint_every: 4
+    diagnostics_every: 1
+    save_training_curves: true
+    save_posterior_preview: false

@@ -1,5 +1,1763 @@
 # Plan
 
+## 2026-09-16 Main integration cleanup
+
+- Completed: restore Black/Ruff/pytest/Sphinx CI, pin the formatter/linter
+  versions, expose every real CLI command, repair archived config references,
+  and make the synthetic mock smoke independent of production checkpoints.
+- Preserved the AVI/EM/factorial, exact-posterior/geometry, and COSMOS2020
+  benchmark surfaces. Archived 21 superseded incident recovery launchers under
+  `legacy/scripts/recovery/` while keeping the formal RWS recovery suite active.
+- Added `docs/source/active_workflows.rst`, refreshed contributor/runbook
+  guidance for `master`, clarified COSMOS2020 data/filter benchmarking versus
+  historical PopCosmos parameterization fits, and removed five unreferenced
+  generated documentation assets.
+- Fixed guarded wake backtracking under process-wide JAX X64 and made the
+  decoder-qualification and micro-flow integrity tests robust without relaxing
+  their scientific gates.
+- Validation: Black and Ruff pass; compileall and Bash syntax pass; all 26
+  archived YAML configs load; Sphinx passes with warnings as errors; the
+  asset-free smoke writes readable checkpoints/receipts; full pytest passes
+  with `1090 passed, 8 skipped`.
+- Keep this file as the chronological record of completed work. The maintained
+  workflow surface lives in `docs/source/active_workflows.rst`.
+
+## 2026-09-14 AVI EM factorial diagnosis
+
+- Completed: freeze the completed EM cycle-0 and cycle-4 components into a
+  four-cell `Q0/P0`, `Q4/P0`, `Q0/P4`, `Q4/P4` inference design on the same
+  512 validation galaxies, with K=4096 and two independent replicas.
+- Reuse the qualified ordinary full-15D IS inference. Keep selection out of
+  object weights and use truth only in the dependent post-inference report.
+- Report proposal support, predictive fit, raw/IS MIRA, physical/SFH PIT and
+  coverage, selected and inverse-beta parent population closure, and replica
+  stability. Add immutable Jean-Zay submission and reconnectable monitoring.
+- Added explicit conditional Q/P effects and the Q-by-P interaction for every
+  scalar diagnostic. The report keeps fixed-target proposal effects distinct
+  from changes to the posterior target induced by the prior.
+- Added a same-cohort truth baseline against the population-weighted selected
+  truth, so sampling/measure mismatch is not mistaken for posterior error.
+- Validation: Ruff, Bash syntax and compileall pass; the focused report tests
+  pass with `5 passed`; the complete AVI test family passes with `45 passed`.
+
+## 2026-09-13 Selection-corrected AVI generalized EM
+
+- Completed: add a restartable Jean-Zay generalized-EM workflow seeded from
+  `Q_latest_refresh` and `P_latest_prior`, retaining ordinary full-15D
+  likelihood-prior-proposal weights in every E-step.
+- Alternate one conservative, selection-corrected parent-prior M-step with a
+  three-epoch prior-frozen encoder refresh. Keep `beta` out of object-level
+  posterior weights and retain `+log(alpha_eta)` only in the prior objective.
+- Evaluate every completed cycle on one immutable validation cohort. Report the
+  actual fixed-point comparisons `posterior aggregate vs selected prior` and
+  `inverse-beta aggregate vs parent prior`, alongside post-hoc selected/parent
+  truth closure, ESS, alpha and per-parameter physical/SFH distances.
+- Added immutable code snapshots, sequential Slurm dependencies, reconnectable
+  monitoring, completion receipts, focused tests and paste-ready launch
+  commands. Truth remains unavailable to training and checkpoint selection.
+- Validation: Ruff and Bash syntax checks pass; `python -m compileall` passes;
+  the complete AVI test selection passes with `41 passed`.
+
+## 2026-09-13 AVI next validation suite
+
+- Completed: implement one immutable Jean-Zay workflow that (1) regenerates
+  a genuinely distinct noisy selected-truth cohort with alpha and identity
+  receipts, (2) evaluates `Q_latest_refresh` on the exact eight historical NUTS
+  observations without launching new NUTS, and (3) audits the 15D decoder
+  Jacobian/SFH null directions with posterior-predictive interventions.
+- Keep truth display-only, preserve exact joint 15D draws and ordinary
+  likelihood-prior-proposal weights, and fail closed on mismatched model,
+  photometry, selector, latent normalization or incomplete dependencies.
+- Produce a dependent report with simple Encoder/NUTS/Truth comparisons,
+  selection parent-versus-selected closure, Jacobian spectra and machine-
+  readable completion receipts. Add reconnectable submission and watcher
+  commands for Jean-Zay.
+- Implemented in `scripts/feniks_avi_next_validation.py` with a four-stage
+  preflight, inference, J-lens and report dependency chain. The selection
+  closure joins the immutable 50,000-object pre-selection photometry to exact
+  spline truth by `object_id`, retains `galaxy_weight`, and applies the active
+  noisy `lsst_r < 29` contract. The local readback gives 47,076 selected rows,
+  empirical alpha 0.94152 and population-weighted alpha 0.94713.
+- The eight-object inference evaluates one dense joint Q_latest bank against
+  both the historical source-prior target (the only target-compatible NUTS
+  comparison) and the current latest-prior target. The dependent SFH audit uses
+  an actual joint draw near the weighted latent centre, local decoder singular
+  directions and nonlinear plus/minus one-posterior-SD flux interventions.
+- Added immutable snapshot submission, reconnectable monitoring and completion
+  receipts. The report now recomputes joint 15D MIRA independently against the
+  population-weighted true parent and genuinely selected cohorts, and reports
+  the physical 5D scores without reusing object identities across cohorts.
+  Ruff, Bash syntax, real 50k selection closure and 15 focused tests pass
+  locally; GPU numerical execution remains intentionally delegated to the
+  Jean-Zay preflight. A broad test run reached 84 passing tests with no failure
+  before being stopped because the full repository suite is long-running.
+
+## 2026-09-13 AVI comprehensive wrap-up and NUTS comparison
+
+- Correction completed: recover display-only truth for the eight observed
+  NUTS identities by exact 18-band photometry/error/mask matching against the
+  local pre-grouping catalogue, audit every match, and replace the sparse
+  triangular corner with compact truth-aware Encoder/NUTS comparisons plus an
+  eight-case overview. All eight joins are unique with maximum relative flux
+  and uncertainty residuals below `5.1e-8`; truth remains post-hoc and never
+  enters either sampler. The regenerated folder has nine PNGs, 82 hashed
+  artifacts pass readback, and 22 overnight/NUTS tests pass.
+- Consolidate the existing overnight analysis into one self-contained wrap-up
+  with readable population, calibration, run-evolution, individual-posterior
+  and NUTS comparison sections. Preserve dense joint draws throughout.
+- Audit whether selection and the parent population are actually identified.
+  Reconstruct an explicitly labelled beta-weighted truth reference only when
+  the exact-selector emulator passes held-out validation; retain the hard
+  failure caused by identical parent/selected truth receipts.
+- Quantify paired improvement over `B_source` using ESS and proper empirical
+  CRPS, regenerate grouped PIT/coverage and truth-versus-posterior summaries,
+  and stratify individual examples by physical galaxy type.
+- Compare the eight earlier observed NUTS targets only to their exactly matched
+  AVI banks. Report NUTS convergence defects on every figure and never present
+  these chains as a qualified ground truth.
+- Completed in `scripts/build_feniks_avi_wrapup.py`; the self-contained
+  `wrap_up/` contains 58 plots, machine-readable tables, the previous analysis,
+  a Markdown report and a SHA-256 receipt. The current model improves ordinary-
+  IS physical 5D CRPS for 77.7% of 512 galaxies and ESS for 81.6%, but improves
+  SFH CRPS for only 3.7%.
+- The latest prior has calibrated-looking physical 5D MIRA for both parent
+  (0.681) and selected (0.676) populations, and marginally covers at least
+  94.5% of parent physical truths in its central 95% support. It is not an exact
+  population fit: metallicity and dust remain smoothed, while SFH closure fails
+  severely.
+- The exact selected-truth receipt is unusable because it duplicates the parent
+  identities and physical values. A held-out-qualified beta emulator provides
+  only a labelled diagnostic selected reference; exact noisy-cohort closure is
+  still required. All eight NUTS comparisons remain diagnostic because every
+  chain group fails the saved convergence gate through integration-limit
+  saturation and/or R-hat/divergences.
+- Verified Ruff, compileall, full report regeneration and 32 focused AVI tests.
+
+## 2026-09-13 AVI overnight scientific analysis and readable figures
+
+- Recompute the completed five-variant overnight comparison from joint K4096
+  banks and frozen truth cohorts. Do not aggregate posterior medians.
+- Replace crowded overlays with one-run-at-a-time population closure panels:
+  true parent population, inferred selected population and true selected
+  population, plus explicit support and selection diagnostics.
+- Produce publication-readable individual posterior corners with truth and
+  focused genetic comparisons between source/latest/scratch prior and before/
+  after q refresh. Diagnose the SFH failure separately from the physical 5D.
+- Completed in `scripts/analyze_feniks_avi_overnight.py` and validated against
+  the full local K4096 result. The analysis writes one-lineage population
+  overlays, four truth-aware individual corners, run genealogy/scorecards,
+  paired ESS changes, posterior/prior MIRA and dedicated SFH diagnostics.
+- `Q_latest_refresh` is the strongest proposal (median ESS 143/4096, physical
+  5D raw/IS MIRA 0.666/0.653), but SFH 10D remains globally miscalibrated and
+  per-object SFH IQRs are still 12x the truth-population IQR. The parent and
+  selected truth receipts reuse the same latent rows, so selection-population
+  closure is explicitly failed rather than inferred from overlapping curves.
+- Verified end-to-end artifact generation and visual rendering, Ruff,
+  compileall, and 11 overnight/inference tests. The synced training root still
+  lacks training curves, so loss convergence remains outside this phase.
+
+## 2026-09-13 AVI overnight coadaptation and closure
+
+- Continue the qualified four-expert encoder for 12 epochs under either the
+  frozen source prior or the selection-corrected `P_latest` prior. Keep the
+  decoder and prior fixed during each q refresh; use the source-prior arm as a
+  duration-matched control. Do not promote `P_scratch` to training.
+- Run a dependent K4096, two-replica inference over five explicit encoder/prior
+  pairs. Retain full joint 15D proposal banks and ordinary importance weights,
+  plus beta for an auditable inverse-selection population projection.
+- Produce truth-only-after-inference diagnostics: individual 5D corners with
+  truth, 15D marginals, selected posterior mixtures, inverse-beta parent
+  mixtures, parent/selected prior closure, posterior MIRA and explicitly
+  labelled population-prior MIRA. Hash all final artifacts and fail closed on
+  incomplete dependencies or invalid weights.
+- Implemented immutable, dependency-gated Jean-Zay launch and reconnectable
+  watcher. The report consolidates raw/IS posterior MIRA and parent/selected
+  prior MIRA, writes 5D corners with truth, 15D marginals, distribution/support
+  tables and hashed completion receipts. Its full K4096 banks remain joint.
+- Verified 30 focused tests (two existing full-device integrations excluded),
+  Ruff, compileall, CLI help and Bash syntax. H100 execution and scientific
+  conclusions remain remote work; every stage requires a fresh output root.
+
+## AVI post-training inference comparison
+
+- v1 inference tasks failed before sampling because the per-arm runtime output
+  directory did not exist when the real runtime wrote its split artifacts.
+  Create it explicitly and assert this contract in the four-device integration;
+  use a fresh immutable v2 root. Five inference tests pass, including the
+  four-device residual source/expert path with an assertion that the runtime
+  directory exists before preparation. Ruff, compileall and shell syntax pass;
+  the real H100/physical runtime remains the remote check.
+
+- Prepare source plus seven final encoders on the same development validation
+  identities, two fresh K4096 banks, exact q weights, raw and IS joint draws.
+- Reuse the frozen decoder/prior, float64 transport and existing MIRA evaluator.
+  Truth is diagnostic only; no ESS filtering, no training or model selection.
+- Add four-GPU inference array, dependent MIRA job, hashes and progress receipts.
+  Verified 12 tests: residual single/expert checkpoint readback and sampling on
+  four CPU devices, exact joint resampling, fixed identities and padded tail,
+  truth preparation, nonblank plots and existing MIRA regressions. Ruff,
+  compileall and shell syntax pass. Physical runtime is mocked in the new CPU
+  integration; no H100 execution performed locally. Legacy fit smoke configs
+  are absent. Remote inference and scientific comparison remain pending.
+
+## AVI residual expert startup recovery
+
+- Preflight A/C passed; B/D/E/F/G failed because mixture construction assumed
+  a Gaussian MLP trunk. Read residual input_dim and retain legacy MLP support.
+- Exercise residual experts in density/sample tests and the seven-arm, four-CPU
+  integration. Preserve selection correction and frozen prior.
+- Verified 21 targeted tests plus the seven-arm residual integration (408s),
+  including four-device updates, resume and plots. Raised only the local test
+  timeout after its former 300s ceiling interrupted compilation. Ruff and
+  compileall pass; real-asset H100 preflight remains required in a fresh v6 root.
+
+## 2026-09-10 Fix global smoke coverage
+
+- Remote smoke ran sleep only: bootstrap=16 and flow freeze=12 exceeded its
+  eight epochs. Corrected smoke to exercise warmup wake at epoch 4 and joint
+  wake at epoch 7, with trainable flow. Full schedule now uses 2 sleep / 1 wake
+  after its unchanged bootstrap. No change to the 60+120 phase lengths.
+- Added fail-closed applied-update/descent gate, checked after smoke and before
+  full training. New roots required; cancelled v1 is not a qualified reference.
+- Verified 38 focused CPU tests, Ruff, Python compilation and shell syntax.
+  Corrected H100 smoke has not yet run; no convergence claim.
+
+## 2026-09-10 Global guarded RWS
+
+- Added opt-in float64 coupling transport to the global encoder and opt-in
+  distributed wake backtracking with optimizer-state rollback on rejection.
+- Added fresh-training launcher with same-program smoke dependency, two seeds
+  serialized on four H100s, original full-cohort RWS/population schedule.
+- This starts from scratch, NOT arm C or a legacy optimizer. Warm-start migration
+  and independent posterior qualification are not delivered by this launcher.
+- CPU distributed and transport tests passed; GPU/physical-decoder execution is
+  not verified locally. Preserve historical defaults and label this experimental.
+- Verification: 37 focused tests, config validation, Ruff, compileall and shell
+  syntax passed. Full launch keeps the historical 60+120 epoch schedule.
+
+## 2026-09-10 Shared AVI continuation
+
+- Implement a two-seed shared stochastic-ELBO training array from certified
+  precision-night arm C. No posterior teacher and no catalogue truth inputs.
+- Keep the population prior frozen. Population updates and independent posterior
+  evaluation remain separate follow-up work; do not claim end-to-end completion.
+- Added bounded two-seed array launcher and immutable code snapshot. Verified
+  configuration test and shell syntax; no H100 execution locally. Global native
+  transport is explicitly not certified by the local transport64 diagnostic.
+
+## 2026-09-10 Independent wake-batch diagnostic
+
+- Completed: opt-in independent before/after loss measurements on two fresh
+  mixture batches per attempt, without changing update acceptance or RNG keys.
+- Preserve guarded wake, source/parent contracts, all attempts and decoder cost
+  accounting. Independent batches are diagnostic only, never selection data.
+- Verified 46 focused tests, Python compilation and shell syntax. Updated the
+  meeting explanation and launch runbook. H100 execution remains unrun locally;
+  this is a diagnostic, not qualification for global training.
+
+## 2026-09-10 Plain-language experiment rewrite
+
+- Completed: replaced technical experiment descriptions with short sentences
+  explaining the question, action, observation and meaning for a newcomer.
+- Kept evidence, plots and uncertainty; moved technical identifiers after the
+  explanation and retained formulas on the separate reference page.
+- Added plain-language plot reading instructions and a final fixed/open recap.
+  Main dossier now directs newcomers to this page first. Sphinx -W verified;
+  no changes to inference code or the cluster run.
+
+## 2026-09-10 Meeting narrative simplification
+
+- Completed: added a plain-English executive recap separating observed
+  problems, verified fixes, experimental lessons and unresolved questions.
+- Preserved detailed evidence and equations; added a short reading path,
+  a four-chapter experiment guide and accessible metric explanations.
+- Verified Sphinx HTML with warnings treated as errors and diff whitespace.
+  Documentation only; no change to the running pilot or inference code.
+
+## 2026-09-10 Expanded English meeting dossier
+
+- Implemented: three English pages covering the historical baseline, current
+  run ledger, exact metric equations and 22 experiment-by-experiment accounts.
+- Added genuine joint-draw corner, individual/population distributions, support
+  and MIRA plots with downloadable receipts, scores, PDFs and source hashes.
+- Historical epoch-160 data are explicitly separated from the running corrected
+  pilot; current pilot draws/MIRA are not available locally and are not invented.
+- Verified asset regeneration, copied figure hashes, new plot visual checks,
+  Ruff, compileall and Sphinx HTML; no inference or training code changed.
+
+## 2026-09-10 Wake descent correction
+
+- Implemented: versioned Armijo backtracking with full Adam rollback on rejection,
+  fixed-parent pilot and meeting figures spanning the numerical/debug sequence.
+- Evidence: exact 32/32 forensic replay; seven of nine inspected full updates
+  increase their own wake loss. Independent support still requires validation.
+- Verified: 41 targeted tests across guarded updates, original wake/pilot,
+  transport64 integration and preparation/night gates. Ruff, compileall, Bash
+  syntax and Sphinx -W pass. PNG/PDF meeting figures visually inspected.
+- Handoff: one H100, max 10h; original seeds and budgets, fresh blocking audits;
+  wake_armijo_v1 with per-attempt descent readback. No cluster result yet.
+  Legacy fit/posterior smoke configs are absent; those runs were not performed.
+
+## 2026-09-10 Wake update forensics
+
+- Implemented: replay all original wake trajectories, record fixed-batch loss,
+  directional AD/FD and scaled first-update counterfactuals, with common-noise
+  direct evaluations. No best-step selection or population training.
+- Final parameter/acceptance mismatch produces WAKE_REPLAY_MISMATCH. Pinned
+  pilot, fresh blocking transport64 audits, first accepted update only; one H100,
+  maximum 10h. The longer training extension remains separately resource-gated.
+- Verified: 36 focused tests plus two preparation/integrity tests; Ruff,
+  compileall, Bash syntax, and Sphinx -W pass. No H100 replay run locally;
+  legacy fit/posterior smoke configs are absent. Operator must submit and
+  inspect FINAL.json and the hashed forensic readback before interpretation.
+
+## 2026-09-10 Gated overnight objective extension
+
+- Implemented: dependent 10-hour, single-H100 fixed-parent extension,
+  with CPU readback of completed pilot before model loading. Fail closed on
+  incomplete evidence, insufficient wake acceptance or absent paired ESS gain.
+  Reused development cohort, not global amortized or population training.
+- Same original source; 32768 decoder draws per arm/start, fresh optimization
+  and evaluation seeds. Criteria are resource gates, not posterior qualification.
+- Validated: 24 tests, including integrity, insufficient ESS gain, rejected
+  wake, extended optimizer budgets and evaluation seeds; Ruff, compileall,
+  Bash syntax and Sphinx -W pass. No remote job submitted here. Legacy fit/
+  posterior configs remain absent; those smoke runs were not performed.
+- Handoff: submit_feniks_sc_drws_objective_night.sh with pilot ID 1962310;
+  afterany dependency plus durable NIGHT_EXTENSION_NOT_STARTED if gate fails.
+
+## 2026-09-10 Versioned transport64 objective pilot
+
+- Implemented: job 1961888 reports 32/32 transport64 audits PASS while native
+  reproduces 31 PASS / 1 INCONCLUSIVE. Integrate the tested transport into all
+  pilot operations, with pinned qualification, fresh audits and checkpoint
+  contracts. No population training or automatic overnight escalation.
+- Pinned qualification is checked during preparation and runtime; fresh
+  float64 audits gate all updates. Every sampling/density/evaluation path uses
+  the same adapter. Checkpoint sidecars pin contract, parameters and manifest.
+- Validation: 50 focused tests across objective orchestration/reference,
+  transport, wake, objective audit and qualified VI; Ruff, compileall, CLI help,
+  Bash syntax and warning-free Sphinx pass. No H100 run performed locally.
+  Legacy fit/posterior smoke configs remain absent, so those are not run.
+- Handoff: submit_feniks_sc_drws_transport64_pilot.sh; bounded 1 H100 / 1 node /
+  3-hour job. Larger fixed-parent wake requires actual support and acceptance
+  readback; no population RWS is authorized by numerical audits alone.
+
+## 2026-09-09 Transport precision localization after job 1960443
+
+- Implemented: separate audit-only replay, same source checkpoints/noise/directions,
+  native transport versus explicitly float64 diagnostic transport. No optimizer
+  or override of the original 31 PASS / 1 INCONCLUSIVE receipt.
+- Record latent/flux finite differences and dtypes; retain fixed target and
+  context. Preserve default production arithmetic and checkpoint structures.
+- Added hashed per-draw latent/flux stencil archives and receipt-checked CPU
+  readback. Even all-PASS diagnostic results cannot construct an optimizer.
+- Updated HTML status and operator-transcribed stencil figure; launch protocol
+  is `docs/feniks_transport_precision_runbook.md`. H100 results remain pending.
+- Validation: 113 tests pass across transport, objective audit, orchestration,
+  qualified/local VI and flow/posterior regressions; two additional reference
+  tests pass. Transport tests rerun after archive assertions: 3 passed.
+  Ruff, compileall, Bash syntax,
+  CLI help and warning-free Sphinx build pass. Legacy AGENTS fit/posterior
+  smoke configurations are absent from this checkout; those runs are not done.
+
+## 2026-09-09 Full VI objective audit and guarded wake pilot
+
+- Implemented: audit the actual fixed-noise VI parameter gradient, then gate a
+  matched decoder-draw-budget reverse/wake comparison on all 32 native audit points.
+- Replay 1959175 leaves 31/32 local proposals with bad k. Stable ELBO/residuals
+  do not certify support. No further blind duration or K extension.
+- Freeze all source final checkpoints and C anchors. No truth, population update,
+  pointwise targets, best-checkpoint selection or accumulated importance bank.
+- Native flow still contains float32 casts; promoting parameter copies alone
+  is not a full64 flow and cannot qualify the original optimizer.
+- Fresh exact 50/50 local/C mixture draws feed a stopped-sample, stopped-weight
+  wake objective. ESS >=16 and max weight <=0.20 are optimizer preconditions;
+  rejection preserves parameters and Adam state and consumes the fixed budget.
+- Audit JSON/stencil hashes are pinned and rechecked before adaptation, after
+  each case and on CPU readback. Fixed checkpoints and independent evaluations;
+  no retry-until-pass or implicit winning start.
+- Verification: 68 affected tests passed, including the real conditional flow,
+  injected wrong AD rules, native unresolved precision, optimizer state guards,
+  source/recipe refusal, audit-first orchestration and altered audit evidence.
+  Test x64 fixtures now enable and restore their own settings rather than
+  depending on the caller's environment. Compileall, Ruff, Bash syntax, CLI
+  help and Sphinx -W passed; desktop/mobile HTML and PNGs visually inspected.
+- HTML: outputs/docs_support_probe/feniks_current_status.html. Illustrated
+  analysis and commands: docs/feniks_objective_pilot_runbook.md. One H100/node,
+  serial arms, 3h allocation, 1.2M decoder-evaluation ceiling. H100 run pending;
+  CPU mock-target tests do not qualify science. Legacy AGENTS fit/posterior
+  configs remain absent, so those smoke commands were not run.
+
+## 2026-09-09 Standalone CPU audit import repair
+
+- Operator audit failed before execution with ModuleNotFoundError for
+  euclid_dsps.amortized.population_vem. The chained GPU submission never ran;
+  latest monitor environment still points to completed job 1948458.
+- Remove the package import from this CPU-only utility. Use Python 3.11+
+  hashlib.file_digest, and test direct script execution outside the checkout
+  with isolated import paths. No changes to diagnostics or scientific gates.
+- Implemented and verified: standalone subprocess (-I, external working
+  directory) audits a real NPZ and writes receipts successfully; pytest,
+  Ruff and compileall pass. GPU probe remains not submitted by this agent.
+
+## 2026-09-09 Support probe and illustrated status (implemented, cluster pending)
+
+- User reports job 1948458 complete: smaller steps reduce instability, but
+  all 48 observed final fits have bad Pareto-k. MC16 is not a general rescue.
+- Publish attributed numerical plots and an HTML explanation of the workflow,
+  evidence and remaining questions. No invented remote artifact access.
+- Add CPU saved-draw concentration audit and a frozen-checkpoint direct-draw
+  dispersion/explicit-mixture probe. Fixed candidates, fresh evaluations,
+  exact mixture density; no optimizer, teacher or population promotion.
+- Added Sphinx current-state page, attributed JSON evidence, reproducible PNG
+  trajectories/ESS table and explicitly conceptual mixture illustration.
+  HTML built at outputs/docs_support_probe/feniks_current_status.html.
+- Implemented CPU bank/hash/concentration readback and four fixed proposals
+  from both final slow_mc16 starts. Exact 50/50 mixture log density, fresh
+  evaluation keys, source receipts/hash and simulated-input identity guards.
+  No optimizer; 1 H100/node, 3h ceiling, 50000 evaluation budget.
+- Verification: 33 targeted tests passed, plus rerun integration with zero
+  optimization steps passed. Covers mixture normalization/density/reload,
+  immutable parent, new draws, CPU audit and tamper rejection. Compileall,
+  Ruff, shell syntax, CLI help and Sphinx -W pass. Figures visually inspected.
+- No cluster execution here; legacy AGENTS fit/posterior configs still absent,
+  so those smoke commands were not run. Historical unrelated work preserved.
+
+## 2026-09-09 Controlled local optimization (implemented, cluster pending)
+
+- Job 1938818 completed, but local support worsens in 15/16 observed fits.
+  Simulated cases also fail: improved residuals are not posterior recovery.
+- Add a prespecified paired optimization experiment: original settings,
+  smaller learning rate, then more gradient draws at that same smaller rate.
+  Record intermediate distributions without selecting a winning checkpoint.
+- Preserve the same eight observed contexts, simulations and two starts;
+  frozen target, no catalogue truth, no population update. Test and document
+  before handing off a new immutable cluster run.
+- Implemented original/slow/slow-MC16 regimes, paired starts and saved
+  checkpoints/direct draws at 8/16/32/64 updates, with shared evaluation keys
+  independent of optimization. CPU readback includes density and scale changes.
+- 32 targeted tests pass, including real optimizer/mock-decoder execution of
+  all regimes and intermediate readback; compileall, Ruff, shell syntax, CLI
+  help and Sphinx -W pass. Fixed a summary-schema error caught by integration.
+- Legacy fit/posterior smoke configs in AGENTS.md are absent; those commands
+  were not run. No H100 execution here. One H100/node, sequential, 3h ceiling,
+  180000 evaluation budget. Runbook: docs/feniks_controlled_local_vi_runbook.md.
+
+## 2026-09-09 Qualified local VI follow-up (implemented, cluster pending)
+
+- User-supplied job 1923347 completed: six numerical qualification points pass,
+  smoke/B/C training and A/B/C evaluation complete. All posterior support gates
+  still fail. C improves photometric tails, not effective importance support.
+- Resume bounded same-family per-object VI from qualified night C, using its
+  exact numerical configuration, frozen parent and fresh observed-context
+  simulations. Eight observed + eight simulated cases, two starts, 64 steps,
+  two independent 128-draw evaluations per final distribution; no NPE teacher.
+- Add receipt/hash guards, CPU-only night audit and tests. Examine the enormous
+  held-out simulated residual references before interpreting relative PASS.
+- Preserve historical results and gates. No population update, no long sweep,
+  no catalogue truth reads, and no automatic scientific promotion.
+- Implemented CPU readback with absolute held-out references and loss/gradient
+  summaries; descriptive simultaneous rank bounds do not reclassify gates.
+  New launcher selects C explicitly, pins receipts/numerics/parameter order,
+  and enforces x64 during front-end preparation as well as GPU execution.
+- Verification: 50 targeted tests pass (qualified preparation/real local
+  optimizer with mock physics, old diagnostic modes, synthetic full-SED
+  qualification, checkpoint precision contracts, analytical Gaussian and
+  missing-mode controls). Independent K128 replicate support is now explicit
+  alongside pooled K256; no best-start selection. Compileall, Ruff, Bash syntax,
+  CLI help and Sphinx -W pass. No new H100 run has been submitted here.
+- Legacy one-row/batch fit configs named in AGENTS.md remain absent; these
+  catalogue fits were not run. No MCMC test or catalogue-truth path executed.
+- Runbook: docs/feniks_qualified_local_vi_runbook.md. One H100/node, sequential
+  cases, three-hour ceiling and first-pair cost preflight. Qualification on six
+  points is empirical, and 64 local steps/two nearby starts cannot establish
+  mode completeness, family adequacy or catalogue-simulator compatibility.
+
+## 2026-09-09 Versioned precision and gated overnight experiment (implemented)
+
+- Job 1922455: all zpath64 branches pass at point4 with tiny center shifts;
+  canonical latent target remains inconclusive and mixed full has failures.
+- Integrated opt-in spline64 arithmetic, including latent transforms and
+  likelihood, without changing defaults, priors, noise, selection or bounds.
+- Prepared one sequential overnight job: all-coordinate qualification, fresh
+  small bank/gradient smoke, bounded sleep and sleep+ELBO continuations and
+  truth-free validation. Fail closed; no population training or promotion.
+- One H100 / one node / 10-hour ceiling, qualification before any training;
+  1024-point gradient smoke, 16384-point new bank, 8192 training rows, 4+4
+  epochs and matched A/B/C K256 on 64 observed validation objects. No old flux
+  bank reuse. A uses unchanged weights under corrected numerics.
+- Checkpoint migration verifies all model arrays after save/reload. Numerical
+  contracts enter latent hashes, sidecars and cache provenance. Historical
+  defaults/checkpoints remain readable. Documented recipe and overnight commands.
+- Local checks: 196 passed / 3 skipped in targeted model, posterior and workflow
+  suites; CPU synthetic mock-decoder optimizer smoke (16 objects, one epoch),
+  compileall, Ruff, Bash syntax, CLI help and Sphinx -W pass. No H100 run submitted.
+- Remaining: six real-checkpoint full-target qualification inputs, H100 runtime,
+  new posterior-support results and catalogue simulator compatibility. Neither
+  a pointwise derivative pass nor a completed pilot enables population training.
+
+## 2026-09-09 Point-4 redshift precision isolation (implemented)
+
+- Cluster job 1922142 resolves four density checks within existing tolerances;
+  point 4 / z_obs / lsst_z remains INCONCLUSIVE. Two favorable intermediate
+  steps are not a convergence plateau. Output ULPs do not bound upstream noise.
+- Add a receipt-linked, single-point branch audit under merged/MDF64, including
+  a diagnostic float64 redshift-dependent path, all bands, unchanged stencils
+  and tolerances. Keep production arithmetic and historical receipts unchanged.
+- No NPE, local VI or population launch. Update Markdown/RST evidence tracking.
+- Added ten sequential branch curves, physical-z/tangent-vs-latent separation,
+  trace-enforced float64 z-path and native-SED-cast control. Production defaults
+  and previous numerical decisions are unchanged. Hash-linked CPU replay added.
+- Local verification: 103 tests passed, 3 skipped across model, numerical and
+  workflow tests; includes three synthetic SED/IGM cases, source-AD guard,
+  wrong-gradient rejection, receipt tampering and mock end-to-end branch mode.
+  Compileall/Ruff/Bash syntax/CLI help and Sphinx HTML -W checked. No Jean-Zay
+  run submitted here. Legacy fit smoke configs are absent; no catalogue fit.
+- Launch LOCAL_VI_REDSHIFT_PRECISION_REFERENCE from target_resolution_v1 into
+  a fresh redshift_precision_v1 root. One H100/node, 16 CPUs, 45-minute ceiling,
+  1000 component calls. No automatic promotion even if branch stencils pass.
+
+## 2026-09-09 Residual audit and remaining redshift convergence (implemented)
+
+- Job 1921589: MDF64 resolves all metallicity checks; four of six full points
+  pass. Five remaining required checks are INCONCLUSIVE, not FAIL.
+- Four density curves agree at coarse steps but the artificial float32 ULP
+  screen on a float64 quadratic sum blocks them. Redshift still lacks a stable
+  plateau before mixed-precision noise appears; one favorable step is not proof.
+- Add a bounded, receipt-linked replay of unresolved checks, stable per-band
+  Gaussian differences, actual representable steps, and FD-only plateau and
+  truncation checks. Keep historical reports and tolerances unchanged.
+- Maintain Markdown and Sphinx RST debug chronology, distinguishing cluster
+  evidence, local tests, prepared work, and conditions for resuming training.
+- Added `LOCAL_VI_TARGET_RESOLUTION_REFERENCE`: source-linked residual-only
+  audit, unchanged merged/MDF64 target and tolerances, 25 prespecified steps,
+  asymmetric representable stencils and FD-only Richardson/plateau comparison.
+  Actual flux-output ULPs are propagated through stable Gaussian differences;
+  unknown upstream rounding remains explicit, not magically certified away.
+- Export complete perturbation fluxes/JVPs for CPU replay with final hashes.
+  The summary recomputes decisions; no old receipt or scientific gate is changed.
+- Verification: 39 targeted tests passed (including synthetic real-DSPS SED
+  smoke and mock end-to-end residual submission inputs/finalization/replay),
+  compileall/Ruff/CLI help/Bash checks pass. Sphinx HTML builds with `-W`.
+  No H100 residual audit or catalogue training executed locally. Legacy fit
+  commands remain unavailable because their named configs are absent.
+- Tracking: `docs/feniks_decoder_debug_log.md` and the indexed Sphinx page
+  `docs/source/feniks_decoder_debug.rst`. One node/one H100/16 CPUs, maximum
+  45 minutes, internal 40 minutes and 1000 decoder evaluations, no follow-on
+  training. Resolve remaining evidence before simulator review/new banks/VI.
+
+## 2026-09-08 Full-decoder quadrature qualification (implemented)
+
+- Job 1918919: fixed-spectrum reference PASS at three points and 54 band
+  derivatives; legacy projection differs from the reference derivative even
+  where its own AD/FD converge. This is not full-posterior validation.
+- Add versioned opt-in merged Gauss4 photometry; keep the historical default.
+  Protect reusable sleep banks against mixing numerical integrators.
+- Require the frozen reference receipt, compare complete canonical targets on
+  three generated and three direct-q points, all coordinates, matched contexts.
+  Measure flux differences, gradient convergence, runtime and device memory.
+- Keep residual mixed precision visible. No NPE, local optimization, catalogue
+  regeneration or population training until the results have been inspected.
+- Implemented `model.photometry_integrator=merged_gauss4_v1`, opt-in projection
+  float64 with strict x64 requirement and unchanged SFH/SSP/IGM arithmetic.
+  Historical default remains bitwise identical on the synthetic regression case;
+  cache receipts cannot silently cross the legacy/merged numerical contracts.
+- Full diagnostic requires the previous reference PASS and hashes, records six
+  fixed parameter/context pairs, compares all fifteen latent-x directions with
+  FD/JVP, canonical/centered likelihood and reverse-mode target derivatives.
+  Durable per-coordinate CSV/progress, mixed dtype traces and numerical checks
+  remain separate from workflow completion and scientific promotion.
+- Budget: one node/one H100/16 CPU threads, sequential variants, 90-minute Slurm
+  ceiling (1.5 GPU-hours), 80-minute process ceiling and 6000 component calls.
+  Record steady single-point forward time, compilation-inclusive case time and
+  whole-process allocator peaks; not a large-training-batch qualification.
+- Initial targeted model/photometry/local-VI suite: 95 passed, three real-asset
+  skips. No catalogue fit or real SSP/checkpoint/H100 run available locally.
+  Runbook: `docs/feniks_full_decoder_qualification_runbook.md`.
+- Final qualification/workflow/frozen-NPE/posterior regression suite: 58 passed,
+  including a deliberately wrong flux gradient rejected by the new checks,
+  full synthetic SED derivatives, cache contract migration, receipt readback and
+  tamper rejection. Compileall, Ruff, CLI help, Bash syntax and diff checks pass.
+
+## 2026-09-08 Isolate observed likelihood gradient discrepancy
+
+- v2 evidence: logprior AD=1.16517 and finite differences agree; loglike
+  AD=49.2304 versus FD=39.40..62.95 remains unresolved. Final-scalar ULP
+  estimates do not explain the full discrepancy. Do not claim a broken prior,
+  wrong AD or float32 as the proven cause from this one direction.
+- Implement a separate 20-minute, one-H100 forensic mode at the same point:
+  per-band flux Jacobian, coordinate and original-direction differences,
+  centered Gaussian differences without the large normalization constant,
+  and a likelihood-only derivative test with fixed decoder fluxes.
+- Keep all physics/precision/gates unchanged. This mode never starts VI,
+  even if its checks agree; save raw evidence for the next decision.
+- Implemented `LOCAL_VI_GRADIENT_ISOLATION=1`, a separate 20-minute submission
+  mode with 500-evaluation cap, same point/cohort, partial CSVs and a dedicated
+  final receipt. No optimizer or population submission is reachable in this mode.
+- Verification: 20 focused tests pass, including correct and deliberately broken
+  flux gradients at cgs scales and an end-to-end mock-physics isolation run.
+  Compileall, Ruff, bash syntax and whitespace checks pass. The real DSPS cause
+  remains unverified; no cluster job has been submitted from this checkout.
+
+## 2026-09-08 Local-VI gradient audit failure
+
+- Jean-Zay job 1913341 stopped before local optimization: central differences
+  at h=.01 and .005 disagree by 5.1818. This alone does not identify a bad
+  derivative, float32 cancellation or truncation/non-smoothness.
+- Replace the two-step scalar assertion with a bounded multi-scale audit of
+  loglike, logprior and logtarget; persist values, AD derivatives and resolution
+  estimates before failing. Keep tolerances, target and training unchanged.
+- Require a resolved finite-difference plateau independent of AD, then compare
+  AD. Non-convergence stays inconclusive/blocked, never an automatic pass.
+- Preserve v1; prepare a new immutable v2 diagnostic after targeted tests.
+- Implemented six steps and a three-step resolved plateau for each component.
+  `GRADIENT_AUDIT.json` and the partial `CONTRACT_AUDIT.json` survive a failed
+  or inconclusive gradient check. No scientific tolerances were widened.
+- Verified 17 local diagnostic tests, including truncation refinement, wrong
+  AD, unresolved float32 cancellation, cancelling component errors and durable
+  failure receipts; mock-physics end-to-end still passes. Real SED cause remains
+  undetermined until the new cluster audit is inspected. No job submitted here.
+
+## 2026-09-08 Implement bounded local-VI diagnostic
+
+- Implement a separate, truth-free single-H100 runner: contract checks, then
+  same-family local VI with two starts on 16 observed and 16 generated objects.
+- Use corrected balanced B as the fixed-family source (rather than historical
+  A's known incomplete topology); retain A/D as external historical controls.
+- Freeze context, prior, calibration and features; optimize only local Gaussian
+  base and coupling parameters. Preserve full density and entropy terms.
+- Add finite-rank likelihood controls, per-object replicated support/residual
+  diagnostics, checkpoint round trips, strict cost/deadline stops and artifacts.
+- No population step, automatic sweep or cancellation of existing jobs.
+  Implemented in a separate runner and immutable one-H100 launcher; existing
+  workflows and historical gates remain unchanged.
+- Completed contract audits, frozen-parent local base/coupling optimization,
+  fresh replicated direct-draw diagnostics, generated likelihood ranks,
+  per-case histories/checkpoints and paired CSV/PNG reports. Stop at 45,000
+  decoder evaluations or 9,900 process seconds, with a two-case cost preflight
+  and three-hour Slurm limit. No posterior is automatically selected/promoted.
+- Strip legacy truth/reporting column references from a separate resolved
+  read config before accessing the catalogue. Verify original artifact hashes
+  and preserve physical settings. Reject unsupported noise/missing-data
+  contexts, changed parents and nonfinite updates without filtering cases.
+- Verification: 40 focused/adjacent tests pass, including an end-to-end CPU
+  mock-physics run through parquet loading, contracts, VI, checkpoint reload
+  and reports; Gaussian optimization and a missed-mode high-ESS negative
+  control; compileall, Ruff, CLI help and shell syntax pass. Real DSPS assets
+  and the source B checkpoint are not available locally, so no SED/H100 run
+  or cluster submission is claimed. No MCMC-based smoke was run.
+- Runbook: `docs/feniks_local_vi_diagnostic_runbook.md`. Remaining task is the
+  bounded Jean-Zay execution and artifact readback before choosing a next
+  amortization, optimization or model-adequacy intervention.
+
+## 2026-09-08 Diagnostic reset before further VI training
+
+- Planning phase requested after balanced-v2 K256 failed for every candidate.
+  Audit target/feature/noise consistency, diagnostic sensitivity, amortization
+  versus approximation error, and population-model adequacy separately.
+- No new training, cluster cancellation, population update or gate change is
+  authorized by this planning phase. Preserve the frozen experiment contract.
+- Prepare a bounded, decision-driven plan in
+  `docs/feniks_vi_diagnostic_attack_plan_20260908.md`; record executed analytical
+  checks separately from proposed SED experiments. Analysis completed.
+- Verified that balanced selection already excludes B/C/D after their supplied
+  K256 failures; K1024 cannot restore eligibility under the frozen contract.
+- CPU negative control using existing rank functions: a prior-only proposal
+  passes marginal/projection SBC but fails likelihood-rank SBC (KS .9491).
+  Exact Gaussian posterior positive control passes all three (likelihood KS
+  .0214). This exposes diagnostic insensitivity, not a proven SED encoder bug.
+- Next proposed experiment: contract audit, then 16 observed + 16 generated
+  cases with two-start same-family local VI; one H100, three-hour hard ceiling
+  after a two-object cost measurement. No new global sweep. Separate inference
+  readiness from population adequacy in any future protocol, without modifying
+  historical gates or allowing unreliable population integration.
+- Delivered the plan only; no science code changes or remote actions. Existing
+  SED run conclusions remain provisional until artifact-level readback.
+
+## 2026-09-08 Balanced NPE single-GPU launch repair
+
+- Job `1892569` completed the two-object SED smoke, then failed before the
+  first optimizer step: the runner forced `pmap` on a one-H100 allocation.
+- Set both generated training configs and the CLI override to `single` for
+  S/B/C/D. Keep the one-GPU resource allocation and scientific recipe unchanged.
+- Test actual runner arguments against the one-device training resolver.
+  Preserve v1 and prepare an explicit v2 launch after cancelling only its
+  dependency-blocked descendants. No historical checkpoints are overwritten.
+- Completed: 16 balanced-run tests pass, including all four training CLI paths
+  exercised against the one-device resolver; Ruff, compileall and whitespace
+  checks pass. The cluster log certifies the old SED smoke only. The corrected
+  H100 training has not been executed locally or submitted from this checkout.
+
+## 2026-09-03 Population-flow coupling coverage recovery
+
+- Preserve the completed architecture-v1 artifacts and the legacy
+  `alternating_roll` checkpoint semantics, but stop using that topology for new
+  candidates: combined with alternating masks it never transforms odd latent
+  coordinates, exactly matching the invariant stellar-mass and `dust_av`
+  validation metrics.
+- Switch new benchmark candidates to the existing `roll` topology, expose
+  per-coordinate transform counts in flow integrity diagnostics, and fail the
+  benchmark preflight if any candidate coordinate has zero active transforms.
+- Add a truth-free hard NLL non-regression gate against the saturated source
+  RealNVP before architecture ranking. The baseline remains eligible, so a
+  spline cannot win on marginal CDFs while degrading the joint validation NLL.
+- Validate locally, commit, and publish a fresh architecture-v2 launch. Do not
+  overwrite v1 and do not rerun posterior inference or use truth before winner
+  freeze.
+
+Implementation complete locally; no recovery jobs were submitted from this
+checkout. The legacy topology remains loadable and is reported as `WARN`, while
+new candidates use full-coverage indexed rolls and fail before fitting if any
+coordinate is inactive. Validation: Ruff, `compileall`, shell syntax, 38 focused
+flow/config/projection tests, and 57 SC-DRWS/VEM/SC-ASMC regressions pass.
+
+## 2026-09-03 Truth-free population projection architecture benchmark
+
+- Reuse the immutable epoch-160 joint-q and inverse-selection beta banks; do
+  not run DSPS posterior inference again and do not expose truth to fitting or
+  architecture selection.
+- Compare the saturated affine baseline against three independently trained
+  exact-density candidates: a wider RealNVP, a full 15D RQ-spline coupling
+  flow, and a block-triangular RQ-spline flow
+  `p(core_5) p(SFH_10 | core_5)` that preserves the joint distribution while
+  giving redshift, mass, metallicity, and dust dedicated capacity.
+- Fit candidates as parallel four-H100 jobs, evaluate their fixed validation
+  distributions as parallel one-H100 jobs, and select the winner only from
+  predeclared truth-free CDF/rank and weighted-NLL metrics. Treat SFH metrics as
+  secondary diagnostics; never use a redshift median gate.
+- Run posterior PIT/coverage and population truth closure exactly once, after
+  the truth-free winner receipt is frozen. Publish candidate checkpoints,
+  metrics, provenance, plots, and copy-paste monitoring in a separate output
+  root so the completed v1/v2 projections remain untouched.
+
+Implementation complete locally; no Jean-Zay jobs were submitted from this
+checkout. Validation: `compileall`, Ruff, shell syntax, 36 focused flow/config/
+projection tests, and 40 SC-DRWS/VEM regression tests pass. The launcher uses a
+detached commit worktree, three parallel four-H100 fits, four parallel one-H100
+truth-free validations, a CPU winner gate, and one post-freeze H100 closure.
+
+## 2026-09-03 Population-VEM stage-1 gate recovery
+
+- The 36 initial Jean-Zay bank tasks completed, but CPU gate `1702058`
+  failed before aggregation because `module purge` removed `git` from `PATH`.
+- Make commit provenance checks read Git metadata directly, while retaining a
+  captured executable fallback for the already-frozen `a4e5face71d6` code
+  snapshot. Add a guarded recovery submitter that reuses every completed bank,
+  cancels only the impossible downstream jobs, and resubmits stages 1b--5.
+
+Completed locally: eight focused tests, Ruff, compileall, Bash syntax, direct
+main-checkout provenance read, and whitespace checks pass. Jean-Zay recovery
+submission remains explicit and has not been run from this checkout.
+
+Jean-Zay follow-up: recovery gate `1702560` found `git`, but prepending its
+whole binary directory shadowed the Conda interpreter with a Python lacking
+JAX. Restore only a `git` symlink through a private shim directory, and archive
+failed recovery receipts so the guarded recovery can be retried without
+discarding provenance or any completed bank. The retry change passes the eight
+focused tests, Ruff, compileall, Bash syntax, and whitespace checks locally.
+
+The private shim was not visible to the legacy Python subprocess in recovery
+gate `1702696`. Remove the executable dependency entirely for recovery: execute
+the frozen finalizer but prepend the current checkout, containing only the
+metadata-only provenance repair, to its module path. Record both the bank-code
+commit and the recovery-code commit in the recovery receipt. Eight focused
+tests, Ruff, compileall, Bash syntax, and whitespace validation pass locally.
+
+## 2026-09-03 Population-VEM submit import preflight
+
+- The first Jean-Zay launch stopped before submission because the active Conda
+  environment resolved an older installed `euclid_dsps` package while the
+  preparation script was executed from `scripts/`.
+- Put the active checkout first on `PYTHONPATH` before any local preparation,
+  verify the imported `population_vem.py` path is inside that checkout, and add
+  regression coverage for the ordering. No population-VEM Slurm job was
+  submitted by the failed attempt.
+
+Completed locally: the submit preflight now fails clearly on a foreign package;
+focused tests, Ruff, compileall, Bash syntax, and whitespace checks pass.
+
+## 2026-09-03 Selection-corrected population VEM follow-up
+
+- Freeze the epoch-160 model and build reusable, truth-free joint q banks once:
+  32 draws for 95% of the selected training objects and 64 draws for a fixed
+  5% validation cohort. Shard the work across H100 jobs and preserve row IDs,
+  model hashes, feature-stat hashes, and joint-draw provenance.
+- Audit the configured selection function separately on the frozen C0 closure
+  catalogue before optimizing the population prior. Keep this truth-bearing
+  diagnostic out of every training input and fail closed when the r<29
+  completeness model is not calibrated to the observed selection labels.
+- Optimize only the parent population flow with a selection-corrected M-step.
+  Reuse a fixed parent-prior reference bank so DSPS and beta are evaluated once,
+  distribute the data and normalization terms over four GPUs, bound each device
+  batch, gate reference-bank ESS/K and prior drift, and checkpoint every pass.
+- Run a short two-epoch, prior-frozen q refresh from the selected prior model;
+  this is an approximate AVI consistency update, not an exact importance-
+  corrected posterior claim. Avoid repeated high-K wake cycles.
+- Evaluate the refreshed q and parent/selected priors on the complete independent
+  selected catalogue with 32 joint draws per object, shard the evaluation, and
+  publish distinct population-support, calibration, redshift, and individual-
+  posterior claims in a durable final receipt.
+
+Completed locally:
+
+- Added an immutable five-stage chain: 36 one-H100 bank/audit tasks (at most 24
+  concurrent), a four-H100 fixed-reference prior M-step, a four-H100 two-epoch
+  AVI refresh, 16 one-H100 final bank tasks, and one H100 finalizer. The
+  independent test catalogue is untouched until the final closure.
+- The prior optimizer evaluates DSPS completeness only while constructing the
+  fixed banks, uses joint 15D q draws with equal object weights, keeps the
+  selection-normalization weights in log space, and rejects updates that fail
+  alpha-MC, reference-ESS, finite-gradient, or source-KL gates.
+- The final receipt distinguishes parent prior, selected prior, and aggregate
+  approximate q, reports redshift and 15D population distances, runs full-test
+  MIRA/TARP at K=32, and publishes population plus individual PNG/PDF figures.
+  It can certify a population target but cannot promote exact posteriors because
+  this bounded workflow deliberately performs no importance correction.
+- Validation passes: 7 focused tests, 84 SC-DRWS/selection/data-parallel
+  regressions, Ruff, compileall, CLI help checks, Bash/SLURM syntax, and diff
+  whitespace checks. No Jean-Zay job was submitted from this checkout.
+
+### Iterative continuation
+
+- Add an immutable VEM-2 launch path whose source is the certified prior-frozen
+  q refresh from VEM-1, rather than the original epoch-160 checkpoint.
+- Keep the same train/validation/test cohorts and truth boundary, rebuild q and
+  selection-reference banks against the new source, and write the continuation
+  to a distinct root so both iterations remain auditable.
+- Require the continuation root explicitly and verify every parent receipt,
+  checkpoint, sidecar, feature-stat hash, and prior-frozen contract before any
+  Slurm job is submitted.
+
+Completed locally: the submitter now accepts `SOURCE_VEM_ROOT`, requires a new
+immutable `VEM_ROOT`, records the iteration and parent provenance, uses the
+certified prior-frozen refresh checkpoint as the next source, and isolates its
+logs. Forty focused population-VEM and SC-DRWS tests, Ruff, compileall, Bash
+syntax, and whitespace checks pass. No Jean-Zay job was submitted here.
+
+### Direct population projection after VEM-2
+
+- Stop alternating VEM after the second iteration degraded the independent
+  closure. Reuse the VEM-2 initial q banks, which are dense joint draws from
+  the better VEM-1 prior-frozen q, over all 37,641 selected training objects.
+- Fit an explicit selected-population flow directly to the object-equal q
+  mixture. Separately reconstruct the C0 parent target with joint-draw weights
+  proportional to `1 / beta(theta)` and fit the parent flow by weighted MLE.
+  Evaluate beta once on 8 draws per fit object and 16 per validation object;
+  keep DSPS outside both optimizers.
+- Select checkpoints only by truth-free held-out density objectives. Preserve
+  every joint draw and weight; do not turn a posterior or population
+  distribution into per-object point estimates.
+- Separate scientific outputs by contract: redshift posterior calibration is
+  assessed object by object with finite-rank PIT and central coverage, while
+  q-aggregate/prior comparisons use full weighted CDF, distribution-rank, and
+  Wasserstein diagnostics. No redshift median criterion is allowed.
+- Reuse the unchanged 4,706-object VEM-1 q closure for PIT, MIRA, and TARP, then
+  publish independent selected-truth and C0-truth closure diagnostics only
+  after both flows have been frozen.
+
+Completed locally: a 20-shard H100 beta-cache stage reuses the fixed VEM-1 q
+draws stored by VEM-2; a four-H100 weighted-density stage fits separate
+selected and inverse-selection parent flows; and a frozen one-H100 evaluation
+publishes distribution projections separately from same-object redshift PIT,
+coverage, MIRA, and TARP. Checkpoint choice is truth-free, no posterior is
+collapsed to a point estimate, and no new DSPS posterior inference is run.
+Fifty-one focused population, calibration, and SC-DRWS tests, Ruff, compileall,
+Bash syntax, and whitespace checks pass. No Jean-Zay job was submitted here.
+
+Recovery completed locally: the first remote fit job `1709290` failed during
+`jax.eval_shape` before its first update because the transactional tree
+selector passed a callable flow leaf to `jnp.where`. Conditional selection now
+touches only JAX array leaves. A narrow, provenance-checked recovery receipt
+preserves the completed beta banks and gate and submits only the four-H100 fit
+plus its dependent frozen evaluation. Fifty-two focused population,
+calibration, and SC-DRWS tests pass with the callable-leaf regression covered.
+
+Evaluation-only recovery completed locally: remote fit `1710542` completed both
+16-pass density projections, while evaluation `1710543` rejected a weighted
+empirical-CDF rank infinitesimally outside `[0, 1]` due to cumulative floating
+point error. The repair preserves the complete fit receipt and checkpoints,
+clamps only roundoff-scale CDF excursions, retains fail-loud behavior for
+material range violations, and provides an evaluation-only recovery with
+chained code provenance. Fifty-five focused projection, population,
+calibration, and SC-DRWS tests pass.
+
+Population-flow continuation completed locally: the frozen evaluation completed but
+the truth-free validation projections remain above their CDF gates. Add a new
+immutable continuation root initialized from both best flow checkpoints, reuse
+the existing joint-q and beta banks without DSPS inference, and optimize for at
+most 48 lower-learning-rate passes with held-out NLL early stopping. Re-run the
+frozen evaluation only after both continued flows are committed; keep the
+unchanged q PIT failure explicit because this continuation cannot calibrate the
+individual amortized posterior. The source checkpoints remain eligible when no
+new pass improves validation NLL. Fifty-six focused projection, population,
+calibration, and SC-DRWS tests pass with Ruff, compileall, Bash syntax, and
+whitespace checks.
+
+Continuation submission recovery completed locally: the first remote submission
+stopped before `sbatch` because the login-shell interpreter resolved an older
+installed `euclid_dsps` without `amortized.population_vem`. Export the active
+checkout on `PYTHONPATH` before preparation and fail loudly unless the imported
+package resolves inside that checkout. No continuation root or Slurm job was
+created by the failed attempt. The same 56 focused tests and static checks pass.
+
+## 2026-09-03 Epoch-160 aggregated science figures
+
+- Build publication-ready population plots from the authoritative combined
+  4,706-object selected-test posterior banks, rather than presenting the
+  small per-shard diagnostic figures as population results.
+- Compare dense raw/EMA q and ordinary-IW mixtures with selected-catalogue
+  truth, and compare the learned parent and beta-weighted selected priors with
+  their distinct C0/selected truth targets. Keep these probability objects
+  separate and never replace them with vectors of point estimates.
+- Produce aggregate correlation and held-out support panels, plus deterministic
+  individual posterior panels showing the learned parent prior, dense EMA q,
+  ordinary-IW resamples, and truth. Record source hashes, identities, draw
+  counts, support limitations, and generated artifacts in a durable manifest.
+- Validate the plotting script against the copied complete epoch-160 bundle,
+  inspect rendered PNGs, and run focused tests, Ruff, compileall, and diff
+  checks without modifying unrelated untracked report/slide/notebook work.
+
+Completed locally:
+
+- Added `scripts/plot_feniks_epoch160_aggregated.py`, which validates and pools
+  the four authoritative 4,706-object posterior banks, preserves object-equal
+  dense joint mixtures, and writes source/artifact hashes to a durable figure
+  manifest.
+- Rendered clean population marginals, prior recovery, recovery metrics,
+  correlation residuals, and held-out importance-support figures in PNG and
+  PDF form. The prior figure keeps the parent/C0 and selected/observed-selected
+  targets distinct.
+- Rendered six deterministic individual examples across observed r-flux
+  quantiles, with the learned parent prior, raw/EMA q, EMA IW resamples, and
+  frozen truth. A multipage PDF covers all 15 latent dimensions.
+- Visually inspected the rendered PNGs after fixing header layout, and passed
+  the focused plotting tests and Ruff checks.
+
+## 2026-09-03 Catalogue-wide epoch-160 calibration
+
+- Reuse the completed truth-free epoch-160 posterior banks for all 4,706
+  observed-selected rows in the independent test catalogue. Do not rerun DSPS
+  inference for this follow-up.
+- Evaluate raw/EMA q and ordinary-IW with shared MIRA/TARP randomness at the
+  common 32-draw budget, then evaluate raw/EMA q alone at the full existing
+  256-draw budget. Preserve dense joint draws and object identities throughout.
+- Publish an immutable diagnostic receipt that records checkpoint provenance,
+  object/draw counts, the existing K=1024 support failure, and the distinction
+  between selected posterior aggregates, the learned parent prior, and the
+  selection-weighted prior.
+- Add Jean-Zay submission and monitoring scripts plus focused contract tests;
+  run pytest, Ruff, compileall, shell syntax, and diff checks before committing.
+
+Completed locally:
+
+- Added a four-H100 diagnostic array that reuses the completed 4,706-object
+  selected-test banks: shared raw/EMA q/IW MIRA and TARP at 32 draws, plus
+  raw/EMA q-only MIRA and TARP at all 256 existing proposal draws. The workflow
+  performs no DSPS inference and writes task outputs through per-job staging
+  directories.
+- The CPU finalizer validates cohort, model, draw-count and frozen-truth
+  contracts and records the held-out K=1024 effective sample sizes so nominal
+  IW resamples cannot be presented as independent effective draws. A dedicated
+  monitor reports jobs, task completion, failures, plots, and the final receipt.
+- A real local smoke against the copied epoch-160 aggregate banks completed
+  MIRA and TARP for all four sources. Focused MIRA/TARP/recovery coverage totals
+  34 passing tests; Ruff, compileall, Bash/SLURM syntax, and diff checks pass.
+  No Jean-Zay job was submitted locally.
+
+## 2026-09-03 Epoch-160 finalizer recovery
+
+- Epoch-160 checkpoint freezing and all 8 held-out K=1024 plus 16 catalogue
+  K=256 tasks completed, but finalization job `1683703` failed before prior
+  evaluation because `report_feniks_sc_drws.py` passed a nonexistent
+  `population/prior/runtime` directory to the shared runtime writer.
+- Make no-truth prior-report publication atomic, create the runtime directory
+  before runtime preparation, quarantine the existing receipt-less output on
+  retry, and resubmit only the finalizer. Preserve all completed inference
+  shards and the frozen checkpoint.
+- Add regression coverage and run focused pytest, Ruff, compileall, shell
+  syntax, and diff checks before committing and pushing the repair.
+
+Completed locally:
+
+- The no-truth prior report now creates its runtime directory inside a sibling
+  staging tree and atomically publishes the complete report. The epoch-160
+  worker quarantines the receipt-less directory left by job `1683703`, without
+  deleting it or any completed posterior shard.
+- Added a recovery submitter that validates all 24 shard markers, submits only
+  the finalizer, and atomically refreshes the monitor environment. The monitor
+  now reads errors only from the current job IDs, so the historical traceback
+  does not mask retry health.
+- Validation: `63 passed` across recovery, SC-DRWS, MIRA, and TARP tests; Ruff,
+  full `compileall`, Bash/SLURM syntax, and `git diff --check` pass. No Jean-Zay
+  job was submitted locally.
+
+## 2026-08-29 SC-DRWS prior-update memory repair
+
+- Long-running full job `1562322_0` completed repeated Phase-B wake/prior
+  cycles through epoch 76, then hit a CPython/Equinox `inspect.signature`
+  `SystemError` while macro 33 at epoch 80 redundantly evaluated
+  `prior.log_prob(zeros)` only to infer the score carry dtype. Its continuation
+  recovered the durable state and reached epoch 92. Remove that redundant flow
+  trace by carrying a scalar dtype witness from the already-required prior
+  forward pass; preserve the mixed float32 completeness / float64 prior score
+  contract and add a regression whose prior rejects the obsolete singleton
+  log-probability probe. Verification passes 69 broad x64 selection/prior/
+  SC-DRWS tests plus Ruff, compileall and `git diff --check`; no configuration,
+  objective, sample count or checkpoint provenance input changed.
+- The first remotely exercised macro after the selection repair still failed
+  during XLA autotuning, now on the population data term: the HLO
+  `f64[256,524288]` is the prior hidden activation for
+  `512 particles x 1024 objects` and requires 1 GiB for one tensor. Preserve
+  the exact 1024-object macro objective and optimizer cadence, but evaluate its
+  data NLL through a rematerialized scan capped at 128 objects. Selection and
+  trust remain evaluated once per macro, so memory bounding must not multiply
+  the expensive selection-normalization work.
+- Relaunch `1550687_0` reached the selection preflight before state loading but
+  exposed an x64-only scan contract error: completeness weights were float32
+  while the loaded population prior's `log_prob` was float64. Type the scalar
+  score carry from the prior log-density result and cover the mixed-dtype path
+  with JAX x64 explicitly enabled. This preflight failure made no state change.
+- Continuation `1527131_0` resumed the truth-free full state successfully and
+  completed all 589 wake batches at epoch 64, then exhausted H100 memory in the
+  first population-prior update while differentiating the 4096-draw
+  score-function selection normalization. The epoch-63 state is intact; the
+  failure occurred before any Phase-B prior optimizer update was committed.
+- Replace the monolithic prior objective and its duplicate component-gradient
+  diagnostics with separately evaluated data, selection and trust gradients
+  that are combined exactly once before clipping. Stream the score-function
+  selection surrogate over deterministic fixed-size batches so DSPS
+  intermediates and prior log-probability activations are rematerialized with
+  bounded peak memory while retaining the same 4096-draw estimator and common
+  random numbers.
+- Add value/gradient equivalence, non-divisible batch and macro-update tests;
+  validate resume/config provenance without submitting Jean-Zay jobs.
+- Implemented without changing any YAML or scientific sample count, so the
+  existing epoch-63 state keeps its resolved-config contract. The
+  score-function estimator still uses 4096 common-random-number prior draws,
+  but caps its working set at 64, stores only completeness values between its
+  two passes, and rematerializes prior scores through a scalar scan. Data,
+  selection and trust gradients now execute sequentially with explicit device
+  synchronization and are combined before the unchanged optimizer clipping.
+  Stale four-device wake replicas are released before prior optimization.
+- Prior macro start/completion markers are emitted and surfaced by the full
+  monitor. Verification passes 75 broad focused tests plus 12 post-synchrony
+  prior tests, Ruff, compileall, SLURM/shell syntax and `git diff --check`.
+  No Jean-Zay job was submitted; continuation must replay epoch 64 from the
+  intact epoch-63 checkpoint before exercising this repair.
+- The mixed-dtype follow-up passes 31 selection/prior tests with
+  `JAX_ENABLE_X64=true`, including the explicit float32-completeness/
+  float64-prior regression, plus Ruff, compileall and `git diff --check`.
+- The first post-repair population macro identified a distinct activation
+  blow-up in the prior data term: evaluating all `512 x 1024` stopped
+  particles together produced the observed `f64[256,524288]` transpose and
+  exhausted another 1 GiB during autotuning. The exact 1024-object objective
+  now accumulates through rematerialized 128-object scan blocks, reducing that
+  dominant activation to `f64[256,65536]` while retaining one optimizer update,
+  one selection estimator and one trust term per macro. Resume also truncates
+  CSV rows newer than the last durable state, so the failed epoch-64 replay is
+  no longer reported as checkpointed progress. Verification passes 79 focused
+  x64 tests, Ruff, compileall, shell/SLURM syntax and `git diff --check`; no
+  scientific configuration, manifest, truth contract or checkpoint hash input
+  changed, and no Jean-Zay job was submitted.
+
+## 2026-08-27 Selection-Corrected Defensive RWS finalization
+
+- Full launch `1508902_0` exposed and the follow-up patch fixes a pre-training
+  index-namespace bug: the full
+  train manifest intentionally contains every selected row from `train.parquet`,
+  while the launcher also passed the train-catalog validation subset, so the
+  generic split correctly rejected row 42 as overlapping. The full now preserves
+  every selected training row and loads the truth-free confirmation cohort from
+  the distinct `test.parquet` namespace; `final_validation_indices.npy` remains
+  untouched for the independent post-training K2048/PPC evaluation. Same-catalog
+  overlap rejection remains strict. The empty directory left by this specific
+  pre-training failure is removed safely on relaunch. The cross-catalog split,
+  full-manifest contract and focused SC-DRWS/recovery suite total 46 passing
+  tests after the correction.
+- Relaunch `1513472_0` exposed a keyword-routing regression before manifest
+  validation: `validation_catalog_path` was passed to `_validate_manifest`
+  instead of `prepare_adaptive_training_runtime`. The argument is now routed
+  only to the runtime loader, with a direct mocked-call regression test; this
+  failure also occurred before any model state or scientific update.
+- Population-first SC-DRWS correction is implemented for the full-production
+  profile. Individual ESS,
+  max-weight and hard-MIS status will remain diagnostics for proposal quality,
+  but they must no longer censor finite objects from the population-prior
+  gradient or reject an otherwise finite macro-batch. The joint algorithm must
+  update `q` from tempered exact wake weights and update the parent prior from
+  every finite object's untempered normalized weights, with selection
+  normalization, clipping and a smooth trust-KL penalty providing the update
+  safeguards. The hard alpha-relative-error and KL threshold gates are disabled
+  for this profile; non-finite losses or gradients still reject an invalid
+  numerical update.
+- Full-production seed policy is reduced, at the user's request, from two
+  seeds to the single seed `260826` for the current run. Pilot and independent
+  confirmation remain two-seed gates. The full launcher now submits array task
+  `0` only, the monitor reports only `260826`, and `finalize-full` gates only
+  the configured production seed before authorizing four-shard inference.
+- Big-run anti-collapse hardening is implemented and deliberately isolated
+  from the already submitted 512-object pilot/confirmation configs. The full
+  catalogue will use a hash-bound production profile with 16 initial
+  sleep-only epochs; phase-local linear-warmup/cosine-decay q learning rates;
+  a base-first conditional-flow thaw; an ESS-aware q-weight-temperature cap
+  with a forced exact `tau=1` before the final quarter; an entropy reference
+  measured before the first wake update; and Phase-A K64-to-K256 defensive
+  deterministic MIS. Exact object weights, the Phase-B K128-to-K512 path,
+  selection normalization remains scientifically unchanged. The production
+  prior no longer uses per-object support thresholds as update gates.
+- The same production profile adds generating-component attribution for
+  dominant importance weights and a fixed, truth-free Gaussian support probe
+  at checkpoint epochs. The probe is diagnostic only: it does not roll back,
+  restore, select, or censor the training state. It is never a replacement for
+  independent K2048 raw/EMA evaluation after training.
+- Big-run anti-collapse hardening is implemented in the dedicated
+  `full_production_anti_collapse_v1` configs. The full launcher selects those
+  configs only after confirmation and validates the profile before training;
+  pilot and confirmation YAMLs retain their original 180-epoch contract.
+  Fixed-common-random-number Gaussian K128 probes start at epoch 64 and retain
+  provenance without influencing optimization. The q curriculum now computes
+  `softmax(tau * exact_logweight)` before numerical underflow can destroy
+  tempered mass, and host MIS buffers preserve the exact particle/weight dtype.
+  The monitor reports LR, flow multiplier, exact and q-training ESS, max weight,
+  tau, expansion/unresolved fractions and split-half population stability.
+- The full launcher accepts either the normal confirmation receipt or an
+  explicit `ALLOW_UNCONFIRMED_FULL=1` authorization naming the architecture.
+  The latter records an immutable no-truth override receipt and does not turn
+  the legacy pilot thresholds into training gates. It still launches only seed
+  `260826`; final independent K2048/PPC evaluation remains an assessment of the
+  resulting individual posteriors rather than a training-time censor.
+- Verification after implementation: 64 relevant SC-DRWS, recovery and shared
+  optimizer/validation tests pass, including four-device pmap, exact
+  logweight tempering, population-first prior updates, float64 MIS packing and
+  explicit full authorization. Ruff, compileall, all changed SLURM/shell syntax
+  checks, resolved production-config validation and `git diff --check` pass.
+  No Jean-Zay job was submitted. At 37,641 selected
+  rows and an assumed 20% hard fraction, the production estimator reports
+  approximately 320.6 million latent-object DSPS evaluations per seed; the
+  fixed support probes contribute 0.49 million of that total.
+
+- Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
+  truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
+  workflow inside the predefined FENIKS refinement/catalogue-support domain
+  `C0`. The additional modeled selection is observed `r<29.0`; upstream
+  true-space filtering remains conditioning and is not inverted.
+- Preserve the two existing conditional-RealNVP candidates and the no-truth
+  `bounded_mixed_warp` geometry. Do not change DSPS, zero points, the existing
+  catalogue, or the canonical object posterior target.
+- Implement a dedicated SC-DRWS training path with a 60-epoch Student-t2,
+  fixed-prior proposal warm-up followed by 120 Gaussian, joint q/prior epochs;
+  3:1 sleep/wake scheduling; variance-control schedules; exact defensive
+  mixture densities; hard-object K128-to-K512 deterministic MIS; separate q
+  and prior optimizers; selection-normalized prior loss; trust region; raw/EMA
+  checkpoints; and resumable state.
+- Extend the existing manifest/evaluation/launcher scaffold rather than
+  duplicating its independent cohorts, ordinary-IW K=2048 evaluation, dense
+  PPC, and four-H100 worker pattern. Add immutable retention-grid and full-row
+  contracts for observed `r<29.0`.
+- Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
+  selected-architecture/two-seed independent 2000-object confirmation, then
+  one complete-selected-training-set seed for the current production run. No
+  Jean-Zay submission is made by
+  Codex; only local tests and copy-paste launch commands are delivered.
+- Analytical wake cost per full seed is
+  `15*N*64 + 30*N*128 + 30*N_hard*384` DSPS evaluations, plus
+  `135*N*8` fixed-pool selected-sleep simulations, selection-alpha MC and
+  validation/inference. Benchmark the smoke before assigning a wall-time;
+  start K512 autotuning at four objects per H100 and enforce the configured
+  85-90% device-memory target.
+- Implementation status: the dedicated SC-DRWS trainer, dynamic variance
+  controls, complete deterministic MIS denominator, K128-to-K512 hard
+  expansion, full-wake prior macro-batches, fixed E-step trust reference,
+  score-function selection term, raw/EMA full-model checkpoints, resume state,
+  r<29.0 retention/full-row manifests, K2048/PPC gates, pilot/confirmation/full
+  launchers, four-shard inference and frozen population report are implemented.
+  Historical q has 673,942 trainable parameters; current q has 2,441,298; the
+  shared parent prior has 1,179,888.
+- Jean-Zay observed-flux audit: `r<27.5` retained only 64.328% of the 40,000
+  train rows and 63.780% of the 5,000 test rows; `r<28.5` still missed the 90%
+  contract at 89.657%/89.900%. The configured cut is therefore the next
+  half-magnitude grid value, `r<29.0`, retaining 94.103% train (37,641 rows)
+  and 94.120% test (4,706 rows). The survey PhotoErr depth remains
+  `m5_r=27.5`; only the explicit observed selection threshold changes.
+- Local verification: 67 focused SC-DRWS/RWS/posthoc/conditional-flow tests
+  pass, including a four-device CPU pmap regression. Ruff, compileall, bash
+  syntax and `git diff --check` pass. A broader suite attempt reached 134
+  passing tests before it was stopped
+  during long unrelated JAX compilation. The FENIKS parquet is absent locally,
+  so retention counts, GPU memory autotuning and the scientific smoke remain
+  Jean-Zay gates.
+- Jean-Zay smoke array `1488772` reached four H100 devices in every task but
+  failed before the first optimizer step: the standalone trainer imported its
+  JAX-heavy module before applying the config runtime, so the repository's
+  conservative default disabled PJRT plugin discovery. The entrypoint now
+  applies and validates the runtime before importing the trainer, and every
+  SC-DRWS GPU worker explicitly enables CUDA plugin autoload and requires an
+  NVIDIA device. The failed immutable root remains diagnostic only; relaunch
+  the smoke in a new root. Its dependency-blocked downstream jobs do not
+  authorize training, and full-catalogue production remains unsubmitted.
+  Post-fix verification passes `compileall`, Ruff, shell syntax,
+  `git diff --check` and 24 focused SC-DRWS/RWS tests, including the
+  four-device pmap regression.
+- The next immutable smoke array `1489064` passed CUDA initialization and ran
+  all seven pre-final epochs on both architectures and seeds. It then failed
+  deterministically at the first Phase-B hard-object K128-to-K512 merge because
+  NumPy views exported from JAX diagnostic arrays were read-only. Packed host
+  diagnostics now take explicit writable copies before selective replacement;
+  a regression mutates every expansion field so this host/device ownership
+  failure cannot recur silently. No support gate or scientific threshold was
+  changed, and the full-catalogue run remains unsubmitted.
+- Smoke array `1490119` then completed all eight training epochs, including the
+  Phase-B K128-to-K512 merge, for both architectures and seeds. Independent
+  IW/PPC startup failed only because SC-DRWS component sidecars used the exact
+  transform hash key `latent_transform_hash`, while the generic checkpoint
+  loader recognized only `latent_spec_hash` and incorrectly fell through to a
+  missing full-spec comparison. The loader now accepts either hash name while
+  validating it against the active deterministic transform, and new SC-DRWS
+  sidecars write both names plus the full latent spec. Existing completed
+  training checkpoints remain hash-verifiable and can be evaluated without
+  retraining. The submitter now has an explicit `RESUME_EXISTING=1` path that
+  requires the immutable manifests, lets each worker reload its final state,
+  and rebuilds the dependency chain; the default continues to reject existing
+  roots.
+- The first post-training inference attempt also exposed a separate contract
+  violation: generic amortized inference unconditionally wrote
+  `inference_truth.parquet` and ran truth diagnostics even though SC-DRWS
+  checkpoint selection must be truth-free. Inference truth access is now
+  explicit and disabled for every SC-DRWS config; resumptions remove stale
+  truth artifacts, finalization skips indirect catalogue-truth plots, and the
+  recovery evaluator rejects support/PPC sources without a fail-closed no-truth
+  receipt. Legacy inference retains its previous truth-enabled defaults. The
+  focused inference/diagnostics/SC-DRWS suite passes 50 tests; compileall, Ruff
+  and `git diff --check` pass. The completed smoke can now resume directly at
+  independent support/PPC evaluation without repeating its eight epochs.
+- Resume must not deserialize the epoch-8 optimizer state after an
+  inference-only config change, because the training-state provenance hash
+  deliberately covers the complete YAML. The GPU worker therefore reuses a
+  completed training receipt only after checking its no-truth contract and all
+  raw/EMA/prior checkpoints, and skips the trainer entirely before independent
+  IW/PPC. Incomplete training still follows the strict state-hash resume path.
+- The 128-object, eight-epoch smoke is a runtime and numerical contract only:
+  it must exercise sleep, wake, hard-object MIS expansion, the fail-closed
+  prior gate, raw/EMA inference, ordinary IW, dense PPC, and the no-truth
+  receipts with finite outputs. Its deliberately undertrained ESS, Pareto,
+  entropy, unresolved-object, and prior-update diagnostics are recorded but
+  cannot reject the 512-object, 180-epoch architecture pilot. Scientific
+  support/PPC and prior-learning thresholds remain unchanged for that pilot
+  and the independent 2000-object confirmation. Evaluation resume also reuses
+  hash-bound, complete truth-free inference and importance artifacts rather
+  than recomputing them. Regression coverage proves that an undertrained but
+  finite smoke passes only the technical contract and still fails the same
+  evaluator in pilot mode; the focused SC-DRWS/inference suite passes 41 tests,
+  with compileall, Ruff, SLURM shell syntax, and `git diff --check` clean. No
+  Jean-Zay job or full-catalogue run was submitted from this change.
+- Resume smoke `1500336` exercised the new technical gate but exposed a schema
+  mismatch in the evaluator: importance correction stores the finite IW
+  evidence at `support_gate.mean_log_evidence_is`, while recovery selection
+  read only a nonexistent top-level `mean_log_evidence_is` and therefore
+  manufactured `NaN` for every raw/EMA variant. Read the canonical nested
+  field with a backward-compatible top-level fallback, keep genuine nonfinite
+  evidence fail-closed, and cover the producer-shaped receipt in regression.
+  The 13 focused recovery tests, Ruff, compileall, and `git diff --check` pass;
+  no remote job was submitted from this patch.
+
+## 2026-08-24 Selection-Corrected Amortized SMC-EM
+
+- Status: implementation complete and locally validated on
+  `feature/feniks-exact-posterior-benchmark` at base commit `179053c`. No
+  Jean-Zay job may be submitted from this phase; the final launcher remains
+  fail-closed on one hash-bound immutable four-H100 smoke, followed by its
+  integrated 512-object budget preflight.
+- Infer the parent population only inside the existing FENIKS refinement and
+  catalogue-support domain C0. The target is `p_eta(theta | C0)` and the only
+  explicitly corrected additional selection is
+  `A = 1[m_r_observed < 25]`. Audit and hash upstream provenance without
+  regenerating the dataset.
+- Keep training, both E-steps, both M-steps, checkpoint selection and preflight
+  strictly no-truth. Remove truth mappings before catalogue reads and reserve
+  truth for a separate post-freeze closure command.
+- Use one Gaussian observation family for object targets, sleep generation and
+  Gaussian-PhotoErr completeness. Retain Student-t2 only as an explicit
+  robustness ablation. Selection normalization enters only the prior M-step;
+  beta and alpha never enter normalized object posterior weights.
+- Add the config-only `bounded_mixed_warp`, 18-band observed-data feature
+  statistics, the shared residual photometry trunk with a direct 128D flow
+  context, a six-layer identity-initialized conditional RealNVP q, and an
+  eight-layer identity-initialized RealNVP population prior. Train all three
+  learned components from scratch.
+- Bootstrap q with 10--15 epochs of post-noise selected Gaussian sleep and EMA,
+  then run exactly two generalized-EM iterations with phase snapshots and
+  frozen persistent posterior banks. Never update q and p from changing
+  particles.
+- Add the ordinary-IS fast path followed by primary K64, fallback K128 and
+  extended hard-only K128 adaptive SMC. Begin with the integrated stratified
+  512-object budget preflight; allow one bounded active bootstrap and abort
+  cleanly if the repeated preflight fails.
+- Persist sharded, atomically completed posterior banks with hashes, resume,
+  validation, streaming merge, prior-ratio reweighting and selective refresh.
+  Produce a fail-closed no-truth receipt and report containing the C0 statement,
+  population/individual diagnostics, predictive photometry, method fractions,
+  runtime and selection-gradient diagnostics.
+- Provide independent 4/8/16-H100 object-sharded launchers, with four independent
+  four-GPU E-step shards at 16 GPUs and no fragile multi-host collective. Keep
+  NUTS entirely outside training and expose only a separate post-training
+  4--8-object validation command.
+- Pre-implementation estimate for 15 latents: q has 2,432,082 trainable
+  parameters with 36 features (2,441,298 with 54 mask-augmented features), the
+  prior has 1,179,888, and the total is 3,611,970 or 3,621,186. For the
+  historical 8,376 selected rows, budget roughly 10--14 million DSPS latent
+  evaluations and 24--32 h on four H100s, 12--16 h on eight, or 6--8 h on
+  sixteen; the measured preflight supersedes these provisional bounds.
+- Final implementation verification: the 54-input q has 2,441,298 trainable
+  parameters, the prior has 1,179,888, and the total is 3,621,186. The complete
+  repository suite passes (`695 passed, 8 skipped`), together with Ruff,
+  `compileall`, shell syntax, CLI help and `git diff --check`. The prior and q
+  conditional flows are identity initialized through exactly zero final
+  layers; the prior identity check gives zero displacement and zero logdet.
+- Resume provenance is fail-closed across the canonical configuration,
+  dataset, row manifests, latent transform, feature statistics, q/q-EMA/prior
+  snapshots, bank shards, active bootstrap, M-steps, distillation, XLA
+  auto-tuning, report and final frozen model. Production launchers require a
+  matching hash-bound four-H100 smoke from the same dataset, configuration and
+  commit before they enter the two-iteration workflow.
+- Remaining external gates: the configured FENIKS parquet is absent from this
+  checkout, so the asset-backed local smoke, four-H100 smoke, measured
+  512-object preflight, full-catalogue run, final report and truth closure have
+  not run. Sphinx and ShellCheck are unavailable locally; `bash -n` covers all
+  launchers. No dataset was regenerated and no Jean-Zay job was submitted.
+- Launch sequencing is now explicit and fail-closed: one four-H100 smoke, then
+  a dependent 16-H100 scaling smoke over four disjoint eight-object cohorts,
+  then the dependent full 16-H100 run. Production validates the four-H100
+  receipt and all four scaling-smoke receipts against the same dataset,
+  canonical configuration and commit.
+- Four-H100 smoke `1347480` exposed a sleep-only feature-contract mismatch:
+  generated sleep pairs emitted 36 flux/error features while the configured q
+  required the 18 masks as 54 inputs. The sleep runtime now carries
+  `append_mask` and `error_epsilon`, and its feature builder matches catalogue
+  validity and mask semantics. The failed smoke remains non-scientific and the
+  dependent 16-H100 smoke and production jobs were cancelled.
+- The first retry also exposed environment leakage in the launcher: an exported
+  output `SMOKE4_ROOT` was mistaken for an upstream receipt and validated before
+  creation. Upstream validation now uses the distinct
+  `UPSTREAM_SMOKE_ROOT` variable, set only by the 16-H100 scaling smoke.
+- Four-H100 retry `1358685` passed initialization and finite mask-augmented
+  sleep, then rejected q at the E-step because checkpoint hashing included
+  unused truth schema metadata that the observed-only runtime deliberately
+  strips. Canonical SC-ASMC-EM hashing now erases the complete truth metadata
+  block while continuing to bind every computational no-truth setting.
+- Four-H100 retry `1358885` then passed both prepare and sleep receipts before
+  exposing a JAX control-flow dtype mismatch in the SMC mutation kernel: an
+  x64 transport proposal was returned against an f32 cached state on the skip
+  branch. Proposal particles and cached densities are now cast back to their
+  state dtypes before entering `lax.cond`/`fori_loop` state.
+- Four-H100 retry `1359371` passed prepare, sleep and hierarchy compilation,
+  then exposed replicated `NamedSharding(P())` metadata leaking from ordinary
+  IS particles into the selective continuation `pmap`, whose leading input
+  axis must be mapped. The continuation boundary now materializes these small
+  selected buffers on the host, reshapes them as contiguous device-major
+  arrays, and lets the next `pmap` establish its required axis sharding.
+- Production `1363794` completed both EM iterations, both selection-corrected
+  prior M-steps, and both full-bank reweighting passes before report-only
+  failure. Posterior-predictive reporting bounded only the sample axis, so its
+  configured batch of 128 still decoded all 64 samples for 32 objects at once
+  and XLA autotuning requested an additional 18.22 GiB. Reporting now bounds
+  the total sample-object pairs per DSPS call while preserving the exact output
+  ordering; no training or frozen-bank artifact is changed.
+
+## 2026-08-24 Exact-cohort SMC bootstrap
+
+- Status: runtime recovery in progress. Jean-Zay curriculum job `1313481`
+  failed during its baseline pass before producing scientific metrics because
+  the nested pass constructed `_loss_batch(photometry)` inline, then referenced
+  an outer-scope `batch` binding while collecting features. The fix must bind
+  the local batch explicitly and be relaunched in a new immutable root.
+  Frozen pilot `1311562` completed successfully and
+  isolated the remaining scientific blockers: RW-MH acceptance is healthy
+  (median 0.232) and particles move, but the standard fallback reaches only
+  median beta 0.265, leaving 77.1% hard; the real pathwise Gaussian-m5
+  selection gradient remains non-finite while its score-function identity is
+  finite.
+- Add one bounded exact-cohort curriculum that runs an extended bridge only
+  until it has enough beta=1 eligible objects for one q macro-distillation,
+  then immediately reruns the frozen standard-budget E-step on the same fixed
+  cohort. It must never update the parent prior or submit production.
+- Add an explicit selection-gradient estimator contract. Preserve the scalar
+  `+log(alpha_eta)` objective, allow an exact score-function gradient surrogate
+  only when configured, and retain pathwise and finite-difference diagnostics.
+- Keep r0, the canonical target, the conditional RealNVP, DSPS, Student-t2,
+  Gaussian-m5 completeness, no-truth inputs, and all fail-closed gates
+  unchanged.
+- Add focused tests, cost accounting, immutable Jean-Zay launch/validation
+  scripts, and leave the big run unauthorized until the post-distillation
+  standard-budget pilot passes.
+- Implemented a diagnostic-only 4-H100 curriculum with a baseline standard
+  frozen E-step, a bounded K=128 / 48-stage exact cohort that stops after at
+  least 32 eligible beta=1 objects, four stopped inclusive-q distillation
+  steps, and a common-random-number standard-budget E-step plus q-only IS
+  comparison after the update. The parent prior is never updated.
+- Promoted the exact score identity for the selection gradient behind
+  `gradient_estimator: score_function`: the returned loss value remains the
+  same Monte-Carlo `log(alpha_eta)`, while its gradient is the stopped
+  beta-weighted prior score. DSPS/Gaussian-m5 evaluation remains chunked and
+  pathwise/score diagnostics are both retained.
+- The receipt records pessimistic latent-object DSPS evaluation ceilings,
+  exact-object yield, q gradient/clipping, SMC cross-entropy change, q-only IS
+  ESS/max-weight change, and standard-budget beta/hard-fraction change. It
+  cannot authorize a training smoke unless all three kernel, q and selection
+  gates pass.
+- Local verification: 91 focused adaptive-SMC, selection, canonical-target and
+  exact-posterior tests pass; the score gradient matches pathwise and finite
+  differences on shift-normal and active RealNVP directions. Ruff, compileall,
+  shell syntax and diff checks pass. No remote job was submitted.
+- Runtime recovery: bind the per-iteration value as the uniquely local
+  `loss_batch` before both the E-step call and feature accumulation. This
+  removes the accidental closure over the later outer `batch` variable that
+  caused job `1313481` to fail. Focused config/selection tests pass again
+  (`26 passed`), together with Ruff, compileall and diff checks. Relaunch in a
+  fresh output root; `1313481` contains no scientific result.
+- Second runtime recovery in progress: job `1314730` validated the extended
+  bridge scientifically on its first batch (32/32 eligible, median beta=1,
+  acceptance 0.184), then failed before q distillation because its K=128
+  posterior retained the internal mesh of the E-step `pmap`. Host-materialize
+  the stopped posterior/features before rebuilding the explicit device axis,
+  mirroring the existing post-prior-update replica-layout repair.
+- Implemented that mesh reset for both curriculum and production q macro
+  updates. The two-device regression exercises the host-materialized posterior
+  through q distillation, prior M-step and a second q distillation; the focused
+  config/selection suite passes (`26 passed`) with Ruff, compileall and diff
+  checks. Job `1314730` establishes extended-SMC feasibility but remains an
+  incomplete artifact because no q update or receipt was written.
+- Completed curriculum `1316284` confirms the extended E-step (32/32 exact in
+  the first batch) and four finite unclipped q updates, but q-only IS remains
+  collapsed at ESS/K=1/64 with max weight approximately one. Four optimizer
+  steps reduce the exact-cohort CE only marginally and are not a meaningful
+  amortization phase. Expand the bounded diagnostic to all 96 observed objects
+  and 64 full-cohort q updates while keeping the parent prior frozen.
+- The completed receipt also exposed that runtime normalization dropped
+  `selection_correction.gradient_estimator`, silently reverting the preflight
+  to pathwise. Preserve and validate that field explicitly so the configured
+  score-function estimator is the production gradient while pathwise remains
+  diagnostic. Record exact-cohort CE before/after separately from the changing
+  standard-budget eligible subset.
+- Implemented the 96-object / 64-step curriculum defaults, periodic q progress
+  logging and fixed exact-cohort CE before/after. Added a regression proving
+  that runtime selection normalization preserves `score_function`; the focused
+  selection/config suite passes (`27 passed`) with Ruff, compileall, shell
+  syntax and diff checks. No parent-prior update or big job is enabled.
+- Curriculum `1317167` completed all 96 extended attempts with 95 eligible
+  exact posteriors and a finite production score gradient, but the diagnostic
+  incorrectly required 96/96 before applying any q update. This violates the
+  hard-object exclusion contract. Use the largest eligible count divisible by
+  the device count (92 here), require at least 64 exact objects, and report
+  attempted/collected/used counts separately. The focused trainer, selection
+  and bridge-SMC suite passes (`44 passed`), together with Ruff, compileall,
+  shell syntax and diff checks; no remote job or big run was submitted.
+
+## 2026-08-24 Adaptive-SMC E-step isolation
+
+- Teacher audit follow-up: add one immutable eight-object diagnostic comparing
+  the bootstrap and distilled q checkpoints against the same extended bridge
+  SMC teacher and canonical-target NUTS reference. Persist q-only IS/PSIS,
+  marginal location/width, covariance geometry, SMC ancestry/movement and NUTS
+  convergence diagnostics. This is a diagnostic gate only; no q/prior update
+  and no truth-dependent loss are permitted. Implementation is locally
+  complete: `49 passed` across the teacher audit, exact-posterior and bridge-SMC
+  suites, with Ruff, compileall, CLI, shell syntax and diff checks passing. No
+  Jean-Zay job or big run was submitted.
+- Teacher audit concurrency is configurable via `MAX_CONCURRENT` and defaults
+  to all eight array tasks. A one-shot monitor reports Slurm state per task plus
+  teacher, NUTS-chain, NUTS-galaxy, distilled-q and summary artifact counts.
+
+- Status: implementation complete and locally validated; the frozen H100 pilot
+  remains unexecuted. The latest immutable H100 smoke failed scientifically:
+  median beta remained near 0.27, 81-94% of training objects remained hard,
+  q-only IS and held-out SMC cross-entropy worsened, and the real Gaussian-m5
+  pathwise selection gradient was non-finite. No big run is authorized.
+- Replace the movement mean used by the hard gate with per-particle diagnostics
+  (median squared epsilon displacement, moved fraction, unchanged fraction),
+  while retaining the legacy mean for compatibility.
+- Accumulate only eligible final-SMC objects before q distillation and prior
+  M-steps. Do not update either network from the 2-6 surviving objects of one
+  micro-batch; log the skipped tail explicitly.
+- Report q-SMC clipping separately from sleep clipping and compare the real
+  pathwise selection gradient with the diagnostic score-function identity.
+- Add an E-step-only H100 pilot that loads the immutable bootstrap checkpoint,
+  freezes q and the prior, and tests corrected initial RW scales before another
+  training smoke. The pilot must not submit the big run.
+- Implemented per-particle movement diagnostics and changed the hard gate to use
+  the median squared epsilon displacement rather than the legacy mean. q and
+  prior updates now accumulate eligible objects and skip undersized tails;
+  q-SMC clipping is reported separately from sleep clipping.
+- The real selection preflight now reports both the production pathwise gradient
+  and a disabled score-function diagnostic on the same DSPS/Gaussian-m5 graph.
+  The diagnostic does not alter `+log(alpha_eta)` or enable a partial update.
+- Added a 4-H100 frozen E-step pilot launcher using the immutable bootstrap
+  checkpoint and initial RW scales 0.30/0.15. It writes a diagnostic receipt and
+  never updates q/prior or submits production.
+- Local verification: 15 bridge-SMC tests, 49 adaptive/target/exact tests,
+  19 selection tests and focused receipt/movement regressions pass; Ruff,
+  compileall, shell syntax and diff checks pass. The repository-wide suite was
+  stopped after 11% because of its local runtime and is not claimed complete.
+- Frozen pilot jobs `1310704` and `1311364` failed before SMC because the
+  checkpoint is genuinely mixed dtype: trained encoder parameters are float64
+  while fixed calibration state remains float32. The loader now reads the
+  ordered serialized array headers and aligns every template leaf to its exact
+  on-disk dtype and shape; the pilot also enables JAX x64. A subprocess
+  regression serializes and reloads this exact mixed-dtype case.
+
+## 2026-08-22 Adaptive-SMC measured remediation
+
+- Status: implementation complete and locally validated; a fresh Jean-Zay
+  scientific smoke remains required. The completed smoke proved two independent
+  blockers: both prior macro losses were finite but their joint gradients were
+  non-finite (`rejection_code=1`), while q-coordinate mutation accepted only
+  6-10% and left 34-41% of training objects hard after fallback.
+- The Gaussian-m5 selection probability is now evaluated in one detached common
+  flux unit. This preserves exactly
+  `beta=Phi((fhat_r-f_limit)/sigma_m5(fhat_r))` while avoiding cgs-scale
+  reverse-mode products. Rejected M-steps now report separate data, selection
+  and trust gradient norms/finite flags and still apply no partial update.
+- Epsilon-space RW scale is adapted per object between exact MH kernels toward
+  acceptance 0.30, with bounded scales. The fallback retains K=128 and the hard
+  gate but uses four moves after resampling and two final moves. Final scale,
+  unique ancestry and squared epsilon displacement are persisted into training
+  and exact-posterior diagnostics.
+- The 96-object smoke now performs at least 128 fresh sleep optimizer updates:
+  43 epochs x 3 batches = 129 updates, instead of 36. q uses a measured clip
+  norm 20 while the prior keeps 5. The production schedule remains 12 epochs
+  over the full selected training manifest.
+- The fail-closed receipt now requires q-only ordinary-IS support
+  (`ESS/K>=0.05`, median maximum weight <=0.80), SMC acceptance in [0.15, 0.60],
+  non-degenerate ancestry/movement, non-permanent q clipping, a finite nonzero
+  selection gradient and at least one accepted finite prior M-step. Equal final
+  weights after SMC resampling alone can no longer pass the workflow.
+- Local verification passes 66 core adaptive-SMC/selection/canonical/exact
+  posterior tests, 26 supplemental SMC/data-parallel tests, the added fused
+  selection-gradient regression, Ruff, compileall, shell syntax and diff
+  checks. The more active
+  fallback raises the absolute configured primary-plus-fallback ceiling from
+  4,480 to 7,680 latent-object DSPS evaluations; the measured smoke rates, not
+  this pessimistic ceiling, decide whether the 20-hour big job is viable.
+- Publish this patch and run exactly one new smoke root. Do not submit or resume
+  the big run until the new receipt is `PASS`; the previous failed roots remain
+  diagnostic artifacts only.
+
+## 2026-08-21 Adaptive-SMC scientific smoke gate
+
+- Status: remote smoke completed the intended training and checkpoint path,
+  then the fail-closed validator exited with code 3 because the scientific
+  receipt was `FAIL`; this is no longer a software crash.
+- Held-out validation reached `beta=1` with finite SMC cross-entropy, but only
+  5/8 objects were eligible after fallback (`hard_fraction=0.375`). Mutation
+  acceptance was only 0.061 and q-only IS remained collapsed
+  (`ESS/K=0.0156255`, maximum weight 0.999983). Final equal SMC weights after
+  resampling do not establish mixing or q calibration.
+- Both prior macro-updates were rejected. Inspect `prior_macro_log.csv` before
+  changing the trust region or selection estimator; the receipt's downstream
+  prior checks are necessarily false when no update was applied and do not by
+  themselves identify the rejection cause.
+- Do not submit the big run. The next patch must address the measured q/SMC
+  bootstrap and mutation deficiencies without weakening the hard-object gate,
+  then rerun one fresh smoke.
+
+## 2026-08-21 Adaptive-SMC checkpoint-mode recovery
+
+- Status: implemented and locally validated. The fresh 12-epoch Jean-Zay smoke
+  completed bootstrap and all three observed SMC batches, then failed while
+  writing `best.eqx`:
+  the shared checkpoint architecture summary rejected the dedicated
+  `adaptive_smc_wake` objective mode. No training receipt was written, so this
+  root remains incomplete even though the sampler itself ran.
+- Registered the dedicated mode for config/checkpoint/inference metadata,
+  recorded its adaptive-SMC block and inclusive-distillation semantics in
+  sidecars, and explicitly rejected it in the legacy generic trainer so it
+  cannot silently fall through to an ELBO objective.
+- Added a regression that exercises the production config through objective
+  normalization and architecture-summary construction. The expanded focused
+  suite passes (`86 passed`), together with Ruff, compileall and diff checks.
+  Publish this isolated fix and launch a new smoke root rather than reusing the
+  checkpoint-sidecar-incomplete run.
+- Do not weaken the scientific gate: the observed post-fallback hard fractions
+  were 0.344, 0.375 and 0.406, all above the strict `<0.30` threshold. The
+  corrected workflow must reach the receipt and report `PASS` or `FAIL` from
+  the complete held-out validation metrics before any big job is submitted.
+
+## 2026-08-21 Adaptive-SMC smoke replica-sharding recovery
+
+- Status: implemented and locally validated. Jean-Zay smoke job `1254124`
+  reached two observed SMC batches, then failed immediately after the first
+  prior macro-update because
+  the rebuilt model retained a replicated `NamedSharding(mesh='devices',
+  P())`; the next `filter_pmap` expected its leading internal pmap axis to be
+  sharded. This is a runtime replica-layout bug, not an SMC target/support
+  failure.
+- Materialize the post-M-step model leaves through host arrays before rebuilding
+  the leading device axis. Add a two-device regression that performs q-SMC,
+  prior M-step, replica refresh, then a second q-SMC step.
+- Local regression and the complete focused suite pass (`58 passed`), together
+  with Ruff, compileall and diff checks. Publish the fix, then launch a fresh
+  smoke root; the failed root is diagnostic only and must not be resumed.
+- Keep the production 12-epoch sleep bootstrap in the smoke. The failed run's
+  two-epoch shortcut left q cross-entropy near 22 and post-fallback hard
+  fractions at 0.375 and 0.344; retaining the full bootstrap tests the intended
+  production state without weakening the hard-object gate.
+
+## 2026-08-21 Adaptive bridge SMC production training
+
+- Status: implementation complete and locally validated. Static-SNIS wake and
+  the older x-space MALA SMC remain diagnostic ablations; the production
+  trainer uses only the new exact-target adaptive bridge SMC. Jean-Zay smoke,
+  big training and final exact validation remain unexecuted.
+- Keep the canonical learned-prior posterior target and selection contract:
+  object weights contain only likelihood, prior and full proposal density;
+  `log(alpha_eta)` enters the averaged prior M-step once and remains fully
+  differentiable through prior, DSPS and Gaussian PhotoErr.
+- Add exact single-component conditional-RealNVP transport helpers between
+  standard-normal epsilon and latent x. Implement a JAX-native adaptive bridge
+  from the exact defensive r0 mixture to the canonical target, conditional-ESS
+  bisection, systematic resampling, exact epsilon-space random-walk MH, logZ,
+  fixed-budget histories and explicit hard-object output/fallback.
+- Add a dedicated no-truth production trainer with an initial sleep bootstrap,
+  observed adaptive-SMC sweeps, stopped inclusive q distillation, macro-batch
+  prior updates, `log(alpha_eta)`, prior trust region, distinct q/prior
+  optimizers and fixed observed validation cohorts.
+- Use bounds/fit-initial-only standardized-logit coordinates and a broad
+  identity-initialized joint RealNVP population prior. Do not reuse the
+  truth-trained spline15d prior weights or its truth-standardized coordinates.
+- Deliver separate 4-H100 smoke and big-run submissions so the big job is not
+  submitted until the smoke receipt is `PASS`. The exact 32-object workflow
+  adds adaptive SMC to q/raw-IS/defensive-IS/MAP/NUTS, central coverage,
+  full-15D TARP/MIRA, covariance geometry and population closure.
+- Cost accounting counts batched latent-object DSPS evaluations. Per object
+  and observed sweep the configured primary costs 128 evaluations with no
+  resampling, 256 with one resampling, and 384 with two. The absolute primary
+  plus fallback configured upper bound is 4,480; the smoke must measure actual
+  stage/resampling/hard rates before accepting the theoretical big-job budget.
+- Local verification: Ruff, `compileall`, shell syntax, `git diff --check`, and
+  58 focused tests pass. These cover 1D, correlated-2D, 15D and multimodal
+  targets, exact nominal r0 sampling, adaptive beta, epsilon-MH invariance,
+  transport/Jacobians, hard fallback, stopped q/prior losses, selection,
+  target consistency, no-truth config, two-device pmap, checkpoint restore and
+  exact-workflow compatibility. The FENIKS parquet and DSPS SSP assets are
+  absent locally, so no real FENIKS scientific smoke result is claimed.
+
+## 2026-08-21 Exact encoder diagnostic after support-gated wake failure
+
+- Status: implementation complete and locally validated. The first Jean-Zay
+  smoke preparation failed before generating data because its H100 wrapper did
+  not re-enable the JAX CUDA plugin autoload; the dependent array therefore
+  never started. Align the preparation environment with the already-correct
+  exact wrapper, then relaunch the smoke in a fresh root. Full diagnostic
+  remains unexecuted. Evaluate the final sleep-NPE encoder
+  without pretending that the parent prior was updated or validated.
+- Build one immutable 32-object benchmark containing 16 stratified observed
+  FENIKS rows and 16 synthetic pairs drawn from the exact configured sleep
+  joint with observed error covariates and selection applied after noise.
+- Reuse the canonical exact-posterior workflow to compare raw q, q-only IS,
+  defensive-mixture IS, MAP and NUTS under the same target and physical bounds.
+- Aggregate support, covariance geometry, TARP and MIRA separately for the
+  observed and sleep-synthetic domains. The final receipt is diagnostic only:
+  it cannot promote a prior or mark the failed training run production-ready.
+- Deliver separate smoke and full launch modes. The smoke uses four galaxies
+  and short NUTS chains; the full run uses 32 galaxies and clean chains.
+- Local verification: Ruff, compileall, shell syntax, diff checks and 51
+  focused posterior-target, selection, TARP/MIRA and workflow tests pass. The
+  local checkout has no FENIKS parquet/checkpoint assets, so the four-object
+  Jean-Zay smoke remains mandatory before the 32-object array.
+
+## 2026-08-21 Sleep-NPE negative-result handoff
+
+- Status: remote production completed all 80 epochs but every defensive wake
+  batch through the last scheduled wake was support-gated. Preserve the best
+  encoder checkpoint as a diagnostic artifact; do not promote the run as a
+  learned selection-corrected parent prior.
+- Export a self-contained scientific handoff with immutable commit/run paths,
+  objective and proposal definitions, observed metrics, conclusions that are
+  already justified, unresolved hypotheses, and the exact-posterior analyses
+  required before another training change.
+
+## 2026-08-21 Jean-Zay prior-wake NaN recovery
+
+- Status: implementation complete and locally validated (`ruff`, `compileall`,
+  shell syntax, and 100 posterior/selection/workflow tests pass, including the
+  two-device pmap NaN regression). Jean-Zay recovery smoke and production
+  remain unexecuted. The interrupted run must not be continued because every
+  observed epoch 25 wake update had non-finite prior gradients and was skipped.
+- Root cause: the support gate masked the prior loss with `jnp.where` only after
+  differentiating the selection-normalization graph. JAX can propagate
+  `0 * NaN` from that inactive branch. Move both the differentiable prior
+  density and `log(alpha_eta)` computation inside the accepted branch of
+  `jax.lax.cond`; rejected batches now have exactly finite zero prior gradients
+  and do not evaluate alpha.
+- Add a real prior-to-DSPS-to-PhotoErr selection-gradient preflight before the
+  optimizer and make the production finalizer fail if any gradient is
+  non-finite, no wake prior update is actually applied, or alpha Monte Carlo
+  relative error exceeds 15 percent.
+- The first remote recovery smoke exposed a compile-time branch mismatch only
+  when JAX x64 is enabled: the wake loss was float64 while selection metrics
+  were float32. Cast every `lax.cond` output to the wake dtype and cover the
+  exact x64 plus pmap combination in the multi-device regression test.
+- Reduce the fixed common-random-number alpha bank from 4096 draws in 64-draw
+  chunks to 1024 draws in 256-draw chunks. This changes 64 decoder chunks to 4;
+  the final population diagnostic retains 8192 independent draws.
+- Resume parameters and fixed feature statistics from the exact epoch 24
+  checkpoint in a new output tree. The optimizer state is intentionally
+  reinitialized. Run an epoch 25 wake plus epoch 26 sleep smoke before the
+  dependent epoch 25-to-80 recovery job.
+
+## 2026-08-21 Mass-covering sleep NPE and selection-corrected parent prior
+
+- Status: implementation complete and locally validated; Jean-Zay smoke,
+  production training and exact-posterior confirmation remain unexecuted. The
+  completed 20k architecture battle is diagnostic only: all three posterior
+  families collapsed to roughly one to three effective samples out of 2048
+  with catastrophic Pareto tails. Do not run another architecture sweep; keep
+  the established conditional RealNVP and change the training objective and
+  target contract.
+- Introduce one canonical learned-prior posterior target, including the common
+  physical-bounds mask, fixed DSPS decoder, fixed calibration, robust
+  likelihood and learned-prior density. Reuse it in wake/SMC, stored inference
+  targets, MAP and the exact NUTS/MCLMC benchmark. Persist per-chain bounds
+  audits.
+- Train the encoder only with model-generated inclusive-KL sleep using observed
+  catalog errors as fixed covariates. Apply the observed `lsst_r < 25` cut only
+  after drawing noisy photometry. Select encoder checkpoints with held-out
+  sleep NLL and log full-flow entropy diagnostics.
+- Freeze the prior for the first 24 epochs. Thereafter alternate seven sleep
+  epochs with one defensive wake epoch. Wake freezes the encoder and updates
+  only the learned parent-population prior with stopped normalized weights from
+  the exact mixture `0.50 q_T1 + 0.25 q_T2 + 0.15 q_T4 + 0.10 p_eta`.
+- Keep normalized wake/IS weights exactly
+  `softmax(loglike + logprior - logproposal)`. Correct the mean prior M-step as
+  `-E_w[log p_eta(x)] + log(alpha_eta)`, with differentiable Gaussian-PhotoErr
+  survey completeness. Never add `beta(x)` or `log(alpha_eta)` to per-object
+  normalized particle weights.
+- Fail closed on poor wake support: record ESS, maximum weight and weight
+  entropy, exclude unsupported objects, and skip the whole prior update when
+  the batch median ESS fraction is below the configured floor. A falling
+  photometric objective alone is not a success criterion.
+- Deliver one production config and one four-H100 training job, preceded by a
+  tiny smoke. Use the second compute stage only for a stratified exact-posterior
+  array comparing raw q, q-only IS, defensive IS, MAP and NUTS, including
+  generalized covariance-ratio diagnostics.
+- The production launcher builds immutable manifests from observed
+  `flux_lsst_r` and errors only, submits a two-epoch four-H100 smoke, then one
+  80-epoch four-H100 run. The exact launcher submits 32 one-galaxy H100 tasks
+  with at most eight concurrent tasks and one CPU finalizer. Task zero also
+  evaluates parent prior, beta-weighted forward-selected prior, aggregate q,
+  parent truth and selected truth without adding a third compute stage.
+- The finalizer fails closed on target support, NUTS convergence, raw-q and
+  defensive-IS ESS/Pareto gates, generalized covariance coverage, full-15D
+  TARP/MIRA agreement with NUTS, prior physical support, parent-population
+  closure and forward-selected population closure. Truth enters only this
+  synthetic closure stage.
+- Local verification: `compileall`, Ruff, `bash -n`, `git diff --check`, and
+  144 focused target, posterior, selection, exact-inference, MAP, config and
+  workflow tests pass; two environment-dependent tests are skipped. A real
+  local training smoke was not possible because the FENIKS train/test parquet
+  files are not present in this checkout; the dependency-gated Jean-Zay smoke
+  is therefore mandatory before production.
+
 ## 2026-07-22 Self-Supervised Learned-Prior Production Candidate
 
 - Status: smoke training, inference, Jacobian Lens, and finalization completed;
@@ -6665,3 +8423,820 @@ Phase 6 - Later AGN and production scaling:
 - Added a JIT regression test for default spline-node reconstruction. The fix
   applies to the model path itself rather than relying on eager imports in the
   Slurm wrapper.
+# 2026-08-22 Adaptive-SMC mixing and prior-gradient completion
+
+## Current scientific gate
+
+- Audited HEAD: `2a5eeba13d15c8ae286ce1de836f48f72c22a955`.
+- The latest Jean-Zay smoke correctly failed closed: training batches reached
+  only median `beta_final=0.235-0.347`, hard fractions were `0.656-0.812`, and
+  prior macro-updates were rejected because the selection gradient was NaN
+  while the data and trust gradients were finite.
+- Keep the canonical target, defensive `r0`, conditional RealNVP, broad
+  identity RealNVP parent prior, standardized-logit no-truth coordinates,
+  Student-t2 likelihood, Gaussian-m5 selection correction, and K64/K128
+  primary/fallback budgets unchanged.
+- The big run remains blocked until a new immutable smoke passes every
+  scientific and numerical gate.
+
+## Implementation phase
+
+- Add genealogical ancestor ESS and a combined mixing failure contract.
+- Adapt the per-object RW scale only between bridge stages.
+- Propagate mixing diagnostics through fallback, training, validation, exact
+  benchmarking, receipts, and the hard-object queue.
+- Record a common-random-number q baseline immediately after sleep bootstrap
+  and compare it to the post-SMC-distillation validation.
+- Keep prior updates fail-closed, stabilize invalid selection draws, and add a
+  score-function gradient diagnostic without enabling it in production.
+- Rename the mixed-likelihood selection score so it is not presented as an
+  exact marginal evidence.
+- Run targeted and full local tests, update this plan, then commit and push.
+
+## Completed local gate
+
+- Implemented ancestor ESS, the combined per-object mixing rule, and fixed-scale
+  within-stage RW-MH adaptation without changing the bridge target or budgets.
+- Added post-bootstrap common-random-number validation and fail-closed q/prior
+  receipt checks. Final ESS remains diagnostic only.
+- Stabilized the Gaussian-m5 selection gradient at physical CGS scales and
+  added a score-function comparison helper that is diagnostic-only.
+- Targeted Adaptive-SMC/selection tests: `39 passed`.
+- Full repository suite: `631 passed, 8 skipped` (`8` non-failing warnings).
+- `ruff check` and `python -m compileall euclid_dsps scripts tests` pass.
+- No Jean-Zay job and no big run were submitted. The next permissible action
+  is one new immutable scientific smoke; the big run remains fail-closed on
+  its receipt.
+# Final unresolved-bank repair (2026-08-26)
+
+- The frozen report completed after the bounded decoder fix, but final validation
+  correctly rejected `em2_p2` because its unresolved fraction exceeded 5%.
+- Root cause: prior-ratio reweighting refreshed low-ratio-ESS rows only; unresolved
+  E-step rows with healthy ratio ESS were copied unchanged (`refreshed=0`).
+- Add one post-EM retry of unresolved rows under frozen q1/p2, persist it as a
+  separate bank, then regenerate the report and retain the unchanged 5% gate.
+- This repair is not an EM iteration and does not update q, p2, DSPS, or selection.
+- Source-bank validation preserves its historical training commit while the repair
+  receipt records the newer repair implementation commit separately.
+- Run the repair as four independent 4-H100 array tasks (12 source-bank shards
+  each), followed by a dependent 4-H100 streaming merge/report/validation job.
+
+## Post-freeze truth closure (2026-08-26)
+
+- Bind closure and NUTS consumers to the repaired final bank recorded in the
+  immutable final receipt.
+- Retain 128 joint draws per object for q0, SMC EM1, q1, and SMC EM2; aggregate
+  them only as equal-object selected-catalog posterior mixtures.
+- Compare p0/p1/p2 parent samples and beta-weighted selected samples separately
+  against truth C0 and truth selected distributions.
+- Produce 15D marginal coverage, PIT, bias/pulls, MIRA, TARP, photo-z metrics,
+  population recovery, representative individual corners, and provenance-backed
+  source arrays. Truth remains post-freeze only.
+- The first Jean-Zay closure launch failed before reading truth because the
+  relative catalogue path from the YAML did not reproduce the absolute-path
+  training configuration hash. Rebind that path from the immutable run manifest
+  and require the reconstructed hash to match before loading any checkpoint.
+- The completed closure exposes severe q bias and SMC under-dispersion. Add a
+  separate post-freeze audit that evaluates the DSPS forward model at truth for
+  every selected object and posterior-predictive residuals for q0, SMC EM1, q1,
+  and SMC EM2 over every resolved object. Keep this audit diagnostic-only and
+  bind it to the frozen final and truth-closure receipts.
+
+## SC-ASMC scientific repair plan (2026-08-26)
+
+### Evidence and current blockers
+
+- Treat job `1413622` as a diagnostic gate, not as another training run. It must
+  distinguish a forward-model/likelihood failure from an inference failure by
+  comparing truth-forward and dense posterior-predictive residuals over the full
+  selected catalogue.
+- The frozen closure already rejects the current inference chain: q0/q1 have
+  strongly biased photo-z point summaries and no direct-IS successes, while the
+  SMC central estimates are accurate but its 15D posterior is severely
+  under-dispersed. The final SMC bank must not be used as a teacher for a new
+  population run without a diversity repair.
+- Sleep bootstrap performs only 528 optimizer updates for a 2.44M-parameter q
+  and selects on model-generated sleep NLL. It does not require useful overlap
+  with the observed-catalogue target.
+- Distillation performs 48 bank and 16 sleep updates per epoch for three epochs.
+  With EMA decay 0.999, the EMA contains only about 6.2% cumulative new-weight
+  contribution after epoch 1 and 17.5% after all three epochs. The selected
+  best-EMA q1 can therefore remain effectively q0 even when the raw encoder
+  changes.
+- The fallback SMC uses 128 particles, random-walk mutations in 15 dimensions,
+  four moves after resampling, and two final moves. Its hard ancestry threshold
+  is only 0.05, and poor ancestry is not by itself a failure. This permits a
+  nearly single-lineage posterior bank to pass when small movements are finite.
+- The prior M-step is correctly selection-aware, but 50-100 steps at 1e-5 with
+  a trust penalty cannot recover the parent population from a collapsed teacher.
+  Prior optimization must remain blocked until q and SMC pass their own gates.
+
+### Repair sequence
+
+1. **Forward and likelihood gate.** Require full-catalogue truth-forward
+   normalized residuals, per-band bias/RMS/coverage, reduced chi-square, and
+   conditional slices in redshift, r magnitude, and S/N. If truth-forward fails,
+   fix parameter semantics, photometric units, passbands, or the noise model
+   before changing q or SMC. Do not hide a deterministic bias with an error floor.
+2. **q optimization and checkpoint gate.** Compare q1 raw against q1 EMA on a
+   fixed no-truth observed cohort and the post-freeze closure cohort. Increase
+   sleep exposure substantially, shorten or bias-correct the distillation EMA,
+   allow more than five distillation epochs, reduce sleep replay anchoring, and
+   select checkpoints using held-out bank CE plus observed direct-IS ESS,
+   maximum weight, hard-SMC fraction, and entropy. Preserve dense joint draws.
+3. **SMC diversity gate.** Benchmark random-walk versus the existing
+   gradient-informed MALA kernel on the same fixed hard cohort. Test higher CESS,
+   less frequent resampling, more final rejuvenation, and K=256 only after the
+   kernel comparison. Require ancestry ESS/unique lineages and posterior
+   calibration, not only final weight ESS or a resolved flag.
+4. **Selection-aware prior learning.** Once the teacher passes, run additional
+   EM iterations with held-out bank objective and selection-gradient diagnostics.
+   Learn one parent `p_eta(theta|C0)`; derive the selected population as
+   `beta(theta) p_eta(theta|C0) / alpha`, rather than fitting a second unrelated
+   selected prior. Keep truth out of optimization and checkpoint selection.
+5. **End-to-end pilot before production.** Use a fixed 512-object audit cohort,
+   then a 2k-object pilot, before a new 6140-object run. Freeze seeds and rows and
+   compare q0, raw/EMA q1, SMC, p0/p1/p2, predictive residuals, MIRA, TARP, PIT,
+   coverage, runtime, and unresolved fractions in one receipt.
+
+### Promotion gates
+
+- Forward model: every band has finite truth-forward diagnostics with normalized
+  residual mean close to zero and RMS/central coverage compatible with the stated
+  likelihood, including conditional redshift/magnitude/SNR bins.
+- Fast q: finite dense draws, materially improved held-out bank CE, useful
+  direct-IS overlap on observed data, no entropy collapse, and post-freeze 15D
+  MIRA/TARP/coverage competitive with the historical RWS reference.
+- SMC teacher: unresolved fraction below 1%, median ancestry ESS fraction above
+  0.2 with a reported lower tail, nontrivial unique-ancestor and moved-particle
+  fractions, and calibrated dense posterior coverage. Accurate medians alone do
+  not pass this gate.
+- Population prior: held-out selection-corrected objective improves without a
+  failed trust/Monte-Carlo gate; post-freeze parent and selected-population
+  distances both improve from p0 to p2. Truth metrics remain evaluation-only.
+- Photometry: full-catalogue dense posterior-predictive residuals are reported by
+  method and band. A pass requires the SMC posterior predictive to inherit the
+  truth-forward calibration rather than merely producing plausible latent point
+  estimates.
+
+### Predictive-audit recovery outcome
+
+- Recovered the completed full-catalogue tables from job `1413622` without
+  repeating DSPS evaluation. Fixed the tuple-based Pandas band indexer that had
+  crashed only the plotting/finalization phase, and added a standalone recovery
+  entry point plus regression coverage.
+- The truth-forward gate passes on all 6140 selected objects: the median
+  per-band normalized-residual RMS is 1.023 and the largest is 1.070. This rules
+  out a gross DSPS/FENIKS forward-contract mismatch for this catalogue.
+- The scientific posterior-predictive gate fails. q0 and q1 have catastrophic
+  normalized residuals, while SMC EM2 improves the median per-band RMS to 3.77
+  but remains far from the truth-forward calibration. Continue with the q and
+  SMC diversity repairs above; do not promote the frozen result as calibrated.
+
+### Global decision after the historical RWS comparison
+
+- The historical RWS baseline is not a validated exact posterior, but it is the
+  stronger amortized baseline. Its two paper seeds reached full-15D MIRA scores
+  0.6915 and 0.6919 and TARP coverage RMSE 0.0612 and 0.0591. The current q1
+  reaches 0.5569 and 0.5033, while SMC EM2 reaches 0.3745 and 0.5256.
+- The regression is structural, not a request for a few extra SC-ASMC epochs.
+  Historical RWS used 120 epochs, 12,690 sleep updates and 4,230 observed wake
+  updates. Current q0 received 528 sleep updates, and the selected q1 EMA was
+  chosen after one 64-update distillation epoch, so only about 6.2% of its EMA
+  mass came from the new teacher. q0 and q1 being almost identical is expected.
+- The current SMC has high final-weight ESS but essentially one surviving
+  lineage: median ancestry ESS 1 and median unique-ancestor fraction 1/128.
+  Current acceptance/resolution gates therefore certify numerically finite
+  output, not a diverse posterior. p2 does not improve parent recovery over p0,
+  so population EM must remain blocked.
+- Implement an apples-to-apples frozen-cohort benchmark first: historical RWS,
+  current q0, q1 raw, q1 EMA, and exact-target SMC, all evaluated with 128 joint
+  draws, full predictive residuals, ordinary-IS K=2048 support, MIRA, TARP,
+  coverage, photo-z, and runtime. Keep likelihood/transform differences explicit.
+- Restore a selection-aware hybrid RWS proposal baseline before extending
+  SC-ASMC: historical 4-layer/128-wide conditional flow, long 3:1 sleep/wake
+  exposure, observed wake updates, unchanged importance weights, and
+  `+log(alpha_eta)` only for the trainable parent prior. Compare robust
+  Student-t2 proposal training against the exact Gaussian target rather than
+  silently changing both training and scientific target together.
+- Only after the proposal passes support should the bridge-SMC path gain a
+  pluggable MALA kernel, ancestry-only rejection, stronger final rejuvenation,
+  and K=128/256 ablations on a fixed hard cohort. Distillation must then compare
+  raw and bias-corrected/lower-decay EMA checkpoints and gate on direct-IS
+  support and predictive fit, not bank cross-entropy alone.
+- Required promotion order is now: 512-object RWS recovery pilot, independent
+  2k confirmation, SMC diversity benchmark, q distillation, selection-aware
+  prior M-step, then and only then a new 6140-object run. Do not continue the
+  failed q1/p2 checkpoints as the default recovery path.
+
+### RWS recovery implementation
+
+- Added a truth-free recovery matrix with two architecture controls and two
+  seeds. Both train for 180 epochs on every observed-r<25 training row using
+  Student-t2 RWS, a 3:1 sleep/wake schedule, and an explicitly frozen identity
+  population prior. Historical 4x128/base-moments capacity is compared against
+  the current 6x256/residual-photometry capacity without changing the data or
+  objective.
+- Added immutable manifests for selected training, held-out validation, a
+  512-object independent test pilot, and a disjoint 2000-object confirmation.
+  Manifest construction reads only observed r-band flux and records that no
+  truth column participates in training or checkpoint selection.
+- Added exact-Gaussian K=2048 ordinary-IW evaluation and dense posterior-
+  predictive evaluation. Promotion requires both seeds to pass median and
+  lower-tail ESS, Pareto-k, maximum-weight, finite-weight, and per-band PPC
+  gates. A passing pilot selects one architecture; a separate two-seed 2k
+  confirmation is then required.
+- Added a single Jean-Zay submitter with a four-task 16-H100 pilot, a two-task
+  8-H100 confirmation, dependency-based fail-closed gates, SCRATCH-backed JAX
+  caches/logs, persistent job metadata, and a detailed restart-safe monitor.
+- Tightened the bridge-SMC hard-object classifier: low ancestry ESS now fails on
+  its own even when descendants moved. This prevents the prior false-positive
+  resolution mode. MALA/particle-count ablations remain deliberately blocked
+  until `RWS_RECOVERY_PASS.json` authorizes the fixed-cohort SMC benchmark.
+- The final recovery receipt can authorize only the SMC diversity benchmark.
+  It explicitly leaves population-prior update and full-catalogue production
+  false, so no learned prior can consume a proposal that failed overlap or PPC.
+## 2026-08-27 Selection-Corrected Defensive RWS finalization
+
+- Scope: replace the fixed-prior `r<25` RWS recovery diagnostic with a
+  truth-free Selection-Corrected Defensive Reweighted Wake-Sleep (SC-DRWS)
+  workflow inside the predefined FENIKS refinement/catalogue-support domain
+  `C0`. The additional modeled selection is observed `r<29.0`; upstream
+  true-space filtering remains conditioning and is not inverted.
+- Preserve the two existing conditional-RealNVP candidates and the no-truth
+  `bounded_mixed_warp` geometry. Do not change DSPS, zero points, the existing
+  catalogue, or the canonical object posterior target.
+- Implement a dedicated SC-DRWS training path with a 60-epoch Student-t2,
+  fixed-prior proposal warm-up followed by 120 Gaussian, joint q/prior epochs;
+  3:1 sleep/wake scheduling; variance-control schedules; exact defensive
+  mixture densities; hard-object K128-to-K512 deterministic MIS; separate q
+  and prior optimizers; selection-normalized prior loss; trust region; raw/EMA
+  checkpoints; and resumable state.
+- Extend the existing manifest/evaluation/launcher scaffold rather than
+  duplicating its independent cohorts, ordinary-IW K=2048 evaluation, dense
+  PPC, and four-H100 worker pattern. Add immutable retention-grid and full-row
+  contracts for observed `r<29.0`.
+- Promotion remains fail closed: two-architecture/two-seed 512-object pilot,
+  selected-architecture/two-seed independent 2000-object confirmation, then
+  two complete-selected-training-set seeds. No Jean-Zay submission is made by
+  Codex; only local tests and copy-paste launch commands are delivered.
+- Analytical wake cost per full seed is
+  `15*N*64 + 30*N*128 + 30*N_hard*384` DSPS evaluations, plus `135*N` sleep
+  simulations and validation/inference. Benchmark the smoke before assigning a
+  wall-time; start K512 autotuning at four objects per H100 and enforce the
+  configured 85-90% device-memory target.
+
+## 2026-09-02 SC-DRWS post-freeze evaluation chain
+
+- Preserve the scientific `FULL_TRAIN_PASS` gate, but also record a clearly
+  non-promotional raw/EMA diagnostic checkpoint when both variants are
+  technically complete yet miss support or PPC thresholds.
+- Add a dependency-aware four-shard selected-catalogue inference launch path so
+  it can be queued before the long training chain finishes. Diagnostic fallback
+  must be explicit and must never be relabeled as a scientific pass.
+- Add an independent post-freeze closure job that runs only after the frozen
+  full summary exists: no-truth parent/selected-prior reports, held-out 15D
+  MIRA and TARP for raw/EMA proposal and importance-resampled draws, and
+  parent/selected population comparisons against truth. Truth remains absent
+  from training, checkpoint selection, and the no-truth gate.
+- Extend workflow tests, run focused pytest, Ruff, compileall, and shell syntax
+  checks, then commit and push before providing the Jean-Zay continuation and
+  monitoring commands.
+
+Completed locally:
+
+- Added a one-command tail submitter that queues one resumable `afterany`
+  worker, replaces the terminal full gate, and submits all post-freeze work
+  behind the replacement gate.
+- The full worker still performs independent raw/EMA K2048 ordinary-IW and
+  dense PPC evaluation. The post-freeze chain adds four parallel catalogue
+  shards, no-truth raw/EMA parent and beta-weighted selected-prior reports,
+  and held-out dense 15D MIRA/TARP for q and importance-resampled draws.
+- A failed scientific support/PPC gate remains `FAIL`; a technically readable
+  raw/EMA checkpoint may only authorize a clearly labeled, non-promotional
+  diagnostic inference and closure.
+- Validation: `59 passed` across the SC-DRWS workflow and MIRA/TARP tests;
+  Ruff, Python compilation, Bash syntax, and `git diff --check` pass. Jean-Zay
+  submission and remote artifact completion remain to be performed by the
+  user after pulling this commit.
+
+## 2026-09-02 SC-DRWS epoch-160 parallel evaluation
+
+- Add an evaluation-only branch that waits for the exact durable
+  `checkpoints/epoch_0160` snapshot while the existing continuation chain keeps
+  training toward epoch 180. Never read the moving `latest.eqx` state.
+- Measure raw and EMA individual-posterior support with K=1024 on the frozen
+  512-object final-validation cohort, sharded across independent GPU tasks.
+  Include ordinary IW, dense PPC, and post-freeze MIRA/TARP without using truth
+  for training or checkpoint selection.
+- Infer raw and EMA dense joint posteriors for every observed-selected object in
+  the independent test catalogue with K=256, also sharded across independent
+  GPU tasks. Keep all per-object draws and produce deterministic observed-only
+  individual panels.
+- Report three distinct population objects: learned parent
+  `p_eta(theta|C0)`, beta-weighted observed-selected prior, and the descriptive
+  object-equal aggregate of catalogue posteriors (q and importance-resampled).
+  Never relabel the selected posterior stack as the parent distribution.
+- Add immutable receipts, checkpoint hashes, completion validation, monitoring,
+  focused tests, Python/shell linting, and paste-ready Jean-Zay submission.
+
+Completed locally:
+
+- Added an immediate CPU watcher for the exact truth-free epoch-160 component
+  snapshot; it never reads or copies the moving resumable state.
+- Added 8 one-H100 held-out tasks (`raw/EMA x 4`) at K=1024 with ordinary IW
+  and K=64 PPC, plus 16 one-H100 full independent-test tasks (`raw/EMA x 8`)
+  at K=256 with ordinary-IW resampling.
+- Added post-freeze 15D MIRA/TARP, parent and beta-selected prior closure,
+  object-equal q/IW posterior aggregates, distributional marginal/correlation
+  tables, and 16 observed-r-selected dense individual posterior panels.
+- Validation: `62 passed` across the SC-DRWS workflow and MIRA/TARP suites;
+  Ruff, full Python compilation, Bash syntax, and `git diff --check` pass.
+  Jean-Zay submission and remote completion remain to be performed by the user.
+
+## 2026-09-04 Projected-parent individual posterior diagnostic
+
+- Freeze the truth-free `realnvp_wide` architecture winner and evaluate its
+  parent prior without changing or retraining the epoch-160 conditional
+  proposal. Use the independent selected-test cohort only.
+- Select 64 objects deterministically across observed `lsst_r` flux, shard them
+  over eight one-H100 tasks, and draw 1024 joint proposal samples per object.
+  Truth must not participate in cohort or panel selection.
+- On the exact same proposal draws, compare ordinary/PSIS importance support
+  under the projected parent prior and the source prior. Retain dense joint
+  draws, per-object ESS, Pareto-k, maximum weights, and posterior-predictive
+  residuals.
+- After inference and support measurement are frozen, attach truth for closure
+  only and generate observed-space-selected individual corners overlaying the
+  parent prior, raw q, projected-parent IW, and truth. Report redshift PIT and
+  coverage as distributions, never as posterior medians.
+- Add immutable manifests, checkpoint/config hashes, fail-loud Slurm wrappers,
+  a persistent environment file, monitoring, focused tests, and local syntax
+  validation. This diagnostic cannot promote the posterior or trigger a full
+  catalogue run on its own.
+
+Completed locally:
+
+- Added preparation, eight-way one-H100 inference, same-draw source/projected
+  prior importance correction, a dependent H100 finalizer, and a reconnect-safe
+  monitor. Interrupted IW directories are rebuilt while complete inference
+  shards remain resumable.
+- The finalizer freezes support before reading truth, retains all joint q and
+  weighted/resampled IW banks, reports redshift finite-rank PIT/coverage and
+  weighted PPC, and writes eight core/full individual corner panels.
+- Validation passes: Ruff, Python compilation, Bash syntax, `git diff --check`,
+  `5` new focused tests, and `43` related inference/projection tests in `shine`.
+  The full repository run reached `810 passed, 8 skipped`; two unrelated legacy
+  supervised-prior integrity tests reproducibly report `WARN` instead of
+  `PASS` in both available local Python environments.
+
+Remote recovery:
+
+- Jean-Zay completed all eight K=1024 inference/IW shards in job `1720493`.
+  Finalizer `1720494` failed after support aggregation because a non-finite
+  per-object Pareto diagnostic reached strict JSON serialization.
+- Preserve every completed shard. Encode non-finite diagnostics as JSON `null`,
+  authorize a separately hashed finalizer-only recovery commit, and resubmit
+  only the dependent finalizer. The immutable inference manifest continues to
+  identify the original inference commit.
+- Recovery implementation and validation are complete: the authorization binds
+  the original manifest hash, inference commit, and recovery commit; the submit
+  script records that no new inference was submitted. Ruff, compileall, Bash
+  syntax, `git diff --check`, `7` recovery-focused tests, and `22` related tests
+  in `shine` pass.
+
+## 2026-09-04 Frozen-prior NPE and full-test posterior closure
+
+- Freeze the truth-free `realnvp_wide` projected parent and the independent
+  selected-test cohort. Do not update the population prior while repairing the
+  amortized posterior, and never use catalogue truth for optimization or
+  checkpoint selection.
+- Run two independent chains from one immutable manifest. The first immediately
+  evaluates the current conditional posterior on all 4,706 selected-test
+  objects with low-draw, massively sharded inference. The second trains the
+  posterior with model-generated, selection-aware sleep/NPE only under the
+  frozen projected parent.
+- Keep the workflow distributional end to end: dense joint draws, exact
+  proposal densities, ordinary/PSIS importance diagnostics, object-aligned
+  PIT/coverage, MIRA/TARP, PPC, selected-posterior aggregates, direct parent and
+  beta-selected-parent distributions, and observed-only corner-panel selection.
+  Point estimates must not be used as training or population targets.
+- Implement five fail-loud stages: (1) frozen provenance and simulator/observed
+  support preflight, (2) current-q full-test baseline, (3) warm-start and
+  from-scratch sleep-only NPE arms, (4) matched full-test evaluation of the
+  truth-free validation winner, and (5) frozen closure/decision. Stages 2 and 3
+  may run concurrently; stage 4 waits only for stage 3, and stage 5 waits for
+  both matched evaluations.
+- Optimize Jean-Zay cost by using one latent/simulation pair per NPE update,
+  `selection_candidate_factor=2`, multi-H100 data parallelism, K=256 for the
+  4,706-object population banks, and K=1024 only on a deterministic 512-object
+  support cohort. No prior M-step or further catalogue-scale run is authorized
+  unless the posterior support and calibration gates pass.
+- Implemented the complete launch graph. Stage 2 submits matched current-q
+  `4706 x K256` and `512 x K1024` arrays (32 shards each, at most 16 H100s per
+  array); stage 3 concurrently compares warm-start and random-encoder pure-sleep
+  arms on four H100s each. A CPU truth-free gate freezes the lowest fixed-seed
+  validation sleep NLL, after which stage 4 submits the same two evaluations for
+  the winner and stage 5 compares matched receipts.
+- Extended the posterior finalizer to retain all dense joint draws, run q-only
+  PIT/coverage at the full K, common-draw q/IW PIT plus MIRA/TARP, PPC, twelve
+  observed-flux-selected individual q/IW/prior/truth corners, and direct parent
+  plus beta-selected-parent population distributions against the independent
+  C0/selected truth. Truth is attached only after the support receipt is frozen;
+  no point estimate is used as a posterior or population target.
+- Added immutable model-receipt overrides, non-divisible cohort sharding,
+  bounded object batches, source/config/checkpoint hashes, direct bitwise prior
+  checks, reconnectable monitoring, and fail-closed calibration/support gates.
+  Local validation: Ruff, Python compileall, Bash/SLURM syntax,
+  `git diff --check`, and all 37 focused population/posterior tests pass. The
+  full repository suite reaches 816 passed and 8 skipped; two pre-existing
+  supervised-prior integrity tests report `WARN` instead of their expected
+  `PASS` under both local Python environments, in untouched code.
+- Jean-Zay launch `1751670` exposed a CLI-only scratch-arm failure before
+  training: argparse produced `config`, while the builder function requires
+  `config_path`. The warm arm and both current-q posterior arrays remain valid
+  and must not be repeated. Fix the explicit CLI mapping and provide a narrow
+  recovery that reuses task `1751670_0`, resubmits only task 1, replaces the
+  blocked gate/evaluation submitter, and records both the immutable manifest
+  commit and descendant execution-fix commit.
+- Both arms subsequently passed (`warm_start` validation sleep NLL 19.4334,
+  `scratch_encoder` 22.5754), but recovery gate `1751918` failed before model
+  selection because the CPU partition omits the `git` executable after
+  `module purge`. Reuse both certified arm receipts and both completed baseline
+  evaluations. Validate the detached-worktree HEAD without a subprocess, bind
+  the manifest and arm receipt hashes in a gate-only authorization, and
+  resubmit only the gate plus its stage-4 submitter. Persist `CACHE_ROOT` in all
+  environment files and give the monitor a `$SCRATCH` fallback.
+- Gate retry `1779366` reached model selection but rejected the certified
+  scratch receipt because it was produced by the intermediate CLI-fix commit,
+  distinct from both the original manifest and current finalizer commits. Bind
+  each arm's runtime commit to its already hashed receipt, verify on the login
+  node that manifest -> arm -> finalizer ancestry holds, and authorize exactly
+  those arm commits in the CPU finalizer without executing Git there.
+- Implemented the per-arm authorization and login-node ancestry checks. The
+  authorization is unique to failed gate `1779366`, remains bound to both arm
+  receipt hashes, and cannot authorize training or baseline recomputation.
+  Compile, shell syntax, Ruff, diff checks, and the 41 focused NPE/population
+  tests pass; only the replacement CPU gate and stage-4 submitter remain remote.
+- Gate `1783398` completed and froze `warm_start` at validation sleep NLL
+  `19.433409` with the parent prior bitwise unchanged. Stage-4 submitter
+  `1783399` then failed before creating any environment, submission receipt, or
+  GPU job because `submit_feniks_sc_drws_population_posterior.sh` still invoked
+  Git after the CPU `module purge`. Make nested posterior submission accept and
+  verify a frozen worktree commit without a Git executable, and add a stage-4
+  only recovery bound to the frozen-winner receipt and failed submitter.
+- Implemented the no-Git frozen-worktree path in preparation, submission, and
+  H100 provenance checks, plus the receipt-bound stage-4-only recovery. Shell
+  syntax, compile, Ruff, diff checks, and 43 focused tests pass. The full local
+  suite cannot collect three unrelated spline tests because this local `shine`
+  environment lacks `jax_cosmo`; remote stage 4 remains to be submitted.
+- Analyse the completed matched frozen-parent NPE experiment, separate
+  posterior calibration from importance-support and population-distribution
+  closure, and package a compact online-review bundle. Preserve all CSV/JSON
+  receipts and diagnostic figures while excluding the multi-gigabyte dense
+  joint-draw banks and redundant full-15D corner images from the ZIP.
+- Completed the frozen-parent NPE analysis bundle. It contains an explicit
+  scientific assessment, matched key metrics, 48 core-5 corners, all JSON/CSV
+  receipts and plots, and 56 lightweight Parquet diagnostics. The 40 MiB ZIP
+  passes `unzip -t`; dense joint-draw banks, duplicate PDFs, and full-15D
+  corner PNGs remain available only in the 2.1 GiB local result tree.
+# 2026-09-06 - Topology-corrected frozen-parent NPE continuation
+
+- [completed] Reproduce and expose the topology held by the serialized
+  conditional flow, including masks, permutations, per-coordinate coupling
+  counts, untransformed coordinates, and a stable SHA256 fingerprint. Historical
+  checkpoints remain readable; fingerprint enforcement only applies when a
+  sidecar records one.
+- [completed] Rebuild a topology-corrected `indexed_roll` posterior and transfer
+  only the compatible residual-photometry trunk. Keep the posterior heads,
+  couplings, masks, and permutations newly initialized; verify the frozen parent
+  bitwise, reload the checkpoint, and check direct sample/log-density agreement.
+- [completed] Add an opt-in `sleep + observed reverse-KL` objective using direct
+  reparameterized q draws and the canonical posterior target. Preserve entropy,
+  prior and likelihood densities in latent-x space, keep the prior frozen for
+  updates while retaining its derivative with respect to x, and record separate
+  component gradients and decoder costs.
+- [completed] Cache only direct frozen-parent latents and raw noiseless DSPS
+  fluxes for sleep. Refresh noise, errors, masks, context, and noisy r<29
+  selection at every optimization step; bind the cache to prior and calibration
+  fingerprints and forbid it while the prior is trainable.
+- [completed] Add truth-free observed and model-generated validation: exact
+  direct-proposal weights, raw ESS, finite/non-finite Pareto diagnostics, maximum
+  weights, log-density decomposition, independent-draw stability, held-out-band
+  prediction with the bands removed from both features and likelihood,
+  finite-rank simulated calibration, posterior geometry, boundary concentration,
+  and flux/error Jacobian sensitivity. Catalogue truth is rejected at the input
+  boundary.
+- [completed] Replace the historical TARP curve-ordinate KS p-value with an
+  explicitly randomized finite-rank uniform test and cover its K-grid contract
+  with an analytic unit test.
+- [completed] Add a frozen-proposal population marginal-likelihood objective
+  with the selection normalizer, full proposal denominator, fixed direct
+  particles, all-object finite/support gates, and no good-ESS filtering. The
+  first M-step is separately activatable only after a posterior-bound
+  `POPULATION_VI_READY.json`; another q adaptation is mandatory before any
+  subsequent prior step.
+- [completed] Add separate B pure-sleep, C sleep-plus-photometric-ELBO, and gated
+  population configs; an immutable Jean-Zay pilot; parallel A/B/C truth-free
+  validation; a reconnectable monitor; and a one-H100 population M-step wrapper.
+  The pilot never auto-submits population training.
+- [completed] Local verification: Ruff, Python compilation, Bash/SLURM syntax,
+  CLI help smoke tests, `git diff --check`, and 105 focused/adjacent tests pass.
+  The full repository suite has no new failure; the same two unrelated legacy
+  supervised-prior tests still expect `PASS` where their untouched integrity
+  diagnostic returns `WARN`. No cluster training or long experiment was launched
+  locally.
+- [completed] Repair the first Jean-Zay pilot launch failure before submission:
+  explicitly map `--topology-config` and `--elbo-config` to `prepare()`'s
+  `*_config_path` arguments and cover the complete CLI mapping with a regression
+  test. The failed command never entered `prepare()` and submitted no Slurm job,
+  so the immutable pilot can be launched again without recovery or cleanup.
+- [completed] Recover Jean-Zay pilot `1829245-1829250` after all three matched
+  truth-free validations reached their four-hour limit. Preserve the completed
+  B/C checkpoints and frozen prior, cancel the dependency-blocked finalizer,
+  resubmit only A/B/C validation from the immutable pilot worktree with an
+  eight-hour limit, and queue a replacement finalizer. Record both the original
+  and replacement jobs in a durable receipt; no training is resubmitted.
+- [completed] Repair the post-inference internal-validation failure caused by
+  two new scripts calling the obsolete `load_context(config)` API. Load the
+  configured filter curves and pass the complete SSP/model context explicitly
+  in both internal validation and the gated population M-step. Add an immutable,
+  truth-free internal-only recovery that requires completed K256/K1024 receipts,
+  reuses all existing inference, records cross-commit authorization, and queues
+  only the three internal diagnostics plus the fail-closed finalizer.
+- [completed] Make the internal validator apply the pilot's fixed held-out-band
+  and simulated-calibration contract to historical arm A, whose source config
+  predates `truth_free_validation`. Make repeated internal recovery submit only
+  arms still lacking their durable validation receipt, so completed B/C
+  diagnostics are preserved when recovering A.
+- [completed] Bound peak GPU memory in internal held-out predictive validation
+  by decoding posterior samples in explicit sample-axis chunks and recording the
+  chunk size. The prior/posterior draws, object cohort, likelihood, and metrics
+  are unchanged; only the DSPS execution batching changes. This recovers the
+  three H100 diagnostics after the unchunked `[64, 256, 15]` decode requested a
+  72.81 GiB allocation.
+# 2026-09-08: photometric integration reference (implemented)
+
+- Job 1915987 localizes the main point-0 instability to fixed-spectrum projection;
+  float64 projection alone does not resolve it. Stellar weights converge in
+  float64. Branch AD identities also differ and must not be silently certified.
+- Export fixed spectra/filters at the same three generated points, including
+  eager versus compiled spectra. Compare legacy projection to a merged-knot
+  Gauss quadrature candidate and an independent NumPy analytic integral of the
+  same piecewise-linear spectrum/transmission. Audit normalization separately.
+- Test smooth spectra, narrow lines and moving support analytically. Extend
+  float64 stencils below the nearest interpolation knot and count crossings.
+  Keep the training decoder unchanged until numerical and forward checks pass.
+- If integration changes materially, regenerate sleep/validation banks and
+  re-evaluate the frozen parent before matched NPE retraining; never reuse old
+  simulator banks as though they came from a new likelihood.
+- Implemented opt-in `LOCAL_VI_PHOTOMETRY_REFERENCE=1`: one H100, 45-minute
+  Slurm ceiling, 1000 component evaluations, three fixed generated points.
+  Candidate quadrature is diagnostic-only; production projection is unchanged.
+  An independent analytic integral checks centers and both sides of twenty
+  FD stencils, with step selection independent of AD and explicit dtype traces.
+- Export `FIXED_SPECTRA.npz` and a hash receipt for CPU-only replay without the
+  source SSP bank/checkpoint. Record normalization, eager/JIT spectrum and
+  native/candidate flux differences. No training or promotion follows this job.
+- Verification: targeted model/local-VI/decomposition/quadrature suite 91 passed,
+  three real-asset-dependent skips; compileall, Ruff, CLI help, shell syntax and
+  whitespace checks pass. Synthetic real-DSPS spectrum export and mock workflow
+  finalization are tested. No real SSP/checkpoint/H100 execution is claimed.
+- Final quadrature/replay subset: six passed, including CPU replay, source/module
+  fingerprints, immutable outputs and rejection of altered export/results.
+- Runbook: `docs/feniks_photometry_reference_runbook.md`. Numerical success still
+  requires full-decoder qualification and catalogue-simulator compatibility
+  before rebuilding banks and running a matched NPE comparison.
+
+# 2026-09-08: redshift branch diagnostic (implemented)
+
+- Isolate age/SFH, IGM, and observer-frame projection at three fixed generated
+  cache points, without fitting or reading catalogue truth. Retain the original
+  point and report physical versus latent redshift step sizes.
+- Audit float64 only for explicitly precision-preserving sub-calculations
+  (age/mass weights and frozen-spectrum projection), not by relabelling the
+  mixed-precision production decoder. Preserve historical physics and runs.
+- Record branch center agreement, chain-rule reconstruction, multiscale AD/FD,
+  and precision traces before proposing any decoder correction or VI restart.
+- Implemented opt-in `LOCAL_VI_REDSHIFT_DECOMPOSITION=1`, three fixed cache
+  entries, eight scalar-input curves each, ten steps, one H100/45 minutes,
+  40-minute internal budget and 1000 component-evaluation ceiling. No local
+  optimization, posterior selection or population training follows this job.
+- Cache/live flux checks and canonical center agreement protect the comparison.
+  Float64 arithmetic is certified by nested JAX traces only for age/mass weights
+  and frozen-spectrum projection. Default production casts remain unchanged.
+- Verification: initial model/spline/local-VI/diagnostic suite 97 passed and
+  three asset-dependent skips; updated runner subset 25 passed; final dedicated
+  decomposition suite seven passed, including real DSPS on synthetic spectra
+  and tabulated survival. Ruff/compileall/CLI-help/Bash checks passed. No real
+  SED assets, cluster checkpoint, catalogue fits or GPU run available locally.
+- Next decision is branch/precision localization from the new JSON/CSV, not
+  loosening convergence tolerances or starting another NPE/VI training run.
+
+# 2026-09-08: balanced frozen-parent NPE continuation (implemented)
+
+- Completed pilot has no eligible posterior: all A/B/C fail importance support;
+  B passes marginal simulated ranks but fails held-out photometry; C reverses
+  that tradeoff. No population update is justified by these receipts.
+- Prepare a bounded continuation from the corrected B checkpoint, preserving
+  the parent and all historical artifacts. Compare continued sleep and two
+  small, prespecified observed-ELBO weights from a common sleep anchor.
+- Add selection-preserving missing-band training, common simulated validation
+  inputs, joint projection ranks, and a reserved confirmation cohort. Keep
+  population training disabled; technical completion is not promotion.
+- Implemented an opt-in selection-preserving sleep conditioning mask, strict
+  finite-draw observed ELBO, and common sleep random numbers. Added full/masked
+  simulated joint projections with training-only normalization and a shared
+  generated-input fingerprint. Historical defaults remain unchanged.
+- The runner preserves checkpoints/cache hashes, reserves confirmation rows,
+  resumes validation shards, records each Slurm submission, and caps peak
+  allocation at four one-GPU jobs. Source B -> S24 -> B/C/D8 -> matched A/B/C/D
+  validation -> frozen-candidate confirmation -> technical receipt. No prior
+  or population job is submitted. Allocation ceiling is 66 GPU-hours.
+- Verification: 83 targeted tests passed; compileall, CLI help and bash syntax
+  passed. The new joint-rank test detects wrong Gaussian correlations despite
+  calibrated marginals. A two-row/four-draw real SED smoke is scheduled before
+  S on Jean-Zay, not claimed as executed locally. No cluster job launched here.
+- Remaining limits: no guarantee of support improvement; confirmation is a
+  reserved subset of previously used validation, not a new catalogue; projection
+  calibration is necessary evidence, not a joint-posterior certificate.
+
+# 2026-09-09: isolate remaining MDF precision failures (implemented)
+
+- Remote full-decoder qualification completed, not passed: nine metallicity
+  AD/FD failures and unresolved weak directions remain with merged quadrature.
+  Matching reverse/JVP identities do not certify the physical derivatives.
+- Compare unchanged merged arithmetic with float64 MDF weight arithmetic at
+  the exact six saved points. Preserve DSPS triweight equations, scatter,
+  assets, likelihood, prior, and existing tolerances; no automatic training.
+- Export small weight/derivative probes with an independent polynomial
+  reference to distinguish weight arithmetic from downstream mixed precision.
+- Implemented opt-in MDF weight precision and induced float64 contractions,
+  retaining historical defaults and downstream casts. Numerical cache contracts
+  reject cross-precision bank reuse. This is not a full-float64 decoder.
+- New `LOCAL_VI_MDF_PRECISION_REFERENCE` mode verifies the completed decoder
+  receipt and exact saved point/context identity. Compare merged_mdf32/64 on
+  every coordinate; weight-reference discrepancies also block qualification.
+- Verification: 89 targeted tests passed, three asset-dependent tests skipped;
+  compileall, Ruff, CLI help, Bash syntax and diff checks pass. Includes real
+  DSPS synthetic SED forward/gradient smoke, compressed/survival contractions,
+  analytic polynomial controls, unchanged historical weights, cache exclusion,
+  and mock end-to-end preparation/replay/receipt integrity.
+- Legacy one-row/batch fit commands from AGENTS.md could not run: their named
+  config files are absent. No H100 qualification or catalogue fit is claimed.
+- Runbook: `docs/feniks_mdf_precision_runbook.md`. One H100, 90-minute allocation
+  ceiling, 6000 decoder calls; no local VI, NPE or population job follows.
+  Inspect numerical results and simulator compatibility before rebuilding banks.
+# Long local VI follow-up (2026-09-09)
+
+- Implemented: fixed 512-step, MC32, two-start experiment on all 16 development
+  cases; independent evaluation streams and K1024 at fixed checkpoints.
+- Support probe 1952467 did not recover reliable support. Concentration audit
+  has ESS near one in the three inspected cases; weighted means are not targets.
+- No checkpoint selection, truth-based tuning or population promotion.
+- Verification: dedicated mock-decoder long-mode integration passed; seed-range,
+  fixed-recipe and incompatible-mode tests added. Compileall, Ruff, Bash syntax
+  and Sphinx -W pass. Legacy fit/posterior smoke configs listed in AGENTS.md are
+  absent; no local full DSPS/H100 run or scientific qualification is claimed.
+- Runbook: docs/feniks_long_local_vi_runbook.md; current HTML rebuilt under
+  outputs/docs_support_probe/feniks_current_status.html.
+# Frozen long-run replay (2026-09-09)
+
+- Implemented: independent K4096 replay of all final long-run checkpoints and
+  amortized anchors. No optimization, checkpoint selection or promotion.
+- Operator job 1957394 completed; 28/32 final local proposals still have bad k.
+  CPU audit completed for 144 distributions. Concentrated weighted coordinates
+  are descriptive only, never fitting targets.
+- Verification: 17 targeted tests passed, including real local optimizer and
+  frozen replay on mock physics, source tamper detection and fresh draw checks.
+  Compileall, Ruff, Bash syntax and Sphinx -W pass. No H100 run here; legacy
+  fit/posterior smoke configs remain absent. Paired readback CLI also tested.
+- Runbook: docs/feniks_long_replay_runbook.md. No next-stage auto-submission.
+# Frozen geometry and NUTS comparison
+
+- 2026-09-11 observed-cohort extension implemented: run the eight already
+  frozen, truth-free observed identities while the four-case depth jobs run.
+  Preserve their upstream r-flux/SNR/mask-count stratification. Add only
+  encoder-derived descriptive tags (redshift, SNR and late/early SFH trend),
+  explicitly not catalog truth or physical class labels. Prepare geometry on
+  one H100, then launch eight independent dense-depth-6 group-B tasks through
+  an afterok dependency so incomplete geometry can never feed NUTS. This adds
+  six observed identities beyond the two in the four-case comparison and tests
+  individual-posterior generality, not population-prior quality. The workflow
+  peaks at eight H100s and 64 vectorized chains; concurrency remains operator
+  configurable. Verification: 53 focused tests passed; Ruff, compileall, Bash
+  syntax and diff checks pass. No remote observed-cohort run has been submitted.
+
+- 2026-09-11 follow-up implemented: depth-4 recovery completed all 12 tasks,
+  but 97.74% of retained transitions reached the 15-step integration ceiling.
+  Add an explicit dense-mass NUTS contract, a B-only depth-5/6 bounded probe,
+  and a separate longer B-only depth-6 run. Keep all targets, starts and frozen
+  learned prior unchanged. Add simulation truth to plots only, never to target,
+  initialization, convergence checks or selection. Do not expand the observed
+  cohort until the sampler configuration is shown not to saturate.
+  The short profile is eight one-H100 tasks (four cases by depths 5/6; 500
+  warmup and 512 retained draws per chain). The independent long profile is
+  four one-H100 tasks (depth 6; 1500 warmup and 4096 retained draws per chain).
+  Both use eight vectorized chains per task and write explicit dense-mass,
+  float64 and truth-display contracts plus an aggregate comparison table/plot.
+  Verification: 51 focused tests passed, Ruff, compileall, CLI help, Bash syntax
+  and diff checks pass. No H100 follow-up has been run from this checkout.
+
+- 2026-09-11 recovery implemented: the first float64 NUTS array was cancelled
+  after four tasks spent more than three hours inside an opaque 1000-step
+  warmup with `max_num_doublings=10` and produced no warmup checkpoint. Prepare
+  a new immutable root from the completed geometry with the previously measured
+  tractable depth cap (`max_num_doublings=4`), all 12 target groups concurrent,
+  and a low-frequency liveness heartbeat. Preserve eight vectorized chains,
+  1000 warmup steps and 4096 retained draws; do not reuse partial cancelled
+  artifacts or interpret liveness as sampler progress.
+  The new launcher requests all 12 one-H100 tasks concurrently (96 vectorized
+  chains at peak), uses an eight-hour task ceiling, and records both old and new
+  settings in the immutable imported manifest. Focused geometry/exact-sampler
+  tests pass (22), along with Ruff, compileall, Bash syntax and diff checks.
+  Real H100 duration and convergence remain unmeasured until the v3 run.
+
+- Completed follow-up: verified 28 downloaded geometry artifacts and documented anisotropic photometric/proposal mismatch. Added opt-in float64 NUTS target coordinates, reusable compiled block executors, corrected per-chain chunk paths, and a hash-checked geometry import into a new versioned NUTS root. 21 focused CPU tests pass, including sub-float32 displacement preservation, one compiled cache entry across two blocks, mixed-precision resume rejection, immutable import and plot output. H100 performance/convergence still requires measurement; no remote jobs submitted here.
+
+- Implemented: one controlled geometry/weight diagnostic, then a separately submitted NUTS array on the same four galaxies. See `docs/feniks_geometry_nuts_runbook.md`.
+- Freeze the learned target. Compare A (dispersed / learned prior), B (encoder / learned prior), C (dispersed / initial identity prior). Never label these references as a known true posterior.
+- Preserve all chains and require explicit diagnostic review before scientific interpretation. No training, automatic promotion, or automatic NUTS submission.
+- Verified locally: CPU Gaussian batched NUTS, geometry bank/start contracts, plot generation, transport tests, sampler regression tests, compileall, Ruff and shell syntax. H100/real frozen-source execution remains untested locally; no convergence or speed claim. Real-data fit/posterior CLI smoke tests were not run for this standalone diagnostic change.
+# Full-catalogue AVI experiment array (2026-09-11)
+
+- 2026-09-12 prior preflight recovery: prior tasks 2/3 failed before loading
+  photometry because the shared adaptive runtime attempted to write split
+  artifacts into a missing output directory. Make runtime preparation own the
+  creation of that directory and regress the caller-independent contract. This
+  changes no posterior weight, selection correction, prior objective or model
+  initialization. Relaunch in a new immutable root after local verification.
+
+- 2026-09-12 next-stage implementation: keep the completed four-expert B arm as
+  the control and add a four-task array: matched two/eight-expert encoder
+  capacity, plus selection-corrected prior-only learning from the learned source
+  and from an identity RealNVP. Both prior arms freeze B, use full-catalogue
+  K256 defensive balance MIS in five sweeps, retain exact full-15D weights and
+  differentiate `+log_alpha_eta`; no SFH coordinate or low-ESS galaxy is
+  silently discarded. Add a dependent expert audit with gate utilization,
+  exact responsibilities, physical/SFH separation, K512 support and raw 5D
+  MIRA. This is a causal prior test, not yet the final joint alternation.
+
+- v4 runtime recovery: AVI reused a population-training loader whose selection
+  correction requirement is inappropriate for its frozen-prior encoder-only
+  objective. Add explicit train_population_prior=False for AVI only, propagate
+  the role into objective metadata, keep the production default and selection
+  guard unchanged. Per user clarification, restore the inherited r<29 selection
+  normalization and record frozen log(alpha) with fixed shared randomness.
+  Include +log(alpha) in E's selected ELBO and all validation ELBOs, preserving
+  unselected values too. Keep beta/alpha out of individual normalized weights.
+  Test real runtime preparation with small parquet/filter/SSP fixtures, not a
+  mocked runtime return. Recheck frozen-prior integration before handoff.
+  Verified 27 tests across AVI and adaptive runtime, including seven-arm/four-CPU
+  integration and selected/unselected ELBO offsets. Preserve float64 in the JIT
+  latent spec for selection; reran real runtime regression after this change.
+  Ruff and compilation pass. H100 execution remains a required remote preflight.
+
+- v3 startup recovery: the source archive omitted filters/, although configuration
+  uses relative curve paths. Include dereferenced filter contents in the hashed
+  snapshot, keep the existing Data link, and validate filter parsing plus SSP and
+  configured model asset file existence during CPU preparation. Hash these assets
+  in the input manifest so changed physics inputs cannot silently resume.
+  Add actual-shell snapshot and real-filter-loader regressions. New v4 root.
+  Verified 12 AVI tests (excluding unchanged mock-physics integration), Ruff,
+  shell syntax and Python compilation. No remote GPU job submitted locally.
+
+- v2 recovery: default YAML sorting reordered fit.free_parameters, changing the
+  latent coordinate hash before loading the source. Preserve insertion order,
+  assert roundtrip coordinate hashes and compare against source sidecar during
+  CPU preparation, before GPU submission. Keep checkpoint validation strict.
+  Add regression proving sorted serialization is rejected. New v3 root required.
+  Verified ten AVI tests (excluding the unchanged full mock-physics integration),
+  Ruff and Python compilation. Remote source loading awaits the corrected run.
+
+- GPU startup recovery: preflight 2046734 failed before training because the AVI
+  launcher omitted EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=0, unlike NUTS.
+  Enable discovery explicitly; preserve numerical methods and the shared shine
+  installation. Add a subprocess regression exercising actual shell setup and
+  asserting the JAX discovery function is not replaced. New run root required.
+  Verified three targeted runtime/startup tests, Ruff and Bash syntax; actual
+  H100 plugin initialization still requires the remote preflight.
+
+- Implemented locally: seven controlled encoder experiments, four H100 per task with
+  actual data-parallel gradients and accumulation. Freeze the qualified learned
+  prior and decoder; this stage does not yet retrain the population density.
+- Compare repaired/scratch single/expert flows, pathwise ELBO, and optional
+  existing joint NUTS teacher banks with likelihood-reweighted neighbours.
+- Require real per-arm preflight, immutable inputs, full-state resume, independent
+  validation, progress receipts and plots. Preserve unrelated workspace edits.
+- Verification: 79 distinct targeted CPU tests passed across the experiment,
+  transport, proposal, RWS, balanced-NPE, adaptive-runtime and feature suites.
+  Re-ran the seven-arm integration after decoder blocking changes: four virtual
+  CPU devices, mock physical decoder, real flow/mixture gradients, optimizer
+  accumulation, pause/resume, evaluation and nonblank plots all pass. Compileall,
+  Ruff, CLI help and Bash syntax pass. The legacy fit/posterior smoke configs
+  listed in AGENTS.md are absent; no real-asset fit or H100 benchmark was run.
+- Deployment: Git-based Jean-Zay handoff and immutable per-run snapshot; no remote
+  submission performed. The learned population prior remains frozen in this
+  first wave, and empirical NUTS teacher diagnostics are explicitly unqualified.
+- Runbook: docs/feniks_avi_experiments_runbook.md. Check measured preflight timings
+  before interpreting the twenty-hour allocation as an expected runtime.

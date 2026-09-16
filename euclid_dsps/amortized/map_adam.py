@@ -29,19 +29,28 @@ from .catalog_identity import (
 from .collapse_gates import write_inference_collapse_gate
 from .config import amortized_config, require_equinox
 from .data import (
+    compute_feature_stats_from_config,
     iter_photometry_batches_from_arrays,
     load_photometry_arrays_from_config,
 )
 from .decoder import model_flux_from_x
-from .features import read_feature_stats
+from .features import read_feature_stats, write_feature_stats
 from .latent import (
-    latent_spec_from_config,
     network_x_to_raw_x,
     theta_to_x,
     x_to_theta,
 )
-from .likelihood import photometric_loglike
-from .train import JitLatentSpec, _StaticArg, load_checkpoint
+from .posterior_target import (
+    PosteriorObservation,
+    posterior_log_target,
+)
+from .train import (
+    JitLatentSpec,
+    _latent_spec_for_amortized_config,
+    _StaticArg,
+    build_amortized_model,
+    load_checkpoint,
+)
 from .truth_diagnostics import write_extended_truth_diagnostics
 
 eqx = require_equinox()
@@ -51,7 +60,7 @@ def run_map_adam_under_prior(
     config: dict[str, Any],
     out_dir: Path,
     *,
-    checkpoint: Path,
+    checkpoint: Path | None,
     feature_stats_path: Path | None,
     limit: int | None,
     batch_size: int,
@@ -71,8 +80,9 @@ def run_map_adam_under_prior(
     row_indices_file: str | Path | None = None,
     dataset_label: str = "Diffsky HLTDS",
     verbose: bool = True,
+    progress_interval: int = 0,
 ) -> dict[str, Any]:
-    """Run per-object MAP optimization with the learned NF prior."""
+    """Run per-object MAP optimization, optionally under a learned NF prior."""
     out = ensure_dir(out_dir)
     cfg = amortized_config(config)
     inference_cfg = cfg["inference"]
@@ -113,16 +123,34 @@ def run_map_adam_under_prior(
         filename="inference_truth.parquet",
         batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
     )
-    checkpoint = Path(checkpoint)
-    if feature_stats_path is None:
-        feature_stats_path = checkpoint.parent.parent / "feature_stats.json"
-    feature_stats = read_feature_stats(feature_stats_path)
+    checkpoint = Path(checkpoint) if checkpoint is not None else None
+    _validate_checkpoint_free_map(
+        checkpoint=checkpoint,
+        prior_weight=float(prior_weight),
+        start_mode=str(start_mode),
+    )
     arrays = load_photometry_arrays_from_config(
         config,
         batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
         limit=limit if row_indices is None else None,
         row_indices=row_indices,
     )
+    if feature_stats_path is None and checkpoint is not None:
+        feature_stats_path = checkpoint.parent.parent / "feature_stats.json"
+    if feature_stats_path is not None:
+        feature_stats_path = Path(feature_stats_path)
+        feature_stats = read_feature_stats(feature_stats_path)
+    else:
+        stats_config = dict(config)
+        stats_catalog = cfg["features"].get("stats_catalog_path")
+        if stats_catalog:
+            stats_config["catalog_path"] = str(stats_catalog)
+        feature_stats = compute_feature_stats_from_config(
+            stats_config,
+            batch_size=int(inference_cfg.get("catalog_batch_size", 10_000)),
+        )
+        feature_stats_path = out / "feature_stats.json"
+        write_feature_stats(feature_stats_path, feature_stats)
     filters = load_filters(config["bands"])
     context = load_context(
         config["ssp_path"],
@@ -133,10 +161,15 @@ def run_map_adam_under_prior(
         model_config=config.get("model"),
     )
     model_args = dynamic_model_args(context)
-    latent_spec = latent_spec_from_config(config)
+    latent_spec = _latent_spec_for_amortized_config(config)
     jit_latent_spec = _jit_latent_spec(latent_spec)
     jit_context = _StaticArg(context)
-    model = load_checkpoint(checkpoint, config)
+    model_key, key = jax.random.split(jax.random.PRNGKey(int(seed)))
+    model = (
+        load_checkpoint(checkpoint, config)
+        if checkpoint is not None
+        else build_amortized_model(config, model_key, latent_spec=latent_spec)
+    )
     scale_cfg = global_sed_scale_config(
         {"calibration": config.get("calibration", {}) or {}}
     )
@@ -154,15 +187,21 @@ def run_map_adam_under_prior(
         else jnp.zeros((len(config["bands"]),), dtype=jnp.float32)
     )
     start_chunk_size = _effective_start_chunk_size(start_chunk_size, int(n_starts))
+    progress_interval = _normalise_progress_interval(progress_interval)
     estimate_shard_dir = out / "map_estimates_shards"
     by_start_shard_dir = out / "map_estimates_by_start_shards"
     trace_shard_dir = out / "map_optimizer_trace_shards"
+    photometry_shard_dir = out / "map_photometry_shards"
     if shard_outputs:
         estimate_shard_dir.mkdir(parents=True, exist_ok=True)
         by_start_shard_dir.mkdir(parents=True, exist_ok=True)
         trace_shard_dir.mkdir(parents=True, exist_ok=True)
+        photometry_shard_dir.mkdir(parents=True, exist_ok=True)
     if verbose:
-        print(f"[map-prior] checkpoint: {checkpoint}")
+        print(
+            "[map-prior] checkpoint: "
+            f"{checkpoint if checkpoint is not None else 'none (likelihood-only)'}"
+        )
         print(f"[map-prior] output directory: {out}")
         print(
             "[map-prior] run config: "
@@ -170,14 +209,27 @@ def run_map_adam_under_prior(
             f"maxiter={maxiter} lr={learning_rate} prior_weight={prior_weight} "
             f"prior_density_space={prior_density_space} "
             f"start_mode={start_mode} start_chunk_size={start_chunk_size} "
+            f"progress_interval={progress_interval} "
             f"shard_outputs={shard_outputs} resume={resume}"
         )
-    key = jax.random.PRNGKey(int(seed))
+    total_objects = int(arrays.flux.shape[0])
+    total_batches = (
+        int(np.ceil(total_objects / max(int(batch_size), 1))) if total_objects else 0
+    )
+    if verbose:
+        print(
+            "[map-prior] progress: "
+            f"total_objects={total_objects} total_batches={total_batches} "
+            f"step_interval={progress_interval or 'disabled'}",
+            flush=True,
+        )
     rows = []
     rows_by_start = []
     traces = []
+    photometry_rows = []
     progress_rows = []
     started_at = time.perf_counter()
+    completed_objects = 0
     for batch_index, batch in enumerate(
         iter_photometry_batches_from_arrays(
             arrays,
@@ -189,11 +241,21 @@ def run_map_adam_under_prior(
         estimate_shard = estimate_shard_dir / f"part_{batch_index:06d}.parquet"
         by_start_shard = by_start_shard_dir / f"part_{batch_index:06d}.parquet"
         trace_shard = trace_shard_dir / f"part_{batch_index:06d}.parquet"
-        if shard_outputs and resume and estimate_shard.exists():
+        photometry_shard = photometry_shard_dir / f"part_{batch_index:06d}.parquet"
+        if (
+            shard_outputs
+            and resume
+            and estimate_shard.exists()
+            and photometry_shard.exists()
+        ):
+            completed_objects += int(batch.flux.shape[0])
             if verbose:
                 print(
                     "[map-prior] batch "
-                    f"{batch_index}: existing shard -> skip {estimate_shard}"
+                    f"{batch_index}/{total_batches}: existing shard -> "
+                    f"skip {estimate_shard} "
+                    f"progress={completed_objects}/{total_objects}",
+                    flush=True,
                 )
             progress_rows.append(
                 {
@@ -201,11 +263,20 @@ def run_map_adam_under_prior(
                     "n_objects": int(batch.flux.shape[0]),
                     "status": "skipped_existing_shard",
                     "elapsed_s": 0.0,
+                    "objects_done": completed_objects,
+                    "total_objects": total_objects,
+                    "total_batches": total_batches,
                 }
             )
+            pd.DataFrame(progress_rows).to_csv(out / "map_progress.csv", index=False)
             continue
         if verbose:
-            print(f"[map-prior] batch {batch_index}: n_objects={batch.flux.shape[0]}")
+            print(
+                "[map-prior] batch "
+                f"{batch_index}/{total_batches}: n_objects={batch.flux.shape[0]} "
+                f"objects_done={completed_objects}/{total_objects}",
+                flush=True,
+            )
         key, batch_key = jax.random.split(key)
         batch_started = time.perf_counter()
         result = _map_adam_batch(
@@ -228,10 +299,33 @@ def run_map_adam_under_prior(
             log_alpha_band=log_alpha_band,
             use_global_scale=bool(scale_cfg.enabled),
             use_band_calibration=bool(band_cfg.enabled),
+            batch_index=int(batch_index),
+            total_batches=int(total_batches),
+            progress_interval=int(progress_interval),
+            verbose=bool(verbose),
         )
         jax.block_until_ready(result["best_objective"])
         batch_elapsed = time.perf_counter() - batch_started
         theta = np.asarray(jax.device_get(x_to_theta(result["best_x"], latent_spec)))
+        model_flux = model_flux_from_x(
+            result["best_x"],
+            jit_latent_spec,
+            context,
+            model_args,
+            latent_spec.names,
+        )
+        if scale_cfg.enabled:
+            model_flux = apply_global_sed_scale_to_flux(model_flux, log_alpha_sed)
+        if band_cfg.enabled:
+            model_flux = apply_per_band_flux_calibration_to_flux(
+                model_flux,
+                log_alpha_band,
+            )
+        model_flux = np.asarray(jax.device_get(model_flux))
+        mask = np.asarray(jax.device_get(batch.mask), dtype=bool)
+        n_valid = np.sum(mask, axis=1, dtype=np.int64)
+        nominal_dof = np.maximum(n_valid - len(latent_spec.names), 1)
+        chi2 = np.asarray(jax.device_get(result["best_chi2"]))
         row = {
             "object_id": np.asarray(batch.object_id),
             "row_index": (
@@ -242,7 +336,12 @@ def run_map_adam_under_prior(
             "map_objective": np.asarray(jax.device_get(result["best_objective"])),
             "map_photometric_nll": np.asarray(jax.device_get(result["best_nll"])),
             "map_prior_logprob": np.asarray(jax.device_get(result["best_logprior"])),
-            "map_chi2": np.asarray(jax.device_get(result["best_chi2"])),
+            "map_chi2": chi2,
+            "map_n_valid_bands": n_valid,
+            "map_n_parameters": len(latent_spec.names),
+            "map_nominal_dof": nominal_dof,
+            "map_chi2_per_valid_band": chi2 / np.maximum(n_valid, 1),
+            "map_reduced_chi2": chi2 / nominal_dof,
             "map_start_index": np.asarray(jax.device_get(result["best_start"])),
             "map_start_family": np.asarray(result["start_family"], dtype=object)[
                 np.asarray(jax.device_get(result["best_start"]))
@@ -252,6 +351,11 @@ def run_map_adam_under_prior(
         for index, name in enumerate(latent_spec.names):
             row[name] = theta[:, index]
         estimates_piece = pd.DataFrame(row)
+        photometry_piece = _map_photometry_frame(
+            batch,
+            model_flux,
+            arrays.band_names,
+        )
         by_start = _map_by_start_frame(
             result,
             batch,
@@ -270,6 +374,7 @@ def run_map_adam_under_prior(
             if not by_start.empty:
                 _write_parquet_atomic(by_start, by_start_shard)
             _write_parquet_atomic(trace, trace_shard)
+            _write_parquet_atomic(photometry_piece, photometry_shard)
             # This shard is the completion marker for resume, so write it last.
             _write_parquet_atomic(estimates_piece, estimate_shard)
         else:
@@ -277,9 +382,23 @@ def run_map_adam_under_prior(
             if not by_start.empty:
                 rows_by_start.append(by_start)
             traces.append(trace)
+            photometry_rows.append(photometry_piece)
         throughput = (
             float(batch.flux.shape[0]) / batch_elapsed
             if batch_elapsed > 0.0
+            else float("nan")
+        )
+        completed_objects += int(batch.flux.shape[0])
+        wall_elapsed = float(time.perf_counter() - started_at)
+        average_objects_per_s = (
+            float(completed_objects) / wall_elapsed
+            if wall_elapsed > 0.0
+            else float("nan")
+        )
+        remaining_objects = max(total_objects - completed_objects, 0)
+        eta_s = (
+            float(remaining_objects) / average_objects_per_s
+            if average_objects_per_s > 0.0
             else float("nan")
         )
         progress_rows.append(
@@ -289,25 +408,38 @@ def run_map_adam_under_prior(
                 "status": "completed",
                 "elapsed_s": float(batch_elapsed),
                 "objects_per_s": float(throughput),
-                "wall_elapsed_s": float(time.perf_counter() - started_at),
+                "wall_elapsed_s": wall_elapsed,
+                "objects_done": completed_objects,
+                "total_objects": total_objects,
+                "total_batches": total_batches,
+                "eta_s": eta_s,
             }
         )
         pd.DataFrame(progress_rows).to_csv(out / "map_progress.csv", index=False)
         if verbose:
             print(
                 "[map-prior] batch "
-                f"{batch_index} done in {batch_elapsed:.1f}s "
-                f"({throughput:.2f} objects/s)"
+                f"{batch_index}/{total_batches} done in {batch_elapsed:.1f}s "
+                f"({throughput:.2f} objects/s) "
+                f"progress={completed_objects}/{total_objects} "
+                f"eta={_format_eta(eta_s)}",
+                flush=True,
             )
     if shard_outputs:
         rows = _read_shard_frames(estimate_shard_dir)
         rows_by_start = _read_shard_frames(by_start_shard_dir)
         traces = _read_shard_frames(trace_shard_dir)
+        photometry_rows = _read_shard_frames(photometry_shard_dir)
     estimates = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
     by_start_frame = (
         pd.concat(rows_by_start, ignore_index=True) if rows_by_start else pd.DataFrame()
     )
     trace_frame = pd.concat(traces, ignore_index=True) if traces else pd.DataFrame()
+    photometry_frame = (
+        pd.concat(photometry_rows, ignore_index=True)
+        if photometry_rows
+        else pd.DataFrame()
+    )
     estimates.to_parquet(out / "map_estimates.parquet", index=False)
     estimates.to_csv(out / "map_estimates.csv", index=False)
     if not by_start_frame.empty:
@@ -315,9 +447,12 @@ def run_map_adam_under_prior(
         by_start_frame.to_csv(out / "map_estimates_by_start.csv", index=False)
         _write_start_family_summary(by_start_frame, out)
     trace_frame.to_parquet(out / "map_optimizer_trace.parquet", index=False)
+    photometry_frame.to_parquet(out / "map_photometry.parquet", index=False)
+    _write_map_photometry_summary(photometry_frame, out)
     _write_map_plots(estimates, trace_frame, out, by_start_frame)
     summary = {
-        "checkpoint": str(checkpoint),
+        "checkpoint": str(checkpoint) if checkpoint is not None else None,
+        "uses_learned_prior": bool(checkpoint is not None and prior_weight != 0.0),
         "feature_stats_path": str(feature_stats_path),
         "limit": limit,
         "selection": selection_summary,
@@ -332,14 +467,17 @@ def run_map_adam_under_prior(
         "prior_density_space": str(prior_density_space),
         "start_mode": str(start_mode),
         "start_chunk_size": int(start_chunk_size),
+        "progress_interval": int(progress_interval),
         "shard_outputs": bool(shard_outputs),
         "resume": bool(resume),
         "shard_paths": {
             "estimates": str(estimate_shard_dir) if shard_outputs else None,
             "by_start": str(by_start_shard_dir) if shard_outputs else None,
             "trace": str(trace_shard_dir) if shard_outputs else None,
+            "photometry": str(photometry_shard_dir) if shard_outputs else None,
         },
         "dataset_label": dataset_label,
+        "photometric_fit": _map_fit_summary(estimates),
     }
     write_json(out / "map_summary.json", summary)
     try:
@@ -370,6 +508,139 @@ def run_map_adam_under_prior(
     return summary
 
 
+def _validate_checkpoint_free_map(
+    *,
+    checkpoint: Path | None,
+    prior_weight: float,
+    start_mode: str,
+) -> None:
+    if checkpoint is not None:
+        return
+    if not np.isclose(float(prior_weight), 0.0):
+        raise ValueError("MAP without an amortized checkpoint requires prior_weight=0")
+    mode = str(start_mode or "").strip().lower()
+    if mode not in {"latin_hypercube", "z_grid", "lowz_grid"}:
+        raise ValueError(
+            "MAP without an amortized checkpoint requires an encoder-independent "
+            "start_mode: latin_hypercube, z_grid, or lowz_grid"
+        )
+
+
+def _map_photometry_frame(
+    batch,
+    model_flux: np.ndarray,
+    band_names: tuple[str, ...],
+) -> pd.DataFrame:
+    observed = np.asarray(jax.device_get(batch.flux), dtype=float)
+    error = np.asarray(jax.device_get(batch.flux_err), dtype=float)
+    mask = np.asarray(jax.device_get(batch.mask), dtype=bool)
+    predicted = np.asarray(model_flux, dtype=float)
+    if predicted.shape != observed.shape:
+        raise ValueError(
+            f"MAP model flux shape {predicted.shape} != observed {observed.shape}"
+        )
+    n_objects, n_bands = observed.shape
+    if len(band_names) != n_bands:
+        raise ValueError(f"Expected {n_bands} band names, got {len(band_names)}")
+    object_id = np.asarray(batch.object_id)
+    row_index = (
+        np.asarray(batch.row_index, dtype=np.int64)
+        if batch.row_index is not None
+        else np.arange(n_objects, dtype=np.int64)
+    )
+    residual = np.full(observed.shape, np.nan, dtype=float)
+    valid = mask & np.isfinite(error) & (error > 0.0)
+    residual[valid] = (predicted[valid] - observed[valid]) / error[valid]
+    return pd.DataFrame(
+        {
+            "object_id": np.repeat(object_id, n_bands),
+            "row_index": np.repeat(row_index, n_bands),
+            "band": np.tile(np.asarray(band_names, dtype=object), n_objects),
+            "observed_flux_fnu_cgs": observed.ravel(),
+            "observed_error_fnu_cgs": error.ravel(),
+            "map_flux_fnu_cgs": predicted.ravel(),
+            "normalized_residual": residual.ravel(),
+            "is_valid": valid.ravel(),
+        }
+    )
+
+
+def _map_fit_summary(estimates: pd.DataFrame) -> dict[str, Any]:
+    if estimates.empty:
+        return {}
+    chi2_per_band = estimates["map_chi2_per_valid_band"].to_numpy(dtype=float)
+    reduced_chi2 = estimates["map_reduced_chi2"].to_numpy(dtype=float)
+    chi2_per_band = chi2_per_band[np.isfinite(chi2_per_band)]
+    reduced_chi2 = reduced_chi2[np.isfinite(reduced_chi2)]
+    if not len(reduced_chi2):
+        return {}
+    return {
+        "n_objects": int(len(estimates)),
+        "n_parameters": int(estimates["map_n_parameters"].iloc[0]),
+        "median_chi2_per_valid_band": float(np.median(chi2_per_band)),
+        "median_reduced_chi2": float(np.median(reduced_chi2)),
+        "p84_reduced_chi2": float(np.percentile(reduced_chi2, 84)),
+        "fraction_reduced_chi2_le_2": float(np.mean(reduced_chi2 <= 2.0)),
+        "fraction_reduced_chi2_le_5": float(np.mean(reduced_chi2 <= 5.0)),
+        "fraction_reduced_chi2_le_10": float(np.mean(reduced_chi2 <= 10.0)),
+    }
+
+
+def _write_map_photometry_summary(frame: pd.DataFrame, out: Path) -> None:
+    if frame.empty:
+        return
+    valid = frame.loc[
+        frame["is_valid"].astype(bool)
+        & np.isfinite(frame["normalized_residual"].to_numpy(dtype=float))
+    ].copy()
+    if valid.empty:
+        return
+    rows = []
+    for band, group in valid.groupby("band", sort=False):
+        residual = group["normalized_residual"].to_numpy(dtype=float)
+        rows.append(
+            {
+                "band": str(band),
+                "n": int(len(residual)),
+                "mean": float(np.mean(residual)),
+                "std": float(np.std(residual)),
+                "median": float(np.median(residual)),
+                "p16": float(np.percentile(residual, 16)),
+                "p84": float(np.percentile(residual, 84)),
+                "frac_abs_gt_3": float(np.mean(np.abs(residual) > 3.0)),
+                "frac_abs_gt_5": float(np.mean(np.abs(residual) > 5.0)),
+            }
+        )
+    summary = pd.DataFrame(rows)
+    summary.to_csv(out / "map_normalized_residuals_by_band.csv", index=False)
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        return
+    y = np.arange(len(summary))
+    median = summary["median"].to_numpy(dtype=float)
+    lower = median - summary["p16"].to_numpy(dtype=float)
+    upper = summary["p84"].to_numpy(dtype=float) - median
+    fig, ax = plt.subplots(figsize=(8.0, max(5.0, 0.28 * len(summary))))
+    ax.errorbar(
+        median,
+        y,
+        xerr=np.vstack([lower, upper]),
+        fmt="o",
+        markersize=4,
+        capsize=2,
+    )
+    ax.axvline(0.0, color="black", lw=1.0, alpha=0.6)
+    ax.axvspan(-3.0, 3.0, color="0.9", zorder=-1)
+    ax.set_yticks(y, summary["band"])
+    ax.set_xlabel("(MAP model flux - observed flux) / reported error")
+    ax.set_title("Native 15D MAP photometric residuals")
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(out / "map_normalized_residuals_by_band.png", dpi=160)
+    plt.close(fig)
+
+
 def _map_adam_batch(
     model,
     batch,
@@ -391,8 +662,20 @@ def _map_adam_batch(
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
+    batch_index: int = 0,
+    total_batches: int = 0,
+    progress_interval: int = 0,
+    verbose: bool = False,
 ) -> dict[str, jnp.ndarray]:
-    mean, log_std = model.encoder(batch.features)
+    mode = str(start_mode or "encoder").strip().lower()
+    if mode in {"encoder", "mixed"}:
+        mean, log_std = model.encoder(batch.features)
+    else:
+        mean = jnp.zeros(
+            (batch.flux.shape[0], len(parameter_names)),
+            dtype=batch.flux.dtype,
+        )
+        log_std = jnp.zeros_like(mean)
     n_objects = mean.shape[0]
     n_starts = max(1, int(n_starts))
     starts, start_family = _make_map_starts(
@@ -405,11 +688,20 @@ def _map_adam_batch(
         start_mode=start_mode,
     )
     chunk_size = _effective_start_chunk_size(start_chunk_size, n_starts)
+    n_chunks = int(np.ceil(n_starts / chunk_size))
     chunk_results = []
     weighted_trace = None
-    for start in range(0, n_starts, chunk_size):
+    for chunk_index, start in enumerate(range(0, n_starts, chunk_size), start=1):
         end = min(start + chunk_size, n_starts)
         chunk = starts[start:end]
+        if verbose and progress_interval > 0:
+            print(
+                "[map-prior] "
+                f"batch {batch_index}/{total_batches or '?'} "
+                f"chunk {chunk_index}/{n_chunks} start "
+                f"starts={start + 1}-{end}",
+                flush=True,
+            )
         chunk_result = _optimize_map_start_chunk(
             model,
             batch,
@@ -427,6 +719,11 @@ def _map_adam_batch(
             log_alpha_band=log_alpha_band,
             use_global_scale=use_global_scale,
             use_band_calibration=use_band_calibration,
+            batch_index=int(batch_index),
+            total_batches=int(total_batches),
+            chunk_index=int(chunk_index),
+            n_chunks=int(n_chunks),
+            progress_interval=int(progress_interval),
         )
         chunk_results.append(chunk_result)
         weight = float(end - start)
@@ -496,6 +793,11 @@ def _optimize_map_start_chunk(
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
+    batch_index: int = 0,
+    total_batches: int = 0,
+    chunk_index: int = 0,
+    n_chunks: int = 0,
+    progress_interval: int = 0,
 ) -> dict[str, jnp.ndarray]:
     density_space = _normalize_prior_density_space(prior_density_space)
     if density_space == "theta" and "log10_gas_metallicity" in parameter_names:
@@ -529,6 +831,11 @@ def _optimize_map_start_chunk(
         log_alpha_band=log_alpha_band,
         use_global_scale=bool(use_global_scale),
         use_band_calibration=bool(use_band_calibration),
+        batch_index=int(batch_index),
+        total_batches=int(total_batches),
+        chunk_index=int(chunk_index),
+        n_chunks=int(n_chunks),
+        progress_interval=int(progress_interval),
     )
 
 
@@ -556,42 +863,51 @@ def _optimize_map_start_chunk_jit(
     log_alpha_band,
     use_global_scale: bool,
     use_band_calibration: bool,
+    batch_index: int = 0,
+    total_batches: int = 0,
+    chunk_index: int = 0,
+    n_chunks: int = 0,
+    progress_interval: int = 0,
 ) -> dict[str, jnp.ndarray]:
     actual_context = context.value if isinstance(context, _StaticArg) else context
 
     def metrics_for_x(x):
-        model_flux_raw = model_flux_from_x(
+        target = posterior_log_target(
+            model,
             x,
+            PosteriorObservation(flux, flux_err, mask),
             latent_spec,
             actual_context,
             model_args,
             parameter_names,
+            {
+                "type": likelihood_type,
+                "student_t_dof": float(student_t_dof),
+                "error_floor_frac": float(error_floor_frac),
+                "error_jitter": float(error_jitter),
+            },
+            {
+                "calibration": {
+                    "global_sed_scale": {"enabled": use_global_scale},
+                    "per_band_zero_points": {"enabled": use_band_calibration},
+                }
+            },
         )
-        model_flux = (
-            apply_global_sed_scale_to_flux(model_flux_raw, log_alpha_sed)
-            if use_global_scale
-            else model_flux_raw
-        )
-        model_flux = (
-            apply_per_band_flux_calibration_to_flux(model_flux, log_alpha_band)
-            if use_band_calibration
-            else model_flux
-        )
-        loglike = photometric_loglike(
-            obs_flux=flux,
-            model_flux=model_flux,
-            obs_err=flux_err,
-            mask=mask,
-            likelihood_type=likelihood_type,
-            student_t_dof=float(student_t_dof),
-            error_floor_frac=float(error_floor_frac),
-            error_jitter=float(error_jitter),
-        )
-        logprior = _prior_log_prob_for_map(
-            model,
-            x,
-            latent_spec,
-            prior_density_space=prior_density_space,
+        model_flux = target.model_flux
+        loglike = target.loglike
+        logprior = (
+            target.logprior
+            if _normalize_prior_density_space(prior_density_space) == "x"
+            else jnp.where(
+                target.physical_valid,
+                _prior_log_prob_for_map(
+                    model,
+                    x,
+                    latent_spec,
+                    prior_density_space=prior_density_space,
+                ),
+                -jnp.inf,
+            )
         )
         chi = (model_flux - flux[None, :, :]) / flux_err[None, :, :]
         chi = jnp.where(mask[None, :, :], chi, 0.0)
@@ -629,6 +945,35 @@ def _optimize_map_start_chunk_jit(
         m_hat = m / (1.0 - beta1**iteration)
         v_hat = v / (1.0 - beta2**iteration)
         x = x - float(learning_rate) * m_hat / (jnp.sqrt(v_hat) + eps_adam)
+        if int(progress_interval) > 0:
+            should_report = (
+                (iteration == 1)
+                | (iteration % int(progress_interval) == 0)
+                | (iteration == int(maxiter))
+            )
+
+            def report(_):
+                jax.debug.print(
+                    "[map-prior] batch {batch}/{total_batches} "
+                    "chunk {chunk}/{n_chunks} step {step}/{maxiter} "
+                    "mean_obj={mean_obj} best_obj={best_obj} grad_norm={grad_norm}",
+                    batch=int(batch_index),
+                    total_batches=int(total_batches),
+                    chunk=int(chunk_index),
+                    n_chunks=int(n_chunks),
+                    step=iteration,
+                    maxiter=int(maxiter),
+                    mean_obj=value,
+                    best_obj=jnp.mean(best_obj),
+                    grad_norm=jnp.mean(jnp.linalg.norm(grad, axis=-1)),
+                    ordered=True,
+                )
+                return jnp.asarray(0, dtype=jnp.int32)
+
+            def skip(_):
+                return jnp.asarray(0, dtype=jnp.int32)
+
+            jax.lax.cond(should_report, report, skip, operand=None)
         return (x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2), value
 
     init = (x, m, v, best_x, best_obj, best_nll, best_logprior, best_chi2)
@@ -691,6 +1036,27 @@ def _effective_start_chunk_size(value: int | None, n_starts: int) -> int:
     if chunk <= 0:
         raise ValueError("MAP start_chunk_size must be positive")
     return max(1, min(chunk, int(n_starts)))
+
+
+def _normalise_progress_interval(value: int | None) -> int:
+    """Return the MAP step logging interval, with zero disabling step logs."""
+    interval = int(value or 0)
+    if interval < 0:
+        raise ValueError("MAP progress_interval must be non-negative")
+    return interval
+
+
+def _format_eta(value: float) -> str:
+    if not np.isfinite(value) or value < 0.0:
+        return "unknown"
+    seconds = int(round(value))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
 
 
 def _jit_latent_spec(latent_spec) -> JitLatentSpec:

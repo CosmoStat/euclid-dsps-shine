@@ -1,0 +1,69 @@
+extends: feniks_sc_asmc_em_r25.yaml
+
+# Recovery contract: train only the amortized proposal on the observed r<25
+# cohort. The parent prior is deliberately frozen until the proposal passes an
+# independent ordinary-IW support gate under the exact Gaussian likelihood.
+amortized:
+  likelihood:
+    type: student_t
+    student_t_dof: 2.0
+    error_floor_frac: 0.0
+    error_jitter: 0.0
+
+  prior:
+    train_jointly: false
+
+  objective:
+    mode: reweighted_wake_sleep
+    npe_weight: 0.0
+    prior_truth_weight: 0.0
+    sleep:
+      enabled: true
+      error_model: observed_catalog
+      noise_family: match_likelihood
+      entropy_samples: 4
+      selection:
+        enabled: true
+        band: lsst_r
+        max_mag_ab: 25.0
+        candidate_factor: 8
+    wake:
+      start_encoder_epoch: 4
+      every_encoder_epochs: 4
+      n_particles: 8
+      n_tempered_particles: 2
+      base_temperature: 2.0
+      train_encoder: true
+      train_prior: false
+      sampler: importance
+      support_gate_enabled: false
+
+  training:
+    epochs: 180
+    batch_size: 1024
+    jax_batch_size: 64
+    n_samples: 1
+    learning_rate: 1.0e-4
+    weight_decay: 1.0e-6
+    gradient_clip_norm: 5.0
+    validation_every: 5
+    best_checkpoint_metric: validation_negative_loglike
+    best_checkpoint_min_epoch: 20
+    data_parallel: pmap
+
+  inference:
+    posterior_samples: 2048
+    prior_samples: 512
+    decoder_sample_chunk_size: 1
+    prior_predictive_batch_size: 64
+    shard_outputs: true
+    resume_shards: true
+    write_posterior_predictive: true
+    write_residual_samples: false
+    combine_sample_shards: false
+
+  output:
+    checkpoint_every: 5
+    diagnostics_every: 5
+    save_training_curves: true
+

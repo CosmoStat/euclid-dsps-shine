@@ -762,6 +762,7 @@ def summarize_inference_outputs(
     config: dict[str, Any] | None = None,
     limit: int | None = None,
     row_indices: np.ndarray | None = None,
+    include_truth: bool = True,
 ) -> None:
     """Write posterior predictive diagnostics from inference parquet outputs."""
     summary_path = Path(summary_path)
@@ -772,19 +773,27 @@ def summarize_inference_outputs(
     frame = pd.read_parquet(summary_path)
     residual_summary = _write_residual_summary(out)
     top_chi2 = _write_top_chi2(frame, residual_summary, out)
-    redshift = _write_redshift_comparison(
-        frame,
-        out,
-        config=config,
-        limit=limit,
-        row_indices=row_indices,
+    redshift = (
+        _write_redshift_comparison(
+            frame,
+            out,
+            config=config,
+            limit=limit,
+            row_indices=row_indices,
+        )
+        if include_truth
+        else pd.DataFrame()
     )
-    catalog_proxy = _write_catalog_proxy_comparison(
-        frame,
-        out,
-        config=config,
-        limit=limit,
-        row_indices=row_indices,
+    catalog_proxy = (
+        _write_catalog_proxy_comparison(
+            frame,
+            out,
+            config=config,
+            limit=limit,
+            row_indices=row_indices,
+        )
+        if include_truth
+        else pd.DataFrame()
     )
     prior_summary = _write_learned_prior_summary(out)
     pit_summary = _write_redshift_pit(redshift, out)
@@ -797,6 +806,7 @@ def summarize_inference_outputs(
         catalog_proxy,
         out,
         config=config,
+        include_truth=include_truth,
     )
     payload = {
         "n_objects": int(len(frame)),
@@ -818,6 +828,7 @@ def summarize_inference_outputs(
         "redshift_pit": pit_summary,
         "normalized_residual_tail_rows": int(len(residual_tail_summary)),
         "plots": plots,
+        "truth_diagnostics_enabled": bool(include_truth),
     }
     if not residual_summary.empty:
         band_stats = (
@@ -858,11 +869,16 @@ def _write_full_latent_truth_prior_posterior_corner(
     plt,
     *,
     config: dict[str, Any] | None,
+    include_truth: bool,
 ) -> Path | None:
     posterior, posterior_label = _full_latent_posterior_frame(out, config=config)
     if posterior.empty:
         return None
-    truth = _truth_parameter_frame(summary, out, config=config)
+    truth = (
+        _truth_parameter_frame(summary, out, config=config)
+        if include_truth
+        else pd.DataFrame()
+    )
     prior = _read_learned_prior(out)
     return _write_multi_overlay_corner_plot(
         posterior,
@@ -870,8 +886,16 @@ def _write_full_latent_truth_prior_posterior_corner(
         plt,
         truth=truth,
         prior=prior,
-        filename="corner_full_latent_truth_prior_posterior.png",
-        title="Full latent truth / prior / posterior",
+        filename=(
+            "corner_full_latent_truth_prior_posterior.png"
+            if include_truth
+            else "corner_full_latent_prior_posterior.png"
+        ),
+        title=(
+            "Full latent truth / prior / posterior"
+            if include_truth
+            else "Full latent prior / posterior"
+        ),
         posterior_label=posterior_label,
         config=config,
     )
@@ -1528,6 +1552,7 @@ def _write_inference_plots(
     out: Path,
     *,
     config: dict[str, Any] | None = None,
+    include_truth: bool = True,
 ) -> list[str]:
     try:
         _prepare_matplotlib_cache(out)
@@ -1541,6 +1566,7 @@ def _write_inference_plots(
         out,
         plt,
         config=config,
+        include_truth=include_truth,
     )
     if path is not None:
         written.append(path.name)
@@ -1778,6 +1804,7 @@ def _write_multi_overlay_corner_plot(
     title: str,
     posterior_label: str,
     config: dict[str, Any] | None,
+    additional_overlays: list[dict[str, Any]] | None = None,
 ) -> Path | None:
     columns = _corner_columns_for_config(posterior, config)
     if len(columns) < 2 or posterior.empty:
@@ -1795,6 +1822,23 @@ def _write_multi_overlay_corner_plot(
             "points": False,
         },
     ]
+    for index, overlay in enumerate(additional_overlays or ()):
+        frame = overlay.get("frame")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("corner additional overlay frame must be a DataFrame")
+        frames.append(
+            {
+                "key": str(overlay.get("key", f"overlay_{index}")),
+                "label": str(overlay.get("label", f"overlay {index + 1}")),
+                "frame": _finite_sample_partial(frame, columns, max_rows=4_000),
+                "color": str(overlay.get("color", "#009E73")),
+                "linestyle": str(overlay.get("linestyle", "-")),
+                "linewidth": float(overlay.get("linewidth", 1.25)),
+                "fill_alpha": float(overlay.get("fill_alpha", 0.0)),
+                "contour_alpha": float(overlay.get("contour_alpha", 0.95)),
+                "points": bool(overlay.get("points", False)),
+            }
+        )
     if truth is not None and not truth.empty:
         frames.append(
             {

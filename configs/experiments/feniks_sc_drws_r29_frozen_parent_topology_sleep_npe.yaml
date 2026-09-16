@@ -1,0 +1,71 @@
+extends: feniks_sc_drws_r29_frozen_parent_sleep_npe.yaml
+
+# Arm B: rebuild q with coordinate-covering permutations.  This file must be
+# paired with build_feniks_sc_drws_topology_corrected_checkpoint.py; loading the
+# historical checkpoint directly would restore its serialized old topology.
+amortized:
+  encoder:
+    flow_permutation: indexed_roll
+    topology_contract:
+      minimum_transform_count: 2
+      require_serialized_fingerprint: true
+
+  objective:
+    sleep:
+      # The pilot runner activates this with an absolute shared $SCRATCH path.
+      # Keeping path null prevents accidental cache creation in the source tree.
+      noiseless_flux_cache:
+        enabled: false
+        path: null
+        candidates: 131072
+        decoder_batch_size: 256
+    observed_elbo:
+      enabled: false
+      weight: 0.0
+      sleep_weight: 1.0
+      n_samples: 4
+
+  training:
+    epochs: 8
+    validation_every: 1
+    component_gradient_audit_first_batch: true
+    component_gradient_audit_objects: 8
+    best_checkpoint_metric: validation_sleep_nll
+    best_checkpoint_min_epoch: 2
+
+  truth_free_validation:
+    enabled: true
+    observed_validation_objects: 256
+    tracking_draws: 256
+    support_draws: 1024
+    independent_draw_replicates: 2
+    held_out_bands: [lsst_u, lsst_r, euclid_nisp_h]
+    model_generated_objects: 512
+    maximum_model_generated_pit_ks: 0.12
+    maximum_model_generated_coverage_ece: 0.12
+    technical_gates:
+      minimum_median_ess_fraction: 0.05
+      maximum_pareto_k_gt_0p7_or_nonfinite_fraction: 0.20
+      maximum_p90_raw_weight: 0.80
+
+  population_vi:
+    enabled: false
+    require_truth_free_posterior_gate: true
+    require_held_out_band_predictive: true
+    require_model_generated_calibration: true
+    proposal:
+      kind: direct_posterior_or_explicit_defensive_mixture
+      freeze_particles_during_prior_step: true
+      use_complete_mixture_density: true
+    selection:
+      event: noisy_lsst_r_ab_lt_29
+      common_alpha_requires_shared_observation_context: true
+    object_subsampling:
+      allow_good_ess_filter: false
+      require_known_inclusion_probability: true
+
+  output:
+    checkpoint_every: 2
+
+truth:
+  parameter_columns: {}
