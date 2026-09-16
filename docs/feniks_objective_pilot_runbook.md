@@ -154,7 +154,8 @@ son facteur de securite et peut interrompre avant de depasser le budget.
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 
 export REPO_DIR="$PWD"
 export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"

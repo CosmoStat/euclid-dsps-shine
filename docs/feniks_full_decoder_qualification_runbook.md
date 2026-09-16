@@ -62,8 +62,8 @@ JVP units are not forward-equivalent cost. No follow-up training is submitted.
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 
 source outputs/logs/feniks_sc_drws_balanced_npe_latest.env
 export REPO_DIR="$PWD"

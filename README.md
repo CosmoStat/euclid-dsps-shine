@@ -21,8 +21,10 @@ experiment surface.
 | Train NN+DSPS+NF inference | `configs/amortized_diffsky_synthetic_feniks_full_gpu.yaml` |
 | Preflight the full ladder | `diffsky-plan-prior-workflow` |
 
-Full docs live under `docs/source/`; the most useful entry points are
-`production.rst`, `spline15d_realnvp.rst`, and `amortized_inference.rst`.
+Full docs live under `docs/source/`; start with `active_workflows.rst` for the
+maintained experiment surface, then use `production.rst`,
+`spline15d_realnvp.rst`, and `amortized_inference.rst` for implementation
+details.
 
 ## Production Configs
 
@@ -44,8 +46,13 @@ Reference/debug configs:
 | `configs/fs2_gpu.yaml` | Euclid FS2 MAP/posterior comparison path. |
 | `configs/amortized_fs2_realnvp.yaml` | FS2 amortized comparison path. |
 
-Historical HLTDS MAP/amortized experiments, OpenUniverse helpers, COSMOS SED
-tools, reconstruction dashboards, and old docs/tests live under `legacy/`.
+Historical attempts to reproduce or fit the PopCosmos parameterization and its
+SED model live under `legacy/`. Active COSMOS2020 code prepares the observed
+catalogue and transmission curves, then benchmarks this repository's own
+FENIKS spline-15D RWS/AVI inference on that external dataset. It does not fit
+the PopCosmos parameterization. Historical HLTDS experiments, OpenUniverse
+helpers, reconstruction dashboards, and old docs/tests also live under
+`legacy/`.
 
 ## Install
 

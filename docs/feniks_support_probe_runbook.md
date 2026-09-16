@@ -49,8 +49,8 @@ the latent_x order of the source config; they are not physical parameters.
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 export REPO_DIR="$PWD"
 export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"
 BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"

@@ -190,7 +190,7 @@ Why SVD, Not Wavelets
 ---------------------
 
 A sparse Haar-wavelet benchmark was added in
-``scripts/benchmark_wavelet_compression.py``. It compares the current SVD-style
+``legacy/scripts/benchmark_wavelet_compression.py``. It compares the current SVD-style
 compressed assets to an oracle sparse Haar representation that stores the top
 wavelet coefficients and their indices per spectrum.
 

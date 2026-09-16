@@ -52,8 +52,8 @@ joint B/prior alternation and a fresh K4096 inference audit.
 
 ```bash
 cd "$WORK/dsps-popcosmos"
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
 

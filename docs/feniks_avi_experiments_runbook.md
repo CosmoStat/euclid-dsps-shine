@@ -79,8 +79,8 @@ uncommitted runtime changes. It records hashes and never modifies old runs.
 
 ```bash
 cd "$WORK/dsps-popcosmos"
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
 BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"

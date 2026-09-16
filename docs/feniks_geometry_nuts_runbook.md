@@ -93,7 +93,8 @@ it is a fit diagnostic, not calibrated predictive coverage.
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"
 ROOT="$BASE/frozen_geometry_nuts_v1"
 bash scripts/submit_feniks_geometry_nuts.sh geometry "$ROOT" "$BASE/frozen_parent_wake_holdout_v1"
@@ -164,7 +165,8 @@ Prepare two new immutable roots from the completed geometry root:
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 
 BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"
 GEOMETRY_ROOT="$BASE/frozen_geometry_nuts_v1"

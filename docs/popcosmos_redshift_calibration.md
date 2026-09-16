@@ -21,9 +21,9 @@ Run from the checkout that owns the Pop-COSMOS outputs:
 
 ```bash
 cd /lustre/fswork/projects/rech/jrx/urx63nr/dsps-popcosmos
-git fetch origin feature/feniks-exact-posterior-benchmark
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git fetch origin master
+git switch master
+git pull --ff-only origin master
 mkdir -p outputs/logs
 
 RUN_ROOT=outputs/runs/popcosmos_native15d_rws_k8_array_20260803_162536

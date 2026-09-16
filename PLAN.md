@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-16 Main integration cleanup
+
+- Completed: restore Black/Ruff/pytest/Sphinx CI, pin the formatter/linter
+  versions, expose every real CLI command, repair archived config references,
+  and make the synthetic mock smoke independent of production checkpoints.
+- Preserved the AVI/EM/factorial, exact-posterior/geometry, and COSMOS2020
+  benchmark surfaces. Archived 21 superseded incident recovery launchers under
+  `legacy/scripts/recovery/` while keeping the formal RWS recovery suite active.
+- Added `docs/source/active_workflows.rst`, refreshed contributor/runbook
+  guidance for `master`, clarified COSMOS2020 data/filter benchmarking versus
+  historical PopCosmos parameterization fits, and removed five unreferenced
+  generated documentation assets.
+- Fixed guarded wake backtracking under process-wide JAX X64 and made the
+  decoder-qualification and micro-flow integrity tests robust without relaxing
+  their scientific gates.
+- Validation: Black and Ruff pass; compileall and Bash syntax pass; all 26
+  archived YAML configs load; Sphinx passes with warnings as errors; the
+  asset-free smoke writes readable checkpoints/receipts; full pytest passes
+  with `1090 passed, 8 skipped`.
+- Keep this file as the chronological record of completed work. The maintained
+  workflow surface lives in `docs/source/active_workflows.rst`.
+
 ## 2026-09-14 AVI EM factorial diagnosis
 
 - Completed: freeze the completed EM cycle-0 and cycle-4 components into a

@@ -23,9 +23,9 @@ Update the checkout and verify the completed inference inputs:
 
 ```bash
 cd /lustre/fswork/projects/rech/jrx/urx63nr/euclid-dsps-shine
-git fetch origin feature/feniks-exact-posterior-benchmark
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git fetch origin master
+git switch master
+git pull --ff-only origin master
 mkdir -p outputs/logs
 
 PAPER_ROOT=outputs/runs/feniks_selfsup_paper_v1

@@ -31,9 +31,9 @@ Update the checkout and verify the input contract before submitting:
 
 ```bash
 cd /lustre/fswork/projects/rech/jrx/urx63nr/euclid-dsps-shine
-git fetch origin feature/feniks-exact-posterior-benchmark
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git fetch origin master
+git switch master
+git pull --ff-only origin master
 mkdir -p outputs/logs
 
 for run in rws_k8_t2_seed2 rws_k8_t2_seed3; do

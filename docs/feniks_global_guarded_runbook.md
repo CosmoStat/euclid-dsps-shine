@@ -47,7 +47,8 @@ The smoke checks execution, not scientific quality; failure blocks the array.
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 BASE="/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111"
 bash scripts/submit_feniks_global_guarded.sh \
   "$BASE/manifests" "$BASE/global_guarded_rws_v1"

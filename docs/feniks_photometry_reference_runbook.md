@@ -44,8 +44,8 @@ No cluster performance claim has been made from CPU-only local tests.
 cd "$WORK/dsps-popcosmos"
 source "$WORK/miniconda3/etc/profile.d/conda.sh"
 conda activate shine
-git switch feature/feniks-exact-posterior-benchmark
-git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+git switch master
+git pull --ff-only origin master
 source outputs/logs/feniks_sc_drws_balanced_npe_latest.env
 export REPO_DIR="$PWD"
 export CACHE_ROOT="$SCRATCH/feniks_sc_drws_runtime"

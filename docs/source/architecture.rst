@@ -11,7 +11,7 @@ Active Layout
      config.py              YAML loading, inheritance, defaults, validation.
      io.py                  Parquet rows, photometry units, truth transforms.
      filters.py             Filter loading and smoke-test approximations.
-     model.py               Native DSPS boundary.
+     model.py               Production DSPS forward-model boundary.
      parameter_vectors.py   Theta-vector to DSPS array interface.
      fit.py                 MAP optimization.
      mcmc.py                NUTS/HMC/MCLMC posterior sampling.
@@ -42,8 +42,8 @@ Active Layout
      build_diffsky_lowz_projected_truth_dataset.py
      merge_mclmc_runs.py
    legacy/
-     Historical HLTDS experiments, OpenUniverse helpers, COSMOS SED tools,
-     reconstruction dashboards, ablation scripts, and old docs/tests.
+     Superseded HLTDS experiments, old PopCosmos-parameterization attempts,
+     reconstruction dashboards, incident launchers, and old docs/tests.
 
 Data Flow
 ---------
@@ -81,8 +81,9 @@ Layer Rules
 -----------
 
 ``model.py``
-  The only native DSPS boundary. Other modules pass normalized arrays and
-  parameter dictionaries into this layer.
+  Owns the production DSPS forward model. ``filters.py``, the synthetic-data
+  backend, and numerical audit modules may call narrow DSPS utilities or
+  reference kernels, but they must not define a competing production model.
 
 ``parameter_vectors.py``
   The public JAX theta contract for MAP, MCLMC, and amortized DSPS decoding.
@@ -106,5 +107,6 @@ Layer Rules
 
 ``legacy/``
   Stores historical code and docs that are not part of the current FENIKS
-  ladder. Nothing under ``legacy/`` is imported by the active package or
-  collected by the active pytest configuration.
+  ladder. The active package must not import it at runtime. A small number of
+  contract tests may inspect archived paths to keep reproducibility receipts
+  readable, but archived launchers are not supported execution entry points.

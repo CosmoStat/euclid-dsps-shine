@@ -24,7 +24,7 @@ Where to Start
      - :doc:`installation`
      - ``python -m pip install -e .``
    * - Run the production workflow
-     - :doc:`production`, :doc:`diffsky_synthetic_closure`
+     - :doc:`active_workflows`, :doc:`production`, :doc:`diffsky_synthetic_closure`
      - ``configs/diffsky_synthetic_feniks_260617_50k.yaml``
    * - Validate closure data
      - :doc:`production`, :doc:`diffsky_synthetic_closure`
@@ -71,7 +71,8 @@ Workflow Map
 Project Boundaries
 ------------------
 
-* ``euclid_dsps.model`` is the only module that calls native DSPS.
+* ``euclid_dsps.model`` owns the production DSPS forward model. Filter,
+  synthetic-data, and numerical audit modules may use narrow DSPS utilities.
 * ``euclid_dsps.io`` owns parquet row contracts and photometry unit
   conversions.
 * ``euclid_dsps.fit`` and ``euclid_dsps.mcmc`` own point estimates and
@@ -92,6 +93,7 @@ parameters physically.
    :caption: Getting Started
 
    installation
+   active_workflows
    production
    data_download
    run_setup
