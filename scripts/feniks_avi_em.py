@@ -213,6 +213,153 @@ def prepare(
     )
 
 
+def prepare_from_components(
+    runtime_root: Path,
+    initial_encoder: Path,
+    initial_prior: Path,
+    selection: Path,
+    root: Path,
+    inference_root: Path,
+    *,
+    cycles: int,
+    q_epochs: int,
+    prior_sweeps: int,
+    e_step_mode: str,
+    selection_objective_enabled: bool,
+    track: str,
+) -> None:
+    """Prepare an EM trajectory from explicit immutable components.
+
+    This entry point is used by the SBEB benchmark so warm and scratch
+    encoders can share the same observed cohort, prior and selection contract.
+    """
+    if root.exists() or inference_root.exists():
+        raise FileExistsError("new EM and inference roots are required")
+    if cycles < 1 or q_epochs < 3 or q_epochs % 3:
+        raise ValueError(
+            "cycles must be positive and q_epochs a positive multiple of 3"
+        )
+    if prior_sweeps < 1:
+        raise ValueError("prior_sweeps must be positive")
+    if e_step_mode not in {"raw_q", "ordinary_iw"}:
+        raise ValueError(f"unknown E-step mode: {e_step_mode}")
+    runtime_manifest = read(runtime_root / "MANIFEST.json")
+    _check_hashes(runtime_manifest)
+    required = (
+        "source",
+        "seed",
+        "train_rows",
+        "validation_rows",
+        "validation_catalog",
+        "global_batch",
+        "local_microbatch",
+        "accumulation",
+        "gpus",
+        "particles",
+        "decoder_draw_block",
+        "validation_particles",
+        "learning_rate",
+        "warmup_fraction",
+        "cycle",
+    )
+    missing = [key for key in required if key not in runtime_manifest]
+    if missing:
+        raise ValueError(f"runtime manifest is missing fields: {missing}")
+    for path in (initial_encoder, initial_prior):
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise FileNotFoundError(path)
+    selection_final = _require_final(
+        selection / "selection/FINAL.json", "EXACT_OBSERVED_SELECTION_COMPLETE"
+    )
+    true_parent = selection / "selection/true_parent.parquet"
+    true_selected = selection / "selection/true_selected.parquet"
+    for path in (true_parent, true_selected):
+        if not path.is_file() or path.stat().st_size <= 0:
+            raise FileNotFoundError(path)
+    if int(selection_final["parent_objects"]) == int(
+        selection_final["selected_objects"]
+    ):
+        raise ValueError("selection closure did not create distinct populations")
+
+    _copy_runtime_inputs(runtime_root, root)
+    inputs = [
+        runtime_root / "MANIFEST.json",
+        initial_encoder,
+        initial_prior,
+        selection / "selection/FINAL.json",
+        true_parent,
+        true_selected,
+        *(
+            root / name
+            for name in (
+                "source_config.yaml",
+                "train.npy",
+                "validation.npy",
+                "teachers.npz",
+                "teachers.json",
+            )
+        ),
+    ]
+    manifest = {
+        **{key: runtime_manifest[key] for key in required},
+        "version": 2,
+        "suite": "feniks_sbeb_multicycle_em_v2",
+        "track": track,
+        "cycles": int(cycles),
+        "q_epochs_per_cycle": int(q_epochs),
+        "prior_sweeps_per_cycle": int(prior_sweeps),
+        "prior_macro_objects": int(runtime_manifest.get("prior_macro_objects", 1024)),
+        "prior_particles": int(runtime_manifest.get("prior_particles", 512)),
+        "prior_learning_rate": float(
+            runtime_manifest.get("prior_learning_rate", 1.0e-5)
+        ),
+        "prior_trust_strength": float(
+            runtime_manifest.get("prior_trust_strength", 0.2)
+        ),
+        "prior_maximum_kl_per_dimension": float(
+            runtime_manifest.get("prior_maximum_kl_per_dimension", 0.02)
+        ),
+        "initial_encoder": str(initial_encoder.resolve()),
+        "initial_prior": str(initial_prior.resolve()),
+        "source_training": str(runtime_root.resolve()),
+        "source_q_refresh": str(runtime_root.resolve()),
+        "source_prior_followup": str(runtime_root.resolve()),
+        "selection_root": str(selection.resolve()),
+        "selection_final": selection_final,
+        "true_parent": str(true_parent.resolve()),
+        "true_selected": str(true_selected.resolve()),
+        "inference_root": str(inference_root.resolve()),
+        "e_step_mode": e_step_mode,
+        "selection_objective_enabled": bool(selection_objective_enabled),
+        "em_contract": {
+            "e_step": (
+                "unweighted dense joint q draws"
+                if e_step_mode == "raw_q"
+                else "ordinary full_15d logtarget-logproposal weights"
+            ),
+            "m_step": (
+                "-E_posterior[log p_parent] + log alpha_eta"
+                if selection_objective_enabled
+                else "-E_posterior[log p_selected] (selection ablation)"
+            ),
+            "selected_fixed_point": "aggregate posterior == beta * p_parent / alpha",
+            "parent_projection": "aggregate posterior / beta with joint weights",
+            "selection_in_object_weights": False,
+            "selection_in_prior_loss": bool(selection_objective_enabled),
+        },
+        "truth_used_for_training_or_checkpoint_selection": False,
+        "truth_role": "post-training blind-cohort closure only",
+        "scientific_promotion": False,
+        "hashes": _files_hash(inputs),
+    }
+    write(root / "MANIFEST.json", manifest)
+    print(
+        f"Prepared SBEB EM track={track} cycles={cycles} "
+        f"q_epochs={q_epochs} prior_sweeps={prior_sweeps}",
+        flush=True,
+    )
+
+
 def _manifest(root: Path) -> dict[str, Any]:
     value = read(root / "MANIFEST.json")
     _check_hashes(value)
@@ -304,9 +451,21 @@ def prepare_mstep(root: Path, cycle: int) -> Path:
             "prior_maximum_kl_per_dimension": float(
                 manifest["prior_maximum_kl_per_dimension"]
             ),
-            "selection_correction": "required +log_alpha_eta in parent-prior loss",
+            "selection_correction": (
+                "required +log_alpha_eta in parent-prior loss"
+                if manifest.get("selection_objective_enabled", True)
+                else "disabled selected-density ablation"
+            ),
             "selection_in_object_weights": False,
-            "posterior_weight_contract": "ordinary full_15d logtarget-logproposal",
+            "posterior_weight_contract": (
+                "unweighted dense joint q draws"
+                if manifest.get("e_step_mode", "ordinary_iw") == "raw_q"
+                else "ordinary full_15d logtarget-logproposal"
+            ),
+            "e_step_mode": manifest.get("e_step_mode", "ordinary_iw"),
+            "selection_objective_enabled": bool(
+                manifest.get("selection_objective_enabled", True)
+            ),
         }
     )
     stage["hashes"].update(_files_hash([root / "MANIFEST.json", encoder, prior]))
@@ -637,12 +796,30 @@ def _plot_population_overlay(
 
 
 def report(inference_root: Path) -> None:
+    from scripts.build_feniks_avi_wrapup import plot_corner
     from scripts.feniks_avi_overnight import population_weights
+    from scripts.feniks_sbeb_benchmark import (
+        _population_corner,
+        _posterior_calibration_artifacts,
+        _representative_galaxies,
+    )
 
     manifest = read(inference_root / "MANIFEST.json")
     _check_hashes(manifest)
     destination = inference_root / "report"
     destination.mkdir(exist_ok=True)
+    inference_truth_path = inference_root / "inference_truth.parquet"
+    has_individual_truth = inference_truth_path.is_file()
+    if has_individual_truth:
+        truth_individual = pd.read_parquet(inference_truth_path).sort_values(
+            "row_index"
+        )
+        individual_types = _representative_galaxies(truth_individual)
+        truth_indexed = truth_individual.set_index("row_index")
+    else:
+        truth_individual = pd.DataFrame()
+        individual_types = pd.DataFrame(columns=("type", "row_index"))
+        truth_indexed = pd.DataFrame()
     truth_parent = pd.read_parquet(inference_root / "true_parent.parquet")
     truth_selected = pd.read_parquet(inference_root / "true_selected.parquet")
     names = list(FENIKS_SPLINE15D_PARAMETERS)
@@ -662,6 +839,7 @@ def report(inference_root: Path) -> None:
     distance_rows: list[dict[str, Any]] = []
     support_rows: list[dict[str, Any]] = []
     final_distributions = None
+    individual_corner_count = 0
     comparisons = (
         ("aggregate_selected", "prior_selected"),
         ("aggregate_parent", "prior_parent"),
@@ -696,6 +874,55 @@ def report(inference_root: Path) -> None:
             "truth_selected": truth_selected_draws,
             "truth_parent": truth_parent_draws,
         }
+        cycle_dir = destination / f"cycle_{cycle:02d}"
+        _population_corner(
+            cycle_dir / "selected_population_corner_5d.png",
+            distributions["aggregate_selected"][:8192],
+            distributions["prior_selected"][:8192],
+            distributions["truth_selected"][:8192],
+            title=f"EM cycle {cycle:02d} | selected population",
+        )
+        _population_corner(
+            cycle_dir / "parent_population_corner_5d.png",
+            distributions["aggregate_parent"][:8192],
+            distributions["prior_parent"][:8192],
+            distributions["truth_parent"][:8192],
+            title=f"EM cycle {cycle:02d} | recovered parent population",
+        )
+        raw_path = arm / "raw_0.parquet"
+        corrected_path = arm / "is_0.parquet"
+        calibration_summary: dict[str, float] = {}
+        if has_individual_truth and raw_path.is_file() and corrected_path.is_file():
+            raw = pd.read_parquet(raw_path)
+            corrected = pd.read_parquet(corrected_path)
+            calibration_summary = _posterior_calibration_artifacts(
+                corrected,
+                truth_individual,
+                cycle_dir / "calibration",
+                title=f"EM cycle {cycle:02d}",
+            )
+            for order, galaxy in individual_types.iterrows():
+                row_index = int(galaxy.row_index)
+                before = raw.loc[raw.row_index.eq(row_index), list(PHYSICAL)].to_numpy(
+                    np.float64
+                )
+                current = corrected.loc[
+                    corrected.row_index.eq(row_index), list(PHYSICAL)
+                ].to_numpy(np.float64)
+                truth_value = truth_indexed.loc[row_index, list(PHYSICAL)].to_numpy(
+                    np.float64
+                )
+                label = str(galaxy["type"]).replace(" ", "_").replace("-", "_")
+                plot_corner(
+                    cycle_dir
+                    / "individual"
+                    / f"{order + 1:02d}_{label}_row_{row_index}.png",
+                    before,
+                    current,
+                    truth_value,
+                    f"EM cycle {cycle:02d} | {galaxy['type']} | row {row_index}",
+                )
+                individual_corner_count += 1
         distance_rows.extend(_distance_rows(cycle, distributions, comparisons))
         inference_metrics = pd.read_csv(arm / "metrics.csv")
         support_rows.append(
@@ -714,6 +941,7 @@ def report(inference_root: Path) -> None:
                 "parent_projection_ess": support["parent_projection_ess"],
                 "parent_projection_max_weight": support["parent_projection_max_weight"],
                 "prior_alpha": float(np.mean(prior["beta"])),
+                **calibration_summary,
             }
         )
         final_distributions = distributions
@@ -782,7 +1010,7 @@ These are convergence diagnostics, not automatic scientific promotion. Inspect
     (destination / "REPORT.md").write_text(report_text, encoding="utf-8")
     artifacts = {
         str(path.relative_to(inference_root)): sha(path)
-        for path in sorted(destination.iterdir())
+        for path in sorted(destination.rglob("*"))
         if path.is_file() and path.name != "FINAL.json"
     }
     write(
@@ -793,6 +1021,8 @@ These are convergence diagnostics, not automatic scientific promotion. Inspect
             "cycles": final_cycle,
             "selected_fixed_point_physical_5d": selected_fixed,
             "parent_fixed_point_physical_5d": parent_fixed,
+            "population_corners": 2 * (final_cycle + 1),
+            "individual_corners": individual_corner_count,
             "truth_used_for_training_or_checkpoint_selection": False,
             "artifacts": artifacts,
             "scientific_promotion": False,
@@ -807,6 +1037,7 @@ def main() -> None:
         "mode",
         choices=(
             "prepare",
+            "prepare-components",
             "prepare-mstep",
             "prepare-qstep",
             "finalize-cycle",
@@ -820,9 +1051,22 @@ def main() -> None:
     parser.add_argument("--training", type=Path)
     parser.add_argument("--prior-followup", type=Path)
     parser.add_argument("--selection", type=Path)
+    parser.add_argument("--runtime-root", type=Path)
+    parser.add_argument("--initial-encoder", type=Path)
+    parser.add_argument("--initial-prior", type=Path)
     parser.add_argument("--inference-root", type=Path)
     parser.add_argument("--cycles", type=int, default=4)
     parser.add_argument("--q-epochs", type=int, default=3)
+    parser.add_argument("--prior-sweeps", type=int, default=5)
+    parser.add_argument(
+        "--e-step-mode", choices=("ordinary_iw", "raw_q"), default="ordinary_iw"
+    )
+    parser.add_argument(
+        "--selection-objective",
+        choices=("corrected", "naive"),
+        default="corrected",
+    )
+    parser.add_argument("--track", default="em")
     parser.add_argument("--particles", type=int, default=4096)
     parser.add_argument("--cycle", type=int)
     parser.add_argument("--task", type=int)
@@ -850,6 +1094,33 @@ def main() -> None:
             args.inference_root.resolve(),
             cycles=args.cycles,
             q_epochs=args.q_epochs,
+        )
+    elif args.mode == "prepare-components":
+        required = (
+            args.runtime_root,
+            args.initial_encoder,
+            args.initial_prior,
+            args.selection,
+            args.inference_root,
+        )
+        if any(value is None for value in required):
+            parser.error(
+                "prepare-components requires --runtime-root, --initial-encoder, "
+                "--initial-prior, --selection and --inference-root"
+            )
+        prepare_from_components(
+            args.runtime_root.resolve(),
+            args.initial_encoder.resolve(),
+            args.initial_prior.resolve(),
+            args.selection.resolve(),
+            args.root,
+            args.inference_root.resolve(),
+            cycles=args.cycles,
+            q_epochs=args.q_epochs,
+            prior_sweeps=args.prior_sweeps,
+            e_step_mode=args.e_step_mode,
+            selection_objective_enabled=args.selection_objective == "corrected",
+            track=args.track,
         )
     elif args.mode in {"prepare-mstep", "prepare-qstep", "finalize-cycle"}:
         if args.cycle is None:

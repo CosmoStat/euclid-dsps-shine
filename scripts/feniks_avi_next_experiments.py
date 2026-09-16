@@ -124,7 +124,15 @@ def _check(root: Path) -> dict:
     return manifest
 
 
-def _prior_bank(model, candidate, runtime, particles: int, devices):
+def _prior_bank(
+    model,
+    candidate,
+    runtime,
+    particles: int,
+    devices,
+    *,
+    e_step_mode: str = "ordinary_iw",
+):
     import equinox as eqx
     import jax
     import jax.numpy as jnp
@@ -134,12 +142,24 @@ def _prior_bank(model, candidate, runtime, particles: int, devices):
         stratified_proposal,
     )
     from euclid_dsps.amortized.posterior_target import posterior_log_target
+    from euclid_dsps.amortized.proposal_expressivity import (
+        sample_independent_mixture,
+    )
+
+    if e_step_mode not in {"ordinary_iw", "raw_q"}:
+        raise ValueError(f"unknown E-step mode: {e_step_mode}")
 
     @partial(eqx.filter_pmap, in_axes=(None, None, 0, 0), devices=devices)
     def evaluate(active_model, encoder, batch, key):
-        x, logr = stratified_proposal(
-            active_model, encoder, batch.features, key, particles
-        )
+        if e_step_mode == "raw_q":
+            x = sample_independent_mixture(
+                active_model, encoder, key, batch.features, particles
+            ).x
+            logr = jnp.zeros(x.shape[:-1], dtype=x.dtype)
+        else:
+            x, logr = stratified_proposal(
+                active_model, encoder, batch.features, key, particles
+            )
 
         def decode(block):
             return posterior_log_target(
@@ -160,7 +180,16 @@ def _prior_bank(model, candidate, runtime, particles: int, devices):
         model_flux = values.model_flux.reshape(
             (x.shape[0],) + values.model_flux.shape[2:]
         )
-        weights, valid, ess = normalized_weights(target - logr)
+        if e_step_mode == "raw_q":
+            valid = jnp.all(jnp.isfinite(x), axis=(0, -1))
+            weights = jnp.where(
+                valid[None],
+                jnp.full(target.shape, 1.0 / particles, dtype=target.dtype),
+                0.0,
+            )
+            ess = jnp.where(valid, float(particles), 0.0)
+        else:
+            weights, valid, ess = normalized_weights(target - logr)
         residual = jnp.where(
             batch.mask[None],
             (model_flux - batch.flux[None]) / jnp.maximum(batch.flux_err[None], 1e-30),
@@ -279,7 +308,16 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
         optax.adam(manifest["prior_learning_rate"]),
     )
     optimizer_state = optimizer.init(eqx.filter(model.prior, eqx.is_inexact_array))
-    selection_fn = _make_selection_log_alpha_fn(runtime)
+    selection_objective_enabled = bool(
+        manifest.get("selection_objective_enabled", True)
+    )
+    if selection_objective_enabled:
+        selection_fn = _make_selection_log_alpha_fn(runtime)
+    else:
+
+        def selection_fn(_model, _key):
+            zero = jnp.asarray(0.0, dtype=jnp.float64)
+            return zero, {"selection/alpha_mc_relative_error": zero}
 
     arrays = runtime.train_arrays
 
@@ -297,7 +335,15 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
         )
 
     particle_count = 64 if preflight else int(manifest["prior_particles"])
-    bank = _prior_bank(model, candidate, runtime, particle_count, devices)
+    e_step_mode = str(manifest.get("e_step_mode", "ordinary_iw"))
+    bank = _prior_bank(
+        model,
+        candidate,
+        runtime,
+        particle_count,
+        devices,
+        e_step_mode=e_step_mode,
+    )
     macro_objects = 256 if preflight else int(manifest["prior_macro_objects"])
     sweeps = 1 if preflight else int(manifest["prior_sweeps"])
     macros_per_sweep = math.ceil(len(arrays.flux) / macro_objects)
@@ -397,6 +443,8 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
             "posterior_max_weight_q90": float(np.quantile(metrics[:, 1], 0.9)),
             "raw_predictive_rms_median": float(np.median(metrics[:, 3])),
             "is_predictive_rms_median": float(np.median(metrics[:, 4])),
+            "e_step_mode": e_step_mode,
+            "selection_objective_enabled": selection_objective_enabled,
             "elapsed_seconds": time.monotonic() - started,
         }
         pd.DataFrame([row]).to_csv(
@@ -473,8 +521,14 @@ def run_prior(root: Path, task: int, *, preflight: bool, platform: str = "gpu") 
             ),
             "prior_updates": total,
             "encoder": str(Path(manifest["upstream_b_encoder"]).resolve()),
-            "selection_correction": "+log_alpha_eta differentiated at every update",
+            "selection_correction": (
+                "+log_alpha_eta differentiated at every update"
+                if selection_objective_enabled
+                else "ablated: selected-population density fit without log_alpha"
+            ),
             "selection_in_object_weights": False,
+            "e_step_mode": e_step_mode,
+            "selection_objective_enabled": selection_objective_enabled,
             "full_15d_target": True,
             "physical_5d_primary_evaluation": True,
             "truth_used": False,

@@ -176,3 +176,66 @@ def test_prior_bank_keeps_exact_joint_weights(monkeypatch):
     assert weights.shape == (1, 32, 8)
     np.testing.assert_allclose(np.asarray(weights).sum(axis=1), 1.0, atol=1e-6)
     assert np.isfinite(metrics).all()
+
+
+def test_raw_q_prior_bank_uses_unweighted_joint_mixture_draws(monkeypatch):
+    from types import SimpleNamespace
+
+    import jax.numpy as jnp
+
+    from euclid_dsps.amortized.posterior_target import PosteriorTargetValues
+    from euclid_dsps.amortized.train import LossBatch
+    from scripts.feniks_avi_next_experiments import _prior_bank
+    from tests.test_avi_experiments import model
+
+    jax.config.update("jax_enable_x64", True)
+    source = model()
+    candidate = initialize_candidate(
+        source, {"unused": True}, None, Arm("test", experts=4), 7
+    )
+
+    def target(active_model, x, batch, *args):
+        flux = x[..., :1]
+        loglike = -0.5 * jnp.sum((flux - batch.flux) ** 2, axis=-1)
+        logprior = active_model.prior.log_prob(x)
+        return PosteriorTargetValues(
+            loglike + logprior,
+            loglike,
+            logprior,
+            jnp.ones(loglike.shape, bool),
+            flux,
+            flux,
+        )
+
+    monkeypatch.setattr(
+        "euclid_dsps.amortized.posterior_target.posterior_log_target", target
+    )
+    runtime = SimpleNamespace(
+        latent_spec=None,
+        context=None,
+        model_args=None,
+        parameter_names=("a", "b"),
+        likelihood_config={},
+        calibration_config={},
+    )
+    batch = LossBatch(
+        jnp.ones((1, 8, 1)),
+        jnp.ones((1, 8, 1)),
+        jnp.ones((1, 8, 1), bool),
+        jnp.ones((1, 8, 3)),
+        jnp.zeros((1, 8, 0)),
+    )
+    evaluate = _prior_bank(
+        source,
+        candidate,
+        runtime,
+        32,
+        (jax.local_devices()[0],),
+        e_step_mode="raw_q",
+    )
+    particles, weights, metrics = evaluate(
+        source, candidate, batch, jax.random.split(jax.random.PRNGKey(9), 1)
+    )
+    assert particles.shape == (1, 32, 8, 2)
+    np.testing.assert_allclose(np.asarray(weights), 1.0 / 32, atol=1e-12)
+    np.testing.assert_allclose(np.asarray(metrics)[..., 0], 32.0)

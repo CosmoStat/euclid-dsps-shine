@@ -1,5 +1,97 @@
 # Plan
 
+## 2026-09-16 SBEB population-selection benchmark
+
+- Completed: promote the design into a restartable Jean-Zay
+  suite. Freeze deterministic object-ID train/validation/blind splits for
+  observed `lsst_r` cuts 25, 27 and 29; fail preparation unless every cut has
+  at least 4,096 selected training objects, 512 selected validation objects and
+  1,000 selected blind-closure objects.
+- Add a true scratch branch: randomly initialize the four-expert encoder and
+  run 180 pure selected-sleep epochs under the broad source prior before any
+  population M-step. Keep the current encoder/prior branch as the warm-start
+  control and record both initialization contracts explicitly.
+- Run the frozen-q `raw_q` versus ordinary full-15D IW and `naive` versus
+  selection-corrected M-step matrix at all three cuts for both initialization
+  branches (warm q/learned prior and scratch q/identity prior). Then run four
+  complete EM cycles for the preregistered scientific
+  tracks, with five parent sweeps and 24 q-refresh epochs per cycle.
+- Persist every cycle's prior, encoder, optimizer-resume state, support table,
+  population closure, selected/parent corners and completion receipt. Infer the
+  exact eight historical NUTS observations with every final encoder and retain
+  target-compatible Encoder/NUTS/Truth corners.
+- Completed design audit: the PDF's SBEB M-step is mathematically the same
+  parent cross-entropy plus `log(alpha)` objective already used by the AVI
+  generalized EM. The current loop improved median ESS/K by 58.6% while its
+  selected and parent physical-5D truth distances worsened by 11.2% and 14.3%;
+  SBEB therefore needs a controlled E-step/selection benchmark, not more blind
+  cycles.
+- Preserve dense joint 15D posteriors and ordinary object-level importance
+  weights. Treat truth as post-inference evaluation only, and learn the parent
+  through its forward-noise-selection induced selected distribution.
+- First run the already implemented `Q0/P0`, `Q4/P0`, `Q0/P4`, `Q4/P4`
+  factorial on the frozen EM endpoints to separate encoder drift, prior drift
+  and their interaction.
+- Main frozen-q array: compare raw-q versus ordinary full-15D IW E-steps,
+  uncorrected selected-flow versus selection-corrected parent-flow objectives,
+  and observed-r thresholds 29, 27 and 25. This is a preregistered 2x2x3 matrix
+  with the current four-expert architecture held fixed.
+- Freeze one object-ID split of the 50k parent mock: 70% population fit, 15%
+  validation and 15% blind closure. Build one shared K=512 joint bank and a
+  two-replica K=4096 stratified diagnostic bank; reuse them across every arm.
+- Gate the forward-noise selection model before training. Require calibrated
+  alpha/beta, finite fixed-reference normalization, held-out objective
+  convergence, adequate reference ESS and bounded prior drift. Checkpoints are
+  selected without truth.
+- Close four loops for eight preregistered arms: strict raw-q SBEB at r<29 and
+  the IW/selection-aware variant at r<29, r<27 and r<25, each from both warm
+  and scratch initializations. Simulate selected sleep examples from each
+  learned parent and refresh the same four-expert architecture for 24 epochs
+  per cycle. Evaluate every saved cycle on the same blind objects.
+- Implemented Jean-Zay topology: one synchronous preparation, three scratch
+  bootstraps, 24 frozen-q factor cells, eight four-cycle EM trajectories, 64
+  historical-NUTS comparisons and dependent reports. Each trajectory also
+  runs the terminal `Q0/P0`, `Q4/P0`, `Q0/P4`, `Q4/P4` factorial to separate
+  q drift, prior drift and their interaction. Every task uses four
+  H100s; the default array concurrency is eight (32 H100s peak) and can be
+  lowered at submission. Every stage is fail-closed and restartable from
+  immutable receipts.
+- The scratch branch is now independent in both relevant senses: 180 pure
+  selected-sleep epochs initialize q from random weights under the embedded
+  source prior, and the first frozen-q SBEB prior fit starts from the identity
+  flow. Long trajectories start from their own selection-corrected factorial
+  prior rather than reusing the warm prior.
+- Local deterministic counts satisfy the population-level gates: at r<25,
+  r<27 and r<29 there are respectively 5,455/1,088/1,124,
+  17,380/3,646/3,662 and 33,047/6,903/7,126 selected train/validation/blind
+  galaxies. Remote preparation recomputes and gates these counts before any
+  `sbatch`.
+- Verification completed: 53 AVI/SBEB tests pass in 327.35 s; Ruff,
+  compileall, CLI help, Bash syntax and diff checks pass. No Jean-Zay job has
+  been submitted and no H100 runtime or scientific improvement is claimed.
+
+## 2026-09-14 AVI latest-results Reveal.js dossier
+
+- Completed (2026-09-16 expansion): promote all eight target-compatible NUTS
+  corner plots into full slides and add archived calibration, population,
+  genealogy and representative-galaxy figures to the main narrative.
+- Completed: consolidate the completed encoder, expert-capacity, prior,
+  selection/SFH, overnight coadaptation and four-cycle EM campaigns into one
+  French Reveal.js deck and a detailed Markdown report.
+- Recomputed cross-run ESS improvements and controlled scorecards from immutable
+  CSV artifacts. Keep proposal support, posterior calibration, selection
+  closure and population fixed-point diagnostics scientifically distinct.
+- Packaged curated and source figures, derived tables, source paths and SHA-256
+  provenance in a self-contained results folder. Label historical NUTS as a
+  geometric diagnostic and the pending Q/P factorial as future work.
+- Delivered a 39-slide Reveal.js deck plus a detailed Markdown report under
+  `outputs/reports/feniks_avi_latest_results_20260914`. The deck now exposes 31
+  curated figures; the archive contains 183 source PNGs and 405 source CSVs
+  from six campaigns, plus ten derived CSVs.
+- Verification: Ruff, Python 3.11 compilation, checksum readback for 639 files,
+  local-link checks, nonblank-image checks, desktop/mobile Playwright captures
+  and seven focused deck/EM/factorial tests pass.
+
 ## 2026-09-14 AVI EM factorial diagnosis
 
 - Completed: freeze the completed EM cycle-0 and cycle-4 components into a

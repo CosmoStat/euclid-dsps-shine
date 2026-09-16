@@ -9,6 +9,7 @@ from euclid_dsps.amortized.mira import FENIKS_SPLINE15D_PARAMETERS
 from scripts.feniks_avi_em import (
     finalize_cycle,
     prepare,
+    prepare_from_components,
     prepare_mstep,
     prepare_qstep,
     report,
@@ -178,6 +179,39 @@ def test_em_cycle_manifests_chain_latest_components(tmp_path, monkeypatch):
     assert next_manifest["initial_prior_checkpoint_by_arm"]["P_em_02"] == str(
         (p / "prior.eqx").resolve()
     )
+
+
+def test_prepare_from_components_records_sbeb_contract(tmp_path, monkeypatch):
+    source, training, prior, selection = _training_fixture(tmp_path, monkeypatch)
+    encoder = training / "arms/Q_latest_refresh/encoder.eqx"
+    prior_checkpoint = prior / "arms/P_latest_prior/prior.eqx"
+    root = tmp_path / "component_em"
+    inference = tmp_path / "component_inference"
+
+    prepare_from_components(
+        source,
+        encoder,
+        prior_checkpoint,
+        selection,
+        root,
+        inference,
+        cycles=4,
+        q_epochs=24,
+        prior_sweeps=5,
+        e_step_mode="raw_q",
+        selection_objective_enabled=True,
+        track="scratch_raw_r29",
+    )
+
+    manifest = read(root / "MANIFEST.json")
+    assert manifest["cycles"] == 4
+    assert manifest["q_epochs_per_cycle"] == 24
+    assert manifest["prior_sweeps_per_cycle"] == 5
+    assert manifest["e_step_mode"] == "raw_q"
+    assert manifest["em_contract"]["selection_in_prior_loss"] is True
+    assert manifest["initial_encoder"] == str(encoder.resolve())
+    assert manifest["initial_prior"] == str(prior_checkpoint.resolve())
+    assert manifest["truth_used_for_training_or_checkpoint_selection"] is False
 
 
 def test_em_report_measures_selected_and_parent_fixed_points(tmp_path):
