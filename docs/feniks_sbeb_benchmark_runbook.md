@@ -48,14 +48,18 @@ TAG=$(date +%Y%m%d_%H%M%S)
 ROOT="$BASE/avi_sbeb_benchmark_$TAG"
 
 bash scripts/submit_feniks_sbeb_benchmark.sh \
-  "$SOURCE" "$Q_TRAIN" "$PRIOR" "$SELECTION" "$NUTS" "$ROOT" 8 \
+  "$SOURCE" "$Q_TRAIN" "$PRIOR" "$SELECTION" "$NUTS" "$ROOT" 40 \
   | tee "$BASE/avi_sbeb_submission_$TAG.txt"
 
 printf 'export ROOT=%q\n' "$ROOT" > "$BASE/avi_sbeb_latest.env"
 ```
 
-The last argument is array concurrency. Every task uses four H100s, so `8`
-permits a 32-H100 peak. Use `4` for a 16-H100 peak.
+The last argument is array concurrency. `40` removes the artificial throttle:
+the widest stage submits 40 four-H100 tasks, for a structural peak of 160
+H100s. Narrower stages submit all their tasks at once: 24 factor cells use at
+most 96 H100s, 32 endpoint-factorial cells use at most 128, and the eight EM
+trajectories use at most 32. Jean-Zay starts as many of these tasks as the
+account quota and cluster availability permit; the remainder stay pending.
 
 Preparation is synchronous and must print the exact counts for all cuts before
 the first `sbatch`. It fails unless every cut has at least 4,096 selected train

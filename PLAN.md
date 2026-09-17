@@ -53,8 +53,10 @@
   historical-NUTS comparisons and dependent reports. Each trajectory also
   runs the terminal `Q0/P0`, `Q4/P0`, `Q0/P4`, `Q4/P4` factorial to separate
   q drift, prior drift and their interaction. Every task uses four
-  H100s; the default array concurrency is eight (32 H100s peak) and can be
-  lowered at submission. Every stage is fail-closed and restartable from
+  H100s; the default array concurrency is 40, removing the artificial throttle
+  and allowing a structural peak of 160 H100s while leaving admission to the
+  Jean-Zay scheduler. It can be lowered at submission. Every stage is
+  fail-closed and restartable from
   immutable receipts.
 - The scratch branch is now independent in both relevant senses: 180 pure
   selected-sleep epochs initialize q from random weights under the embedded

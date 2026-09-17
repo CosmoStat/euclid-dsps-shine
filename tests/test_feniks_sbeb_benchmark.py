@@ -87,7 +87,8 @@ def test_sbeb_launch_is_fail_closed_and_uses_four_h100s_per_task():
     watcher = Path("scripts/watch_feniks_sbeb_benchmark.sh").read_text()
     assert "#SBATCH --gres=gpu:4" in slurm
     assert "--mem" not in slurm
-    assert 'CONCURRENCY="${7:-8}"' in submit
+    assert 'CONCURRENCY="${7:-40}"' in submit
+    assert "concurrency must be 1..40" in submit
     assert "afterok:$dependency" in submit
     assert '--array="0-23%$CONCURRENCY"' not in submit
     assert "submit_array factor 0-23" in submit

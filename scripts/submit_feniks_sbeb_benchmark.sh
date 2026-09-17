@@ -9,9 +9,9 @@ PRIOR="$(realpath "${3:?completed P_latest_prior root}")"
 SELECTION="$(realpath "${4:?completed exact-selection validation root}")"
 NUTS="$(realpath "${5:?historical eight-object NUTS root}")"
 export FENIKS_SBEB_ROOT="$(realpath -m "${6:?new SBEB benchmark root}")"
-CONCURRENCY="${7:-8}"
-[[ "$CONCURRENCY" =~ ^[1-8]$ ]] || {
-  echo "concurrency must be 1..8 (four H100s per task)" >&2
+CONCURRENCY="${7:-40}"
+[[ "$CONCURRENCY" =~ ^([1-9]|[1-3][0-9]|40)$ ]] || {
+  echo "concurrency must be 1..40 (four H100s per task)" >&2
   exit 2
 }
 test ! -e "$FENIKS_SBEB_ROOT"
