@@ -22,6 +22,7 @@ from scipy.stats import kstest, wasserstein_distance
 
 from euclid_dsps.amortized.avi_experiments import Arm
 from euclid_dsps.amortized.mira import FENIKS_SPLINE15D_PARAMETERS
+from euclid_dsps.observation_arrays import photometry_arrays_from_dataframe
 from scripts.feniks_avi_experiments import read, sha, source_config_text, write
 from scripts.feniks_avi_next_validation import observed_selection_mask
 
@@ -161,18 +162,15 @@ def _dummy_teachers(
     chosen = np.asarray(rows[: min(16, len(rows))], np.int64)
     if len(chosen) == 0:
         raise ValueError("cannot build the zero-weight teacher payload")
-    bands = [str(band["name"]) for band in config["bands"]]
-    flux = frame.iloc[chosen][[f"flux_{band}" for band in bands]].to_numpy(np.float64)
-    error = frame.iloc[chosen][[f"fluxerr_{band}" for band in bands]].to_numpy(
-        np.float64
+    observations = photometry_arrays_from_dataframe(
+        frame.iloc[chosen], config["bands"]
     )
-    mask = frame.iloc[chosen][[f"mask_{band}" for band in bands]].to_numpy(bool)
     np.savez(
         destination / "teachers.npz",
         x=np.zeros((len(chosen), 64, 15), dtype=np.float64),
-        flux=flux,
-        flux_err=error,
-        mask=mask,
+        flux=observations.flux,
+        flux_err=observations.flux_err,
+        mask=observations.mask,
         rows=chosen,
     )
     write(

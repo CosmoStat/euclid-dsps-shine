@@ -1,5 +1,15 @@
 # Plan
 
+## 2026-09-17 SBEB bootstrap observation-identity recovery
+
+- Completed: remote bootstrap `2129436_0` failed before training because the
+  zero-weight teacher payload stored raw catalogue fluxes while the training
+  loader validates converted `fnu_cgs` observations. Build the payload through
+  the production photometry-array conversion path, retain strict observational
+  identity validation, and add a units/error/mask regression. Verified 48
+  AVI/SBEB integration tests, Ruff, compilation, Bash syntax and diff hygiene.
+  The cancelled root remains immutable; deployment requires a fresh run root.
+
 ## 2026-09-16 SBEB population-selection benchmark
 
 - Completed: promote the design into a restartable Jean-Zay

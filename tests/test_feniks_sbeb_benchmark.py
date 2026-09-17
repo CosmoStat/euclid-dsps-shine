@@ -7,12 +7,56 @@ import pandas as pd
 
 from scripts.feniks_sbeb_benchmark import (
     PHYSICAL,
+    _dummy_teachers,
     _factor_cells,
     _posterior_calibration_artifacts,
     _selection_config,
     _stable_bucket,
     _trajectory_tracks,
 )
+
+
+def test_dummy_teachers_use_production_photometry_conversion(tmp_path):
+    from euclid_dsps.amortized.data import load_photometry_arrays_from_config
+
+    frame = pd.DataFrame(
+        {
+            "flux_lsst_r": [2.0, np.nan, -1.0],
+            "fluxerr_lsst_r": [0.2, 0.3, -0.1],
+        }
+    )
+    config = {
+        "catalog_path": str(tmp_path / "catalog.parquet"),
+        "bands": [
+            {
+                "name": "lsst_r",
+                "column": "flux_lsst_r",
+                "error_column": "fluxerr_lsst_r",
+                "units": "microjy",
+            }
+        ]
+    }
+    frame.to_parquet(config["catalog_path"], index=False)
+
+    _dummy_teachers(frame, np.array([0, 1, 2]), config, tmp_path)
+    expected = load_photometry_arrays_from_config(
+        config, batch_size=3, row_indices=np.array([0, 1, 2])
+    )
+
+    with np.load(tmp_path / "teachers.npz", allow_pickle=False) as payload:
+        np.testing.assert_array_equal(payload["rows"], [0, 1, 2])
+        np.testing.assert_allclose(
+            payload["flux"], expected.flux, rtol=0.0, atol=0.0, equal_nan=True
+        )
+        np.testing.assert_allclose(
+            payload["flux_err"],
+            expected.flux_err,
+            rtol=0.0,
+            atol=0.0,
+            equal_nan=True,
+        )
+        np.testing.assert_array_equal(payload["mask"], expected.mask)
+        assert payload["flux"][0, 0] != frame.loc[0, "flux_lsst_r"]
 
 
 def test_sbeb_factor_and_trajectory_design_is_complete():
