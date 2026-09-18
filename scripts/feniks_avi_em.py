@@ -227,6 +227,7 @@ def prepare_from_components(
     e_step_mode: str,
     selection_objective_enabled: bool,
     track: str,
+    cycle_offset: int = 0,
 ) -> None:
     """Prepare an EM trajectory from explicit immutable components.
 
@@ -241,6 +242,8 @@ def prepare_from_components(
         )
     if prior_sweeps < 1:
         raise ValueError("prior_sweeps must be positive")
+    if cycle_offset < 0:
+        raise ValueError("cycle_offset must be non-negative")
     if e_step_mode not in {"raw_q", "ordinary_iw"}:
         raise ValueError(f"unknown E-step mode: {e_step_mode}")
     runtime_manifest = read(runtime_root / "MANIFEST.json")
@@ -306,6 +309,7 @@ def prepare_from_components(
         "suite": "feniks_sbeb_multicycle_em_v2",
         "track": track,
         "cycles": int(cycles),
+        "cycle_offset": int(cycle_offset),
         "q_epochs_per_cycle": int(q_epochs),
         "prior_sweeps_per_cycle": int(prior_sweeps),
         "prior_macro_objects": int(runtime_manifest.get("prior_macro_objects", 1024)),
@@ -432,13 +436,15 @@ def prepare_mstep(root: Path, cycle: int) -> Path:
         prior_initialization="learned_source",
     )
     stage = _base_stage_manifest(manifest, stage_root)
+    global_cycle = int(manifest.get("cycle_offset", 0)) + cycle
     stage.update(
         {
             "version": 1,
             "suite": "selection_corrected_avi_em_mstep_v1",
             "em_cycle": cycle,
+            "global_em_cycle": global_cycle,
             "arms": [asdict(arm)],
-            "seed": int(manifest["seed"]) + 10_000 * cycle,
+            "seed": int(manifest["seed"]) + 10_000 * global_cycle,
             "epochs": 1,
             "upstream_training": str(root.resolve()),
             "upstream_b_encoder": str(encoder.resolve()),
@@ -495,13 +501,15 @@ def prepare_qstep(root: Path, cycle: int) -> Path:
     _copy_runtime_inputs(root, stage_root)
     arm = Arm(f"Q_em_{cycle:02d}", experts=4)
     stage = _base_stage_manifest(manifest, stage_root)
+    global_cycle = int(manifest.get("cycle_offset", 0)) + cycle
     stage.update(
         {
             "version": 1,
             "suite": "selection_corrected_avi_em_qstep_v1",
             "em_cycle": cycle,
+            "global_em_cycle": global_cycle,
             "arms": [asdict(arm)],
-            "seed": int(manifest["seed"]) + 10_000 * cycle + 1,
+            "seed": int(manifest["seed"]) + 10_000 * global_cycle + 1,
             "epochs": int(manifest["q_epochs_per_cycle"]),
             "bootstrap_epochs": 0,
             "initial_encoder_checkpoint_by_arm": {arm.name: str(encoder.resolve())},
@@ -591,6 +599,7 @@ def prepare_inference(root: Path, inference_root: Path, *, particles: int) -> No
     if particles < 256 or particles % 8:
         raise ValueError("particles must be >=256 and divisible by eight")
     variants = []
+    cycle_offset = int(manifest.get("cycle_offset", 0))
     dependency_paths: list[Path] = [root / "MANIFEST.json"]
     for cycle in range(0, int(manifest["cycles"]) + 1):
         encoder, prior = _components(root, cycle)
@@ -600,6 +609,7 @@ def prepare_inference(root: Path, inference_root: Path, *, particles: int) -> No
         variants.append(
             {
                 "name": f"cycle_{cycle:02d}",
+                "global_cycle": cycle_offset + cycle,
                 "encoder": str(encoder.resolve()),
                 "prior": str(prior.resolve()),
                 "prior_label": f"em_cycle_{cycle:02d}",
@@ -848,7 +858,8 @@ def report(inference_root: Path) -> None:
         ("aggregate_parent", "truth_parent"),
         ("prior_parent", "truth_parent"),
     )
-    for cycle, variant in enumerate(manifest["variants"]):
+    for local_cycle, variant in enumerate(manifest["variants"]):
+        cycle = int(variant.get("global_cycle", local_cycle))
         arm = inference_root / "arms" / variant["name"]
         _require_final(
             arm / "FINAL.json",
@@ -1021,7 +1032,7 @@ These are convergence diagnostics, not automatic scientific promotion. Inspect
             "cycles": final_cycle,
             "selected_fixed_point_physical_5d": selected_fixed,
             "parent_fixed_point_physical_5d": parent_fixed,
-            "population_corners": 2 * (final_cycle + 1),
+            "population_corners": 2 * len(manifest["variants"]),
             "individual_corners": individual_corner_count,
             "truth_used_for_training_or_checkpoint_selection": False,
             "artifacts": artifacts,
@@ -1069,6 +1080,7 @@ def main() -> None:
     parser.add_argument("--track", default="em")
     parser.add_argument("--particles", type=int, default=4096)
     parser.add_argument("--cycle", type=int)
+    parser.add_argument("--cycle-offset", type=int, default=0)
     parser.add_argument("--task", type=int)
     args = parser.parse_args()
     args.root = args.root.resolve()
@@ -1121,6 +1133,7 @@ def main() -> None:
             e_step_mode=args.e_step_mode,
             selection_objective_enabled=args.selection_objective == "corrected",
             track=args.track,
+            cycle_offset=args.cycle_offset,
         )
     elif args.mode in {"prepare-mstep", "prepare-qstep", "finalize-cycle"}:
         if args.cycle is None:

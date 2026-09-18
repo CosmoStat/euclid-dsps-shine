@@ -1,5 +1,22 @@
 # Plan
 
+## 2026-09-18 SBEB cycle-4 continuation
+
+- Completed: extend only the scientifically viable `warm_iw_r27` and
+  `warm_iw_r29` trajectories from their immutable cycle-4 encoder/prior
+  checkpoints. Run three additional generalized-EM cycles in fresh roots,
+  retaining 24 q-refresh epochs, five prior sweeps, ordinary full-15D IW and
+  the selection-corrected parent objective.
+- Submit both tracks in parallel only after the current benchmark final report,
+  then run K=4096 inference for continuation cycles 0--3 and produce one
+  closure report per track. Keep the original benchmark root and receipts
+  unchanged.
+- Added an explicit cycle offset so continuation stages and reports retain
+  global cycle labels and use fresh deterministic seeds for cycles 5--7.
+  Submission and inference are capped at two concurrent four-H100 tasks.
+  Verified 16 AVI EM, factorial and SBEB tests, Ruff, compilation, Bash syntax
+  and diff hygiene.
+
 ## 2026-09-17 SBEB bootstrap observation-identity recovery
 
 - Completed: remote bootstrap `2129436_0` failed before training because the

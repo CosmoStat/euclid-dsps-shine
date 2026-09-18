@@ -201,10 +201,12 @@ def test_prepare_from_components_records_sbeb_contract(tmp_path, monkeypatch):
         e_step_mode="raw_q",
         selection_objective_enabled=True,
         track="scratch_raw_r29",
+        cycle_offset=4,
     )
 
     manifest = read(root / "MANIFEST.json")
     assert manifest["cycles"] == 4
+    assert manifest["cycle_offset"] == 4
     assert manifest["q_epochs_per_cycle"] == 24
     assert manifest["prior_sweeps_per_cycle"] == 5
     assert manifest["e_step_mode"] == "raw_q"
@@ -212,6 +214,12 @@ def test_prepare_from_components_records_sbeb_contract(tmp_path, monkeypatch):
     assert manifest["initial_encoder"] == str(encoder.resolve())
     assert manifest["initial_prior"] == str(prior_checkpoint.resolve())
     assert manifest["truth_used_for_training_or_checkpoint_selection"] is False
+
+    mstep = prepare_mstep(root, 1)
+    mstep_manifest = read(mstep / "MANIFEST.json")
+    assert mstep_manifest["em_cycle"] == 1
+    assert mstep_manifest["global_em_cycle"] == 5
+    assert mstep_manifest["seed"] == manifest["seed"] + 50_000
 
 
 def test_em_report_measures_selected_and_parent_fixed_points(tmp_path):
@@ -288,3 +296,22 @@ def test_em_launch_is_sequential_and_uses_four_h100s():
     assert '--dependency="afterok:$PREPARE_JOB"' in submit
     assert '--dependency="afterok:$INFERENCE_JOB"' in submit
     assert "prepare-mstep" in slurm and "prepare-qstep" in slurm
+
+
+def test_sbeb_continuation_preserves_cycle4_and_limits_peak_gpus():
+    submit = Path("scripts/submit_feniks_sbeb_continuation.sh").read_text()
+    watcher = Path("scripts/watch_feniks_sbeb_continuation.sh").read_text()
+
+    assert "TRACKS=(warm_iw_r27 warm_iw_r29)" in submit
+    assert "CYCLES=3" in submit
+    assert "cycles/cycle_04/FINAL.json" in submit
+    assert "prepare-components" in submit
+    assert "--q-epochs 24 --prior-sweeps 5" in submit
+    assert "--cycle-offset 4" in submit
+    assert "--e-step-mode ordinary_iw --selection-objective corrected" in submit
+    assert 'DEPENDENCY="$PARENT_DEPENDENCY"' in submit
+    assert '--dependency="afterok:$DEPENDENCY"' in submit
+    assert '--array="0-${CYCLES}%1"' in submit
+    assert "peak_h100s=8" in submit
+    assert "global_cycle_mapping" in submit
+    assert "cycles={completed}/{cycles}" in watcher
