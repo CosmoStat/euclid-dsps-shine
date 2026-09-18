@@ -315,3 +315,26 @@ def test_sbeb_continuation_preserves_cycle4_and_limits_peak_gpus():
     assert "peak_h100s=8" in submit
     assert "global_cycle_mapping" in submit
     assert "cycles={completed}/{cycles}" in watcher
+
+
+def test_global_sbeb_watcher_covers_every_campaign_stage():
+    watcher = Path("scripts/watch_feniks_sbeb_global.sh").read_text()
+
+    for label in (
+        "SCRATCH BOOTSTRAP",
+        "INITIAL FACTOR GRID: PRIOR FITS",
+        "INITIAL FACTOR GRID: INFERENCE",
+        "EM TRAINING CYCLES 1-4",
+        "ENDPOINT Q0/Q4 x P0/P4 FACTORIALS",
+        "ENDPOINT FACTORIAL REPORTS",
+        "FULL EM INFERENCE BY SAVED CYCLE",
+        "FULL EM REPORTS",
+        "FINAL NUTS-COHORT INFERENCE",
+        "ORIGINAL CAMPAIGN FINAL REPORT",
+        "CONTINUATION: GLOBAL CYCLES 5-7",
+        "CONTINUATION INFERENCE GLOBAL CYCLES 4-7",
+        "CONTINUATION REPORTS",
+    ):
+        assert label in watcher
+    assert 'WATCH_JOBS="$PARENT_JOBS,$CONTINUATION_JOBS"' in watcher
+    assert 'progress.get("progress_percent", progress.get("percent"))' in watcher

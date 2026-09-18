@@ -16,6 +16,14 @@
   Submission and inference are capped at two concurrent four-H100 tasks.
   Verified 16 AVI EM, factorial and SBEB tests, Ruff, compilation, Bash syntax
   and diff hygiene.
+- Completed: add one compact global watcher spanning every original SBEB
+  phase and the cycle-5--7 continuation. Count all completed/waiting units and
+  expose per-arm progress for currently active endpoint factorial, cycle
+  inference, NUTS and continuation work.
+- The watcher also includes the initial scratch/bootstrap and factor grid,
+  endpoint and EM reports, the original final report, Slurm states and a
+  fail-only accounting view. Focused validation now passes six AVI EM tests,
+  Ruff, compilation, Bash syntax and diff hygiene.
 
 ## 2026-09-17 SBEB bootstrap observation-identity recovery
 
