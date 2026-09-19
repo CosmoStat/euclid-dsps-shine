@@ -28,6 +28,7 @@ while true; do
   echo
   python - "$PARENT" "$CONTINUATION" <<'PY'
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -174,10 +175,12 @@ for track in ("warm_iw_r27", "warm_iw_r29"):
         receipt = load(cycle_root / "FINAL.json")
         if receipt:
             completed += 1
+            log_alpha = receipt.get("selection_log_alpha")
+            alpha = math.exp(float(log_alpha)) if log_alpha is not None else None
             active = (
                 f"global {local_cycle + 4} complete; "
-                f"alpha={receipt.get('selection_log_alpha')} "
-                f"ESS={receipt.get('posterior_ess_median')}"
+                f"alpha={alpha} "
+                f"mstep_ESS={receipt.get('posterior_ess_median')}"
             )
             continue
         for stage, arm_name in (
@@ -203,6 +206,15 @@ for track in ("warm_iw_r27", "warm_iw_r29"):
                 "FINAL.json",
             )
             for variant in inference_manifest["variants"]
+        )
+    else:
+        continuation_inference.extend(
+            (
+                f"{track}/global_{global_cycle}",
+                root / "arms" / f"cycle_{local_cycle:02d}",
+                "FINAL.json",
+            )
+            for local_cycle, global_cycle in enumerate(range(4, 8))
         )
     continuation_reports.append((track, root / "report", "FINAL.json"))
 section("CONTINUATION INFERENCE GLOBAL CYCLES 4-7", continuation_inference)

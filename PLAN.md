@@ -24,6 +24,10 @@
   endpoint and EM reports, the original final report, Slurm states and a
   fail-only accounting view. Focused validation now passes six AVI EM tests,
   Ruff, compilation, Bash syntax and diff hygiene.
+- Completed: correct continuation reporting while one track is still being
+  trained. Count the two expected four-state inference suites even before the
+  second manifest exists, and display selection `alpha` rather than its stored
+  logarithm.
 
 ## 2026-09-17 SBEB bootstrap observation-identity recovery
 

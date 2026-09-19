@@ -338,3 +338,5 @@ def test_global_sbeb_watcher_covers_every_campaign_stage():
         assert label in watcher
     assert 'WATCH_JOBS="$PARENT_JOBS,$CONTINUATION_JOBS"' in watcher
     assert 'progress.get("progress_percent", progress.get("percent"))' in watcher
+    assert 'alpha = math.exp(float(log_alpha))' in watcher
+    assert "enumerate(range(4, 8))" in watcher
