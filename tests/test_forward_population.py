@@ -104,6 +104,43 @@ def test_support_constraint_bounds_parent_mass_not_selected_mass():
     assert receipt["support_constraint_active"]
 
 
+@pytest.mark.parametrize("support", [False, True])
+def test_stalled_slsqp_is_polished_without_relaxing_kkt(monkeypatch, support):
+    from scipy.optimize import OptimizeResult
+
+    from euclid_dsps.amortized import forward_population as module
+
+    def premature_success(fun, x0, **unused):
+        return OptimizeResult(
+            x=np.asarray(x0),
+            nit=1,
+            success=True,
+            message="Optimization terminated successfully",
+        )
+
+    monkeypatch.setattr(module, "minimize", premature_success)
+    logc = np.log(np.array([[0.99, 0.01]] * 25 + [[0.01, 0.99]] * 75))
+    args = (
+        dict(alpha=[0.8, 0.01], eligible=[True, False], weak_parent_mass=0.05)
+        if support
+        else {}
+    )
+    with pytest.raises(RuntimeError, match="KKT gap"):
+        fit_selected_weights(logc, [0.5, 0.5], polish_maxiter=0, **args)
+    v, receipt = fit_selected_weights(logc, [0.5, 0.5], **args)
+    assert receipt["initial_kkt_gap"] > 2e-6
+    assert receipt["kkt_gap"] <= 2e-6
+    assert receipt["polish_iterations"] > 0
+    np.testing.assert_allclose(v.sum(), 1)
+    assert np.all(v >= 0)
+    if support:
+        assert parent_from_selected(v, args["alpha"])[1] <= 0.050001
+    else:
+        np.testing.assert_allclose(
+            v, [(0.25 - 0.01) / 0.98, (0.75 - 0.01) / 0.98], atol=1e-5
+        )
+
+
 def test_efficiencies_use_rejected_draws():
     result = selection_efficiencies(
         np.repeat([0, 1], 1000),

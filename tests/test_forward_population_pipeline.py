@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 def test_forward_stages_freeze_parent_and_train_15d(tmp_path, monkeypatch):
@@ -149,7 +150,22 @@ def test_forward_stages_freeze_parent_and_train_15d(tmp_path, monkeypatch):
         lambda *a, **kw: arrays,
     )
     run.bank(root, 0, "reference")
+    fit_weights = run.fit_selected_weights
+
+    def failed_fit(*args, **kwargs):
+        raise RuntimeError("injected population solver failure")
+
+    monkeypatch.setattr(run, "fit_selected_weights", failed_fit)
+    with pytest.raises(RuntimeError, match="injected population solver failure"):
+        run.population(root)
+    saved_classifier = run.sha(root / "population/best.eqx")
+    training_log = (root / "population/training.jsonl").read_bytes()
+    assert (root / "population/observed_ratios.npz").is_file()
+    assert not (root / "population/FINAL.json").exists()
+    monkeypatch.setattr(run, "fit_selected_weights", fit_weights)
     run.population(root)
+    assert run.sha(root / "population/best.eqx") == saved_classifier
+    assert (root / "population/training.jsonl").read_bytes() == training_log
     parent_hash = run.sha(root / "population/parent.json")
     run.bank(root, 0, "posterior")
     run.bank(root, 1, "posterior")

@@ -192,6 +192,38 @@ fixed by repeated requeueing.
 
 ## Outputs and interpretation
 
+### Recovery after the population KKT stop
+
+SLSQP can report successful objective convergence while the independently
+computed KKT gap still exceeds `2e-6`. The solver now restarts with the same
+objective scaled for numerical precision, then uses feasible Frank-Wolfe
+steps with a scalar line search if necessary. The original KKT tolerance,
+likelihood and weak-selection parent-mass constraint are unchanged. Receipts
+record the initial/final gap and refinement iterations.
+
+For a failed population stage with all reference banks and classifier epochs
+complete, update the checkout and run from its root:
+
+```bash
+bash scripts/resume_feniks_forward_population.sh "$ROOT"
+bash scripts/watch_feniks_forward_population.sh "$ROOT"
+```
+
+This validates input/bank hashes and classifier resume state, refuses active
+jobs or an already finalized population, preserves previous code/job pointers
+under `recovery/<timestamp>/`, freezes a new code snapshot, cancels only pending
+jobs in the old population-to-report chain, and submits replacement dependencies.
+Reference simulations and completed classifier training are not repeated.
+The existing classifier resume loader returns its best checkpoint after
+skipping already completed epochs. Ratio evaluation and population fitting
+are repeated. The new `observed_ratios.npz` and `component_selection.csv` are
+saved before fitting to support numerical failure diagnosis.
+
+If submission itself fails, `RECOVERY_PENDING` points to the recovery directory
+and its submitted job IDs. Inspect these before any retry; do not blindly remove
+the marker and create duplicate work. No downstream simulation bank may already
+be finalized when using this specific recovery path.
+
 - `MANIFEST.json`, `experiment.yaml`, `CODE_SHA256`: immutable contracts.
 - `reference/shard_*/bank.npz`: selected and rejected full forward simulations.
 - `population/component_weights.csv`: u, v, c, alpha, Wilson bounds and support.

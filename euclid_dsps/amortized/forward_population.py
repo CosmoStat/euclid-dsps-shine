@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from scipy.optimize import minimize
+from scipy.optimize import brentq, minimize
 from scipy.special import logsumexp
 from scipy.stats import norm, qmc
 
@@ -159,6 +159,7 @@ def fit_selected_weights(
     observation_weights=None,
     tolerance=2e-6,
     maxiter=2000,
+    polish_maxiter=10000,
 ):
     """Concave ML on a simplex; optional LINEAR parent-mass support constraints.
 
@@ -218,19 +219,81 @@ def fit_selected_weights(
         options=dict(ftol=1e-12, maxiter=maxiter),
     )
     v = simplex(np.maximum(result.x, 0))
-    loss, negative_gradient = objective(v)
-    vertex = linprog(
-        negative_gradient,
-        A_ub=None if constraint is None else constraint[None],
-        b_ub=None if constraint is None else [0.0],
-        A_eq=np.ones((1, len(c))),
-        b_eq=[1.0],
-        bounds=(0, 1),
-        method="highs",
-    )
-    if not vertex.success:
-        raise RuntimeError("KKT oracle failed")
-    gap = float(negative_gradient @ (v - vertex.x))
+
+    def certificate(weights):
+        loss, gradient = objective(weights)
+        vertex = linprog(
+            gradient,
+            A_ub=None if constraint is None else constraint[None],
+            b_ub=None if constraint is None else [0.0],
+            A_eq=np.ones((1, len(c))),
+            b_eq=[1.0],
+            bounds=(0, 1),
+            method="highs",
+        )
+        if not vertex.success:
+            raise RuntimeError("KKT oracle failed")
+        return loss, float(gradient @ (weights - vertex.x)), vertex.x
+
+    loss, gap, vertex = certificate(v)
+    initial_gap = gap
+    restart_iterations = 0
+    if gap > tolerance and polish_maxiter > 0:
+        # SLSQP's absolute objective-change tolerance is NOT a stationarity
+        # tolerance. Rescale the same objective, then certify in original units.
+        def scaled_objective(weights):
+            value, gradient = objective(weights)
+            return 1000 * value, 1000 * gradient
+
+        restart = minimize(
+            scaled_objective,
+            v,
+            jac=True,
+            bounds=[(0.0, 1.0)] * len(c),
+            constraints=constraints,
+            method="SLSQP",
+            options=dict(ftol=1e-12, maxiter=maxiter),
+        )
+        restart_iterations = int(restart.nit)
+        candidate = simplex(np.maximum(restart.x, 0))
+        if (constraint is None or constraint @ candidate <= 1e-10) and objective(
+            candidate
+        )[0] <= loss:
+            v = candidate
+            loss, gap, vertex = certificate(v)
+
+    polish_iterations = 0
+    # Frank-Wolfe follows a feasible segment of the SAME polytope. Exact
+    # one-dimensional line search reduces the objective without relaxing KKT
+    # or the weak-parent-mass constraint, even on simplex boundary solutions.
+    while gap > tolerance and polish_iterations < polish_maxiter:
+        if constraint is not None and constraint @ v > 1e-8:
+            break
+        direction = vertex - v
+        denom = np.maximum(d @ v, 1e-300)
+        change = d @ direction
+
+        def slope(step, denom=denom, change=change):
+            return -float(
+                np.sum(ow * change / np.maximum(denom + step * change, 1e-300))
+            )
+
+        if slope(0) >= 0:
+            break
+        step = 1.0 if slope(1) <= 0 else brentq(slope, 0.0, 1.0, xtol=1e-15, rtol=1e-14)
+        candidate = simplex(v + step * direction)
+        if np.array_equal(candidate, v):
+            break
+        candidate_loss, candidate_gap, candidate_vertex = certificate(candidate)
+        if candidate_loss > loss + 1e-12:
+            raise RuntimeError("population polishing increased objective")
+        v, loss, gap, vertex = (
+            candidate,
+            candidate_loss,
+            candidate_gap,
+            candidate_vertex,
+        )
+        polish_iterations += 1
     feasible = constraint is None or constraint @ v <= 1e-8
     if gap > tolerance or not feasible or not np.isfinite(loss):
         raise RuntimeError(
@@ -241,6 +304,9 @@ def fit_selected_weights(
         mean_negative_log_likelihood_shifted=float(loss),
         iterations=int(result.nit),
         solver_message=str(result.message),
+        initial_kkt_gap=max(float(initial_gap), 0.0),
+        scaled_restart_iterations=restart_iterations,
+        polish_iterations=polish_iterations,
         weak_parent_mass_cap=weak_parent_mass,
         support_constraint_active=bool(
             constraint is not None and abs(constraint @ v) < 1e-6

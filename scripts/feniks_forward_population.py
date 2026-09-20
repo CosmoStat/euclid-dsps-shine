@@ -576,6 +576,21 @@ def population(root):
             "population fit contains observations outside declared selection"
         )
     logc = classify(classifier, features)
+    # Retain solver inputs even if the independent convergence gate fails.
+    np.savez(
+        out / "observed_ratios.npz", log_classifier=logc, row_index=arrays.row_index
+    )
+    pd.DataFrame(
+        dict(component=np.arange(basis.components), c=frequencies, **efficiency)
+    ).to_csv(out / "component_selection.csv", index=False)
+    write(
+        out / "PROGRESS.json",
+        dict(stage="selected_mixture_fit", observations=len(features)),
+    )
+    print(
+        f"[population] selected mixture fit objects={len(features)} KKT tolerance=2e-6",
+        flush=True,
+    )
     v, diagnostics = fit_selected_weights(
         logc,
         frequencies,
@@ -602,9 +617,8 @@ def population(root):
             **diagnostics,
         ),
     )
-    np.savez(
-        out / "observed_ratios.npz", log_classifier=logc, row_index=arrays.row_index
-    )
+    print(f"[population] selected fit certified: {diagnostics}", flush=True)
+    write(out / "PROGRESS.json", dict(stage="synthetic_family_closure", **diagnostics))
     # Held-out synthetic family closure. Its draws never train the classifier.
     known_u = rng.dirichlet(np.full(basis.components, 2.0))
     eligible = efficiency["eligible"]
