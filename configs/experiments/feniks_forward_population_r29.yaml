@@ -1,0 +1,61 @@
+# One scientific run. No sweep, no q-dependent population update.
+seed: 20260920
+cut: 29.0
+basis:
+  components: 128
+  width: 0.7
+  extent: 1.5
+observation:
+  error_model: m5_depth
+  noise_family: gaussian
+  mask_model: all_observed
+reference_simulations: 4194304
+reference_shards: 8
+posterior_simulations: 2097152
+posterior_shards: 4
+evaluation_simulations: 131072
+simulation_batch: 32
+bank_checkpoint_batches: 2048
+selection_support:
+  min_selected: 128
+  min_alpha: 0.001
+weak_parent_mass_cap: 0.05
+classifier:
+  width: 256
+  depth: 3
+  batch_size: 2048
+  learning_rate: 0.0003
+  epochs: 60
+  validation_limit: 65536
+posterior:
+  experts: 4
+  batch_size: 512
+  learning_rate: 0.0001
+  epochs: 100
+  validation_limit: 32768
+  architecture:
+    type: conditional_flow
+    latent_dim: 15
+    hidden_sizes: [256, 256, 256]
+    flow_family: rq_spline
+    flow_layers: 12
+    flow_hidden_size: 256
+    flow_bins: 16
+    flow_tail_bound: 12.0
+    flow_permutation: indexed_roll
+    flow_output_space: latent_x
+    log_std_min: -5.0
+    log_std_max: 3.0
+    initial_log_std: 0.0
+    flow_init_scale: 0.0
+report_objects: 1024
+report_draws: 1024
+population_report_draws: 16384
+resources:
+  gpus_per_task: 1
+  reference_concurrency: 8
+  posterior_bank_concurrency: 4
+  bank_hours: 20
+  classifier_hours: 20
+  posterior_hours: 20
+  report_hours: 10

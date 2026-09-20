@@ -20,6 +20,24 @@ VARIANTS = ("Q0_P0", "Q4_P0", "Q0_P4", "Q4_P4")
 POPULATION_SAMPLES = 65536
 
 
+def _physical_closure_cells(closure_summary: pd.DataFrame) -> pd.DataFrame:
+    """Physical labels must never average the ten SFH dimensions into 5D scores."""
+    return (
+        closure_summary.loc[closure_summary.group == "physical"]
+        .groupby(["variant", "population"], as_index=False)
+        .median_wasserstein_over_iqr.mean()
+        .pivot(
+            index="variant", columns="population", values="median_wasserstein_over_iqr"
+        )
+        .rename(
+            columns={
+                "selected": "selected_physical_w1_over_iqr",
+                "parent": "parent_physical_w1_over_iqr",
+            }
+        )
+    )
+
+
 def _weighted_truth(path: Path, *, count: int, seed: int) -> pd.DataFrame:
     names = list(FENIKS_SPLINE15D_PARAMETERS)
     frame = pd.read_parquet(path)
@@ -452,21 +470,7 @@ def _summary(output: Path, manifest: dict[str, Any]) -> None:
         index="variant", columns=["group", "kind"], values="score"
     )
     mira_cells.columns = [f"mira_{group}_{kind}" for group, kind in mira_cells.columns]
-    closure_cells = (
-        closure_summary.groupby(["variant", "population"], as_index=False)
-        .median_wasserstein_over_iqr.mean()
-        .pivot(
-            index="variant",
-            columns="population",
-            values="median_wasserstein_over_iqr",
-        )
-        .rename(
-            columns={
-                "selected": "selected_physical_w1_over_iqr",
-                "parent": "parent_physical_w1_over_iqr",
-            }
-        )
-    )
+    closure_cells = _physical_closure_cells(closure_summary)
     cells = averaged.join(mira_cells).join(closure_cells).reindex(VARIANTS)
     cells.index.name = "variant"
     cells.reset_index().to_csv(output / "report/factorial_cells.csv", index=False)
