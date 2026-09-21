@@ -178,8 +178,55 @@ def test_forward_stages_freeze_parent_and_train_15d(tmp_path, monkeypatch):
     monkeypatch.setattr("scripts.feniks_avi_overnight._marginals", lambda *a: None)
     from scripts.report_feniks_forward_population import report
 
+    evaluation_path = root / "evaluation_indices.npy"
+    np.save(evaluation_path, sel)
+    manifest = run.read(root / "MANIFEST.json")
+    manifest["evaluation_indices"] = str(evaluation_path)
+    run.write(root / "MANIFEST.json", manifest)
     report(root)
     assert run.read(root / "report/FINAL.json")["posterior_dimensions"] == 15
     cal = pd.read_csv(root / "report/simulation_calibration.csv")
     assert len(cal) == 15
     assert (cal.group == "physical").sum() == 5
+    # Exercise both capacity targets with the real 15D mixture, without DSPS.
+    from scripts import feniks_forward_diagnostics as diag
+
+    diagnostics = tmp_path / "diagnostics"
+    diagnostics.mkdir()
+    run.write(
+        diagnostics / "MANIFEST.json",
+        dict(
+            settings=dict(
+                seed=51,
+                capacity=dict(
+                    epochs=2,
+                    batch_size=32,
+                    learning_rate=0.001,
+                    validation_limit=32,
+                    training_draws=64,
+                    test_draws=64,
+                    fixed_validation=True,
+                ),
+            )
+        ),
+    )
+    for task, name in enumerate(("capacity_analytic", "capacity_truth")):
+        branch = diagnostics / name
+        (branch / "report").mkdir(parents=True)
+        manifest = run.read(root / "MANIFEST.json")
+        manifest["blind_truth_parent"] = str(catalog)
+        run.write(branch / "MANIFEST.json", manifest)
+        (branch / "basis.npz").symlink_to(root / "basis.npz")
+        (branch / "population").symlink_to(
+            root / "population", target_is_directory=True
+        )
+        diag.capacity(diagnostics, task)
+        final = run.read(branch / "report/FINAL.json")
+        assert final["dimensions"] == 15
+        assert not final["production_prior_modified"]
+        if task == 0:
+            assert np.isfinite(final["kl_target_flow"])
+        else:
+            split = np.load(branch / "report/truth_split.npz")
+            assert not set(split["train"]) & set(split["test"])
+            assert not set(split["validation"]) & set(split["test"])

@@ -1,0 +1,37 @@
+# Controlled continuations, not a new DSPS simulation campaign.
+seed: 20260922
+report_objects: 8192
+classifier:
+  epochs: 180
+  learning_rate: 0.0001
+  lr_decay_every: 30
+  lr_decay_factor: 0.5
+  minimum_lr: 0.000003
+  fixed_validation: true
+  save_validation_losses: true
+posterior:
+  epochs: 150
+  learning_rate: 0.00003
+  lr_decay_every: 30
+  lr_decay_factor: 0.5
+  minimum_lr: 0.000001
+  fixed_validation: true
+  save_validation_losses: true
+capacity:
+  epochs: 120
+  learning_rate: 0.0001
+  lr_decay_every: 30
+  lr_decay_factor: 0.5
+  minimum_lr: 0.000003
+  fixed_validation: true
+  save_validation_losses: true
+  batch_size: 512
+  validation_limit: 32768
+  training_draws: 262144
+  test_draws: 32768
+resources:
+  evaluation_hours: 10
+  classifier_hours: 12
+  posterior_hours: 20
+  capacity_hours: 20
+  summary_hours: 1

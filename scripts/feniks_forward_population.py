@@ -376,13 +376,18 @@ def supervised_fit(
 ):
     """Shared optimizer; targets are component labels or FORWARD simulator theta."""
     import equinox as eqx
+    import jax
     import jax.numpy as jnp
     import optax
 
     batch = settings["batch_size"]
+    initial_checkpoint = settings.get("initial_checkpoint")
+    if initial_checkpoint and not (out / "RESUME.json").exists():
+        candidate = eqx.tree_deserialise_leaves(initial_checkpoint, candidate)
+    scheduled = bool(settings.get("lr_decay_every"))
     optimizer = optax.chain(
         optax.clip_by_global_norm(5.0),
-        optax.adamw(settings["learning_rate"], weight_decay=1e-6),
+        optax.adamw(1.0 if scheduled else settings["learning_rate"], weight_decay=1e-6),
     )
     state = optimizer.init(eqx.filter(candidate, eqx.is_inexact_array))
     start = 0
@@ -396,7 +401,7 @@ def supervised_fit(
         start, best = r["epoch"], r["best_nll"]
 
     @eqx.filter_jit
-    def step(net, opt, f, t, valid):
+    def step(net, opt, f, t, valid, rate):
         def loss(nn):
             return jnp.sum(loss_function(nn, f, t) * valid) / jnp.sum(valid)
 
@@ -404,6 +409,8 @@ def supervised_fit(
         updates, opt = optimizer.update(
             grad, opt, eqx.filter(net, eqx.is_inexact_array)
         )
+        if scheduled:
+            updates = jax.tree_util.tree_map(lambda value: rate * value, updates)
         return eqx.apply_updates(net, updates), opt, value
 
     @eqx.filter_jit
@@ -411,7 +418,44 @@ def supervised_fit(
         return loss_function(net, f, t)
 
     rng = np.random.default_rng(settings["seed"])
+    vf, vt = validation
+    fixed_vi = None
+    if settings.get("fixed_validation"):
+        fixed_vi = rng.choice(
+            len(vf), min(len(vf), settings["validation_limit"]), replace=False
+        )
+        np.save(out / "validation_positions.npy", fixed_vi)
+    if initial_checkpoint and start == 0 and not (out / "RESUME.json").exists():
+        vi = (
+            fixed_vi
+            if fixed_vi is not None
+            else np.arange(min(len(vf), settings["validation_limit"]))
+        )
+        values = np.concatenate(
+            [
+                np.asarray(
+                    evaluate(candidate, jnp.asarray(vf[idx]), jnp.asarray(vt[idx]))
+                )
+                for idx in np.array_split(vi, max(1, int(np.ceil(len(vi) / batch))))
+            ]
+        )
+        best = float(values.mean())
+        if not np.isfinite(best):
+            raise FloatingPointError("nonfinite initial validation loss")
+        eqx.tree_serialise_leaves(out / "best.eqx", candidate)
+        if settings.get("save_validation_losses"):
+            np.savez(out / "best_validation_losses.npz", positions=vi, nll=values)
+        write(
+            out / "INITIAL_VALIDATION.json",
+            dict(nll=best, checkpoint=str(initial_checkpoint), optimizer_reset=True),
+        )
     for epoch in range(start, settings["epochs"]):
+        rate = max(
+            settings.get("minimum_lr", 0.0),
+            settings["learning_rate"]
+            * settings.get("lr_decay_factor", 0.5)
+            ** (epoch // settings.get("lr_decay_every", settings["epochs"])),
+        )
         order = np.random.default_rng(settings["seed"] + epoch).permutation(
             len(features)
         )
@@ -426,14 +470,18 @@ def supervised_fit(
                 jnp.asarray(features[idx]),
                 jnp.asarray(targets[idx]),
                 jnp.arange(batch) < n,
+                jnp.asarray(rate),
             )
             value = float(value)
             if not np.isfinite(value):
                 raise FloatingPointError("nonfinite supervised loss")
             losses.append(value)
-        vf, vt = validation
-        vi = rng.choice(
-            len(vf), min(len(vf), settings["validation_limit"]), replace=False
+        vi = (
+            fixed_vi
+            if settings.get("fixed_validation")
+            else rng.choice(
+                len(vf), min(len(vf), settings["validation_limit"]), replace=False
+            )
         )
         values = []
         for offset in range(0, len(vi), batch):
@@ -450,6 +498,8 @@ def supervised_fit(
             best = score
             eqx.tree_serialise_leaves(out / "best.next.eqx", candidate)
             (out / "best.next.eqx").replace(out / "best.eqx")
+            if settings.get("save_validation_losses"):
+                np.savez(out / "best_validation_losses.npz", positions=vi, nll=values)
         state_path = out / f"state_{(epoch+1)%2}.eqx"
         eqx.tree_serialise_leaves(state_path, (candidate, state))
         write(
@@ -467,6 +517,10 @@ def supervised_fit(
             train_nll=float(np.mean(losses)),
             validation_nll=score,
             best_nll=best,
+            learning_rate=rate if scheduled else settings["learning_rate"],
+            validation_nll_q50=float(np.median(values)),
+            validation_nll_q99=float(np.quantile(values, 0.99)),
+            validation_nll_max=float(np.max(values)),
         )
         with (out / "training.jsonl").open("a") as stream:
             stream.write(json.dumps(record) + "\n")

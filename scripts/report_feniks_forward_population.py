@@ -211,6 +211,15 @@ def report(root):
             names,
         )
     arrays = rt.validation_arrays
+    if m.get("evaluation_indices"):
+        from euclid_dsps.amortized.data import load_photometry_arrays_from_config
+
+        requested = np.load(m["evaluation_indices"])
+        arrays = load_photometry_arrays_from_config(
+            config, batch_size=10000, row_indices=requested
+        )
+        if not np.array_equal(arrays.row_index, requested):
+            raise ValueError("full validation catalogue order/identity mismatch")
     features = np.asarray(
         make_encoder_features(
             arrays.flux, arrays.flux_err, rt.feature_stats, arrays.mask
@@ -282,6 +291,7 @@ def report(root):
         tw = (
             np.asarray(tf["population_weight"])
             if "population_weight" in tf
+            and cfg.get("truth_weighting", "population") == "population"
             else np.ones(len(tf))
         )
         if not np.isfinite(tw).all() or np.any(tw < 0) or tw.sum() <= 0:
