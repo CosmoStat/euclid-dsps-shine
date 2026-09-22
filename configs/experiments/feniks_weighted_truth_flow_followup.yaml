@@ -1,0 +1,27 @@
+# Controlled continuation of the completed weighted-truth capacity diagnostic.
+seed: 20260923
+metric_seed: 2026092301
+replicas: 2
+arms: [resampled, exact_weighted]
+training_draws: 262144
+exact_cycles: 58
+validation_draws: 32768
+metric_draws: 32768
+milestones: [50, 100, 150, 200]
+flow:
+  batch_size: 512
+  learning_rate: 0.00000625
+  minimum_lr: 0.000003125
+  lr_decay_every: 100
+  lr_decay_factor: 0.5
+  validation_limit: 32768
+  fixed_validation: true
+  save_validation_losses: true
+decision:
+  target_physical_sliced_wasserstein: 0.05
+  material_improvement: 0.03
+  continuing_improvement: 0.01
+resources:
+  task_hours: 6
+  report_hours: 1
+  concurrency: 4
