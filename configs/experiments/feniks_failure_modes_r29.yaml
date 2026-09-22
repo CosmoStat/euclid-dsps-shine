@@ -1,0 +1,36 @@
+# Read-only failure-mode audit of the completed r<29 forward campaign.
+seed: 20260922
+decoder_objects: 2048
+nuisance_objects: 2048
+nuisance_replicates: 8
+noise_replicates: 32
+posterior_draws: 256
+posterior_simulation_objects: 8192
+posterior_catalogue_objects: 8192
+posterior_batch: 32
+posterior_persist_objects: 1024
+population_bootstraps: 24
+population_draws_per_bootstrap: 8192
+conditional_bins:
+  z_obs: [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 5.5]
+  r_mag: [15.0, 23.0, 25.0, 27.0, 28.0, 28.5, 29.0, 31.0]
+  log10_snr: [-2.0, 0.0, 0.5, 1.0, 1.5, 2.0, 4.0]
+  selection_margin_sigma: [0.0, 0.5, 1.0, 2.0, 5.0, 10.0, 1000000.0]
+gates:
+  decoder_p95_abs_residual_sigma: 0.25
+  error_p95_relative_residual: 0.02
+  noise_mean_abs: 0.08
+  noise_std_abs_from_one: 0.08
+  nuisance_population_selection_abs: 0.03
+  nuisance_zbin_selection_abs: 0.08
+  simulation_coverage68_abs: 0.03
+  simulation_coverage95_abs: 0.02
+  catalogue_coverage68_abs: 0.03
+  catalogue_coverage95_abs: 0.02
+  alpha_abs: 0.02
+  known_mixture_max_w1_over_iqr: 0.10
+  bootstrap_alpha_std: 0.02
+resources:
+  array_hours: 3
+  report_hours: 1
+  concurrency: 5
