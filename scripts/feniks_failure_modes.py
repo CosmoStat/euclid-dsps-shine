@@ -960,7 +960,7 @@ def report(root):
     ):
         failure_modes.append("decoder_or_observation_contract")
     if not checks["nuisance_conditional"]:
-        failure_modes.append("nuisance_conditional_selection_mismatch")
+        failure_modes.append("parent_nuisance_selection_contract")
     if not checks["classifier_density_closure"]:
         failure_modes.append("classifier_ratio_or_component_identifiability")
     if not checks["parent_alpha"] or not checks["population_bootstrap_stability"]:
@@ -987,6 +987,12 @@ def report(root):
         dict(
             checks=checks,
             production_checks=list(production_checks),
+            check_interpretation={
+                "nuisance_conditional": (
+                    "population prior selection-normalization contract; not "
+                    "individual SFH reconstruction accuracy"
+                )
+            },
             failure_modes=failure_modes,
             ready_for_production=ready,
             next_action=(

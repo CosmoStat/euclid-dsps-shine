@@ -62,7 +62,13 @@ Thresholds are frozen in
 cover decoder residuals, uncertainty/noise consistency, selector identity,
 nuisance-conditional sensitivity, per-physical-parameter 68/95% coverage,
 parent selection normalization, known-mixture density closure, and bootstrap
-stability.
+stability. The nuisance test is not a demand for precise individual SFH
+reconstruction. Broad, prior-like SFH posteriors are expected for an
+underconstrained inverse problem. It is nevertheless a parent-prior gate: it
+tests whether the fixed standard-normal nuisance conditional used by every
+population component changes the `r<29` selection probability relative to the
+true conditional. A failure can bias `alpha_j` and therefore the reconstructed
+parent weights even when the five physical coordinates are represented well.
 
 The original posterior is a diagnostic baseline and is not part of the
 production-readiness conjunction. The continued posterior is. A likely useful

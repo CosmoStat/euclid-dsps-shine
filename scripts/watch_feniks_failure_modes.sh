@@ -25,7 +25,7 @@ from pathlib import Path
 root = Path(sys.argv[1])
 tasks = (
     ("Decoder + observation", "decoder_observation"),
-    ("Nuisance conditional", "nuisance_sensitivity"),
+    ("Nuisance -> selection", "nuisance_sensitivity"),
     ("Posterior original", "posterior_original"),
     ("Posterior continued", "posterior_continued"),
     ("Population + classifier", "population_identifiability"),

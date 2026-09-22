@@ -176,6 +176,18 @@ def test_report_decision_uses_continued_posterior_not_original(tmp_path):
     assert decision["checks"]["continued_catalogue_68"]
     assert decision["ready_for_production"]
     assert (tmp_path / "failure_modes_summary.png").is_file()
+    nuisance_final = json.loads(
+        (tmp_path / "nuisance_sensitivity/FINAL.json").read_text()
+    )
+    nuisance_final["population_selection_probability_abs_shift"] = 0.5
+    nuisance_final["max_zbin_selection_probability_abs_shift"] = 0.5
+    write(tmp_path / "nuisance_sensitivity/FINAL.json", nuisance_final)
+    report(tmp_path)
+    decision = json.loads((tmp_path / "DECISION.json").read_text())
+    assert not decision["checks"]["nuisance_conditional"]
+    assert not decision["ready_for_production"]
+    assert "parent_nuisance_selection_contract" in decision["failure_modes"]
+    assert "individual SFH" in decision["check_interpretation"]["nuisance_conditional"]
 
 
 def test_failure_mode_slurm_chain_is_bounded_and_fail_closed():

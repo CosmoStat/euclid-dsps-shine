@@ -1,0 +1,25 @@
+# Direct 15D density-capacity test on the weighted true parent. No photometry.
+seed: 20260922
+split_seed: 2026092201
+evaluation_seed: 2026092202
+replicas: 2
+training_fraction: 0.60
+validation_fraction: 0.20
+training_draws: 262144
+validation_draws: 32768
+heldout_draws: 32768
+evaluation_draws: 65536
+flow:
+  epochs: 200
+  batch_size: 512
+  learning_rate: 0.0001
+  minimum_lr: 0.00000625
+  lr_decay_every: 50
+  lr_decay_factor: 0.5
+  validation_limit: 32768
+  fixed_validation: true
+  save_validation_losses: true
+resources:
+  replica_hours: 6
+  report_hours: 1
+  concurrency: 2
