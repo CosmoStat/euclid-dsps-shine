@@ -1,0 +1,37 @@
+# One localization run, not a hyperparameter sweep or production retraining.
+seed: 20260924
+metric_seed: 2026092401
+decoder_objects: 4096
+reference_simulations: 524288
+reference_shards: 4
+reference_min_selected_per_component: 128
+target_simulations: 131072
+simulation_batch: 32
+bank_checkpoint_batches: 512
+metric_draws: 16384
+bootstraps: 8
+classifier:
+  width: 256
+  depth: 3
+  batch_size: 2048
+  learning_rate: 0.0003
+  epochs: 80
+  validation_limit: 65536
+  fixed_validation: true
+  lr_decay_every: 40
+  lr_decay_factor: 0.5
+  minimum_lr: 0.000075
+contracts:
+  decoder_p95_abs_residual_sigma: 0.25
+  conditional_noise_mean_abs: 0.08
+  conditional_noise_std_abs_from_one: 0.08
+  exact_parent_physical_sw: 0.06
+  exact_selected_physical_sw: 0.06
+  maximum_stage_sw_increase: 0.04
+resources:
+  observation_hours: 2
+  bank_hours: 4
+  ratio_hours: 6
+  report_hours: 1
+  bank_concurrency: 5
+  ratio_concurrency: 4

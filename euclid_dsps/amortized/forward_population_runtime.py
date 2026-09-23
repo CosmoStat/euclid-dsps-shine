@@ -123,7 +123,7 @@ def load_forward_runtime(source: Path, destination: Path, settings):
     return model, runtime, observation, config
 
 
-def simulator(model, runtime, observation):
+def simulator(model, runtime, observation, *, diagnostic_features=False):
     from .decoder import model_flux_from_x
     from .features import make_encoder_features
     from .latent import x_to_theta
@@ -161,7 +161,7 @@ def simulator(model, runtime, observation):
             flux_min=observation["selection_flux_min_fnu_cgs"],
             observed_mask=mask,
         )
-        return dict(
+        result = dict(
             x=x,
             theta=x_to_theta(x, runtime.latent_spec),
             flux=noisy,
@@ -171,6 +171,14 @@ def simulator(model, runtime, observation):
             selected=selected,
             features=make_encoder_features(noisy, errors, runtime.feature_stats, mask),
         )
+        if diagnostic_features:
+            # Keep selection tied to the noisy observation. The noiseless arm only
+            # changes classifier information, so comparisons isolate measurement
+            # noise without changing the selected population or alpha.
+            result["noiseless_features"] = make_encoder_features(
+                flux, errors, runtime.feature_stats, mask
+            )
+        return result
 
     return simulate
 
