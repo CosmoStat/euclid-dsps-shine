@@ -1,0 +1,32 @@
+# Two diagnostic experiments, not another production pipeline or sweep.
+seed: 20260923
+metric_seed: 2026092301
+replicas: 2
+exact_repeats: 8
+metric_draws: 16384
+bootstrap_reference: 20
+transform_tolerance: 0.0001
+contracts:
+  decoder_objects: 2048
+  decoder_p95_abs_residual_sigma: 0.25
+  error_p95_relative_residual: 0.02
+  noise_mean_abs: 0.08
+  noise_std_abs_from_one: 0.08
+flow:
+  epochs: 200
+  batch_size: 512
+  learning_rate: 0.0001
+  minimum_lr: 0.00000625
+  lr_decay_every: 50
+  lr_decay_factor: 0.5
+closure:
+  parent_simulations: 131072
+  shard_size: 8192
+  minimum_selected: 1024
+  bootstraps: 16
+resources:
+  contract_hours: 2
+  fit_hours: 8
+  closure_hours: 4
+  report_hours: 1
+  concurrency: 2
