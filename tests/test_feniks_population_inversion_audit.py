@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.feniks_population_inversion_audit import _select_strength
+from scripts.feniks_population_inversion_audit import _json_scalar, _select_strength
 
 
 def test_selection_uses_one_se_then_bootstrap_stability():
@@ -54,3 +54,8 @@ def test_regularization_row_removes_duplicate_strength_keyword():
     workflow = (repository / "scripts/feniks_population_inversion_audit.py").read_text()
 
     assert 'if key != "strength"' in workflow
+
+
+def test_optional_solver_columns_serialize_as_json_null():
+    assert _json_scalar(np.nan) is None
+    assert _json_scalar(np.inf) is None

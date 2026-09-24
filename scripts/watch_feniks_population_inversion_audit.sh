@@ -9,9 +9,8 @@ while true; do
     squeue -j "${ALL_JOBS:?}" -o '%.20i %.12T %.10M %R' || true
     sacct -X -j "$ALL_JOBS" --state=FAILED,TIMEOUT,OUT_OF_MEMORY,CANCELLED \
       --format=JobID,State,ExitCode || true
-    FAILED_TASKS=$(sacct -X -n -j "$ARM_JOB" \
-      --state=FAILED,TIMEOUT,OUT_OF_MEMORY,CANCELLED --format=JobIDRaw | \
-      awk -F_ 'NF == 2 {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' | \
+    FAILED_TASKS=$(sacct -X -n -j "$ARM_JOB" --format=JobIDRaw,State | \
+      awk '$2 ~ /FAILED|TIMEOUT|OUT_OF_MEMORY|CANCELLED/ {split($1, a, "_"); if (length(a) == 2) print a[2]}' | \
       paste -sd, -)
     export FAILED_TASKS
   fi

@@ -31,6 +31,12 @@ for arm in manifest["arms"]:
         raise SystemExit(f"{arm} is already final; refuse mixed recovery")
     if not (root / arm / "checkpoint_stability.csv").is_file():
         raise SystemExit(f"{arm} did not reach the recoverable checkpoint")
+    completed = all(
+        (root / arm / name).is_file()
+        for name in ("regularization_path.csv", "bootstrap.csv", "selected_weights.csv")
+    )
+    if not completed:
+        raise SystemExit(f"{arm} is missing completed path/bootstrap tables")
 r = manifest["settings"]["resources"]
 for key in ("arm_hours", "report_hours", "arm_concurrency"):
     value = r[key]
@@ -67,8 +73,8 @@ printf '%s\n' "$FENIKS_POPULATION_INVERSION_CODE" \
   > "$FENIKS_POPULATION_INVERSION_ROOT/CODE_DIR"
 printf '%s\n' "$DIGEST" > "$FENIKS_POPULATION_INVERSION_ROOT/CODE_SHA256"
 
-export FENIKS_POPULATION_INVERSION_MODE=run
-RAW=$(sbatch --parsable --time="$ARM_HOURS:00:00" \
+export FENIKS_POPULATION_INVERSION_MODE=finalize
+RAW=$(sbatch --parsable --time="1:00:00" \
   --array="0-1%$ARM_CONCURRENCY" --export=ALL \
   --output="$FENIKS_POPULATION_INVERSION_ROOT/logs/arm-%A_%a.out" \
   --error="$FENIKS_POPULATION_INVERSION_ROOT/logs/arm-%A_%a.err" \
@@ -91,6 +97,6 @@ mv "$FENIKS_POPULATION_INVERSION_ROOT/JOBS.next.env" \
   "$FENIKS_POPULATION_INVERSION_ROOT/JOBS.env"
 
 echo "arms=$ARM_JOB report=$REPORT_JOB"
-echo 'Reused the frozen source classifiers, banks, splits and saved checkpoint diagnostics.'
+echo 'Reused completed regularization paths and bootstraps; only receipts and report are rerun.'
 printf 'watch=bash scripts/watch_feniks_population_inversion_audit.sh %q\n' \
   "$FENIKS_POPULATION_INVERSION_ROOT"

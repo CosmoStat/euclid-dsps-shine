@@ -121,7 +121,7 @@ def _json_scalar(value):
     if isinstance(value, (int, np.integer)):
         return int(value)
     if isinstance(value, (float, np.floating)):
-        return float(value)
+        return float(value) if np.isfinite(value) else None
     return str(value)
 
 
@@ -225,6 +225,7 @@ def run(root: Path, task: int):
     offsets, calibration = fit_marginal_logit_offsets(
         calibration_logits, frequencies, **settings["calibration"]
     )
+    write(out / "calibration.json", calibration)
     logc_fit = apply_logit_offsets(
         classify(classifier, target_features[splits["target_fit"]]), offsets
     )
@@ -397,6 +398,61 @@ def run(root: Path, task: int):
     )
 
 
+def finalize_arm(root: Path, task: int):
+    """Finalize already-computed path/bootstrap tables after receipt failures."""
+    if task not in range(len(ARMS)):
+        raise ValueError("population-inversion task must be 0 or 1")
+    manifest, _ = contract(root)
+    source = Path(manifest["source_convergence"])
+    arm = ARMS[task]
+    out = root / arm
+    required = (
+        out / "regularization_path.csv",
+        out / "bootstrap.csv",
+        out / "selected_weights.csv",
+    )
+    for path in required:
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    path = pd.read_csv(out / "regularization_path.csv")
+    admissible = path[path.heldout_one_se.astype(bool)]
+    if admissible.empty:
+        raise ValueError(f"{arm} has no heldout-admissible regularization")
+    selected_row = admissible.sort_values(
+        ["bootstrap_parent_sw_median", "strength"], ascending=[True, True]
+    ).iloc[0]
+    calibration_path = out / "calibration.json"
+    calibration = (
+        read(calibration_path)
+        if calibration_path.is_file()
+        else {
+            "status": "not_persisted_before_receipt_failure",
+            "recovery_note": "path and bootstrap tables were completed",
+        }
+    )
+    write(
+        out / "FINAL.json",
+        dict(
+            status="POPULATION_INVERSION_AUDIT_ARM_COMPLETE",
+            arm=arm,
+            selected_strength=float(selected_row.strength),
+            selected={
+                key: _json_scalar(value)
+                for key, value in selected_row.to_dict().items()
+                if key != "arm"
+            },
+            calibration=calibration,
+            final_classifier_sha256=sha(source / arm / "best.eqx"),
+            classifier_frozen=True,
+            simulation_banks_reused=True,
+            truth_used_for_selection=False,
+            population_uses_q=False,
+            production_prior_modified=False,
+            recovered_from_saved_tables=True,
+        ),
+    )
+
+
 def report(root: Path):
     import matplotlib
 
@@ -495,7 +551,7 @@ def report(root: Path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("prepare", "run", "report"))
+    parser.add_argument("mode", choices=("prepare", "run", "finalize", "report"))
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--source", type=Path)
     parser.add_argument("--config", type=Path)
@@ -507,6 +563,8 @@ def main():
         prepare(args.source.resolve(), args.root.resolve(), args.config.resolve())
     elif args.mode == "run":
         run(args.root.resolve(), args.task)
+    elif args.mode == "finalize":
+        finalize_arm(args.root.resolve(), args.task)
     else:
         report(args.root.resolve())
 
