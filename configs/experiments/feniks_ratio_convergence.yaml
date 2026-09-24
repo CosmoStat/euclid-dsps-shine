@@ -1,0 +1,14 @@
+# Adaptive continuation of the two independent seed-1 photometric classifiers.
+epoch_block: 20
+minimum_epochs: 240
+maximum_epochs: 600
+required_plateau_windows: 2
+minimum_recent_nll_improvement: 0.002
+maximum_parent_sw_change: 0.0025
+ratio_moment_median_abs_error: 0.025
+metric_draws: 16384
+metric_seed: 2026092403
+resources:
+  classifier_hours: 12
+  report_hours: 2
+  classifier_concurrency: 2
