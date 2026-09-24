@@ -35,6 +35,9 @@ def test_workflow_freezes_classifier_and_does_not_select_on_truth():
     launcher = (
         repository / "scripts/submit_feniks_population_inversion_audit.sh"
     ).read_text()
+    recovery = (
+        repository / "scripts/resume_feniks_population_inversion_audit.sh"
+    ).read_text()
 
     assert "tree_deserialise_leaves" in workflow
     assert "supervised_fit" not in workflow
@@ -42,3 +45,12 @@ def test_workflow_freezes_classifier_and_does_not_select_on_truth():
     assert "truth_used_for_selection=False" in workflow
     assert '--array="0-1%$ARM_CONCURRENCY"' in launcher
     assert '--dependency="afterok:$ARM_JOB"' in launcher
+    assert "checkpoint_stability.csv" in recovery
+    assert '--dependency="afterok:$ARM_JOB"' in recovery
+
+
+def test_regularization_row_removes_duplicate_strength_keyword():
+    repository = Path(__file__).parents[1]
+    workflow = (repository / "scripts/feniks_population_inversion_audit.py").read_text()
+
+    assert 'if key != "strength"' in workflow

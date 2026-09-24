@@ -286,6 +286,9 @@ def run(root: Path, task: int):
             weak_mass=weak_mass,
             tol=audit["solver_tolerance"],
         )
+        diagnostics = {
+            key: value for key, value in diagnostics.items() if key != "strength"
+        }
         parent = parent_from_selected(selected, alpha)
         fitted[strength] = (selected, parent)
         heldout_values[strength] = _mixture_log_values(

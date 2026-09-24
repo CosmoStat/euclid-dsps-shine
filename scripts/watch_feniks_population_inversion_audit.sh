@@ -9,9 +9,15 @@ while true; do
     squeue -j "${ALL_JOBS:?}" -o '%.20i %.12T %.10M %R' || true
     sacct -X -j "$ALL_JOBS" --state=FAILED,TIMEOUT,OUT_OF_MEMORY,CANCELLED \
       --format=JobID,State,ExitCode || true
+    FAILED_TASKS=$(sacct -X -n -j "$ARM_JOB" \
+      --state=FAILED,TIMEOUT,OUT_OF_MEMORY,CANCELLED --format=JobIDRaw | \
+      awk -F_ 'NF == 2 {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' | \
+      paste -sd, -)
+    export FAILED_TASKS
   fi
   python - "$ROOT" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,7 +30,8 @@ def read(path):
         return {}
 
 print("\nARM          STATE       STAGE/PENALTY      PARENT SW  BOOT SW   EFF K")
-for arm in ("noiseless_photometry", "noisy_photometry"):
+failed = set(filter(None, os.environ.get("FAILED_TASKS", "").split(",")))
+for task, arm in enumerate(("noiseless_photometry", "noisy_photometry")):
     short = "noiseless" if arm.startswith("noiseless") else "noisy"
     final = read(root / arm / "FINAL.json")
     if final.get("status"):
@@ -40,7 +47,8 @@ for arm in ("noiseless_photometry", "noisy_photometry"):
     stage = progress.get("stage", "waiting")
     if stage == "bootstrap":
         stage = f"bootstrap {progress.get('complete', 0)}"
-    print(f"{short:13} {'RUNNING' if progress else 'WAITING':11} {stage:>13}")
+    state = "FAILED" if str(task) in failed else ("RUNNING" if progress else "WAITING")
+    print(f"{short:13} {state:11} {stage:>13}")
 
 report = read(root / "report/FINAL.json")
 print(f"\nREPORT: {'DONE' if report.get('status') else 'WAITING'}")
