@@ -74,3 +74,21 @@ def test_regularization_path_must_bracket_every_selected_penalty():
     assert not _regularization_path_bracketed(
         {"noiseless_photometry": 1.0, "noisy_photometry": 0.01}, strengths
     )
+
+
+def test_hierarchical_workflow_never_selects_on_truth():
+    repository = Path(__file__).parents[1]
+    workflow = (repository / "scripts/feniks_population_basis_audit.py").read_text()
+    launcher = (
+        repository / "scripts/submit_feniks_population_basis_audit.sh"
+    ).read_text()
+
+    selection = workflow[
+        workflow.index("def _select_candidate") : workflow.index("def run")
+    ]
+    assert "truth" not in selection
+    assert "parent_physical_sliced_wasserstein" not in selection
+    assert "truth_used_for_hierarchy=False" in workflow
+    assert "truth_used_for_selection=False" in workflow
+    assert '--dependency="afterok:$HIERARCHY_JOB"' in launcher
+    assert '--dependency="afterok:$ARM_JOB"' in launcher

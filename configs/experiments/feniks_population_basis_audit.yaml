@@ -1,0 +1,19 @@
+# One controlled hierarchy audit over frozen 128-class photometric ratios.
+resolutions: [32, 48, 64, 96, 128]
+strengths: [0.0, 3.0e-3, 1.0e-2, 3.0e-2, 1.0e-1]
+bootstraps: 32
+metric_draws: 4096
+metric_seed: 2026092404
+response_rank: 16
+solver_tolerance: 2.0e-6
+hierarchy:
+  physical_weight: 1.0
+  photometric_weight: 1.0
+contracts:
+  maximum_bootstrap_physical_sw: 0.015
+  maximum_parent_sw_above_physical_oracle: 0.02
+resources:
+  hierarchy_hours: 2
+  arm_hours: 6
+  report_hours: 1
+  arm_concurrency: 2
