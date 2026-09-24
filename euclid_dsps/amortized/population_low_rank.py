@@ -130,6 +130,7 @@ def fit_low_rank_selected_weights(
     weight_floor=1e-10,
     tolerance=2e-7,
     maximum_iterations=2000,
+    initial_coefficients=None,
 ):
     """Fit a convex smooth correction in a fixed low-rank affine subspace.
 
@@ -199,9 +200,19 @@ def fit_low_rank_selected_weights(
         weight_floor - reference,
         np.full(len(reference), np.inf),
     )
+    if initial_coefficients is None:
+        initial = np.zeros(rank, dtype=np.float64)
+    else:
+        initial = np.asarray(initial_coefficients, dtype=np.float64)
+        if initial.shape != (rank,) or not np.isfinite(initial).all():
+            raise ValueError("invalid initial low-rank coefficients")
+        if np.any(
+            low_rank_selected_weights(reference, modes, initial) < weight_floor - 1e-12
+        ):
+            raise ValueError("initial low-rank coefficients are infeasible")
     result = minimize(
         objective,
-        np.zeros(rank, dtype=np.float64),
+        initial,
         jac=gradient,
         constraints=(constraint,),
         method="SLSQP",

@@ -155,8 +155,8 @@ def _load_modes(root: Path, maximum_rank: int):
     return modes
 
 
-def _select_candidate(path, heldout_values):
-    """Use paired heldout one-SE admissibility, then bootstrap stability."""
+def _mark_heldout_admissible(path, heldout_values):
+    """Mark candidates inside the paired heldout one-standard-error set."""
     path = path.copy()
     best_row = path.loc[path.heldout_log_likelihood.idxmax()]
     best_key = (int(best_row["rank"]), float(best_row.strength))
@@ -169,7 +169,15 @@ def _select_candidate(path, heldout_values):
         path.loc[mask, "heldout_degradation_from_best"] = degradation
         path.loc[mask, "heldout_difference_standard_error"] = standard_error
         path.loc[mask, "heldout_one_se"] = degradation <= max(standard_error, 1e-8)
+    return path
+
+
+def _select_candidate(path, heldout_values):
+    """Use paired heldout one-SE admissibility, then bootstrap stability."""
+    path = _mark_heldout_admissible(path, heldout_values)
     admissible = path[path.heldout_one_se.astype(bool)]
+    if admissible.bootstrap_parent_sw_median.isna().any():
+        raise ValueError("heldout-admissible candidate missing bootstrap metrics")
     selected = admissible.sort_values(
         ["bootstrap_parent_sw_median", "rank", "strength"],
         ascending=[True, True, True],
@@ -228,6 +236,7 @@ def run(root: Path, task: int):
     complete = 0
     for rank in map(int, audit["ranks"]):
         current_modes = modes[:, :rank]
+        initial_coefficients = None
         for strength in map(float, audit["strengths"]):
             write(
                 out / "PROGRESS.json",
@@ -248,7 +257,9 @@ def run(root: Path, task: int):
                 weight_floor=audit["weight_floor"],
                 tolerance=audit["solver_tolerance"],
                 maximum_iterations=audit["solver_maximum_iterations"],
+                initial_coefficients=initial_coefficients,
             )
+            initial_coefficients = coefficients
             parent = parent_from_selected(selected, alpha)
             parent_theta = theta(parent)
             key = (rank, strength)
@@ -281,7 +292,14 @@ def run(root: Path, task: int):
                 )
             )
             complete += 1
-    path = pd.DataFrame(rows)
+    path = _mark_heldout_admissible(pd.DataFrame(rows), heldout_values)
+    admissible_keys = {
+        (int(row["rank"]), float(row.strength))
+        for _, row in path[path.heldout_one_se.astype(bool)].iterrows()
+    }
+    if not admissible_keys:
+        raise RuntimeError("no heldout-admissible low-rank candidates")
+    path.to_csv(out / "candidate_path_prebootstrap.csv", index=False)
 
     bootstrap_rows = []
     for repeat in range(audit["bootstraps"]):
@@ -289,6 +307,8 @@ def run(root: Path, task: int):
             rng.integers(len(logc_fit), size=len(logc_fit)), minlength=len(logc_fit)
         )
         for key, candidate in candidates.items():
+            if key not in admissible_keys:
+                continue
             selected, coefficients, diagnostics = fit_low_rank_selected_weights(
                 logc_fit,
                 frequencies,
@@ -298,6 +318,7 @@ def run(root: Path, task: int):
                 weight_floor=audit["weight_floor"],
                 tolerance=audit["solver_tolerance"],
                 maximum_iterations=audit["solver_maximum_iterations"],
+                initial_coefficients=candidate["coefficients"],
             )
             parent = parent_from_selected(selected, alpha)
             bootstrap_rows.append(
@@ -326,6 +347,7 @@ def run(root: Path, task: int):
                 arm=arm,
                 complete=repeat + 1,
                 total=audit["bootstraps"],
+                candidates=len(admissible_keys),
             ),
         )
     bootstrap = pd.DataFrame(bootstrap_rows)
@@ -335,7 +357,12 @@ def run(root: Path, task: int):
         bootstrap_weight_l1_median=("parent_weight_l1_to_full", "median"),
         bootstrap_maximum_kkt_gap=("kkt_gap", "max"),
     )
-    path = path.merge(stability, on=["rank", "strength"], validate="one_to_one")
+    path = path.merge(
+        stability,
+        on=["rank", "strength"],
+        how="left",
+        validate="one_to_one",
+    )
     path, selected_key = _select_candidate(path, heldout_values)
     selected_row = path[
         (path["rank"] == selected_key[0]) & np.isclose(path.strength, selected_key[1])

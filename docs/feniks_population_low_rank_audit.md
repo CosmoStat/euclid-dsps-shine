@@ -33,7 +33,11 @@ No inverse-selection factor enters an individual posterior.
 Ranks 8, 16, 24, 32, 48 and 64 and a short penalty path are tested in one
 controlled experiment. Candidate selection uses paired held-out target
 likelihood followed by minimum median bootstrap parent-density instability.
-Known synthetic truth is used only after selection for closure evaluation.
+Only candidates inside the paired held-out one-standard-error set are
+bootstrapped; candidates already rejected by held-out data cannot be selected
+and are not recomputed 32 unnecessary times. Each bootstrap starts from its
+full-catalogue optimum. Known synthetic truth is used only after selection for
+closure evaluation.
 
 Both noiseless and noisy arms must pass:
 
