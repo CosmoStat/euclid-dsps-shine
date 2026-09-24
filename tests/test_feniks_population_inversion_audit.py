@@ -3,7 +3,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.feniks_population_inversion_audit import _json_scalar, _select_strength
+from scripts.feniks_population_inversion_audit import (
+    _json_scalar,
+    _regularization_path_bracketed,
+    _select_strength,
+)
 
 
 def test_selection_uses_one_se_then_bootstrap_stability():
@@ -59,3 +63,14 @@ def test_regularization_row_removes_duplicate_strength_keyword():
 def test_optional_solver_columns_serialize_as_json_null():
     assert _json_scalar(np.nan) is None
     assert _json_scalar(np.inf) is None
+
+
+def test_regularization_path_must_bracket_every_selected_penalty():
+    strengths = [0.0, 0.01, 0.1, 1.0]
+
+    assert _regularization_path_bracketed(
+        {"noiseless_photometry": 0.1, "noisy_photometry": 0.01}, strengths
+    )
+    assert not _regularization_path_bracketed(
+        {"noiseless_photometry": 1.0, "noisy_photometry": 0.01}, strengths
+    )

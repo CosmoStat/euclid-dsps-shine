@@ -163,6 +163,15 @@ def _select_strength(path, heldout_values):
     return path, float(selected.strength)
 
 
+def _regularization_path_bracketed(selected_strengths, strengths):
+    """Return whether no arm selected the largest tested penalty."""
+    upper = float(np.max(np.asarray(strengths, float)))
+    return all(
+        not np.isclose(float(selected), upper)
+        for selected in selected_strengths.values()
+    )
+
+
 def _fit(logc, frequencies, strength, *, alpha, eligible, weak_mass, weights=None, tol):
     kwargs = dict(
         alpha=alpha,
@@ -483,7 +492,13 @@ def report(root: Path):
         )
     ]
     contracts = settings["contracts"]
+    selected_strengths = {
+        arm: float(final["selected_strength"]) for arm, final in finals.items()
+    }
     decisions = {
+        "regularization_path_bracketed": _regularization_path_bracketed(
+            selected_strengths, settings["strengths"]
+        ),
         "heldout_one_se": bool(chosen.heldout_one_se.all()),
         "bootstrap_density_stable": bool(
             (
@@ -498,7 +513,9 @@ def report(root: Path):
             ).all()
         ),
     }
-    if all(decisions.values()):
+    if not decisions["regularization_path_bracketed"]:
+        next_action = "extend_regularization_path_before_basis_decision"
+    elif all(decisions.values()):
         next_action = "repair_decoder_contract_then_one_end_to_end_parent_fit"
     else:
         next_action = "reduce_or_rebuild_population_component_basis"
@@ -531,7 +548,7 @@ def report(root: Path):
             status="POPULATION_INVERSION_AUDIT_REPORT_COMPLETE",
             decisions=decisions,
             next_action=next_action,
-            selected_strengths={arm: finals[arm]["selected_strength"] for arm in ARMS},
+            selected_strengths=selected_strengths,
             physical_oracle_parent_sw=oracle,
             classifier_frozen=True,
             simulation_banks_reused=True,
