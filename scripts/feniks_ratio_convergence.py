@@ -71,8 +71,7 @@ def prepare(source: Path, root: Path, config: Path):
         "source_physical_classifier": ratio_root / "physical_a/best.eqx",
         "followup_manifest": source / "MANIFEST.json",
         "followup_report": source / "report/FINAL.json",
-        "source_noiseless_checkpoint": source
-        / "noiseless_photometry_seed1/best.eqx",
+        "source_noiseless_checkpoint": source / "noiseless_photometry_seed1/best.eqx",
         "source_noisy_checkpoint": source / "noisy_photometry_seed1/best.eqx",
         "config": root / "ratio_convergence.yaml",
         "splits": root / "splits.npz",
@@ -139,6 +138,17 @@ def _load_trajectory(path: Path):
     return pd.read_csv(path).to_dict(orient="records")
 
 
+def _parent_stability(trajectory: list[dict], current_sw: float, maximum_change: float):
+    """Compare successive checkpoints; the first checkpoint has no delta."""
+    if not trajectory:
+        return None, False
+    previous_sw = float(trajectory[-1]["parent_physical_sliced_wasserstein"])
+    if not np.isfinite(previous_sw) or not np.isfinite(current_sw):
+        return None, False
+    change = float(abs(current_sw - previous_sw))
+    return change, bool(change <= maximum_change)
+
+
 def run(root: Path, task: int):
     import jax
     import jax.numpy as jnp
@@ -170,9 +180,7 @@ def run(root: Path, task: int):
     ) = _context(root)
     convergence = settings["convergence"]
     out = root / arm
-    source_final = read(
-        Path(manifest["source_followup"]) / f"{arm}_seed1/FINAL.json"
-    )
+    source_final = read(Path(manifest["source_followup"]) / f"{arm}_seed1/FINAL.json")
     classifier_seed = source_final["classifier_seed"]
     classifier_settings = {**settings["classifier"], "seed": classifier_seed}
     feature_key = "noiseless_features" if arm.startswith("noiseless") else "features"
@@ -210,9 +218,7 @@ def run(root: Path, task: int):
                 current_settings,
                 out,
             )
-            logc_calibration = classify(
-                classifier, features[splits["calibration"]]
-            )
+            logc_calibration = classify(classifier, features[splits["calibration"]])
             offset, calibration = fit_marginal_logit_offsets(
                 logc_calibration,
                 frequencies,
@@ -252,29 +258,15 @@ def run(root: Path, task: int):
                 logc_audit, labels[splits["audit"]], frequencies
             )
             history = _history(out / "training.jsonl")
-            improvements, nll_plateau = _plateau_diagnostics(
-                history, convergence
-            )
-            previous_sw = (
-                float(trajectory[-1]["parent_physical_sliced_wasserstein"])
-                if trajectory
-                else np.nan
-            )
-            parent_sw_change = (
-                abs(
-                    population["parent_physical_sliced_wasserstein"]
-                    - previous_sw
-                )
-                if np.isfinite(previous_sw)
-                else np.nan
+            improvements, nll_plateau = _plateau_diagnostics(history, convergence)
+            parent_sw_change, parent_stable = _parent_stability(
+                trajectory,
+                population["parent_physical_sliced_wasserstein"],
+                convergence["maximum_parent_sw_change"],
             )
             ratio_pass = bool(
                 classifier_metrics["ratio_moment_median_abs_error"]
                 <= convergence["ratio_moment_median_abs_error"]
-            )
-            parent_stable = bool(
-                np.isfinite(parent_sw_change)
-                and parent_sw_change <= convergence["maximum_parent_sw_change"]
             )
             converged = bool(
                 epoch >= convergence["minimum_epochs"]
@@ -285,9 +277,7 @@ def run(root: Path, task: int):
             row = dict(
                 arm=arm,
                 epoch=epoch,
-                best_epoch=int(
-                    history.loc[history.validation_nll.idxmin(), "epoch"]
-                ),
+                best_epoch=int(history.loc[history.validation_nll.idxmin(), "epoch"]),
                 best_nll=float(history.validation_nll.min()),
                 last_nll=float(history.validation_nll.iloc[-1]),
                 recent_nll_improvements=";".join(
@@ -299,9 +289,7 @@ def run(root: Path, task: int):
                 ratio_pass=ratio_pass,
                 converged=converged,
                 classifier_sha256=sha(out / "best.eqx"),
-                calibration_gap=calibration[
-                    "calibration_ratio_moment_max_abs_error"
-                ],
+                calibration_gap=calibration["calibration_ratio_moment_max_abs_error"],
                 **classifier_metrics,
                 **population,
             )
@@ -371,9 +359,7 @@ def report(root: Path):
     source_contracts = settings["contracts"]
     final_rows = trajectory.sort_values("epoch").groupby("arm").tail(1)
     decisions = {
-        "classifiers_converged": bool(
-            all(finals[arm]["converged"] for arm in ARMS)
-        ),
+        "classifiers_converged": bool(all(finals[arm]["converged"] for arm in ARMS)),
         "physical_parent_closure": bool(
             (
                 final_rows.parent_physical_sliced_wasserstein

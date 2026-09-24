@@ -24,3 +24,18 @@ convergence.
 If converged classifiers retain boundary solutions and poor parent closure,
 the next experiment must regularize or reduce the 127 free mixture-weight
 degrees of freedom. More classifier epochs are then scientifically unjustified.
+
+## In-place recovery
+
+The initial epoch has no preceding parent-SW checkpoint, so its change is
+serialized as JSON `null`. Unexpected non-finite scientific metrics still fail
+strict serialization. If an older code snapshot failed while writing that
+initial progress receipt, resume the existing root with:
+
+```bash
+bash scripts/resume_feniks_ratio_convergence.sh "$RATIO_CONVERGENCE"
+```
+
+The recovery validates the saved trajectories and checkpoints, preserves the
+original job and code provenance under `recovery/<timestamp>/`, and replaces
+only the failed two-cell classifier array and its blocked report job.
