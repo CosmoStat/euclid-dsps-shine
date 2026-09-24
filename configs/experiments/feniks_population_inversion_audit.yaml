@@ -1,0 +1,14 @@
+# Freeze the epoch-600 classifiers and audit only the 128-weight inversion.
+strengths: [0.0, 1.0e-5, 3.0e-5, 1.0e-4, 3.0e-4, 1.0e-3, 3.0e-3, 1.0e-2]
+bootstraps: 16
+metric_draws: 4096
+metric_seed: 2026092404
+checkpoint_tail: 6
+solver_tolerance: 2.0e-6
+contracts:
+  maximum_bootstrap_physical_sw: 0.015
+  maximum_parent_sw_above_physical_oracle: 0.02
+resources:
+  arm_hours: 4
+  report_hours: 1
+  arm_concurrency: 2
