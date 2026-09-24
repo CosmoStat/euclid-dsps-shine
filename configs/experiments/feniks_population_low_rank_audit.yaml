@@ -1,0 +1,20 @@
+# One controlled truth-free spectral correction audit over 128 components.
+ranks: [8, 16, 24, 32, 48, 64]
+strengths: [0.0, 1.0e-3, 1.0e-2, 1.0e-1]
+graph_neighbors: 12
+bootstraps: 32
+metric_draws: 4096
+metric_seed: 2026092405
+weight_floor: 1.0e-10
+solver_tolerance: 2.0e-6
+solver_maximum_iterations: 2000
+contracts:
+  maximum_bootstrap_physical_sw: 0.015
+  maximum_parent_sw_above_physical_oracle: 0.02
+  minimum_effective_parent_components: 32
+  maximum_single_parent_weight: 0.10
+resources:
+  basis_hours: 1
+  arm_hours: 8
+  report_hours: 1
+  arm_concurrency: 2
