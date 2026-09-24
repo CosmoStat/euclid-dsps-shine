@@ -12,6 +12,7 @@ from euclid_dsps.amortized.forward_population import (
 from scripts.feniks_ratio_ladder import (
     _localize_failure,
     _stratified_split,
+    _target_split,
     conditional_normal_score,
     exact_selected_log_classifier,
 )
@@ -102,6 +103,18 @@ def test_stratified_split_is_disjoint_and_uses_only_selected_rows():
     assert set(np.concatenate((train, validation, test))) == set(
         np.flatnonzero(selected)
     )
+
+
+def test_target_split_is_deterministic_and_task_independent():
+    selected = np.arange(100) % 4 != 0
+
+    fit_a, heldout_a = _target_split(selected, seed=29)
+    fit_b, heldout_b = _target_split(selected, seed=29)
+
+    np.testing.assert_array_equal(fit_a, fit_b)
+    np.testing.assert_array_equal(heldout_a, heldout_b)
+    assert set(fit_a).isdisjoint(heldout_a)
+    assert set(np.concatenate((fit_a, heldout_a))) == set(np.flatnonzero(selected))
 
 
 def test_submission_chain_and_four_ratio_arms_are_explicit():

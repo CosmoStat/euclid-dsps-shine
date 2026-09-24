@@ -461,6 +461,17 @@ def _stratified_split(labels, selected, seed):
     return result
 
 
+def _target_split(selected, seed):
+    """Return one deterministic target split shared by every ladder arm."""
+    indices = np.flatnonzero(np.asarray(selected, bool))
+    if len(indices) < 2:
+        raise ValueError("at least two selected target rows are required")
+    rng = np.random.default_rng(seed)
+    rng.shuffle(indices)
+    midpoint = len(indices) // 2
+    return indices[:midpoint], indices[midpoint:]
+
+
 def _mixture_objective(logc, frequencies, weights):
     return float(
         np.mean(
@@ -548,11 +559,10 @@ def ratio(root: Path, task: int):
     frequencies = np.bincount(labels[train], minlength=basis.components) / len(train)
     if np.any(frequencies <= 0):
         raise ValueError("empty selected classifier class")
-    target_selected = np.flatnonzero(target["selected"])
-    rng = np.random.default_rng(settings["seed"] + task)
-    rng.shuffle(target_selected)
-    midpoint = len(target_selected) // 2
-    fit_ids, heldout = target_selected[:midpoint], target_selected[midpoint:]
+    fit_ids, heldout = _target_split(target["selected"], settings["seed"])
+    # Common random numbers make population-metric differences attributable to
+    # the ratio arm rather than to Monte-Carlo draw noise.
+    rng = np.random.default_rng(settings["metric_seed"])
     if arm == "exact_theta":
         logc_fit = exact_selected_log_classifier(
             target["x"][fit_ids], basis, alpha, frequencies

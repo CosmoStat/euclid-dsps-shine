@@ -1,0 +1,33 @@
+# One bank-reuse decision run. No DSPS simulation or posterior is generated.
+seed: 20260924
+calibration_seed: 2026092402
+metric_seed: 2026092403
+metric_draws: 16384
+classifier:
+  width: 256
+  depth: 3
+  batch_size: 2048
+  learning_rate: 0.0003
+  epochs: 200
+  validation_limit: 65536
+  fixed_validation: true
+  lr_decay_every: 40
+  lr_decay_factor: 0.5
+  minimum_lr: 0.000075
+independent_seed_offset: 1000
+calibration:
+  l2: 1.0e-8
+  tolerance: 1.0e-10
+  maximum_iterations: 1000
+contracts:
+  convergence_window: 20
+  minimum_recent_nll_improvement: 0.005
+  ratio_moment_median_abs_error: 0.025
+  heldout_fit_minus_true_abs: 0.005
+  maximum_parent_sw_above_physical_oracle: 0.02
+  maximum_seed_parent_sw_spread: 0.015
+  maximum_zero_weight_fraction: 0.10
+resources:
+  classifier_hours: 12
+  report_hours: 2
+  classifier_concurrency: 4
