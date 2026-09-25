@@ -1,5 +1,76 @@
 # Plan
 
+## 2026-09-25 coherent parent catalogue preparation
+
+- [x] User confirmed 256/56/59 raw proposal shards on Jean-Zay; reuse them
+  without regenerating Diffsky. Contents remain to be validated on the cluster.
+- [x] Add a versioned, restartable parent rephotometry workflow: weights once,
+  effective-seed-disjoint splits, native-to-15D projection, frozen observation
+  model, independent parent and observed-r-selected outputs.
+- [x] Test weighted streaming sampling, selection/noise contracts, integrity,
+  resume and small actual-DSPS forward checks; preserve existing pipelines.
+- [x] Provide one bounded Jean-Zay preparation array and compact watcher,
+  update the roadmap, and document what remains before posterior training.
+- Planned output: 100k/20k/20k parent rows in three disjoint source pools,
+  14 photometry tasks with at most four concurrent H100s. No training in this job.
+- Final source review found overlapping effective seeds in the original split
+  files. Canonical train shards cover all saved effective seeds; partition whole
+  realizations 183/37/36 rather than treating different prefixes as independent.
+- Eleven focused tests cover this workflow; 24 tests pass including the
+  provenance and precision regressions. Ruff, compileall and shell checks pass.
+- Actual-DSPS CPU smoke on eight projected galaxies gives finite 18-band fluxes
+  and batch-replay discrepancy below 9.9e-12 sigma.
+  This is dataset self-consistency, not independent physics or posterior validation.
+- Historical collision readback: 41409 original IDs collapse to 38243 effective
+  keys; 2751 keys have multiple IDs with exactly equal native truth vectors.
+- Handoff documented in docs/feniks_coherent_parent_runbook.md. Remote sampling,
+  photometry, scientific validation and model training remain unexecuted here.
+
+## 2026-09-25 catalogue provenance and minimal next-run decision
+
+- [x] Trace the synchronized catalogue to its generator manifest and checksum;
+  distinguish proposal resampling weights from final-catalogue weights.
+- [x] Inspect native-SFH photometry, spline-truth joins and pre-r selection.
+- [x] Replay a small identical-object set through native, legacy-spline and
+  current-spline contracts; separate verified discrepancies from hypotheses.
+- [x] Record the evidence and explicit dataset/bank reuse limits; give the
+  shortest justified next launch without starting a production campaign.
+- Preliminary blockers: final resampled galaxies retain proposal weights that
+  were applied again in truth reporting; root catalogue also has photometric
+  cuts before r selection. Do not overwrite historical artifacts or mix targets.
+- Completed CPU replay on the same 128 stored objects. Maximum per-band p95
+  residuals: native/legacy 0.0194 sigma, spline/legacy 0.1712, current 1.4260.
+  Native legacy is a current-code replay, not an exact historical environment.
+- Historical blind mean z changes 1.39276 -> 1.28451 when proposal weights are
+  applied again. Source-proposal overlap also affects object-ID split independence.
+- Added a read-only replay helper, two focused tests, provenance/metrics/figure,
+  and docs/feniks_catalogue_provenance_20260925.md. No production code changed,
+  no new catalogue generated, no remote job submitted and no changes pushed.
+- Verification: all 13 targeted provenance/precision tests pass; compileall,
+  Ruff and git diff --check pass. Replay figure inspected visually.
+- Next blocker: raw pre-photometric-cut proposal availability on Jean-Zay.
+  Prepare one versioned consistent dataset; do not restart the old chain unchanged.
+
+## 2026-09-25 precision audit results and roadmap decisions
+
+- [x] Verify synchronized receipts, solver normalization/KKT, metric precision,
+  paired bootstrap and decoder configuration before scientific conclusions.
+- [x] Re-evaluate saved bootstrap weights at higher metric precision locally,
+  without refitting or DSPS; save a reproducible analysis and focused figures.
+- [x] Update the roadmap with evidence, limits and the shortest next action;
+  keep raw cluster artifacts immutable and production readiness unvalidated.
+- Evidence: 84 present artifact hashes verified; 36 fits normalized and passing
+  KKT at 2e-6. At 65536 metric draws, eight-repeat photometric bootstrap medians
+  are 0.00959 (noiseless) and 0.01319 (noisy), with a noisy maximum of 0.03908.
+- New blocker: baseline and merged decoder branches both used merged_gauss4_v1;
+  the numerical comparison was a no-op. Catalogue F087 p95 remains 1.426 sigma.
+  Pin generator/inference provenance before changing assets or retraining.
+- Verification: 11 focused tests pass; Ruff, compileall and diff checks pass.
+  No new cluster jobs, DSPS calls, classifier training or population fits.
+- Results: docs/feniks_population_precision_results_20260925.md and the run's
+  analysis/ directory. Roadmap now separates numerical evidence from unverified
+  observation compatibility, catalogue parent recovery and final 15D calibration.
+
 ## 2026-09-25 Jean-Zay precision submission recovery
 
 - [x] Remove explicit SLURM memory requests rejected by Jean-Zay; preserve the

@@ -1,0 +1,30 @@
+seed: 260925
+parent_rows:
+  train: 100000
+  validation: 20000
+  test: 20000
+expected_proposal_shards:
+  train: 256
+  validation: 56
+  test: 59
+rows_per_task: 10000
+checkpoint_rows: 1024
+decoder_batch_size: 32
+projection_batch_size: 256
+support:
+  require_metallicity_unclipped: true
+selection:
+  band: lsst_r
+  max_mag_ab: 29.0
+contracts:
+  replay_objects_per_task: 8
+  maximum_replay_abs_sigma: 0.01
+  maximum_noise_mean_abs: 0.02
+  maximum_noise_std_error: 0.02
+  selection_sigma_tolerance: 6.0
+resources:
+  sample_minutes: 30
+  photometry_minutes: 45
+  report_minutes: 15
+  concurrency: 4
+  cpu_threads: 4

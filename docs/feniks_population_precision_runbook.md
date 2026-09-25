@@ -129,7 +129,31 @@ expected when no job was accepted.
 
 The durable project roadmap is `docs/feniks_population_validation_roadmap.md`;
 this run addresses steps 1 and 2 only. Joint physical ambiguity and posterior
-calibration are later stages. Scientific results are pending the Jean-Zay run.
+calibration are later stages. See the completed-run interpretation below.
+
+### Completed run, 2026-09-25
+
+The run `avi_population_precision_20260925_105102` is now complete and analyzed
+in [the results note](feniks_population_precision_results_20260925.md).
+Importantly, the inherited baseline was already `merged_gauss4_v1`, so the two decoder branches were
+identical. Their agreement is not evidence for an integration improvement.
+Do not rerun this unchanged comparison expecting to resolve the discrepancy.
+
+The lightweight mirror includes all saved bootstrap weights needed to repeat
+the analysis without classifier banks, DSPS, refitting or GPU allocation:
+
+```bash
+JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu \
+EUCLID_DSPS_REQUIRE_GPU=0 JAX_ENABLE_X64=true \
+OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4 \
+.venv/bin/python -m scripts.analyze_feniks_population_precision \
+  outputs/forward_population_results/avi_population_precision_20260925_105102
+```
+
+This writes `analysis/` only, checks hashes of present artifacts, explicitly
+lists excluded artifacts, and replays the cluster metric before calculating
+65536-draw bootstrap distances with three evaluation seeds. Those seeds do not
+increase the number of independent catalogue resamples (eight).
 
 ## Local verification
 

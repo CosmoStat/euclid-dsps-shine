@@ -12,6 +12,75 @@ The current audit is a synthetic population experiment with a known parent in
 the component family. Success here would not establish recovery for every
 parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
+## Latest evidence: precision run completed
+
+### Provenance follow-up: target and observation contracts must be repaired
+
+The [catalogue provenance audit](feniks_catalogue_provenance_20260925.md) now
+identifies concrete problems behind previously ambiguous failures:
+
+- The final catalogue is already proposal-weight resampled, but truth reports
+  apply retained proposal weights again. Blind mean z changes from 1.39276 to
+  1.28451. Correct report targets before interpreting prior biases.
+- The same 128-object replay gives maximum per-band p95 residuals of 0.0194
+  sigma (native/legacy), 0.1712 (spline/legacy), and 1.4260 (spline/current).
+  Numerical drift is a substantial part of the decoder mismatch. This is a
+  current-source replay, not exact recreation of the historical environment;
+  legacy-spline individual outliers remain. No flow was used in this comparison.
+- Historical root data already pass multi-band S/N/magnitude cuts. r-only
+  correction cannot establish recovery of the photometrically unselected parent.
+- Reassigned object-ID splits share source proposals. The original generator
+  also reuses effective seeds across differently named split files. Future
+  confirmation must separate effective source realizations, not ID prefixes.
+  The 15D SFH conditional still needs scientific checks.
+
+The user has now confirmed 256/56/59 raw proposal shard files on Jean-Zay.
+The [coherent parent preparation workflow](feniks_coherent_parent_runbook.md)
+implements once-only weights, disjoint source pools, reprojected 15D photometry
+and explicit parent/selected outputs. The canonical 256-shard pool is partitioned
+183/37/36 by effective seed; overlapping original split files are not counted twice.
+Local tests and an actual-DSPS smoke pass;
+remote dataset execution and its scientific interpretation remain unverified.
+This is a new data-preparation launcher, not a production training launch.
+Reuse compatible forward banks only after a full contract comparison. The old
+generated catalogue remains an explicit mismatch test rather than being overwritten.
+
+### Precision measurements
+
+Run: `avi_population_precision_20260925_105102`. The synchronized receipts and
+84 present artifact hashes were checked. Excluded large arrays remain unverified
+locally. See [the detailed analysis](feniks_population_precision_results_20260925.md).
+Original cluster reports were preserved; local higher-precision bootstrap
+measurements and figures are in the run's `analysis/` directory.
+
+- All four full fits and 32 bootstrap cells pass the configured KKT tolerance
+  of 2e-6. Parent and selected weights normalize to floating-point precision.
+  Recorded fit times are 0.94--1.71 s (full) and 1.57--5.31 s (bootstrap).
+- The 4096-draw metric was not accurate enough for the old threshold decisions.
+  At 65536 draws, mean parent SW is 0.0070 for the exact-latent oracle, 0.0221
+  for noiseless photometry and 0.0294 for noisy photometry. The residual
+  photometric gap is not explained away by increasing evaluation draws.
+- Re-evaluating the existing eight catalogue resamples at 65536 draws and
+  three numerical seeds gives median bootstrap SW 0.0096 (noiseless) and
+  0.0132 (noisy), versus about 0.0047 for the matched exact-latent oracle.
+  The noisy maximum remains 0.0391. These are conditional, eight-repeat
+  diagnostics, not a full uncertainty certification or an automatic PASS.
+- The largest physical marginal error is dust Av: W1/IQR 0.0562 without noise
+  and 0.0729 with noise. Redshift and stellar-mass marginal distances are much
+  smaller in this synthetic case; they are not the principal residual here.
+- The decoder screen has a design defect: the inherited baseline already uses
+  `merged_gauss4_v1`. Both variants therefore run the same integrator, with
+  identical paired outputs. It has NOT tested an integration improvement.
+  The actual catalogue mismatch still exists: F087 p95 is 1.426 reported sigma
+  against the screen's 0.25 target. Selection identity has zero mismatches.
+
+This changes the immediate priority: do not rebuild the population basis or add
+bands solely because of the old 4096-draw failure. Resolve the observation
+contract and characterize the surviving dust-sensitive variation first.
+
+The evidence below describes the earlier low-rank run and is retained for
+provenance; its raw metric values use a different finite-draw setup.
+
 Verified source artifacts:
 
 - `outputs/forward_population_results/avi_population_low_rank_audit_20260924_190751/`
@@ -146,24 +215,47 @@ quantify this effect before claiming fully calibrated population-marginalized
 posteriors. SFH recovery need not be sharp to pass, but physical inference must
 remain calibrated after nuisance marginalization.
 
-## Immediate action
+## Current checklist and next actions
 
-Steps 1 and 2 now have a bounded parallel implementation. See
-[the launch runbook](feniks_population_precision_runbook.md). One GPU job caches
-ratios and full fits; CPU metric and paired-bootstrap arrays reuse the cache.
-An independent GPU job screens decoder integration against catalogue fluxes.
-Every bootstrap cell and decoder batch is persisted for selective recovery.
-
-| Step | Implementation | Scientific status |
+| Block | Status after the precision run | Remaining evidence |
 |---|---|---|
-| 1: metric precision and matched oracle reference | Implemented, local smoke tests | Awaiting cluster artifacts |
-| 2: observation model | 128-object integration screen implemented | Full qualification still pending |
-| 3: physical ambiguity | Analysis plan | Not established by classifier curvature alone |
-| 4: additional filters | What-if inventory only | No experiment implemented |
-| 5: final parent and 15D posterior | Existing pipeline available | Awaiting scientific validation |
+| Selection algebra and v/u normalization | Existing checks retained; actual new fits normalized | Efficiency uncertainty and support not newly qualified |
+| Convex population solve | KKT passes all 36 fits; seconds per fit | This certifies this objective, not correct population recovery |
+| Full 15D reference and no q feedback | Architecture retained, no q used in this audit | Correctness of the SFH conditional for a target is a separate question |
+| Exact-latent population closure | Good in-family reference, SW about 0.007 | Out-of-family parents and other catalogue realizations |
+| Evaluation precision | 4096-draw problem identified; 65536-draw checks completed | More seeds/draws only for decisions near a numerical boundary |
+| Empirical target weighting | BUG identified; once-only weighting implemented in new preparation | Remote dataset checks; correct historical reports without modifying originals |
+| Unselected-parent definition | Raw proposal file inventory recovered; coherent preparation implemented | Verify contents and execute parent/selected construction on Jean-Zay |
+| Photometric parent stability | Noiseless encouraging; noisy tail remains | Dust-sensitive repeat 6; classifier error versus information loss |
+| Noise and selection identity | Earlier noise pass retained; new selection check passes | 128-object screen is not a fresh full noise qualification |
+| Decoder versus catalogue | Numerical drift isolated by native/legacy/current replay | New versioned flux contract; independent numerical and disjoint-object confirmation |
+| Reference-catalogue parent recovery | Not validated | Observation compatibility and independent population closure |
+| Final individual 15D posterior | Not tested in this run | Independent 68/95 coverage, ranks, widths, bias and predictive checks |
 
-Each new run exports `ROADMAP_STATUS.md` and `ROADMAP_STATUS.json` with execution
-states; the report keeps production readiness false. Update this table from
-persisted evidence after the run, not from job completion alone. The separate
-[Pop-COSMOS band assessment](feniks_popcosmos_bands_what_if.md) records available
-curves and what a matched comparison would require.
+The following original branches are superseded on the critical path by the
+provenance follow-up above. They remain useful within a frozen simulator:
+
+1. Observation compatibility: recover the archived catalogue-generator numerical
+   contract and asset hashes; compare it with the saved effective decoder config.
+   Replay the same objects through the generator-compatible and inference paths,
+   requiring distinct effective contracts when testing a proposed change. Record
+   filters, units, SED/SSP precision, transforms and any calibration. Fix a proven
+   mismatch, then confirm on disjoint objects across S/N/redshift. A simple forced
+   legacy-versus-merged comparison is insufficient unless it matches provenance.
+2. Population uncertainty: reuse the saved full-fit and bootstrap weights to
+   display physical marginals and observable predictions, especially noisy
+   repeat 6. Compare likelihoods on independent forward data before attributing
+   the variation to classifier error or intrinsic degeneracy. Do not select a
+   new rank/penalty using the known truth in this diagnostic.
+
+Only after these checks: one fixed end-to-end confirmation with a frozen learned
+parent and supervised 15D posterior. No new classifier sweep, 8-hour bootstrap
+restart or extra-band campaign is justified by these results alone. Steps 1 and
+part of 3 advanced; step 2 remains the immediate correctness blocker. Scientific
+production readiness is still false. No remote job was launched during analysis.
+
+Each run exports execution-level `ROADMAP_STATUS` files. This document is the
+scientific interpretation; do not replace historical raw receipts with revised
+verdicts. The [launch runbook](feniks_population_precision_runbook.md) documents
+the completed audit, and the [band assessment](feniks_popcosmos_bands_what_if.md)
+remains a what-if rather than the next mandatory experiment.
