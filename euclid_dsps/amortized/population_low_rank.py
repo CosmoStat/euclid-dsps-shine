@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 from scipy.linalg import eigh
 from scipy.optimize import LinearConstraint, linprog, minimize, minimize_scalar
 from scipy.sparse.csgraph import connected_components
-from scipy.special import logsumexp
 
 from euclid_dsps.amortized.forward_population import simplex
 
@@ -131,6 +132,7 @@ def fit_low_rank_selected_weights(
     tolerance=2e-7,
     maximum_iterations=2000,
     initial_coefficients=None,
+    maximum_seconds=None,
 ):
     """Fit a convex smooth correction in a fixed low-rank affine subspace.
 
@@ -176,21 +178,41 @@ def fit_low_rank_selected_weights(
     correction = reference[:, None] * modes
     rank = modes.shape[1]
 
-    def objective(coefficients):
+    # exp(log_ratio - row_max) @ (c + correction @ gamma) is affine in gamma.
+    # Cache the projection once instead of repeating NxJ log/exp operations at
+    # every optimizer iteration. Row offsets preserve the original objective.
+    row_offset = log_ratio.max(axis=1)
+    scaled_ratio = np.exp(log_ratio - row_offset[:, None])
+    baseline = scaled_ratio @ reference
+    projected = scaled_ratio @ correction
+    started = time.monotonic()
+    if maximum_seconds is not None and (
+        not np.isfinite(maximum_seconds) or maximum_seconds <= 0
+    ):
+        raise ValueError("maximum_seconds must be positive and finite")
+
+    def terms(coefficients):
+        if maximum_seconds is not None and time.monotonic() - started > maximum_seconds:
+            raise TimeoutError("low-rank solver reached its per-fit time budget")
         selected = low_rank_selected_weights(reference, modes, coefficients)
-        if np.any(selected <= 0):
+        values = baseline + projected @ coefficients
+        # Close to a boundary, avoid cancellation between the affine terms.
+        sensitive = values < 1e-8 * baseline
+        if np.any(sensitive):
+            values[sensitive] = scaled_ratio[sensitive] @ selected
+        return selected, values
+
+    def objective(coefficients):
+        selected, mixture = terms(coefficients)
+        if np.any(selected <= 0) or np.any(mixture <= 0):
             return np.inf
-        values = logsumexp(log_ratio + np.log(selected)[None, :], axis=1)
+        values = np.log(mixture) + row_offset
         penalty = 0.5 * strength * np.mean(coefficients * coefficients)
         return -float(observations @ values) + penalty
 
     def gradient(coefficients):
-        selected = low_rank_selected_weights(reference, modes, coefficients)
-        values = logsumexp(log_ratio + np.log(selected)[None, :], axis=1)
-        derivative_weights = -np.sum(
-            observations[:, None] * np.exp(log_ratio - values[:, None]), axis=0
-        )
-        result = correction.T @ derivative_weights
+        _, mixture = terms(coefficients)
+        result = -(projected.T @ (observations / mixture))
         if strength:
             result += strength * coefficients / rank
         return result

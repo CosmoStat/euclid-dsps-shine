@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from euclid_dsps.amortized.population_low_rank import (
     build_spectral_modes,
@@ -66,3 +67,69 @@ def test_equal_selection_efficiency_leaves_parent_equal_to_selected():
     parent = parent_from_selected(selected, np.full(3, 0.2))
 
     np.testing.assert_allclose(parent, selected)
+
+
+def test_cached_solver_matches_independent_log_space_reference():
+    from scipy.optimize import LinearConstraint, minimize
+    from scipy.special import logsumexp
+
+    rng = np.random.default_rng(55)
+    c = np.array([0.1, 0.2, 0.3, 0.4])
+    modes = rng.normal(size=(4, 2))
+    modes -= c @ modes
+    logc = rng.normal(scale=4, size=(500, 4))
+    logc -= logsumexp(logc, axis=1, keepdims=True)
+    observation_weights = rng.uniform(0.1, 2.0, len(logc))
+    observation_weights /= observation_weights.sum()
+    correction = c[:, None] * modes
+    strength = 0.02
+
+    def objective(gamma):
+        v = c + correction @ gamma
+        if (v <= 0).any():
+            return np.inf
+        return -observation_weights @ logsumexp(
+            logc - np.log(c) + np.log(v), axis=1
+        ) + 0.5 * strength * np.mean(gamma**2)
+
+    reference = minimize(
+        objective,
+        np.zeros(2),
+        method="SLSQP",
+        constraints=[LinearConstraint(correction, 1e-10 - c, np.inf)],
+        options=dict(ftol=1e-12, maxiter=1000),
+    )
+    v, gamma, certificate = fit_low_rank_selected_weights(
+        logc,
+        c,
+        modes,
+        strength=strength,
+        observation_weights=observation_weights,
+        tolerance=2e-6,
+    )
+    assert reference.success
+    np.testing.assert_allclose(v, c + correction @ reference.x, atol=1e-5)
+    np.testing.assert_allclose(certificate["objective"], objective(gamma), atol=1e-12)
+    shifted, _, _ = fit_low_rank_selected_weights(
+        logc - 10000.0,
+        c,
+        modes,
+        strength=strength,
+        observation_weights=observation_weights,
+        tolerance=2e-6,
+    )
+    np.testing.assert_allclose(shifted, v, atol=1e-7)
+
+
+def test_solver_time_budget_is_explicit(monkeypatch):
+    from euclid_dsps.amortized import population_low_rank as module
+
+    ticks = iter([0.0, 2.0, 3.0, 4.0])
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks))
+    with pytest.raises(TimeoutError, match="time budget"):
+        fit_low_rank_selected_weights(
+            np.log(np.array([[0.9, 0.1], [0.2, 0.8]])),
+            [0.5, 0.5],
+            [[-1.0], [1.0]],
+            maximum_seconds=1.0,
+        )

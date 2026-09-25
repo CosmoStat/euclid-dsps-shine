@@ -1,5 +1,26 @@
 # Plan
 
+## 2026-09-25 parallel precision and decoder audit implementation
+
+- [x] Inspect Pop-COSMOS bands and local filter assets for a what-if assessment;
+  keep additional-band simulation and training out of this implementation.
+- [x] Accelerate the identical low-rank convex objective through a cached affine
+  projection; verify against an independent direct log-space optimizer.
+- [x] Implement independent numerical-precision and decoder branches, matched
+  oracle/photometry bootstrap tasks, per-cell persistence and bounded resources.
+- [x] Add a compact watcher, partial-result report, selective resume and a
+  durable roadmap status file; test locally and publish launchable code.
+- Validation: 52 targeted tests pass in the repository .venv, including full
+  synthetic SED/gradient checks, real optimizer/metric round trips, mocked
+  SLURM submission and selective resume. Compileall, Ruff and Bash checks pass.
+  The standalone conda shine environment lacks jax_cosmo for the broader SED
+  tests; its 21 focused tests passed before switching to the complete .venv.
+- Local solver timing: 38.016 s to 0.474 s on a 50k-object/128-component/64-mode
+  synthetic case, with maximum weight difference 2.46e-10 and unchanged KKT.
+  This is not a cluster-runtime guarantee. No cluster job submitted locally.
+- Durable handoff: docs/feniks_population_precision_runbook.md and
+  docs/feniks_population_validation_roadmap.md; each run has ROADMAP_STATUS files.
+
 ## 2026-09-18 SBEB cycle-4 continuation
 
 - Completed: extend only the scientifically viable `warm_iw_r27` and

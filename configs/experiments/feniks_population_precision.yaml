@@ -1,0 +1,23 @@
+seed: 2026092507
+bootstraps: 8
+metric_draws: [4096, 16384, 65536]
+metric_seeds: [2026092508, 2026092509, 2026092510]
+bootstrap_metric_draws: 16384
+directions: 64
+solver_tolerance: 0.000002
+solver_maximum_iterations: 1000
+solver_seconds: 120
+decoder_objects: 128
+decoder_batch: 8
+contracts:
+  historical_bootstrap_sw: 0.015
+  metric_resolution_tolerance: 0.002
+  decoder_p95_abs_sigma: 0.25
+resources:
+  cache_minutes: 25
+  decoder_minutes: 25
+  metric_minutes: 15
+  bootstrap_minutes: 15
+  report_minutes: 5
+  bootstrap_concurrency: 4
+  cpu_threads: 4
