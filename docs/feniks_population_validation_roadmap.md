@@ -14,6 +14,23 @@ parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
 ## Latest evidence: precision run completed
 
+### Coherent qualification and representation adapter
+
+The user reports coherent dataset integrity PASS, but old-transform qualification
+BLOCKED: 0.423% of masses and rare SFH contrasts lie outside the old support.
+Physical/SFH maximum absolute Spearman is 0.360; the final SFH contrast has 5.788%
+exact zeros. This invalidates reusing the old clipped coordinates or treating an
+independent SFH reference as automatically adequate.
+
+The [coherent representation job](feniks_coherent_representation.md) now provides
+an unclipped mass/SFH coordinate adapter, a two-factor structured density oracle
+and a small projection-zero replay. Reuse the finished dataset without new
+photometry. Physical and conditional SFH factors train independently in parallel;
+old checkpoints and banks are not reused. This is **truth-labelled representation
+testing**, not observed-only parent recovery. Exact SFH atoms, the independent
+reference conditional, new population closure and final posterior calibration
+remain open scientific gates. No production promotion is implied by completion.
+
 ### Coherent dataset completed on Jean-Zay (user-reported)
 
 The latest watcher reports `COHERENT_PARENT_DATASET_COMPLETE`: 140000 parent

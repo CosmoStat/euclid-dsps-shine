@@ -1,5 +1,29 @@
 # Plan
 
+## 2026-09-25 coherent representation adapter
+
+- [x] Read the remote qualification: mass and two SFH contrasts exceed the old
+  box; physical/SFH dependence and repeated SFH zeros need explicit treatment.
+- [x] Add a separate train-only, invertible coordinate adapter without clipping
+  mass/SFH; preserve all catalogue rows, zeros, weights and photometry.
+- [x] Prepare one structured density oracle, physical and conditional SFH factors
+  trained independently in parallel, with checkpoint recovery and held-out plots.
+- [x] Verify SFH zero replay, transforms/training/submission, prepare
+  bounded launch commands and update the roadmap without promoting production.
+- Six new tests pass, including actual two-factor optimization/report and
+  missing-factor-only mocked SLURM recovery. Projection smoke on 32 historical
+  native galaxies reproduces contrasts exactly across batch sizes; new coordinate
+  roundtrip error is 1.8e-15. This does not certify the new remote parent.
+- SFH exact atoms remain unresolved as a physical/numerical target question;
+  no jitter applied. The new model is a truth-labelled oracle, not a blind prior.
+- Final checks: 38 distinct focused tests pass (36 regression tests plus two
+  provenance tests); Ruff, compileall, shell syntax and plot inspection pass.
+  The amended resume test also passes. Historical CLI fit smokes cannot run:
+  their referenced config is absent. Actual new-factor optimizer smokes pass.
+- Handoff: docs/feniks_coherent_representation.md. Two H100 factors, 90-minute
+  ceiling each, checkpoint recovery; CPU zero replay/report. No remote job
+  submitted here, no resimulation and no production prior/posterior modified.
+
 ## 2026-09-25 coherent dataset qualification and next jobs
 
 - [x] User reports completed coherent preparation: 140000 parent rows and

@@ -1,0 +1,30 @@
+# Capacity oracle only. No selection correction, classifier, q, or DSPS bank.
+seed: 20260926
+draws: 20000
+projection_objects: 1024
+roundtrip_tolerance: 0.00000001
+flow:
+  experts: 2
+  epochs: 120
+  batch_size: 512
+  learning_rate: 0.0001
+  lr_decay_every: 30
+  lr_decay_factor: 0.5
+  minimum_lr: 0.0000125
+  fixed_validation: true
+  validation_limit: 20000
+  save_validation_losses: true
+  architecture:
+    hidden_sizes: [256, 256, 256]
+    flow_family: rq_spline
+    flow_layers: 12
+    flow_hidden_size: 256
+    flow_bins: 16
+    flow_tail_bound: 12.0
+    flow_permutation: indexed_roll
+    log_std_min: -5.0
+    log_std_max: 3.0
+resources:
+  fit_minutes: 90
+  report_minutes: 30
+  cpu_threads: 4

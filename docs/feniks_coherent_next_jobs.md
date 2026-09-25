@@ -59,6 +59,11 @@ qualification directory. No large simulation needs to be restarted.
 
 ## Next jobs, conditional on qualification
 
+Update after the supplied qualification: support/roundtrip are blocked. The
+[coherent representation runbook](feniks_coherent_representation.md) implements
+the next bounded coordinate/representation test. The population-bank and final
+posterior stages below remain gated, not ready for blind production submission.
+
 These are the next implementation/run stages, **not existing ready-to-submit
 commands for the coherent dataset**. Do not launch the old forward run against
 this new root. `load_forward_runtime` still loads the historical catalogue,
