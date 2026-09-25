@@ -14,6 +14,17 @@ parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
 ## Latest evidence: precision run completed
 
+### Coherent dataset completed on Jean-Zay (user-reported)
+
+The latest watcher reports `COHERENT_PARENT_DATASET_COMPLETE`: 140000 parent
+rows and 85514 observed-r-selected rows, with all 14 photometry tasks complete.
+This advances data preparation, not population or posterior inference. Artifacts
+have not yet been independently read back locally. The
+[next-jobs runbook](feniks_coherent_next_jobs.md) gives a read-only CPU check
+and the dependencies for the next population/posterior jobs. The historical
+forward launcher is not an adapter for the new dataset and must not be reused
+unchanged. No further long bootstrap sweep is required at this stage.
+
 ### Provenance follow-up: target and observation contracts must be repaired
 
 The [catalogue provenance audit](feniks_catalogue_provenance_20260925.md) now
@@ -40,7 +51,8 @@ implements once-only weights, disjoint source pools, reprojected 15D photometry
 and explicit parent/selected outputs. The canonical 256-shard pool is partitioned
 183/37/36 by effective seed; overlapping original split files are not counted twice.
 Local tests and an actual-DSPS smoke pass;
-remote dataset execution and its scientific interpretation remain unverified.
+remote completion is now user-reported; independent artifact readback and
+scientific interpretation remain to be checked.
 This is a new data-preparation launcher, not a production training launch.
 Reuse compatible forward banks only after a full contract comparison. The old
 generated catalogue remains an explicit mismatch test rather than being overwritten.
@@ -224,11 +236,12 @@ remain calibrated after nuisance marginalization.
 | Full 15D reference and no q feedback | Architecture retained, no q used in this audit | Correctness of the SFH conditional for a target is a separate question |
 | Exact-latent population closure | Good in-family reference, SW about 0.007 | Out-of-family parents and other catalogue realizations |
 | Evaluation precision | 4096-draw problem identified; 65536-draw checks completed | More seeds/draws only for decisions near a numerical boundary |
-| Empirical target weighting | BUG identified; once-only weighting implemented in new preparation | Remote dataset checks; correct historical reports without modifying originals |
-| Unselected-parent definition | Raw proposal file inventory recovered; coherent preparation implemented | Verify contents and execute parent/selected construction on Jean-Zay |
+| Empirical target weighting | Once-only preparation COMPLETE in user watcher | Recheck completed receipts; historical reports remain distinct |
+| Unselected-parent definition | 140k parent and 85514 selected rows prepared without photometric preselection | Verify hashes/views/split separation; SSP-metallicity support still explicit |
 | Photometric parent stability | Noiseless encouraging; noisy tail remains | Dust-sensitive repeat 6; classifier error versus information loss |
 | Noise and selection identity | Earlier noise pass retained; new selection check passes | 128-object screen is not a fresh full noise qualification |
-| Decoder versus catalogue | Numerical drift isolated by native/legacy/current replay | New versioned flux contract; independent numerical and disjoint-object confirmation |
+| Decoder versus catalogue | New self-consistent 15D flux contract COMPLETE in user watcher | Independent numerical accuracy is not established by self-replay |
+| New target versus old reference | Qualification implemented; not yet run on cluster artifacts | Bounds, transform clipping, SFH pileups and conditional assumptions |
 | Reference-catalogue parent recovery | Not validated | Observation compatibility and independent population closure |
 | Final individual 15D posterior | Not tested in this run | Independent 68/95 coverage, ranks, widths, bias and predictive checks |
 

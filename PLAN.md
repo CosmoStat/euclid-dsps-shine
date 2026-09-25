@@ -1,5 +1,22 @@
 # Plan
 
+## 2026-09-25 coherent dataset qualification and next jobs
+
+- [x] User reports completed coherent preparation: 140000 parent rows and
+  85514 selected rows; cluster artifacts not yet mirrored locally.
+- [x] Inspect next launchers: historical runtime still loads old catalogues;
+  physical mixture weights cannot alter the fixed independent SFH reference.
+- [x] Add a read-only CPU qualification: receipts, split/selection/weight
+  identities, old latent support and roundtrip, SFH atoms and dependencies.
+- [x] Test and document the qualification command and gated follow-up roadmap.
+  No new simulations or training requested before identifying incompatibilities.
+- Verification: 28 focused tests pass, including four new read-only qualification
+  tests; Ruff and compileall pass. A smoke using the saved bounded-mixed spec
+  roundtrips simulated interior points at 2.3e-14 IQR relative error.
+- New catalogue geometry is still unmeasured locally. The CPU command in
+  docs/feniks_coherent_next_jobs.md checks it on Jean-Zay; future training
+  adapters/reference decisions remain explicit implementation work, not ready jobs.
+
 ## 2026-09-25 coherent parent catalogue preparation
 
 - [x] User confirmed 256/56/59 raw proposal shards on Jean-Zay; reuse them
