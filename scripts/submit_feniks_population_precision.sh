@@ -76,9 +76,10 @@ record_jobs() {
 submit() {
   local mode=$1 gpu=$2 minutes=$3
   shift 3
-  local resource=(--account="${FENIKS_CPU_ACCOUNT:-jrx@cpu}" --partition="${FENIKS_CPU_PARTITION:-cpu_p1}" --mem="${FENIKS_CPU_MEM:-16G}")
+  # Jean-Zay sets memory from the allocation; explicit memory flags are rejected.
+  local resource=(--account="${FENIKS_CPU_ACCOUNT:-jrx@cpu}" --partition="${FENIKS_CPU_PARTITION:-cpu_p1}")
   if [[ $gpu == 1 ]]; then
-    resource=(--account="${FENIKS_GPU_ACCOUNT:-jrx@h100}" --partition="${FENIKS_GPU_PARTITION:-gpu_p6}" --constraint=h100 --gres=gpu:1 --mem="${FENIKS_GPU_MEM:-60G}")
+    resource=(--account="${FENIKS_GPU_ACCOUNT:-jrx@h100}" --partition="${FENIKS_GPU_PARTITION:-gpu_p6}" --constraint=h100 --gres=gpu:1)
   fi
   local raw
   raw=$(sbatch --parsable --job-name="feniks_precision_$mode" "${resource[@]}" \

@@ -78,8 +78,9 @@ The submitter uses the repository's existing jrx@cpu/cpu_p1 and jrx@h100/gpu_p6
 accounts. `FENIKS_CPU_ACCOUNT`, `FENIKS_CPU_PARTITION`, `FENIKS_GPU_ACCOUNT` and
 `FENIKS_GPU_PARTITION` allow explicit site overrides. Resources are configurable
 in `configs/experiments/feniks_population_precision.yaml` before preparation.
-Host-memory requests are 16 GiB per CPU task and 60 GiB per GPU task; override
-with `FENIKS_CPU_MEM` or `FENIKS_GPU_MEM` when required by the site allocation.
+Jean-Zay rejects explicit `--mem`, `--mem-per-cpu` and `--mem-per-gpu` options.
+The launcher leaves memory assignment to the site allocation policy; it does
+not promise a fixed RAM capacity. `FENIKS_CPU_MEM` and `FENIKS_GPU_MEM` are unused.
 
 ## Monitor and resume
 
@@ -106,6 +107,13 @@ hashes, skips finished cells and reuses saved fits if only metric work was
 interrupted. Each submission attempt has a separate `JOBS_<timestamp>.env`.
 Reports depend on `afterany`; invalid downstream dependencies are cancelled by
 SLURM instead of remaining pending indefinitely.
+
+If preparation succeeded but the first `sbatch` was rejected for explicit
+memory flags, update the checkout and use `--resume` on the same root. The
+current checkout's launcher supplies the corrected submission options, while
+the scientific code still comes from the original `CODE_DIR`. No snapshot,
+manifest, bank or checkpoint needs to be recreated. A missing `JOBS.env` is
+expected when no job was accepted.
 
 ## Results and roadmap tracking
 

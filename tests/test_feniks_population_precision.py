@@ -196,10 +196,16 @@ def test_submit_dependencies_and_selective_resume(tmp_path):
         dict(inputs={}, settings=dict(resources=resources, bootstraps=2)),
     )
     (root / "CODE_DIR").write_text(str(repo))
+    (root / "CODE_SHA256").write_text("original scientific snapshot")
+    frozen = {
+        name: (root / name).read_bytes()
+        for name in ("MANIFEST.json", "CODE_DIR", "CODE_SHA256")
+    }
     log = tmp_path / "submissions.jsonl"
     (commands / "sbatch").write_text(
         f"#!{sys.executable}\n"
         "import json, os, sys\nfrom pathlib import Path\n"
+        "assert not any(a.split('=')[0] in ('--mem', '--mem-per-cpu', '--mem-per-gpu') for a in sys.argv[1:]), 'Jean-Zay rejects explicit memory flags'\n"
         "p = Path(os.environ['MOCK_SUBMISSIONS'])\n"
         "n = len(p.read_text().splitlines()) if p.exists() else 0\n"
         "with p.open('a') as f: f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
@@ -209,6 +215,8 @@ def test_submit_dependencies_and_selective_resume(tmp_path):
     for path in commands.iterdir():
         path.chmod(0o755)
     env = dict(os.environ, MOCK_SUBMISSIONS=str(log))
+    # Obsolete overrides must not reintroduce the forbidden flags.
+    env.update(FENIKS_CPU_MEM="16G", FENIKS_GPU_MEM="60G")
     env["PATH"] = f"{commands}:{Path(sys.executable).parent}:{env['PATH']}"
     command = [
         "bash",
@@ -216,6 +224,8 @@ def test_submit_dependencies_and_selective_resume(tmp_path):
         "--resume",
         str(root),
     ]
+    # Preparation succeeded but the first sbatch failed: no JOBS.env exists yet.
+    assert not (root / "JOBS.env").exists()
     subprocess.run(command, cwd=repo, env=env, capture_output=True, check=True)
     jobs = [json.loads(row) for row in log.read_text().splitlines()]
     assert len(jobs) == 5
@@ -244,6 +254,8 @@ def test_submit_dependencies_and_selective_resume(tmp_path):
     assert "--array=1%4" in jobs[0]
     assert not any(arg.startswith("--dependency") for arg in jobs[0])
     assert "--dependency=afterany:1005" in jobs[1]
+    for name, payload in frozen.items():
+        assert (root / name).read_bytes() == payload
 
 
 def test_decoder_screen_preserves_runtime_and_resumes_batches(tmp_path, monkeypatch):

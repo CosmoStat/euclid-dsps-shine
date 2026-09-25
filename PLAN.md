@@ -1,5 +1,14 @@
 # Plan
 
+## 2026-09-25 Jean-Zay precision submission recovery
+
+- [x] Remove explicit SLURM memory requests rejected by Jean-Zay; preserve the
+  prepared run and immutable scientific code snapshot through --resume.
+- [x] Add submission regression checks, correct the runbook, and publish the
+  launcher-only fix with commands to resume the existing root.
+- Verification: eight workflow tests pass, including memory-option rejection
+  and unchanged preparation files on resume; Ruff, Bash and diff checks pass.
+
 ## 2026-09-25 parallel precision and decoder audit implementation
 
 - [x] Inspect Pop-COSMOS bands and local filter assets for a what-if assessment;
