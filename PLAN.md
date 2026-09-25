@@ -1,5 +1,30 @@
 # Plan
 
+## 2026-09-26 coherent representation result review
+
+- [x] Locate synchronized run avi_coherent_representation_20260925_233915;
+  verify 20 available artifact hashes and all stage manifest contracts.
+  Seven deliberately excluded cache/checkpoint/draw artifacts remain unverified.
+- [x] Inspect physical/SFH plots, transport and coordinate checks, convergence,
+  joint closure and physical-SFH correlations; distinguish completion from fit.
+- [x] Write a reproducible lightweight analysis, readable diagnostic figures
+  and a next-action decision without launching another training campaign.
+- New reporting issue: projection_zero_table checks log-SFR -30, but the native
+  SFH helper clips at SFR=1e-14 first. Reported zero-floor attribution is invalid;
+  replay agreement and density metrics are not affected by that label error.
+- Best factors are epochs 114/116, still improving by 0.0968/0.2130 over the
+  last 20 epochs. Physical SW=0.02974 versus validation/test=0.01407; SFH10
+  near-zero probability is 5.96% truth versus 0.8% flow. No convergence or
+  blind-population validation claim; transport tests and coordinate roundtrip pass.
+- Added three analysis figures and docs/feniks_coherent_representation_results_20260926.md;
+  refreshed the roadmap. Two analysis tests, Ruff, compileall, diff and visual
+  checks pass. Historical 32-object zero replay shows some nonfloor plateaus;
+  it cannot assign origins to the new run's 1024 audited rows.
+- Next: saved-array tails/bias and corrected zero attribution, then one bounded
+  physical continuation from the best checkpoint at lower LR with distribution
+  metrics. SFH treatment depends on the audit and observable impact. No dataset
+  regeneration, no production code changes, no remote submissions this turn.
+
 ## 2026-09-25 coherent representation adapter
 
 - [x] Read the remote qualification: mass and two SFH contrasts exceed the old

@@ -14,6 +14,20 @@ parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
 ## Latest evidence: precision run completed
 
+### 2026-09-26 coherent representation results
+
+The [synchronized representation review](feniks_coherent_representation_results_20260926.md)
+verifies 20 available hashes. Coordinate/transport checks pass. Physical SW is
+0.02974 versus validation/test 0.01407; physical-SFH correlation maximum error
+is 0.03825. These are promising representation results, not blind parent recovery.
+Best checkpoints are epochs 114/116; both losses still improve and fluctuate.
+SFH10 near-zero mass is 5.96% in truth versus 0.8% in draws. The zero audit used
+the wrong floor (-30 versus upstream -14); origin attribution needs correction,
+although replay and density metrics remain valid. Next: saved-draw tail/bias
+tables plus correct zero replay, then one lower-rate physical continuation with
+validation distribution metrics. Do not resimulate the coherent dataset or
+silently promote its truth-trained oracle to an independent population reference.
+
 ### Coherent qualification and representation adapter
 
 The user reports coherent dataset integrity PASS, but old-transform qualification
