@@ -66,20 +66,28 @@ def project_diffsky_frame_to_spline15d(
     normalized_log_time_nodes: np.ndarray = DEFAULT_NORMALIZED_LOG_TIME_NODES,
     n_sfh_bins: int = 80,
     batch_size: int = 2048,
+    precision: str = "float32",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Project Diffsky truth rows to five physical plus ten spline contrasts."""
+    """Project truth; float64 replay is diagnostic, not a replacement catalogue."""
+    if precision not in ("float32", "float64"):
+        raise ValueError("precision must be float32 or float64")
+    if precision == "float64" and not jax.config.x64_enabled:
+        raise ValueError("float64 projection requires JAX_ENABLE_X64=true")
+    dtype = getattr(jnp, precision)
     if frame.empty:
         raise ValueError("Cannot project an empty Diffsky frame")
     nodes = validate_normalized_log_time_nodes(normalized_log_time_nodes)
     if int(n_sfh_bins) < N_SPLINE_NODES:
         raise ValueError("n_sfh_bins must be at least the spline node count")
-    theta = theta_from_truth_frame(frame)
-    kernel = _projection_kernel(int(n_sfh_bins), tuple(float(value) for value in nodes))
+    theta = theta_from_truth_frame(frame, dtype=getattr(np, precision))
+    kernel = _projection_kernel(
+        int(n_sfh_bins), tuple(float(value) for value in nodes), precision=precision
+    )
     knot_time_parts = []
     knot_log_sfr_parts = []
     for start in range(0, len(frame), max(int(batch_size), 1)):
         knot_time, knot_log_sfr = kernel(
-            jnp.asarray(theta[start : start + int(batch_size)], dtype=jnp.float32)
+            jnp.asarray(theta[start : start + int(batch_size)], dtype=dtype)
         )
         knot_time_parts.append(np.asarray(jax.device_get(knot_time), dtype=np.float64))
         knot_log_sfr_parts.append(
@@ -519,16 +527,21 @@ def cubic_spline_interpolate_jax(
     )(x_new)
 
 
-def _projection_kernel(n_sfh_bins: int, nodes: tuple[float, ...]):
+def _projection_kernel(
+    n_sfh_bins: int, nodes: tuple[float, ...], *, precision: str = "float32"
+):
     names = tuple(DIFFSKY_BASIC_PARAMETER_NAMES)
-    nodes_jax = jnp.asarray(nodes, dtype=jnp.float32)
+    dtype = getattr(jnp, precision)
+    nodes_jax = jnp.asarray(nodes, dtype=dtype)
 
     def single(theta: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
         params = {name: theta[index] for index, name in enumerate(names)}
         z_obs = params["z_obs"]
         t_obs = jnp.ravel(age_at_z(z_obs, *DEFAULT_COSMOLOGY))[0]
         time = jnp.linspace(0.05, jnp.maximum(t_obs, 0.06), int(n_sfh_bins))
-        sfh = dsps_model.build_diffsky_basic_sfh_table_jax(time, t_obs, params)
+        sfh = dsps_model.build_diffsky_basic_sfh_table_jax(
+            time, t_obs, params, numerical_dtype=dtype
+        )
         knot_time = spline_knot_times_jax(time, nodes_jax)
         knot_log_sfr = jnp.interp(
             jnp.log10(knot_time),

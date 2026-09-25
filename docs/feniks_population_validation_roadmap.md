@@ -14,6 +14,16 @@ parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
 ## Latest evidence: precision run completed
 
+### 2026-09-26 bounded refinement implementation
+
+The [refinement runbook](feniks_coherent_refinement.md) provides one physical-only
+best-checkpoint continuation (60 additional epochs at 3e-6) and a parallel CPU
+tail/zero-precision audit. SFH remains frozen, data and source run immutable.
+Validation distribution milestones supplement NLL; test metrics never choose
+checkpoints. Local optimizer/recovery, metrics and provenance tests pass; this
+is ready for remote submission, not a remotely completed stage. It does not open the blind-population or final
+posterior gates. No new dataset or bootstrap sweep is needed for these checks.
+
 ### 2026-09-26 coherent representation results
 
 The [synchronized representation review](feniks_coherent_representation_results_20260926.md)

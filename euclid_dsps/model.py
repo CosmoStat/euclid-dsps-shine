@@ -2852,12 +2852,17 @@ def build_diffstar_sfh_table_jax(
     return jnp.nan_to_num(jnp.clip(sfh, 1.0e-14, jnp.inf), nan=1.0e-14)
 
 
+DIFFSKY_BASIC_SFR_FLOOR = 1.0e-14
+
+
 def build_diffsky_basic_sfh_table_jax(
     gal_t_table: jnp.ndarray,
     t_obs: jnp.ndarray,
     params: dict[str, Any],
+    *,
+    numerical_dtype=jnp.float32,
 ) -> jnp.ndarray:
-    """Evaluate Diffstar using per-object Diffstar and Diffmah parameters."""
+    """Evaluate native SFH; float64 is opt-in for precision diagnostics only."""
     (
         calc_sfh_singlegal,
         default_diffstar_params,
@@ -2865,33 +2870,37 @@ def build_diffsky_basic_sfh_table_jax(
         default_mah_params,
         fb,
     ) = _import_diffstar_api()
+
+    def parameter(name, default):
+        return jnp.asarray(params.get(name, default), dtype=numerical_dtype)
+
     diffstar_params = diffstar_params_cls(
-        _jax_param(params, "diffstar_lgmcrit", default_diffstar_params.lgmcrit),
-        _jax_param(
-            params, "diffstar_lgy_at_mcrit", default_diffstar_params.lgy_at_mcrit
-        ),
-        _jax_param(params, "diffstar_indx_lo", default_diffstar_params.indx_lo),
-        _jax_param(params, "diffstar_indx_hi", default_diffstar_params.indx_hi),
-        _jax_param(params, "diffstar_lg_qt", default_diffstar_params.lg_qt),
-        _jax_param(params, "diffstar_qlglgdt", default_diffstar_params.qlglgdt),
-        _jax_param(params, "diffstar_lg_drop", default_diffstar_params.lg_drop),
-        _jax_param(params, "diffstar_lg_rejuv", default_diffstar_params.lg_rejuv),
+        parameter("diffstar_lgmcrit", default_diffstar_params.lgmcrit),
+        parameter("diffstar_lgy_at_mcrit", default_diffstar_params.lgy_at_mcrit),
+        parameter("diffstar_indx_lo", default_diffstar_params.indx_lo),
+        parameter("diffstar_indx_hi", default_diffstar_params.indx_hi),
+        parameter("diffstar_lg_qt", default_diffstar_params.lg_qt),
+        parameter("diffstar_qlglgdt", default_diffstar_params.qlglgdt),
+        parameter("diffstar_lg_drop", default_diffstar_params.lg_drop),
+        parameter("diffstar_lg_rejuv", default_diffstar_params.lg_rejuv),
     )
     mah_params = type(default_mah_params)(
-        _jax_param(params, "diffmah_logm0", default_mah_params.logm0),
-        _jax_param(params, "diffmah_logtc", default_mah_params.logtc),
-        _jax_param(params, "diffmah_early_index", default_mah_params.early_index),
-        _jax_param(params, "diffmah_late_index", default_mah_params.late_index),
-        _jax_param(params, "diffmah_t_peak", default_mah_params.t_peak),
+        parameter("diffmah_logm0", default_mah_params.logm0),
+        parameter("diffmah_logtc", default_mah_params.logtc),
+        parameter("diffmah_early_index", default_mah_params.early_index),
+        parameter("diffmah_late_index", default_mah_params.late_index),
+        parameter("diffmah_t_peak", default_mah_params.t_peak),
     )
     sfh = calc_sfh_singlegal(
         diffstar_params,
         mah_params,
-        jnp.asarray(gal_t_table, dtype=jnp.float32),
+        jnp.asarray(gal_t_table, dtype=numerical_dtype),
         lgt0=jnp.log10(jnp.maximum(t_obs, 1.0e-6)),
         fb=fb,
     )
-    return jnp.nan_to_num(jnp.clip(sfh, 1.0e-14, jnp.inf), nan=1.0e-14)
+    return jnp.nan_to_num(
+        jnp.clip(sfh, DIFFSKY_BASIC_SFR_FLOOR, jnp.inf), nan=DIFFSKY_BASIC_SFR_FLOOR
+    )
 
 
 def diffsky_basic_dust_params_jax(

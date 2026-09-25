@@ -123,7 +123,7 @@ def test_preparation_uses_train_only_and_freezes_all_inputs(tmp_path, monkeypatc
 def test_sfh_provenance_distinguishes_floor_and_nonfloor_knots():
     names = list(SPLINE15D_PARAMETER_NAMES)[5:]
     knots = pd.DataFrame(
-        {f"spline_log_sfr_{k:02d}": [-30.0, -5.0, float(k)] for k in range(11)}
+        {f"spline_log_sfr_{k:02d}": [-14.0, -5.0, float(k)] for k in range(11)}
     )
     contrasts = pd.DataFrame(np.diff(knots.to_numpy(), axis=1), columns=names)
     result = pipeline.projection_zero_table(contrasts, contrasts, knots)

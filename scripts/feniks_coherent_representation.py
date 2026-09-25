@@ -197,15 +197,21 @@ def fit(root, task):
 
 
 def projection_zero_table(original, projected, knots):
+    from euclid_dsps.model import DIFFSKY_BASIC_SFR_FLOOR
     from euclid_dsps.prior_learning.spline15d_schema import SFH_CONTRAST_NAMES
 
     rows = []
+    # Native SFH clips at 1e-14 before projection's protective log floor (1e-30).
+    floor_log = float(np.log10(DIFFSKY_BASIC_SFR_FLOOR))
     for k, name in enumerate(SFH_CONTRAST_NAMES):
         left, right = (
             knots[f"spline_log_sfr_{k:02d}"],
             knots[f"spline_log_sfr_{k + 1:02d}"],
         )
         zero = projected[name].to_numpy() == 0
+        floor_pair = np.isclose(left, floor_log, rtol=0, atol=2e-5) & np.isclose(
+            right, floor_log, rtol=0, atol=2e-5
+        )
         rows.append(
             dict(
                 parameter=name,
@@ -213,9 +219,10 @@ def projection_zero_table(original, projected, knots):
                 replay_zero_count=int(zero.sum()),
                 equal_knots_count=int(np.sum(left == right)),
                 equal_floor_knots_count=int(
-                    np.sum(zero & (left <= -29.99) & (right <= -29.99))
+                    np.sum(zero & floor_pair)
                 ),
-                equal_nonfloor_knots_count=int(np.sum(zero & (left > -29.99))),
+                equal_nonfloor_knots_count=int(np.sum(zero & ~floor_pair)),
+                native_log_sfr_floor=floor_log,
                 max_replay_error=float(
                     np.max(abs(original[name].to_numpy() - projected[name].to_numpy()))
                 ),

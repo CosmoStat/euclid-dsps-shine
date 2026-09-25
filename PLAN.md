@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-26 bounded representation follow-up
+
+- [x] Add read-only tail/bias diagnostics and correct the SFH floor attribution;
+  compare native projection float32/float64 without changing stored targets.
+- [x] Implement continuation of only the physical factor from its best checkpoint at lower LR,
+  retaining the frozen SFH factor, fixed validation and restartable milestones.
+- [x] Test source immutability, recovery, statistical metrics and Jean-Zay
+  submission; document a single-GPU launch plus parallel CPU audit.
+- Scope: truth-trained capacity oracle only. No new dataset, no blind parent
+  recovery, no posterior training or production promotion.
+- Verification: 66 distinct focused tests pass, two optional native-DSPS tests
+  skipped; actual two-epoch continuation/recovery and report smoke passes.
+  Ruff, compileall, shell syntax, diff and new figure inspection pass.
+- Native replay on 32 historical objects confirms default projection bitwise
+  unchanged; float64 replay remains finite and retains this sample's late-SFH
+  zeros. This small different sample does not assign origins to the remote 1024.
+- Historical one-row/batch CLI fit checks cannot start: their prescribed config
+  is absent. New-factor optimizer and native projection smokes ran locally.
+- Handoff: docs/feniks_coherent_refinement.md. One H100 capped at 60 minutes,
+  parallel CPU tails/SFH audit, afterany report and missing-stage-only recovery.
+  Remote stages remain unsubmitted; finite epoch budget is not convergence.
+
 ## 2026-09-26 coherent representation result review
 
 - [x] Locate synchronized run avi_coherent_representation_20260925_233915;

@@ -33,7 +33,7 @@ GROUND_TRUTH_COLUMNS = {
 }
 
 
-def theta_from_truth_frame(frame: pd.DataFrame) -> np.ndarray:
+def theta_from_truth_frame(frame: pd.DataFrame, *, dtype=np.float32) -> np.ndarray:
     """Return theta in canonical DIFFSKY_BASIC_PARAMETER_NAMES order."""
     missing = [
         column
@@ -46,7 +46,7 @@ def theta_from_truth_frame(frame: pd.DataFrame) -> np.ndarray:
     theta = frame[
         [GROUND_TRUTH_COLUMNS[name] for name in DIFFSKY_BASIC_PARAMETER_NAMES]
     ]
-    arr = theta.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float32)
+    arr = theta.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=dtype)
     if not np.isfinite(arr).all():
         bad = int((~np.isfinite(arr).all(axis=1)).sum())
         raise ValueError(f"Closure theta contains {bad} non-finite rows")

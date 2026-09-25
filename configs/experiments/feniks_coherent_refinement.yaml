@@ -1,0 +1,11 @@
+# Bounded truth-trained oracle follow-up, NOT blind population recovery.
+epochs: 60
+learning_rate: 0.000003
+milestones: [0, 20, 40, 60]
+draws: 20000
+draw_seed: 20260927
+resources:
+  fit_minutes: 60
+  audit_minutes: 30
+  report_minutes: 30
+  cpu_threads: 4
