@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-26 parallel coherent inference experiment
+
+- [x] Implement independent native-reference preparation, restartable reference
+  simulations and a parallel supervised catalogue-posterior control.
+- [x] Fit selected mixture weights from photometry only, reconstruct the parent,
+  and reuse labelled reference simulations for weighted supervised 15D NPE.
+- [x] Add comparative calibration/population reporting, focused smoke tests,
+  immutable Jean-Zay submission/recovery and a compact watcher.
+- Reference assumption: continuous kernels around unweighted native proposals,
+  excluding target identities; not the truth-trained representation flow.
+- Remote physical continuation improves NLL but not test SW (0.0282 -> 0.0308).
+  It is not a prerequisite for this independent experiment or a production gate.
+- Actual local native projection/kernel/DSPS smoke: eight new draws, all 18
+  bands finite. Small full optimizer/report/resume test passes; H100 science
+  remains unsubmitted and unvalidated. No existing dataset/checkpoint modified.
+- Verification: 27 focused/new and existing population tests pass, including
+  trained transport checks, classifier learning and optimizer interruption,
+  stage DAG/recovery and guarded rsync. Ruff, compileall and shell checks pass.
+- Handoff: docs/feniks_coherent_inference.md; at most 5 H100 concurrently,
+  1048576 independent-reference simulations, no catalogue resimulation and no
+  second DSPS bank for the final posterior. Small-result rsync helper included.
+
 ## 2026-09-26 bounded representation follow-up
 
 - [x] Add read-only tail/bias diagnostics and correct the SFH floor attribution;

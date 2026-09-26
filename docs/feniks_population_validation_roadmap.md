@@ -14,6 +14,21 @@ parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
 ## Latest evidence: precision run completed
 
+### 2026-09-26 parallel coherent inference implementation
+
+The user-reported refinement lowered NLL but did not improve held-out physical
+SW (0.0282 -> 0.0308). Do not make another oracle continuation a prerequisite.
+The [new coherent inference DAG](feniks_coherent_inference.md) implements one
+supervised posterior control in parallel with independent native-reference
+simulations, followed by photometry-only selected/parent weights and a 15D NPE
+trained from the weighted simulator bank. No q feedback or truth-trained prior.
+It keeps reference physical-SFH associations, but its finite joint kernel family
+and smoothing scale remain scientific assumptions. The same coherent catalogue
+is reused; only the new independent reference bank needs DSPS simulation.
+Remote population recovery, in-model and target-catalogue calibration remain
+UNVALIDATED until this experiment is executed and its report inspected. The
+old in-family classifier checks cannot certify these new reference ratios.
+
 ### 2026-09-26 bounded refinement implementation
 
 The [refinement runbook](feniks_coherent_refinement.md) provides one physical-only

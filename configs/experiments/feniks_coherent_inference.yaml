@@ -1,0 +1,69 @@
+# A coherent benchmark, not a claim of blind recovery on a real survey.
+seed: 20260926
+reference:
+  anchors: 32768
+  components: 64
+  kernel_bandwidth: 0.15
+  gate_width: 1.0
+  broad_fraction: 0.02
+  bounds:
+    z_obs: [0.001, 5.5]
+    log10_stellar_metallicity: [-2.5, 0.5]
+    dust_av: [0.000001, 6.0]
+    dust_delta: [-2.5, 1.0]
+bank:
+  shards: 4
+  rows_per_shard: 262144
+  checkpoint_rows: 8192
+  decoder_batch_size: 32
+classifier:
+  width: 256
+  depth: 3
+  epochs: 600
+  batch_size: 2048
+  learning_rate: 0.0003
+  validation_limit: 32768
+  fixed_validation: true
+population:
+  penalties: [0.003, 0.01, 0.03, 0.1]
+  min_selected: 128
+  min_alpha: 0.001
+  weak_parent_mass: 0.05
+posterior:
+  experts: 2
+  epochs: 200
+  batch_size: 512
+  learning_rate: 0.0001
+  lr_decay_every: 50
+  lr_decay_factor: 0.5
+  minimum_lr: 0.0000125
+  fixed_validation: true
+  validation_limit: 32768
+  architecture:
+    hidden_sizes: [256, 256, 256]
+    flow_family: rq_spline
+    flow_layers: 12
+    flow_hidden_size: 256
+    flow_bins: 16
+    flow_tail_bound: 12.0
+    flow_permutation: indexed_roll
+    log_std_min: -5.0
+    log_std_max: 3.0
+stopping:
+  block_epochs: 20
+  minimum_epochs: 80
+  patience_blocks: 3
+  minimum_gain: 0.001
+evaluation:
+  objects: 1024
+  draws_per_object: 512
+  population_draws: 20000
+resources:
+  reference_minutes: 60
+  bank_minutes: 120
+  oracle_minutes: 240
+  population_minutes: 180
+  posterior_minutes: 300
+  report_minutes: 30
+  bank_concurrency: 4
+  cpu_threads: 4
