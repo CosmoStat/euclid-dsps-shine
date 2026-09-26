@@ -6,10 +6,10 @@ reference:
   kernel_bandwidth: 0.15
   gate_width: 1.0
   broad_fraction: 0.02
+  positive: [dust_av]  # Log coordinate on (0, infinity), no artificial Av cap.
   bounds:
     z_obs: [0.001, 5.5]
     log10_stellar_metallicity: [-2.5, 0.5]
-    dust_av: [0.000001, 6.0]
     dust_delta: [-2.5, 1.0]
 bank:
   shards: 4

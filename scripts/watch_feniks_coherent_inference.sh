@@ -25,7 +25,7 @@ for name in ('reference','banks','oracle','population','posterior','report'):
         print(f'{name:14} {done}/{total} complete'); continue
     final=read(r/name/'FINAL.json'); p=read(r/name/'PROGRESS.json'); stop=read(r/name/'STOP.json')
     status='DONE' if final else ('BLOCKED' if (r/name/'BLOCKED.json').exists() else 'checkpoint' if p else 'waiting')
-    detail=''
+    detail=p.get('stage','')
     if p.get('epoch') is not None: detail=f"epoch={p['epoch']} best NLL={p.get('best_nll',0):.4f}"
     if stop: detail+=f" {stop['reason']}"
     print(f'{name:14} {status:17} {detail}')

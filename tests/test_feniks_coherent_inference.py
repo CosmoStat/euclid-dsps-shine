@@ -91,7 +91,7 @@ def test_penalty_uses_observations_not_parent_truth():
     assert "sample_" not in inspect.getsource(pipeline.posterior)
 
 
-def fixture(tmp_path, monkeypatch):
+def fixture(tmp_path, monkeypatch, *, positive_dust=False):
     from test_feniks_clean_parent import small_settings
 
     from euclid_dsps.synthetic_diffsky.coherent_parent import catalogue_checks, observe
@@ -112,6 +112,8 @@ def fixture(tmp_path, monkeypatch):
     checks, paths = {}, []
     for i, split in enumerate(("train", "validation", "test")):
         frame = pd.DataFrame(rng.uniform(-0.6, 0.6, (400, 15)), columns=pipeline.NAMES)
+        if positive_dust:
+            frame["dust_av"] = np.exp(frame["dust_av"])
         frame["object_id"] = np.arange(400) + i * 1000
         frame["population_weight"] = frame["galaxy_weight"] = 1.0
         frame["split"] = split
@@ -136,6 +138,8 @@ def fixture(tmp_path, monkeypatch):
             paths.append(p)
     proposals = source / "proposals.parquet"
     pool = pd.DataFrame(rng.uniform(-0.65, 0.65, (1200, 15)), columns=pipeline.NAMES)
+    if positive_dust:
+        pool["dust_av"] = np.linspace(0.00001, 9.0, len(pool))
     pool["effective_proposal_key"] = [f"0:{i}" for i in range(len(pool))]
     pool["galaxy_weight"] = np.exp(rng.normal(size=len(pool)))
     pool.to_parquet(proposals, index=False)
@@ -188,6 +192,7 @@ def fixture(tmp_path, monkeypatch):
         anchors=128,
         components=2,
         bounds={n: [-1.0, 1.0] for n in cfg["reference"]["bounds"]},
+        positive=["dust_av"] if positive_dust else [],
     )
     cfg["bank"].update(shards=2, rows_per_shard=1024, checkpoint_rows=512)
     cfg["posterior"].update(
@@ -228,8 +233,11 @@ def test_reference_uniform_exclusion_and_source_integrity(tmp_path, monkeypatch)
         pipeline.settings(root)
 
 
-def test_end_to_end_optimizers_report_and_idempotence(tmp_path, monkeypatch):
-    root, source, _ = fixture(tmp_path, monkeypatch)
+@pytest.mark.parametrize("positive_dust", [False, True])
+def test_end_to_end_optimizers_report_and_idempotence(
+    tmp_path, monkeypatch, positive_dust
+):
+    root, source, _ = fixture(tmp_path, monkeypatch, positive_dust=positive_dust)
     before = {str(p): sha(p) for p in source.rglob("*") if p.is_file()}
     pipeline.reference(root)
     pipeline.report(root)

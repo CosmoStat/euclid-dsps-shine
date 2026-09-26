@@ -35,9 +35,17 @@ Eligibility retains positive-weight native proposals and the saved unclipped
 metallicity support. This is a same-generator, disjoint-object reference, not
 an externally independent astrophysical population model.
 
-Normalize all 15 coordinates using these REFERENCE anchors only. Physical open
-bounds are explicitly configured, not enlarged from target truth. Mass/SFH
+Normalize all 15 coordinates using these REFERENCE anchors only. Redshift,
+metallicity and dust slope retain explicitly configured open bounds, not bounds
+enlarged from target truth. Dust Av uses log(Av), with support (0, infinity),
+because native proposals can exceed the former artificial cap of 6. Mass/SFH
 have unbounded asinh coordinates. No target clipping, jitter or zero removal.
+The Av inverse is exp(raw), with log-Jacobian raw + log(scale); normalization
+is preserved by the coordinate change. Nonpositive Av fails explicitly, rather
+than introducing an epsilon floor or silently removing objects. This continuous
+positive model does not model an exact Av=0 atom. Old v1 coordinate files retain
+their original transform and remain readable without reinterpretation.
+`reference/support.csv` records actual anchor ranges before coordinate fitting.
 
 64 joint physical centers are fitted to the reference anchors; Gaussian soft
 gates (width 1 in normalized physical coordinates) plus 2% uniform gate mass
@@ -177,6 +185,57 @@ The launcher refuses duplicate submission while recorded jobs are active. A
 failed prerequisite cancels its afterok dependents; the afterany report explains
 incomplete stages. Corrupt completed artifacts fail rather than being overwritten.
 
+### Recovery of reference job 217287
+
+This failed at `fit_coordinates`: the original reference config restricted
+Av to (1e-6, 6). The local saved native TRAIN proposals contain 35 eligible
+rows above 6 among 1345886 eligible rows, with maximum 7.5906 and minimum
+6.17e-5. These local counts are not claimed to be the remote sampled-anchor
+counts. The traceback identifies the same coordinate contract violation.
+
+No reference bank, classifier or posterior was completed. The bounded-config
+smoke fixture failed to exercise this legitimate native dust tail. Tests now
+cover Av above 6, positive-coordinate inverses/Jacobians/normalization and the
+actual reference-to-bank path, as well as safe frozen-code recovery.
+
+Do NOT merely pull and use `--resume`: it deliberately reuses the old frozen
+snapshot AND the old prepared settings. After all recorded jobs have stopped:
+
+```bash
+(
+set -euo pipefail
+cd /lustre/fswork/projects/rech/jrx/urx63nr/euclid-dsps-shine
+git switch feature/feniks-exact-posterior-benchmark
+git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+source "$WORK/miniconda3/etc/profile.d/conda.sh"
+conda activate shine
+BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
+INFERENCE="$BASE/avi_coherent_inference_20260926_094557"
+bash scripts/repair_feniks_coherent_inference.sh "$INFERENCE"
+)
+```
+
+The repair keeps the SAME root, archives original configuration, code pointers,
+job records and partial reference/blocked report under `recovery/`, freezes a
+new code snapshot, records `REFERENCE_REPAIR.json`, and resubmits the DAG. It
+changes only Av support, leaving seeds, counts, assets, datasets and all other
+scientific settings untouched. It refuses any completed reference or downstream
+bank/training artifact, any active job, or a failed scheduler query. The original
+code archive is retained. An interrupted repair fails closed for inspection.
+If repair succeeded but submission was interrupted, use ordinary `--resume`
+after any submitted jobs stop; do not apply the support repair twice.
+
+```bash
+cd /lustre/fswork/projects/rech/jrx/urx63nr/euclid-dsps-shine
+BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
+INFERENCE="$BASE/avi_coherent_inference_20260926_094557"
+bash scripts/watch_feniks_coherent_inference.sh "$INFERENCE"
+```
+
+This fixes a preparation bug, not a demonstrated scientific failure or validation
+of parent recovery. The next report must still establish population closure and
+both in-model and target-catalogue posterior calibration.
+
 ## Download locally
 
 After pulling this branch locally:
@@ -194,6 +253,17 @@ up to 25 MiB per file. It excludes `.eqx`, `.npz`, `.npy`, parquet and banks.
 It does not delete any previously downloaded files.
 
 ## Local verification
+
+Support-repair verification: 29 focused tests pass, including positive-coordinate
+normalization/Jacobians, old v1 roundtrips, Av>6 reference/bank generation, full
+tiny training/report runs with both coordinate versions, and same-root frozen
+code repair/resubmission. Active jobs and scheduler failures block repair.
+Ruff, compileall, Bash syntax and diff checks pass. Native Av ranges were read
+directly from saved parquet proposals. An additional native-SFH projection smoke
+could not run in the current .venv because its optional Diffmah dependency is
+absent; Jean-Zay had already completed projection before the support error.
+
+Previous initial implementation checks:
 
 27 focused and existing population tests pass, including full two-epoch NPE /
 population / report execution on a toy observation model, trained flow transport,

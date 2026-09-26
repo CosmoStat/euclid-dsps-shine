@@ -14,6 +14,21 @@ parent shape, for the reference FENIKS catalogue, or for real sky observations.
 
 ## Latest evidence: precision run completed
 
+### 2026-09-26 independent-reference support repair
+
+The first coherent-inference reference job (217287) failed before simulation
+or training: its Av logit imposed an artificial upper limit of 6, while native
+proposals can exceed 6 (local eligible native maximum 7.5906). This is a
+preparation/support bug, not a population-recovery result. The correction uses
+an opt-in positive log Av coordinate, retaining all 15 dimensions and all rows.
+Old representation/refinement coordinate specifications are unchanged.
+
+The [same-root repair](feniks_coherent_inference.md#recovery-of-reference-job-217287)
+archives old provenance and upgrades the frozen snapshot/config only before
+any reference completion or downstream computation. The observed dataset is
+unchanged; no new coherent target catalogue is required. Population and both
+posterior calibration gates remain pending remote completion and inspection.
+
 ### 2026-09-26 parallel coherent inference implementation
 
 The user-reported refinement lowered NLL but did not improve held-out physical

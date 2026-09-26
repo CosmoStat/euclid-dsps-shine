@@ -12,6 +12,7 @@ import yaml
 from scipy.special import logsumexp
 
 from euclid_dsps.amortized.coherent_coordinates import (
+    BOUNDED,
     fit_coordinates,
     to_theta,
     to_x,
@@ -44,6 +45,9 @@ STAGES = ("reference", "oracle", "population", "posterior", "report")
 
 
 def settings(root):
+    repair = root / "REFERENCE_REPAIR.json"
+    if repair.exists() and read(repair).get("status") != "COMPLETE":
+        raise ValueError("Reference repair interrupted; inspect REFERENCE_REPAIR.json")
     m, cfg, digest = base_settings(root)
     for path, expected in m["source_files"].items():
         if sha(Path(path)) != expected:
@@ -173,6 +177,7 @@ def reference(root):
     out.mkdir(exist_ok=True)
     if complete(out, digest):
         return
+    write(out / "PROGRESS.json", dict(stage="sampling_reference"))
     source, r = Path(m["source"]), cfg["reference"]
     excluded = set(
         pd.read_parquet(
@@ -182,6 +187,7 @@ def reference(root):
     pool, provenance = uniform_anchors(
         m["native_source"], excluded, r["anchors"], cfg["seed"]
     )
+    write(out / "PROGRESS.json", dict(stage="projecting_reference", anchors=len(pool)))
     decoder = read(source / "decoder.json")
     projected, _ = project_diffsky_frame_to_spline15d(
         pool, n_sfh_bins=decoder["model"]["n_sfh_bins"], batch_size=2048
@@ -189,8 +195,30 @@ def reference(root):
     if not np.array_equal(projected.object_id, pool.object_id):
         raise ValueError("Projection changed identities")
     theta = projected[NAMES].to_numpy()
+    positive = r.get("positive", [])
+    # Save actual ranges BEFORE validating so a support failure is diagnosable.
+    pd.DataFrame(
+        [
+            dict(
+                parameter=n,
+                minimum=float(theta[:, k].min()),
+                maximum=float(theta[:, k].max()),
+                nonfinite=int((~np.isfinite(theta[:, k])).sum()),
+                zeros=int((theta[:, k] == 0).sum()),
+                transform="log"
+                if n in positive
+                else "logit"
+                if n in BOUNDED
+                else "asinh",
+            )
+            for k, n in enumerate(NAMES)
+        ]
+    ).to_csv(out / "support.csv", index=False)
+    write(out / "PROGRESS.json", dict(stage="fitting_coordinates", anchors=len(pool)))
     bounds = [r["bounds"].get(n, [-1, 1]) for n in NAMES]
-    spec = fit_coordinates(theta, NAMES, np.array(bounds)[:, 0], np.array(bounds)[:, 1])
+    spec = fit_coordinates(
+        theta, NAMES, np.array(bounds)[:, 0], np.array(bounds)[:, 1], positive=positive
+    )
     spec.update(
         fitted_on="independent_unweighted_native_reference", role="population_reference"
     )
@@ -227,6 +255,7 @@ def reference(root):
                 "provenance.json",
                 "identities.csv",
                 "basis.npz",
+                "support.csv",
             )
         ],
         digest,

@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-26 coherent inference reference support recovery
+
+- [x] Trace remote reference job 217287 to the artificial dust Av upper bound
+  of 6; local native eligible proposals reach 7.5906 without projection changes.
+- [x] Add an opt-in positive log coordinate for this pipeline, preserving old
+  coordinate specifications and rejecting nonpositive values without clipping.
+- [x] Add support diagnostics and a guarded same-root repair that archives old
+  config/code pointers and refuses to mix any completed reference or training.
+- [x] Verify coordinate/Jacobian, pipeline and recovery tests; prepare the scoped
+  fix and provide exact same-run restart plus watcher commands.
+- No target dataset modification, resimulation or scientific promotion implied.
+- Verification: 29 focused tests pass, including both old/new-coordinate full
+  tiny optimizer/report runs, Av tail support, numerical normalization/Jacobian,
+  frozen-code repair/resubmission, active-job refusal and source immutability.
+  Ruff, compileall, shell syntax and diff checks pass. Optional actual native-SFH
+  projection smoke could not run in .venv because Diffmah is not installed there;
+  native Av ranges were checked directly in saved proposal parquet files.
+  The unrelated pre-existing syntax error in test_audit_feniks_coherent_parent.py
+  prevents its dependent legacy tests; that user edit remains untouched.
+- Handoff: scripts/repair_feniks_coherent_inference.sh on the failed existing
+  root, followed by the existing watcher. No remote job submitted locally.
+
 ## 2026-09-26 parallel coherent inference experiment
 
 - [x] Implement independent native-reference preparation, restartable reference
