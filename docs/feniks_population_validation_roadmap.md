@@ -13,7 +13,39 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
-## Latest qualification and implemented continuation, 2026-09-27
+## Latest result: physical capacity improves, one gate remains
+
+Run `avi_reference_to_parent_20260927_173822` is synchronized and inspected.
+Seven available receipt artifacts and the frozen configuration verify; two
+excluded NPZs remain remote. Qualification completed numerically and exited 2
+on the scientific gate. The bank and blind population stages did not run.
+
+| Block | Latest evidence / status |
+|---|---|
+| Coherent target / simulator / selection infrastructure | Retained for this synthetic benchmark; not real-sky validation |
+| 15D reference / no q feedback / parent-selection algebra | Retained; diagnostic u is nonnegative and sums to one |
+| Five physical marginal capacity checks | PASS, all improve; worst W1/IQR 0.0470 |
+| Joint physical SW criterion | PASS: 0.04588 -> 0.02770, threshold 0.035; empirical comparator 0.01430 |
+| Validation CDF qualification | Only failed capacity gate: 0.033833 > effective 0.032400; excess 0.001433 |
+| Numerical capacity optimization | HiGHS Optimal; TRAIN CDF constraint active; not a training crash |
+| SFH population conditional / new-reference photometric prediction | Unvalidated; final SFH contrast W1/IQR 0.958 |
+| Parent learned from fluxes with this reference | NOT RUN; dependencies cancelled after qualification FAIL |
+| Final learned-parent 15D posterior / independent calibration | NOT RUN; earlier truth-supervised control evidence remains available |
+| Production / paper claims | Not approved |
+
+The effective CDF threshold differs from the prior run because its empirical
+sampling comparator differs. Do not interpret the old fit's changed PASS/FAIL
+as an improvement in that fit. No evidence yet identifies the new worst CDF
+direction or proves the excess is only sampling noise.
+
+**Recommended next, not yet implemented:** bounded fixed-weight CPU CDF
+localization/uncertainty plus a short full-15D forward-predictive control in
+parallel. This checks whether residual SFH population mismatch materially
+affects photometry/selection before committing to the large reference bank.
+Preserve the failed gate; do not silently override it. Details and decision
+branches: [result review](feniks_reference_to_parent_results_20260927.md).
+
+## Prior qualification and implemented continuation, 2026-09-27
 
 Reference redesign `avi_reference_redesign_20260927_163901` is synchronized and
 verified (42 available receipt artifacts; five NPZs intentionally absent).

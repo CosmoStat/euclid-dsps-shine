@@ -1,5 +1,24 @@
 # Plan
 
+## 2026-09-27 reference-to-parent qualification result review
+
+- [x] Verify downloaded receipts and inspect physical, SFH, solver and gate results.
+- [x] Separate capacity progress from unexecuted photometry-only population learning.
+- [x] Update the roadmap and document the smallest justified next decision;
+  preserve all failed qualification gates and do not resubmit the same run.
+- Scope: analyze avi_reference_to_parent_20260927_173822; no new training,
+  no silent threshold change, no production promotion.
+- Seven available receipt artifacts and frozen config verify; two excluded NPZs
+  remain unavailable. Physical SW improves 0.04588 -> 0.02770 and all five
+  marginal errors improve. Only CDF fails: 0.033833 > effective 0.032400.
+- HiGHS reached Optimal; no optimizer crash. New maximum CDF direction is not
+  saved, and SFH conditional remains unvalidated (last contrast W1/IQR 0.958).
+- Recommended, not implemented: bounded fixed-weight CDF localization/uncertainty
+  and small full-15D forward predictive control in parallel, then the existing
+  blind-parent benchmark if justified. No new training or remote jobs in review.
+- Review saved in docs/feniks_reference_to_parent_results_20260927.md; current
+  checklist supersedes earlier unexecuted-continuation statements.
+
 ## 2026-09-27 reference redesign results and integrated next step
 
 - [x] Verify synchronized receipts, per-parameter failures and paired-tail replay;
