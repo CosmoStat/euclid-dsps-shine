@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-27 parallel blind-parent and posterior overnight run
+
+- [x] Add a nested SFH split of each existing physical component, with exact
+  normalization and recovery of the old family as a tied-weight submodel.
+- [x] Replay saved anchor draws to relabel existing simulations without DSPS;
+  fit expanded and tied parents from catalogue photometry only.
+- [x] Compare held-out flux likelihood and parent/selected closure, keeping
+  target truth report-only and all existing failed gates visible.
+- [x] Add one guarded overnight launcher/watcher alongside the existing fresh
+  15D posterior run, regression tests, runbook and roadmap update.
+- Scope: no truth-supervised parent loss, no q feedback, no change to the target,
+  decoder, coordinates or 15D kernels. This is one conditional-family experiment,
+  not an unrestricted flow prior or an automatic production approval.
+- Local: 39 focused/regression tests pass across numerical mixture recovery,
+  actual small classifier/15D flow training and mocked Slurm submission/reuse.
+  Exact bank replay and immutable source contracts tested on synthetic fixtures;
+  actual remote bank replay is a required runtime check, not a local science claim.
+- Ruff, compileall and Bash syntax pass. Legacy one-row/batch CLI fit attempts
+  stop because the AGENTS-named config files are absent. No new local DSPS run.
+- Handoff: one overnight wrapper, peak five H100s and default ceiling 14
+  H100-hours (not expected runtime). No remote jobs submitted from this checkout.
+
 ## 2026-09-27 synchronized frozen-parent recovery review
 
 - [x] Verify synchronized receipt hashes, recovery errors and known-label

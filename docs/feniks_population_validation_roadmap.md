@@ -15,6 +15,19 @@ on this target, on the historical catalogue, or on real sky observations.
 
 ## Current execution decision: advance posterior in parallel
 
+The [overnight launcher](feniks_overnight_blind_parent.md) now pairs that posterior
+with one **blind conditional-parent refinement**, not a supervised parent oracle.
+512 nested SFH subcomponents retain the full old family and 15D kernels. Exact
+anchor replay recycles 2097152 DSPS simulations; one new classifier supports both
+expanded and tied-weight inversions. Neither target latent truth nor q enters
+population fitting. New results remain pending remote execution.
+
+- Conditional-family flexibility: implementation prepared; compare expanded
+  versus tied using the same classifier, plus held-out flux and joint closure.
+- Posterior capacity/calibration: separate fresh-bank branch; parent frozen.
+- No new claim of target parent recovery, SFH identifiability or production
+  approval. The earlier numerical/in-family checks remain valid in their scope.
+
 The synchronized [frozen-recovery result](feniks_parent_recovery_results_20260927.md)
 now passes its in-family controls: physical parent SW 0.01864/0.03481,
 selected SW 0.01292/0.01565, all physical marginals and known-label gates pass.

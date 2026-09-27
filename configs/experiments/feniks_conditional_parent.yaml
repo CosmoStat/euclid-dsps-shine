@@ -1,0 +1,14 @@
+# One nested family change, not a hyperparameter campaign.
+seed: 20260930
+probability_floor: 0.05
+classifier:
+  epochs: 600
+  fixed_validation: true
+# Other classifier/solver/stopping settings are inherited unchanged.
+resources:
+  prepare_minutes: 30
+  relabel_minutes: 40
+  relabel_concurrency: 4
+  population_minutes: 180
+  report_minutes: 30
+  cpu_threads: 4
