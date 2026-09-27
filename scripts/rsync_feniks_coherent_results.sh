@@ -5,7 +5,8 @@ KIND=${1:-refinement}
 case "$KIND" in
   refinement) PREFIX=avi_coherent_refinement; VARIABLE=REFINE ;;
   inference) PREFIX=avi_coherent_inference; VARIABLE=INFERENCE ;;
-  *) echo 'Usage: bash scripts/rsync_feniks_coherent_results.sh refinement|inference' >&2; exit 2 ;;
+  reference_audit) PREFIX=avi_coherent_reference_audit; VARIABLE=AUDIT ;;
+  *) echo 'Usage: bash scripts/rsync_feniks_coherent_results.sh refinement|inference|reference_audit' >&2; exit 2 ;;
 esac
 BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
 REMOTE=${FENIKS_REMOTE:-urx63nr@jean-zay.idris.fr}

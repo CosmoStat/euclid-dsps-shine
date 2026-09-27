@@ -1,5 +1,31 @@
 # Plan
 
+## 2026-09-27 coherent inference results and bounded diagnosis
+
+- [x] Read synchronized receipts, dense-draw calibration summaries, population
+  closure, selection weights and training histories; inspect comparison plots.
+- [x] Separate the successful truth-supervised physical coverage control from
+  failed blind parent closure and final target-catalogue calibration.
+- [x] Save a reproducible small-result analysis and update the current roadmap.
+- [x] Add one read-only CPU audit: analytic component-CDF capacity using TRAIN
+  truth only, held-out closure, and exact weighted observable-tail diagnostics.
+- [x] Test numerical/provenance invariants and provide a frozen-code launch.
+- No new simulations or neural training. Source run remains immutable. Do not
+  confuse early stopping after overfitting with a healthy validation plateau.
+- Verified 30 downloaded receipt artifacts; eight large referenced files and
+  bank contents are unavailable locally. Physical oracle coverage is 69.0% /
+  95.1%; learned parent SW is 0.1239 versus empirical 0.0141. Final posterior
+  overcovers metallicity (91.1% at nominal 68%) and overfits after best epoch29.
+- Verification: 23 new/existing focused tests pass, including analytic CDFs,
+  exact-family LP recovery, weighted tail detection, full read-only audit and
+  resume, source immutability, CPU snapshot submission and active-job refusal.
+  Ruff, compileall, Bash syntax and diff checks pass; summary figure inspected.
+  Full repository pytest is not claimed (unrelated pre-existing test syntax
+  error remains untouched). No posterior training/DSPS logic changed.
+- Handoff: docs/feniks_coherent_reference_audit.md; one CPU job, four threads,
+  30-minute allocation ceiling, no new dataset or neural training. Local tests
+  do not establish the result of the full remote capacity/tail audit.
+
 ## 2026-09-26 coherent inference reference support recovery
 
 - [x] Trace remote reference job 217287 to the artificial dust Av upper bound

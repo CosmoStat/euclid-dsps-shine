@@ -1,4 +1,4 @@
-# Population validation roadmap, 2026-09-25
+# Population validation roadmap, updated 2026-09-27
 
 ## Scope and evidence
 
@@ -8,11 +8,61 @@ simulation. Population learning has no input from approximate posterior draws.
 Broad SFH posteriors are acceptable; a wrong assumed SFH distribution can still
 bias inferred physical population coordinates through its photometric effects.
 
-The current audit is a synthetic population experiment with a known parent in
-the component family. Success here would not establish recovery for every
-parent shape, for the reference FENIKS catalogue, or for real sky observations.
+The current coherent benchmark uses a known synthetic target parent and an
+independent native reference. The target is NOT guaranteed to lie in that
+reference's component family. Earlier in-family tests do not establish recovery
+on this target, on the historical catalogue, or on real sky observations.
 
-## Latest evidence: precision run completed
+## Current checklist: synchronized coherent inference, 2026-09-27
+
+Authoritative current status; sections below are dated historical evidence.
+Run: `avi_coherent_inference_20260926_094557`, repaired snapshot contract
+`f45de11a563a45ab02251f9ec8718681c3e275e3b8343821c2d99561c491de4c`.
+Thirty available receipt artifacts verified locally; eight referenced large
+artifacts and all bank contents intentionally unavailable locally.
+
+| Block | Current evidence / status |
+|---|---|
+| Coherent target data + observation model | Completed coherent benchmark, no reuse of historical mismatched photometry; not a real-sky validation |
+| Coordinates / flow transport | PASS on saved checks, Av artificial upper bound removed |
+| Parent/selected normalization | PASS: both sums 1; saved u agrees with normalized v/alpha |
+| Convex population solver | PASS KKT 7.87e-7; certifies optimization, not the scientific family |
+| Full 15D / no q feedback | Retained; native SFH correlations present, reference conditional still an assumption |
+| Classifier | Validation plateau; audit NLL 3.108 vs null 4.079, ratio-moment error 0.0125; conditional ratios not certified |
+| Truth-supervised posterior control | Physical marginal coverage 69.0% / 95.1% on 1024 test objects; strong capacity evidence, not joint/conditional certification |
+| Oracle optimization | Maximum epoch 200, still improving; do not label converged |
+| Blind parent recovery | FAIL: physical SW 0.124 vs empirical validation/test 0.0141 |
+| Learned-parent NPE on its own model | PARTIAL: marginal averages near nominal, PIT discrepancies and only 871 unique resampled evaluation rows |
+| Learned-parent NPE on target | FAIL: physical 68% coverage average 80.5%, metallicity 91.1%; not the previous universal narrowing failure |
+| Final NPE convergence | Overfits weighted bank after best epoch 29; plateau stop at 100 is no-new-best, not healthy flat validation |
+| Observable predictive | Large raw-flux W1; upper-tail vs bulk cause not yet measured |
+| Real catalogue / paper production | NOT VALIDATED |
+
+### Next actions, in order
+
+1. **Prepared:** one read-only CPU [reference audit](feniks_coherent_reference_audit.md).
+   Reuse all existing artifacts; no DSPS, classifier, posterior or bootstrap
+   training. Analytic component CDFs + TRAIN-only truth diagnostic weights test
+   the fixed family's restrictions. Reserved-bank exact weighted flux metrics
+   distinguish upper-tail sensitivity from bulk mismatch.
+2. **Conditional on that result:** if the family cannot fit the physical target,
+   modify the reference/gates/smoothing based on the measured defect, not more
+   epochs. If capacity is adequate, investigate photometric ratio/inversion
+   error and identifiability. Do not assume sparse weights alone prove a bug.
+3. **After parent predictive closure improves:** use new or adequately diversified
+   learned-parent training pairs for final supervised NPE, instead of continuing
+   the overfitted finite bank. Keep best-validation checkpoint selection.
+4. Add independent joint and conditional calibration (including S/N/redshift
+   strata), population predictive checks and repeatability before a paper run.
+   These gates are not replaced by the physical marginal averages above.
+
+No target catalogue resimulation, extra bands, oracle continuation, large
+bootstrap sweep or blind final training is currently justified. The immediate
+audit has a 30-minute CPU allocation ceiling, not a runtime promise.
+
+See [detailed result review](feniks_coherent_inference_results_20260927.md).
+
+## Historical evidence and decisions
 
 ### 2026-09-26 independent-reference support repair
 
@@ -298,7 +348,9 @@ quantify this effect before claiming fully calibrated population-marginalized
 posteriors. SFH recovery need not be sharp to pass, but physical inference must
 remain calibrated after nuisance marginalization.
 
-## Current checklist and next actions
+## Historical checklist and next actions (before coherent inference)
+
+Superseded by the 2026-09-27 current checklist above; retained for provenance.
 
 | Block | Status after the precision run | Remaining evidence |
 |---|---|---|
