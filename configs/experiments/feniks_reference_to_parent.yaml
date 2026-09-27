@@ -1,0 +1,35 @@
+# One fixed family, one corrected capacity objective, then a blind parent benchmark.
+seed: 20260928
+candidate: local_256
+capacity:
+  draws_per_component: 4096
+  directions: 32
+  grid_size: 49
+  original_cdf_slack: 0.003
+  maximum_solver_seconds: 600
+  evaluation_draws: 30000
+bank:
+  shards: 4
+  rows_per_shard: 524288
+  checkpoint_rows: 8192
+  decoder_batch_size: 32
+classifier:
+  epochs: 600
+  fixed_validation: true
+evaluation:
+  population_draws: 30000
+parent_contracts:
+  maximum_physical_sw: 0.05
+  maximum_physical_marginal_w1: 0.1
+  maximum_alpha_error: 0.03
+  maximum_observable_ks: 0.05
+  maximum_tail_probability: 0.005
+  maximum_ratio_moment_error: 0.03
+  minimum_classifier_gain: 0.05
+resources:
+  qualify_minutes: 30
+  bank_minutes: 120
+  population_minutes: 180
+  report_minutes: 20
+  bank_concurrency: 4
+  cpu_threads: 4

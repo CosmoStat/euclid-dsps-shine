@@ -13,9 +13,38 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
-## Current checklist: synchronized coherent inference, 2026-09-27
+## Latest qualification and implemented continuation, 2026-09-27
 
-Authoritative current status; sections below are dated historical evidence.
+Reference redesign `avi_reference_redesign_20260927_163901` is synchronized and
+verified (42 available receipt artifacts; five NPZs intentionally absent).
+Local 256 now passes all five physical marginal tolerances. Physical SW improves
+0.1739 -> 0.0506, but the unchanged 0.035 gate and CDF 0.030 gate still fail
+(CDF 0.0320). This is not proof that physical SW cannot be improved with the same
+family: the old LP minimized a different objective in transformed coordinates.
+
+| Block | Latest change / next validation |
+|---|---|
+| Reference normalization / 15D / no q feedback | Retained and tested; not a new population result |
+| Finite linear-mass moment | PASS for affine/local geometry; alone did not fix finite-sample flux tails |
+| Five physical marginal capacity checks | PASS for local 256 |
+| Joint physical capacity + CDF | Still FAIL; one TRAIN-only physical-CDF objective implemented, thresholds unchanged |
+| Paired observation replay | PASS at 4.66e-13; local 128 reduces perturbations; 32 targeted native anchors are already bright |
+| SFH population conditional | Still unvalidated, last contrast W1/IQR 0.889; not equivalent to weak individual SFH constraints |
+| Blind parent with redesigned reference | NOT RUN; automatically follows the next CPU qualification only on PASS |
+| Final supervised 15D posterior | Deferred until parent closure; old overfitted bank not reused for training |
+| Publication / real-sky claims | Not validated; development truth has influenced design, fresh final evaluation required |
+
+The [new runbook](feniks_reference_to_parent.md) connects qualification directly
+to compatible reference banks, one classifier/selection-corrected parent fit,
+and a predictive report. No oracle retraining, new target catalogue or posterior
+training. It is implemented and locally tested, not remotely executed yet.
+See [the source-backed review](feniks_reference_redesign_results_20260927.md)
+for interpretation and figures. This section supersedes older "awaiting redesign"
+actions below; those are retained as dated history.
+
+## Prior checklist: synchronized coherent inference, 2026-09-27
+
+Evidence from the prior inference; reference-specific progress is updated above.
 Run: `avi_coherent_inference_20260926_094557`, repaired snapshot contract
 `f45de11a563a45ab02251f9ec8718681c3e275e3b8343821c2d99561c491de4c`.
 Thirty available receipt artifacts verified locally; eight referenced large

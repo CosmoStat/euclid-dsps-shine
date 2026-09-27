@@ -7,7 +7,8 @@ case "$KIND" in
   inference) PREFIX=avi_coherent_inference; VARIABLE=INFERENCE ;;
   reference_audit) PREFIX=avi_coherent_reference_audit; VARIABLE=AUDIT ;;
   reference_redesign) PREFIX=avi_reference_redesign; VARIABLE=REDESIGN ;;
-  *) echo 'Usage: bash scripts/rsync_feniks_coherent_results.sh refinement|inference|reference_audit|reference_redesign' >&2; exit 2 ;;
+  reference_to_parent) PREFIX=avi_reference_to_parent; VARIABLE=PARENT_RUN ;;
+  *) echo 'Usage: bash scripts/rsync_feniks_coherent_results.sh refinement|inference|reference_audit|reference_redesign|reference_to_parent' >&2; exit 2 ;;
 esac
 BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
 REMOTE=${FENIKS_REMOTE:-urx63nr@jean-zay.idris.fr}

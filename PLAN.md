@@ -1,5 +1,34 @@
 # Plan
 
+## 2026-09-27 reference redesign results and integrated next step
+
+- [x] Verify synchronized receipts, per-parameter failures and paired-tail replay;
+  inspect figures and distinguish basis limitations from objective mismatch.
+- [x] Choose and implement the smallest justified correction plus a guarded
+  route toward blind population learning, reusing completed work where valid.
+- [x] Verify numerical, provenance, orchestration and recovery invariants.
+- [x] Record evidence, checklist changes, figure links and exact Jean-Zay commands;
+  publish scoped changes without unrelated worktree edits.
+- No new remote computation until the downloaded diagnostic evidence is read.
+- Verified 42 available artifacts; five excluded NPZs unavailable. Local 256
+  improves physical SW 0.1739 -> 0.0506; all physical marginals pass. CDF 0.032
+  and joint SW still fail unchanged gates. SFH conditional remains unvalidated.
+- Implemented one physical integrated-CDF capacity LP, old TRAIN CDF constraint,
+  independent validation draws, unchanged family and validation thresholds.
+- CPU gate then four new reference bank shards, classifier/parent and report;
+  no final posterior yet, no truth-fitted weights carried into population.
+- Added analysis figure/review, runbook, current roadmap and reconnect-safe
+  watcher, missing-only resume and small-artifact rsync mode.
+- Validation: 57 focused tests pass, including actual tiny classifier/parent
+  training with mock photometry, unchanged sources, strict observation-only
+  readers, failure gating and mocked Slurm dependency/resume checks. Ruff,
+  compileall, Bash syntax and diff checks pass. Native GPU DSPS remains remote;
+  no remote submission or scientific success claimed from these local tests.
+- Handoff: scripts/submit_feniks_reference_to_parent.sh on the completed
+  avi_reference_redesign_20260927_163901 root. New root, frozen code, same local
+  256 family; up to 2097152 reference simulations only after capacity PASS.
+  Full default allocation ceiling 11 H100-hours, not expected runtime.
+
 ## 2026-09-27 bounded reference redesign qualification
 
 - [x] Add opt-in affine log-mass and normalized locally resolved 15D reference
