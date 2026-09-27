@@ -1,5 +1,47 @@
 # Plan
 
+## 2026-09-27 frozen-classifier in-family recovery implementation
+
+- [x] Add independent reserved-bank controls for the saved learned and physical
+  capacity mixtures, retaining 15D and the frozen classifier/calibration.
+- [x] Separate inverse-selection sampling effects, label-aware penalized control
+  and photometric inversion; report density errors rather than weight L1 gates.
+- [x] Add component bright-tail attribution and conditional ratio-moment
+  uncertainty without neural training, DSPS or solver bootstrap campaigns.
+- [x] Test source immutability, actual checkpoint loading, checkpointed resume,
+  numerical invariants and Slurm orchestration; publish launch and watcher.
+- CPU cache -> two-case CPU array -> CPU report; source fit untouched. No
+  automatic promotion even if in-family recovery passes.
+- Implemented cache -> two-case CPU array -> report with immutable code/source,
+  missing-only resume, saved fit reuse, active-job guards and small-file rsync.
+- 38 regression tests passed, plus the added cold-launch/frozen-code smoke;
+  all eight new diagnostic tests pass. Ruff, whole euclid_dsps/scripts compileall,
+  Bash syntax and diff checks pass. Synthetic tiny checkpoint fixture only;
+  no actual 256-component remote scientific result or submission claimed.
+- Handoff: submit_feniks_parent_recovery.sh on run 184817. Zero new DSPS and
+  zero GPUs; limits 25 minutes cache, 25 per case, 5 report (not runtime estimates).
+
+## 2026-09-27 completed exploratory parent result review
+
+- [x] Verify synchronized receipts, normalization, solver certificates and
+  classifier history for reference-to-parent run 184817.
+- [x] Compare blind parent, selected population and truth-assisted physical
+  capacity control; distinguish flux CDF agreement from full predictive closure.
+- [x] Record figures and checklist progress, and choose one bounded diagnostic
+  before spending on new training. No model/threshold change or remote launch.
+- Verified 23 available receipt artifacts; basis/checkpoint and banks unavailable
+  locally. Weight sums, u = normalized v/alpha and saved KKT certificates pass.
+- Parent physical SW 0.09751; dust Av W1/IQR 0.18677 is the only physical marginal
+  failure. Classifier best epoch 399; plateau stop 460, ratio moment 0.03170.
+- Truth-assisted physical control improves physical SW to 0.02798 but predicts
+  ~1.43% very bright objects vs target ~0.107%; SFH remains discrepant. Learned
+  flux CDF/frequency PASS does not certify tail amplitudes or joint colors.
+- Added reproducible small-artifact analysis, two inspected summary plots and
+  docs/feniks_blind_parent_results_20260927.md; current roadmap updated.
+- Six focused analysis tests, Ruff, compileall and diff checks pass. Next proposal
+  is a frozen-classifier in-family recovery/control on reserved bank rows, not
+  yet implemented. No training, resimulation, threshold change or job submission.
+
 ## 2026-09-27 recover regularized parent KKT termination
 
 - [x] Reproduce and fix regularized simplex polishing without changing the

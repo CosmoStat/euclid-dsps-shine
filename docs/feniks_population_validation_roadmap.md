@@ -13,7 +13,43 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
-## Latest result: physical capacity improves, one gate remains
+## Latest result: blind fit completes, physical recovery still fails
+
+Exploratory run `avi_reference_to_parent_20260927_184817` is now synchronized.
+User-reported recovery jobs 252749/252750 completed. Twenty-three small receipt
+artifacts verify locally; basis/checkpoint and simulation banks are not local.
+See the [completed blind-parent review](feniks_blind_parent_results_20260927.md).
+
+| Block | Latest evidence / status |
+|---|---|
+| Numerical inversion and parent/selected weights | PASS on saved evidence: sums 1, u = normalized v/alpha, all KKT < 2e-6 |
+| Selection fraction | PASS: learned 0.60235 vs validation 0.60995; component alpha >= 0.09399 |
+| Classifier optimization | Best epoch 399, stopping at 460 on implemented validation plateau |
+| Classifier ratio accuracy | Still unvalidated: independent moment 0.03170 > 0.030, sampling uncertainty not saved |
+| Learned physical marginals | Four of five PASS; dust Av 0.18677 parent and 0.17356 selected exceeds 0.1 |
+| Joint physical recovery | FAIL: parent SW 0.09751 and selected SW 0.07666 exceed 0.05 |
+| Physical capacity control | Better parent SW 0.02798, but not a valid full-population oracle |
+| Observable prediction | Marginal CDF/tail-frequency gates PASS; joint colors untested and raw tail-amplitude error remains |
+| SFH conditional / joint reference | Unvalidated; SFH SW ~0.38 even for physical capacity control |
+| Final posterior under new learned parent | NOT RUN; parent bias would propagate |
+| Production / paper claims | Not approved; strict capacity CDF FAIL retained |
+
+**Next diagnostic implemented, awaiting Jean-Zay:** the
+[frozen-classifier recovery check](feniks_parent_recovery.md), using two known
+mixtures, disjoint reserved bank roles, fixed source penalty/alpha and label-aware
+sampling/penalty controls. CPU cache -> two-case CPU array -> report, no new
+DSPS, classifier training or posterior. Tail attribution, joint asinh-flux
+diagnostics and conditional ratio-moment uncertainty reuse the same rows.
+This separates an inversion/ratio problem from joint reference/target mismatch
+before choosing a retraining intervention. In-family PASS would not validate
+the coherent target or authorize the final posterior automatically.
+
+Do not interpret four marginal passes or good one-band flux CDFs as full 15D
+recovery. Conversely, the small ratio-moment gate excess alone does not establish
+the cause of the substantially larger dust discrepancy. Normalization and KKT
+success do not remove statistical or model-family error.
+
+## Prior state before numerical recovery
 
 Update from exploratory run `avi_reference_to_parent_20260927_184817`:
 four reference banks completed and classifier stopped on validation plateau at
