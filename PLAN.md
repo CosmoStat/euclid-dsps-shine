@@ -1,5 +1,27 @@
 # Plan
 
+## 2026-09-27 recover regularized parent KKT termination
+
+- [x] Reproduce and fix regularized simplex polishing without changing the
+  objective, selection constraints or 2e-6 certificate tolerance.
+- [x] Add a guarded new-code recovery of only population/report, preserving
+  completed reference banks, classifier checkpoint, config and original logs.
+- [x] Verify numerical, checkpoint-reuse and Slurm recovery regressions; publish
+  the fix and exact recovery/watcher commands.
+- Remote evidence: 252117 banks complete, classifier stopped at epoch 460;
+  252118 failed with KKT gap 1.18467e-5 after optimizer success. Not a CDF gate
+  failure or demonstrated population-model failure. No remote rerun yet.
+- Reproduced a 256-component stagnation (old gap 9.63e-5); pairwise feasible
+  transfers plus derivative-root search meet 2e-6 without changing the objective.
+  Weak-parent-support cases retain constrained feasible segments and pass too.
+- 94 focused tests pass, including failure after actual tiny classifier training,
+  unchanged checkpoint/history/config hashes, no optimizer call on recovery,
+  frozen-code replacement, active-job/query/corruption guards and two-job DAG.
+  Ruff, compileall, Bash syntax and diff checks pass. Mock photometry in local
+  end-to-end tests; no claim that the unavailable remote ratios are now solved.
+- Handoff: recover_feniks_reference_to_parent.sh on existing run 184817; preserve
+  all banks/classifier and resubmit population/report only. No new science gate.
+
 ## 2026-09-27 explicit exploratory continuation after near-threshold CDF failure
 
 - [x] Add an opt-in, narrowly bounded CDF-only admission that retains FAIL and

@@ -142,7 +142,41 @@ def test_full_guarded_blind_population_path_resume_and_no_truth_weights(
         return real_read(path, *args, **kwargs)
 
     monkeypatch.setattr(pd, "read_parquet", blind_read)
-    pipeline.population(root)
+    from euclid_dsps.amortized import population_regularization
+    from scripts import feniks_forward_population
+
+    def solver_failure(*args, **kwargs):
+        raise RuntimeError("simulated post-classifier KKT failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            population_regularization, "fit_selected_weights_kl", solver_failure
+        )
+        with pytest.raises(RuntimeError, match="post-classifier"):
+            pipeline.population(root)
+    retained = pipeline.recovery_inputs(root)
+    assert retained["classifier_epoch"] == 2 and retained["banks"] == 2
+    assert not retained["classifier_retraining"]
+    resume_path = root / "population/RESUME.json"
+    saved_resume = resume_path.read_bytes()
+    corrupt = read(resume_path)
+    corrupt["state_sha256"] = "invalid"
+    write(resume_path, corrupt)
+    with pytest.raises(ValueError, match="Optimizer checkpoint integrity"):
+        pipeline.recovery_inputs(root)
+    resume_path.write_bytes(saved_resume)
+
+    def no_training(*args, **kwargs):
+        raise AssertionError("Completed classifier must not retrain")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(feniks_forward_population, "supervised_fit", no_training)
+        pipeline.population(root)
+    assert retained["preserved"] == {
+        name: sha(root / name) for name in retained["preserved"]
+    }
+    with pytest.raises(ValueError, match="already exists"):
+        pipeline.recovery_inputs(root)
     parent = read(root / "population/parent.json")
     assert not parent["target_truth_used"] and not parent["population_uses_q"]
     np.testing.assert_allclose(np.sum(parent["u"]), 1)
@@ -326,7 +360,11 @@ mode=sys.argv[3]; root=Path(sys.argv[sys.argv.index('--root')+1])
 if mode in ('init', 'init-exploratory'): (root/'logs').mkdir(parents=True)
 elif mode=='schedule':
     print('QUALIFY_MINUTES=30\\nBANK_MINUTES=120\\nPOPULATION_MINUTES=180\\nREPORT_MINUTES=20\\nCPU_THREADS=4\\nBANK_CONCURRENCY=4')
-    print('NEED_QUALIFICATION=0\\nMISSING_BANKS=2\\nNEED_POPULATION=1\\nNEED_REPORT=1' if os.environ.get('RESUMING') else 'NEED_QUALIFICATION='+('0' if os.environ.get('EXPLORING') else '1')+'\\nMISSING_BANKS=0,1,2,3\\nNEED_POPULATION=1\\nNEED_REPORT=1')
+    if os.environ.get('RECOVERING'): print('NEED_QUALIFICATION=0\\nMISSING_BANKS=\\nNEED_POPULATION=1\\nNEED_REPORT=1')
+    else: print('NEED_QUALIFICATION=0\\nMISSING_BANKS=2\\nNEED_POPULATION=1\\nNEED_REPORT=1' if os.environ.get('RESUMING') else 'NEED_QUALIFICATION='+('0' if os.environ.get('EXPLORING') else '1')+'\\nMISSING_BANKS=0,1,2,3\\nNEED_POPULATION=1\\nNEED_REPORT=1')
+elif mode=='check-recovery':
+    if os.environ.get('BAD_RECOVERY'): sys.exit(7)
+    print('{"test_stub": true}')
 """)
     (fake / "sbatch").write_text("""#!/usr/bin/env python3
 import os,sys,json
@@ -334,7 +372,9 @@ from pathlib import Path
 p=Path(os.environ['CALL_LOG']); lines=p.read_text().splitlines() if p.exists() else []
 p.write_text('\\n'.join(lines+[json.dumps(sys.argv[1:])])+'\\n'); print(800+len(lines))
 """)
-    (fake / "squeue").write_text('#!/bin/bash\nprintf "%s" "${ACTIVE_TEST:-}"\n')
+    (fake / "squeue").write_text(
+        '#!/bin/bash\nprintf "%s" "${ACTIVE_TEST:-}"\nexit "${QUEUE_FAILURE:-0}"\n'
+    )
     for p in fake.iterdir():
         p.chmod(0o755)
     checkout = tmp_path / "checkout"
@@ -344,6 +384,7 @@ p.write_text('\\n'.join(lines+[json.dumps(sys.argv[1:])])+'\\n'); print(800+len(
     for name in (
         "submit_feniks_reference_to_parent.sh",
         "feniks_reference_to_parent.slurm",
+        "recover_feniks_reference_to_parent.sh",
     ):
         shutil.copy2(repo / "scripts" / name, checkout / "scripts" / name)
     (checkout / "pyproject.toml").write_text("")
@@ -404,3 +445,46 @@ p.write_text('\\n'.join(lines+[json.dumps(sys.argv[1:])])+'\\n'); print(800+len(
         capture_output=True,
     )
     assert failed.returncode and b"still active" in failed.stderr
+    recovery_command = [
+        "bash",
+        "scripts/recover_feniks_reference_to_parent.sh",
+        str(root),
+    ]
+    old_input = (root / "INPUT.env").read_bytes()
+    old_code_sha = (root / "CODE_SHA256").read_bytes()
+    old_jobs = (root / "JOBS.env").read_bytes()
+    for extra in (
+        dict(ACTIVE_TEST="800_0"),
+        dict(QUEUE_FAILURE="3"),
+        dict(BAD_RECOVERY="1"),
+    ):
+        rejected = subprocess.run(
+            recovery_command, cwd=checkout, env=dict(env, **extra), capture_output=True
+        )
+        assert rejected.returncode
+        assert (root / "INPUT.env").read_bytes() == old_input
+        assert (root / "JOBS.env").read_bytes() == old_jobs
+        assert not (root / "recovery").exists()
+    (checkout / "euclid_dsps/solver_patch.py").write_text(
+        "# corrected solver snapshot\n"
+    )
+    subprocess.run(
+        recovery_command,
+        cwd=checkout,
+        env=dict(env, RECOVERING="1"),
+        check=True,
+        capture_output=True,
+    )
+    recovered = [json.loads(x) for x in (tmp_path / "calls").read_text().splitlines()]
+    assert len(recovered) == len(calls) + 2
+    assert "--job-name=feniks_parent_population" in recovered[-2]
+    assert "--job-name=feniks_parent_report" in recovered[-1]
+    assert not any("--array" in a for c in recovered[-2:] for a in c)
+    assert f"--dependency=afterany:{800 + len(calls)}" in recovered[-1]
+    saved = next((root / "recovery").iterdir())
+    assert (saved / "INPUT.env.previous").read_bytes() == old_input
+    assert (saved / "CODE_SHA256.previous").read_bytes() == old_code_sha
+    assert (saved / "JOBS.env.previous").read_bytes() == old_jobs
+    assert (root / "INPUT.env").read_bytes() != old_input
+    assert (root / "CODE_SHA256").read_bytes() != old_code_sha
+    assert read(saved / "PRESERVED.json")["test_stub"]

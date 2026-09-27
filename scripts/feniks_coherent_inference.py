@@ -448,6 +448,7 @@ def population(root):
         out,
     )
     c = simplex(counts[2])
+    write(out / "INVERSION_PROGRESS.json", dict(stage="calibrating_ratios"))
     offset, offset_info = fit_marginal_logit_offsets(
         classify(model, data["features"][cal]), c
     )
@@ -460,6 +461,10 @@ def population(root):
     audit_logc = apply_logit_offsets(classify(model, data["features"][audit]), offset)
     rows, candidates, heldout = [], [], []
     for strength in p["penalties"]:
+        write(
+            out / "INVERSION_PROGRESS.json",
+            dict(stage="selected_weight_solver", strength=strength),
+        )
         v, diagnostics = fit_selected_weights_kl(
             target_logs[0],
             c,
@@ -471,6 +476,7 @@ def population(root):
         candidates.append(v)
         heldout.append(logsumexp(target_logs[1] - np.log(c) + np.log(v), axis=1))
         rows.append(diagnostics)
+    write(out / "INVERSION_PROGRESS.json", dict(stage="finalizing_parent"))
     selected, accepted, degradation, se = choose_penalty(heldout, p["penalties"])
     for i, row in enumerate(rows):
         row.update(
@@ -535,6 +541,7 @@ def population(root):
         target_truth_used=False,
         scientific_promotion=False,
     )
+    write(out / "INVERSION_PROGRESS.json", dict(stage="complete"))
 
 
 def posterior(root, oracle=False):

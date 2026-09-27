@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy.optimize import linprog, minimize, minimize_scalar
+from scipy.optimize import brentq, linprog, minimize
 
 from euclid_dsps.amortized.forward_population import simplex
 
@@ -32,6 +32,13 @@ def fit_selected_weights_kl(
     c = simplex(frequencies)
     if strength <= 0 or not np.isfinite(strength):
         raise ValueError("strength must be finite and positive")
+    if (
+        not np.isfinite(tolerance)
+        or tolerance <= 0
+        or maxiter < 1
+        or polish_maxiter < 0
+    ):
+        raise ValueError("positive tolerance and valid iteration budgets required")
     if not 0 <= weight_floor < 1 / len(c):
         raise ValueError("invalid weight floor")
     if (
@@ -62,7 +69,7 @@ def fit_selected_weights_kl(
     def objective(v):
         denom = np.maximum(d @ v, 1e-300)
         likelihood = -np.sum(ow * np.log(denom))
-        ratio = np.maximum(v, weight_floor) / c
+        ratio = np.maximum(v, max(weight_floor, np.finfo(float).tiny)) / c
         penalty = strength * np.sum(v * np.log(ratio))
         gradient = -(d.T @ (ow / denom)) + strength * (np.log(ratio) + 1)
         return float(likelihood + penalty), gradient
@@ -90,6 +97,10 @@ def fit_selected_weights_kl(
 
     def certificate(weights):
         loss, gradient = objective(weights)
+        if constraint is None:
+            vertex = np.full(len(c), weight_floor)
+            vertex[np.argmin(gradient)] += 1 - len(c) * weight_floor
+            return loss, float(gradient @ (weights - vertex)), vertex, gradient
         vertex = linprog(
             gradient,
             A_ub=None if constraint is None else constraint[None],
@@ -101,9 +112,9 @@ def fit_selected_weights_kl(
         )
         if not vertex.success:
             raise RuntimeError("regularized population KKT oracle failed")
-        return loss, float(gradient @ (weights - vertex.x)), vertex.x
+        return loss, float(gradient @ (weights - vertex.x)), vertex.x, gradient
 
-    loss, gap, vertex = certificate(v)
+    loss, gap, vertex, gradient = certificate(v)
     initial_gap = gap
     restart_iterations = 0
     if gap > tolerance:
@@ -123,44 +134,76 @@ def fit_selected_weights_kl(
         )
         restart_iterations = int(restart.nit)
         candidate = simplex(np.maximum(restart.x, weight_floor))
-        candidate_loss, candidate_gap, candidate_vertex = certificate(candidate)
+        candidate_loss, candidate_gap, candidate_vertex, candidate_gradient = (
+            certificate(candidate)
+        )
         if (
             constraint is None or constraint @ candidate <= 1e-8
         ) and candidate_loss <= loss:
-            v, loss, gap, vertex = (
+            v, loss, gap, vertex, gradient = (
                 candidate,
                 candidate_loss,
                 candidate_gap,
                 candidate_vertex,
+                candidate_gradient,
             )
 
     polish_iterations = 0
+    pairwise_iterations = 0
     while gap > tolerance and polish_iterations < polish_maxiter:
+        if constraint is not None and constraint @ v > 1e-8:
+            break
         direction = vertex - v
-        search = minimize_scalar(
-            lambda step, current=v, delta=direction: objective(current + step * delta)[
-                0
-            ],
-            bounds=(0.0, 1.0),
-            method="bounded",
-            options={"xatol": 1e-12},
+        if constraint is None:
+            # Transfer mass directly instead of shrinking every component toward
+            # one vertex. The latter can zigzag for thousands of iterations.
+            receiver = int(np.argmin(gradient))
+            donor = int(np.argmax((v - weight_floor) * (gradient - gradient[receiver])))
+            transfer = max(float(v[donor] - weight_floor), 0.0)
+            if donor == receiver or transfer == 0:
+                break
+            direction = np.zeros_like(v)
+            direction[donor], direction[receiver] = -transfer, transfer
+            pairwise_iterations += 1
+        denom = np.maximum(d @ v, 1e-300)
+        change = d @ direction
+
+        # Near stationarity, objective differences lose significant digits. Solve
+        # the monotone directional derivative of the SAME convex KL objective.
+        # Matrix-vector products are cached outside the scalar root search.
+        def slope(step, v=v, direction=direction, denom=denom, change=change):
+            point = np.maximum(
+                v + step * direction, max(weight_floor, np.finfo(float).tiny)
+            )
+            return float(
+                -np.sum(ow * change / np.maximum(denom + step * change, 1e-300))
+                + strength * np.dot(direction, np.log(point / c) + 1)
+            )
+
+        if slope(0) >= 0:
+            break
+        step = 1.0 if slope(1) <= 0 else brentq(slope, 0.0, 1.0, xtol=1e-15, rtol=1e-14)
+        candidate = simplex(np.maximum(v + step * direction, weight_floor))
+        candidate_loss, candidate_gap, candidate_vertex, candidate_gradient = (
+            certificate(candidate)
         )
-        candidate = simplex(np.maximum(v + float(search.x) * direction, weight_floor))
-        candidate_loss, candidate_gap, candidate_vertex = certificate(candidate)
         if candidate_loss > loss + 1e-12 or np.array_equal(candidate, v):
             break
-        v, loss, gap, vertex = (
+        v, loss, gap, vertex, gradient = (
             candidate,
             candidate_loss,
             candidate_gap,
             candidate_vertex,
+            candidate_gradient,
         )
         polish_iterations += 1
 
     feasible = constraint is None or constraint @ v <= 1e-8
-    if gap > tolerance or not feasible or not np.isfinite(loss):
+    if gap > tolerance or not feasible or not np.isfinite(loss) or not np.isfinite(gap):
         raise RuntimeError(
-            f"regularized population solver not converged: gap={gap}, {result.message}"
+            f"regularized population solver not converged: gap={gap}, "
+            f"initial_gap={initial_gap}, polish_iterations={polish_iterations}, "
+            f"{result.message}"
         )
     return v, {
         "strength": float(strength),
@@ -169,6 +212,8 @@ def fit_selected_weights_kl(
         "initial_kkt_gap": max(float(initial_gap), 0.0),
         "scaled_restart_iterations": restart_iterations,
         "polish_iterations": polish_iterations,
+        "pairwise_iterations": pairwise_iterations,
+        "polishing_method": "feasible_directional_derivative",
         "solver_message": str(result.message),
         "support_constraint_active": constraint is not None,
         "weak_parent_mass_cap": float(weak_parent_mass),

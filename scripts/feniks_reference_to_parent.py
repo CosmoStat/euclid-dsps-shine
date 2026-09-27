@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import shutil
 from pathlib import Path
 
@@ -795,6 +796,72 @@ def schedule(root: Path) -> None:
     )
 
 
+def recovery_inputs(root: Path) -> dict:
+    """Read-only verification before replacing code for an unfinished parent fit."""
+    _, cfg, digest = require_population_admission(root)
+    ci.require_reference(root, digest)
+    out = root / "population"
+    if any(
+        (root / p).exists()
+        for p in (
+            "population/FINAL.json",
+            "population/parent.json",
+            "report/FINAL.json",
+            "posterior",
+        )
+    ):
+        raise ValueError(
+            "Parent or downstream output already exists; refuse mixed recovery"
+        )
+    for i in range(cfg["bank"]["shards"]):
+        bank_dir = root / "banks" / f"shard_{i:03d}"
+        if not complete(bank_dir, digest):
+            raise ValueError(f"Completed bank required: {bank_dir}")
+        for start in range(
+            0, cfg["bank"]["rows_per_shard"], cfg["bank"]["checkpoint_rows"]
+        ):
+            if not complete(bank_dir / f"block_{start:07d}", digest):
+                raise ValueError("Incomplete bank block")
+    stop, resume = read(out / "STOP.json"), read(out / "RESUME.json")
+    if (
+        stop["reason"] not in ("validation_plateau", "maximum_epoch")
+        or stop["epoch"] != resume["epoch"]
+        or stop["epoch"] < 1
+        or stop["epoch"] > cfg["classifier"]["epochs"]
+    ):
+        raise ValueError("Completed classifier stopping record required")
+    state = Path(resume["state_file"])
+    if state.name != str(state) or sha(out / state) != resume["state_sha256"]:
+        raise ValueError("Optimizer checkpoint integrity failed")
+    files = [
+        root / "MANIFEST.json",
+        root / "experiment.yaml",
+        root / "reference/FINAL.json",
+    ]
+    files += [
+        out / n
+        for n in (
+            "best.eqx",
+            "STOP.json",
+            "RESUME.json",
+            "training.jsonl",
+            "validation_positions.npy",
+            state,
+        )
+    ]
+    if (out / "best.eqx").stat().st_size == 0:
+        raise ValueError("Missing best classifier checkpoint")
+    return dict(
+        contract=digest,
+        classifier_epoch=stop["epoch"],
+        banks=cfg["bank"]["shards"],
+        parent_weights_refitted=True,
+        classifier_retraining=False,
+        kkt_tolerance=2e-6,
+        preserved={str(p.relative_to(root)): sha(p) for p in files},
+    )
+
+
 def main() -> None:
     import matplotlib
 
@@ -810,6 +877,7 @@ def main() -> None:
             "population",
             "report",
             "schedule",
+            "check-recovery",
         ),
     )
     p.add_argument("--root", type=Path, required=True)
@@ -833,6 +901,10 @@ def main() -> None:
         initialize_exploratory(args.source_run.resolve(), root)
     elif args.mode == "bank":
         bank(root, args.task)
+    elif args.mode == "check-recovery":
+        print(
+            json.dumps(recovery_inputs(root), indent=2, sort_keys=True, allow_nan=False)
+        )
     else:
         globals()[args.mode](root)
 

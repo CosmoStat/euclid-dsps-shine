@@ -15,6 +15,14 @@ on this target, on the historical catalogue, or on real sky observations.
 
 ## Latest result: physical capacity improves, one gate remains
 
+Update from exploratory run `avi_reference_to_parent_20260927_184817`:
+four reference banks completed and classifier stopped on validation plateau at
+epoch 460, best NLL 1.59957. Parent fitting failed its numerical KKT certificate
+(1.18467e-5 > 2e-6); no learned parent or scientific closure result yet.
+The corrected solver and [same-run recovery](feniks_reference_to_parent.md) reuse
+banks and classifier, with no relaxed certificate and no posterior training.
+This is execution progress, not validation of population recovery or ratios.
+
 Run `avi_reference_to_parent_20260927_173822` is synchronized and inspected.
 Seven available receipt artifacts and the frozen configuration verify; two
 excluded NPZs remain remote. Qualification completed numerically and exited 2
@@ -29,7 +37,9 @@ on the scientific gate. The bank and blind population stages did not run.
 | Validation CDF qualification | Only failed capacity gate: 0.033833 > effective 0.032400; excess 0.001433 |
 | Numerical capacity optimization | HiGHS Optimal; TRAIN CDF constraint active; not a training crash |
 | SFH population conditional / new-reference photometric prediction | Unvalidated; final SFH contrast W1/IQR 0.958 |
-| Parent learned from fluxes with this reference | NOT RUN; dependencies cancelled after qualification FAIL |
+| New reference banks | DONE 4/4 in exploratory continuation 184817; none ran in strict qualification 173822 |
+| Photometric classifier on these banks | Training stopped on validation plateau, epoch 460; ratio audit still pending |
+| Parent learned from fluxes with this reference | INCOMPLETE: numerical KKT failure after classifier; same-run recovery prepared |
 | Final learned-parent 15D posterior / independent calibration | NOT RUN; earlier truth-supervised control evidence remains available |
 | Production / paper claims | Not approved |
 

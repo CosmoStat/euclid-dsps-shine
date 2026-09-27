@@ -4,6 +4,50 @@ One controlled change and one guarded DAG, not another basis sweep. Read the
 [synchronized results](feniks_reference_redesign_results_20260927.md) first.
 No jobs are launched by local tests or by generating the analysis figures.
 
+## Recovery after completed classifier, 2026-09-27
+
+Run `avi_reference_to_parent_20260927_184817` completed all four banks and
+stopped classifier training on validation plateau at epoch 460 (best NLL
+1.59957185). Job 252118 then failed in the regularized weight solver with KKT
+gap 1.18467e-5 versus the unchanged 2e-6 tolerance. This is not the CDF admission
+gate, nor evidence of failed population recovery: parent fitting was unfinished.
+
+The numerical fix keeps the same KL-regularized objective, constraints and
+tolerance. It uses pairwise feasible mass transfers on the simplex and solves
+the monotone line derivative instead of comparing tiny objective differences.
+With a weak-parent-mass constraint, it retains feasible Frank-Wolfe segments
+and uses the same derivative root search. A deterministic 256-component test
+that exhausted the old 2000 polishing iterations now meets the original KKT
+criterion; constrained and premature-success regression tests also pass.
+That fixture is not the remote catalogue; remote completion still needs checking.
+
+Use a **new code snapshot in the same run**, not ordinary resume with the old
+snapshot, and do not launch a new bank:
+
+```bash
+(
+set -euo pipefail
+cd /lustre/fswork/projects/rech/jrx/urx63nr/euclid-dsps-shine
+git switch feature/feniks-exact-posterior-benchmark
+git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+source "$WORK/miniconda3/etc/profile.d/conda.sh"
+conda activate shine
+BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
+PARENT_RUN="$BASE/avi_reference_to_parent_20260927_184817"
+bash scripts/recover_feniks_reference_to_parent.sh "$PARENT_RUN"
+)
+```
+
+Recovery refuses active jobs (including pending ones), scheduler query errors,
+incomplete/corrupt banks, an invalid optimizer checkpoint or an already written
+parent. It records preserved hashes and old code/job pointers under `recovery/`,
+freezes patched code and submits only population -> report. `STOP.json` causes
+the existing best classifier to load without another optimizer step. No change
+to manifest, experiment configuration, qualification, banks or training history.
+The watcher additionally shows calibration/weight-solving stage and penalty.
+After partial submission, ordinary `--resume` uses the newly recorded code;
+wait until recorded jobs have stopped. No automatic job cancellation is performed.
+
 ## Explicit exploratory continuation, 2026-09-27
 
 The completed `avi_reference_to_parent_20260927_173822` run passes physical SW,
@@ -227,8 +271,8 @@ support is described in `population/selected_support.json` and `BLOCKED.json`.
 
 ## Local verification
 
-69 focused tests pass across the new objective/pipeline, reference redesign,
-reference audit, coherent inference and support-repair contracts. The new
+94 focused tests pass across the objective/pipeline, regularized and unregularized
+solvers, reference redesign, reference audit, coherent inference and support-repair contracts. The
 end-to-end smoke uses mock photometry but real component sampling, transforms,
 classifier optimization, calibrated ratios, selection correction and reports.
 It checks immutable sources, observation-only target readers, no diagnostic
@@ -236,6 +280,9 @@ weight handoff, strict failed qualification blocking all banks, narrow explicit
 exploratory admission retaining FAIL, unchanged imported sources, report-only
 capacity controls, idempotence and missing-only Slurm resume. The exact downloaded
 failed certificate also passes the new execution admission, not qualification.
+Recovery tests force a failure after classifier training, then forbid any new
+optimizer call and verify unchanged training artifacts. Sharp 256-component
+solver fixtures pass the original KKT and weak-parent-mass constraints.
 Ruff, compileall and Bash syntax checks pass.
 This is not native GPU DSPS validation; that is the remote bank work. No
 per-galaxy MCMC/NUTS, unrelated legacy fit runs or new posterior tests were added.
