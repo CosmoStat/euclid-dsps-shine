@@ -4,6 +4,78 @@ One controlled change and one guarded DAG, not another basis sweep. Read the
 [synchronized results](feniks_reference_redesign_results_20260927.md) first.
 No jobs are launched by local tests or by generating the analysis figures.
 
+## Explicit exploratory continuation, 2026-09-27
+
+The completed `avi_reference_to_parent_20260927_173822` run passes physical SW,
+marginals and finite-mass criteria. Its only failed capacity gate is CDF:
+0.033833 versus 0.032400, an excess of 0.001433. The user explicitly chose to
+proceed to photometry-only parent recovery rather than spend another campaign
+on this small excess. This does **not** prove statistical equivalence or justify
+rewriting the qualification as PASS.
+
+`--explore-cdf FAILED_RUN NEW_ROOT` imports the completed reference and capacity
+receipts into a new run, pins their hashes and freezes current code. The source
+is unchanged; `passed: false` is retained. No LP, capacity Monte Carlo, target
+generation, standalone pilot or posterior training is repeated. The three-job
+DAG is reference bank array -> classifier/blind parent -> report. The unchanged
+configuration requests 2097152 forward simulations and at most four H100s.
+
+Admission is intentionally narrow and disclosed as post-hoc: only the
+`physical_cdf` candidate, all other original capacity gates passing, finite
+metrics, CDF excess at most 0.002 and absolute CDF at most 0.04. These bounds
+authorize exploratory compute, not scientific qualification. The launcher
+recomputes eligibility from saved metrics and unchanged contracts, verifies
+source receipts, and rejects incomplete, corrupt or other failed qualifications.
+Default strict submissions still stop on any failed qualification.
+
+The report compares **learned parent** and **truth-assisted capacity control**
+using the same reserved bank (role 4). Both retain all 15 dimensions. Each
+selected row is weighted by its component's parent weight; parent selection
+probability is the weighted sum of component efficiencies. No new DSPS calls
+are needed for the comparison. Control weights are read only in the report,
+never in classifier/population fitting, bank sampling or initialization.
+
+Look at `report/parent_physical.png`, `selected_physical.png`,
+`observable_predictive.png`, `observable_predictive_comparison.csv` and
+`DECISION.json`. The latter retains `strict_qualification_passed: false`,
+the admission policy and control effective sample size. SFH metrics remain
+in `marginals.csv` and `joint.csv`; capacity controls have `capacity_` labels.
+
+- Good control photometry but bad learned photometry: investigate inference,
+  ratios or identifiability; this alone does not prove classifier error.
+- Both fail photometry/selection: the current reference fit may not reproduce
+  the joint population/observation distribution; more classifier epochs alone
+  are not a demonstrated remedy. The physical-fit control is not an optimal
+  photometric oracle, so its failure is not proof of impossibility for the family.
+- Learned parent passes physical/selected/observable development checks: proceed
+  to a fresh-simulation 15D posterior benchmark, still not production approval.
+
+This replaces the preceding recommendation for two additional preliminary
+checks. Development truth has already influenced the reference; reserve an
+independent final evaluation for publication claims.
+
+Launch this continuation from the completed **failed parent run**, not the
+older redesign root:
+
+```bash
+(
+set -euo pipefail
+cd /lustre/fswork/projects/rech/jrx/urx63nr/euclid-dsps-shine
+git switch feature/feniks-exact-posterior-benchmark
+git pull --ff-only origin feature/feniks-exact-posterior-benchmark
+source "$WORK/miniconda3/etc/profile.d/conda.sh"
+conda activate shine
+BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
+SOURCE="$BASE/avi_reference_to_parent_20260927_173822"
+PARENT_RUN="$BASE/avi_reference_to_parent_$(date +%Y%m%d_%H%M%S)"
+bash scripts/submit_feniks_reference_to_parent.sh --explore-cdf "$SOURCE" "$PARENT_RUN"
+)
+```
+
+Watcher and missing-only resume commands below are unchanged. An exploratory
+watcher displays capacity FAIL and explicit exploratory admission side by side.
+No remote submission is performed by preparing this code.
+
 ## Method and boundaries
 
 Keep `local_256` exactly as saved: 255 overlapping local physical groups plus
@@ -45,7 +117,7 @@ process. Do not claim fresh-test or real-sky validation from these results.
 ## What the one launch runs
 
 1. CPU qualification: 256 x 4096 = **1048576 cheap latent draws**, zero DSPS.
-2. Only on PASS: four H100 bank tasks, **2097152 new DSPS simulations** total,
+2. On PASS (or the explicit bounded exploration above): four H100 bank tasks, **2097152 new DSPS simulations** total,
    524288 per task. These are necessary because old components/kernels changed.
    The coherent target and oracle are reused, not regenerated/retrained.
 3. One H100 classifier/population task: existing MLP (three 256-wide hidden
@@ -91,7 +163,8 @@ is reported separately; maximum epoch is never called convergence.
 - CPU: qualification 30 minutes, report 20 minutes, four threads each.
 - H100: bank concurrency 4, two-hour limit per task; classifier three-hour limit.
 - Full allocation ceiling **11 H100-hours**, not expected runtime or wall time.
-  Queue delay is additional. Qualification failure prevents GPU work.
+  Queue delay is additional. Qualification failure prevents GPU work unless
+  the explicit bounded exploration above is requested in a new root.
 - Frozen config/source hashes and code archive; immutable old runs.
 - Bank receipts every 8192 rows; missing-only bank and optimizer-state resume.
 - `qualification/`: old/new metrics, plot, solver and diagnostic weights.
@@ -100,7 +173,7 @@ is reported separately; maximum epoch is never called convergence.
   observable CDF/tail CSV and plot, `DECISION.json`, `REPORT.md`.
 - `ROADMAP_STATUS.md`: run-specific checklist and next gate, no production approval.
 
-## Launch on Jean-Zay
+## Strict launch on Jean-Zay
 
 Use a subshell so a failed check does not close the interactive SSH session.
 Do not compare full `git rev-parse HEAD` to a short hash.
@@ -138,7 +211,8 @@ bash scripts/submit_feniks_reference_to_parent.sh --resume "$PARENT_RUN"
 ```
 
 Completed failed capacity qualification is not resubmitted unchanged. Inspect
-`qualification/FINAL.json` and its plot instead. Submission refuses active
+`qualification/FINAL.json` and its plot; only the explicit mode above can admit
+the narrowly defined CDF-only case. Submission refuses active
 jobs and records every ID immediately; the report uses `afterany` and GPU
 dependencies use `afterok` with invalid-dependency cancellation.
 
@@ -153,12 +227,15 @@ support is described in `population/selected_support.json` and `BLOCKED.json`.
 
 ## Local verification
 
-57 focused tests pass across the new objective/pipeline, reference redesign,
+69 focused tests pass across the new objective/pipeline, reference redesign,
 reference audit, coherent inference and support-repair contracts. The new
 end-to-end smoke uses mock photometry but real component sampling, transforms,
 classifier optimization, calibrated ratios, selection correction and reports.
 It checks immutable sources, observation-only target readers, no diagnostic
-weight handoff, failed qualification blocking all banks, idempotence and
-missing-only Slurm resume. Ruff, compileall and Bash syntax checks pass.
+weight handoff, strict failed qualification blocking all banks, narrow explicit
+exploratory admission retaining FAIL, unchanged imported sources, report-only
+capacity controls, idempotence and missing-only Slurm resume. The exact downloaded
+failed certificate also passes the new execution admission, not qualification.
+Ruff, compileall and Bash syntax checks pass.
 This is not native GPU DSPS validation; that is the remote bank work. No
 per-galaxy MCMC/NUTS, unrelated legacy fit runs or new posterior tests were added.

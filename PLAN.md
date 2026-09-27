@@ -1,5 +1,26 @@
 # Plan
 
+## 2026-09-27 explicit exploratory continuation after near-threshold CDF failure
+
+- [x] Add an opt-in, narrowly bounded CDF-only admission that retains FAIL and
+  imports completed qualification/reference into a new immutable run root.
+- [x] Implement banks -> photometry-only parent -> report directly, without new
+  capacity fitting, extra pilot simulations or posterior training.
+- [x] Compare the learned parent and truth-assisted capacity control using the
+  same reserved reference bank, with no diagnostic weights in population fitting.
+- [x] Test admission/provenance/failure/restart contracts, update watcher/docs,
+  publish scoped code and exact launch commands.
+- User explicitly requests progress beyond the small CDF excess. This is an
+  exploratory execution decision, not a retrospective scientific PASS.
+- Verification: 69 focused tests pass, including strict/exploratory DAGs,
+  unchanged sources, genuine tiny classifier fitting with mock photometry,
+  no target-theta fitting inputs, report controls and missing-only resume.
+  Ruff, compileall, Bash syntax and scoped diff checks pass. Actual saved CDF
+  certificate is eligible; its strict FAIL is retained. No remote job submitted.
+- Handoff: --explore-cdf on avi_reference_to_parent_20260927_173822 in a new
+  root. Same target/geometry/config; 2097152 forward simulations, four H100s
+  maximum, then one classifier/parent and a CPU report. No posterior yet.
+
 ## 2026-09-27 reference-to-parent qualification result review
 
 - [x] Verify downloaded receipts and inspect physical, SFH, solver and gate results.

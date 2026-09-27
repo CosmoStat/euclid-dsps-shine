@@ -1,5 +1,5 @@
 #!/bin/bash
-# REDESIGN NEW_ROOT [CONFIG], or --resume EXISTING_ROOT. Never overwrite a run.
+# REDESIGN NEW_ROOT [CONFIG], --explore-cdf FAILED_RUN NEW_ROOT, or --resume ROOT.
 set -Eeuo pipefail
 command -v sbatch >/dev/null
 REPO=$(pwd -P)
@@ -10,12 +10,19 @@ if [[ ${1:-} == --resume ]]; then
   export FENIKS_RTP_ROOT=$(realpath "${2:?existing root}")
   source "$FENIKS_RTP_ROOT/INPUT.env"
 else
-  SOURCE=$(realpath "${1:?completed reference redesign root}")
-  export FENIKS_RTP_ROOT=$(realpath -m "${2:?new root}")
-  CONFIG=$(realpath "${3:-configs/experiments/feniks_reference_to_parent.yaml}")
+  if [[ ${1:-} == --explore-cdf ]]; then
+    SOURCE=$(realpath "${2:?completed failed qualification run}")
+    export FENIKS_RTP_ROOT=$(realpath -m "${3:?new exploratory root}")
+    INIT=(init-exploratory --source-run "$SOURCE")
+  else
+    SOURCE=$(realpath "${1:?completed reference redesign root}")
+    export FENIKS_RTP_ROOT=$(realpath -m "${2:?new root}")
+    CONFIG=$(realpath "${3:-configs/experiments/feniks_reference_to_parent.yaml}")
+    INIT=(init --redesign "$SOURCE" --config "$CONFIG")
+  fi
   test ! -e "$FENIKS_RTP_ROOT"
   test ! -e "$FENIKS_RTP_ROOT.code.tar"
-  python -m scripts.feniks_reference_to_parent init --redesign "$SOURCE" --root "$FENIKS_RTP_ROOT" --config "$CONFIG"
+  python -m scripts.feniks_reference_to_parent "${INIT[@]}" --root "$FENIKS_RTP_ROOT"
   tar --exclude='__pycache__' --exclude='*.pyc' -cf "$FENIKS_RTP_ROOT.code.tar" euclid_dsps scripts configs pyproject.toml
   DIGEST=$(sha256sum "$FENIKS_RTP_ROOT.code.tar" | cut -d' ' -f1)
   export FENIKS_RTP_CODE="${SCRATCH:?}/feniks_sc_drws_runtime/code/reference-to-parent-$DIGEST"
@@ -78,7 +85,7 @@ fi
 REPORT_DEP=()
 [[ -z $CURRENT_JOBS ]] || REPORT_DEP=(--dependency="afterany:${CURRENT_JOBS//,/:}")
 submit report "$REPORT_MINUTES" 0 "${REPORT_DEP[@]}"
-echo 'CPU capacity qualification -> reference banks -> blind parent -> report.'
-echo 'GPU jobs cannot start after failed qualification. No posterior training.'
+echo 'Reference banks -> blind parent -> report. Completed qualification is reused.'
+echo 'GPU work requires capacity PASS or explicit bounded CDF-only exploration. No posterior training.'
 echo 'Default full allocation ceiling: 11 H100-hours; not an expected runtime.'
 printf 'watch=bash scripts/watch_feniks_reference_to_parent.sh %q\n' "$FENIKS_RTP_ROOT"

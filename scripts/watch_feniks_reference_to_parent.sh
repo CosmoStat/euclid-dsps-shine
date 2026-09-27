@@ -25,7 +25,10 @@ print('\nSTAGE              SAVED STATE / DETAIL')
 print('Capacity           ', ('PASS' if q['passed'] else 'FAIL') if q else p.get('stage', 'waiting'))
 for row in q.get('results', []):
     print(f"  {row['objective']:16s} CDF={row['validation_cdf_max']:.4f} SW={row['physical_sw']:.4f}")
-cfg = read(r/'MANIFEST.json').get('settings', {})
+manifest = read(r/'MANIFEST.json')
+if manifest.get('exploratory_admission'):
+    print('  EXPLORATORY continuation; CDF FAIL retained, not a scientific PASS.')
+cfg = manifest.get('settings', {})
 n = cfg.get('bank', {}).get('shards', 0)
 done = sum(read(r/'banks'/f'shard_{i:03d}'/'FINAL.json').get('status') == 'COMPLETE' for i in range(n))
 print(f'Reference banks     {done}/{n}')

@@ -71,7 +71,18 @@ Weak individual SFH constraints or genuine zero star formation are not errors.
 The population distribution of those variables still affects fluxes and the
 selection probability, and cannot be dismissed for parent inference.
 
-## Recommended next step, not implemented or submitted in this review
+## Follow-up execution decision
+
+After this review the user explicitly requested continuing past the small
+CDF-only excess. The [runbook](feniks_reference_to_parent.md) now implements
+`--explore-cdf`: import completed geometry/qualification into a fresh root,
+retain FAIL, and run reference banks -> blind parent -> report directly.
+The physical-fit control is evaluated from the same reserved bank, not from
+an extra pilot. No diagnostic weights enter the blind fit and no posterior
+is trained yet. This replaces the preliminary experiments recommended below;
+it does not revise the numerical evidence or certify the failed CDF criterion.
+
+## Original recommendation, superseded by the explicit decision above
 
 Do not widen thresholds silently, regenerate the target, rerun the same LP,
 increase the number of components blindly, or retrain the final posterior.

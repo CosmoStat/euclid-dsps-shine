@@ -38,12 +38,23 @@ sampling comparator differs. Do not interpret the old fit's changed PASS/FAIL
 as an improvement in that fit. No evidence yet identifies the new worst CDF
 direction or proves the excess is only sampling noise.
 
-**Recommended next, not yet implemented:** bounded fixed-weight CPU CDF
-localization/uncertainty plus a short full-15D forward-predictive control in
-parallel. This checks whether residual SFH population mismatch materially
-affects photometry/selection before committing to the large reference bank.
-Preserve the failed gate; do not silently override it. Details and decision
-branches: [result review](feniks_reference_to_parent_results_20260927.md).
+**Next action, explicitly requested by the user and now implemented:** continue
+directly to the reference-bank -> photometry-only parent -> report benchmark.
+Use `--explore-cdf` on the completed failed run in a new root. The small
+CDF-only excess is admitted for exploratory execution, not relabelled PASS;
+all other capacity gates must pass and original thresholds remain unchanged.
+No capacity rerun, extra pilot or posterior training. The same reserved bank
+also evaluates the truth-assisted capacity fit, to separate reference predictive
+limitations from difficulties in blind inversion without additional DSPS work.
+This supersedes the earlier recommendation for two additional preliminary checks.
+Code preparation and local smoke tests are not completed remote parent recovery.
+See the [launch runbook](feniks_reference_to_parent.md) and
+[result review](feniks_reference_to_parent_results_20260927.md).
+
+After this run, inspect learned-parent physical/selected closure, selection
+efficiency, flux CDFs/tails and classifier ratio diagnostics together. Only if
+these are satisfactory, freeze the learned parent and generate fresh supervised
+15D posterior training simulations. Final independent calibration remains open.
 
 ## Prior qualification and implemented continuation, 2026-09-27
 

@@ -31,6 +31,139 @@ from scripts.feniks_coherent_parent import complete, finish
 from scripts.report_feniks_forward_population import population_metrics
 
 
+def exploratory_cdf_admission(record: dict, cfg: dict) -> dict:
+    """Post-hoc compute admission, NOT a relaxed scientific qualification."""
+    rows = [r for r in record["results"] if r["objective"] == "physical_cdf"]
+    if record["passed"] is not False or len(rows) != 1:
+        raise ValueError(
+            "Exploration requires one completed, failed physical_cdf result"
+        )
+    row = rows[0]
+    values = (
+        [
+            row[k]
+            for k in (
+                "validation_cdf_max",
+                "physical_sw",
+                "physical_marginal_max",
+                "log10_mean_mass",
+            )
+        ]
+        + list(record["baseline"].values())
+        + list(cfg["qualification_contracts"].values())
+    )
+    if not np.isfinite(values).all():
+        raise ValueError("Nonfinite capacity metrics cannot be admitted")
+    gates, limits = qualification(
+        row, record["baseline"], cfg["qualification_contracts"]
+    )
+    if gates != row["gates"] or limits != row["limits"] or row["passed"] is not False:
+        raise ValueError("Inconsistent saved qualification certificate")
+    failed = [k for k, passed in gates.items() if not passed]
+    excess = row["validation_cdf_max"] - limits["cdf_limit"]
+    # Deliberately narrow, disclosed after seeing the failed result; no statistical
+    # equivalence claim. Other failed gates must still stop expensive downstream work.
+    if (
+        failed != ["validation_cdf"]
+        or not (0 < excess <= 0.002)
+        or row["validation_cdf_max"] > 0.04
+    ):
+        raise ValueError("Only a small CDF-only failure is eligible for exploration")
+    return dict(
+        mode="explicit_cdf_only_exploration",
+        strict_qualification_passed=False,
+        gates=gates,
+        limits=limits,
+        validation_cdf_max=row["validation_cdf_max"],
+        cdf_excess=excess,
+        maximum_admitted_cdf_excess=0.002,
+        maximum_admitted_cdf=0.04,
+        post_hoc_execution_policy=True,
+        production_promotion=False,
+    )
+
+
+def initialize_exploratory(source: Path, root: Path) -> None:
+    """Import immutable completed geometry/results; never import fitted parent u."""
+    if root.exists() or root in source.parents or source in root.parents:
+        raise ValueError("Use a new root outside completed runs")
+    m, cfg, digest = ci.settings(source)
+    if m.get("exploratory_admission") or not m.get("no_posterior_training"):
+        raise ValueError("Expected an original reference-to-parent qualification run")
+    if set(m["frozen_files"]) != {"experiment.yaml"}:
+        raise ValueError("Unsupported additional frozen configuration files")
+    if not complete(source / "qualification", digest):
+        raise ValueError("Completed qualification required")
+    ci.require_reference(source, digest)
+    q = read(source / "qualification/FINAL.json")
+    admission = exploratory_cdf_admission(q, cfg)
+    artifacts = {}
+    for stage in ("reference", "qualification"):
+        receipt = read(source / stage / "FINAL.json")
+        for name in receipt["artifacts"]:
+            path = Path(stage) / name
+            if Path(name).is_absolute() or ".." in path.parts:
+                raise ValueError("Only stage-local imported artifacts are supported")
+            artifacts[str(path)] = sha(source / path)
+        artifacts[f"{stage}/FINAL.json"] = sha(source / stage / "FINAL.json")
+    for name in ("basis.npz", "coordinates.json", "feature_stats.json"):
+        if f"reference/{name}" not in artifacts:
+            raise ValueError("Missing reference artifact in receipt")
+    if "qualification/diagnostic_weights.json" not in artifacts:
+        raise ValueError("Missing capacity control weights in receipt")
+    m = copy.deepcopy(m)
+    m.update(
+        exploratory_admission=admission,
+        qualification_source=str(source),
+        qualification_source_sha256=sha(source / "qualification/FINAL.json"),
+    )
+    m["source_files"].update({str(source / p): h for p, h in artifacts.items()})
+    m["source_files"][str(source / "MANIFEST.json")] = digest
+    root.mkdir(parents=True)
+    for name in ("logs", "reference", "banks", "population", "qualification", "report"):
+        (root / name).mkdir()
+    shutil.copy2(source / "experiment.yaml", root / "experiment.yaml")
+    write(root / "MANIFEST.json", m)
+    new_digest = sha(root / "MANIFEST.json")
+    for stage in ("reference", "qualification"):
+        record = read(source / stage / "FINAL.json")
+        files = []
+        for name in record["artifacts"]:
+            dest = root / stage / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / stage / name, dest)
+            files.append(dest)
+        original = root / stage / "SOURCE_FINAL.json"
+        shutil.copy2(source / stage / "FINAL.json", original)
+        values = {
+            k: v
+            for k, v in record.items()
+            if k not in ("artifacts", "status", "contract")
+        }
+        finish(root / stage, files + [original], new_digest, **values)
+    print(
+        yaml.safe_dump(
+            dict(
+                admission=admission,
+                qualification_recomputed=False,
+                original_run_unchanged=str(source),
+                components=cfg["reference"]["components"],
+                basis="unchanged local joint 15D anchor mixture",
+                nuisance="all 10 SFH coordinates sampled with native associations and kernels",
+                selection=m["selection"],
+                efficiencies="binomial counts including rejected parents",
+                new_reference_simulations=cfg["bank"]["shards"]
+                * cfg["bank"]["rows_per_shard"],
+                classifier=cfg["classifier"],
+                resources=cfg["resources"],
+                posterior="not trained",
+                truth_weights="report-only capacity control; never used in population fitting",
+            ),
+            sort_keys=False,
+        )
+    )
+
+
 def initialize(source: Path, root: Path, config: Path) -> None:
     if root.exists() or root in source.parents or source in root.parents:
         raise ValueError("Use a new root outside completed runs")
@@ -319,25 +452,39 @@ def population_plot(path: Path, truth: np.ndarray, series: dict) -> None:
     plt.close(fig)
 
 
-def require_qualified(root: Path) -> tuple:
+def population_admitted(root: Path, m: dict, cfg: dict, digest: str) -> bool:
+    if not complete(root / "qualification", digest):
+        return False
+    record = read(root / "qualification/FINAL.json")
+    if m.get("exploratory_admission"):
+        expected = exploratory_cdf_admission(record, cfg)
+        if expected != m["exploratory_admission"]:
+            raise ValueError("Exploratory admission does not match qualification")
+        if (
+            sha(root / "qualification/SOURCE_FINAL.json")
+            != m["qualification_source_sha256"]
+        ):
+            raise ValueError("Imported qualification provenance changed")
+        return True
+    return record["passed"] is True
+
+
+def require_population_admission(root: Path) -> tuple:
     m, cfg, digest = ci.settings(root)
-    if (
-        not complete(root / "qualification", digest)
-        or not read(root / "qualification/FINAL.json")["passed"]
-    ):
+    if not population_admitted(root, m, cfg, digest):
         raise ValueError(
-            "Reference capacity not qualified; no expensive downstream work"
+            "Reference capacity not qualified or explicitly admitted; no downstream work"
         )
     return m, cfg, digest
 
 
 def bank(root: Path, task: int) -> None:
-    require_qualified(root)
+    require_population_admission(root)
     ci.bank(root, task)
 
 
 def population(root: Path) -> None:
-    _, cfg, digest = require_qualified(root)
+    _, cfg, digest = require_population_admission(root)
     data = ci.load_bank(root, cfg, digest)
     k = cfg["reference"]["components"]
     counts = np.array(
@@ -408,9 +555,8 @@ def report(root: Path) -> None:
     missing = [
         s for s in ("qualification", "population") if not complete(root / s, digest)
     ]
-    if (
-        complete(root / "qualification", digest)
-        and not read(root / "qualification/FINAL.json")["passed"]
+    if complete(root / "qualification", digest) and not population_admitted(
+        root, m, cfg, digest
     ):
         missing.append("qualification_failed")
     if missing:
@@ -439,11 +585,39 @@ def report(root: Path) -> None:
     target_selected = pd.read_parquet(
         source / "dataset/selected_r29/validation.parquet"
     )
+    # This truth-assisted control is evaluated only after blind fitting, on the
+    # same reserved bank. It never supplies targets or initialization to the fit.
+    oracle_u = np.asarray(
+        read(root / "qualification/diagnostic_weights.json")["u"], float
+    )
+    if (
+        oracle_u.shape != u.shape
+        or not np.isfinite(oracle_u).all()
+        or np.any(oracle_u < 0)
+        or not np.isclose(oracle_u.sum(), 1)
+    ):
+        raise ValueError("Invalid capacity control distribution")
+    oracle_weights = oracle_u[data["component"][mask]]
+    if oracle_weights.sum() <= 0:
+        raise ValueError("No reserved selected support for capacity control")
+    oracle_weights /= oracle_weights.sum()
+    control_rng = np.random.default_rng(cfg["seed"] + 700)
+    oracle = np.asarray(
+        to_theta(
+            sample_basis(
+                basis, control_rng.choice(len(u), n, p=oracle_u), cfg["seed"] + 701
+            ),
+            spec,
+        )
+    )
+    oracle_selected = data["theta"][control_rng.choice(indices, n, p=oracle_weights)]
     marginals = []
     joint = []
     for name, values, actual in (
         ("parent", learned, truth),
         ("selected", selected, target_selected),
+        ("capacity_parent", oracle, truth),
+        ("capacity_selected", oracle_selected, target_selected),
     ):
         one, multi = population_metrics(
             values, actual[ci.NAMES].to_numpy(), ci.NAMES, cfg["seed"] + 702
@@ -457,36 +631,50 @@ def report(root: Path) -> None:
     population_plot(
         out / "parent_physical.png",
         truth[ci.NAMES].to_numpy(),
-        dict(learned_parent=learned),
+        dict(learned_parent=learned, truth_assisted_capacity=oracle),
     )
     population_plot(
         out / "selected_physical.png",
         target_selected[ci.NAMES].to_numpy(),
-        dict(learned_selected=selected),
+        dict(learned_selected=selected, truth_assisted_capacity=oracle_selected),
     )
     bands = [b["name"] for b in read(source / "decoder.json")["bands"]]
     predictive = []
-    for j, band in enumerate(bands):
-        p = data["flux"][mask, j]
-        t = target_selected[f"flux_{band}"].to_numpy()
-        predictive.append(
-            dict(
-                band=band,
-                ks=weighted_ks(p, t, weights),
-                **observable_tail_metrics(p, t, weights),
+    for label, measure in (
+        ("learned_parent", weights),
+        ("truth_assisted_capacity", oracle_weights),
+    ):
+        for j, band in enumerate(bands):
+            p = data["flux"][mask, j]
+            t = target_selected[f"flux_{band}"].to_numpy()
+            predictive.append(
+                dict(
+                    model=label,
+                    band=band,
+                    ks=weighted_ks(p, t, measure),
+                    **observable_tail_metrics(p, t, measure),
+                )
             )
-        )
-    pred = pd.DataFrame(predictive)
-    pred.to_csv(out / "observable_predictive.csv", index=False)
+    comparison = pd.DataFrame(predictive)
+    comparison.to_csv(out / "observable_predictive_comparison.csv", index=False)
+    pred = comparison.loc[comparison.model.eq("learned_parent")].copy()
+    pred.drop(columns="model").to_csv(out / "observable_predictive.csv", index=False)
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    axes[0].bar(range(len(pred)), pred.ks)
+    for offset, (label, group) in zip(
+        (-0.2, 0.2), comparison.groupby("model", sort=False), strict=True
+    ):
+        positions = np.arange(len(group)) + offset
+        axes[0].bar(positions, group.ks, width=0.4, label=label)
+        axes[1].bar(
+            positions, group.predicted_mass_above_truth_q999, width=0.4, label=label
+        )
+    axes[0].legend(fontsize=7)
     axes[0].axhline(
         cfg["parent_contracts"]["maximum_observable_ks"], color="black", ls="--"
     )
     axes[0].set_ylabel("Weighted flux CDF KS")
-    axes[1].bar(range(len(pred)), pred.predicted_mass_above_truth_q999)
     axes[1].axhline(
         cfg["parent_contracts"]["maximum_tail_probability"], color="black", ls="--"
     )
@@ -505,7 +693,10 @@ def report(root: Path) -> None:
         parent_physical_sw=physical_sw(joint[0]) <= limits["maximum_physical_sw"],
         selected_physical_sw=physical_sw(joint[1]) <= limits["maximum_physical_sw"],
         physical_marginals=bool(
-            one.loc[one.group.eq("physical"), "w1_over_truth_iqr"].max()
+            one.loc[
+                one.group.eq("physical") & one.population.isin(["parent", "selected"]),
+                "w1_over_truth_iqr",
+            ].max()
             <= limits["maximum_physical_marginal_w1"]
         ),
         parent_alpha=alpha_error <= limits["maximum_alpha_error"],
@@ -524,6 +715,9 @@ def report(root: Path) -> None:
         limits=limits,
         ready_for_fresh_posterior_benchmark=all(gates.values()),
         ready_for_production=False,
+        strict_qualification_passed=read(root / "qualification/FINAL.json")["passed"],
+        exploratory_continuation=bool(m.get("exploratory_admission")),
+        exploratory_admission=m.get("exploratory_admission"),
         population_uses_target_truth=False,
         population_uses_q=False,
         alpha_learned=parent["alpha_parent"],
@@ -536,12 +730,33 @@ def report(root: Path) -> None:
         sfh_conditional_validated=False,
         validation_used_for_development=True,
     )
+    control_pred = comparison.loc[comparison.model.eq("truth_assisted_capacity")]
+    decision["capacity_control"] = dict(
+        truth_assisted=True,
+        used_for_population_fitting=False,
+        same_reserved_bank=True,
+        parent_physical_sw=physical_sw(joint[2]),
+        selected_physical_sw=physical_sw(joint[3]),
+        alpha_parent=float(oracle_u @ np.asarray(parent["alpha"])),
+        alpha_absolute_error=float(
+            abs(oracle_u @ np.asarray(parent["alpha"]) - alpha_actual)
+        ),
+        maximum_observable_ks=float(control_pred.ks.max()),
+        maximum_tail_probability=float(
+            control_pred.predicted_mass_above_truth_q999.max()
+        ),
+        reserved_effective_rows=float(1 / (oracle_weights @ oracle_weights)),
+        role="diagnostic comparison, not an independent model or likelihood oracle",
+    )
     decision["classifier_stop"] = stopping
     decision["optimization_converged"] = bool(stopping["plateau"])
     write(out / "DECISION.json", decision)
     text = "# Reference to parent benchmark\n\n" + "\n".join(
         f"- {key}: {'PASS' if value else 'FAIL'}" for key, value in gates.items()
     )
+    if decision["exploratory_continuation"]:
+        text += "\n\nCapacity CDF remains FAIL. Explicit exploratory execution only; original thresholds unchanged."
+    text += "\n\nPlots compare the blind learned parent with a truth-assisted capacity control on the same reserved bank. Control weights never enter fitting."
     text += (
         "\n\nNext: "
         + decision["next"]
@@ -559,10 +774,9 @@ def report(root: Path) -> None:
 
 
 def schedule(root: Path) -> None:
-    _, cfg, digest = ci.settings(root)
-    if (
-        complete(root / "qualification", digest)
-        and not read(root / "qualification/FINAL.json")["passed"]
+    m, cfg, digest = ci.settings(root)
+    if complete(root / "qualification", digest) and not population_admitted(
+        root, m, cfg, digest
     ):
         raise ValueError(
             "Completed qualification failed; inspect results, do not resubmit unchanged"
@@ -587,10 +801,20 @@ def main() -> None:
     matplotlib.use("Agg")
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
-        "mode", choices=("init", "qualify", "bank", "population", "report", "schedule")
+        "mode",
+        choices=(
+            "init",
+            "init-exploratory",
+            "qualify",
+            "bank",
+            "population",
+            "report",
+            "schedule",
+        ),
     )
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--redesign", type=Path)
+    p.add_argument("--source-run", type=Path)
     p.add_argument(
         "--config",
         type=Path,
@@ -603,6 +827,10 @@ def main() -> None:
         if args.redesign is None:
             p.error("init requires --redesign")
         initialize(args.redesign.resolve(), root, args.config.resolve())
+    elif args.mode == "init-exploratory":
+        if args.source_run is None:
+            p.error("init-exploratory requires --source-run")
+        initialize_exploratory(args.source_run.resolve(), root)
     elif args.mode == "bank":
         bank(root, args.task)
     else:
