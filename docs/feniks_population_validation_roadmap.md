@@ -15,15 +15,24 @@ on this target, on the historical catalogue, or on real sky observations.
 
 ## Current execution decision: advance posterior in parallel
 
+The synchronized [frozen-recovery result](feniks_parent_recovery_results_20260927.md)
+now passes its in-family controls: physical parent SW 0.01864/0.03481,
+selected SW 0.01292/0.01565, all physical marginals and known-label gates pass.
+Twenty-two downloaded artifact hash references verify. These are two known
+mixture reconstructions, NOT an improvement of the target parent SW 0.09751.
+Classifier ratio exactness and full target population recovery remain open.
+
 User explicitly authorizes advancing despite dust failure. The
 [fresh-parent posterior continuation](feniks_parent_to_posterior.md) now adds
 fresh direct-parent simulations -> unit-weight supervised 15D posterior ->
 separate in-model/coherent-target calibration, in a new exploratory run.
 No dust/SFH removal, q feedback or relabelling of source gates. The frozen CPU
-recovery diagnostic (user-reported 253496-253498 pending) remains untouched and
-independent. These two branches can run concurrently.
+recovery diagnostic (user-reported 253496-253498 completed) was left untouched.
+No downloaded posterior-run result is available at this review; check live
+SLURM before submitting a duplicate. The overnight posterior run remains justified.
 
 - Parent normalization/numerical checks: retained, not recomputed as new science.
+- Physical density recovery for the two tested in-family mixtures: PASS.
 - Parent recovery: dust, joint SW and ratio gates still unvalidated/failed.
 - Fresh learned-parent posterior: implementation prepared; remote run pending.
 - In-model vs target transfer: separate evaluation planned; no result claimed.
@@ -42,7 +51,7 @@ See the [completed blind-parent review](feniks_blind_parent_results_20260927.md)
 | Numerical inversion and parent/selected weights | PASS on saved evidence: sums 1, u = normalized v/alpha, all KKT < 2e-6 |
 | Selection fraction | PASS: learned 0.60235 vs validation 0.60995; component alpha >= 0.09399 |
 | Classifier optimization | Best epoch 399, stopping at 460 on implemented validation plateau |
-| Classifier ratio accuracy | Still unvalidated: independent moment 0.03170 > 0.030, sampling uncertainty not saved |
+| Classifier ratio accuracy | In-family recovery PASS; moment still 0.03170 > 0.030, conditional interval [0.03056, 0.04512], not full ratio validation |
 | Learned physical marginals | Four of five PASS; dust Av 0.18677 parent and 0.17356 selected exceeds 0.1 |
 | Joint physical recovery | FAIL: parent SW 0.09751 and selected SW 0.07666 exceed 0.05 |
 | Physical capacity control | Better parent SW 0.02798, but not a valid full-population oracle |
@@ -51,15 +60,16 @@ See the [completed blind-parent review](feniks_blind_parent_results_20260927.md)
 | Final posterior under new learned parent | Fresh simulation-trained exploratory run prepared; not yet evaluated |
 | Production / paper claims | Not approved; strict capacity CDF FAIL retained |
 
-**Next diagnostic implemented, awaiting Jean-Zay:** the
+**Completed diagnostic:** the
 [frozen-classifier recovery check](feniks_parent_recovery.md), using two known
 mixtures, disjoint reserved bank roles, fixed source penalty/alpha and label-aware
 sampling/penalty controls. CPU cache -> two-case CPU array -> report, no new
 DSPS, classifier training or posterior. Tail attribution, joint asinh-flux
 diagnostics and conditional ratio-moment uncertainty reuse the same rows.
-This separates an inversion/ratio problem from joint reference/target mismatch
-before choosing a retraining intervention. In-family PASS would not validate
-the coherent target or authorize the final posterior automatically.
+Both tested mixtures pass, directing attention toward joint reference/target
+mismatch while retaining residual classifier error. In-family PASS does not
+validate the coherent target. The exploratory posterior is an explicit user
+execution decision, not automatic production promotion.
 
 Do not interpret four marginal passes or good one-band flux CDFs as full 15D
 recovery. Conversely, the small ratio-moment gate excess alone does not establish

@@ -1,5 +1,22 @@
 # Plan
 
+## 2026-09-27 synchronized frozen-parent recovery review
+
+- [x] Verify synchronized receipt hashes, recovery errors and known-label
+  controls for avi_parent_recovery_20260927_205052.
+- [x] Record what passes in-family versus what remains unvalidated on the
+  coherent target; update the roadmap and identify the overnight experiment.
+- Scope: read-only scientific analysis and documentation, no new model,
+  threshold change, simulation or remote submission.
+- Verified 22 downloaded artifact hashes and normalized weights; all four
+  penalized solves meet KKT <=2e-6. Physical parent SW 0.01864/0.03481;
+  both selected/parent physical density controls pass in the tested family.
+- Target parent remains unvalidated; the capacity mixture produces a 1.4016%
+  bright r tail vs 0.1066% target. Components 148/66 dominate upper excess,
+  descriptive only. Ratio moment remains 0.03170, not silently relabelled PASS.
+- Persisted result review/roadmap. Recommend the existing fresh-parent posterior
+  run overnight; no new diagnostic campaign or duplicate remote submission.
+
 ## 2026-09-27 exploratory fresh-parent posterior continuation
 
 - [x] Freeze the completed blind parent and its failed scientific gates in a
