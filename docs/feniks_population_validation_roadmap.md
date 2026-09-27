@@ -38,17 +38,38 @@ artifacts and all bank contents intentionally unavailable locally.
 | Observable predictive | Large raw-flux W1; upper-tail vs bulk cause not yet measured |
 | Real catalogue / paper production | NOT VALIDATED |
 
+### Completed reference audit, 2026-09-27
+
+Run `avi_coherent_reference_audit_20260927_151331` is now inspected: thirteen
+available receipt artifacts and source hashes verify; stderr is empty. The
+optimal TRAIN projected-CDF residual is **0.1231**, test **0.1262**, versus
+validation/test **0.02015**. This is a demonstrated restriction of the current
+fixed family on the chosen features, even with truth-provided fitting targets.
+It is not a lower bound on SW; the truth-CDF optimum's SW need not improve.
+
+The raw r-band flux distance falls **236.59 -> 8.77** under diagnostic upper
+capping; predicted mass beyond target q99.9 is **0.909% versus 0.107%**. Most
+raw distance is upper-tail sensitive, but residual/CDF disagreement persists.
+No clipping is authorized. Individual tail causes remain unidentified.
+
+**Checklist update:** capacity diagnosis COMPLETE / current family INADEQUATE;
+bright-tail diagnosis COMPLETE / reference-tail remediation PENDING. Parent
+recovery and final posterior remain FAIL; the previous supervised marginal
+control remains encouraging. See the [complete review and next-run design](feniks_coherent_reference_results_20260927.md).
+
 ### Next actions, in order
 
-1. **Prepared:** one read-only CPU [reference audit](feniks_coherent_reference_audit.md).
-   Reuse all existing artifacts; no DSPS, classifier, posterior or bootstrap
-   training. Analytic component CDFs + TRAIN-only truth diagnostic weights test
-   the fixed family's restrictions. Reserved-bank exact weighted flux metrics
-   distinguish upper-tail sensitivity from bulk mismatch.
-2. **Conditional on that result:** if the family cannot fit the physical target,
-   modify the reference/gates/smoothing based on the measured defect, not more
-   epochs. If capacity is adequate, investigate photometric ratio/inversion
-   error and identifiability. Do not assume sparse weights alone prove a bug.
+1. **Next implementation:** one bounded reference-redesign qualification, not
+   another unchanged run. Address mass-coordinate tail amplification, local
+   physical kernel/gate resolution and forced shared broad tails. Retain 15D
+   native associations and no q feedback. Analytic TRAIN/validation capacity
+   plus a small paired replay of influential bright rows gate new simulations.
+   This redesigned experiment has no launcher yet; the old audit must not be
+   presented as testing modified bases.
+2. **After capacity/tail qualification:** rebuild a compatible reference bank,
+   classifier and selection efficiencies, then fit the parent from photometry
+   only. Reuse the coherent target dataset and oracle control. Do not silently
+   reuse obsolete component labels or truth-fitted diagnostic weights.
 3. **After parent predictive closure improves:** use new or adequately diversified
    learned-parent training pairs for final supervised NPE, instead of continuing
    the overfitted finite bank. Keep best-validation checkpoint selection.
@@ -57,8 +78,9 @@ artifacts and all bank contents intentionally unavailable locally.
    These gates are not replaced by the physical marginal averages above.
 
 No target catalogue resimulation, extra bands, oracle continuation, large
-bootstrap sweep or blind final training is currently justified. The immediate
-audit has a 30-minute CPU allocation ceiling, not a runtime promise.
+bootstrap sweep or blind final training is currently justified. The completed
+audit had a 30-minute CPU allocation ceiling; this is not a timing promise for
+the next redesign qualification, whose resources must be bounded explicitly.
 
 See [detailed result review](feniks_coherent_inference_results_20260927.md).
 

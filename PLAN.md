@@ -1,5 +1,28 @@
 # Plan
 
+## 2026-09-27 completed reference-capacity audit review
+
+- [x] Verify downloaded audit receipts and their exact source-parent provenance.
+- [x] Read capacity/held-out metrics, inspect both figures, and quantify the
+  bright-tail contribution without discarding or renormalizing observations.
+- [x] Update the scientific checklist and record a bounded next-run decision.
+- Scope: analysis and next-experiment design only; no new production training.
+- Thirteen available audit artifacts and source fingerprints verify; one small
+  CDF feature NPZ was excluded; completed-attempt stderr is empty.
+- Analytic minimax TRAIN CDF residual 0.1231 proves a current-family restriction
+  on the tested empirical features. Test residual 0.1262 vs comparator 0.02015;
+  the objective is not minimum SW. No more epochs can remove this restriction.
+- Upper-capping diagnostic reduces raw r-band scaled W1 236.59 -> 8.77;
+  extreme predicted mass 0.909% vs truth 0.107%. No clipping or tail attribution
+  to a specific physical cause is justified from these aggregate artifacts.
+- Source-level risk: Gaussian reference kernels in asinh(log10 mass) imply
+  an ideal unbounded parent with divergent linear-mass expectation. This does
+  not prove the origin of the finite-bank outliers. Consider affine log-mass
+  and separate/local support geometry in the next bounded qualification.
+- Saved docs/feniks_coherent_reference_results_20260927.md and updated roadmap.
+  No new launcher or training implementation in this analysis-only phase; no
+  existing experiment should be described as testing the proposed redesign.
+
 ## 2026-09-27 coherent inference results and bounded diagnosis
 
 - [x] Read synchronized receipts, dense-draw calibration summaries, population
