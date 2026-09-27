@@ -1,7 +1,7 @@
 """Read-only finite-mixture capacity diagnostics, not a production population fit.
 
 For unit direction d, component j has analytic CDF
-F_j(t) = sum_l A_lj Phi((t - d.anchor_l) / h).
+F_j(t) = sum_l A_lj Phi((t - d.anchor_l) / sqrt(sum_k d_k^2 h_lk^2)).
 The LP minimizes max_m |sum_j u_j F_j(t_m) - F_train(t_m)|.
 This certifies only the chosen projected-CDF features, NOT optimal SW or full
 15D representability. No classifier or approximate posterior enters this fit.
@@ -14,15 +14,17 @@ from scipy.optimize import linprog
 from scipy.special import ndtr
 from scipy.stats import wasserstein_distance
 
+from .native_reference import kernel_bandwidths
+
 
 def cdf_design(basis, train, random_directions=16, thresholds=25, seed=0):
     x = np.asarray(train, dtype=float)
     anchors = np.asarray(basis["anchors"], dtype=float)[:, :5]
     a = np.asarray(basis["conditional"], dtype=float)
-    h = float(basis["bandwidth"])
+    h = kernel_bandwidths(basis)[:, :5]
     if x.ndim != 2 or x.shape[1] != 5 or not np.isfinite(x).all():
         raise ValueError("Finite 5D train coordinates required")
-    if h <= 0 or not np.isfinite(anchors).all() or not np.isfinite(a).all():
+    if not np.isfinite(anchors).all() or not np.isfinite(a).all():
         raise ValueError("Invalid reference kernels")
     if a.shape[0] != len(anchors) or np.any(a < 0) or not np.allclose(a.sum(0), 1):
         raise ValueError("Components must be normalized")
@@ -36,7 +38,8 @@ def cdf_design(basis, train, random_directions=16, thresholds=25, seed=0):
     for direction in directions:
         projected = x @ direction
         t = np.quantile(projected, np.linspace(0.01, 0.99, thresholds))
-        values = ndtr((t[:, None] - (anchors @ direction)[None]) / h) @ a
+        projected_std = np.sqrt(h**2 @ direction**2)
+        values = ndtr((t[:, None] - (anchors @ direction)[None]) / projected_std) @ a
         design.append(np.clip(values, 0, 1))  # Roundoff in normalized CDF sums only.
         target.append(np.searchsorted(np.sort(projected), t, side="right") / len(x))
         grid.append(t)

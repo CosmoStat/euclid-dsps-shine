@@ -1,5 +1,29 @@
 # Plan
 
+## 2026-09-27 bounded reference redesign qualification
+
+- [x] Add opt-in affine log-mass and normalized locally resolved 15D reference
+  kernels; preserve all legacy specifications and frozen artifacts.
+- [x] Implement four controlled capacity cells plus a parallel, bounded paired
+  replay of influential bright rows and reserved controls. No neural training.
+- [x] Select on development validation only, write explicit next-bank gates,
+  provenance, small plots and a compact reconnect-safe watcher.
+- [x] Verify numerical/normalization, source isolation, replay and Slurm recovery
+  tests; publish exact launch commands and update the roadmap.
+- Scope: qualification before rebuilding a reference bank, not production
+  parent recovery. Reuse the coherent target and existing posterior oracle.
+- Verification: 49 focused tests pass, including eight new tests; three legacy
+  tests fail importing the pre-existing unrelated `celuimport` test typo.
+  Eight new tests also pass independently after adding watcher/measure checks.
+  Ruff, compileall, shell syntax and diff checks pass. Smoke plots inspected.
+  Actual GPU DSPS replay is remote work, not claimed from the mock-forward smoke.
+- Launch: scripts/submit_feniks_reference_redesign.sh; four CPU capacity cells
+  and one H100 paired replay (256 forward rows, 15-minute allocation ceiling),
+  frozen-source, missing-only resume. No remote jobs submitted locally.
+- Prepared docs/feniks_reference_redesign.md and updated the current checklist;
+  qualified basis handoff explicitly excludes truth-fitted weights. Blind parent
+  recovery and final posterior calibration remain open, not production-approved.
+
 ## 2026-09-27 completed reference-capacity audit review
 
 - [x] Verify downloaded audit receipts and their exact source-parent provenance.

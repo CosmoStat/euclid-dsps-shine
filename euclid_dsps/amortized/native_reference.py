@@ -1,6 +1,7 @@
 """Normalized continuous 15D mixtures over independent native proposal anchors.
 
-g_j(x) = sum_l A_lj Normal(x; anchor_l, h^2 I), sum_l A_lj = 1.
+g_j(x) = sum_l A_lj Normal(x; anchor_l, diag(h_l^2)), sum_l A_lj = 1.
+Legacy models retain their scalar h and identical sampling streams.
 The gates defining A depend on the five physical coordinates. Joint anchors
 retain reference physical/SFH dependence; every coordinate is still stochastic.
 This is a reference-family assumption, not an estimate of the target SFH law.
@@ -36,7 +37,16 @@ def make_basis(anchors, components, bandwidth, gate_width, broad_fraction, seed)
     )
 
 
-def sample_basis(basis, labels, seed):
+def kernel_bandwidths(basis):
+    """Scalar legacy or positive per-anchor diagonal Gaussian standard deviations."""
+    h = np.asarray(basis["bandwidth"], dtype=float)
+    h = np.broadcast_to(h, basis["anchors"].shape)
+    if not np.isfinite(h).all() or np.any(h <= 0):
+        raise ValueError("Finite positive kernel bandwidths required")
+    return h
+
+
+def sample_basis(basis, labels, seed, *, return_aux=False):
     """Draw theta in normalized coordinates, never from an inference network."""
     rng = np.random.default_rng(seed)
     labels = np.asarray(labels, dtype=int)
@@ -47,20 +57,24 @@ def sample_basis(basis, labels, seed):
     for j in np.unique(labels):
         idx = np.flatnonzero(labels == j)
         anchors[idx] = rng.choice(len(a), len(idx), p=a[:, j])
-    return basis["anchors"][anchors] + float(basis["bandwidth"]) * rng.normal(
-        size=(len(labels), 15)
-    )
+    noise = rng.normal(size=(len(labels), 15))
+    draws = basis["anchors"][anchors] + kernel_bandwidths(basis)[anchors] * noise
+    return (draws, anchors, noise) if return_aux else draws
 
 
 def log_prob(basis, x, weights, chunk=256):
     """Exact normalized latent density; used for contracts, not per-object IS."""
     w = basis["conditional"] @ simplex(weights)
-    h = float(basis["bandwidth"])
+    logw = np.full_like(w, -np.inf)
+    np.log(w, out=logw, where=w > 0)
+    h = kernel_bandwidths(basis)
     result = []
     for rows in np.array_split(x, max(1, int(np.ceil(len(x) / chunk)))):
-        delta = (rows[:, None, :] - basis["anchors"][None]) / h
-        terms = -0.5 * np.sum(delta**2, axis=-1) - 15 * np.log(h * np.sqrt(2 * np.pi))
-        result.extend(logsumexp(terms + np.log(w), axis=1))
+        delta = (rows[:, None, :] - basis["anchors"][None]) / h[None]
+        terms = -0.5 * np.sum(delta**2, axis=-1) - np.log(h * np.sqrt(2 * np.pi)).sum(
+            axis=1
+        )
+        result.extend(logsumexp(terms + logw, axis=1))
     return np.asarray(result)
 
 

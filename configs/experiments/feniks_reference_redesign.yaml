@@ -1,0 +1,31 @@
+seed: 20260927
+# Fixed ablations, not a neural hyperparameter sweep. No test-set selection.
+candidates: [legacy, affine_mass, local_128, local_256]
+local:
+  gate_neighbors: 4
+  kernel_neighbors: 32
+  bandwidth_factor: 0.15
+  minimum_bandwidth: 0.005
+  maximum_bandwidth: 0.15
+  sfh_bandwidth: 0.15
+evaluation:
+  random_directions: 16
+  thresholds: 25
+  population_draws: 20000
+replay:
+  extremes: 32
+  controls: 32
+  decoder_batch_size: 32
+  maximum_noise_scaled_replay_error: 0.00001
+contracts:
+  maximum_cdf_error: 0.03
+  maximum_physical_sw: 0.035
+  maximum_physical_marginal_w1: 0.1
+  sampling_multiplier: 2.0
+resources:
+  prepare_minutes: 20
+  capacity_minutes: 25
+  replay_minutes: 15
+  report_minutes: 5
+  capacity_concurrency: 4
+  cpu_threads: 4

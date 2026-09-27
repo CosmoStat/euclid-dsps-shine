@@ -1,7 +1,7 @@
 """Invertible coordinates for coherent 15D densities.
 
-Mass (already log10) and SFH contrasts have real-line support via asinh. Physical
-coordinates use declared open bounds, with optional positive log coordinates.
+Mass (already log10) has opt-in affine coordinates; legacy mass and SFH use asinh.
+Physical coordinates use declared open bounds, with optional positive log coordinates.
 No clipping, row removal, or dequantization is permitted. The caller determines
 the fitting sample and records its provenance; old v1 specifications are unchanged.
 """
@@ -39,12 +39,14 @@ def validate_theta(theta, spec):
             )
 
 
-def fit_coordinates(train, names, lower, upper, *, positive=()):
+def fit_coordinates(train, names, lower, upper, *, positive=(), affine=()):
     """Fit scales on the supplied training/reference sample, never extend bounds."""
     if tuple(names) != tuple(SPLINE15D_PARAMETER_NAMES):
         raise ValueError("Expected canonical physical-5 + SFH-10 order")
     if not set(positive) <= set(names):
         raise ValueError("Unknown positive coordinate")
+    if not set(affine) <= set(names) or set(affine) & (set(BOUNDED) | set(positive)):
+        raise ValueError("Affine coordinates must have declared real-line support")
     positive_mask = np.array([n in positive for n in names])
     bounded = np.array([n in BOUNDED for n in names]) & ~positive_mask
     train = np.asarray(train, dtype=np.float64)
@@ -68,6 +70,10 @@ def fit_coordinates(train, names, lower, upper, *, positive=()):
     )
     if positive_mask.any():
         spec.update(version="coherent_coordinates_v2", positive=positive_mask.tolist())
+    if affine:
+        spec.update(
+            version="coherent_coordinates_v3", affine=[n in affine for n in names]
+        )
     validate_theta(train, spec)
     raw = np.asarray(to_x(train, spec))
     spec["center"] = np.median(raw, axis=0).tolist()
@@ -89,6 +95,11 @@ def to_x(theta, spec):
         logit,
         jnp.arcsinh((t - jnp.asarray(spec["location"])) / jnp.asarray(spec["width"])),
     )
+    raw = jnp.where(
+        jnp.asarray(spec.get("affine", [False] * len(spec["names"]))),
+        (t - jnp.asarray(spec["location"])) / jnp.asarray(spec["width"]),
+        raw,
+    )
     positive = jnp.asarray(spec.get("positive", [False] * len(spec["names"])))
     # log: (0, infinity) -> R. No upper cap, epsilon floor or discarded rows.
     raw = jnp.where(positive, jnp.log(jnp.where(positive, t, 1.0)), raw)
@@ -104,6 +115,11 @@ def to_theta(x, spec):
         jnp.asarray(spec["bounded"]),
         lo + (hi - lo) * jax.nn.sigmoid(raw),
         jnp.asarray(spec["location"]) + jnp.asarray(spec["width"]) * jnp.sinh(raw),
+    )
+    theta = jnp.where(
+        jnp.asarray(spec.get("affine", [False] * len(spec["names"]))),
+        jnp.asarray(spec["location"]) + jnp.asarray(spec["width"]) * raw,
+        theta,
     )
     positive = jnp.asarray(spec.get("positive", [False] * len(spec["names"])))
     return jnp.where(positive, jnp.exp(jnp.where(positive, raw, 0.0)), theta)
@@ -121,6 +137,11 @@ def log_abs_det_dtheta_dx(x, spec):
     )
     unbounded_ld = (
         jnp.log(jnp.asarray(spec["width"])) + jnp.logaddexp(raw, -raw) - jnp.log(2.0)
+    )
+    unbounded_ld = jnp.where(
+        jnp.asarray(spec.get("affine", [False] * len(spec["names"]))),
+        jnp.log(jnp.asarray(spec["width"])),
+        unbounded_ld,
     )
     positive = jnp.asarray(spec.get("positive", [False] * len(spec["names"])))
     # For t=exp(raw), log|dt/dx| = raw + log(scale).

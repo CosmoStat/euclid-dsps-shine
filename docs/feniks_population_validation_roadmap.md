@@ -35,7 +35,7 @@ artifacts and all bank contents intentionally unavailable locally.
 | Learned-parent NPE on its own model | PARTIAL: marginal averages near nominal, PIT discrepancies and only 871 unique resampled evaluation rows |
 | Learned-parent NPE on target | FAIL: physical 68% coverage average 80.5%, metallicity 91.1%; not the previous universal narrowing failure |
 | Final NPE convergence | Overfits weighted bank after best epoch 29; plateau stop at 100 is no-new-best, not healthy flat validation |
-| Observable predictive | Large raw-flux W1; upper-tail vs bulk cause not yet measured |
+| Observable predictive | Raw r-band W1 dominated by rare bright predictions; bulk disagreement also remains; physical cause not yet isolated |
 | Real catalogue / paper production | NOT VALIDATED |
 
 ### Completed reference audit, 2026-09-27
@@ -59,13 +59,15 @@ control remains encouraging. See the [complete review and next-run design](fenik
 
 ### Next actions, in order
 
-1. **Next implementation:** one bounded reference-redesign qualification, not
+1. **Implemented, awaiting Jean-Zay:** one bounded reference-redesign qualification, not
    another unchanged run. Address mass-coordinate tail amplification, local
    physical kernel/gate resolution and forced shared broad tails. Retain 15D
    native associations and no q feedback. Analytic TRAIN/validation capacity
    plus a small paired replay of influential bright rows gate new simulations.
-   This redesigned experiment has no launcher yet; the old audit must not be
-   presented as testing modified bases.
+   Four CPU cells (legacy, affine log-mass, local 128, local 256) and a parallel
+   paired H100 replay (64 objects x 4 cases) are prepared. The launcher, restart
+   and watcher are in [the runbook](feniks_reference_redesign.md). Local tests
+   validate implementation invariants, not scientific success of new bases.
 2. **After capacity/tail qualification:** rebuild a compatible reference bank,
    classifier and selection efficiencies, then fit the parent from photometry
    only. Reuse the coherent target dataset and oracle control. Do not silently
@@ -78,9 +80,12 @@ control remains encouraging. See the [complete review and next-run design](fenik
    These gates are not replaced by the physical marginal averages above.
 
 No target catalogue resimulation, extra bands, oracle continuation, large
-bootstrap sweep or blind final training is currently justified. The completed
-audit had a 30-minute CPU allocation ceiling; this is not a timing promise for
-the next redesign qualification, whose resources must be bounded explicitly.
+bootstrap sweep or blind final training is currently justified. New qualification
+ceilings: preparation 20 CPU minutes; four capacity cells 25 CPU minutes each;
+one H100 replay 15 minutes; CPU report 5 minutes. Times are allocation ceilings,
+not predictions; queue time is extra. A pass permits a new-reference-bank
+benchmark, not automatic production. Changing components invalidates old labels,
+classifier ratios, selection efficiencies and weighted posterior-bank reuse.
 
 See [detailed result review](feniks_coherent_inference_results_20260927.md).
 
