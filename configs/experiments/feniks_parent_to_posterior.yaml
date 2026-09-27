@@ -1,0 +1,52 @@
+# Exploratory posterior under a frozen, imperfect blind parent. No population fit.
+seed: 2026092701
+bank:
+  shards: 4
+  rows_per_shard: 262144
+  checkpoint_rows: 8192
+  decoder_batch_size: 32
+  role_probabilities: [0.85, 0.10, 0.05]
+  minimum_training_rows: 100000
+  minimum_validation_rows: 16384
+posterior:
+  experts: 2
+  epochs: 200
+  batch_size: 512
+  learning_rate: 0.0001
+  lr_decay_every: 50
+  lr_decay_factor: 0.5
+  minimum_lr: 0.0000125
+  fixed_validation: true
+  validation_limit: 32768
+  architecture:
+    hidden_sizes: [256, 256, 256]
+    flow_family: rq_spline
+    flow_layers: 12
+    flow_hidden_size: 256
+    flow_bins: 16
+    flow_tail_bound: 12.0
+    flow_permutation: indexed_roll
+    log_std_min: -5.0
+    log_std_max: 3.0
+    residual_trunk_width: 512
+    residual_blocks: 3
+    residual_representation_width: 256
+    residual_context_dim: 128
+stopping:
+  block_epochs: 20
+  minimum_epochs: 80
+  patience_blocks: 3
+  minimum_gain: 0.001
+evaluation:
+  objects: 2048
+  draws_per_object: 512
+  # Diagnostic flags only; never override inherited parent failures.
+  maximum_coverage_error: 0.04
+  maximum_pit_ks: 0.05
+resources:
+  bank_minutes: 60
+  train_minutes: 360
+  evaluate_minutes: 60
+  report_minutes: 15
+  bank_concurrency: 4
+  cpu_threads: 4

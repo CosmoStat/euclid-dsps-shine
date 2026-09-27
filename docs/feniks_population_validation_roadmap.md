@@ -13,6 +13,23 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
+## Current execution decision: advance posterior in parallel
+
+User explicitly authorizes advancing despite dust failure. The
+[fresh-parent posterior continuation](feniks_parent_to_posterior.md) now adds
+fresh direct-parent simulations -> unit-weight supervised 15D posterior ->
+separate in-model/coherent-target calibration, in a new exploratory run.
+No dust/SFH removal, q feedback or relabelling of source gates. The frozen CPU
+recovery diagnostic (user-reported 253496-253498 pending) remains untouched and
+independent. These two branches can run concurrently.
+
+- Parent normalization/numerical checks: retained, not recomputed as new science.
+- Parent recovery: dust, joint SW and ratio gates still unvalidated/failed.
+- Fresh learned-parent posterior: implementation prepared; remote run pending.
+- In-model vs target transfer: separate evaluation planned; no result claimed.
+- Final production/paper validation: still requires full calibration and a
+  genuinely untouched evaluation set. Tolerating dust is not passing all checks.
+
 ## Latest result: blind fit completes, physical recovery still fails
 
 Exploratory run `avi_reference_to_parent_20260927_184817` is now synchronized.
@@ -31,7 +48,7 @@ See the [completed blind-parent review](feniks_blind_parent_results_20260927.md)
 | Physical capacity control | Better parent SW 0.02798, but not a valid full-population oracle |
 | Observable prediction | Marginal CDF/tail-frequency gates PASS; joint colors untested and raw tail-amplitude error remains |
 | SFH conditional / joint reference | Unvalidated; SFH SW ~0.38 even for physical capacity control |
-| Final posterior under new learned parent | NOT RUN; parent bias would propagate |
+| Final posterior under new learned parent | Fresh simulation-trained exploratory run prepared; not yet evaluated |
 | Production / paper claims | Not approved; strict capacity CDF FAIL retained |
 
 **Next diagnostic implemented, awaiting Jean-Zay:** the

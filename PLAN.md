@@ -1,5 +1,26 @@
 # Plan
 
+## 2026-09-27 exploratory fresh-parent posterior continuation
+
+- [x] Freeze the completed blind parent and its failed scientific gates in a
+  new opt-in run; leave pending parent-recovery jobs 253496-253498 untouched.
+- [x] Generate fresh direct-parent 15D simulations with independent training,
+  validation and evaluation roles; unit-weight supervised posterior targets.
+- [x] Implement existing two-expert spline training and separately evaluate
+  in-model calibration and coherent-catalogue transfer, retaining dust/SFH.
+- [x] Add restartable Jean-Zay launch/watch/rsync, regression tests and roadmap.
+- User requests proceeding despite dust failure. This authorizes exploratory
+  execution only, not changing CDF, ratio or parent-closure FAIL to PASS.
+- 41 distinct focused/regression tests pass (40-test suite, then six updated
+  focused tests including the added download guard). Actual small flow optimizer,
+  transport and 15D sampling tested with mocked DSPS; no remote science claimed.
+- Tested direct u sampling, disjoint roles, block resume, immutable source,
+  blocked reporting, guarded Slurm DAG/resume, watcher and small-file rsync.
+  Ruff, compileall, Bash syntax and diff checks pass; smoke plots inspected.
+- Handoff: --exploratory on parent run 184817. 1048576 fresh simulations, peak
+  four H100s, 11 H100-hour default allocation ceiling (not runtime estimate).
+  Parent failures remain; no posterior-to-parent feedback or production approval.
+
 ## 2026-09-27 frozen-classifier in-family recovery implementation
 
 - [x] Add independent reserved-bank controls for the saved learned and physical

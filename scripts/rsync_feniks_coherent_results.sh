@@ -9,7 +9,8 @@ case "$KIND" in
   reference_redesign) PREFIX=avi_reference_redesign; VARIABLE=REDESIGN ;;
   reference_to_parent) PREFIX=avi_reference_to_parent; VARIABLE=PARENT_RUN ;;
   parent_recovery) PREFIX=avi_parent_recovery; VARIABLE=RECOVERY ;;
-  *) echo 'Usage: bash scripts/rsync_feniks_coherent_results.sh refinement|inference|reference_audit|reference_redesign|reference_to_parent|parent_recovery' >&2; exit 2 ;;
+  parent_to_posterior) PREFIX=avi_parent_to_posterior; VARIABLE=POSTERIOR_RUN ;;
+  *) echo 'Usage: bash scripts/rsync_feniks_coherent_results.sh refinement|inference|reference_audit|reference_redesign|reference_to_parent|parent_recovery|parent_to_posterior' >&2; exit 2 ;;
 esac
 BASE=/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111
 REMOTE=${FENIKS_REMOTE:-urx63nr@jean-zay.idris.fr}
