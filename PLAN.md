@@ -1,5 +1,24 @@
 # Plan
 
+## 2026-09-28 representation-aware posterior replay recovery
+
+- [x] Inspect reported audit: both expert transport checks pass; only target
+  replay fails (0.00116167 versus 0.001). Parent report now completed, but
+  physical joint closure and classifier convergence remain unvalidated.
+- [x] Separate latent sampling replay from information lost when bounded
+  physical draws are serialized; retain existing latent and transport limits.
+- [x] Save latent draws in future evaluations and add per-coordinate replay
+  diagnostics plus regression tests for quantization and genuine corruption.
+- [x] Implement a new-root re-audit reusing the completed parent report;
+  release the existing bounded continuation only if numerical checks pass.
+- No new DSPS, classifier training, parent switch or scientific promotion.
+- Local 26 pipeline/regression tests and two coordinate/Jacobian tests pass;
+  four affected tests rerun successfully after final hardening. Ruff, compileall
+  and shell syntax pass; Black passes on the changed audit/test modules.
+  Selective GitHub archive extraction tested without WORK writes.
+- [ ] Confirm remote per-coordinate replay diagnosis, then inspect the bounded
+  continuation and paired calibration. No remote job submitted locally.
+
 ## 2026-09-28 targeted overnight recovery and bounded continuation
 
 - [x] Fix saturated grouped selection efficiencies without weakening probability

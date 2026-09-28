@@ -1,14 +1,32 @@
 #!/bin/bash
-# CONDITIONAL POSTERIOR NEW_ROOT [CONFIG], or --resume ROOT.
+# CONDITIONAL POSTERIOR NEW_ROOT [CONFIG], --reaudit OLD_ROOT NEW_ROOT, or --resume ROOT.
 set -Eeuo pipefail
 REPO=$(pwd -P)
 command -v sbatch >/dev/null
 export JAX_ENABLE_X64=true JAX_PLATFORMS=cpu EUCLID_DSPS_JAX_PLATFORMS=cpu
 export EUCLID_DSPS_REQUIRE_GPU=0 EUCLID_DSPS_DISABLE_JAX_PLUGIN_AUTOLOAD=1
 export OPENBLAS_NUM_THREADS=4 OMP_NUM_THREADS=4 MPLBACKEND=Agg
+REUSE=()
 if [[ ${1:-} == --resume ]]; then
   export FENIKS_RECOVERY_ROOT=$(realpath "${2:?existing root}")
   source "$FENIKS_RECOVERY_ROOT/INPUT.env"
+elif [[ ${1:-} == --reaudit ]]; then
+  PREVIOUS=$(realpath "${2:?previous recovery}")
+  mapfile -t SOURCES < <(python - "$PREVIOUS/MANIFEST.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+print(m['source_conditional'])
+print(m['source_posterior'])
+PY
+  )
+  [[ ${#SOURCES[@]} == 2 ]]
+  CONDITIONAL=$(realpath "${SOURCES[0]}")
+  POSTERIOR=$(realpath "${SOURCES[1]}")
+  export FENIKS_RECOVERY_ROOT=$(realpath -m "${3:?new recovery root}")
+  CONFIG=$(realpath "${4:-configs/experiments/feniks_overnight_recovery.yaml}")
+  REUSE=(--reuse-parent "$PREVIOUS")
+  test ! -e "$FENIKS_RECOVERY_ROOT"
+  test ! -e "$FENIKS_RECOVERY_ROOT.code.tar"
 else
   CONDITIONAL=$(realpath "${1:?conditional-parent root}")
   POSTERIOR=$(realpath "${2:?posterior root}")
@@ -28,6 +46,7 @@ check_active() {
   [[ -z "$found" ]] || { echo "Active jobs retained: $folder $found" >&2; exit 1; }
 }
 if [[ ${1:-} != --resume ]]; then
+  [[ ${1:-} != --reaudit ]] || check_active "$PREVIOUS"
   check_active "$CONDITIONAL"
   check_active "$POSTERIOR"
   BASE=$(dirname "$FENIKS_RECOVERY_ROOT")
@@ -38,7 +57,7 @@ if [[ ${1:-} != --resume ]]; then
     check_active "$PREVIOUS"
   fi
   python -m scripts.feniks_overnight_recovery init --root "$FENIKS_RECOVERY_ROOT" \
-    --conditional "$CONDITIONAL" --posterior "$POSTERIOR" --config "$CONFIG"
+    --conditional "$CONDITIONAL" --posterior "$POSTERIOR" --config "$CONFIG" "${REUSE[@]}"
   tar --exclude='__pycache__' --exclude='*.pyc' -cf "$FENIKS_RECOVERY_ROOT.code.tar" euclid_dsps scripts configs pyproject.toml
   DIGEST=$(sha256sum "$FENIKS_RECOVERY_ROOT.code.tar" | cut -d' ' -f1)
   export FENIKS_RECOVERY_CODE="${SCRATCH:?}/feniks_sc_drws_runtime/code/overnight-recovery-$DIGEST"
@@ -96,6 +115,11 @@ fi
 DEP=()
 [[ -z "$CURRENT_JOBS" ]] || DEP=(--dependency="afterany:${CURRENT_JOBS//,/:}")
 submit report "$REPORT_MINUTES" 0 "${DEP[@]}"
-echo 'Parent recovery and tail audit run in parallel on CPU. Audit gates one H100 continuation.'
+if [[ $NEED_PARENT == 0 ]]; then
+  echo 'Completed parent reused; no parent or classifier job.'
+else
+  echo 'Parent recovery and tail audit run in parallel on CPU.'
+fi
+echo 'Numerical audit gates one H100 continuation.'
 echo 'Zero new DSPS/classifier training. Default ceiling: 4 H100-hours, not expected runtime.'
 printf 'watch=bash scripts/watch_feniks_overnight_recovery.sh %q\n' "$FENIKS_RECOVERY_ROOT"

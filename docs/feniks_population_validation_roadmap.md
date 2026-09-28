@@ -13,7 +13,35 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
-## Current result: fresh posterior tested; conditional-parent report blocked
+## Latest remote recovery, reported 2026-09-28
+
+User-provided JSON/job logs (not yet downloaded and hash-verified locally):
+parent job 263486 completed, audit 263487 failed, GPU 263488 cancelled,
+summary 263489 completed with BLOCKED status. No posterior continuation occurred.
+
+- Expanded versus tied flux validation gain: 0.0138395 per row, paired SE
+  0.00100985 over 12199 rows. Same validation was used for penalty selection;
+  this is development evidence, not an independent final test.
+- Parent alpha, observable CDF/tails and core physical marginals PASS.
+  Parent physical SW 0.0931754, selected physical SW 0.0690065: both FAIL.
+  Full physical marginals, classifier ratio moment and classifier plateau FAIL.
+  Thus successful blind learning is NOT full parent recovery or paper readiness.
+- Both expert inverse/Jacobian checks pass, including the selected extreme
+  contexts. In-model replay error 7.35e-13 passes; coherent-target replay
+  0.00116167 narrowly exceeds the original 0.001 threshold.
+- The legacy replay test compares generated x against x reconstructed from
+  saved theta. Bounded float64 sigmoid output can lose latent information.
+  This mechanism is reproduced locally, not yet established as the remote cause.
+
+Next: a versioned representation-aware re-audit reuses the complete parent report.
+Keep latent 0.001 and transport 1e-5 limits. Only a bounded legacy coordinate
+matching theta to eight representable neighbours AND its inverse interval can
+be attributed to serialization precision. Future evaluations also save x directly.
+No blanket tolerance increase, clipping, SFH removal or new DSPS/classifier fit.
+Conditional GPU continuation still uses the OLD frozen parent, not the expanded
+parent. Failed tail/calibration/scientific gates remain; no production promotion.
+
+## Earlier synchronized result: fresh posterior tested; parent report then blocked
 
 The synchronized [overnight review](feniks_overnight_results_20260928.md) supersedes
 the pending-execution statements below. Both runs end in `20260927_234702`.

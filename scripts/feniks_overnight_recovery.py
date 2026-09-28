@@ -26,7 +26,7 @@ def settings(root):
     return ci.settings(root)
 
 
-def initialize(conditional, posterior, root, config):
+def initialize(conditional, posterior, root, config, reuse_parent=None):
     if root.exists() or any(
         s in root.parents or root in s.parents for s in (conditional, posterior)
     ):
@@ -97,6 +97,29 @@ def initialize(conditional, posterior, root, config):
     for source in (conditional, posterior):
         for p in (source / "banks").glob("shard_*/FINAL.json"):
             pinned[str(p)] = sha(p)
+    if reuse_parent is not None:
+        previous, _, previous_digest = settings(reuse_parent)
+        if (
+            Path(previous["source_conditional"]).resolve() != conditional.resolve()
+            or Path(previous["source_posterior"]).resolve() != posterior.resolve()
+            or not complete(reuse_parent / "parent", previous_digest)
+        ):
+            raise ValueError("Parent reuse requires a completed matching recovery")
+        if (
+            root == reuse_parent
+            or root in reuse_parent.parents
+            or reuse_parent in root.parents
+        ):
+            raise ValueError("Use a separate sibling recovery root")
+        for name in ("tied", "report"):
+            directory = reuse_parent / "parent" / name
+            if not complete(directory, cd):
+                raise ValueError(f"Incomplete recovered parent stage: {directory}")
+            final = directory / "FINAL.json"
+            pinned[str(final)] = sha(final)
+            for relative, digest in read(final)["artifacts"].items():
+                pinned[str(directory / relative)] = digest
+        pinned[str(reuse_parent / "MANIFEST.json")] = previous_digest
     root.mkdir(parents=True)
     for name in (
         "logs",
@@ -118,7 +141,20 @@ def initialize(conditional, posterior, root, config):
             conditional / name, target_is_directory=True
         )
     for name in ("tied", "report"):
-        (root / "parent" / name).mkdir()
+        if reuse_parent is None:
+            (root / "parent" / name).mkdir()
+        else:
+            # These are small fits/reports, not banks. Real files remain usable
+            # after lightweight rsync, unlike absolute links to the old run.
+            shutil.copytree(reuse_parent / "parent" / name, root / "parent" / name)
+    frozen = ["experiment.yaml", "parent/MANIFEST.json", "parent/experiment.yaml"]
+    if reuse_parent is not None:
+        for name in ("tied", "report"):
+            frozen.extend(
+                str(p.relative_to(root))
+                for p in (root / "parent" / name).rglob("*")
+                if p.is_file()
+            )
     write(
         root / "MANIFEST.json",
         dict(
@@ -126,26 +162,34 @@ def initialize(conditional, posterior, root, config):
             source_posterior=str(posterior),
             settings=cfg,
             source_files=pinned,
-            frozen_files={
-                name: sha(root / name)
-                for name in (
-                    "experiment.yaml",
-                    "parent/MANIFEST.json",
-                    "parent/experiment.yaml",
-                )
-            },
+            frozen_files={name: sha(root / name) for name in frozen},
             new_dsps_simulations=0,
             classifier_retrained=False,
             population_uses_q=False,
             population_uses_target_truth=False,
             production_promotion=False,
             posterior_start="source best checkpoint, explicit optimizer reset",
+            reused_parent_recovery=None if reuse_parent is None else str(reuse_parent),
+            numerical_replay_contract="float64_theta_replay_v2",
         ),
     )
+    if reuse_parent is not None:
+        finish(
+            root / "parent",
+            [root / "parent" / n / "FINAL.json" for n in ("tied", "report")],
+            sha(root / "MANIFEST.json"),
+            reused_parent_recovery=str(reuse_parent),
+            classifier_retrained=False,
+            new_dsps_simulations=0,
+        )
     print(
         yaml.safe_dump(
             dict(
-                parent="saved expanded fit + classifier; only tied control and report recomputed",
+                parent=(
+                    "completed parent report reused; no parent job"
+                    if reuse_parent is not None
+                    else "saved expanded fit + classifier; only tied control and report recomputed"
+                ),
                 posterior="same 15D two-expert spline, same frozen parent and bank",
                 initial_checkpoint=str(posterior / "posterior/best.eqx"),
                 additional_epochs=c["epochs"],
@@ -201,7 +245,7 @@ def cohort_features(source, cfg, digest, label, positions):
     return ci.features(frame.iloc[positions], bands, stats), truth[positions]
 
 
-def describe_draws(directory, draws, truth, spec, cfg):
+def describe_draws(directory, draws, truth, spec, cfg, latent_x=None):
     from euclid_dsps.amortized.posterior_tail_audit import tail_table
 
     tables = []
@@ -209,7 +253,11 @@ def describe_draws(directory, draws, truth, spec, cfg):
         ("theta", draws, truth),
         (
             "latent_x",
-            np.asarray(ci.to_x(draws.reshape(-1, 15), spec)).reshape(draws.shape),
+            (
+                np.asarray(ci.to_x(draws.reshape(-1, 15), spec)).reshape(draws.shape)
+                if latent_x is None
+                else latent_x
+            ),
             np.asarray(ci.to_x(truth, spec)),
         ),
     ):
@@ -223,13 +271,27 @@ def describe_draws(directory, draws, truth, spec, cfg):
     return result
 
 
-def replay_extremes(model, features, draws, truth, spec, seed, cfg):
+def replay_extremes(
+    model,
+    features,
+    draws,
+    truth,
+    spec,
+    seed,
+    cfg,
+    *,
+    saved_x=None,
+    coordinate_path=None,
+):
     import equinox as eqx
     import jax
     import jax.numpy as jnp
 
     from euclid_dsps.amortized.posterior import posterior_encoder_state
-    from euclid_dsps.amortized.posterior_tail_audit import extreme_positions
+    from euclid_dsps.amortized.posterior_tail_audit import (
+        extreme_positions,
+        replay_coordinates,
+    )
     from euclid_dsps.amortized.proposal_expressivity import sample_independent_mixture
     from euclid_dsps.amortized.structured_population import (
         DensityModel,
@@ -242,7 +304,7 @@ def replay_extremes(model, features, draws, truth, spec, seed, cfg):
             DensityModel(net.experts[0]), net, k, f, draws.shape[1]
         )
     )
-    rows, contexts, extreme_x = [], [], []
+    rows, contexts, extreme_x, physical, stored_x = [], [], [], [], []
     for start in sorted(set((ids[:, 0] // 16 * 16).tolist())):
         current = features[start : start + 16]
         padded = np.pad(current, ((0, 16 - len(current)), (0, 0)), mode="edge")
@@ -271,7 +333,24 @@ def replay_extremes(model, features, draws, truth, spec, seed, cfg):
                 )
             )
             contexts.append(features[i])
-            extreme_x.append(x)
+            extreme_x.append(rx)
+            physical.append(draws[i, d])
+            if saved_x is not None:
+                stored_x.append(saved_x[i, d])
+    coordinates, replay_check = replay_coordinates(
+        np.asarray(extreme_x),
+        np.asarray(physical),
+        spec,
+        tolerance=cfg["audit"]["maximum_replay_latent_error"],
+        saved_x=None if saved_x is None else np.asarray(stored_x),
+    )
+    attribution = pd.DataFrame(rows)
+    coordinates["object_position"] = attribution.object_position.to_numpy()[
+        coordinates.extreme_position
+    ]
+    coordinates["draw"] = attribution.draw.to_numpy()[coordinates.extreme_position]
+    if coordinate_path is not None:
+        coordinates.to_csv(coordinate_path, index=False)
     audit = transport_audit(
         model,
         jnp.asarray(contexts),
@@ -279,23 +358,18 @@ def replay_extremes(model, features, draws, truth, spec, seed, cfg):
         tolerance=cfg["audit"]["transport_tolerance"],
         values=jnp.asarray(extreme_x),
     )
-    error = max(r["replay_latent_error"] for r in rows)
-    ok = bool(
-        np.isfinite(error)
-        and error <= cfg["audit"]["maximum_replay_latent_error"]
-        and audit["passed"]
-    )
+    ok = bool(replay_check["passed"] and audit["passed"])
     nonfinite = []
     for i, row in enumerate(audit["experts"]):
         for name, value in row.items():
             if not np.isfinite(value):
                 nonfinite.append(f"expert_{i}.{name}")
                 row[name] = None
-    if not np.isfinite(error):
+    if replay_check["maximum_replay_latent_error"] is None:
         nonfinite.append("maximum_replay_latent_error")
-    return pd.DataFrame(rows), dict(
+    return attribution, dict(
+        **{k: v for k, v in replay_check.items() if k != "passed"},
         passed=ok and not nonfinite,
-        maximum_replay_latent_error=error if np.isfinite(error) else None,
         nonfinite_metrics=nonfinite,
         transport=audit,
     )
@@ -325,14 +399,23 @@ def audit(root):
             draws, truth, positions = (
                 saved[k] for k in ("draws", "truth", "evaluation_positions")
             )
+            latent_x = saved["latent_x"] if "latent_x" in saved else None
         features, expected_truth = cohort_features(source, pc, old, label, positions)
         np.testing.assert_allclose(truth, expected_truth, rtol=0, atol=1e-12)
-        describe_draws(directory, draws, truth, spec, cfg)
+        describe_draws(directory, draws, truth, spec, cfg, latent_x)
         model = eqx.tree_deserialise_leaves(
             source / "posterior/best.eqx", ptp.template(pc, features.shape[1])
         )
         attribution, checks[label] = replay_extremes(
-            model, features, draws, truth, spec, pc["seed"] + offset, cfg
+            model,
+            features,
+            draws,
+            truth,
+            spec,
+            pc["seed"] + offset,
+            cfg,
+            saved_x=latent_x,
+            coordinate_path=directory / "replay_coordinates.csv",
         )
         attribution["row_id"] = positions[attribution.object_position.to_numpy()]
         attribution.to_csv(directory / "extreme_draws.csv", index=False)
@@ -473,7 +556,9 @@ def train(root):
             source, probe_cfg, model, checkpoint, spec, stats, 811, probe
         )
         with np.load(draws_path) as f:
-            describe_draws(checkpoint, f["draws"], f["truth"], spec, cfg)
+            describe_draws(
+                checkpoint, f["draws"], f["truth"], spec, cfg, f.get("latent_x")
+            )
         hist = pd.read_json(out / "training.jsonl", lines=True).drop_duplicates(
             "epoch", keep="last"
         )
@@ -560,7 +645,9 @@ def evaluate(root):
         with np.load(draws_path) as f:
             np.testing.assert_array_equal(f["evaluation_positions"], positions)
             np.testing.assert_allclose(f["truth"], truth, rtol=0, atol=1e-12)
-            describe_draws(directory, f["draws"], f["truth"], spec, cfg)
+            describe_draws(
+                directory, f["draws"], f["truth"], spec, cfg, f.get("latent_x")
+            )
         finish(directory, [draws_path, cal_path, directory / "tails.csv"], digest)
     finish(
         out,
@@ -581,6 +668,11 @@ def report(root):
         for s in ("parent", "audit", "posterior", "evaluation")
         if not complete(root / s, digest)
     ]
+    if (
+        complete(root / "audit", digest)
+        and not read(root / "audit/DECISION.json")["safe_to_optimize"]
+    ):
+        missing.append("numerical_audit_failed")
     if missing:
         write(out / "BLOCKED.json", dict(missing=missing, ready_for_production=False))
         (root / "ROADMAP_STATUS.md").write_text(
@@ -729,6 +821,7 @@ def main():
     parser.add_argument("--conditional", type=Path)
     parser.add_argument("--posterior", type=Path)
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--reuse-parent", type=Path)
     args = parser.parse_args()
     root = args.root.resolve()
     if args.mode == "init":
@@ -737,6 +830,7 @@ def main():
             args.posterior.resolve(),
             root,
             args.config.resolve(),
+            None if args.reuse_parent is None else args.reuse_parent.resolve(),
         )
         return
     if args.mode == "schedule":

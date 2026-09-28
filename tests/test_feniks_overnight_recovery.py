@@ -76,6 +76,55 @@ def test_tail_metrics_do_not_hide_a_rare_extreme():
         tail_table(draws, truth, rec.ci.NAMES)
 
 
+def test_bounded_float64_rounding_is_not_a_sampling_error():
+    import json
+
+    from euclid_dsps.amortized.coherent_coordinates import to_theta
+    from euclid_dsps.amortized.posterior_tail_audit import replay_coordinates
+
+    spec = dict(
+        names=rec.ci.NAMES,
+        bounded=[True] + [False] * 14,
+        lower=[0.0] * 15,
+        upper=[1.0] * 15,
+        location=[0.0] * 15,
+        width=[1.0] * 15,
+        center=[0.0] * 15,
+        scale=[1.0] * 15,
+    )
+    x = np.zeros((1, 15))
+    x[0, 0] = 34.0
+    theta = np.asarray(to_theta(x, spec))
+    table, check = replay_coordinates(x, theta, spec, tolerance=0.001)
+    assert check["maximum_replay_latent_error"] > 0.001
+    assert check["bounded_quantization_compatible_coordinates"] == 1
+    assert check["passed"] and not check["stored_latent_available"]
+    assert table.iloc[0].replay_theta == theta[0, 0]
+    _, check = replay_coordinates(x, theta, spec, tolerance=0.001, saved_x=x)
+    assert check["passed"] and check["maximum_stored_latent_error"] == 0
+    corrupt_x = x.copy()
+    corrupt_x[0, 0] -= 0.01
+    _, check = replay_coordinates(x, theta, spec, tolerance=0.001, saved_x=corrupt_x)
+    assert not check["passed"]  # Never excuse a discrepancy in directly saved x.
+    corrupt_theta = theta.copy()
+    corrupt_theta[0, 0] -= 1e-9
+    _, check = replay_coordinates(x, corrupt_theta, spec, tolerance=0.001)
+    assert not check["passed"]
+    corrupt_theta = theta.copy()
+    corrupt_theta[0, 9] = 1e18
+    _, check = replay_coordinates(x, corrupt_theta, spec, tolerance=0.001)
+    assert not check["passed"]  # SFH has no bounded-coordinate exemption.
+    corrupt_theta = theta.copy()
+    corrupt_theta[0, 0] = 1.0
+    _, check = replay_coordinates(x, corrupt_theta, spec, tolerance=0.001)
+    assert not check["passed"]  # A saturated endpoint is not finite latent evidence.
+    json.dumps(check, allow_nan=False)
+    saturated_x = x.copy()
+    saturated_x[0, 0] = 100.0
+    _, check = replay_coordinates(saturated_x, theta, spec, tolerance=0.001)
+    assert not check["passed"] and check["nonfinite_coordinates"] == 1
+
+
 def test_actual_recovery_and_bounded_training_preserve_sources(
     completed_sources, tmp_path, monkeypatch
 ):
@@ -195,6 +244,7 @@ def test_failed_replay_is_not_a_pass(completed_sources, tmp_path, monkeypatch):
         draws, truth, positions = (
             f[k] for k in ("draws", "truth", "evaluation_positions")
         )
+        assert f["latent_x"].shape == draws.shape
     features, _ = rec.cohort_features(source, pc, digest, "in_model", positions)
     model = eqx.tree_deserialise_leaves(
         source / "posterior/best.eqx", rec.ptp.template(pc, features.shape[1])
@@ -230,6 +280,42 @@ def test_failed_replay_is_not_a_pass(completed_sources, tmp_path, monkeypatch):
         "expert_0.inverse_error"
     ]
     json.dumps(audit, allow_nan=False)
+
+
+def test_reaudit_reuses_only_matching_completed_parent(
+    completed_sources, tmp_path, monkeypatch
+):
+    root, new = tmp_path / "previous", tmp_path / "new"
+    rec.initialize(*completed_sources, root, config(tmp_path))
+    rec.recover_parent(root)
+    write(root / "audit/DECISION.json", dict(safe_to_optimize=False))
+    finish(root / "audit", [root / "audit/DECISION.json"], sha(root / "MANIFEST.json"))
+    before = {p: sha(p) for p in root.rglob("*") if p.is_file()}
+    rec.initialize(*completed_sources, new, config(tmp_path), reuse_parent=root)
+    monkeypatch.setattr(
+        rec.cp, "population", lambda *_: pytest.fail("Parent recomputed")
+    )
+    rec.recover_parent(new)
+    assert complete(new / "parent", sha(new / "MANIFEST.json"))
+    assert not (new / "parent/report").is_symlink()
+    assert sha(new / "parent/report/DECISION.json") == sha(
+        root / "parent/report/DECISION.json"
+    )
+    assert not (new / "audit/FINAL.json").exists()
+    rec.audit(new)
+    assert read(new / "audit/DECISION.json")["safe_to_optimize"]
+    assert (new / "audit/coherent_target/replay_coordinates.csv").is_file()
+    assert before == {p: sha(p) for p in before}
+    write(new / "parent/report/DECISION.json", dict(corrupted=True))
+    with pytest.raises(ValueError, match="Prepared configuration changed"):
+        rec.settings(new)
+    m = read(root / "MANIFEST.json")
+    m["source_posterior"] = str(tmp_path / "wrong_source")
+    write(root / "MANIFEST.json", m)
+    with pytest.raises(ValueError, match="matching recovery"):
+        rec.initialize(
+            *completed_sources, tmp_path / "bad", config(tmp_path), reuse_parent=root
+        )
 
 
 def test_slurm_parallel_gate_frozen_resume_and_no_mem(completed_sources, tmp_path):
@@ -291,3 +377,25 @@ def test_slurm_parallel_gate_frozen_resume_and_no_mem(completed_sources, tmp_pat
     assert p.returncode == 0, p.stderr
     assert len(calls.read_text().splitlines()) == 6
     assert "--job-name=feniks_recover_train" in calls.read_text().splitlines()[4]
+    previous = tmp_path / "completed_parent"
+    rec.initialize(*completed_sources, previous, config(tmp_path))
+    rec.recover_parent(previous)
+    write(previous / "audit/DECISION.json", dict(safe_to_optimize=False))
+    finish(
+        previous / "audit",
+        [previous / "audit/DECISION.json"],
+        sha(previous / "MANIFEST.json"),
+    )
+    target = tmp_path / "reaudited"
+    p = subprocess.run(
+        command + ["--reaudit", str(previous), str(target), str(config(tmp_path))],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert p.returncode == 0, p.stderr
+    lines = calls.read_text().splitlines()[6:]
+    assert len(lines) == 3  # Audit -> train -> report, no repeated parent job.
+    assert "--job-name=feniks_recover_audit" in lines[0] and "--gres" not in lines[0]
+    assert "--dependency=afterok:907" in lines[1]
+    assert "--dependency=afterany:907:908" in lines[2]

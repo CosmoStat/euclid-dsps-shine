@@ -717,6 +717,7 @@ def evaluate_posterior(root, model, out, cfg, spec, stats, bank_evaluation=None)
     np.savez(
         out / f"{prefix}draws.npz",
         draws=draws,
+        latent_x=draws_x,
         truth=truth,
         ranks=ranks,
         evaluation_positions=indices,

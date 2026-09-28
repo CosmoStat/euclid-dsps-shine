@@ -1,5 +1,59 @@
 # Targeted recovery and posterior continuation
 
+## Re-audit after the 2026-09-28 numerical stop
+
+Reported jobs: parent 263486 completed; audit 263487 blocked on target replay
+error 0.00116167 > 0.001; GPU 263488 was cancelled. Both expert transport audits
+passed. This alone does not establish CPU/GPU differences or a defective flow.
+The old file retained theta but not the original x. Reconstructing x through a
+bounded logit can amplify float64 rounding; this failure mode is locally reproduced.
+
+The new `float64_theta_replay_v2` audit retains the 0.001 latent and 1e-5
+transport thresholds. Each exception must be a bounded coordinate whose forward
+replay agrees with stored theta within eight `nextafter` neighbours AND whose x
+lies inside that interval mapped through the exact same monotone transform.
+The actual saved/replayed samples are never clipped. Saturated endpoints, NaNs,
+SFH discrepancies and transport failures still block. Directly saved x gets no
+rounding exemption. Legacy theta compatibility does not certify exact latent
+identity, calibration or the physical plausibility of the tails.
+
+`audit/*/replay_coordinates.csv` records each extreme object's coordinate,
+theta replay, latent replay, intrinsic roundtrip error, rounding compatibility
+and verdict. Future evaluations save `latent_x` alongside `draws`, with unchanged
+joint samples and calibration. Additional storage: 15 float64 values per draw
+(about 120 MiB for 2048 objects x 512 draws); lightweight rsync still excludes NPZ.
+
+Use the NEW code with `--reaudit OLD_RECOVERY NEW_RECOVERY`: source identities and
+completed tied/report receipts are verified. Small reports/fits are copied with
+identical content hashes so lightweight rsync works; source data stay untouched.
+Only audit, conditional posterior continuation and report are submitted. The old failure
+stays immutable. `--resume` still uses its original frozen code, so it does not
+apply this repair. Existing banks and classifier are never regenerated.
+
+The WORK inode quota can be avoided for code deployment by downloading the pinned
+GitHub source archive into a new directory on fsn1, extracting only `euclid_dsps`,
+`scripts`, `configs`, `pyproject.toml`, and linking the original `Data`. Do not
+create another WORK worktree, delete results, or alter the dirty original checkout.
+
+```bash
+source "$BASE/avi_overnight_recovery_latest.env"
+PREVIOUS="$RECOVERY"
+NEW="$BASE/avi_overnight_recovery_$(date +%Y%m%d_%H%M%S)"
+# Run from the newly deployed code directory, with shine active.
+bash scripts/submit_feniks_overnight_recovery.sh --reaudit "$PREVIOUS" "$NEW"
+```
+
+Inspect the new audit before interpreting success: only coordinate diagnostics
+can confirm the remote mismatch was bounded serialization, rather than real replay
+inconsistency. The completed parent's joint-physical and classifier gates still
+fail. No automatic scientific promotion or change to the posterior's frozen parent.
+
+Local repair verification: 26 pipeline/regression and two coordinate tests pass;
+four affected tests rerun after final hardening. Tests cover genuine corruption,
+saturated endpoints, saved-latent disagreement, immutable source/report copies,
+and the three-job re-audit dependency chain. Ruff, compileall, Bash syntax and
+selective archive extraction pass. This is not a new Jean-Zay science result.
+
 ## What runs, and what does not
 
 Use the two completed/partially completed branches ending in

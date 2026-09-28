@@ -37,6 +37,8 @@ for stage in ('parent', 'audit', 'posterior', 'evaluation', 'report'):
         d = read(out/'DECISION.json')
         if d:
             detail = f"numerics={'PASS' if d['safe_to_optimize'] else 'FAIL'}; tails NOT certified"
+            rounding = sum(c.get('bounded_quantization_compatible_coordinates',0) for c in d.get('checks',{}).values())
+            if rounding: detail += f'; bounded rounding={rounding}'
             if not d['safe_to_optimize']: state = 'BLOCKED'
     elif stage == 'posterior':
         p = read(out/'PROGRESS.json')
