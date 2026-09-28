@@ -284,8 +284,10 @@ def test_actual_small_flow_training_two_cohorts_report_and_immutability(
     assert complete(root / "report", sha(root / "MANIFEST.json"))
 
 
+@pytest.mark.parametrize("kind", ["parent_to_posterior", "overnight_recovery"])
 def test_download_uses_guarded_parent_to_posterior_root_and_excludes_large_arrays(
     tmp_path,
+    kind,
 ):
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -299,7 +301,7 @@ def test_download_uses_guarded_parent_to_posterior_root_and_excludes_large_array
         script.chmod(0o755)
     source = (
         "/lustre/fsn1/projects/rech/jrx/urx63nr/feniks_sc_drws_r29_hardmerge_20260828_002111/"
-        "avi_parent_to_posterior_20260927_220000"
+        f"avi_{kind}_20260927_220000"
     )
     env = dict(
         os.environ,
@@ -310,7 +312,7 @@ def test_download_uses_guarded_parent_to_posterior_root_and_excludes_large_array
     command = [
         "bash",
         "scripts/rsync_feniks_coherent_results.sh",
-        "parent_to_posterior",
+        kind,
     ]
     result = subprocess.run(command, env=env, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr

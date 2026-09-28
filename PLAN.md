@@ -1,5 +1,50 @@
 # Plan
 
+## 2026-09-28 targeted overnight recovery and bounded continuation
+
+- [x] Fix saturated grouped selection efficiencies without weakening probability
+  validation; regress the saved roundoff failure and tied likelihood identity.
+- [x] Implement tied parent/report recovery in a separate root with saved classifier/banks.
+- [x] Implement saved posterior tails, exact sampling replay and expert transport audit;
+  block continuation on numerical inconsistency, not silently clip tails.
+- [x] Implement continuation from the best posterior with a declared optimizer reset, reduced
+  LR and <=100 new epochs; reuse direct-parent bank and evaluate every 20 epochs.
+- [x] Test source immutability, restart safety and the parallel Slurm DAG;
+  provide launcher/watcher, lightweight rsync and update the roadmap.
+- No new DSPS, target-theta parent fitting, q feedback, model-family change or
+  automatic production approval. Existing failed scientific gates remain.
+- Local: 36 distinct tests pass across small classifier/15D flow recovery, injected milestone failure,
+  saved-state resume, negative audit/NaN diagnostics, strict probability checks,
+  immutable sources and mocked Slurm dependencies tested. Saved Jean-Zay split
+  reproduces 21 alpha>1 values; corrected maximum exactly 1 with normalized u.
+- Ruff, Black, compileall, shell syntax and diff checks pass; smoke figures
+  inspected. Legacy AGENTS CLI fit configs are absent, so no local DSPS fit.
+- Handoff: CPU parent recovery and CPU tail audit in parallel, then one gated
+  H100 continuation <=100 additional epochs. Zero new DSPS/classifier training;
+  default ceiling 4 H100-hours, not an expected runtime. Remote results pending.
+
+## 2026-09-28 synchronized overnight result review
+
+- [x] Inspect conditional-parent and fresh-parent posterior receipts, training
+  histories, calibration, dense-aggregate metrics and existing figures.
+- [x] Reproduce the conditional-control failure from synchronized split/alpha:
+  21 grouped efficiencies exceed one by roundoff, maximum 1.0000000000000016.
+- [x] Record results, figure links and prioritized recovery in the roadmap.
+- Verified 41 available artifact hash references, zero mismatches; seven large
+  referenced artifacts plus bank contents are unavailable locally.
+- Expanded blind fit complete/normalized, all eight expanded/tied solves meet
+  KKT <=2e-6, but tied finalization/report failed. No target-closure gain claimed.
+- Fresh posterior: 1048576 parent simulations, 537106 unit-weight training rows;
+  transport audit PASS; epoch-200 budget stop, not convergence, best epoch 181.
+- In-model physical calibration remains imperfect; coherent-target calibration
+  shifts further. SFH central coverage/PIT PASS does NOT validate full tails:
+  in-model aggregate SFH SW 4.44e13, dominated by contrast 05.
+- Next: repair tied probability arithmetic and finish report with saved banks/
+  classifier; inspect saved posterior tails/experts; then a bounded continuation
+  using the existing bank if the tail diagnosis permits. No new DSPS campaign.
+- Scope: analysis/documentation only. No model edits, threshold changes,
+  remote submissions, checkpoint modifications or production promotion.
+
 ## 2026-09-27 parallel blind-parent and posterior overnight run
 
 - [x] Add a nested SFH split of each existing physical component, with exact

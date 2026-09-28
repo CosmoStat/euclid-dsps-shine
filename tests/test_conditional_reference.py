@@ -94,3 +94,26 @@ def test_invalid_or_constant_reference_is_not_silently_split():
     basis["anchors"][:, 5:] = 0
     with pytest.raises(ValueError, match="No SFH"):
         split_sfh_basis(basis)
+
+
+def test_saturated_tied_efficiency_roundoff_is_a_valid_probability():
+    z = np.array([[0.50872431, 0.49127569], [0.3, 0.7]])
+    z[0] *= 1 + 1.6e-15
+    assert z[0].sum() > 1
+    logs = np.log(np.full((5, 4), 0.25))
+    alpha = np.array([1.0, 1.0, 0.2, 0.8])
+    tied, c, a = tied_selected_ratios(logs, [0.25] * 4, alpha, z)
+    assert a[0] == 1.0 and np.all(a <= 1)
+    u = parent_from_selected([0.5, 0.5], a)
+    expanded = lift_parent(u, z)
+    np.testing.assert_allclose(expanded.sum(), 1, atol=1e-15)
+    v = expanded * alpha / (expanded @ alpha)
+    np.testing.assert_allclose(
+        logsumexp(tied - np.log(c) + np.log([0.5, 0.5]), axis=1),
+        logsumexp(logs - np.log(0.25) + np.log(v), axis=1),
+        atol=1e-12,
+    )
+    with pytest.raises(ValueError):
+        tied_selected_ratios(logs, [0.25] * 4, [1.00001, 1, 0.2, 0.8], z)
+    with pytest.raises(ValueError):
+        tied_selected_ratios(logs, [0.25] * 4, alpha, z * 1.00001)

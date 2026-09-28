@@ -1,4 +1,4 @@
-# Population validation roadmap, updated 2026-09-27
+# Population validation roadmap, updated 2026-09-28
 
 ## Scope and evidence
 
@@ -13,7 +13,47 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
-## Current execution decision: advance posterior in parallel
+## Current result: fresh posterior tested; conditional-parent report blocked
+
+The synchronized [overnight review](feniks_overnight_results_20260928.md) supersedes
+the pending-execution statements below. Both runs end in `20260927_234702`.
+Forty-one available receipt artifact hashes verify without mismatch; large
+checkpoints/draws and bank contents remain remote.
+
+| Block | Current evidence / decision |
+|---|---|
+| Blind expanded parent fit | Completed, normalized u/v, KKT <=2e-6; no target theta or q in fitting |
+| Expanded versus tied-parent comparison | BLOCKED by roundoff: grouped alpha max 1.0000000000000016; fix and finish saved work |
+| Expanded classifier convergence/ratios | Cap 600, no plateau; independent moment error 0.03240, not newly validated |
+| Fresh posterior bank / learning measure | DONE: 1048576 parent simulations, 537106 unique unit-weight training pairs, 15D retained |
+| Flow inverse/Jacobian on checked contexts | PASS, worst error about 4.94e-13; not exhaustive tail validation |
+| Posterior optimization | Budget stop at 200, best epoch 181; still improving, not converged |
+| In-model posterior calibration | PARTIAL/FAIL: z coverage 81.64/98.29%, core PIT discrepancies |
+| SFH posterior tails | FAIL/needs attribution: in-model aggregate SW 4.44e13 despite central coverage/PIT PASS |
+| Coherent-target posterior calibration | FAIL: mass 60.16/88.23%, dust Av 54.20/81.69%; not universal narrowing |
+| Physical selected aggregate | Bulk promising: SW 0.02478 in-model / 0.05723 target; not parent or calibration validation |
+| Production / paper results | Not approved; untouched final evaluation still needed |
+
+Next: recover conditional tied/report and audit saved posterior tails in parallel,
+without new DSPS/classifier training. Then one bounded posterior continuation on
+the existing bank if diagnosis permits. Do not restart the overnight wrapper as
+a new campaign; ordinary resume uses frozen buggy code or an unchanged epoch cap.
+The frozen-parent posterior cannot establish improvement of the new parent.
+No jobs launched or numerical thresholds changed by this read-only review.
+
+### Implemented next action, 2026-09-28
+
+The [targeted recovery launcher](feniks_overnight_recovery.md) runs parent
+tied/report recovery and a saved-posterior tail/transport audit in parallel.
+A numerically consistent audit releases one H100 continuation, <=100 additional
+epochs from the best checkpoint with a declared optimizer reset and lower LR.
+Every 20 epochs receive fixed validation calibration and full-support tail
+diagnostics; final evaluation repeats the original cohorts for paired comparison.
+No new DSPS/classifier training or parent switch. Numerical PASS only permits
+exploratory optimization; scientific tail/coverage failures remain unvalidated.
+Code/local tests are not new Jean-Zay results. Production approval remains false.
+
+## Prior execution decision, 2026-09-27: advance posterior in parallel
 
 The [overnight launcher](feniks_overnight_blind_parent.md) now pairs that posterior
 with one **blind conditional-parent refinement**, not a supervised parent oracle.

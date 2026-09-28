@@ -1,0 +1,21 @@
+# Existing banks only. Numerical failure blocks training; tail quality remains diagnostic.
+continuation:
+  epochs: 100
+  block_epochs: 20
+  learning_rate: 0.00000625
+  minimum_lr: 0.000003125
+  lr_decay_every: 50
+  lr_decay_factor: 0.5
+  validation_objects: 512
+  validation_draws: 256
+audit:
+  extreme_draws: 8
+  maximum_replay_latent_error: 0.001
+  transport_tolerance: 0.00001
+  far_iqr: 100.0
+resources:
+  parent_minutes: 60
+  audit_minutes: 30
+  train_minutes: 240
+  report_minutes: 15
+  cpu_threads: 4

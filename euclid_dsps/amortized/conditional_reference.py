@@ -72,10 +72,25 @@ def split_sfh_basis(basis: dict, probability_floor: float = 0.05) -> tuple:
     return result, gates, info
 
 
-def lift_parent(weights, z):
+def normalized_split(z):
+    """Remove summation roundoff only; reject genuinely unnormalized masses."""
     z = np.asarray(z, float)
+    if (
+        z.ndim != 2
+        or z.shape[1] != 2
+        or not np.isfinite(z).all()
+        or np.any(z <= 0)
+        or not np.allclose(z.sum(axis=1), 1, rtol=0, atol=1e-12)
+    ):
+        raise ValueError("Two normalized positive subcomponent masses required")
+    first = z[:, 0] / z.sum(axis=1)
+    return np.column_stack([first, 1 - first])
+
+
+def lift_parent(weights, z):
+    z = normalized_split(z)
     u = simplex(weights)
-    if z.shape != (len(u), 2) or np.any(z <= 0) or not np.allclose(z.sum(axis=1), 1):
+    if z.shape != (len(u), 2):
         raise ValueError("Two normalized positive subcomponent masses required")
     return (u[:, None] * z).ravel()
 
@@ -87,7 +102,7 @@ def tied_selected_ratios(log_classifier, frequencies, alpha, z):
     calibration frequencies differ from the theoretical sampling proportions.
     Returned logC need not sum to one: common per-object factors cancel in fits.
     """
-    z = np.asarray(z, float)
+    z = normalized_split(z)
     c, alpha = simplex(frequencies), np.asarray(alpha, float)
     logc = np.asarray(log_classifier, float)
     if (
@@ -107,8 +122,13 @@ def tied_selected_ratios(log_classifier, frequencies, alpha, z):
     ):
         raise ValueError("Inconsistent selected subcomponent ratios")
     selected_mass = z * alpha.reshape(z.shape)
-    grouped_alpha = selected_mass.sum(axis=1)
-    mix = selected_mass / grouped_alpha[:, None]
+    efficiencies = alpha.reshape(z.shape)
+    low, high = efficiencies.min(axis=1), efficiencies.max(axis=1)
+    high_weight = z[np.arange(len(z)), efficiencies.argmax(axis=1)]
+    # Convex interpolation returns exactly 1 when both sub-efficiencies are 1.
+    # A raw sum can produce 1+epsilon and fail strict probability validation.
+    grouped_alpha = low + high_weight * (high - low)
+    mix = selected_mass / selected_mass.sum(axis=1, keepdims=True)
     logd = logsumexp(
         (logc - np.log(c)).reshape(len(logc), *z.shape) + np.log(mix), axis=2
     )
