@@ -147,7 +147,17 @@ def test_actual_recovery_and_bounded_training_preserve_sources(
     )
     rec.recover_parent(root)
     rec.audit(root)
-    assert read(root / "audit/DECISION.json")["safe_to_optimize"]
+    decision = read(root / "audit/DECISION.json")
+    assert decision["safe_to_optimize"]
+    for label in ("in_model", "coherent_target"):
+        numerics = decision["checks"][label]
+        assert numerics["replay_graph"] == "evaluate_posterior_x_only_v1"
+        assert numerics["xonly_full_graph_max_delta"] >= 0.0
+        extremes = pd.read_csv(root / f"audit/{label}/extreme_draws.csv")
+        assert {
+            "full_graph_replay_latent_error",
+            "xonly_full_graph_delta",
+        }.issubset(extremes.columns)
     assert not read(root / "audit/DECISION.json")["scientific_pass"]
     rec.train(root)
     baseline_nll = read(posterior / "posterior/STOP.json")["best_nll"]

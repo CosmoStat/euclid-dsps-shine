@@ -299,20 +299,41 @@ def replay_extremes(
     )
 
     ids = extreme_positions(draws, truth, cfg["audit"]["extreme_draws"])
-    sample = eqx.filter_jit(
+    # Keep the numerical replay graph identical to ci.evaluate_posterior: that
+    # function materializes only `.x`. Returning the full diagnostic structure
+    # can give slightly different tail-rounding in JAX for extreme coordinates.
+    sample_x = eqx.filter_jit(
+        lambda net, f, k: (
+            sample_independent_mixture(
+                DensityModel(net.experts[0]), net, k, f, draws.shape[1]
+            ).x
+        )
+    )
+    sample_full = eqx.filter_jit(
         lambda net, f, k: sample_independent_mixture(
             DensityModel(net.experts[0]), net, k, f, draws.shape[1]
         )
     )
-    rows, contexts, extreme_x, physical, stored_x = [], [], [], [], []
+    rows, contexts = [], []
+    extreme_x, physical, stored_x, graph_deltas = [], [], [], []
     for start in sorted(set((ids[:, 0] // 16 * 16).tolist())):
         current = features[start : start + 16]
         padded = np.pad(current, ((0, 16 - len(current)), (0, 0)), mode="edge")
-        replay = sample(model, jnp.asarray(padded), jax.random.PRNGKey(seed + start))
+        key = jax.random.PRNGKey(seed + start)
+        replay_x = np.asarray(sample_x(model, jnp.asarray(padded), key))
+        replay = sample_full(model, jnp.asarray(padded), key)
+        replay_full_x = np.asarray(replay.x)
         for i, d in ids[ids[:, 0] // 16 * 16 == start]:
-            x = np.asarray(ci.to_x(draws[i, d][None], spec))[0]
-            rx = np.asarray(replay.x[d, i - start])
-            error = float(np.max(abs(rx - x)))
+            artifact_x = (
+                np.asarray(saved_x[i, d])
+                if saved_x is not None
+                else np.asarray(ci.to_x(draws[i, d][None], spec))[0]
+            )
+            rx = replay_x[d, i - start]
+            full_rx = replay_full_x[d, i - start]
+            error = float(np.max(abs(rx - artifact_x)))
+            full_error = float(np.max(abs(full_rx - artifact_x)))
+            graph_delta = float(np.max(abs(full_rx - rx)))
             expert = int(replay.component[d, i - start])
             context = jnp.asarray(features[i : i + 1])
             state = posterior_encoder_state(
@@ -328,13 +349,16 @@ def replay_extremes(
                     ),
                     maximum_base_std=float(jnp.exp(state.log_std).max()),
                     replay_latent_error=error,
-                    maximum_abs_latent=float(abs(x).max()),
+                    full_graph_replay_latent_error=full_error,
+                    xonly_full_graph_delta=graph_delta,
+                    maximum_abs_latent=float(abs(artifact_x).max()),
                     sfh05=float(draws[i, d, 9]),
                 )
             )
             contexts.append(features[i])
             extreme_x.append(rx)
             physical.append(draws[i, d])
+            graph_deltas.append(graph_delta)
             if saved_x is not None:
                 stored_x.append(saved_x[i, d])
     coordinates, replay_check = replay_coordinates(
@@ -367,11 +391,14 @@ def replay_extremes(
                 row[name] = None
     if replay_check["maximum_replay_latent_error"] is None:
         nonfinite.append("maximum_replay_latent_error")
+    graph_delta = max(graph_deltas) if graph_deltas else None
     return attribution, dict(
         **{k: v for k, v in replay_check.items() if k != "passed"},
         passed=ok and not nonfinite,
         nonfinite_metrics=nonfinite,
         transport=audit,
+        replay_graph="evaluate_posterior_x_only_v1",
+        xonly_full_graph_max_delta=graph_delta,
     )
 
 

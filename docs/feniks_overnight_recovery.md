@@ -5,8 +5,13 @@
 Reported jobs: parent 263486 completed; audit 263487 blocked on target replay
 error 0.00116167 > 0.001; GPU 263488 was cancelled. Both expert transport audits
 passed. This alone does not establish CPU/GPU differences or a defective flow.
-The old file retained theta but not the original x. Reconstructing x through a
-bounded logit can amplify float64 rounding; this failure mode is locally reproduced.
+The second re-audit showed the remaining two failures were unbounded SFH
+coordinates, so the bounded-rounding explanation is not enough. The actionable
+bug is that the audit replay returned the full diagnostic sample object, while
+the original evaluation materialized only `.x`; for extreme tail values JAX can
+round these two compiled graphs differently. Re-audit now uses the same x-only
+sampling graph as `evaluate_posterior` for the numerical gate and records the
+full-graph difference only as diagnostic metadata.
 
 The new `float64_theta_replay_v2` audit retains the 0.001 latent and 1e-5
 transport thresholds. Each exception must be a bounded coordinate whose forward
@@ -19,9 +24,12 @@ identity, calibration or the physical plausibility of the tails.
 
 `audit/*/replay_coordinates.csv` records each extreme object's coordinate,
 theta replay, latent replay, intrinsic roundtrip error, rounding compatibility
-and verdict. Future evaluations save `latent_x` alongside `draws`, with unchanged
-joint samples and calibration. Additional storage: 15 float64 values per draw
-(about 120 MiB for 2048 objects x 512 draws); lightweight rsync still excludes NPZ.
+and verdict. `audit/*/extreme_draws.csv` also records
+`full_graph_replay_latent_error` and `xonly_full_graph_delta` so future failures
+can distinguish artifact inconsistency from a diagnostic-graph mismatch. Future
+evaluations save `latent_x` alongside `draws`, with unchanged joint samples and
+calibration. Additional storage: 15 float64 values per draw (about 120 MiB for
+2048 objects x 512 draws); lightweight rsync still excludes NPZ.
 
 Use the NEW code with `--reaudit OLD_RECOVERY NEW_RECOVERY`: source identities and
 completed tied/report receipts are verified. Small reports/fits are copied with
