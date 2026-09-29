@@ -52,6 +52,55 @@ def extreme_positions(draws, truth, count):
     return np.column_stack(np.unravel_index(order, score.shape))
 
 
+def replay_inputs(saved, rebuilt_features, *, backend, expected_backend, seed):
+    """Use artifact contexts; legacy contexts require the evaluation backend.
+
+    Rebuilding float32 photometry features on another backend is not an exact
+    replay of the same network input. Bank contexts, unlike catalogue contexts,
+    have historically been stored, which can hide this asymmetry in tests.
+    """
+    if expected_backend not in ("cpu", "gpu") or backend != expected_backend:
+        raise ValueError(
+            f"Replay backend mismatch: expected {expected_backend}, got {backend}"
+        )
+    recorded_backend = (
+        str(np.asarray(saved["sampling_backend"]).item())
+        if "sampling_backend" in saved
+        else None
+    )
+    if recorded_backend is not None and recorded_backend != backend:
+        raise ValueError(
+            f"Saved evaluation backend {recorded_backend} differs from replay {backend}"
+        )
+    for name, expected in (("sampling_seed", seed), ("sampling_batch_size", 16)):
+        if name in saved and np.asarray(saved[name]).item() != expected:
+            raise ValueError(f"Saved {name} differs from replay contract")
+    rebuilt = np.asarray(rebuilt_features)
+    stored = "features" in saved
+    features = np.asarray(saved["features"]) if stored else rebuilt
+    if (
+        rebuilt.ndim != 2
+        or features.shape != rebuilt.shape
+        or not np.issubdtype(features.dtype, np.floating)
+        or not np.isfinite(features).all()
+        or not np.isfinite(rebuilt).all()
+    ):
+        raise ValueError("Finite matching evaluation feature matrices required")
+    return features, dict(
+        contract="backend_matched_replay_v1",
+        runtime_backend=backend,
+        expected_backend=expected_backend,
+        saved_backend=recorded_backend,
+        feature_source="saved_evaluation" if stored else "legacy_reconstruction",
+        feature_dtype=str(features.dtype),
+        recomputed_feature_max_abs_error=float(
+            np.max(abs(features.astype(np.float64) - rebuilt.astype(np.float64)))
+        ),
+        seed=seed,
+        batch_size=16,
+    )
+
+
 def replay_coordinates(replayed_x, saved_theta, spec, *, tolerance, saved_x=None):
     """Compare what the artifact actually retained, without clipping any draw.
 

@@ -1,15 +1,53 @@
 # Targeted recovery and posterior continuation
 
+## Backend-matched re-audit, 2026-09-29
+
+Job 300667 ran the x-only repair but still failed on the same two SFH coordinates:
+maximum latent replay error 0.00116167, x-only/full-graph delta exactly zero.
+The graph explanation is falsified for this run. Both expert transport checks
+still pass; the old bounded-serialization explanation also does not apply to
+these unbounded coordinates.
+
+The original parent-to-posterior evaluation ran on H100, but the recovery audit
+ran on CPU. `make_encoder_features` explicitly calculates float32 features;
+coherent-target features were rebuilt on CPU, whereas in-model bank features
+were loaded unchanged. This is a verified replay-contract mismatch, not yet a
+measured attribution of the 0.00116167 discrepancy to features or to sampling.
+
+The default audit now runs on one H100 (30-minute ceiling), matching the source
+backend, and keeps the latent 0.001 and transport 1e-5 thresholds. A backend
+mismatch blocks the audit. `audit/runtime.json` records JAX/JAXLIB, devices,
+x64 and the checkpoint hash. Each cohort reports its input provenance. New
+evaluations store the exact feature matrix, latent draws, backend, seed and batch
+size in the hash-protected NPZ; replay uses those stored inputs and verifies the
+metadata. Legacy artifacts use reconstructed inputs on the declared backend.
+The `cpu` option is for sources actually evaluated on CPU, including local tests.
+
+Use `--reaudit PREVIOUS NEW` with the new code, not `--resume` of the frozen CPU
+attempt. This submits GPU audit -> conditional GPU continuation -> CPU report;
+the parent is reused. GPU stages are sequential, peak one H100, default total
+allocation ceiling 4.5 H100-hours. No DSPS or classifier work is repeated.
+Remote agreement remains to be verified. If it fails, inspect `runtime.json`,
+`DECISION.json` and the per-coordinate CSV; do not increase tolerance or silently
+replace the archived evaluation. Scientific tail/calibration failures remain.
+
+Local verification: 11 focused tests pass, including a real small flow pipeline,
+perturbed feature reconstruction, invalid backend/seed/shape/NaN rejection,
+immutable-source reuse and mocked GPU-audit Slurm dependencies. Compileall,
+Ruff, Bash syntax and diff checks pass. CLI fit/posterior smoke configs listed
+in AGENTS are absent; the flow pipeline tests use a mocked DSPS boundary.
+
 ## Re-audit after the 2026-09-28 numerical stop
 
 Reported jobs: parent 263486 completed; audit 263487 blocked on target replay
 error 0.00116167 > 0.001; GPU 263488 was cancelled. Both expert transport audits
 passed. This alone does not establish CPU/GPU differences or a defective flow.
 The second re-audit showed the remaining two failures were unbounded SFH
-coordinates, so the bounded-rounding explanation is not enough. The actionable
-bug is that the audit replay returned the full diagnostic sample object, while
+coordinates, so the bounded-rounding explanation is not enough. One suspected
+cause was that the audit replay returned the full diagnostic sample object, while
 the original evaluation materialized only `.x`; for extreme tail values JAX can
-round these two compiled graphs differently. Re-audit now uses the same x-only
+round these two compiled graphs differently. Job 300667 subsequently ruled out
+this explanation for the reported discrepancy. Re-audit uses the same x-only
 sampling graph as `evaluate_posterior` for the numerical gate and records the
 full-graph difference only as diagnostic metadata.
 
@@ -51,9 +89,9 @@ NEW="$BASE/avi_overnight_recovery_$(date +%Y%m%d_%H%M%S)"
 bash scripts/submit_feniks_overnight_recovery.sh --reaudit "$PREVIOUS" "$NEW"
 ```
 
-Inspect the new audit before interpreting success: only coordinate diagnostics
-can confirm the remote mismatch was bounded serialization, rather than real replay
-inconsistency. The completed parent's joint-physical and classifier gates still
+Inspect runtime, input and coordinate diagnostics before interpreting success.
+Neither the bounded-serialization nor the sampling-graph hypothesis explains
+job 300667. The completed parent's joint-physical and classifier gates still
 fail. No automatic scientific promotion or change to the posterior's frozen parent.
 
 Local repair verification: 26 pipeline/regression and two coordinate tests pass;
@@ -73,10 +111,11 @@ Use the two completed/partially completed branches ending in
    a convex interpolation of efficiencies prevents `alpha=1+1.6e-15` without
    accepting genuinely invalid probabilities. All numerical/scientific gates
    and the target catalogue are unchanged.
-2. **CPU posterior-tail audit**. Read saved joint draws, reconstruct their exact
+2. **Backend-matched posterior-tail audit** (H100 for the production artifacts).
+   Read saved joint draws, reconstruct their exact
    evaluation contexts/IDs, measure full-support tails in theta and latent x,
    replay the largest draws with the same RNG keys, identify their expert/gate,
-   and test each expert's inverse and Jacobian at extreme values. CPU/GPU
+   and test each expert's inverse and Jacobian at extreme values. Same-backend
    replay uses an explicit 0.001 absolute latent tolerance; independent transport
    tolerance is 1e-5. No clipping, draw removal, dimension removal or new DSPS.
 3. **One H100 continuation**, automatically after a successful numerical audit.
@@ -103,9 +142,10 @@ The posterior still uses the **old frozen parent**. It is not silently switched
 to the new expanded parent. Population fitting stays photometry-only; simulator
 truth supervises q, never parent fitting. No q feedback, RWS, MCMC or SMC.
 
-Default requests: 4 CPU threads/task; CPU parent 60 min, audit 30 min and report
-15 min; one H100 train/evaluate job capped at 240 min. Peak one H100, allocation
-ceiling 4 H100-hours, not an expected runtime. No `--mem*` options.
+Default requests: 4 CPU threads/task; CPU parent 60 min, report 15 min;
+one H100 audit capped at 30 min followed by one H100 train/evaluate job capped
+at 240 min. Peak one H100, allocation ceiling 4.5 H100-hours, not an expected
+runtime. No `--mem*` options.
 No new classifier training and zero new DSPS simulations.
 
 Local verification: 36 distinct focused/regression tests pass, including real

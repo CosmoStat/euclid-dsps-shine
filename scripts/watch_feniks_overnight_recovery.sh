@@ -37,6 +37,8 @@ for stage in ('parent', 'audit', 'posterior', 'evaluation', 'report'):
         d = read(out/'DECISION.json')
         if d:
             detail = f"numerics={'PASS' if d['safe_to_optimize'] else 'FAIL'}; tails NOT certified"
+            backend = d.get('runtime',{}).get('backend')
+            if backend: detail += f'; backend={backend}'
             rounding = sum(c.get('bounded_quantization_compatible_coordinates',0) for c in d.get('checks',{}).values())
             if rounding: detail += f'; bounded rounding={rounding}'
             if not d['safe_to_optimize']: state = 'BLOCKED'
@@ -50,6 +52,11 @@ for stage in ('parent', 'audit', 'posterior', 'evaluation', 'report'):
         if stop: detail += ' '+stop['reason']
     if failed: detail = failed.get('message','')[:110]
     print(f'{stage:18s}{state:10s} {detail}')
+    if stage == 'audit' and d:
+        for label, check in d.get('checks',{}).items():
+            print(f"  {label}: replay={check.get('maximum_replay_latent_error')} "
+                  f"failed_coords={check.get('failed_coordinates')} "
+                  f"transport={'PASS' if check.get('transport',{}).get('passed') else 'FAIL'}")
 print('\nNo new DSPS. Same old parent for q. Saved state is not live SLURM state.')
 print('Numerical audit permits optimization only; no production approval.')
 PY

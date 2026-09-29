@@ -106,7 +106,7 @@ submit() {
 [[ $NEED_PARENT == 0 ]] || submit parent "$PARENT_MINUTES" 0
 DEP=()
 if [[ $NEED_AUDIT == 1 ]]; then
-  submit audit "$AUDIT_MINUTES" 0
+  submit audit "$AUDIT_MINUTES" "$AUDIT_GPU"
   DEP=(--dependency="afterok:$ID" --kill-on-invalid-dep=yes)
 fi
 if [[ $NEED_POSTERIOR == 1 || $NEED_EVALUATION == 1 ]]; then
@@ -118,8 +118,8 @@ submit report "$REPORT_MINUTES" 0 "${DEP[@]}"
 if [[ $NEED_PARENT == 0 ]]; then
   echo 'Completed parent reused; no parent or classifier job.'
 else
-  echo 'Parent recovery and tail audit run in parallel on CPU.'
+  echo 'CPU parent recovery and backend-matched tail audit run in parallel.'
 fi
-echo 'Numerical audit gates one H100 continuation.'
-echo 'Zero new DSPS/classifier training. Default ceiling: 4 H100-hours, not expected runtime.'
+echo 'Backend-matched numerical audit gates one H100 continuation.'
+echo 'Zero new DSPS/classifier training. Default ceiling: 4.5 H100-hours including audit; not expected runtime.'
 printf 'watch=bash scripts/watch_feniks_overnight_recovery.sh %q\n' "$FENIKS_RECOVERY_ROOT"

@@ -55,6 +55,7 @@ def config(tmp_path):
         epochs=2, block_epochs=1, validation_objects=16, validation_draws=16
     )
     cfg["audit"]["extreme_draws"] = 2
+    cfg["audit"]["backend"] = "cpu"  # Fixture evaluations are generated on CPU.
     path = tmp_path / "recovery.yaml"
     path.write_text(yaml.safe_dump(cfg))
     return path
@@ -74,6 +75,43 @@ def test_tail_metrics_do_not_hide_a_rare_extreme():
     draws[0, 0, 0] = np.nan
     with pytest.raises(ValueError, match="Finite joint"):
         tail_table(draws, truth, rec.ci.NAMES)
+
+
+def test_replay_inputs_preserve_stored_float32_context_and_validate_metadata():
+    from euclid_dsps.amortized.posterior_tail_audit import replay_inputs
+
+    original = np.array([[0.125, -3.0]], dtype=np.float32)
+    reconstructed = np.nextafter(original, np.float32(np.inf))
+    saved = dict(
+        features=original,
+        sampling_backend=np.array("gpu"),
+        sampling_seed=np.array(31),
+        sampling_batch_size=np.array(16),
+    )
+    kwargs = dict(backend="gpu", expected_backend="gpu", seed=31)
+    features, info = replay_inputs(saved, reconstructed, **kwargs)
+    np.testing.assert_array_equal(features, original)
+    assert features.dtype == np.float32
+    assert info["recomputed_feature_max_abs_error"] > 0
+    assert info["feature_source"] == "saved_evaluation"
+    for changes, message in (
+        ({"sampling_backend": "cpu"}, "Saved evaluation backend"),
+        ({"sampling_seed": 32}, "sampling_seed"),
+        ({"sampling_batch_size": 8}, "sampling_batch_size"),
+        ({"features": np.full((1, 2), np.nan)}, "Finite matching"),
+        ({"features": np.zeros((2, 2))}, "Finite matching"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            replay_inputs(dict(saved, **changes), reconstructed, **kwargs)
+    with pytest.raises(ValueError, match="Replay backend mismatch"):
+        replay_inputs(saved, reconstructed, **dict(kwargs, backend="cpu"))
+    # Legacy artifacts may reconstruct contexts only on the declared backend.
+    features, info = replay_inputs({}, reconstructed, **kwargs)
+    np.testing.assert_array_equal(features, reconstructed)
+    assert info["saved_backend"] is None
+    assert info["feature_source"] == "legacy_reconstruction"
+    with pytest.raises(ValueError, match="Replay backend mismatch"):
+        replay_inputs({}, reconstructed, **dict(kwargs, backend="cpu"))
 
 
 def test_bounded_float64_rounding_is_not_a_sampling_error():
@@ -149,10 +187,13 @@ def test_actual_recovery_and_bounded_training_preserve_sources(
     rec.audit(root)
     decision = read(root / "audit/DECISION.json")
     assert decision["safe_to_optimize"]
+    assert decision["runtime"]["backend"] == "cpu"
+    assert decision["runtime"]["x64_enabled"]
     for label in ("in_model", "coherent_target"):
         numerics = decision["checks"][label]
         assert numerics["replay_graph"] == "evaluate_posterior_x_only_v1"
         assert numerics["xonly_full_graph_max_delta"] >= 0.0
+        assert numerics["inputs"]["feature_source"] == "saved_evaluation"
         extremes = pd.read_csv(root / f"audit/{label}/extreme_draws.csv")
         assert {
             "full_graph_replay_latent_error",
@@ -191,6 +232,42 @@ def test_actual_recovery_and_bounded_training_preserve_sources(
         capture_output=True,
     )
     assert result.returncode == 0 and "no production approval" in result.stdout
+    assert "backend=cpu" in result.stdout and "failed_coords=0" in result.stdout
+
+
+def test_audit_replays_saved_contexts_despite_reconstruction_drift(
+    completed_sources, tmp_path, monkeypatch
+):
+    root = tmp_path / "drift"
+    rec.initialize(*completed_sources, root, config(tmp_path))
+    original = rec.cohort_features
+
+    def drifted(*args):
+        features, truth = original(*args)
+        return features + np.float32(0.25), truth
+
+    monkeypatch.setattr(rec, "cohort_features", drifted)
+    rec.audit(root)
+    decision = read(root / "audit/DECISION.json")
+    assert decision["safe_to_optimize"]
+    for check in decision["checks"].values():
+        assert check["inputs"]["feature_source"] == "saved_evaluation"
+        assert check["inputs"]["recomputed_feature_max_abs_error"] > 0.2
+
+
+def test_audit_rejects_wrong_backend_before_replaying(completed_sources, tmp_path):
+    path = config(tmp_path)
+    cfg = yaml.safe_load(path.read_text())
+    cfg["audit"]["backend"] = "gpu"
+    path.write_text(yaml.safe_dump(cfg))
+    root = tmp_path / "wrong_backend"
+    rec.initialize(*completed_sources, root, path)
+    with pytest.raises(ValueError, match="Replay backend mismatch"):
+        rec.audit(root)
+    assert not (root / "audit/FINAL.json").exists()
+    assert not (root / "audit/DECISION.json").exists()
+    runtime = read(root / "audit/runtime.json")
+    assert runtime["backend"] == "cpu" and runtime["expected_backend"] == "gpu"
 
 
 def test_negative_numerical_gate_blocks_without_training(
@@ -409,3 +486,21 @@ def test_slurm_parallel_gate_frozen_resume_and_no_mem(completed_sources, tmp_pat
     assert "--job-name=feniks_recover_audit" in lines[0] and "--gres" not in lines[0]
     assert "--dependency=afterok:907" in lines[1]
     assert "--dependency=afterany:907:908" in lines[2]
+    gpu_config = config(tmp_path)
+    cfg = yaml.safe_load(gpu_config.read_text())
+    cfg["audit"]["backend"] = "gpu"
+    gpu_config.write_text(yaml.safe_dump(cfg))
+    p = subprocess.run(
+        command
+        + ["--reaudit", str(previous), str(tmp_path / "gpu_audit"), str(gpu_config)],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert p.returncode == 0, p.stderr
+    lines = calls.read_text().splitlines()[-3:]
+    assert "--job-name=feniks_recover_audit" in lines[0]
+    assert "--gres=gpu:1" in lines[0] and "--constraint=h100" in lines[0]
+    assert "--dependency=afterok:910" in lines[1]
+    assert "--dependency=afterany:910:911" in lines[2]
+    assert "--gres" not in lines[2] and "--mem" not in "\n".join(lines)

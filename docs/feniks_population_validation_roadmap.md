@@ -1,4 +1,4 @@
-# Population validation roadmap, updated 2026-09-28
+# Population validation roadmap, updated 2026-09-29
 
 ## Scope and evidence
 
@@ -13,7 +13,23 @@ independent native reference. The target is NOT guaranteed to lie in that
 reference's component family. Earlier in-family tests do not establish recovery
 on this target, on the historical catalogue, or on real sky observations.
 
-## Latest remote recovery, reported 2026-09-28
+## Latest remote recovery, reported 2026-09-29
+
+Job 300667 ran the x-only replay repair: coherent-target error is still
+0.00116167 and the x-only/full-graph difference is exactly zero. That proposed
+cause is ruled out. Two unbounded SFH coordinates on object position 1998
+(row ID 3998, expert 1) fail; in-model replay and both expert transport audits
+pass. No posterior continuation ran; scientific checklist has not advanced.
+
+Source evaluation used H100 while the recovery audit rebuilt float32 target
+features on CPU. In-model features were already saved in the bank. Align the
+audit with the original H100 backend, retain numerical limits, record runtime
+and input provenance, and save exact features in future evaluations. This fixes
+a known replay-contract mismatch; its effect on the failed coordinates awaits
+the remote result. The new-root re-audit reuses the completed parent and only
+releases bounded continuation after PASS. See the [recovery runbook](feniks_overnight_recovery.md).
+
+## Earlier recovery, reported 2026-09-28
 
 User-provided JSON/job logs (not yet downloaded and hash-verified locally):
 parent job 263486 completed, audit 263487 failed, GPU 263488 cancelled,

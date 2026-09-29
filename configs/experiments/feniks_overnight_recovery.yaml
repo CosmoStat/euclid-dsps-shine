@@ -9,6 +9,7 @@ continuation:
   validation_objects: 512
   validation_draws: 256
 audit:
+  backend: gpu  # Original parent-to-posterior evaluation runs on H100.
   extreme_draws: 8
   maximum_replay_latent_error: 0.001
   transport_tolerance: 0.00001

@@ -57,6 +57,8 @@ def initialize(conditional, posterior, root, config, reuse_parent=None):
     if not 0 < c["lr_decay_factor"] <= 1 or c["lr_decay_every"] < 1:
         raise ValueError("Invalid continuation learning-rate schedule")
     a = cfg["audit"]
+    if a.get("backend", "gpu") not in ("cpu", "gpu"):
+        raise ValueError("Audit backend must match the source evaluation: cpu or gpu")
     if (
         type(a["extreme_draws"]) is not int
         or a["extreme_draws"] < 1
@@ -404,6 +406,10 @@ def replay_extremes(
 
 def audit(root):
     import equinox as eqx
+    import jax
+    import jaxlib
+
+    from euclid_dsps.amortized.posterior_tail_audit import replay_inputs
 
     m, cfg, digest = settings(root)
     out = root / "audit"
@@ -414,6 +420,16 @@ def audit(root):
     source = Path(m["source_posterior"])
     _, pc, old = ptp.settings(source)
     _, spec, _ = ci.require_reference(source, old)
+    runtime = dict(
+        backend=jax.default_backend(),
+        devices=[d.device_kind for d in jax.devices()],
+        jax_version=jax.__version__,
+        jaxlib_version=jaxlib.__version__,
+        x64_enabled=bool(jax.config.jax_enable_x64),
+        expected_backend=cfg["audit"].get("backend", "gpu"),
+        source_checkpoint_sha256=sha(source / "posterior/best.eqx"),
+    )
+    write(out / "runtime.json", runtime)
     checks = {}
     for label, offset in (("in_model", 20), ("coherent_target", 30)):
         directory = out / label
@@ -422,12 +438,24 @@ def audit(root):
         receipt = source / "evaluation" / label
         if not complete(receipt, old):
             raise ValueError("Completed saved evaluation required")
+        if (
+            read(receipt / "FINAL.json")["checkpoint_sha256"]
+            != runtime["source_checkpoint_sha256"]
+        ):
+            raise ValueError("Evaluation and replay checkpoints differ")
         with np.load(receipt / "draws.npz") as saved:
             draws, truth, positions = (
                 saved[k] for k in ("draws", "truth", "evaluation_positions")
             )
             latent_x = saved["latent_x"] if "latent_x" in saved else None
-        features, expected_truth = cohort_features(source, pc, old, label, positions)
+            rebuilt, expected_truth = cohort_features(source, pc, old, label, positions)
+            features, input_check = replay_inputs(
+                saved,
+                rebuilt,
+                backend=runtime["backend"],
+                expected_backend=runtime["expected_backend"],
+                seed=pc["seed"] + offset,
+            )
         np.testing.assert_allclose(truth, expected_truth, rtol=0, atol=1e-12)
         describe_draws(directory, draws, truth, spec, cfg, latent_x)
         model = eqx.tree_deserialise_leaves(
@@ -445,11 +473,13 @@ def audit(root):
             coordinate_path=directory / "replay_coordinates.csv",
         )
         attribution["row_id"] = positions[attribution.object_position.to_numpy()]
+        checks[label]["inputs"] = input_check
         attribution.to_csv(directory / "extreme_draws.csv", index=False)
         write(directory / "numerics.json", checks[label])
     decision = dict(
         safe_to_optimize=all(v["passed"] for v in checks.values()),
         checks=checks,
+        runtime=runtime,
         scientific_pass=False,
         meaning="Numerical consistency gate only; tail quality is NOT certified",
         no_clipping=True,
@@ -460,7 +490,7 @@ def audit(root):
         out,
         sorted(out.glob("*/*.csv"))
         + sorted(out.glob("*/*.json"))
-        + [out / "DECISION.json"],
+        + [out / "DECISION.json", out / "runtime.json"],
         digest,
     )
     if not decision["safe_to_optimize"]:
@@ -830,6 +860,7 @@ def schedule(root):
     _, cfg, digest = settings(root)
     for key, value in cfg["resources"].items():
         print(f"{key.upper()}={value}")
+    print(f"AUDIT_GPU={int(cfg['audit'].get('backend', 'gpu') == 'gpu')}")
     for name in ("parent", "audit", "posterior", "evaluation", "report"):
         print(f"NEED_{name.upper()}={int(not complete(root / name, digest))}")
     if (
