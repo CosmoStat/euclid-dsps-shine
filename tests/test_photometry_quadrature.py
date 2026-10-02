@@ -20,6 +20,34 @@ from euclid_dsps.photometry_quadrature import (
 )
 
 
+@pytest.mark.parametrize("order", [4, 8])
+def test_endpoint_interpolation_preserves_value_and_gradients(order):
+    from scripts.benchmark_merged_photometry import baseline
+
+    rng = np.random.default_rng(261001)
+    wave = jnp.asarray(np.sort(rng.uniform(1000, 10000, 100)))
+    spectrum = jnp.asarray(rng.uniform(0.1, 2.0, 100))
+    fw = jnp.asarray(np.linspace(3000, 11000, 31))
+    ft = jnp.asarray(rng.uniform(0.0, 1.0, 31))
+
+    def evaluate(implementation):
+        return jax.jit(
+            jax.value_and_grad(
+                lambda s, z: implementation(wave, s, fw, ft, z, order=order),
+                argnums=(0, 1),
+            )
+        )
+
+    old, new = evaluate(baseline), evaluate(merged_integral_jax)
+    for z in (0.013, 0.31, 0.9, 12.0):
+        for a, b in zip(
+            jax.tree.leaves(old(spectrum, z)),
+            jax.tree.leaves(new(spectrum, z)),
+            strict=True,
+        ):
+            np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-10)
+
+
 def test_smooth_closed_form_and_gradient():
     wave = jnp.array([1.0, 3.0, 10.0], dtype=jnp.float64)
     fw = jnp.array([4.0, 5.0, 7.0], dtype=jnp.float64)

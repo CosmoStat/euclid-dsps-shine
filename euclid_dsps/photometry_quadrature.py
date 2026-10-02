@@ -6,8 +6,12 @@ wavelength grids; the NumPy reference integrates each affine-product segment.
 
 from __future__ import annotations
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.custom_derivatives import SymbolicZero
 
 
 def merged_integral_jax(wave, spectrum, filter_wave, transmission, z, *, order=8):
@@ -22,11 +26,73 @@ def merged_integral_jax(wave, spectrum, filter_wave, transmission, z, *, order=8
     hi = jnp.maximum(lo, jnp.minimum(shifted[-1], filter_wave[-1]))
     knots = jnp.sort(jnp.clip(jnp.concatenate((shifted, filter_wave)), lo, hi))
     widths = jnp.diff(knots)
-    samples = knots[:-1, None] + widths[:, None] * (jnp.asarray(nodes) + 1) / 2
-    lum = jnp.interp(samples, shifted, spectrum, left=0, right=0)
-    trans = jnp.interp(samples, filter_wave, transmission, left=0, right=0)
+    t = (jnp.asarray(nodes) + 1) / 2
+    samples = knots[:-1, None] + widths[:, None] * t
+    # Both interpolants are affine between merged knots. Search once per knot,
+    # then evaluate every quadrature node by blending the endpoint values.
+    lum_knots = jnp.interp(knots, shifted, spectrum, left=0, right=0)
+    trans_knots = jnp.interp(knots, filter_wave, transmission, left=0, right=0)
+    lum = lum_knots[:-1, None] + jnp.diff(lum_knots)[:, None] * t
+    trans = trans_knots[:-1, None] + jnp.diff(trans_knots)[:, None] * t
     return jnp.sum(
         widths * jnp.sum(lum * trans / samples * jnp.asarray(weights), axis=-1) / 2
+    )
+
+
+_reference_merged_integral = merged_integral_jax
+
+
+@partial(jax.custom_jvp, nondiff_argnums=(5,))
+def _scalar_redshift_integral(wave, spectrum, filter_wave, transmission, z, order):
+    return _reference_merged_integral(
+        wave, spectrum, filter_wave, transmission, z, order=order
+    )
+
+
+def _scalar_redshift_integral_jvp(order, primals, tangents):
+    wave, spectrum, fw, ft, z = primals
+    dw, ds, dfw, dft, dz = tangents
+
+    def evaluate(*args):
+        return _reference_merged_integral(*args, order=order)
+
+    # Trainable wavelength/filter grids use the general derivative rule.
+    if any(not isinstance(t, SymbolicZero) for t in (dw, dfw, dft)):
+        actual = tuple(
+            jnp.zeros_like(p) if isinstance(t, SymbolicZero) else t
+            for p, t in zip(primals, tangents, strict=True)
+        )
+        return jax.jvp(evaluate, primals, actual)
+    if isinstance(dz, SymbolicZero):
+        value = evaluate(*primals)
+        redshift_term = jnp.zeros_like(value)
+    else:
+        value, derivative_z = jax.jvp(
+            lambda zz: evaluate(wave, spectrum, fw, ft, zz), (z,), (jnp.ones_like(z),)
+        )
+        redshift_term = derivative_z * dz
+    # Linearity in the SED and scalar forward-mode in z reduce AD temporaries.
+    spectrum_term = (
+        jnp.zeros_like(value)
+        if isinstance(ds, SymbolicZero)
+        else evaluate(wave, ds, fw, ft, z)
+    )
+    return value, spectrum_term + redshift_term
+
+
+_scalar_redshift_integral.defjvp(_scalar_redshift_integral_jvp, symbolic_zeros=True)
+
+
+def merged_integral_scalar_redshift_jvp_jax(
+    wave, spectrum, filter_wave, transmission, z, *, order=8
+):
+    """Same quadrature with a memory-saving first-derivative implementation.
+
+    This is an opt-in for fixed grids, not a different integrator or precision.
+    Active grid derivatives fall back to the reference JVP.
+    """
+    return _scalar_redshift_integral(
+        wave, spectrum, filter_wave, transmission, z, order
     )
 
 

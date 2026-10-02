@@ -4195,6 +4195,7 @@ def fixed_spectrum_projection_jax(
     *,
     method="legacy",
     order=8,
+    autodiff="reverse_v1",
 ):
     """Project one spectrum with legacy or merged numerical integration.
 
@@ -4210,9 +4211,14 @@ def fixed_spectrum_projection_jax(
     from euclid_dsps.photometry_quadrature import (
         filter_integral_jax,
         merged_integral_jax,
+        merged_integral_scalar_redshift_jvp_jax,
     )
 
+    if autodiff not in {"reverse_v1", "scalar_redshift_jvp_v1"}:
+        raise ValueError(f"unsupported photometry_autodiff: {autodiff}")
     if method == "legacy":
+        if autodiff != "reverse_v1":
+            raise ValueError("scalar_redshift_jvp_v1 requires merged photometry")
         return abmag_to_fnu_cgs_jax(
             calc_obs_mag(
                 wave, spectrum, filter_wave, transmission, z, *DEFAULT_COSMOLOGY
@@ -4220,7 +4226,12 @@ def fixed_spectrum_projection_jax(
         )
     if method not in {"merged", "merged_legacy_ab"}:
         raise ValueError(f"unknown diagnostic projection: {method}")
-    numerator = merged_integral_jax(
+    integral = (
+        merged_integral_scalar_redshift_jvp_jax
+        if autodiff == "scalar_redshift_jvp_v1"
+        else merged_integral_jax
+    )
+    numerator = integral(
         wave, spectrum, filter_wave, transmission, z, order=order
     )
     normalization = (
@@ -4277,6 +4288,13 @@ def photometry_numerics(model_config: dict[str, Any] | None) -> dict[str, Any]:
     name = (model_config or {}).get("photometry_integrator", "legacy_trapezoid_v1")
     if name not in {"legacy_trapezoid_v1", "merged_gauss4_v1"}:
         raise ValueError(f"unsupported photometry_integrator: {name}")
+    autodiff = (model_config or {}).get("photometry_autodiff", "reverse_v1")
+    if autodiff not in {"reverse_v1", "scalar_redshift_jvp_v1"}:
+        raise ValueError(f"unsupported photometry_autodiff: {autodiff}")
+    if autodiff != "reverse_v1" and name != "merged_gauss4_v1":
+        raise ValueError("scalar_redshift_jvp_v1 requires merged_gauss4_v1")
+    # AD implementation does not change the primal numerical receipt. Keep
+    # checkpoint compatibility; record the performance option in runtime config.
     dtype = _mdf_weight_dtype(model_config)
     result = dict(
         integrator=name,
@@ -4330,6 +4348,9 @@ def predict_mags_jax(
                     jnp.asarray(z_obs, dtype=jnp.float64),
                     method="merged",
                     order=4,
+                    autodiff=(context.model_config or {}).get(
+                        "photometry_autodiff", "reverse_v1"
+                    ),
                 )
                 for fw, ft in filter_arrays
             ]
